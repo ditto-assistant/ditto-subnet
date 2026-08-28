@@ -147,6 +147,17 @@ resource "google_secret_manager_secret_iam_member" "validator_prod_hotkey_access
   member    = "serviceAccount:${google_service_account.validator_prod[0].email}"
 }
 
+# The production validator publishes aggregate telemetry to W&B. Grant only
+# payload access on the existing validator-wandb-key secret; its value and
+# versions remain outside Terraform state.
+resource "google_secret_manager_secret_iam_member" "validator_prod_wandb_access" {
+  count     = local.validator_prod_count
+  project   = var.project
+  secret_id = google_secret_manager_secret.validator_wandb_key[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.validator_prod[0].email}"
+}
+
 # Custodians can lifecycle-manage the one recovery version without reading its
 # payload, adding a replacement, or destroying it. Only the armed disposable
 # generator can add the first version. Payload access remains exclusive to the

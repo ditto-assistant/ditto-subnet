@@ -15,6 +15,8 @@ MATERIALIZER = (
 )
 ENV_TEMPLATE = ROOT / "infra/ansible/roles/validator_stack/templates/validator.env.j2"
 PROD_TASKS = ROOT / "infra/ansible/roles/validator_stack/tasks/main.yml"
+PROD_TERRAFORM = ROOT / "infra/terraform/stacks/gcp-platform/validator-prod.tf"
+VALIDATOR_TERRAFORM = ROOT / "infra/terraform/stacks/gcp-platform/validator.tf"
 ADMIN_TERRAFORM = ROOT / "infra/terraform/stacks/gcp-platform/validator-hotkey-admin.tf"
 ADMIN_STARTUP = (
     ROOT
@@ -357,6 +359,36 @@ def test_production_environment_never_contains_signing_seed_or_coldkey() -> None
     assert "MNEMONIC" not in template
     assert "COLDKEY" not in template
     assert "VALIDATOR_MNEMONIC" not in template
+
+
+def test_production_wandb_key_uses_secret_manager_without_terraform_value() -> None:
+    template = ENV_TEMPLATE.read_text()
+    tasks = PROD_TASKS.read_text()
+    production_terraform = PROD_TERRAFORM.read_text()
+    shared_terraform = VALIDATOR_TERRAFORM.read_text()
+
+    assert "WANDB_MODE=online" in template
+    assert "WANDB_API_KEY={{ validator_stack_wandb_api_key }}" in template
+    assert "WANDB_PROJECT=" not in template
+    assert "WANDB_ENTITY=" not in template
+
+    read = tasks.split("- name: Read the W&B API key from Secret Manager", 1)[1]
+    read = read.split("- name: Require a non-empty single-line W&B API key", 1)[0]
+    assert "validator_stack_wandb_secret" in read
+    assert "latest" in read
+    assert "no_log: true" in read
+
+    access = production_terraform.split(
+        'resource "google_secret_manager_secret_iam_member" '
+        '"validator_prod_wandb_access"',
+        1,
+    )[1].split("resource ", 1)[0]
+    assert "google_secret_manager_secret.validator_wandb_key[0].secret_id" in access
+    assert 'role      = "roles/secretmanager.secretAccessor"' in access
+    assert "google_service_account.validator_prod[0].email" in access
+    assert "google_secret_manager_secret_version" not in access
+    assert "validator_wandb_secret_count" in shared_terraform
+    assert "var.enable_validator || var.enable_validator_prod" in shared_terraform
 
 
 def test_production_materializer_pins_the_recorded_numeric_secret_version() -> None:
