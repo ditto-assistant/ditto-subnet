@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.119.0 (2026-08-28)
+
+### Features
+
+- **backroom**: Add audited hotkey unban control
+  ([#1229](https://github.com/ditto-assistant/ditto-subnet/pull/1229),
+  [`25035bd`](https://github.com/ditto-assistant/ditto-subnet/commit/25035bd58dee98851828a69b03bf275b92561bec))
+
+- **screener**: Structured review-notes ledger with gradient verdicts and bigger budgets
+  ([#1228](https://github.com/ditto-assistant/ditto-subnet/pull/1228),
+  [`81f0a01`](https://github.com/ditto-assistant/ditto-subnet/commit/81f0a018b552a59813bf6922519456c00ee86d6f))
+
+
 ## v0.118.0 (2026-08-28)
 
 ### Bug Fixes
