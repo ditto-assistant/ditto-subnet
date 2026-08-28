@@ -65,6 +65,47 @@ describe("reconciledList", () => {
     });
   });
 
+  it("derives identity from a key function when no single field carries it", () => {
+    createRoot((dispose) => {
+      // A fleet node is addressed by one of three optional fields.
+      interface Node {
+        validator_hotkey?: string;
+        screener_hotkey?: string;
+        state: string;
+      }
+      const keyOf = (n: Node, i: number) =>
+        String(n.validator_hotkey || n.screener_hotkey || "#" + i);
+      const [source, setSource] = createSignal<Node[]>([
+        { validator_hotkey: "5A", state: "polling" },
+        { screener_hotkey: "5B", state: "idle" },
+      ]);
+      const list = reconciledList(source, keyOf);
+      const [a, b] = [list()[0], list()[1]];
+
+      setSource([
+        { validator_hotkey: "5A", state: "running_benchmark" },
+        { screener_hotkey: "5B", state: "idle" },
+      ]);
+      expect(list()[0]).toBe(a);
+      expect(list()[1]).toBe(b);
+      expect(list()[0]?.state).toBe("running_benchmark");
+      dispose();
+    });
+  });
+
+  it("falls back to position for a row with no identity field", () => {
+    createRoot((dispose) => {
+      const keyOf = (n: { state: string }, i: number) => "#" + i;
+      const [source, setSource] = createSignal([{ state: "idle" }]);
+      const list = reconciledList(source, keyOf);
+      const row = list()[0];
+      setSource([{ state: "polling" }]);
+      expect(list()[0]).toBe(row);
+      expect(list()[0]?.state).toBe("polling");
+      dispose();
+    });
+  });
+
   it("is current for the render that reads it, not one tick behind", () => {
     createRoot((dispose) => {
       const [source, setSource] = createSignal<Row[]>([]);

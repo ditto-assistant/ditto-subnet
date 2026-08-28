@@ -419,6 +419,9 @@ export function IntegrityReviewBranch(props: {
   loading: boolean;
 }): JSX.Element {
   const view = createMemo(() => integrityReviewView(props.entries, props.statusCounts));
+  // Same 5s snapshot as the lanes: reconciled so a held submission that is
+  // still held keeps its row rather than being replaced under the reader.
+  const shown = reconciledList(() => view().shown, "key");
   return (
     <details class="pipeline-review-branch" aria-labelledby="pipeline-review-title">
       <summary class="pipeline-review-summary">
@@ -443,12 +446,12 @@ export function IntegrityReviewBranch(props: {
         >
           <Show when={!props.loading} fallback={<div class="pipeline-empty">Loading…</div>}>
             <Show
-              when={view().shown.length > 0}
+              when={shown().length > 0}
               fallback={
                 <div class="pipeline-empty">No submissions are held for integrity review.</div>
               }
             >
-              <For each={view().shown}>
+              <For each={shown()}>
                 {(item) => (
                   <a
                     class="pipeline-item"

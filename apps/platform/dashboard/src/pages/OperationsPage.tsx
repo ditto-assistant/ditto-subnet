@@ -10,6 +10,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
+import { reconciledList } from "../data/reconciled";
 import { FleetLedger, FleetRow, RetiredFleetRow } from "../components/operations/FleetTable";
 import { SubmissionBuildLane } from "../components/operations/SubmissionBuildLane";
 import {
@@ -186,6 +187,19 @@ export function OperationsPage(
       generatedAt: report?.generated_at ?? null,
     };
   });
+
+  // A fleet node's identity, for keeping its row across a poll. None of the
+  // three addressing fields is required by the wire type, so the key is
+  // derived rather than named; position is the last resort and is no worse
+  // than the positional identity <For> fell back to before.
+  const fleetKey = (entry: FleetEntryExt, index: number): string =>
+    String(entry.validator_hotkey || entry.screener_hotkey || entry.instance_id || "#" + index);
+
+  // The operations snapshot re-reports the whole fleet every 5s with fresh
+  // objects. Keyed by reference, <For> rebuilt every row on every tick, which
+  // shut any open "inactive slots" disclosure and dropped focus and hover.
+  const fleetEntries = reconciledList<FleetEntryExt>(() => fleet().entries, fleetKey);
+  const fleetRetired = reconciledList<FleetEntryExt>(() => fleet().retired, fleetKey);
 
   /** Exception-only: the head speaks when the reader cannot trust the table,
    * and is silent otherwise. Everything the old summary line stated is on the
@@ -427,7 +441,7 @@ export function OperationsPage(
                         {"No active " + fleet().singular + " software reports."}
                       </EmptyRow>
                     ) : (
-                      <For each={fleet().entries}>
+                      <For each={fleetEntries()}>
                         {(entry) => (
                           <FleetRow
                             entry={entry}
@@ -481,7 +495,7 @@ export function OperationsPage(
                       </tr>
                     </thead>
                     <tbody id="fleet-retired-rows">
-                      <For each={fleet().retired}>
+                      <For each={fleetRetired()}>
                         {(entry) => (
                           <RetiredFleetRow
                             entry={entry}
