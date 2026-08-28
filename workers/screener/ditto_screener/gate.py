@@ -542,6 +542,8 @@ class BuildGate:
             max_completion_tokens=config.source_review_max_completion_tokens,
             reasoning_effort=config.source_review_reasoning_effort,
             static_preflight_v2_mode=config.static_preflight_v2_mode,
+            concern_hold_count=config.review_concern_hold_count,
+            clear_min_notes=config.review_clear_min_notes,
         )
         l2_reviewer = KimiSolSourceReviewAgent(
             api_key_file=config.source_review_api_key_file,
@@ -574,6 +576,8 @@ class BuildGate:
             l1=l1_reviewer,
             l2=l2_reviewer,
             mode=config.l2_review_mode,
+            concern_hold_count=config.review_concern_hold_count,
+            clear_min_notes=config.review_clear_min_notes,
         )
 
     def apply_review_settings(self, effective: EffectiveReviewSettings) -> bool:

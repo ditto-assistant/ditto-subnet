@@ -37,6 +37,7 @@ from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
     _retryable_model_error_type,
+    ledger_disposition,
     policy_v10_static_assessment,
 )
 from ditto_screening_protocol import (
@@ -3721,17 +3722,47 @@ class LayeredSourceReviewAgent:
         l1: OpenRouterSourceReviewAgent,
         l2: KimiSolSourceReviewAgent,
         mode: str,
+        concern_hold_count: int = 3,
+        clear_min_notes: int = 3,
     ) -> None:
         if mode not in {"off", "shadow", "enforce"}:
             raise ValueError("invalid L2 mode")
         self._l1 = l1
         self._l2 = l2
         self._mode = mode
+        self._concern_hold_count = max(1, int(concern_hold_count))
+        self._clear_min_notes = max(1, int(clear_min_notes))
         self._shadow_results: dict[UUID, L2RunResult] = {}
 
     def pop_shadow_result(self, attempt_id: UUID) -> L2RunResult | None:
         """Consume non-authoritative shadow telemetry for one attempt."""
         return self._shadow_results.pop(attempt_id, None)
+
+    def _settle_gradient(
+        self, observation: SourceReviewObservation
+    ) -> SourceReviewObservation:
+        """Decide an exhausted L2 outcome on the ledger it actually ships.
+
+        L2 stamps ``pass_inconclusive`` on ANY budget exhaustion, and until
+        this ran that stamp survived to Platform unchecked -- even when the
+        carried ledger recorded concerns. Four of the five budget-terminated
+        reviews on 2026-08-28 arrived claiming positive coverage they did not
+        have. The disposition has to be re-derived here because this is the
+        first point where the ledger is complete: L2 records no notes of its
+        own, so the evidence only exists once L1's are carried across.
+        """
+        if observation.finding is not None or observation.finding_digest is not None:
+            # A surviving lead is not positive coverage, whatever the ledger
+            # says; the operator decides it.
+            return replace(observation, failure_disposition="inconclusive")
+        return replace(
+            observation,
+            failure_disposition=ledger_disposition(
+                observation.notes,
+                concern_hold_count=self._concern_hold_count,
+                clear_min_notes=self._clear_min_notes,
+            ),
+        )
 
     async def review(
         self,
@@ -3802,13 +3833,14 @@ class LayeredSourceReviewAgent:
         if result.observation.failure_disposition == "pass_inconclusive":
             # Preserve the original bounded L1 lead as partial evidence; the
             # exhausted L2 trajectory has no safe replacement finding.
-            return replace(
+            carried = replace(
                 result.observation,
                 finding_digest=l1.finding_digest,
                 categories=l1.categories,
                 finding=l1.finding,
                 notes=l1.notes,
             )
+            return self._settle_gradient(carried)
         return _carry_l1_notes(_enforce_causal_authority(result.observation), l1)
 
 

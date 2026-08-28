@@ -29,6 +29,8 @@ const settings = {
   source_review_max_steps: 200,
   source_review_max_read_bytes: 8_000_000,
   source_review_max_completion_tokens: 8_000,
+  concern_hold_count: 3,
+  clear_min_notes: 3,
   source_review_reasoning_effort: 'high' as const,
   source_review_model: 'openai/gpt-5.6-luna' as const,
   source_review_timeout_seconds: 1_800,

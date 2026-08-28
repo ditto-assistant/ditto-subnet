@@ -268,6 +268,8 @@ export const screenerReviewSettingsSchema = z
     source_review_reasoning_effort: z.enum(['low', 'medium', 'high']).default('high'),
     source_review_model: sourceReviewModelSchema.default('openai/gpt-5.6-luna'),
     source_review_timeout_seconds: z.number().int().min(60).max(3_600).default(1_800),
+    concern_hold_count: z.number().int().min(1).max(16).default(3),
+    clear_min_notes: z.number().int().min(1).max(32).default(3),
     max_input_tokens: z.number().int().min(1).max(1_000_000),
     max_output_tokens: z.number().int().min(1).max(128_000),
     max_completion_tokens: z.number().int().min(1).max(128_000),

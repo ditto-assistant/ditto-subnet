@@ -50,6 +50,8 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "source_review_max_read_bytes": 8_000_000,
         "source_review_max_completion_tokens": 8_000,
         "source_review_reasoning_effort": "high",
+        "review_concern_hold_count": 3,
+        "review_clear_min_notes": 3,
         "static_preflight_v2_mode": "off",
         "static_preflight_audit_file": None,
         "l2_review_mode": "off",

@@ -22,6 +22,8 @@ from ditto_screener.binary_analysis import BinarySample
 from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
+    ledger_disposition,
+    substantiated_concern_count,
 )
 from ditto_screener.source_signals import (
     find_decisive_malicious_source,
@@ -4938,3 +4940,116 @@ async def test_completion_budget_cannot_be_set_below_one_sweep(
     )
 
     assert all(request["max_completion_tokens"] == 2_000 for request in seen)
+
+
+def test_a_hold_threshold_above_one_is_not_inert() -> None:
+    """The old form held on 1..N-1 concerns, so raising N changed nothing."""
+    notes = [
+        {"kind": "concern", "category": "credential_access", "path": "a.rs", "line": 3},
+        {"kind": "cleared", "category": "none", "path": "b.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "c.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "d.rs", "line": 1},
+    ]
+
+    assert (
+        ledger_disposition(notes, concern_hold_count=1, clear_min_notes=3)
+        == "inconclusive"
+    )
+    assert (
+        ledger_disposition(notes, concern_hold_count=3, clear_min_notes=3)
+        == "pass_inconclusive"
+    )
+
+
+def test_single_site_multi_location_concerns_cannot_hold() -> None:
+    """A one-site benchmark_emulation note could never become a finding.
+
+    The finding contract needs two distinct locations for that category, so
+    counting a single-site note toward a hold holds on evidence that would
+    have been rejected as a verdict.
+    """
+    notes = [
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/main.rs",
+            "line": 10,
+        },
+        {
+            "kind": "concern",
+            "category": "scorer_contract_manipulation",
+            "path": "src/score.rs",
+            "line": 20,
+        },
+        {"kind": "cleared", "category": "none", "path": "b.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "c.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "d.rs", "line": 1},
+    ]
+
+    assert substantiated_concern_count(notes) == 0
+    assert (
+        ledger_disposition(notes, concern_hold_count=3, clear_min_notes=3)
+        == "pass_inconclusive"
+    )
+
+
+def test_two_sites_substantiate_a_multi_location_concern() -> None:
+    notes = [
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/main.rs",
+            "line": 10,
+        },
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/table.rs",
+            "line": 44,
+        },
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/table.rs",
+            "line": 51,
+        },
+        {"kind": "cleared", "category": "none", "path": "b.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "c.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "d.rs", "line": 1},
+    ]
+
+    assert substantiated_concern_count(notes) == 3
+    assert (
+        ledger_disposition(notes, concern_hold_count=3, clear_min_notes=3)
+        == "inconclusive"
+    )
+
+
+def test_repeated_citation_of_one_line_is_one_concern() -> None:
+    notes = [
+        {"kind": "concern", "category": "provider_bypass", "path": "a.rs", "line": 7},
+        {"kind": "concern", "category": "provider_bypass", "path": "a.rs", "line": 7},
+        {"kind": "concern", "category": "provider_bypass", "path": "a.rs", "line": 7},
+        {"kind": "cleared", "category": "none", "path": "b.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "c.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "d.rs", "line": 1},
+    ]
+
+    assert substantiated_concern_count(notes) == 1
+    assert (
+        ledger_disposition(notes, concern_hold_count=3, clear_min_notes=3)
+        == "pass_inconclusive"
+    )
+
+
+def test_thin_clean_ledger_still_holds() -> None:
+    """No concerns is not the same as enough positive coverage to admit."""
+    notes = [{"kind": "cleared", "category": "none", "path": "b.rs", "line": 1}]
+
+    assert (
+        ledger_disposition(notes, concern_hold_count=3, clear_min_notes=3)
+        == "inconclusive"
+    )
+    assert ledger_disposition([], concern_hold_count=3, clear_min_notes=3) == (
+        "inconclusive"
+    )
