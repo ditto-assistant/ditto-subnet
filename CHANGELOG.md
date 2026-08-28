@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.121.2 (2026-08-28)
+
+### Bug Fixes
+
+- **screener**: Calibrate source-review court safe harbors
+  ([#1225](https://github.com/ditto-assistant/ditto-subnet/pull/1225),
+  [`815324c`](https://github.com/ditto-assistant/ditto-subnet/commit/815324c892be24841082a601d7fb33b2a47b538a))
+
+- **validator**: Avoid IAP bootstrap policy deadlock
+  ([#1246](https://github.com/ditto-assistant/ditto-subnet/pull/1246),
+  [`6d212ff`](https://github.com/ditto-assistant/ditto-subnet/commit/6d212fff32f4e2a29ef8556470791ec1a9fd22b7))
+
+- **validator**: Honor protected hotkey admin phases
+  ([#1247](https://github.com/ditto-assistant/ditto-subnet/pull/1247),
+  [`83a3d83`](https://github.com/ditto-assistant/ditto-subnet/commit/83a3d8317305c3c710dfa618def46420c7ae30f2))
+
+- **validator**: Wire production W&B secret
+  ([#1244](https://github.com/ditto-assistant/ditto-subnet/pull/1244),
+  [`7fa15cc`](https://github.com/ditto-assistant/ditto-subnet/commit/7fa15ccec3130b50d6b6c239763e5389fc37905e))
+
+
 ## v0.121.1 (2026-08-28)
 
 ### Performance Improvements
