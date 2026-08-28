@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.116.0 (2026-08-28)
+
+### Bug Fixes
+
+- **infra**: Drop deleted Google identities from ssh_users
+  ([#1199](https://github.com/ditto-assistant/ditto-subnet/pull/1199),
+  [`ef68b35`](https://github.com/ditto-assistant/ditto-subnet/commit/ef68b3560580197a513376678a0f4e220e507bdb))
+
+### Chores
+
+- Agent/ath v10 independent pass
+  ([#1197](https://github.com/ditto-assistant/ditto-subnet/pull/1197),
+  [`f683e4f`](https://github.com/ditto-assistant/ditto-subnet/commit/f683e4ff20fb97f92e60b318a2924bd056ca4397))
+
+### Features
+
+- **preview**: Publish guarded dashboard URLs
+  ([#1088](https://github.com/ditto-assistant/ditto-subnet/pull/1088),
+  [`678234c`](https://github.com/ditto-assistant/ditto-subnet/commit/678234ce19d3c0fa1b59d6687a6428235f319236))
+
+
 ## v0.115.3 (2026-08-27)
 
 ### Bug Fixes
