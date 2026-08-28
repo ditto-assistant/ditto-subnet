@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.121.0 (2026-08-28)
+
+### Features
+
+- **validator**: Enable secure GCP production bootstrap
+  ([#1189](https://github.com/ditto-assistant/ditto-subnet/pull/1189),
+  [`b83e9ad`](https://github.com/ditto-assistant/ditto-subnet/commit/b83e9ad1a43bd235136fd70b6e6e5b5408af0c52))
+
+
 ## v0.120.1 (2026-08-28)
 
 ### Bug Fixes
