@@ -1362,8 +1362,10 @@ jobs:
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$exact")" = "$VERSION"
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")" = "$REVISION"
           test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.turbobt-revision" }}' "$exact")" = "$PYLON_TURBOBT_REVISION"
-          docker run --rm --platform linux/amd64 --entrypoint python "$exact" -c \
+          docker run --rm --platform linux/amd64 --entrypoint /app/pylon_service/.venv/bin/python "$exact" -c \
             'from pathlib import Path; p=Path("/app/pylon_service/.venv/lib/python3.13/site-packages/turbobt/substrate/pallets/author.py"); s=p.read_text(); assert "isinstance(subscription_id_raw, str)" in s'
+          docker run --rm --platform linux/amd64 --entrypoint /app/pylon_service/.venv/bin/python "$exact" -c \
+            'import importlib.metadata,json; from bittensor_wallet.keyfile import deserialize_keypair_from_keyfile_data; address="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"; payload=json.dumps({"cryptoType":1,"ss58Address":address}).encode(); assert importlib.metadata.version("bittensor-wallet")=="4.1.1"; assert deserialize_keypair_from_keyfile_data(payload).ss58_address==address'
 
   prepare-dittobench:
     needs: [plan, release]
