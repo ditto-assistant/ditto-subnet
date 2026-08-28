@@ -4561,6 +4561,124 @@ def _note_call(
     return _tool(call_id, "record_note", {"kind": kind, "summary": summary, **extra})
 
 
+def test_review_transcript_compaction_keeps_stable_prefix_and_recent_turns() -> None:
+    messages: list[dict[str, object]] = [
+        {"role": "system", "content": "stable-system"},
+        {"role": "user", "content": "stable-inventory"},
+    ]
+    for turn in range(6):
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [_tool(f"read-{turn}", "search", {"query": "x"})],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": f"read-{turn}",
+                    "content": f"large-output-{turn}",
+                },
+            ]
+        )
+    notes = [
+        {
+            "kind": "cleared",
+            "area": "served_entrypoint",
+            "category": "none",
+            "summary": "Entrypoint follows the normal path.",
+            "stage": "l1",
+        }
+    ]
+
+    compacted = source_review_module._compacted_review_messages(messages, notes)
+
+    assert compacted[:2] == messages[:2]
+    assert "recorded notes ledger" in str(compacted[2]["content"])
+    assert "large-output-0" not in json.dumps(compacted)
+    assert "large-output-5" in json.dumps(compacted)
+    assert sum(row.get("role") == "assistant" for row in compacted) == 3
+
+
+async def test_l1_uses_cached_prefix_adaptive_reasoning_and_coverage_exit(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    final = {
+        "risk_level": "low",
+        "confidence": 0.9,
+        "categories": ["none"],
+        "evidence": [],
+        "summary": "General model-backed request path.",
+    }
+    areas = [
+        "served_entrypoint",
+        "retrieval",
+        "model_call",
+        "tool_dispatch",
+        "answer_construction",
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        seen.append(payload)
+        if len(seen) == 1:
+            tool_calls = [
+                _note_call(
+                    f"note-{index}",
+                    "cleared",
+                    f"{area} follows the normal served path.",
+                    area=area,
+                )
+                for index, area in enumerate(areas)
+            ]
+            tool_calls.extend(
+                [
+                    _tool(
+                        "read-1",
+                        "read_file",
+                        {"path": "src/main.rs", "start_line": 1, "end_line": 40},
+                    ),
+                    _tool("search-1", "search", {"query": "call_model"}),
+                ]
+            )
+        else:
+            tool_calls = [_tool("submit-1", "submit_review", final)]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": tool_calls,
+                        }
+                    }
+                ]
+            },
+        )
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok and observation.risk_level == "low"
+    assert seen[0]["reasoning"] == {"effort": "medium"}
+    assert seen[1]["reasoning"] == {"effort": "high"}
+    assert seen[0]["prompt_cache_key"] == seen[1]["prompt_cache_key"]
+    assert len(str(seen[0]["prompt_cache_key"])) <= 64
+    assert any(
+        "notes ledger now covers every served-path area" in str(row.get("content"))
+        for row in seen[1]["messages"]
+    )
+    assert "BATCH RELATED READS" in str(seen[0]["messages"][0]["content"])
+
+
 async def test_budget_exhaustion_with_concern_notes_holds_with_evidence(
     tmp_path: Path,
 ) -> None:
