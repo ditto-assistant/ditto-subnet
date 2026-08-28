@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.121.3 (2026-08-28)
+
+### Bug Fixes
+
+- **screener**: Prevent truncated and orphaned source reviews
+  ([#1248](https://github.com/ditto-assistant/ditto-subnet/pull/1248),
+  [`4f1113f`](https://github.com/ditto-assistant/ditto-subnet/commit/4f1113f6679dc3aab512dcfe7c024fb098c77007))
+
+
 ## v0.121.2 (2026-08-28)
 
 ### Bug Fixes
