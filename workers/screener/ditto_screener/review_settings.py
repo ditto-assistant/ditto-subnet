@@ -95,6 +95,10 @@ class ReviewSettings(BaseModel):
     )
     source_review_reasoning_effort: Literal["low", "medium", "high"] = "high"
     source_review_model: SourceReviewModel = "openai/gpt-5.6-luna"
+    source_review_fallback_models: tuple[ReviewModel, ...] = (
+        "z-ai/glm-5.2",
+        "openai/gpt-5.6-sol",
+    )
     source_review_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 1_800
     max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
     max_output_tokens: Annotated[int, Field(ge=1, le=128_000)]
@@ -125,7 +129,9 @@ class ReviewSettings(BaseModel):
             )
         return value
 
-    @field_validator("l2_fallback_models", mode="before")
+    @field_validator(
+        "l2_fallback_models", "source_review_fallback_models", mode="before"
+    )
     @classmethod
     def accept_json_model_chain(cls, value: object) -> object:
         if isinstance(value, list):
@@ -137,6 +143,9 @@ class ReviewSettings(BaseModel):
         chain = (self.l2_model, *self.l2_fallback_models)
         if len(chain) != len(set(chain)):
             raise ValueError("L2 model chain must not contain duplicates")
+        l1_chain = (self.source_review_model, *self.source_review_fallback_models)
+        if len(l1_chain) != len(set(l1_chain)):
+            raise ValueError("L1 model chain must not contain duplicates")
         if self.max_completion_tokens > self.max_output_tokens:
             raise ValueError("completion budget must not exceed output budget")
         return self
@@ -151,6 +160,7 @@ _POST_CHECKSUM_FIELDS: tuple[str, ...] = (
     "source_review_reasoning_effort",
     "source_review_model",
     "source_review_timeout_seconds",
+    "source_review_fallback_models",
 )
 _DEFAULTS = {
     name: ReviewSettings.model_fields[name].default for name in _POST_CHECKSUM_FIELDS
@@ -219,6 +229,7 @@ class EffectiveReviewSettings(BaseModel):
             source_review_max_read_bytes=value.source_review_max_read_bytes,
             source_review_reasoning_effort=value.source_review_reasoning_effort,
             source_review_model=value.source_review_model,
+            source_review_fallback_models=value.source_review_fallback_models,
             source_review_timeout_seconds=float(value.source_review_timeout_seconds),
             l2_max_input_tokens=value.max_input_tokens,
             l2_max_output_tokens=value.max_output_tokens,
@@ -284,6 +295,7 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
             "source_review_max_read_bytes": config.source_review_max_read_bytes,
             "source_review_reasoning_effort": config.source_review_reasoning_effort,
             "source_review_model": config.source_review_model,
+            "source_review_fallback_models": config.source_review_fallback_models,
             "source_review_timeout_seconds": int(config.source_review_timeout_seconds),
             "max_input_tokens": config.l2_max_input_tokens,
             "max_output_tokens": config.l2_max_output_tokens,

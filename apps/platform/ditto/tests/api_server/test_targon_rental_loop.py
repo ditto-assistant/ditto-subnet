@@ -47,6 +47,9 @@ def test_source_review_layer_env_pins_l2_and_l3() -> None:
     assert env["SCREENER_L2_REVIEW_MODE"] == "enforce"
     assert env["SCREENER_L3_REVIEW_ENABLED"] == "true"
     assert env["SCREENER_L2_REVIEW_MODEL"] == "moonshotai/kimi-k3"
+    assert env["SCREENER_SOURCE_REVIEW_FALLBACK_MODELS"] == (
+        "z-ai/glm-5.2,openai/gpt-5.6-sol"
+    )
 
 
 class _FakeTargon:

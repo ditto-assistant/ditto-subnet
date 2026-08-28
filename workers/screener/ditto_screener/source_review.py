@@ -12,6 +12,7 @@ import re
 import tarfile
 import tomllib
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
@@ -310,10 +311,25 @@ def _body_signature(payload: object) -> str:
     elif error:
         error_class = str(error)[:60]
     choices = payload.get("choices")
+    provider_message = _provider_error_message(payload)
     return (
         f"keys=[{keys}] error_class={error_class!r} "
+        f"provider_message={provider_message!r} "
         f"choices={type(choices).__name__ if choices is not None else 'absent'}"
     )
+
+
+def _provider_error_message(payload: object) -> str:
+    """Return the provider-authored error message, bounded to one log line."""
+    if not isinstance(payload, Mapping):
+        return ""
+    error = payload.get("error")
+    if not isinstance(error, Mapping):
+        return ""
+    message = error.get("message")
+    if not isinstance(message, str):
+        return ""
+    return " ".join(message.split())[:200]
 
 
 # A reasoning model occasionally answers in prose instead of the tool
@@ -2554,6 +2570,7 @@ class OpenRouterSourceReviewAgent:
         *,
         api_key_file: str | None,
         model: str,
+        fallback_models: tuple[str, ...] = (),
         base_url: str,
         timeout_seconds: float,
         max_steps: int,
@@ -2572,6 +2589,7 @@ class OpenRouterSourceReviewAgent:
         self._clear_min_notes = max(1, int(clear_min_notes))
         self._api_key_file = api_key_file
         self._model = model
+        self._fallback_models = fallback_models
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._max_steps = max_steps
@@ -2918,8 +2936,11 @@ class OpenRouterSourceReviewAgent:
                 "zdr": True,
                 "data_collection": "deny",
                 "require_parameters": True,
+                "allow_fallbacks": bool(self._fallback_models),
             },
         }
+        if self._fallback_models:
+            request["models"] = [self._model, *self._fallback_models]
         # HTTP 429/5xx and transport faults ride the same long unbilled
         # ladder as relayed 200-body faults: the sub-second ladder could not
         # outlive account-level throttling, and raising here burns the whole
@@ -2943,12 +2964,22 @@ class OpenRouterSourceReviewAgent:
                 status = error.response.status_code
                 if status != 429 and status < 500:
                     raise
+                provider_message = ""
+                with suppress(ValueError):
+                    provider_message = _provider_error_message(error.response.json())
                 if attempt >= len(_MODEL_ERROR_RETRY_DELAYS_SECONDS):
+                    logger.warning(
+                        "source review request transient failure exhausted "
+                        "(HTTP %d) provider_message=%r",
+                        status,
+                        provider_message,
+                    )
                     raise
                 logger.warning(
                     "source review request transiently failed (HTTP %d); "
-                    "retrying attempt=%d",
+                    "provider_message=%r retrying attempt=%d",
                     status,
+                    provider_message,
                     attempt + 2,
                 )
                 await asyncio.sleep(_MODEL_ERROR_RETRY_DELAYS_SECONDS[attempt])

@@ -106,6 +106,10 @@ def _source_review_layer_env(
             settings.source_review_reasoning_effort,
         ),
         ("SCREENER_SOURCE_REVIEW_MODEL", settings.source_review_model),
+        (
+            "SCREENER_SOURCE_REVIEW_FALLBACK_MODELS",
+            ",".join(settings.source_review_fallback_models),
+        ),
         ("SCREENER_L2_MAX_INPUT_TOKENS", str(int(settings.max_input_tokens))),
         ("SCREENER_L2_MAX_OUTPUT_TOKENS", str(int(settings.max_output_tokens))),
         (

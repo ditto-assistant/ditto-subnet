@@ -236,6 +236,7 @@ def _agent(
     return OpenRouterSourceReviewAgent(
         api_key_file=str(key_file),
         model="openai/gpt-5.6-luna",
+        fallback_models=("z-ai/glm-5.2", "openai/gpt-5.6-sol"),
         base_url="https://openrouter.test/api/v1",
         timeout_seconds=10,
         max_steps=4,
@@ -1993,6 +1994,7 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
         "zdr": True,
         "data_collection": "deny",
         "require_parameters": True,
+        "allow_fallbacks": True,
     }
     prompt = seen[0]["messages"][0]["content"]
     assert "Public availability is not a safe harbor" in prompt
@@ -4445,6 +4447,15 @@ def test_body_signature_never_reproduces_content() -> None:
     assert "miner source text" not in signature
     assert "choices" in signature
     assert source_review_module._body_signature(None) == "non-json"
+    provider_signature = source_review_module._body_signature(
+        {
+            "error": {
+                "code": 429,
+                "message": "  key RPM limit\nexceeded for this account  ",
+            }
+        }
+    )
+    assert "key RPM limit exceeded for this account" in provider_signature
 
 
 async def test_non_json_body_rides_the_full_unbilled_ladder(
@@ -4506,7 +4517,7 @@ async def test_non_json_body_rides_the_full_unbilled_ladder(
 
 
 async def test_http_429_rides_the_long_ladder(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Real HTTP 429s wait like relayed ones instead of dying inside 1.5s."""
     monkeypatch.setattr(
@@ -4530,7 +4541,15 @@ async def test_http_429_rides_the_long_ladder(
         nonlocal calls
         calls += 1
         if calls <= 2:
-            return httpx.Response(429, json={"error": "rate limited"})
+            return httpx.Response(
+                429,
+                json={
+                    "error": {
+                        "code": 429,
+                        "message": "key RPM limit exceeded for this account",
+                    }
+                },
+            )
         return httpx.Response(
             200,
             json={
@@ -4553,6 +4572,7 @@ async def test_http_429_rides_the_long_ladder(
 
     assert observation.ok and observation.risk_level == "low"
     assert calls == 3
+    assert "key RPM limit exceeded for this account" in caplog.text
 
 
 def _note_call(
@@ -4671,6 +4691,12 @@ async def test_l1_uses_cached_prefix_adaptive_reasoning_and_coverage_exit(
     assert seen[0]["reasoning"] == {"effort": "medium"}
     assert seen[1]["reasoning"] == {"effort": "high"}
     assert seen[0]["prompt_cache_key"] == seen[1]["prompt_cache_key"]
+    assert seen[0]["models"] == [
+        "openai/gpt-5.6-luna",
+        "z-ai/glm-5.2",
+        "openai/gpt-5.6-sol",
+    ]
+    assert seen[0]["provider"]["allow_fallbacks"] is True
     assert len(str(seen[0]["prompt_cache_key"])) <= 64
     assert any(
         "notes ledger now covers every served-path area" in str(row.get("content"))

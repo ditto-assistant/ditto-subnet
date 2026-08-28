@@ -535,6 +535,7 @@ class BuildGate:
         l1_reviewer = OpenRouterSourceReviewAgent(
             api_key_file=config.source_review_api_key_file,
             model=config.source_review_model,
+            fallback_models=config.source_review_fallback_models,
             base_url=config.source_review_base_url,
             timeout_seconds=config.source_review_timeout_seconds,
             max_steps=config.source_review_max_steps,

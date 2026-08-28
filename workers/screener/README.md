@@ -135,6 +135,8 @@ Required values are supplied through the production host's protected
 - `SCREENER_SOURCE_REVIEW_API_KEY_FILE`: required mode-0400 OpenRouter key file
   for the private read-only source reviewer. The default model is
   `openai/gpt-5.6-luna`.
+- `SCREENER_SOURCE_REVIEW_FALLBACK_MODELS`: ordered OpenRouter fallback chain
+  for L1; defaults to `z-ai/glm-5.2,openai/gpt-5.6-sol`.
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
 - `SCREENER_L2_REVIEW_MODEL`: locked to `moonshotai/kimi-k3`, with
   `SCREENER_L2_FALLBACK_MODELS=z-ai/glm-5.2,openai/gpt-5.6-sol`.

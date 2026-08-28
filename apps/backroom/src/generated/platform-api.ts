@@ -18069,6 +18069,14 @@ export interface components {
              */
             policy_manifest_rotation_id: string;
             /**
+             * Source Review Fallback Models
+             * @default [
+             *       "z-ai/glm-5.2",
+             *       "openai/gpt-5.6-sol"
+             *     ]
+             */
+            source_review_fallback_models: ("moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol")[];
+            /**
              * Source Review Max Read Bytes
              * @default 8000000
              */

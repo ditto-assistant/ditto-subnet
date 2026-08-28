@@ -70,6 +70,10 @@ class ScreenerReviewSettings(BaseModel):
     )
     source_review_reasoning_effort: Literal["low", "medium", "high"] = "high"
     source_review_model: SourceReviewModel = "openai/gpt-5.6-luna"
+    source_review_fallback_models: tuple[ReviewModel, ...] = (
+        "z-ai/glm-5.2",
+        "openai/gpt-5.6-sol",
+    )
     source_review_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 3_600
     max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)] = 425_000
     max_output_tokens: Annotated[int, Field(ge=1, le=128_000)] = 20_000
@@ -106,7 +110,9 @@ class ScreenerReviewSettings(BaseModel):
             )
         return value
 
-    @field_validator("l2_fallback_models", mode="before")
+    @field_validator(
+        "l2_fallback_models", "source_review_fallback_models", mode="before"
+    )
     @classmethod
     def accept_json_model_chain(cls, value: object) -> object:
         """Preserve an immutable chain after FastAPI decodes its JSON array."""
@@ -119,6 +125,9 @@ class ScreenerReviewSettings(BaseModel):
         chain = (self.l2_model, *self.l2_fallback_models)
         if len(chain) != len(set(chain)):
             raise ValueError("L2 model chain must not contain duplicates")
+        l1_chain = (self.source_review_model, *self.source_review_fallback_models)
+        if len(l1_chain) != len(set(l1_chain)):
+            raise ValueError("L1 model chain must not contain duplicates")
         if self.max_completion_tokens > self.max_output_tokens:
             raise ValueError("completion budget must not exceed output budget")
         return self

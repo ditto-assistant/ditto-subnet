@@ -44,6 +44,10 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "review_journal_file": None,
         "source_review_api_key_file": None,
         "source_review_model": "openai/gpt-5.6-luna",
+        "source_review_fallback_models": (
+            "z-ai/glm-5.2",
+            "openai/gpt-5.6-sol",
+        ),
         "source_review_base_url": "https://openrouter.ai/api/v1",
         "source_review_timeout_seconds": 180.0,
         "source_review_max_steps": 200,
