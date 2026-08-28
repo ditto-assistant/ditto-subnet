@@ -175,6 +175,7 @@ def kaniko_argv(*, destination: str) -> list[str]:
         "--context=tar:///workspace/source.tar.gz",
         "--dockerfile=Dockerfile",
         f"--destination={destination}",
+        "--registry-mirror=mirror.gcr.io",
         "--no-push",
         "--no-push-cache",
         "--cache=false",
