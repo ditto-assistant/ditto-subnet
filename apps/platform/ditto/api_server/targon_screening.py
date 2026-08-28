@@ -49,7 +49,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_LEASE_TTL = timedelta(minutes=70)
+_LEASE_TTL = timedelta(minutes=120)
 _SCREENED_IMAGE_TTL = timedelta(days=1)
 _PLATFORM_COPY_PREFIX = "platform-targon-copy:"
 _KANIKO_FAILED_SUFFIX = "_SUBMISSION_KANIKO_FAILED"
@@ -73,6 +73,30 @@ def _certified_low_risk(observation: SourceReviewObservationPayload | None) -> b
         and observation.risk_level == "low"
         and observation.clearance_certified
     )
+
+
+def _admitted_on_coverage(
+    observation: SourceReviewObservationPayload | None,
+) -> bool:
+    """Whether an exhausted review earned admission on its notes ledger.
+
+    ``pass_inconclusive`` is no longer an evidence-free default: the worker
+    emits it only when the review ran out of budget with ZERO recorded
+    concerns and enough ``cleared`` coverage notes. Admitting it makes the
+    review budget a depth knob instead of pass/fail fate; a ledger with
+    concerns (or no positive coverage) arrives as ``inconclusive`` and holds
+    for the operator WITH the notes attached. Legacy payloads that carry
+    ``pass_inconclusive`` with no notes at all keep the old fail-closed hold.
+    """
+    if observation is None or observation.ok:
+        return False
+    if observation.failure_disposition != "pass_inconclusive":
+        return False
+    if observation.finding is not None or observation.finding_digest is not None:
+        return False
+    if any(note.kind == "concern" for note in observation.notes):
+        return False
+    return any(note.kind == "cleared" for note in observation.notes)
 
 
 def _review_failed_retryable(
@@ -310,6 +334,7 @@ async def maybe_finalize_targon_screen(
         return True
     if build.runtime_status != "succeeded":
         return False
+    coverage_admitted = False
     if not attempt.build_only:
         review = await session.scalar(
             select(SubmissionSourceReview)
@@ -337,7 +362,8 @@ async def maybe_finalize_targon_screen(
                 )
             except ValueError:
                 observation = None
-        if not _certified_low_risk(observation):
+        coverage_admitted = _admitted_on_coverage(observation)
+        if not _certified_low_risk(observation) and not coverage_admitted:
             if _review_failed_retryable(observation):
                 await _fail_retryable(
                     session,
@@ -389,7 +415,11 @@ async def maybe_finalize_targon_screen(
     agent.screened_image_verified_at = upload.verified_at
     attempt.status = "passed"
     attempt.finished_at = now
-    attempt.public_reason = None
+    attempt.public_reason = (
+        "Bounded source review exhausted with clean coverage notes; admitted"
+        if coverage_admitted
+        else None
+    )
     logger.info(
         "platform-attested targon pass agent_id=%s attempt_id=%s image_sha256=%s",
         agent.agent_id,
@@ -571,6 +601,20 @@ async def _quarantine(
         reason_code = "agentic-source-review-tripwire"
         public_reason = "Submission held for anti-cheat review"
     review_audit = observation.review_audit if observation is not None else None
+    # The reviewer's in-progress notes ledger is the operator's material for a
+    # budget-terminated review: map it onto the bounded public-safe evidence
+    # trail so Backroom shows WHAT the court determined before it ran out.
+    note_evidence = [
+        {
+            "module": "review-note",
+            "code": f"{note.kind}:{note.category}",
+            "summary": (
+                (f"{note.path}:{note.line} — " if note.path and note.line else "")
+                + note.summary
+            )[:300],
+        }
+        for note in (observation.notes if observation is not None else [])
+    ][:48]
     agent.status = AgentStatus.QUARANTINED
     agent.screening_reason = public_reason
     agent.screening_reason_code = reason_code
@@ -601,6 +645,7 @@ async def _quarantine(
                 else None
             ),
             reason_code=reason_code,
+            evidence=note_evidence or None,
             finding=(
                 observation.finding.model_dump(mode="json")
                 if observation is not None and observation.finding is not None

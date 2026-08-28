@@ -17846,6 +17846,16 @@ export interface components {
              */
             cache_ttl_seconds: number;
             /**
+             * Clear Min Notes
+             * @default 3
+             */
+            clear_min_notes: number;
+            /**
+             * Concern Hold Count
+             * @default 1
+             */
+            concern_hold_count: number;
+            /**
              * Critic Reasoning Effort
              * @default medium
              * @enum {string}
@@ -17883,7 +17893,7 @@ export interface components {
             max_completion_tokens: number;
             /**
              * Max Cost Usd
-             * @default 2
+             * @default 6
              */
             max_cost_usd: number;
             /**
@@ -17898,7 +17908,7 @@ export interface components {
             max_output_tokens: number;
             /**
              * Max Steps
-             * @default 18
+             * @default 32
              */
             max_steps: number;
             /**
@@ -17942,12 +17952,12 @@ export interface components {
             source_review_reasoning_effort: "low" | "medium" | "high";
             /**
              * Source Review Timeout Seconds
-             * @default 1800
+             * @default 3600
              */
             source_review_timeout_seconds: number;
             /**
              * Timeout Seconds
-             * @default 900
+             * @default 1200
              */
             timeout_seconds: number;
         };
@@ -18255,6 +18265,44 @@ export interface components {
          */
         SourceReviewInvariantDisposition: "pass" | "breach" | "inconclusive";
         /**
+         * SourceReviewNote
+         * @description One bounded, typed determination recorded DURING a source review.
+         *
+         *     The review agent is required to log its working determinations as it
+         *     inspects, so a budget- or fault-terminated review still yields the
+         *     evidence it accumulated instead of a bare ``inconclusive``. ``concern``
+         *     notes accumulate toward an operator hold; ``cleared`` notes accumulate
+         *     toward positive coverage; ``observation`` is neutral context. Summaries
+         *     are reviewer-authored and public-safe: never source text, prompts, or
+         *     challenge values.
+         */
+        SourceReviewNote: {
+            /**
+             * Category
+             * @default none
+             */
+            category: string;
+            /** Confidence */
+            confidence?: number | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "concern" | "cleared" | "observation";
+            /** Line */
+            line?: number | null;
+            /** Path */
+            path?: string | null;
+            /**
+             * Stage
+             * @default l1
+             * @enum {string}
+             */
+            stage: "l1" | "l2" | "l3";
+            /** Summary */
+            summary: string;
+        };
+        /**
          * SourceReviewObservationPayload
          * @description Bounded source-review observation safe to cross provider boundaries.
          */
@@ -18277,6 +18325,8 @@ export interface components {
             finding?: components["schemas"]["SourceReviewFinding"] | null;
             /** Finding Digest */
             finding_digest?: string | null;
+            /** Notes */
+            notes?: components["schemas"]["SourceReviewNote"][];
             /** Ok */
             ok: boolean;
             review_audit?: components["schemas"]["ScreenReviewAudit"] | null;

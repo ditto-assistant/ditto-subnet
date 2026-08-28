@@ -212,6 +212,10 @@ class SourceReviewObservation:
     failure_disposition: str = "retryable_infra"
     clearance_certified: bool = False
     review_audit: Mapping[str, object] | None = None
+    notes: tuple[Mapping[str, object], ...] = ()
+    """Typed in-progress determinations (SourceReviewNote shape). Recorded
+    DURING review so a budget- or fault-terminated attempt still ships the
+    evidence it accumulated; at exhaustion they decide the gradient verdict."""
 
 
 ChallengeRunner = Callable[

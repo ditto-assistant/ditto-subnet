@@ -644,11 +644,13 @@ async def test_finalize_still_holds_inconclusive_review_outcomes(
     session_maker: async_sessionmaker[AsyncSession],
     disposition: str,
 ) -> None:
-    """Budget-exhausted review outcomes remain operator-review holds.
+    """Budget exhaustion without a notes ledger remains an operator hold.
 
     Production observations carry the reviewer's budget audit; storing it must
     satisfy the audit/digest/reason constraints, which is exactly what 500ed
-    every platform-attested verdict before this regression test existed.
+    every platform-attested verdict before this regression test existed. A
+    legacy ``pass_inconclusive`` with no notes stays fail-closed: only a
+    ledger with cleared coverage earns admission (see the coverage test).
     """
     attempt_id = await _seed_completed_review(
         session_maker,
@@ -731,3 +733,130 @@ async def test_finalize_tripwire_quarantine_persists_review_audit(
         assert quarantine.review_audit is not None
         assert quarantine.review_audit_digest is not None
         assert quarantine.review_audit_digest == quarantine.manifest_digest
+
+
+@pytest.mark.asyncio
+async def test_finalize_admits_exhausted_review_on_clean_coverage_notes(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Zero concerns + cleared coverage notes = admission, not a hold.
+
+    The gradient contract: the worker emits ``pass_inconclusive`` only when
+    an exhausted review recorded no concerns and enough positive coverage,
+    so the platform admits it instead of parking the miner behind an
+    evidence-free inconclusive.
+    """
+    attempt_id = await _seed_completed_review(
+        session_maker,
+        observation={
+            "ok": False,
+            "categories": [],
+            "error_code": "source-review-step-budget-exhausted",
+            "failure_disposition": "pass_inconclusive",
+            "clearance_certified": False,
+            "review_audit": _REVIEW_AUDIT,
+            "notes": [
+                {
+                    "kind": "cleared",
+                    "category": "none",
+                    "summary": "Entrypoint routes to a genuine model call.",
+                },
+                {
+                    "kind": "cleared",
+                    "category": "none",
+                    "summary": "Tool dispatch executes model-authored calls.",
+                },
+                {
+                    "kind": "cleared",
+                    "category": "none",
+                    "summary": "Answer construction forwards model text.",
+                },
+            ],
+        },
+    )
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        finalized = await maybe_finalize_targon_screen(
+            session,
+            storage=cast(S3StorageClient, _FakeStorage()),
+            screener_hotkey=_SCREENER_HOTKEY,
+            attempt_id=attempt_id,
+            now=now,
+        )
+    assert finalized is True
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.status == "passed"
+        assert attempt.public_reason is not None
+        assert "coverage" in attempt.public_reason
+        agent = await session.get(Agent, attempt.agent_id)
+        assert agent is not None
+        assert agent.status == AgentStatus.EVALUATING
+        quarantine = await session.scalar(
+            select(ScreeningQuarantine).where(
+                ScreeningQuarantine.attempt_id == attempt_id
+            )
+        )
+        assert quarantine is None
+
+
+@pytest.mark.asyncio
+async def test_finalize_holds_concern_notes_with_ledger_as_evidence(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Concern notes hold the artifact and land on the quarantine evidence."""
+    attempt_id = await _seed_completed_review(
+        session_maker,
+        observation={
+            "ok": False,
+            "categories": [],
+            "error_code": "source-review-step-budget-exhausted",
+            "failure_disposition": "inconclusive",
+            "clearance_certified": False,
+            "review_audit": _REVIEW_AUDIT,
+            "notes": [
+                {
+                    "kind": "concern",
+                    "category": "scorer_contract_manipulation",
+                    "path": "src/main.rs",
+                    "line": 7,
+                    "summary": "Host gate rejects model drafts on derived values.",
+                    "confidence": 0.8,
+                },
+                {
+                    "kind": "cleared",
+                    "category": "none",
+                    "summary": "Retrieval is user-scoped.",
+                },
+            ],
+        },
+    )
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        finalized = await maybe_finalize_targon_screen(
+            session,
+            storage=cast(S3StorageClient, _FakeStorage()),
+            screener_hotkey=_SCREENER_HOTKEY,
+            attempt_id=attempt_id,
+            now=now,
+        )
+    assert finalized is True
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.status == "quarantined"
+        quarantine = await session.scalar(
+            select(ScreeningQuarantine).where(
+                ScreeningQuarantine.attempt_id == attempt_id
+            )
+        )
+        assert quarantine is not None
+        assert quarantine.evidence is not None
+        codes = [row["code"] for row in quarantine.evidence]
+        assert "concern:scorer_contract_manipulation" in codes
+        assert any(
+            row["module"] == "review-note"
+            and row["summary"].startswith("src/main.rs:7")
+            for row in quarantine.evidence
+        )

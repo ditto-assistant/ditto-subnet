@@ -29,7 +29,10 @@ from ditto_screener.l2_review import (
     LayeredSourceReviewAgent,
 )
 from ditto_screener.source_review import OpenRouterSourceReviewAgent
-from ditto_screening_protocol import SourceReviewObservationPayload
+from ditto_screening_protocol import (
+    SourceReviewNote,
+    SourceReviewObservationPayload,
+)
 
 _MAX_SOURCE_BYTES = 20 * 1024 * 1024
 
@@ -107,6 +110,10 @@ def _build_reviewer(
         static_preflight_v2_mode=os.environ.get(
             "SCREENER_STATIC_PREFLIGHT_V2_MODE", "off"
         ),
+        concern_hold_count=int(
+            os.environ.get("SCREENER_REVIEW_CONCERN_HOLD_COUNT", "1")
+        ),
+        clear_min_notes=int(os.environ.get("SCREENER_REVIEW_CLEAR_MIN_NOTES", "3")),
     )
     l2 = KimiSolSourceReviewAgent(
         api_key_file=key_file,
@@ -122,14 +129,14 @@ def _build_reviewer(
                 os.environ.get("SCREENER_L2_AUDIT_RETENTION_DAYS", "30")
             ),
         ),
-        timeout_seconds=float(os.environ.get("SCREENER_L2_TIMEOUT_SECONDS", "900")),
-        max_steps=int(os.environ.get("SCREENER_L2_MAX_STEPS", "18")),
+        timeout_seconds=float(os.environ.get("SCREENER_L2_TIMEOUT_SECONDS", "1200")),
+        max_steps=int(os.environ.get("SCREENER_L2_MAX_STEPS", "32")),
         max_input_tokens=int(os.environ.get("SCREENER_L2_MAX_INPUT_TOKENS", "425000")),
         max_output_tokens=int(os.environ.get("SCREENER_L2_MAX_OUTPUT_TOKENS", "20000")),
         max_completion_tokens=int(
             os.environ.get("SCREENER_L2_MAX_COMPLETION_TOKENS", "2400")
         ),
-        max_cost_usd=float(os.environ.get("SCREENER_L2_MAX_COST_USD", "2.00")),
+        max_cost_usd=float(os.environ.get("SCREENER_L2_MAX_COST_USD", "6.00")),
         analyst_reasoning_effort=os.environ.get(
             "SCREENER_L2_ANALYST_REASONING_EFFORT", "model_default"
         ),
@@ -174,7 +181,7 @@ async def _amain() -> int:
     base = f"{platform}/api/v1/screener/submission-source-reviews/{review_id}"
     archive_path: str | None = None
     timeout_seconds = float(
-        os.environ.get("SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "1800")
+        os.environ.get("SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "3600")
     )
     try:
         async with httpx.AsyncClient(
@@ -208,6 +215,10 @@ async def _amain() -> int:
                 failure_disposition=observation.failure_disposition,
                 clearance_certified=observation.clearance_certified,
                 review_audit=observation.review_audit,
+                notes=[
+                    SourceReviewNote.model_validate(note)
+                    for note in observation.notes[:48]
+                ],
             )
             complete = await client.post(
                 f"{base}/complete",

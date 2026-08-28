@@ -51,8 +51,8 @@ from ditto.db.models import (
 logger = logging.getLogger(__name__)
 
 _BUILD_LEASE = timedelta(minutes=50)
-_JOB_TTL = timedelta(minutes=45)
-_SOURCE_LEASE = timedelta(minutes=35)
+_JOB_TTL = timedelta(minutes=80)
+_SOURCE_LEASE = timedelta(minutes=75)
 _REAP_LIMIT = 16
 _TERMINAL_JOB = ("succeeded", "consumed", "canceled", "fallback_required")
 _TERMINAL_RUNTIME = ("succeeded", "fallback_required", "skipped")
@@ -117,6 +117,11 @@ def _source_review_layer_env(
         ("SCREENER_L2_CRITIC_REASONING_EFFORT", settings.critic_reasoning_effort),
         ("SCREENER_L2_CACHE_TTL_SECONDS", str(int(settings.cache_ttl_seconds))),
         ("SCREENER_L2_AUDIT_RETENTION_DAYS", str(int(settings.audit_retention_days))),
+        (
+            "SCREENER_REVIEW_CONCERN_HOLD_COUNT",
+            str(int(settings.concern_hold_count)),
+        ),
+        ("SCREENER_REVIEW_CLEAR_MIN_NOTES", str(int(settings.clear_min_notes))),
     )
 
 

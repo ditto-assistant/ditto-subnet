@@ -3746,8 +3746,23 @@ class LayeredSourceReviewAgent:
                 finding_digest=l1.finding_digest,
                 categories=l1.categories,
                 finding=l1.finding,
+                notes=l1.notes,
             )
-        return _enforce_causal_authority(result.observation)
+        return _carry_l1_notes(_enforce_causal_authority(result.observation), l1)
+
+
+def _carry_l1_notes(
+    observation: SourceReviewObservation, l1: SourceReviewObservation
+) -> SourceReviewObservation:
+    """Ship the L1 ledger with an L2/L3 outcome that recorded none itself.
+
+    A budget- or fault-terminated deep review otherwise discards everything
+    the broad L1 pass already determined; the notes are the operator's
+    material either way.
+    """
+    if observation.notes or not l1.notes:
+        return observation
+    return replace(observation, notes=l1.notes)
 
 
 def _enforce_causal_authority(

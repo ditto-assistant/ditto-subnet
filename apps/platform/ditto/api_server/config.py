@@ -236,7 +236,7 @@ class TargonRentalConfig:
     """Targon-first smoke wait. Kaniko keeps ``provision_timeout_seconds``."""
     build_timeout_seconds: float = 1500.0
     runtime_timeout_seconds: float = 180.0
-    source_review_timeout_seconds: float = 1800.0
+    source_review_timeout_seconds: float = 3600.0
     max_inflight: int = 10
     """Cap on concurrent Targon rentals (Kaniko, smoke, and L1 combined)."""
 

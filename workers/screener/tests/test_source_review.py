@@ -756,7 +756,7 @@ fn run() -> String {
     assert observation.risk_level == "high"
     assert observation.categories == ("benchmark_emulation",)
     assert observation.finding is not None
-    assert observation.finding["prompt_revision"] == "source-review-v21-policy-v10"
+    assert observation.finding["prompt_revision"] == "source-review-v22-policy-v10"
     assert observation.finding["evidence"] == [
         {
             "path": "src/memory_solver.rs",
@@ -1978,7 +1978,14 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     assert progress == [(0, 4), (1, 4), (2, 4)]
     assert all(
         tool["function"]["name"]
-        in {"analyze_binary", "list_files", "read_file", "search", "submit_review"}
+        in {
+            "analyze_binary",
+            "list_files",
+            "read_file",
+            "record_note",
+            "search",
+            "submit_review",
+        }
         for request in seen
         for tool in request["tools"]
     )
@@ -2008,7 +2015,7 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     assert observation.finding is not None
     assert "use\nanalyze_binary only when" in prompt
     assert 'compact, precomputed\n"binary_analysis"' in prompt
-    assert observation.finding["prompt_revision"] == "source-review-v21-policy-v10"
+    assert observation.finding["prompt_revision"] == "source-review-v22-policy-v10"
     assert len(observation.finding["invariant_assessment"]["decisions"]) == 7
     initial_inventory = json.loads(
         seen[0]["messages"][1]["content"]
@@ -2780,7 +2787,7 @@ def test_policy_v10_prompt_separates_replacement_retry_and_strict_controls() -> 
 def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
     from ditto_screener.source_review import _PROMPT_REVISION, _SYSTEM_PROMPT
 
-    assert _PROMPT_REVISION == "source-review-v21-policy-v10"
+    assert _PROMPT_REVISION == "source-review-v22-policy-v10"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -4546,3 +4553,177 @@ async def test_http_429_rides_the_long_ladder(
 
     assert observation.ok and observation.risk_level == "low"
     assert calls == 3
+
+
+def _note_call(
+    call_id: str, kind: str, summary: str, **extra: object
+) -> dict[str, object]:
+    return _tool(call_id, "record_note", {"kind": kind, "summary": summary, **extra})
+
+
+async def test_budget_exhaustion_with_concern_notes_holds_with_evidence(
+    tmp_path: Path,
+) -> None:
+    """A review that dies at its step budget ships its ledger and holds."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        tool_calls = (
+            [
+                _note_call(
+                    "note-1",
+                    "concern",
+                    "Reachable host gate rejects model drafts on derived values.",
+                    category="scorer_contract_manipulation",
+                    path="src/main.rs",
+                    line=7,
+                    confidence=0.8,
+                ),
+                _tool(
+                    "read-1",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 40},
+                ),
+            ]
+            if calls == 1
+            else [
+                _tool(
+                    "read-" + str(calls),
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 40},
+                )
+            ]
+        )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": tool_calls,
+                        }
+                    }
+                ]
+            },
+        )
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert not observation.ok
+    assert observation.error_code == "source-review-step-budget-exhausted"
+    assert observation.failure_disposition == "inconclusive"
+    assert [note["kind"] for note in observation.notes] == ["concern"]
+    note = observation.notes[0]
+    assert note["category"] == "scorer_contract_manipulation"
+    assert note["path"] == "src/main.rs"
+    assert note["line"] == 7
+    assert note["confidence"] == 0.8
+
+
+async def test_budget_exhaustion_with_cleared_coverage_admits(
+    tmp_path: Path,
+) -> None:
+    """Zero concerns + enough cleared notes = admission on positive coverage."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            tool_calls = [
+                _note_call(
+                    "n1", "cleared", "Entrypoint routes to a genuine model call."
+                ),
+                _note_call(
+                    "n2", "cleared", "Tool dispatch executes model-authored calls."
+                ),
+                _note_call("n3", "cleared", "Answer construction forwards model text."),
+            ]
+        else:
+            tool_calls = [
+                _tool(
+                    "read-" + str(calls),
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 40},
+                )
+            ]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": tool_calls,
+                        }
+                    }
+                ]
+            },
+        )
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert not observation.ok
+    assert observation.failure_disposition == "pass_inconclusive"
+    assert len(observation.notes) == 3
+
+
+async def test_budget_exhaustion_with_thin_ledger_still_holds(
+    tmp_path: Path,
+) -> None:
+    """No concerns but too little positive coverage cannot silently admit."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                _tool(
+                                    "read-1",
+                                    "read_file",
+                                    {
+                                        "path": "src/main.rs",
+                                        "start_line": 1,
+                                        "end_line": 40,
+                                    },
+                                )
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() {}")),
+        artifact_sha256=_SHA,
+    )
+
+    assert not observation.ok
+    assert observation.failure_disposition == "inconclusive"
+    assert observation.notes == ()
