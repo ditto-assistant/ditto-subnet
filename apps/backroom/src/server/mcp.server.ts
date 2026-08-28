@@ -15,6 +15,7 @@ import type { BackroomSession } from '../lib/auth.types'
 import {
   compactAthReviewQueue,
   compactBatchRetryResponse,
+  compactMinerOwnerFootprint,
   compactScreeningQuarantines,
   compactScreeningSubmissions,
   compactStuckSubmissions,
@@ -1253,11 +1254,11 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get miner owner footprint',
       description:
-        'Answer "who else does this operator control?" for one SN118 miner hotkey or coldkey. Returns every hotkey linked to it through the platform\'s evaluation-payment records, with each one\'s payment coldkeys, submission count, most recent submission time, recent submissions, and its current public leaderboard standing (rank, composite, quorum vs provisional, emission eligibility, on-chain registration). CRITICAL: this is payment provenance — who paid for each evaluation — NOT on-chain metagraph ownership, and the two can disagree. Miners routinely pay from several coldkeys, so a shared coldkey is ONE corroborating signal worth following and different coldkeys are NOT evidence of different operators; never report a coldkey match as an ownership finding, and confirm on chain (btcli, or the metagraph) before acting on one. link_hop grades the evidence: 0 is the key you asked about, 1 shares a coldkey with it, higher hops are progressively weaker. Raise depth to follow the chain further, and check expansion_complete — false means the walk hit a ceiling and more linkage exists. Agents with no payment row report a null coldkey, meaning unknown rather than unowned. Requires backroom:read, exposes no miner source, and changes nothing.',
+        'Answer "who else does this operator control?" for one SN118 miner hotkey or coldkey. Returns every hotkey linked to it through the platform\'s evaluation-payment records, with each one\'s payment coldkeys, submission count, most recent submission time, recent submissions, and its current public leaderboard standing (rank, composite, quorum vs provisional, emission eligibility, on-chain registration). CRITICAL: this is payment provenance — who paid for each evaluation — NOT on-chain metagraph ownership, and the two can disagree. Miners routinely pay from several coldkeys, so a shared coldkey is ONE corroborating signal worth following and different coldkeys are NOT evidence of different operators; never report a coldkey match as an ownership finding, and confirm on chain (btcli, or the metagraph) before acting on one. link_hop grades the evidence: 0 is the key you asked about, 1 shares a coldkey with it, higher hops are progressively weaker. Raise depth to follow the chain further, and check expansion_complete — false means the walk hit a ceiling and more linkage exists. Agents with no payment row report a null coldkey, meaning unknown rather than unowned. Linkage rows are compacted losslessly: fields identical across every linked hotkey appear once in `hotkeys_shared`, and board fields identical across every ranked standing appear once in `standings_shared` (reconstruct a row as `{ ...hotkeys_shared, ...row }`, a standing as `{ ...standings_shared, ...row.leaderboard }`, and a standing\'s hotkey as its row\'s `miner_hotkey`). Requires backroom:read, exposes no miner source, and changes nothing.',
       inputSchema: ownerFootprintLookupInputSchema,
       annotations: toolAnnotations('read'),
     },
-    async (input) => result(await fetchOwnerFootprint(input)),
+    async (input) => result(compactMinerOwnerFootprint(await fetchOwnerFootprint(input))),
   )
 
   registerTool(

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   batchRetryValidationResponseSchema,
+  ownerFootprintDetailSchema,
   screeningQuarantineListSchema,
   screeningSubmissionListSchema,
   stuckSubmissionsListSchema,
@@ -8,6 +9,7 @@ import {
 } from './admin.schemas'
 import {
   compactBatchRetryResponse,
+  compactMinerOwnerFootprint,
   compactScreeningQuarantines,
   compactScreeningSubmissions,
   compactStuckSubmissions,
@@ -384,6 +386,145 @@ describe('compactStuckSubmissions', () => {
     expect(bytes(compactStuckSubmissions(stuckSubmissionsPayload(10)))).toBeLessThan(
       4_000,
     )
+  })
+})
+
+describe('compactMinerOwnerFootprint', () => {
+  function leaderboardStanding(index: number, minerHotkey: string) {
+    return {
+      rank: index + 1,
+      finalized: true,
+      score_count: 3,
+      score_quorum: 3,
+      agent_id: agentId(100 + index),
+      agent_name: `best-agent-${index}`,
+      miner_hotkey: minerHotkey,
+      composite: 0.9 - index * 0.01,
+      tool_mean: 0.95,
+      memory_mean: 0.85,
+      first_seen: '2026-07-01T00:00:00Z',
+      eligible: true,
+      bench_version: 7,
+      dataset_sha256: 'ab'.repeat(32),
+    }
+  }
+
+  function footprintPayload(count: number) {
+    return ownerFootprintDetailSchema.parse({
+      identifier: HOTKEYS[0],
+      identifier_kind: 'miner_hotkey',
+      depth: 1,
+      miner_coldkeys: ['5ColdA'],
+      hotkey_count: count,
+      submission_count: count * 2,
+      expansion_complete: true,
+      ownership_basis: 'evaluation_payment_records',
+      linkage_caveat: 'Payment records, not ownership.',
+      active_bench_version: 7,
+      desired_bench_version: 8,
+      leaderboard_generated_at: CREATED_AT,
+      ranked_hotkey_count: count,
+      hotkeys: Array.from({ length: count }, (_, index) => ({
+        miner_hotkey: HOTKEYS[index % HOTKEYS.length],
+        miner_coldkeys: ['5ColdA'],
+        link_hop: index,
+        submission_count: 2,
+        paid_submission_count: 2,
+        latest_submitted_at: CREATED_AT,
+        agents_truncated: false,
+        agents: [
+          {
+            agent_id: agentId(index),
+            agent_name: `agent-${index}`,
+            agent_status: 'scored',
+            artifact_sha256: (index % 2 ? 'cd' : 'ab').repeat(32),
+            submitted_at: CREATED_AT,
+            miner_coldkey: '5ColdA',
+          },
+        ],
+        leaderboard: leaderboardStanding(index, HOTKEYS[index % HOTKEYS.length]),
+      })),
+    })
+  }
+
+  it('never states a standing\'s hotkey at two nesting levels', () => {
+    const compact = compactMinerOwnerFootprint(footprintPayload(3)) as {
+      hotkeys: Array<{ miner_hotkey: string; leaderboard: Record<string, unknown> | null }>
+    }
+    expect(compact.hotkeys.every((row) => 'miner_hotkey' in row)).toBe(true)
+    expect(
+      compact.hotkeys.every(
+        (row) => row.leaderboard === null || !('miner_hotkey' in row.leaderboard),
+      ),
+    ).toBe(true)
+    // And the standing stays reconstructable from the row identity.
+    const encoded = JSON.stringify(compact)
+    expect(encoded.split(HOTKEYS[0]).length - 1).toBeGreaterThan(0)
+  })
+
+  it('keeps every hotkey, agent, and standing field', () => {
+    const payload = footprintPayload(3)
+    const compact = compactMinerOwnerFootprint(payload) as {
+      hotkeys: Array<Record<string, unknown>>
+      hotkeys_shared: Record<string, unknown>
+      standings_shared: Record<string, unknown>
+    }
+    expect(compact.hotkeys).toHaveLength(3)
+    for (const [index, row] of compact.hotkeys.entries()) {
+      const standing = row.leaderboard as Record<string, unknown>
+      expect(row.miner_hotkey).toBe(HOTKEYS[index])
+      expect((row.agents as Array<Record<string, unknown>>)[0].agent_id).toBe(
+        agentId(index),
+      )
+      // Per-row standing facts survive on the row.
+      expect(standing.rank).toBe(index + 1)
+      expect(standing.composite).toBeCloseTo(0.9 - index * 0.01)
+      expect(standing.agent_id).toBe(agentId(100 + index))
+      // Board facts shared by the whole cluster are stated once.
+      expect(
+        Object.keys(standing).some((key) => key in compact.standings_shared),
+      ).toBe(false)
+    }
+    expect(compact.standings_shared).toMatchObject({
+      finalized: true,
+      score_quorum: 3,
+      bench_version: 7,
+      eligible: true,
+      dataset_sha256: 'ab'.repeat(32),
+    })
+    expect(compact.hotkeys_shared).toMatchObject({
+      miner_coldkeys: ['5ColdA'],
+      agents_truncated: false,
+    })
+  })
+
+  it('reconstructs the exact platform rows losslessly', () => {
+    const payload = footprintPayload(3)
+    const compact = compactMinerOwnerFootprint(payload) as {
+      hotkeys: Array<Record<string, unknown>>
+      hotkeys_shared?: Record<string, unknown>
+      standings_shared?: Record<string, unknown>
+    }
+    const rebuilt = compact.hotkeys.map((row) => ({
+      ...compact.hotkeys_shared,
+      ...row,
+      leaderboard:
+        row.leaderboard === null
+          ? null
+          : {
+              ...compact.standings_shared,
+              ...(row.leaderboard as Record<string, unknown>),
+              miner_hotkey: row.miner_hotkey,
+            },
+    }))
+    expect(rebuilt).toEqual(payload.hotkeys)
+  })
+
+  it('is a fraction of the platform payload for a large cluster', () => {
+    const payload = footprintPayload(12)
+    const before = bytes(payload)
+    const after = bytes(compactMinerOwnerFootprint(payload))
+    expect(after).toBeLessThan(before * 0.6)
   })
 })
 

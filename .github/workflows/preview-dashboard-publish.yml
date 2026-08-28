@@ -361,9 +361,21 @@ jobs:
           latest=''
           page=1
           while :; do
-            response="$(curl --fail-with-body --silent --show-error \
+            body="$(mktemp)"
+            http_code="$(curl --silent --show-error --write-out '%{http_code}' \
+              --output "$body" \
               -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
               "${endpoint}?env=preview&per_page=100&page=${page}")"
+            # A missing project (404) means this PR never had a dashboard
+            # preview, so there is nothing to retire; treat it as an empty
+            # result instead of failing the retirement.
+            if [ "$http_code" = 404 ]; then
+              rm -f "$body"
+              break
+            fi
+            response="$(cat "$body")"
+            rm -f "$body"
+            test "$http_code" = 200
             jq -e '.success == true' <<<"$response" >/dev/null
             candidate="$(jq -c --arg branch "$PREVIEW_BRANCH" \
               '[.result[] | select(.deployment_trigger.metadata.branch == $branch)] | sort_by(.created_on) | last // empty' \
