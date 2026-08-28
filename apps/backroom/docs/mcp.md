@@ -117,6 +117,21 @@ not in `ath_pending_review` is a hold stranded by some other path, and
 `resolve_ath_review` answers 409 for it; `apps/platform/docs/ath-review-queue.md`
 lists the paths that produce it.
 
+## Hotkey-level upload bans
+
+An ATH rejection bans one agent UUID. The separate `banned_hotkeys` gate is a
+rare miner-wide control that refuses every future upload from one hotkey. Use
+`list_hotkey_bans` to enumerate the active rows and retain the exact `hotkey`,
+stored `reason`, and `banned_at` timestamp.
+
+`unban_hotkey` requires that timestamp as `expectedBannedAt`, a specific
+operator reason, and the exact confirmation `UNBAN HOTKEY <hotkey>`. Platform
+locks and rechecks the active row, removes only that upload gate, and appends
+the signed-in operator identity plus the previous ban evidence to
+`hotkey_ban_audit`. Existing agent UUID statuses are never changed. The tool
+returns the post-write state so a successful call proves `banned=false` and
+surfaces the new audit entry.
+
 ## Reading miner source
 
 Three tools, used in this order. Skipping the middle one is the expensive

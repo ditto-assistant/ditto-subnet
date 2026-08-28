@@ -146,6 +146,11 @@ import {
   validatorFleetObservabilitySchema,
   artifactReleaseControlSchema,
   submissionSettingsControlSchema,
+  hotkeyBanControlSchema,
+  hotkeyBanListSchema,
+  hotkeyBanLookupInputSchema,
+  hotkeyUnbanResponseSchema,
+  unbanHotkeyInputSchema,
   screenerReviewControlSchema,
   screenerReviewRevisionSchema,
   screenerPolicyManifestControlSchema,
@@ -512,6 +517,43 @@ export async function updateSubmissionSettings(actor: string, rawInput: unknown)
     },
   })
   return fetchSubmissionSettingsControl()
+}
+
+const HOTKEY_BANS_PATH = '/api/v1/admin/hotkey-bans'
+
+export async function fetchHotkeyBans(limit: number, offset: number) {
+  const query = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  })
+  const payload = await platformAdminRequest(`${HOTKEY_BANS_PATH}?${query}`)
+  return hotkeyBanListSchema.parse(payload)
+}
+
+export async function fetchHotkeyBan(rawInput: unknown) {
+  const input = hotkeyBanLookupInputSchema.parse(rawInput)
+  const query = new URLSearchParams({ history_limit: String(input.historyLimit) })
+  const payload = await platformAdminRequest(
+    `${HOTKEY_BANS_PATH}/${encodeURIComponent(input.hotkey)}?${query}`,
+  )
+  return hotkeyBanControlSchema.parse(payload)
+}
+
+export async function unbanHotkey(rawInput: unknown, actor: string) {
+  const input = unbanHotkeyInputSchema.parse(rawInput)
+  type HotkeyUnbanRequest =
+    PlatformOperations['remove_hotkey_ban_api_v1_admin_hotkey_bans__hotkey__unban_post']['requestBody']['content']['application/json']
+  const body = {
+    expected_banned_at: input.expectedBannedAt,
+    reason: input.reason,
+    confirmation: input.confirmation,
+  } satisfies HotkeyUnbanRequest
+  const payload = await platformAdminRequest(
+    `${HOTKEY_BANS_PATH}/${encodeURIComponent(input.hotkey)}/unban`,
+    { method: 'POST', actor, body },
+  )
+  hotkeyUnbanResponseSchema.parse(payload)
+  return fetchHotkeyBan({ hotkey: input.hotkey, historyLimit: 20 })
 }
 
 export async function applyScreenerReviewSettings(actor: string, rawInput: unknown) {

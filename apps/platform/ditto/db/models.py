@@ -3930,8 +3930,10 @@ class BannedHotkey(Base):
     status: it blocks the *miner* (all future uploads) rather than a single
     submission. Enforced at upload (``/upload/agent`` rejects a banned hotkey
     before any expensive chain/payment work) and surfaced on the read path
-    (``/retrieval/agent-by-hotkey``). Populated out-of-band by the owner via
-    ``scripts/ban_hotkey.py`` — there is no public write surface.
+    (``/retrieval/agent-by-hotkey``). Created out-of-band by the owner via
+    ``scripts/ban_hotkey.py``. Backroom can inspect active rows and remove one
+    exact gate through the authenticated admin API; there is no public write
+    surface.
     """
 
     __tablename__ = "banned_hotkeys"
@@ -3948,6 +3950,36 @@ class BannedHotkey(Base):
         server_default=func.now(),
     )
     """When the ban was recorded (UTC)."""
+
+
+class HotkeyBanAudit(Base):
+    """Append-only audit of operator changes to hotkey-level bans.
+
+    The active upload gate remains the compact ``banned_hotkeys`` table.  This
+    ledger preserves the row an operator removed, together with the signed-in
+    Backroom identity and public-safe reason, so an unban never erases its own
+    evidence.
+    """
+
+    __tablename__ = "hotkey_ban_audit"
+
+    seq: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    previous_banned_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("action = 'unban'", name="hotkey_ban_audit_action"),
+        Index("hotkey_ban_audit_hotkey_recorded_idx", "hotkey", "recorded_at"),
+    )
 
 
 class ScoreAuditEntry(Base):

@@ -79,6 +79,7 @@ import {
   setQueuePolicySettingsInputSchema,
   setValidatorSlotSettingsInputSchema,
   updateSubmissionSettingsInputSchema,
+  unbanHotkeyInputSchema,
   updateArtifactReleaseSettingsInputSchema,
   retryFailedScreeningNowInputSchema,
   expireRunningScreeningInputSchema,
@@ -175,6 +176,8 @@ import {
   fetchArtifactReleaseControl,
   updateArtifactReleaseSettings,
   updateSubmissionSettings,
+  fetchHotkeyBans,
+  unbanHotkey,
   fetchConfirmationBundleSettings,
   setConfirmationBundleSettings,
   fetchConfirmationBundles,
@@ -232,6 +235,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_inference_concurrency_settings',
   'start_runtime_profile',
   'set_submission_cooldown',
+  'unban_hotkey',
   'set_source_release_policy',
   'set_burn_settings',
   'set_confirmation_bundle_settings',
@@ -502,6 +506,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read the emission burn in force, the miner share it leaves, the governing revision, and how many validators are live enough to fold it. Revision history is newest-first and opt-in; historyLimit defaults to 0.',
   get_submission_cooldown:
     'Read the current miner submission fee and owner-coldkey cooldown. Revision history is newest-first and opt-in; historyLimit defaults to 0.',
+  list_hotkey_bans: 'Hotkey bans.',
+  unban_hotkey: 'Unban.',
   get_confirmation_bundle_settings:
     'Read isolated LongMem confirmation issuance settings and optional audit history. Shadow cannot full-confirm. This does not activate rewards.',
   set_confirmation_bundle_settings:
@@ -1346,6 +1352,43 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => updateArtifactReleaseSettings(props.session.email, input)),
+  )
+
+  registerTool(
+    'list_hotkey_bans',
+    {
+      title: 'List active hotkey-level bans',
+      description: 'List active hotkey upload bans and guards. Read-only.',
+      inputSchema: MCP_PAGINATION_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ limit, offset }) => {
+      const value = await fetchHotkeyBans(limit, offset)
+      return result(
+        compacted(
+          {
+            ...value,
+            count: value.total,
+            returned: value.bans.length,
+            limit,
+            offset,
+            has_more: offset + value.bans.length < value.total,
+          },
+          { bans: { pin: ['hotkey', 'banned_at'] } },
+        ),
+      )
+    },
+  )
+
+  registerTool(
+    'unban_hotkey',
+    {
+      title: 'Remove one hotkey-level upload ban',
+      description: 'Audited guarded hotkey unban; agent statuses stay unchanged. Write scope.',
+      inputSchema: unbanHotkeyInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => unbanHotkey(input, props.session.email)),
   )
 
   registerTool(

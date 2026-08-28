@@ -119,6 +119,7 @@ describe('Backroom MCP tools', () => {
         'get_validation_retry',
         'list_stuck_submissions',
         'list_lease_revocations',
+        'list_hotkey_bans',
         'batch_retry_validator_evaluation',
         'agent_scoring_readiness',
         'get_agent_scores',
@@ -160,6 +161,7 @@ describe('Backroom MCP tools', () => {
         'start_runtime_profile',
         'set_source_release_policy',
         'set_submission_cooldown',
+        'unban_hotkey',
       ].sort(),
     )
     expect(response.tools.map((tool) => tool.name)).not.toContain(
@@ -936,6 +938,7 @@ describe('Backroom MCP tools', () => {
       search_screening_source: { maxLimit: 200, maxDefault: 50 },
       list_stuck_submissions: { maxLimit: 200, maxDefault: 10 },
       list_lease_revocations: { maxLimit: 200, maxDefault: 50 },
+      list_hotkey_bans: { maxLimit: 200, maxDefault: 50 },
       get_leaderboard: { maxLimit: 200, maxDefault: 50 },
       get_validator_fleet: { maxLimit: 200, maxDefault: 50 },
       list_validator_assignments: { maxLimit: 200, maxDefault: 50 },
@@ -3899,6 +3902,79 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+
+  it('lists, reads, and guardedly removes hotkey-level upload bans', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const hotkey = '5FKbkmKbJHTgsELVPigLJqbmovaviDN7dHZzX7UJ6xoqG4fx'
+    const bannedAt = '2026-08-18T03:57:07.967881Z'
+    const activeBan = {
+      hotkey,
+      reason: 'benchmark emulation on agent 11ad9203-0860-40a9-9432-059b4ef68865',
+      banned_at: bannedAt,
+    }
+    const action = {
+      seq: 1,
+      hotkey,
+      action: 'unban',
+      actor: 'peyton@omniaura.ai',
+      reason: 'allow rebuilt architecture to submit under current screening',
+      previous_reason: activeBan.reason,
+      previous_banned_at: bannedAt,
+      recorded_at: '2026-08-28T17:00:00Z',
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ total: 1, bans: [activeBan] }))
+      .mockResolvedValueOnce(Response.json({ hotkey, banned: false, action }))
+      .mockResolvedValueOnce(
+        Response.json({ hotkey, banned: false, active_ban: null, history: [action] }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const readConnection = await connect([BACKROOM_READ_SCOPE])
+    const listing = await readConnection.client.callTool({
+      name: 'list_hotkey_bans',
+      arguments: { limit: 50, offset: 0 },
+    })
+    expect(readJsonResult(listing)).toMatchObject({
+      total: 1,
+      count: 1,
+      returned: 1,
+      limit: 50,
+      offset: 0,
+      has_more: false,
+    })
+    await readConnection.client.close()
+    await readConnection.server.close()
+
+    const writeConnection = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const cleared = await writeConnection.client.callTool({
+      name: 'unban_hotkey',
+      arguments: {
+        hotkey,
+        expectedBannedAt: bannedAt,
+        reason: action.reason,
+        confirmation: `UNBAN HOTKEY ${hotkey}`,
+      },
+    })
+    expect(cleared.isError).not.toBe(true)
+    expect(readJsonResult(cleared)).toMatchObject({
+      hotkey,
+      banned: false,
+      active_ban: null,
+      history: [action],
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `https://platform-api.heyditto.ai/api/v1/admin/hotkey-bans/${hotkey}/unban`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+      }),
+    )
+    await writeConnection.client.close()
+    await writeConnection.server.close()
   })
 
   it('answers owner attestations on read scope alone, keeping every grade and revoked links', async () => {

@@ -41,8 +41,10 @@ SHA-256, and `agent_status`. Screenshots, rank, and truncated keys are leads.
   if it was once quarantined.
 - Skip `banned` rows. Park `evaluating` / `waiting_validator` for the next
   fire — `open_ath_review` 409s until the agent is `scored` or `live`.
-- Ban is per UUID. Same SHA or same hotkey is a different row (see
-  [references/precedents/identity-uuid-not-sha.md](references/precedents/identity-uuid-not-sha.md)).
+- An ATH reject is per UUID. Same SHA or same hotkey is a different agent row
+  (see [references/precedents/identity-uuid-not-sha.md](references/precedents/identity-uuid-not-sha.md)).
+  The rare `banned_hotkeys` upload gate is separate and blocks future uploads;
+  inspect it with `list_hotkey_bans` rather than inferring it from agent status.
 
 ## Inspect the served path
 
@@ -165,6 +167,12 @@ so.
 
 Do not un-ban a row to restore a bench version. Rollout authority is a
 Platform question, not an enforcement undo.
+
+When the user explicitly authorizes removal of a hotkey-level upload gate,
+read `list_hotkey_bans`, retain the exact `banned_at` concurrency guard, and
+call `unban_hotkey` with a specific reason plus `UNBAN HOTKEY <hotkey>`. Re-read
+the returned control state and require `banned=false` with the new audit entry.
+This never clears the rejected agent UUID.
 
 ## Report
 

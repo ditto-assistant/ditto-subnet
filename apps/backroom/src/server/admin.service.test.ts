@@ -41,6 +41,9 @@ import {
   updateArtifactReleaseSettings,
   fetchSubmissionSettingsControl,
   updateSubmissionSettings,
+  fetchHotkeyBan,
+  fetchHotkeyBans,
+  unbanHotkey,
   fetchSubmissionDepositAddressControl,
   updateSubmissionDepositAddress,
   fetchBurnSettings,
@@ -1189,6 +1192,96 @@ describe('submission cooldown administration', () => {
         }),
       }),
     )
+  })
+})
+
+describe('hotkey-level ban administration', () => {
+  const hotkey = '5FKbkmKbJHTgsELVPigLJqbmovaviDN7dHZzX7UJ6xoqG4fx'
+  const bannedAt = '2026-08-18T03:57:07.967881Z'
+  const activeBan = {
+    hotkey,
+    reason: 'benchmark emulation on agent 11ad9203-0860-40a9-9432-059b4ef68865',
+    banned_at: bannedAt,
+  }
+  const action = {
+    seq: 1,
+    hotkey,
+    action: 'unban' as const,
+    actor: 'operator@omniaura.ai',
+    reason: 'allow rebuilt architecture to submit under current screening',
+    previous_reason: activeBan.reason,
+    previous_banned_at: bannedAt,
+    recorded_at: '2026-08-28T17:00:00Z',
+  }
+
+  it('lists and reads exact active bans', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ total: 1, bans: [activeBan] }))
+      .mockResolvedValueOnce(
+        Response.json({ hotkey, banned: true, active_ban: activeBan, history: [] }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchHotkeyBans(25, 50)).resolves.toEqual({ total: 1, bans: [activeBan] })
+    await expect(fetchHotkeyBan({ hotkey, historyLimit: 7 })).resolves.toMatchObject({
+      hotkey,
+      banned: true,
+      active_ban: activeBan,
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://platform-api.heyditto.ai/api/v1/admin/hotkey-bans?limit=25&offset=50',
+      expect.any(Object),
+    )
+  })
+
+  it('unbans with the exact guard and re-reads the audited state', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const cleared = { hotkey, banned: false, active_ban: null, history: [action] }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ hotkey, banned: false, action }))
+      .mockResolvedValueOnce(Response.json(cleared))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      unbanHotkey(
+        {
+          hotkey,
+          expectedBannedAt: bannedAt,
+          reason: action.reason,
+          confirmation: `UNBAN HOTKEY ${hotkey}`,
+        },
+        'operator@omniaura.ai',
+      ),
+    ).resolves.toEqual(cleared)
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `https://platform-api.heyditto.ai/api/v1/admin/hotkey-bans/${hotkey}/unban`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'operator@omniaura.ai' }),
+      }),
+    )
+  })
+
+  it('rejects an inexact confirmation before calling Platform', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(
+      unbanHotkey(
+        {
+          hotkey,
+          expectedBannedAt: bannedAt,
+          reason: action.reason,
+          confirmation: 'UNBAN HOTKEY another-key',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow(`confirmation must be exactly UNBAN HOTKEY ${hotkey}`)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 
