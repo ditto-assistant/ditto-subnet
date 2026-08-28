@@ -311,9 +311,7 @@ describe("admissionRetryLine (#1215)", () => {
       },
       now,
     );
-    expect(line).toBe(
-      "Retry is eligible now and waiting for a screener slot (attempt 2).",
-    );
+    expect(line).toBe("Retry is eligible now and waiting for a screener slot (attempt 2).");
   });
 
   it("renders nothing without the block or for unknown states", () => {

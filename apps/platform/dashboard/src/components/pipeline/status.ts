@@ -419,9 +419,7 @@ export function admissionRetryLine(
   const at = retry.next_retry_at ? new Date(retry.next_retry_at) : null;
   const next = attempts + 1;
   if (!at || Number.isNaN(at.getTime()) || at.getTime() <= now.getTime()) {
-    return (
-      infra + "Retry is eligible now and waiting for a screener slot (attempt " + next + ")."
-    );
+    return infra + "Retry is eligible now and waiting for a screener slot (attempt " + next + ").";
   }
   const minutes = Math.max(1, Math.round((at.getTime() - now.getTime()) / 60000));
   return infra + "Retry scheduled in about " + minutes + " min (attempt " + next + ").";
