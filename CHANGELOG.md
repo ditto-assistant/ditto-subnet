@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v0.122.0 (2026-08-28)
+
+### Bug Fixes
+
+- **screener**: Make the gradient hold threshold mean something
+  ([#1250](https://github.com/ditto-assistant/ditto-subnet/pull/1250),
+  [`ab87291`](https://github.com/ditto-assistant/ditto-subnet/commit/ab8729122df17e69490b91c01123c3b62e22b08a))
+
+### Features
+
+- **infra**: Grant Brian local OpenRouter key access
+  ([#1256](https://github.com/ditto-assistant/ditto-subnet/pull/1256),
+  [`d8a6d6e`](https://github.com/ditto-assistant/ditto-subnet/commit/d8a6d6e6efa0e5429202102c2742894184723e83))
+
+- **platform**: Terminalize adjudicated source reviews
+  ([#1252](https://github.com/ditto-assistant/ditto-subnet/pull/1252),
+  [`617634f`](https://github.com/ditto-assistant/ditto-subnet/commit/617634f597ef6f98f0c7c02f7c3c69d29ddb8f5b))
+
+- **screener**: Adjudicate held source reviews instead of queuing them
+  ([#1251](https://github.com/ditto-assistant/ditto-subnet/pull/1251),
+  [`927c2d7`](https://github.com/ditto-assistant/ditto-subnet/commit/927c2d712b5043988c82f7ffd1b38accde42b4e1))
+
+
 ## v0.121.4 (2026-08-28)
 
 ### Bug Fixes
