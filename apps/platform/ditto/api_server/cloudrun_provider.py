@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any
 
 import httpx
@@ -301,10 +302,8 @@ class CloudRunComputeProvider:
             if task is not None:
                 if not task.done():
                     task.cancel()
-                try:
+                with contextlib.suppress(CloudRunAPIError, asyncio.CancelledError):
                     await task
-                except (CloudRunAPIError, asyncio.CancelledError):
-                    pass
             return True
         kind, name = _split(resource_id)
         try:

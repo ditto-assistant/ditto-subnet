@@ -3,8 +3,8 @@
 #
 # Kaniko compile remains a Cloud Run Job. Runtime smoke is a short-lived
 # internal Service, while L1/L2/L3 can use one private warm Service. The
-# untrusted runtime identity has no project roles beyond log write. Jobs and
-# services are created per attempt by Platform; Terraform owns identity and IAM.
+# untrusted runtime identity has no project roles beyond log write. Platform
+# creates per-attempt resources; Terraform owns the warm service, identity, IAM.
 ###############################################################################
 
 resource "google_service_account" "screening_untrusted" {
