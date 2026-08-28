@@ -57,8 +57,10 @@ runuser -u "$${BOOTSTRAP_USER}" -- \
   "$${GIT_REVISION}" refs/remotes/origin/main
 runuser -u "$${BOOTSTRAP_USER}" -- \
   git -C "$${SOURCE}" checkout --detach "$${GIT_REVISION}"
-test "$(git -C "$${SOURCE}" remote get-url origin)" = "$${REPOSITORY}"
-test "$(git -C "$${SOURCE}" rev-parse HEAD)" = "$${GIT_REVISION}"
+test "$(runuser -u "$${BOOTSTRAP_USER}" -- \
+  git -C "$${SOURCE}" remote get-url origin)" = "$${REPOSITORY}"
+test "$(runuser -u "$${BOOTSTRAP_USER}" -- \
+  git -C "$${SOURCE}" rev-parse HEAD)" = "$${GIT_REVISION}"
 
 runuser -u "$${BOOTSTRAP_USER}" -- \
   python3 -m venv "$${ROOT}/bootstrap-venv"
