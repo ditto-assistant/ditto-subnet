@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.116.1 (2026-08-28)
+
+### Bug Fixes
+
+- **platform**: Keep fleet rows and review holds across operations polls
+  ([#1198](https://github.com/ditto-assistant/ditto-subnet/pull/1198),
+  [`c6408e8`](https://github.com/ditto-assistant/ditto-subnet/commit/c6408e856afa852ebd8a0701e4a392efb43efd2a))
+
+
 ## v0.116.0 (2026-08-28)
 
 ### Bug Fixes
