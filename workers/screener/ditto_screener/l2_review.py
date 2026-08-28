@@ -3297,6 +3297,7 @@ class KimiSolSourceReviewAgent:
         if reasoning_effort != "model_default":
             request["reasoning"] = {"effort": reasoning_effort}
         transport_attempts = 0
+        http_fault_attempts = 0
         model_error_attempts = 0
         while True:
             try:
@@ -3351,10 +3352,15 @@ class KimiSolSourceReviewAgent:
                     error.response.status_code == 429
                     or error.response.status_code >= 500
                 )
-                if not retryable or transport_attempts >= len(_RETRY_DELAYS_SECONDS):
+                # HTTP 429/5xx are unbilled: ride the long fault ladder (still
+                # bounded by the lease-budget check below) instead of the
+                # sub-second transport ladder that cannot outlive throttling.
+                if not retryable or http_fault_attempts >= len(
+                    _MODEL_ERROR_RETRY_DELAYS_SECONDS
+                ):
                     raise
-                delay = _RETRY_DELAYS_SECONDS[transport_attempts]
-                transport_attempts += 1
+                delay = _MODEL_ERROR_RETRY_DELAYS_SECONDS[http_fault_attempts]
+                http_fault_attempts += 1
                 remaining = self._turn_timeout(deadline)
                 if remaining <= delay:
                     raise ValueError("L2 review exceeded lease budget") from None
