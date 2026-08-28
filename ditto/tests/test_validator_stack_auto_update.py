@@ -482,6 +482,12 @@ def test_stack_bootstrap_persists_registry_wallet_and_signature_context() -> Non
     compose = STACK_COMPOSE.read_text()
 
     assert "command -v cosign" in installer
+    assert "command -v runuser" in installer
+    assert 'runuser -u "$service_user"' in installer
+    assert '"$ROOT_DIR/scripts/validator-stack-auto-update.sh"' in installer
+    assert 'git -C "$ROOT_DIR" rev-parse --absolute-git-dir' in installer
+    assert "checkout path must be writable by non-root Docker operator" in installer
+    assert "cannot access Docker without sudo" in installer
     assert 'Environment="DOCKER_CONFIG=$docker_config"' in installer
     assert 'Environment="DITTO_BITTENSOR_WALLETS_DIR=$wallets_dir"' in installer
     assert "ReadWritePaths=$state_dir $sigstore_dir" in installer
