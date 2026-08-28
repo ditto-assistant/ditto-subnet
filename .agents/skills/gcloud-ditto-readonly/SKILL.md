@@ -1,6 +1,6 @@
 ---
 name: gcloud-ditto-readonly
-description: Safely read SN118 production Platform Postgres, Targon rental logs/state, and Platform app-VM disk inventory via gcloud. Use for prod DB lookups, counts, audits, EXPLAIN ANALYZE, Targon rental logs, Kaniko/builder logs, wrk- workloads, Targon API state, live screening-build diagnosis, or a host disk-full during platform-deploy. Never prints credentials.
+description: Safely read SN118 production Platform Postgres, Platform API pm2 logs, Cloud Run screening-job logs, Targon rental logs/state, and Platform app-VM disk inventory via gcloud. Use for prod DB lookups, counts, audits, EXPLAIN ANALYZE, API 500 tracebacks, Cloud Run build/smoke/source-review job failures, Targon rental logs, Kaniko/builder logs, wrk- workloads, Targon API state, live screening-build diagnosis, or a host disk-full during platform-deploy. Never prints credentials.
 ---
 
 # Read-only SN118 production debug
@@ -26,6 +26,61 @@ printf '%s\n' 'SELECT now()' | .agents/skills/gcloud-ditto-readonly/scripts/quer
 4. Report facts vs deployed code vs live Targon state separately. Redact tokens, passwords, private object URLs, and full artifacts.
 
 Target is project `ditto-app-dev`, zone `us-central1-a`, instance `ditto-platform-prod`, env `/opt/ditto-platform/.env`. Connect through IAP. Default statement timeout 30s; `DITTO_DB_STATEMENT_TIMEOUT_MS` at most 120000.
+
+JSON `null` is not SQL NULL: `col IS NOT NULL` is true for a stored JSON
+`null`, so presence checks on jsonb payloads (for example
+`observation->'review_audit'`) must compare against `'null'::jsonb` or the
+"present" branch silently includes empty values.
+
+## Platform API logs
+
+The API runs under pm2 as `ditto-api` (user `deploy`). Live logs are
+`/opt/ditto-subnet/apps/platform/logs/`; `/opt/ditto-platform/logs/` is the
+pre-cutover tree and is stale — check file mtimes before trusting either, and
+re-resolve with `pm2 describe ditto-api` if the layout has moved again.
+`ditto-api.err.log` is empty by design: access lines, app logging, and
+unhandled-exception tracebacks (`error_envelope ... unhandled exception in
+request handler`) all land in `ditto-api.out.log`, which is multi-GB and
+unrotated — never cat it; use the bounded script.
+
+```bash
+.agents/skills/gcloud-ditto-readonly/scripts/read_platform_logs.sh tail 200
+.agents/skills/gcloud-ditto-readonly/scripts/read_platform_logs.sh grep 'submission-source-reviews/.*complete' 3 120
+.agents/skills/gcloud-ditto-readonly/scripts/read_platform_logs.sh grep 'unhandled exception' 10 200
+.agents/skills/gcloud-ditto-readonly/scripts/read_platform_logs.sh --file relay-1 tail 100
+```
+
+A request line ending `-> ERR in Nms` is immediately followed by the
+traceback. VM app logs do NOT ship to Cloud Logging; `gcloud logging read`
+on `resource.type="gce_instance"` finds nothing.
+
+## Cloud Run screening job logs
+
+Cloud Run screening lanes (GCP fallback of the Targon-first stack) log only
+to Cloud Logging, and Platform's `replica_logs` stub returns `""` for Cloud
+Run, so the DB replica-trace columns are empty for gcp rows — Cloud Logging
+is the only artifact. The rental loop deletes failed jobs after capture, so
+`gcloud run jobs describe` usually 404s.
+
+Job names (from the launching Platform loop): Kaniko builds are
+`ditto-miner-build-<build_id hex[:12]>`, source reviews are
+`ditto-source-<review_id hex[:16]>`, runtime smokes are short-lived internal
+Services. Worker stdout/stderr is in `run.googleapis.com%2F{stdout,stderr}`;
+`Container called exit(N)` lands in `run.googleapis.com%2Fvarlog%2Fsystem`
+(builder stage exit codes 71-76 mean SOURCE/KANIKO/ARCHIVE/UPLOAD/COMPLETE/
+CONTRACT); execution-level failures in `cloudaudit.googleapis.com%2Fsystem_event`.
+
+```bash
+gcloud logging read 'resource.type="cloud_run_job" AND resource.labels.job_name=~"ditto-source-" AND severity>=WARNING' \
+  --project=ditto-app-dev --freshness=4h --limit=30 \
+  --format='value(timestamp, resource.labels.job_name, textPayload)'
+gcloud logging read 'resource.type="cloud_run_job" AND resource.labels.job_name="ditto-miner-build-<build12>"' \
+  --project=ditto-app-dev --freshness=6h --limit=25 \
+  --format='value(timestamp, logName, severity, textPayload)'
+```
+
+Resolve the name suffix from the Platform row (`build_id` /
+`review_id`), not from `provider_resource_id` (often cleared after release).
 
 ## Targon logs
 
