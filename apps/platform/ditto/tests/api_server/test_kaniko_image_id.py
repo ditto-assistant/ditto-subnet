@@ -629,13 +629,27 @@ async def test_finalize_retries_review_reported_retryable_infra(
         assert quarantine is None
 
 
+_REVIEW_AUDIT = {
+    "stage": "l2",
+    "reason_code": "l2-model-tool-budget",
+    "prompt_revision": "l2-2026-08",
+    "max_steps": 20,
+    "steps_used": 17,
+}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("disposition", ["inconclusive", "pass_inconclusive"])
 async def test_finalize_still_holds_inconclusive_review_outcomes(
     session_maker: async_sessionmaker[AsyncSession],
     disposition: str,
 ) -> None:
-    """Budget-exhausted review outcomes remain operator-review holds."""
+    """Budget-exhausted review outcomes remain operator-review holds.
+
+    Production observations carry the reviewer's budget audit; storing it must
+    satisfy the audit/digest/reason constraints, which is exactly what 500ed
+    every platform-attested verdict before this regression test existed.
+    """
     attempt_id = await _seed_completed_review(
         session_maker,
         observation={
@@ -644,6 +658,52 @@ async def test_finalize_still_holds_inconclusive_review_outcomes(
             "error_code": "source-review-read-budget-exhausted",
             "failure_disposition": disposition,
             "clearance_certified": False,
+            "review_audit": _REVIEW_AUDIT,
+        },
+    )
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        finalized = await maybe_finalize_targon_screen(
+            session,
+            storage=cast(S3StorageClient, _FakeStorage()),
+            screener_hotkey=_SCREENER_HOTKEY,
+            attempt_id=attempt_id,
+            now=now,
+        )
+    assert finalized is True
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.status == "quarantined"
+        assert attempt.reason_code == "source-review-inconclusive"
+        agent = await session.get(Agent, attempt.agent_id)
+        assert agent is not None
+        assert agent.status == AgentStatus.QUARANTINED
+        quarantine = await session.scalar(
+            select(ScreeningQuarantine).where(
+                ScreeningQuarantine.attempt_id == attempt_id
+            )
+        )
+        assert quarantine is not None
+        assert quarantine.reason_code == "source-review-inconclusive"
+        assert quarantine.review_audit is not None
+        assert quarantine.review_audit_digest is not None
+
+
+@pytest.mark.asyncio
+async def test_finalize_tripwire_quarantine_persists_review_audit(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """An elevated-risk verdict holds as a tripwire and keeps its audit."""
+    attempt_id = await _seed_completed_review(
+        session_maker,
+        observation={
+            "ok": True,
+            "risk_level": "high",
+            "categories": ["scorer_contract_manipulation"],
+            "failure_disposition": "inconclusive",
+            "clearance_certified": False,
+            "review_audit": _REVIEW_AUDIT,
         },
     )
     now = datetime.now(UTC)
@@ -661,12 +721,13 @@ async def test_finalize_still_holds_inconclusive_review_outcomes(
         assert attempt is not None
         assert attempt.status == "quarantined"
         assert attempt.reason_code == "agentic-source-review-tripwire"
-        agent = await session.get(Agent, attempt.agent_id)
-        assert agent is not None
-        assert agent.status == AgentStatus.QUARANTINED
         quarantine = await session.scalar(
             select(ScreeningQuarantine).where(
                 ScreeningQuarantine.attempt_id == attempt_id
             )
         )
         assert quarantine is not None
+        assert quarantine.reason_code == "agentic-source-review-tripwire"
+        assert quarantine.review_audit is not None
+        assert quarantine.review_audit_digest is not None
+        assert quarantine.review_audit_digest == quarantine.manifest_digest

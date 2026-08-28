@@ -704,7 +704,8 @@ class ScreeningQuarantine(Base):
             name="screening_quarantines_review_audit_pair_check",
         ),
         CheckConstraint(
-            "review_audit IS NULL OR reason_code = 'source-review-inconclusive'",
+            "review_audit IS NULL OR reason_code IN "
+            "('source-review-inconclusive', 'agentic-source-review-tripwire')",
             name="screening_quarantines_review_audit_reason_check",
         ),
         CheckConstraint(
