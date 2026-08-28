@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.120.1 (2026-08-28)
+
+### Bug Fixes
+
+- **validator**: Reject unwritable updater checkouts
+  ([#1230](https://github.com/ditto-assistant/ditto-subnet/pull/1230),
+  [`9dffc32`](https://github.com/ditto-assistant/ditto-subnet/commit/9dffc327851d6fac0cc9edb37d93d8571ffc3e8e))
+
+
 ## v0.120.0 (2026-08-28)
 
 ### Features
