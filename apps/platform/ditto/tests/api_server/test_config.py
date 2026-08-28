@@ -631,10 +631,14 @@ class TestTargonRentalConfig:
             "DITTO_CLOUDRUN_INVOKER_SA",
             "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com",
         )
+        monkeypatch.setenv(
+            "DITTO_CLOUDRUN_SOURCE_REVIEW_SERVICE", "ditto-source-review-warm"
+        )
         config = parse_api_server_config_from_env(commit_hash=self._COMMIT)
         assert config.cloudrun is not None
         assert config.cloudrun.enabled is True
         assert config.cloudrun.region == "us-central1"
+        assert config.cloudrun.source_review_service == "ditto-source-review-warm"
 
     def test_targon_requires_cloudrun_fallback(
         self, monkeypatch: pytest.MonkeyPatch

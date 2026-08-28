@@ -247,12 +247,13 @@ class TargonRentalConfig:
 
 @dataclass(frozen=True)
 class CloudRunScreeningConfig:
-    """GCP Cloud Run fallback for Kaniko Jobs, L1 Jobs, and smoke Services."""
+    """GCP Cloud Run fallback for screening jobs and private services."""
 
     project: str
     region: str
     untrusted_sa_email: str
     platform_invoker_sa_email: str
+    source_review_service: str | None = None
 
     @property
     def enabled(self) -> bool:
@@ -517,6 +518,9 @@ def _parse_cloudrun_screening_config_from_env() -> CloudRunScreeningConfig | Non
         or "us-central1",
         untrusted_sa_email=untrusted,
         platform_invoker_sa_email=invoker,
+        source_review_service=(
+            os.environ.get("DITTO_CLOUDRUN_SOURCE_REVIEW_SERVICE", "").strip() or None
+        ),
     )
 
 

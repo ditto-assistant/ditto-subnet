@@ -68,6 +68,10 @@ results. Platform also queues source review when runtime smoke succeeds so the
 lane does not depend on the GCE worker staying alive. Job tokens are
 stored only as hashes and revoked at terminal completion; provider Rental
 identities and cleanup failures remain durable operator evidence.
+Cloud Run may execute the same contract through a private warm service with
+concurrency one. Each invocation still receives a fresh attempt-bound job token
+and short-lived bootstrap token; no model key or Platform capability persists
+between claims.
 
 ## Quarantine management
 
