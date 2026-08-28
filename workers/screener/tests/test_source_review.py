@@ -4322,3 +4322,119 @@ async def test_relayed_rate_limit_error_body_is_retried(
 
     assert observation.ok and observation.risk_level == "low"
     assert calls == 3
+
+
+async def test_string_error_body_and_free_text_rate_limit_are_classified() -> None:
+    assert (
+        source_review_module._retryable_model_error_type(
+            {"error": "rate_limit_exceeded"}
+        )
+        == "rate_limit_exceeded"
+    )
+    assert (
+        source_review_module._retryable_model_error_type(
+            {"error": {"code": 400, "message": "Rate limit exceeded: free-models"}}
+        )
+        == "rate_limit_exceeded"
+    )
+    assert (
+        source_review_module._retryable_model_error_type(
+            {"error": "Provider is overloaded, please try again"}
+        )
+        == "overloaded"
+    )
+    assert (
+        source_review_module._retryable_model_error_type({"error": "invalid api key"})
+        is None
+    )
+    assert source_review_module._retryable_model_error_type({"choices": []}) is None
+
+
+async def test_unclassified_malformed_body_gets_exactly_one_long_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A garbage 200 body means no verdict was authored: wait once, not thrice.
+
+    The sub-second malformed ladder could not outlive a real provider fault,
+    but an unclassified shape may be a BILLED completion under contract
+    drift, so it gets exactly one transport-ladder retry — classified
+    (unbilled) provider faults keep the full ladder.
+    """
+    monkeypatch.setattr(
+        source_review_module, "_MODEL_ERROR_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0)
+    )
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    final = {
+        "risk_level": "low",
+        "confidence": 0.99,
+        "categories": ["none"],
+        "evidence": [],
+        "summary": "Inventory-only result.",
+    }
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(200, json={"unexpected": "shape"})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [_tool("submit-1", "submit_review", final)],
+                        }
+                    }
+                ]
+            },
+        )
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok and observation.risk_level == "low"
+    assert calls == 2
+
+
+async def test_persistent_unclassified_body_fails_after_two_posts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract drift must not become a paid retry loop: 2 posts, then fail."""
+    monkeypatch.setattr(
+        source_review_module, "_MODEL_ERROR_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0)
+    )
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"unexpected": "shape"})
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert not observation.ok
+    assert observation.failure_disposition == "retryable_infra"
+    assert calls == 2
+
+
+def test_body_signature_never_reproduces_content() -> None:
+    signature = source_review_module._body_signature(
+        {"choices": [], "secret_content": "miner source text here"}
+    )
+    assert "miner source text" not in signature
+    assert "choices" in signature
+    assert source_review_module._body_signature(None) == "non-json"
