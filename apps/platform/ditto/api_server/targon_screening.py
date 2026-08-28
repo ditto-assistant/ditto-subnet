@@ -20,6 +20,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
+from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
@@ -27,6 +28,7 @@ from ditto.db.models import (
     Agent,
     BenchmarkDataset,
     ScreenedImageUpload,
+    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     ScreeningQuarantine,
     SubmissionImageBuild,
@@ -38,7 +40,10 @@ from ditto.db.queries.screener_provider_settings import (
     resolve_screener_provider_settings,
 )
 from ditto.db.queries.screening import claim_screening_attempts, get_screening_attempt
-from ditto_screening_protocol import SourceReviewObservationPayload
+from ditto_screening_protocol import (
+    SourceReviewAdjudication,
+    SourceReviewObservationPayload,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -97,6 +102,54 @@ def _admitted_on_coverage(
     if any(note.kind == "concern" for note in observation.notes):
         return False
     return any(note.kind == "cleared" for note in observation.notes)
+
+
+async def _effective_adjudicator_mode(session: AsyncSession) -> str:
+    """Read the operator's adjudicator posture at decision time.
+
+    The worker produces an adjudication in both shadow and enforce, so the
+    authority to ACT on one is resolved here rather than trusted from the
+    payload. A worker running a stale settings revision therefore cannot
+    release or reject anything the operator has not switched on.
+    """
+    row = await session.scalar(
+        select(ScreenerReviewSettingsRevision)
+        .where(ScreenerReviewSettingsRevision.scope == "*")
+        .order_by(ScreenerReviewSettingsRevision.revision.desc())
+        .limit(1)
+    )
+    if row is None:
+        return "off"
+    try:
+        return ScreenerReviewSettings.model_validate(row.settings).adjudicator_mode
+    except ValueError:
+        return "off"
+
+
+def _adjudication_basis(adjudication: SourceReviewAdjudication) -> str:
+    """The published clause, invariant, or refusal code behind a decision."""
+    return (
+        adjudication.escalation_code
+        or adjudication.reject_invariant
+        or adjudication.clear_clause
+        or "none"
+    )
+
+
+def _actionable_adjudication(
+    observation: SourceReviewObservationPayload | None,
+) -> SourceReviewAdjudication | None:
+    """The decision to execute, or ``None`` to keep holding.
+
+    ``escalate`` is the adjudicator's own refusal -- it could not verify its
+    citations -- and is deliberately indistinguishable from having no
+    adjudication at all here: the submission holds for an operator either way.
+    """
+    if observation is None or observation.adjudication is None:
+        return None
+    if observation.adjudication.decision not in {"clear", "reject"}:
+        return None
+    return observation.adjudication
 
 
 def _review_failed_retryable(
@@ -400,14 +453,33 @@ async def maybe_finalize_targon_screen(
                     now=now,
                 )
                 return True
-            await _quarantine(
-                session,
-                attempt=attempt,
-                screener_hotkey=screener_hotkey,
-                observation=observation,
-                now=now,
-            )
-            return True
+            # An adjudicated hold is resolved here instead of waiting on an
+            # operator. Infrastructure failures above are settled first and on
+            # purpose: they are not miner conduct, so they are retried rather
+            # than judged.
+            adjudication = _actionable_adjudication(observation)
+            if adjudication is not None and (
+                await _effective_adjudicator_mode(session) == "enforce"
+            ):
+                if adjudication.decision == "reject":
+                    await _reject_build(
+                        session,
+                        attempt,
+                        reason=adjudication.reason,
+                        code="adjudicated-source-review-reject",
+                        now=now,
+                    )
+                    return True
+                coverage_admitted = True
+            else:
+                await _quarantine(
+                    session,
+                    attempt=attempt,
+                    screener_hotkey=screener_hotkey,
+                    observation=observation,
+                    now=now,
+                )
+                return True
     agent = await session.get(Agent, attempt.agent_id, with_for_update=True)
     if agent is None:
         return False
@@ -642,6 +714,21 @@ async def _quarantine(
         }
         for note in (observation.notes if observation is not None else [])
     ][:48]
+    # A hold that HAS an adjudication is either running in shadow or was
+    # refused by the adjudicator's own citation checks. Either way the operator
+    # who now has to decide it should see what the court concluded and why it
+    # did not carry, rather than re-deriving it.
+    adjudication = observation.adjudication if observation is not None else None
+    if adjudication is not None:
+        note_evidence.append(
+            {
+                "module": "adjudication",
+                "code": (
+                    f"{adjudication.decision}:{_adjudication_basis(adjudication)}"
+                ),
+                "summary": adjudication.reason[:300],
+            }
+        )
     agent.status = AgentStatus.QUARANTINED
     agent.screening_reason = public_reason
     agent.screening_reason_code = reason_code
