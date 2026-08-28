@@ -7,6 +7,8 @@ SERVICE=/etc/systemd/system/ditto-validator-stack-auto-update.service
 TIMER=/etc/systemd/system/ditto-validator-stack-auto-update.timer
 PREFETCH_SERVICE=/etc/systemd/system/ditto-validator-stack-prefetch.service
 PREFETCH_TIMER=/etc/systemd/system/ditto-validator-stack-prefetch.timer
+REFRESH_SERVICE=/etc/systemd/system/ditto-validator-stack-updater-refresh.service
+REFRESH_TIMER=/etc/systemd/system/ditto-validator-stack-updater-refresh.timer
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 require_systemd_path() {
@@ -125,6 +127,38 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
 EOF
 
+cat >"$REFRESH_SERVICE" <<EOF
+[Unit]
+Description=Fast-forward the Ditto validator updater checkout from canonical main
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$service_user
+WorkingDirectory=$ROOT_DIR
+Environment="HOME=$service_home"
+Environment="PATH=$service_path"
+Environment=DITTO_SUBNET_ROOT_DIR=$ROOT_DIR
+Environment=DITTO_SUBNET_ENV_FILE=$ROOT_DIR/.env
+Environment=DITTO_VALIDATOR_STACK_UPDATE_STATE_DIR=$state_dir
+ExecStart=$ROOT_DIR/scripts/validator-stack-auto-update.sh refresh
+TimeoutStartSec=300
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=$ROOT_DIR $state_dir
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+EOF
+
 cat >"$TIMER" <<'EOF'
 [Unit]
 Description=Poll for compatible complete Ditto validator-stack releases
@@ -153,8 +187,23 @@ Unit=ditto-validator-stack-prefetch.service
 [Install]
 WantedBy=timers.target
 EOF
+cat >"$REFRESH_TIMER" <<'EOF'
+[Unit]
+Description=Periodically refresh the Ditto validator updater from canonical main
+
+[Timer]
+OnBootSec=5m
+OnUnitInactiveSec=15m
+RandomizedDelaySec=5m
+Persistent=true
+Unit=ditto-validator-stack-updater-refresh.service
+
+[Install]
+WantedBy=timers.target
+EOF
 systemctl daemon-reload
 systemctl enable --now \
   ditto-validator-stack-auto-update.timer \
-  ditto-validator-stack-prefetch.timer
+  ditto-validator-stack-prefetch.timer \
+  ditto-validator-stack-updater-refresh.timer
 printf 'installed complete-stack updater for %s\n' "$service_user"

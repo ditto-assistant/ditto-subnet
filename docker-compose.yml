@@ -65,6 +65,14 @@ services:
         bind:
           create_host_path: false
       - pylon-data:/data
+    healthcheck:
+      # Pylon has no dedicated unauthenticated health route. Prove the API
+      # listener completed startup without sending the identity token or
+      # depending on a particular public endpoint shape.
+      test: ["CMD", "/app/pylon_service/.venv/bin/python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 2).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
 
   # The scorer receives an isolated nested Docker daemon. This temporarily
   # retains the v0.41 rootful-DinD runtime contract so validators with the
@@ -362,7 +370,7 @@ services:
       UV_CACHE_DIR: /tmp/uv-cache
     depends_on:
       pylon:
-        condition: service_started
+        condition: service_healthy
       dittobench-api:
         condition: service_healthy
     read_only: true
