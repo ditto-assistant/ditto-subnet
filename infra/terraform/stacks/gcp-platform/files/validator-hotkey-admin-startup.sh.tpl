@@ -64,11 +64,16 @@ test "$(runuser -u "$${BOOTSTRAP_USER}" -- \
 
 runuser -u "$${BOOTSTRAP_USER}" -- \
   python3 -m venv "$${ROOT}/bootstrap-venv"
-printf 'uv==%s --hash=sha256:%s\n' "$${UV_VERSION}" "$${UV_SHA256}" | \
-  runuser -u "$${BOOTSTRAP_USER}" -- \
+readonly UV_REQUIREMENTS="$${ROOT}/uv-requirements.txt"
+printf 'uv==%s --hash=sha256:%s\n' "$${UV_VERSION}" "$${UV_SHA256}" > \
+  "$${UV_REQUIREMENTS}"
+chown "$${BOOTSTRAP_USER}:$${BOOTSTRAP_USER}" "$${UV_REQUIREMENTS}"
+chmod 0400 "$${UV_REQUIREMENTS}"
+runuser -u "$${BOOTSTRAP_USER}" -- \
   "$${ROOT}/bootstrap-venv/bin/pip" install \
-    --disable-pip-version-check --no-deps --only-binary=:all: \
-    --require-hashes -r /dev/stdin
+  --disable-pip-version-check --no-deps --only-binary=:all: \
+  --require-hashes -r "$${UV_REQUIREMENTS}"
+rm -f "$${UV_REQUIREMENTS}"
 runuser -u "$${BOOTSTRAP_USER}" -- env \
   UV_PROJECT_ENVIRONMENT="$${ROOT}/project-venv" \
   "$${ROOT}/bootstrap-venv/bin/uv" sync \
