@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.117.3 (2026-08-28)
+
+### Bug Fixes
+
+- **platform**: Carry Targon refusal bodies into TargonAPIError reasons
+  ([#1213](https://github.com/ditto-assistant/ditto-subnet/pull/1213),
+  [`2bf4c0e`](https://github.com/ditto-assistant/ditto-subnet/commit/2bf4c0e79499698c8067702b7e6ed560875ea519))
+
+### Documentation
+
+- **skills**: Route live log diagnosis to pm2 and Cloud Run log surfaces
+  ([#1212](https://github.com/ditto-assistant/ditto-subnet/pull/1212),
+  [`0dd8143`](https://github.com/ditto-assistant/ditto-subnet/commit/0dd8143b290cb5653f1124665f495f931b656c91))
+
+
 ## v0.117.2 (2026-08-28)
 
 ### Bug Fixes
