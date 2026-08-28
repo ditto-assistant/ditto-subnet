@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.117.0 (2026-08-28)
+
+### Features
+
+- **backroom**: Compact get_miner_owner_footprint payloads
+  ([#1200](https://github.com/ditto-assistant/ditto-subnet/pull/1200),
+  [`e7b52ef`](https://github.com/ditto-assistant/ditto-subnet/commit/e7b52ef2401aa0339fa38b45f7b5720cc1e0719a))
+
+
 ## v0.116.1 (2026-08-28)
 
 ### Bug Fixes
