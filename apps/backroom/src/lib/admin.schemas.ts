@@ -6353,3 +6353,54 @@ export const tracePeekResponseSchema = z.object({
   records_scanned: z.number().int().nonnegative(),
   scan_complete: z.boolean(),
 })
+
+// Future screening-policy activation.
+//
+// The platform keeps the live policy in force and holds ONE pending activation
+// that flips the policy version at a scheduled instant. Revisions are
+// append-only: scheduling a new activation supersedes the pending one but the
+// old rows stay readable as audit. `state` is computed by the platform at read
+// time ("due" once now >= activate_at), so it is never stored and never
+// defaulted here.
+export const SCREENER_POLICY_ACTIVATION_CONFIRMATION = 'SCHEDULE SCREENER POLICY ACTIVATION'
+export const MAX_SCREENER_POLICY_ACTIVATION_REVISIONS = 200
+
+export const screenerPolicyActivationRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  target_policy_version: z.number().int().positive(),
+  activate_at: z.string(),
+  rescreen_scored: z.boolean(),
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string(),
+  state: z.enum(['pending', 'due']),
+})
+
+export const screenerPolicyActivationViewSchema = z.object({
+  effective_policy_version: z.number().int().positive(),
+  floor_policy_version: z.number().int().positive(),
+  builtin_policy_version: z.number().int().positive(),
+  // Null until the first activation has ever been scheduled.
+  latest: screenerPolicyActivationRevisionSchema.nullable(),
+  // Newest-first, bounded by the platform at MAX_SCREENER_POLICY_ACTIVATION_REVISIONS.
+  revisions: z
+    .array(screenerPolicyActivationRevisionSchema)
+    .max(MAX_SCREENER_POLICY_ACTIVATION_REVISIONS),
+})
+
+// The offset requirement is what makes the schedule unambiguous: a naive
+// "2026-08-29T09:00:00" would be the platform's UTC wall clock, not the
+// operator's, and the 422 that catches it should never have to.
+export const scheduleScreenerPolicyActivationInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  // The platform bounds this to [floor..builtin] and answers 422 out of range;
+  // it stays the authority, so this only rejects nonsense a positive int catches.
+  targetPolicyVersion: z.number().int().positive(),
+  activateAt: z.string().datetime({ offset: true }),
+  rescreenScored: z.boolean().default(true),
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(SCREENER_POLICY_ACTIVATION_CONFIRMATION),
+})
+
+export type ScreenerPolicyActivationView = z.infer<typeof screenerPolicyActivationViewSchema>

@@ -137,6 +137,8 @@ import {
   runtimeProfileDownloadSchema,
   runtimeProfileLookupInputSchema,
   setQueuePolicySettingsInputSchema,
+  screenerPolicyActivationViewSchema,
+  scheduleScreenerPolicyActivationInputSchema,
   VALIDATOR_SLOT_SETTINGS_SCOPE,
   validatorSlotSettingsControlSchema,
   validatorIssuanceConfirmation,
@@ -905,6 +907,31 @@ export async function setQueuePolicySettings(rawInput: unknown, actor: string) {
     throw queuePolicyRefusal(cause) ?? cause
   }
   return fetchQueuePolicySettings()
+}
+
+const SCREENER_POLICY_ACTIVATION_PATH = '/api/v1/admin/screener-policy-activation'
+
+export async function fetchScreenerPolicyActivation() {
+  const payload = await platformAdminRequest(SCREENER_POLICY_ACTIVATION_PATH)
+  return screenerPolicyActivationViewSchema.parse(payload)
+}
+
+export async function scheduleScreenerPolicyActivation(rawInput: unknown, actor: string) {
+  const input = scheduleScreenerPolicyActivationInputSchema.parse(rawInput)
+  await platformAdminRequest(SCREENER_POLICY_ACTIVATION_PATH, {
+    method: 'POST',
+    actor,
+    body: {
+      expected_revision: input.expectedRevision,
+      target_policy_version: input.targetPolicyVersion,
+      activate_at: input.activateAt,
+      rescreen_scored: input.rescreenScored,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return fetchScreenerPolicyActivation()
 }
 
 const INFERENCE_CONCURRENCY_SETTINGS_PATH = '/api/v1/admin/inference-concurrency-settings'
