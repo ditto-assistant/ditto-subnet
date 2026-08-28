@@ -113,3 +113,21 @@ variable "enable_os_login" {
   type        = bool
   default     = true
 }
+
+variable "enable_secure_boot" {
+  description = "Enable Shielded VM Secure Boot. Keep false for existing generic callers; security-sensitive new hosts should opt in explicitly."
+  type        = bool
+  default     = false
+}
+
+variable "enable_vtpm" {
+  description = "Enable the Shielded VM virtual TPM."
+  type        = bool
+  default     = true
+}
+
+variable "enable_integrity_monitoring" {
+  description = "Enable Shielded VM boot integrity monitoring."
+  type        = bool
+  default     = true
+}

@@ -25,6 +25,16 @@ on:
         description: Optional comma-separated Terraform -target addresses
         required: false
         type: string
+      validator_hotkey_admin_phase:
+        description: Disposable GCP hotkey generator phase (gcp-platform plans only)
+        required: true
+        default: absent
+        type: choice
+        options: [absent, bootstrap, armed]
+      validator_hotkey_admin_revision:
+        description: Bootstrap plan main SHA, required unchanged for the armed phase
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -86,6 +96,46 @@ jobs:
           git merge-base --is-ancestor "$revision" HEAD
           echo "TF_VAR_screener_fleet_release_sha=$revision" >> "$GITHUB_ENV"
 
+      - name: Bind the disposable hotkey admin lifecycle
+        if: inputs.root == 'gcp-platform'
+        env:
+          HOTKEY_ADMIN_PHASE: ${{ inputs.validator_hotkey_admin_phase }}
+          HOTKEY_ADMIN_REVISION: ${{ inputs.validator_hotkey_admin_revision }}
+          HOTKEY_ADMIN_TARGETS: ${{ inputs.targets }}
+        run: |
+          case "$HOTKEY_ADMIN_PHASE" in
+            absent)
+              test -z "$HOTKEY_ADMIN_REVISION"
+              revision=""
+              ;;
+            bootstrap)
+              test -z "$HOTKEY_ADMIN_REVISION"
+              revision="$(git rev-parse HEAD)"
+              ;;
+            armed)
+              [[ "$HOTKEY_ADMIN_REVISION" =~ ^[0-9a-f]{40}$ ]]
+              git cat-file -e "$HOTKEY_ADMIN_REVISION^{commit}"
+              test "$HOTKEY_ADMIN_REVISION" = "$(git rev-parse HEAD)"
+              revision="$HOTKEY_ADMIN_REVISION"
+              ;;
+            *)
+              exit 2
+              ;;
+          esac
+          if [ -n "$HOTKEY_ADMIN_TARGETS" ]; then
+            if [ "$HOTKEY_ADMIN_PHASE" != absent ]; then
+              echo "targeted plans are forbidden during hotkey bootstrap/arm" >&2
+              exit 2
+            fi
+            state="$(terraform -chdir=${{ steps.root.outputs.path }} state list)"
+            if grep -Eq '^((google_compute_instance_from_template|google_compute_instance_template|google_service_account|google_compute_instance_iam_member|google_iap_tunnel_instance_iam_member|google_service_account_iam_member)\.validator_hotkey_admin|google_secret_manager_secret_iam_member\.validator_hotkey_generator)' <<<"$state"; then
+              echo "targeted plans are forbidden while the hotkey admin exists" >&2
+              exit 2
+            fi
+          fi
+          echo "TF_VAR_validator_hotkey_admin_phase=$HOTKEY_ADMIN_PHASE" >> "$GITHUB_ENV"
+          echo "TF_VAR_validator_hotkey_admin_revision=$revision" >> "$GITHUB_ENV"
+
       - name: Create exact private plan
         env:
           TF_VAR_db_password: ${{ secrets.PLATFORM_DB_PASSWORD }}
@@ -103,6 +153,26 @@ jobs:
             done
           fi
           terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan "${extra[@]}"
+
+      - name: Reject replacement of an armed hotkey admin
+        if: inputs.root == 'gcp-platform' && inputs.validator_hotkey_admin_phase == 'armed'
+        run: |
+          plan_json="$(mktemp)"
+          trap 'rm -f "$plan_json"' EXIT
+          terraform -chdir=${{ steps.root.outputs.path }} show -json tfplan > "$plan_json"
+          jq -e '
+            [
+              .resource_changes[]
+              | select(
+                  .address == "google_compute_instance_from_template.validator_hotkey_admin[0]"
+                  or .address == "google_compute_instance_template.validator_hotkey_admin[0]"
+                  or .address == "google_service_account.validator_hotkey_admin[0]"
+                )
+              | .change.actions[]
+              | select(. == "create" or . == "delete")
+            ]
+            | length == 0
+          ' "$plan_json"
 
       - name: Seal plan in private GCS
         id: seal

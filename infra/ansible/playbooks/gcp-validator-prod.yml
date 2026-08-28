@@ -1,0 +1,11 @@
+---
+# Prepare the private production GCP validator host. This play never performs
+# the coldkey transaction and never starts the validator stack. Activation is a
+# separate, supervised step in infra/docs/validator-gcp-production.md.
+- name: Prepare the production SN118 validator on GCP
+  hosts: role_validator_prod
+  become: true
+  gather_facts: true
+  roles:
+    - base
+    - validator_stack

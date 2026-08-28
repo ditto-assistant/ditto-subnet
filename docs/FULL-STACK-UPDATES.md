@@ -54,6 +54,22 @@ transaction, the old stack was not touched: leave it running and capture the
 release, digest, and updater log. If `status` reports a transaction, keep the
 timers disabled and use `recover`.
 
+### Greenfield bootstrap
+
+A new host with no existing Compose services uses the same trust boundary
+without first running a source-built validator. Before on-chain activation,
+run `prepare <descriptor-digest>` to authenticate the exact descriptor and pull
+all component images without starting anything. After the hotkey is registered
+or swapped into place, run `bootstrap <the-same-descriptor-digest>`.
+
+Bootstrap starts the exact release drained and requires the validator's signed
+heartbeat, verified scorer probe, and every required component health/readiness
+check to pass. It then records the managed release and resumes ticket intake.
+It refuses mutable tags, a missing or different prepared digest, and existing
+unmatched services. An interrupted bootstrap is retryable with the same digest:
+a matching functionally ready drained stack resumes; an ambiguous or drifted
+stack remains stopped for operator inspection.
+
 ## Transaction guarantees
 
 Each automatic update: resolves the stable channel to a digest, validates the

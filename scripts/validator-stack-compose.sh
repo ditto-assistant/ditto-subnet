@@ -67,7 +67,19 @@ if [ "$release_dir" = "$current_dir" ]; then
         ;;
     esac
   fi
-  { [ "$managed_ref" = "$descriptor_ref" ] || [ "$transaction_ref" = "$descriptor_ref" ]; } || die "managed current release descriptor does not match installed state"
+  bootstrap_transaction_file="$STATE_DIR/bootstrap-transaction.env"
+  bootstrap_ref=""
+  if [ -z "$managed_ref" ] && [ -f "$bootstrap_transaction_file" ] && \
+    [ ! -L "$bootstrap_transaction_file" ]; then
+    bootstrap_phase="$(awk -F= '$1 == "BOOTSTRAP_PHASE" { print substr($0, index($0, "=") + 1) }' "$bootstrap_transaction_file")"
+    if [ "$bootstrap_phase" = installing ]; then
+      bootstrap_ref="$(awk -F= '$1 == "BOOTSTRAP_RELEASE" { print substr($0, index($0, "=") + 1) }' "$bootstrap_transaction_file")"
+    fi
+  fi
+  { [ "$managed_ref" = "$descriptor_ref" ] || \
+    [ "$transaction_ref" = "$descriptor_ref" ] || \
+    [ "$bootstrap_ref" = "$descriptor_ref" ]; } || \
+    die "managed current release descriptor does not match installed state"
 fi
 
 required_keys=' STACK_FORMAT_VERSION STACK_VERSION STACK_REVISION DITTOBENCH_REVISION COMPATIBILITY_EPOCH UPDATE_PROTOCOL COMPOSE_SCHEMA HEARTBEAT_PROTOCOL VALIDATOR_IMAGE SANDBOX_DOCKER_IMAGE DITTOBENCH_API_IMAGE PYLON_IMAGE '

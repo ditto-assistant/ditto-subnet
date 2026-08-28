@@ -168,6 +168,21 @@ async def admit_targon_screening_work(
             environment=environment,
             runtime_enabled=runtime_enabled,
         )
+        if not attempt.build_only:
+            await session.execute(
+                pg_insert(SubmissionSourceReview)
+                .values(
+                    review_id=uuid4(),
+                    agent_id=agent.agent_id,
+                    attempt_id=attempt.attempt_id,
+                    environment=environment,
+                    artifact_sha256=agent.sha256.lower(),
+                    status="queued",
+                )
+                .on_conflict_do_nothing(
+                    constraint="submission_source_reviews_attempt_key"
+                )
+            )
         admitted += 1
     return admitted
 
@@ -189,7 +204,6 @@ async def _queue_kaniko(
             SubmissionImageBuild.artifact_sha256 == artifact_sha256,
             SubmissionImageBuild.environment == environment,
             SubmissionImageBuild.status.in_(("succeeded", "consumed")),
-            SubmissionImageBuild.runtime_status == "fallback_required",
             SubmissionImageBuild.output_sha256.is_not(None),
             SubmissionImageBuild.output_size_bytes.is_not(None),
             SubmissionImageBuild.output_key.is_not(None),
@@ -200,6 +214,11 @@ async def _queue_kaniko(
     )
     if prior_archive is not None:
         now = datetime.now(UTC)
+        reuse_runtime = bool(
+            runtime_enabled
+            and prior_archive.runtime_status == "succeeded"
+            and prior_archive.runtime_image_reference is not None
+        )
         await session.execute(
             pg_insert(SubmissionImageBuild)
             .values(
@@ -215,10 +234,18 @@ async def _queue_kaniko(
                 output_sha256=prior_archive.output_sha256,
                 output_size_bytes=prior_archive.output_size_bytes,
                 output_image_id=prior_archive.output_image_id,
-                runtime_status="pending" if runtime_enabled else "skipped",
+                runtime_status=(
+                    "succeeded"
+                    if reuse_runtime
+                    else ("pending" if runtime_enabled else "skipped")
+                ),
+                runtime_image_reference=(
+                    prior_archive.runtime_image_reference if reuse_runtime else None
+                ),
                 runtime_error_code=(
                     None if runtime_enabled else "TARGON_RUNTIME_DISABLED_BY_POLICY"
                 ),
+                runtime_completed_at=now if reuse_runtime else None,
                 completed_at=now,
             )
             .on_conflict_do_nothing(constraint="submission_image_builds_attempt_key")

@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Materialize or verify the production hotkey without handling a coldkey."""
+
+from __future__ import annotations
+
+import os
+
+import bittensor as bt
+
+
+wallet_path = os.environ["BT_WALLET_PATH"]
+wallet_name = os.environ["BT_WALLET_NAME"]
+hotkey_name = os.environ["BT_HOTKEY_NAME"]
+expected_hotkey = os.environ["EXPECTED_HOTKEY"]
+verify_only = os.environ.get("VERIFY_ONLY") == "1"
+
+wallet_type = getattr(bt, "Wallet", None) or getattr(bt, "wallet")
+wallet = wallet_type(name=wallet_name, hotkey=hotkey_name, path=wallet_path)
+
+if not verify_only:
+    mnemonic = os.environ["VALIDATOR_MNEMONIC"].strip()
+    wallet.regenerate_hotkey(
+        mnemonic=mnemonic,
+        use_password=False,
+        overwrite=False,
+    )
+    # Pylon needs only the signing hotkey. A public-only stand-in keeps the
+    # Bittensor wallet layout well formed without ever importing a coldkey.
+    wallet.regenerate_coldkeypub(
+        ss58_address=wallet.hotkey.ss58_address,
+        overwrite=False,
+    )
+
+actual_hotkey = wallet.hotkey.ss58_address
+if actual_hotkey != expected_hotkey:
+    raise SystemExit(
+        "materialized hotkey does not match VALIDATOR_PROD_HOTKEY: "
+        f"expected {expected_hotkey}, got {actual_hotkey}"
+    )
+
+print(f"verified validator hotkey {actual_hotkey}")

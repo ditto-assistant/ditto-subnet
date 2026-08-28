@@ -68,6 +68,12 @@ resource "google_compute_instance" "this" {
     }
   }
 
+  shielded_instance_config {
+    enable_secure_boot          = var.enable_secure_boot
+    enable_vtpm                 = var.enable_vtpm
+    enable_integrity_monitoring = var.enable_integrity_monitoring
+  }
+
   deletion_protection = true
 
   lifecycle {

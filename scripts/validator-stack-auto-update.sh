@@ -17,6 +17,8 @@ FAILED_CANDIDATE_FILE="$STATE_DIR/failed-candidate"
 LAST_UPDATE_FILE="$STATE_DIR/last-update.env"
 PREFETCHED_FILE="$STATE_DIR/prefetched-release.env"
 LAST_REFRESH_FILE="$STATE_DIR/last-updater-refresh.env"
+PREPARED_FILE="$STATE_DIR/prepared-release.env"
+BOOTSTRAP_TRANSACTION_FILE="$STATE_DIR/bootstrap-transaction.env"
 LOCK_FILE="$STATE_DIR/lock"
 CURRENT_DIR="$STATE_DIR/current"
 PREVIOUS_DIR="$STATE_DIR/previous"
@@ -398,6 +400,12 @@ validate_release_image_labels() {
   return 0
 }
 
+validate_bootstrap_runtime_capability() {
+  local dir="$1" validator_image
+  validator_image="$(manifest_value "$dir/manifest.env" VALIDATOR_IMAGE)"
+  [ "$(descriptor_label "$validator_image" io.heyditto.validator.bootstrap-resume-ready-state)" = true ]
+}
+
 compose() {
   local dir="$1"; shift
   "$STACK_COMPOSE" "$dir" "$@"
@@ -429,6 +437,14 @@ state_drained() {
     [[ "$state" == *'"platform_accepted":true'* ]] &&
     [[ "$state" == *\"update_protocol\":$EXPECTED_UPDATE_PROTOCOL* ]] &&
     [[ "$state" == *'"state":"drained"'* ]]
+}
+
+state_bootstrap_ready() {
+  state_ready "$1" "$2" && [[ "$1" == *'"resume_ready":true'* ]]
+}
+
+state_bootstrap_drained() {
+  state_drained "$1" "$2" && [[ "$1" == *'"resume_ready":true'* ]]
 }
 
 assert_stack_matches() {
@@ -539,6 +555,24 @@ wait_stack_quiescent() {
   return 1
 }
 
+wait_stack_bootstrap_quiescent() {
+  local dir="$1" timeout="$2" interval="$3" deadline container state running
+  deadline=$((SECONDS+timeout))
+  while ((SECONDS<deadline)); do
+    if stack_services_healthy "$dir"; then
+      container="$(service_container "$dir" ditto-subnet)"
+      running="$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)"
+      state="$(runtime_state "$container")"
+      if [ "$running" = true ] && state_bootstrap_drained "$state" "$container" && \
+        assert_stack_matches "$dir"; then
+        return 0
+      fi
+    fi
+    sleep "$interval"
+  done
+  return 1
+}
+
 resume_and_verify() {
   local dir="$1" timeout="$2" interval="$3" container deadline state delivered=false
   container="$(service_container "$dir" ditto-subnet)"; [ -n "$container" ] || return 1
@@ -548,6 +582,24 @@ resume_and_verify() {
   while ((SECONDS<deadline)); do
     state="$(runtime_state "$container")"
     if state_ready "$state" "$container" && [ "$delivered" = true ]; then RESUME_SIGNAL_DELIVERED=false; DRAINED_CONTAINER=''; return 0; fi
+    sleep "$interval"
+  done
+  return 76
+}
+
+resume_and_verify_bootstrap() {
+  local dir="$1" timeout="$2" interval="$3" container deadline state delivered=false
+  container="$(service_container "$dir" ditto-subnet)"; [ -n "$container" ] || return 1
+  RESUME_SIGNAL_DELIVERED=true
+  if docker kill --signal=USR2 "$container" >/dev/null 2>&1; then delivered=true; fi
+  deadline=$((SECONDS+timeout))
+  while ((SECONDS<deadline)); do
+    state="$(runtime_state "$container")"
+    if state_bootstrap_ready "$state" "$container" && [ "$delivered" = true ]; then
+      RESUME_SIGNAL_DELIVERED=false
+      DRAINED_CONTAINER=''
+      return 0
+    fi
     sleep "$interval"
   done
   return 76
@@ -629,6 +681,13 @@ record_managed() {
   is_descriptor_digest "$digest" || die "refusing to persist a mutable descriptor reference"
   printf 'STACK_RELEASE=%s\n' "$digest" >"$temporary"; mv "$temporary" "$MANAGED_FILE"
 }
+record_bootstrap_transaction() {
+  local digest="$1" temporary="$BOOTSTRAP_TRANSACTION_FILE.tmp"
+  is_descriptor_digest "$digest" || die "refusing to journal a mutable bootstrap descriptor"
+  umask 077
+  printf 'BOOTSTRAP_PHASE=installing\nBOOTSTRAP_RELEASE=%s\n' "$digest" >"$temporary"
+  mv "$temporary" "$BOOTSTRAP_TRANSACTION_FILE"
+}
 managed_release() {
   local digest
   [ -f "$MANAGED_FILE" ] || die "managed stack mode is not adopted; run supervised adopt first"
@@ -670,6 +729,117 @@ prefetch_release() {
   mv "$temporary" "$PREFETCHED_FILE"
   rm -rf -- "$STAGED_DIR"
   log "prefetched authenticated complete stack $candidate_version ($candidate_ref)"
+}
+
+stack_has_containers() {
+  local dir="$1" service
+  while IFS= read -r service; do
+    [ -z "$(service_container "$dir" "$service")" ] || return 0
+  done < <(release_services "$dir")
+  return 1
+}
+
+prepare_initial_release() {
+  local candidate_ref="$1" temporary
+  [ ! -f "$MANAGED_FILE" ] || die "stack is already managed; use run or rollback"
+  verify_descriptor_signature "$candidate_ref" || die "prepared descriptor publisher identity is invalid"
+  docker pull "$candidate_ref" >/dev/null
+  extract_descriptor "$candidate_ref" "$STAGED_DIR" || die "prepared descriptor is invalid"
+  stack_has_containers "$STAGED_DIR" && die "validator services already exist; use adopt or migrate"
+  pull_release_images "$STAGED_DIR" || die "prepared release images are unavailable"
+  validate_bootstrap_runtime_capability "$STAGED_DIR" || \
+    die "prepared release predates the fail-closed bootstrap readiness contract"
+  temporary="$PREPARED_FILE.tmp"
+  printf 'PREPARED_RELEASE=%s\nPREPARED_VERSION=%s\n' \
+    "$candidate_ref" "$(manifest_value "$STAGED_DIR/manifest.env" STACK_VERSION)" >"$temporary"
+  mv "$temporary" "$PREPARED_FILE"
+  log "prepared authenticated initial stack $(manifest_value "$STAGED_DIR/manifest.env" STACK_VERSION) ($candidate_ref) without starting services"
+}
+
+bootstrap_initial_release() {
+  local candidate_ref="$1" recorded_ref prepared_ref bootstrap_ref bootstrap_dir container state
+  stack_update_timers_enabled && die "disable the stack timer before supervised bootstrap"
+
+  if [ -f "$MANAGED_FILE" ]; then
+    recorded_ref="$(managed_release)"
+    [ "$recorded_ref" = "$candidate_ref" ] || die "stack is already managed at a different descriptor"
+    docker pull "$candidate_ref" >/dev/null
+    verify_descriptor_signature "$candidate_ref" || die "managed bootstrap descriptor publisher identity is invalid"
+    if [ ! -d "$CURRENT_DIR" ] || ! validate_descriptor "$candidate_ref" "$CURRENT_DIR"; then
+      die "managed bootstrap release is missing or invalid"
+    fi
+    validate_bootstrap_runtime_capability "$CURRENT_DIR" || \
+      die "managed bootstrap release predates the fail-closed readiness contract"
+    assert_stack_matches "$CURRENT_DIR" || die "managed bootstrap services drifted from the descriptor"
+    container="$(service_container "$CURRENT_DIR" ditto-subnet)"
+    state="$(runtime_state "$container")"
+    if state_bootstrap_ready "$state" "$container"; then
+      rm -f "$PREPARED_FILE" "$BOOTSTRAP_TRANSACTION_FILE"
+      log "initial managed stack is already running ($candidate_ref)"
+      return 0
+    fi
+    state_bootstrap_drained "$state" "$container" || \
+      die "managed bootstrap validator is neither functionally ready nor safely drained"
+    resume_and_verify_bootstrap "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || \
+      die "managed bootstrap validator stayed drained; retry bootstrap after inspecting functional readiness"
+    rm -f "$PREPARED_FILE" "$BOOTSTRAP_TRANSACTION_FILE"
+    log "resumed initial managed stack ($candidate_ref)"
+    return 0
+  fi
+
+  prepared_ref="$(manifest_value "$PREPARED_FILE" PREPARED_RELEASE 2>/dev/null || true)"
+  is_descriptor_digest "$prepared_ref" || die "bootstrap requires a valid prepared release"
+  [ "$prepared_ref" = "$candidate_ref" ] || \
+    die "bootstrap digest does not match the prepared release"
+
+  verify_descriptor_signature "$candidate_ref" || die "bootstrap descriptor publisher identity is invalid"
+  docker pull "$candidate_ref" >/dev/null
+
+  # Reuse an exact prepared release. If a previous bootstrap was interrupted
+  # after the accepted staged directory moved, bind that exact current tree
+  # before asking the trusted Compose wrapper to inspect it.
+  bootstrap_dir="$STAGED_DIR"
+  if [ "$(cat "$CURRENT_DIR/.descriptor-ref" 2>/dev/null || true)" = "$candidate_ref" ]; then
+    bootstrap_ref="$(manifest_value "$BOOTSTRAP_TRANSACTION_FILE" BOOTSTRAP_RELEASE 2>/dev/null || true)"
+    [ "$bootstrap_ref" = "$candidate_ref" ] || \
+      die "interrupted bootstrap current release has no matching transaction"
+    validate_descriptor "$candidate_ref" "$CURRENT_DIR" || die "interrupted bootstrap current release is invalid"
+    validate_bootstrap_runtime_capability "$CURRENT_DIR" || \
+      die "interrupted bootstrap release predates the fail-closed readiness contract"
+    assert_stack_matches "$CURRENT_DIR" || die "interrupted bootstrap services drifted from the descriptor"
+    wait_stack_bootstrap_quiescent "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || \
+      die "interrupted bootstrap stack is not functionally ready and safely drained"
+    record_managed "$candidate_ref"
+    rm -f "$PREPARED_FILE" "$BOOTSTRAP_TRANSACTION_FILE"
+    resume_and_verify_bootstrap "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || \
+      die "interrupted bootstrap stack stayed safely drained; retry after inspection"
+    log "resumed interrupted initial stack ($candidate_ref)"
+    return 0
+  fi
+  if [ "$(cat "$STAGED_DIR/.descriptor-ref" 2>/dev/null || true)" = "$candidate_ref" ]; then
+    validate_descriptor "$candidate_ref" "$STAGED_DIR" || die "prepared bootstrap release is invalid"
+  else
+    extract_descriptor "$candidate_ref" "$STAGED_DIR" || die "bootstrap descriptor is invalid"
+  fi
+  pull_release_images "$STAGED_DIR" || die "bootstrap release images are unavailable"
+  validate_bootstrap_runtime_capability "$STAGED_DIR" || \
+    die "bootstrap release predates the fail-closed readiness contract"
+
+  if stack_has_containers "$bootstrap_dir"; then
+    assert_stack_matches "$bootstrap_dir" || die "existing validator services do not match the bootstrap descriptor"
+  else
+    deploy_release "$bootstrap_dir" || die "initial managed stack failed to start and remains unadopted"
+  fi
+  wait_stack_bootstrap_quiescent "$bootstrap_dir" "$ready_timeout" "$check_seconds" || \
+    die "initial managed stack did not become functionally ready and safely drained"
+
+  record_bootstrap_transaction "$candidate_ref"
+  install_staged_as_current
+  record_managed "$candidate_ref"
+  rm -f "$PREPARED_FILE" "$BOOTSTRAP_TRANSACTION_FILE"
+  resume_and_verify_bootstrap "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || \
+    die "initial managed stack is installed but stayed safely drained; retry bootstrap after inspection"
+  log "bootstrapped initial managed stack ($candidate_ref)"
 }
 
 install_staged_as_current() {
@@ -828,6 +998,8 @@ show_status() {
   [ ! -f "$TRANSACTION_FILE" ] || printf 'transaction_phase=%s\n' "$(transaction_value PHASE)"
   [ ! -f "$LAST_UPDATE_FILE" ] || cat "$LAST_UPDATE_FILE"
   [ ! -f "$PREFETCHED_FILE" ] || cat "$PREFETCHED_FILE"
+  [ ! -f "$PREPARED_FILE" ] || cat "$PREPARED_FILE"
+  [ ! -f "$BOOTSTRAP_TRANSACTION_FILE" ] || cat "$BOOTSTRAP_TRANSACTION_FILE"
   [ ! -f "$FAILED_CANDIDATE_FILE" ] || printf 'failed_candidate=%s\n' "$(cat "$FAILED_CANDIDATE_FILE")"
   [ ! -f "$LAST_REFRESH_FILE" ] || cat "$LAST_REFRESH_FILE"
 }
@@ -873,7 +1045,7 @@ refresh_updater_checkout() {
 }
 
 mode="${1:-run}"
-case "$mode" in adopt|migrate|rollback) [ "$#" -le 2 ] || die "usage: $0 $mode [descriptor-digest]";; run|prefetch|refresh|recover|status|budget) [ "$#" -eq 1 ] || die "usage: $0 $mode";; *) die "usage: $0 [run|prefetch|refresh|status|recover|adopt <descriptor-digest>|migrate <descriptor-digest>|rollback]";; esac
+case "$mode" in adopt|migrate|rollback) [ "$#" -le 2 ] || die "usage: $0 $mode [descriptor-digest]";; prepare|bootstrap) [ "$#" -eq 2 ] || die "usage: $0 $mode <descriptor-digest>";; run|prefetch|refresh|recover|status|budget) [ "$#" -eq 1 ] || die "usage: $0 $mode";; *) die "usage: $0 [run|prefetch|refresh|status|recover|prepare <descriptor-digest>|bootstrap <descriptor-digest>|adopt <descriptor-digest>|migrate <descriptor-digest>|rollback]";; esac
 if [ "$mode" = budget ]; then printf 'TIMEOUT_START_SECONDS=10800\nTIMEOUT_STOP_SECONDS=600\n'; exit 0; fi
 if [ "$mode" = status ]; then show_status; exit 0; fi
 command -v flock >/dev/null 2>&1 || die "flock is not installed"
@@ -928,6 +1100,16 @@ recover_transaction
 if [ "$mode" = recover ]; then log "recovery complete"; exit 0; fi
 if is_true "$(setting VALIDATOR_AUTO_UPDATE false)"; then
   die "the retired validator-only updater is still enabled: stop ditto-validator-auto-update.timer and remove VALIDATOR_AUTO_UPDATE from .env"
+fi
+if [ "$mode" = prepare ]; then
+  is_descriptor_digest "$2" || die "prepare requires an immutable stack descriptor digest"
+  prepare_initial_release "$2"
+  exit 0
+fi
+if [ "$mode" = bootstrap ]; then
+  is_descriptor_digest "$2" || die "bootstrap requires an immutable stack descriptor digest"
+  bootstrap_initial_release "$2"
+  exit 0
 fi
 if [ "$mode" = adopt ]; then
   stack_update_timers_enabled && die "disable the stack timer before supervised adoption"

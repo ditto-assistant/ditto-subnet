@@ -73,12 +73,26 @@ def _prompt_revision(policy_version: int) -> str:
 # and byte budgets therefore tune inspection DEPTH, not pass/fail fate.
 _MAX_REVIEW_NOTES = 48
 _NOTE_KINDS = frozenset({"concern", "cleared", "observation"})
+_COVERAGE_AREAS = frozenset(
+    {
+        "served_entrypoint",
+        "retrieval",
+        "model_call",
+        "tool_dispatch",
+        "answer_construction",
+    }
+)
 # Ask for a note again when this many inspection calls pass without one.
 _NOTELESS_NUDGE_EVERY = 8
 _NOTE_NUDGE = (
     "Reminder: record_note after each area you inspect — a concern the moment "
     "you see one, cleared when an area checks out. Only recorded notes "
     "survive if your budget runs out."
+)
+_COVERAGE_COMPLETE_NUDGE = (
+    "The notes ledger now covers every served-path area. Submit the final "
+    "review now unless a specific unresolved concern still requires one "
+    "bounded read; do not continue broad exploration."
 )
 
 
@@ -100,6 +114,9 @@ def _note_from_arguments(arguments: Mapping[str, object]) -> dict[str, object] |
         "summary": " ".join(summary.split())[:300],
         "stage": "l1",
     }
+    area = arguments.get("area")
+    if isinstance(area, str) and area in _COVERAGE_AREAS:
+        note["area"] = area
     path = arguments.get("path")
     if isinstance(path, str) and path:
         note["path"] = path[:240]
@@ -1548,6 +1565,18 @@ unrecorded determination is wasted work.
 """,
 }
 
+# Version-independent L1 throughput guidance (added by the L1 bounding work).
+# Appended to every policy tail so the batching rules apply under each
+# implemented screening-policy version.
+_BATCH_READS_GUIDANCE = """
+BATCH RELATED READS. In each inspection turn, request every independent file
+read, search, or binary analysis you already know you need for that area in one
+response. Do not serialize independent tool calls across separate turns. Once
+the served entrypoint, retrieval, model call, tool dispatch, and answer
+construction areas each have a cleared note and there are no concerns, submit
+the final review immediately instead of spending the remaining budget.
+"""
+
 
 def _source_review_system_prompt(policy_version: int) -> str:
     """Return the L1 system prompt for one implemented policy version."""
@@ -1559,12 +1588,71 @@ def _source_review_system_prompt(policy_version: int) -> str:
             f"{policy_version} is not implemented by this build "
             f"(implements {sorted(_POLICY_TAILS)})"
         ) from None
-    return _SYSTEM_PROMPT_HEAD + tail
+    return _SYSTEM_PROMPT_HEAD + tail + _BATCH_READS_GUIDANCE
 
 
 def _assert_policy_tails_differ() -> None:
     """Test-visible sanity check: every policy version has distinct text."""
     assert _POLICY_TAILS[10] != _POLICY_TAILS[11]
+
+def _l1_prompt_cache_key(messages: list[dict[str, object]]) -> str:
+    """Cache key bound to the versioned system prompt actually being sent.
+
+    The L1 prompt is policy-version keyed (`_source_review_system_prompt`), so
+    hashing the first message — the system prompt — keeps a v10 cached prefix
+    from ever serving a v11 review (or vice versa).
+    """
+    system = messages[0].get("content", "") if messages else ""
+    return (
+        "ditto-l1-"
+        + hashlib.sha256(str(system).encode("utf-8")).hexdigest()[:48]
+    )
+_COMPACTED_TURNS_TO_KEEP = 3
+
+
+def _compacted_review_messages(
+    messages: list[dict[str, object]], notes: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    """Bound request context after the notes ledger becomes authoritative."""
+    if not notes:
+        return messages
+    assistant_indices = [
+        index
+        for index, message in enumerate(messages)
+        if index >= 2 and message.get("role") == "assistant"
+    ]
+    if len(assistant_indices) <= _COMPACTED_TURNS_TO_KEEP:
+        return messages
+    cutoff = assistant_indices[-_COMPACTED_TURNS_TO_KEEP]
+    ledger = json.dumps(notes, sort_keys=True, separators=(",", ":"))
+    return [
+        *messages[:2],
+        {
+            "role": "user",
+            "content": (
+                "[Earlier inspection turns compacted. Their durable working "
+                f"state is the recorded notes ledger: {ledger}]"
+            ),
+        },
+        *messages[cutoff:],
+    ]
+
+
+def _coverage_complete(notes: list[dict[str, object]]) -> bool:
+    if any(note.get("kind") == "concern" for note in notes):
+        return False
+    cleared = {
+        str(note.get("area"))
+        for note in notes
+        if note.get("kind") == "cleared" and note.get("area") in _COVERAGE_AREAS
+    }
+    return cleared == _COVERAGE_AREAS
+
+
+def _phase_reasoning_effort(configured: str, *, assessment: bool) -> str:
+    if assessment or configured == "low":
+        return configured
+    return "low" if configured == "medium" else "medium"
 
 
 @dataclass(frozen=True)
@@ -3061,6 +3149,7 @@ class OpenRouterSourceReviewAgent:
         inspection_calls = 0
         toolless_turns = 0
         noteless_calls = 0
+        coverage_nudged = False
         read_files: set[str] = set()
         runtime_source_read = False
         if progress is not None:
@@ -3079,8 +3168,19 @@ class OpenRouterSourceReviewAgent:
                     if remaining <= 0:
                         raise ValueError("source reviewer exceeded lease budget")
                     request_timeout = min(request_timeout, remaining)
+                assessment_phase = (
+                    _coverage_complete(notes)
+                    or any(note.get("kind") == "concern" for note in notes)
+                    or _step >= max(2, (self._max_steps * 3) // 4)
+                )
                 message = await self._completion_message(
-                    client, api_key, messages, timeout=request_timeout
+                    client,
+                    api_key,
+                    _compacted_review_messages(messages, notes),
+                    timeout=request_timeout,
+                    reasoning_effort=_phase_reasoning_effort(
+                        self._reasoning_effort, assessment=assessment_phase
+                    ),
                 )
                 messages.append(message)
                 tool_calls = message.get("tool_calls")
@@ -3143,6 +3243,11 @@ class OpenRouterSourceReviewAgent:
                 if noteless_calls >= _NOTELESS_NUDGE_EVERY:
                     noteless_calls = 0
                     messages.append({"role": "user", "content": _NOTE_NUDGE})
+                if _coverage_complete(notes) and not coverage_nudged:
+                    coverage_nudged = True
+                    messages.append(
+                        {"role": "user", "content": _COVERAGE_COMPLETE_NUDGE}
+                    )
                 if progress is not None:
                     progress(_step + 1, self._max_steps)
         raise SourceReviewBudgetExhausted(
@@ -3162,6 +3267,7 @@ class OpenRouterSourceReviewAgent:
         messages: list[dict[str, object]],
         *,
         timeout: float | None = None,
+        reasoning_effort: str,
     ) -> dict[str, object]:
         """One model turn, retrying provider error bodies like transport faults.
 
@@ -3173,7 +3279,11 @@ class OpenRouterSourceReviewAgent:
         body_attempts = 0
         while True:
             response = await self._post_completion(
-                client, api_key, messages, timeout=timeout
+                client,
+                api_key,
+                messages,
+                timeout=timeout,
+                reasoning_effort=reasoning_effort,
             )
             payload: object | None = None
             try:
@@ -3228,6 +3338,7 @@ class OpenRouterSourceReviewAgent:
         messages: list[dict[str, object]],
         *,
         timeout: float | None = None,
+        reasoning_effort: str,
     ) -> httpx.Response:
         request = {
             "model": self._model,
@@ -3235,7 +3346,8 @@ class OpenRouterSourceReviewAgent:
             "tools": _TOOLS,
             "tool_choice": "auto",
             "max_completion_tokens": 2200,
-            "reasoning": {"effort": self._reasoning_effort},
+            "reasoning": {"effort": reasoning_effort},
+            "prompt_cache_key": _l1_prompt_cache_key(messages),
             "provider": {
                 "zdr": True,
                 "data_collection": "deny",
@@ -3798,6 +3910,10 @@ _TOOLS: list[dict[str, object]] = [
                     "category": {
                         "type": "string",
                         "enum": sorted(_ALLOWED_CATEGORIES | {"none"}),
+                    },
+                    "area": {
+                        "type": "string",
+                        "enum": sorted(_COVERAGE_AREAS),
                     },
                     "path": {"type": "string"},
                     "line": {"type": "integer", "minimum": 1},

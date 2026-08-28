@@ -1,0 +1,23 @@
+---
+# Production validator access and host hardening. This group is intentionally
+# separate from role_validator: that historical role owns the dev/source-built
+# rehearsal VM.
+gcp_project: ditto-app-dev
+gcp_region: us-central1
+gcp_zone: us-central1-a
+
+ansible_user: "{{ lookup('env', 'GCP_OSLOGIN_USER') | default('', true) }}"
+ansible_ssh_common_args: >-
+  -o StrictHostKeyChecking=accept-new
+  -o ProxyCommand="gcloud compute start-iap-tunnel {{ inventory_hostname }} 22
+  --listen-on-stdin --zone={{ gcp_zone }} --project={{ gcp_project }}
+  --verbosity=warning"
+
+base_ssh_set_allow_users: false
+base_install_go: false
+base_install_caddy: false
+base_install_postgres_packages: false
+base_install_ops_agent: true
+base_team_members: []
+base_ufw_open_ports:
+  - { port: "22", comment: IAP SSH }
