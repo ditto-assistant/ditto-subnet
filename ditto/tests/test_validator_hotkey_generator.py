@@ -492,3 +492,15 @@ def test_protected_workflow_requires_bootstrap_revision_for_arming() -> None:
     assert "Reject replacement of an armed hotkey admin" in workflow
     assert "TF_VAR_validator_hotkey_admin_phase" in workflow
     assert "TF_VAR_validator_hotkey_admin_revision" in workflow
+    plan = workflow.split("- name: Create exact private plan", 1)[1].split(
+        "- name: Reject replacement of an armed hotkey admin", 1
+    )[0]
+    assert (
+        '-var="validator_hotkey_admin_phase=${TF_VAR_validator_hotkey_admin_phase}"'
+        in plan
+    )
+    assert (
+        '-var="validator_hotkey_admin_revision=${TF_VAR_validator_hotkey_admin_revision}"'
+        in plan
+    )
+    assert "google_project_iam_member" in workflow
