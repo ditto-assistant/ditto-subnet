@@ -280,13 +280,19 @@ resource "google_compute_instance_iam_member" "validator_hotkey_admin_operator_o
   member        = each.value
 }
 
-resource "google_iap_tunnel_instance_iam_member" "validator_hotkey_admin_operator_iap" {
+# Use the same conditional project-IAM path as the persistent validator. The
+# protected apply identity cannot read or mutate per-instance IAP policies.
+resource "google_project_iam_member" "validator_hotkey_admin_operator_iap" {
   for_each = local.validator_hotkey_admin_active ? var.validator_prod_operators : toset([])
   project  = var.project
-  zone     = var.zone
-  instance = google_compute_instance_from_template.validator_hotkey_admin[0].name
   role     = "roles/iap.tunnelResourceAccessor"
   member   = each.value
+
+  condition {
+    title       = "validator_hotkey_admin_exact_instance"
+    description = "Temporary IAP access only to the disposable hotkey admin VM."
+    expression  = "resource.name.extract('/instances/{name}') == '${google_compute_instance_from_template.validator_hotkey_admin[0].name}'"
+  }
 
   depends_on = [google_project_service.iap]
 }
