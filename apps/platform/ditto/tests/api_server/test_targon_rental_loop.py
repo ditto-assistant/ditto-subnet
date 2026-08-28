@@ -24,6 +24,7 @@ from ditto.api_server.targon_rental_loop import (
     TargonRentalLoop,
     _source_review_layer_env,
 )
+from ditto.api_server.targon_screening import _queue_kaniko
 from ditto.db.models import (
     Agent,
     ScreeningAttempt,
@@ -1236,6 +1237,96 @@ async def test_runtime_cloudrun_provision_failure_reuses_kaniko_archive(
         assert current.provider == "targon"
     assert cloudrun.builds == []
     assert promoted == [archive_key]
+
+
+@pytest.mark.asyncio
+async def test_review_failure_reuses_verified_build_and_successful_smoke(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    prior_attempt_id = uuid4()
+    prior_build_id = uuid4()
+    now = datetime.now(UTC)
+    archive_key = f"remote-builds/{prior_build_id}/image.tar"
+    runtime_image = (
+        "us-central1-docker.pkg.dev/ditto-app-dev/"
+        "ditto-screening-candidates/miner@sha256:" + "cd" * 32
+    )
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=prior_attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="failed",
+                started_at=now - timedelta(hours=2),
+                deadline=now - timedelta(minutes=50),
+                finished_at=now - timedelta(minutes=50),
+                reason_code="source-review-retryable-infra",
+                build_only=False,
+            )
+        )
+        session.add(
+            SubmissionImageBuild(
+                build_id=prior_build_id,
+                agent_id=agent_id,
+                attempt_id=prior_attempt_id,
+                environment="prod",
+                artifact_sha256=_SHA256,
+                image_ref=f"ditto-screen/{agent_id}-{prior_attempt_id}:latest",
+                output_key=archive_key,
+                status="succeeded",
+                provider="targon",
+                output_sha256="12" * 32,
+                output_size_bytes=123,
+                output_image_id="sha256:" + "ab" * 32,
+                runtime_status="succeeded",
+                runtime_image_reference=runtime_image,
+                runtime_completed_at=now - timedelta(minutes=55),
+                attempt_count=1,
+                completed_at=now - timedelta(minutes=56),
+            )
+        )
+
+    current_attempt_id = uuid4()
+    async with session_maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        current_attempt = ScreeningAttempt(
+            attempt_id=current_attempt_id,
+            agent_id=agent_id,
+            screener_hotkey=_SCREENER_HOTKEY,
+            policy_version=SCREENING_POLICY_VERSION,
+            status="running",
+            started_at=now,
+            deadline=now + timedelta(hours=2),
+            build_only=False,
+        )
+        session.add(current_attempt)
+        await session.flush()
+        await _queue_kaniko(
+            session,
+            agent=agent,
+            attempt=current_attempt,
+            environment="prod",
+            runtime_enabled=True,
+        )
+
+    async with session_maker() as session:
+        current = await session.scalar(
+            select(SubmissionImageBuild)
+            .where(SubmissionImageBuild.attempt_id == current_attempt_id)
+            .limit(1)
+        )
+        assert current is not None
+        assert current.status == "succeeded"
+        assert current.output_key == archive_key
+        assert current.output_sha256 == "12" * 32
+        assert current.output_image_id == "sha256:" + "ab" * 32
+        assert current.runtime_status == "succeeded"
+        assert current.runtime_image_reference == runtime_image
+        assert current.runtime_completed_at is not None
 
 
 @pytest.mark.asyncio
