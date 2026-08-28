@@ -4263,3 +4263,62 @@ async def test_persistent_toolless_model_still_fails_retryable(
     assert not observation.ok
     assert observation.error_code == "source-review-model-response-invalid"
     assert observation.failure_disposition == "retryable_infra"
+
+
+async def test_relayed_rate_limit_error_body_is_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 200 body carrying ``{"error": {"code": 429}}`` retries, then reviews.
+
+    OpenRouter relays provider rate limits inside successful HTTP responses.
+    The sub-second malformed-body ladder was too short to outlive a real rate
+    limit, so the review burned as retryable_infra and the attempt rescreened.
+    """
+    monkeypatch.setattr(
+        source_review_module, "_MODEL_ERROR_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0)
+    )
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    final = {
+        "risk_level": "low",
+        "confidence": 0.99,
+        "categories": ["none"],
+        "evidence": [],
+        "summary": "Inventory-only result.",
+    }
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            return httpx.Response(
+                200,
+                json={
+                    "error": {"code": 429, "message": "Rate limit exceeded"},
+                    "user_id": "redacted",
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [_tool("submit-1", "submit_review", final)],
+                        }
+                    }
+                ]
+            },
+        )
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok and observation.risk_level == "low"
+    assert calls == 3

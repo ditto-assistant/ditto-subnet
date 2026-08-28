@@ -3804,3 +3804,83 @@ async def test_real_analyzer_container_isolated_and_canonical_starter_clean(
 
     cleanup = await asyncio.create_subprocess_exec("docker", "rmi", "-f", image)
     await cleanup.wait()
+
+
+async def test_relayed_rate_limit_is_retried_not_a_contract_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 200 body carrying ``status: failed / rate_limit_exceeded`` retries.
+
+    OpenRouter relays provider rate limits inside successful HTTP responses;
+    failing the stage on the first one burned entire reviews during sustained
+    rate limiting.
+    """
+    import ditto_screener.l2_review as l2_module
+
+    monkeypatch.setattr(l2_module, "_MODEL_ERROR_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "failed",
+                    "error_type": "rate_limit_exceeded",
+                    "error": "rate_limit_exceeded",
+                    "output": [],
+                },
+            )
+        return _response([], model="moonshotai/kimi-k3-20260715")
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    # The rate-limited turn was retried: the next payload was consumed
+    # normally and the review then failed on the ordinary tool contract,
+    # not on the relayed rate limit.
+    assert result.observation.error_code == "l2-model-tool-contract"
+    assert result.observation.failure_disposition == "retryable_infra"
+    assert len(requests) >= 3
+
+
+async def test_relayed_rate_limit_retries_are_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ditto_screener.l2_review as l2_module
+
+    monkeypatch.setattr(l2_module, "_MODEL_ERROR_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error_type": "rate_limit_exceeded",
+                "error": "rate_limit_exceeded",
+                "output": [],
+            },
+        )
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert not result.observation.ok
+    assert result.observation.failure_disposition == "retryable_infra"
+    assert result.observation.error_code == "l2-model-response-contract"
+    assert len(requests) == 4
