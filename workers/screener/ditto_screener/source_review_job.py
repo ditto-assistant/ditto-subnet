@@ -165,7 +165,7 @@ def _build_reviewer(
     )
 
 
-async def _amain() -> int:
+async def _amain(*, linger_seconds: float = 600) -> int:
     platform = _required("DITTO_PLATFORM_URL").rstrip("/")
     if not platform.startswith("https://"):
         raise ValueError("invalid Platform URL")
@@ -232,7 +232,8 @@ async def _amain() -> int:
             complete.raise_for_status()
         # Rentals are persistent; give the controller time to observe the
         # committed result and delete this workload before Targon restarts it.
-        await asyncio.sleep(600)
+        if linger_seconds > 0:
+            await asyncio.sleep(linger_seconds)
         return 0
     finally:
         if archive_path is not None:

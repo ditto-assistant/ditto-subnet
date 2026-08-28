@@ -207,6 +207,7 @@ platform_cloudrun_project: ""
 platform_cloudrun_region: us-central1
 platform_cloudrun_untrusted_sa: ""
 platform_cloudrun_invoker_sa: ""
+platform_cloudrun_source_review_service: ""
 
 # Platform-owned inference stays dark until the coordinated rollout enables it.
 platform_inference_proxy_enabled: false

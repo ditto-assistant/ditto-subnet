@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, cast
 
 import httpx
@@ -11,7 +12,11 @@ from ditto.api_server.cloudrun_client import (
 )
 from ditto.api_server.cloudrun_provider import CloudRunComputeProvider
 from ditto.api_server.config import CloudRunScreeningConfig, TargonRentalConfig
-from ditto.api_server.screening_provider import SmokeSpec, inflight_failure_code
+from ditto.api_server.screening_provider import (
+    ReviewSpec,
+    SmokeSpec,
+    inflight_failure_code,
+)
 
 
 class _FakeCloudRunClient:
@@ -228,6 +233,78 @@ async def test_create_smoke_ignores_frozen_registry_auth() -> None:
     sidecar = client.kwargs["sidecar"]
     assert sidecar["name"] == "gateway"
     assert sidecar["command"][0] == "python"
+
+
+class _FakeWarmReviewClient:
+    def __init__(self) -> None:
+        self.invocations: list[dict[str, Any]] = []
+        self.release = asyncio.Event()
+
+    async def invoke_service(self, service: str, **kwargs: Any) -> None:
+        self.invocations.append({"service": service, **kwargs})
+        await self.release.wait()
+
+
+@pytest.mark.asyncio
+async def test_source_review_uses_warm_private_service_when_configured() -> None:
+    client = _FakeWarmReviewClient()
+    targon = TargonRentalConfig(
+        api_key="k" * 32,
+        org_slug="ditto",
+        resource="cpu-small",
+        public_platform_url="https://platform-api.heyditto.ai",
+        submission_builder_image=(
+            "us-central1-docker.pkg.dev/ditto-app-dev/"
+            "ditto-public-builders/submission-builder@sha256:" + "ab" * 32
+        ),
+        candidate_writer_sa="push@example.test",
+        candidate_reader_sa="pull@example.test",
+        bootstrap_sa="boot@example.test",
+        source_review_secret_resource="projects/p/secrets/s",
+    )
+    provider = CloudRunComputeProvider(
+        cast(AsyncCloudRunClient, client),
+        CloudRunScreeningConfig(
+            project="ditto-app-dev",
+            region="us-central1",
+            untrusted_sa_email="untrusted@example.test",
+            platform_invoker_sa_email="invoker@example.test",
+            source_review_service="ditto-source-review-warm",
+        ),
+        targon,
+    )
+    spec = ReviewSpec(
+        name="ditto-source-test",
+        image="registry.example/screener@sha256:" + "ab" * 32,
+        env=(
+            ("DITTO_SOURCE_REVIEW_JOB_TOKEN", "job-token"),
+            ("SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "3600"),
+        ),
+        commands=("python", "-m"),
+        args=("ditto_screener.source_review_job",),
+    )
+
+    resource = await provider.create_source_review(spec)
+    assert resource == "warm-review:ditto-source-test"
+    await provider.start(resource)
+    await asyncio.sleep(0)
+
+    assert await provider.provision_status(resource) == "running"
+    assert client.invocations == [
+        {
+            "service": "ditto-source-review-warm",
+            "path": "review",
+            "payload": {
+                "env": [
+                    ["DITTO_SOURCE_REVIEW_JOB_TOKEN", "job-token"],
+                    ["SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "3480"],
+                ]
+            },
+            "timeout_seconds": 3_600.0,
+        }
+    ]
+    assert await provider.delete(resource)
+    await asyncio.sleep(0)
 
 
 def test_error_reason_from_response_uses_api_message() -> None:

@@ -170,6 +170,43 @@ class AsyncCloudRunClient:
     async def run_job(self, job_id: str) -> dict[str, Any]:
         return await self._request("POST", f"{self.job_name(job_id)}:run")
 
+    async def invoke_service(
+        self,
+        service_id: str,
+        *,
+        path: str,
+        payload: dict[str, Any],
+        timeout_seconds: float,
+    ) -> None:
+        service = await self.get_service(service_id)
+        uri = str(service.get("uri", "")).rstrip("/")
+        if not uri.startswith("https://"):
+            raise CloudRunAPIError(
+                operation="invoke service",
+                status=None,
+                reason="service URI is unavailable",
+            )
+        token = await self.identity_token(uri)
+        try:
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                response = await client.post(
+                    f"{uri}/{path.lstrip('/')}",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json=payload,
+                )
+        except httpx.HTTPError as error:
+            raise CloudRunAPIError(
+                operation="invoke service",
+                status=None,
+                reason=type(error).__name__,
+            ) from error
+        if response.status_code >= 400:
+            raise CloudRunAPIError(
+                operation="invoke service",
+                status=response.status_code,
+                reason=error_reason_from_response(response),
+            )
+
     async def get_job(self, job_id: str) -> dict[str, Any]:
         return await self._request("GET", self.job_name(job_id))
 

@@ -19,6 +19,8 @@ from ditto.api_server.screening_provider import (
 
 _JOB_PREFIX = "job:"
 _SERVICE_PREFIX = "service:"
+_WARM_REVIEW_PREFIX = "warm-review:"
+_WARM_REVIEW_MAX_WORK_SECONDS = 3_480
 _SMOKE_GATEWAY_IMAGE = "python:3.12-alpine"
 _SMOKE_GATEWAY_PORT = 11434
 _SMOKE_GATEWAY_STUB = """
@@ -110,6 +112,8 @@ class CloudRunComputeProvider:
         self._client = client
         self._config = config
         self._targon_config = targon_config
+        self._warm_review_specs: dict[str, ReviewSpec] = {}
+        self._warm_review_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def capacity_ok(self) -> bool:
         return self._config.enabled
@@ -165,6 +169,9 @@ class CloudRunComputeProvider:
         return f"{_SERVICE_PREFIX}{spec.name}"
 
     async def create_source_review(self, spec: ReviewSpec) -> str:
+        if self._config.source_review_service:
+            self._warm_review_specs[spec.name] = spec
+            return f"{_WARM_REVIEW_PREFIX}{spec.name}"
         try:
             await self._client.create_job(
                 spec.name,
@@ -187,6 +194,25 @@ class CloudRunComputeProvider:
         return f"{_JOB_PREFIX}{spec.name}"
 
     async def start(self, resource_id: str) -> None:
+        if resource_id.startswith(_WARM_REVIEW_PREFIX):
+            name = resource_id[len(_WARM_REVIEW_PREFIX) :]
+            spec = self._warm_review_specs.pop(name, None)
+            service = self._config.source_review_service
+            if spec is None or service is None:
+                raise ScreeningProviderError(
+                    provider=self.name,
+                    operation="invoke_warm_review",
+                    reason="review invocation is unavailable",
+                )
+            self._warm_review_tasks[name] = asyncio.create_task(
+                self._client.invoke_service(
+                    service,
+                    path="review",
+                    payload={"env": _warm_review_env(spec.env)},
+                    timeout_seconds=3_600.0,
+                )
+            )
+            return
         kind, name = _split(resource_id)
         if kind != "job":
             return
@@ -203,6 +229,18 @@ class CloudRunComputeProvider:
         return (await self.observe_provision(resource_id)).status
 
     async def observe_provision(self, resource_id: str) -> ProvisionObservation:
+        if resource_id.startswith(_WARM_REVIEW_PREFIX):
+            name = resource_id[len(_WARM_REVIEW_PREFIX) :]
+            task = self._warm_review_tasks.get(name)
+            if task is None:
+                return ProvisionObservation(status="error")
+            if not task.done():
+                return ProvisionObservation(status="running")
+            try:
+                task.result()
+            except (CloudRunAPIError, asyncio.CancelledError):
+                return ProvisionObservation(status="error")
+            return ProvisionObservation(status="running")
         kind, name = _split(resource_id)
         try:
             if kind == "job":
@@ -256,6 +294,18 @@ class CloudRunComputeProvider:
         return False
 
     async def delete(self, resource_id: str) -> bool:
+        if resource_id.startswith(_WARM_REVIEW_PREFIX):
+            name = resource_id[len(_WARM_REVIEW_PREFIX) :]
+            self._warm_review_specs.pop(name, None)
+            task = self._warm_review_tasks.pop(name, None)
+            if task is not None:
+                if not task.done():
+                    task.cancel()
+                try:
+                    await task
+                except (CloudRunAPIError, asyncio.CancelledError):
+                    pass
+            return True
         kind, name = _split(resource_id)
         try:
             if kind == "job":
@@ -359,6 +409,19 @@ def _execution_status(detail: dict[str, Any]) -> dict[str, Any]:
     if isinstance(nested, dict):
         return nested
     return detail
+
+
+def _warm_review_env(env: tuple[tuple[str, str], ...]) -> list[list[str]]:
+    """Leave two minutes for completion and cleanup inside Cloud Run's cap."""
+    rows: list[list[str]] = []
+    for name, value in env:
+        if name == "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS":
+            try:
+                value = str(min(int(float(value)), _WARM_REVIEW_MAX_WORK_SECONDS))
+            except ValueError:
+                value = str(_WARM_REVIEW_MAX_WORK_SECONDS)
+        rows.append([name, value])
+    return rows
 
 
 def _job_execution_ref(job: dict[str, Any]) -> dict[str, Any] | None:

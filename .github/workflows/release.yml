@@ -1082,6 +1082,27 @@ jobs:
               >/dev/null
           fi
           echo "screener image: $SCREENER_REPOSITORY@$digest"
+          warm_service="ditto-source-review-warm"
+          if gcloud run services describe "$warm_service" \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --format='value(metadata.name)' >/dev/null 2>&1; then
+            gcloud run services update "$warm_service" \
+              --project="$GCP_PROJECT" \
+              --region="$GCP_REGION" \
+              --image="$SCREENER_REPOSITORY@$digest" \
+              --quiet
+            deployed_digest="$(gcloud run services describe "$warm_service" \
+              --project="$GCP_PROJECT" \
+              --region="$GCP_REGION" \
+              --format='value(spec.template.spec.containers[0].image)')"
+            if [ "$deployed_digest" != "$SCREENER_REPOSITORY@$digest" ]; then
+              echo "::error::warm source-review service did not adopt the reviewed digest"
+              exit 1
+            fi
+          else
+            echo "warm source-review service is not enabled; skipping image rollout"
+          fi
 
   # The validator image spends most of its cold multi-platform build compiling
   # Python/system dependencies. Build each architecture on matching native

@@ -89,6 +89,31 @@ the VM:
 Never place any secret value, private challenge, private risk rule, or raw
 artifact evidence in source, workflow arguments, logs, or PR text.
 
+## Warm source-review capacity
+
+The optional `ditto-source-review-warm` Cloud Run service keeps one reviewed
+screener instance warm with concurrency one. Platform invokes it over private
+Cloud Run IAM and sends only the same attempt-bound Platform capability and
+short-lived Secret Manager bootstrap token used by the one-shot job. The
+service materializes and deletes the model key inside each request and restores
+its environment before accepting another review. Kaniko and miner runtime
+containers remain separate and receive no additional credentials.
+
+Activation remains an infrastructure boundary:
+
+1. Merge and release the worker so an immutable screener digest containing
+   `ditto_screener.source_review_service` exists.
+2. Apply `gcp-platform` with
+   `enable_screening_source_review_service=true` and
+   `screening_source_review_image=<repository>@sha256:<released digest>`.
+3. Set the Platform Ansible value
+   `platform_cloudrun_source_review_service=ditto-source-review-warm`, deploy
+   Platform, and verify one review completes through a `warm-review:` resource.
+
+Semantic releases update the existing service to each newly verified screener
+digest. If the service is not enabled, the release explicitly skips that image
+rollout and the existing one-shot Cloud Run fallback remains authoritative.
+
 ## Policy v7 rollout
 
 1. Merge and deploy the platform protocol pin first. Existing v6 workers stop
