@@ -101,17 +101,32 @@ permanent law: each generation's policies are interim enforcement while the
 next bench version makes the unwanted strategy uncompetitive. Keep them
 narrow so genuinely generalizable paths stay open.
 
-- **Planner-forced tool execution — I7 breach.** A separate planner call
-  (host rule, trained head, or second model turn) whose plan is *enforced*
-  against the deciding model fails I7. Live precedent: `lets_v609`
-  (`de936681`, review `c8bf0641`, reject) — `planning.py` planner model, then
-  `loop.py:425` exposes only the next planned capability, `:480-482` makes the
-  plan the exact ordered capability plan, `:521-526` refuses unadvertised
-  guesses, `models.py:1030-1035` pins `tool_choice` with
-  `parallel_tool_calls=false`. Contrast `grandmaster-agent` v55 (`b590c74b`,
-  reject): same catalog-replacement shape, plan authorship ruled equivalent.
-  Contrast `whoamI` (`89ef6167`, clear): complete catalog stays available and
-  the model chooses arguments, order, and calls — that is the line.
+**Versioning and fairness.** The planner-forced ruling is **policy v11**,
+edited forward from v10 (v10 is preserved byte-for-byte as a legacy variant).
+The required version is DB-scheduled: the queue requires the floor (v10) until
+a scheduled activation fires (`schedule_screener_policy_activation`, MCP write
+tool, confirmation `SCHEDULE SCREENER POLICY ACTIVATION`, timezone-aware
+`activate_at`). Dual-text workers screen under and stamp the REQUIRED version.
+When an activation is due, agents screened under a stale version rescreen on
+identical criteria — scored/live rows only when the activation sets
+`rescreen_scored`. Agents are held to the policy that screened them: never
+apply the v11 I7 letter retroactively to a v10-screened row; the scheduled
+rescreen is the enforcement mechanism. Live precedent for the whole arc:
+`lets_v609` (`de936681`) was rejected under v10-in-place, then **reinstated**
+(clear on review `c8bf0641`) after community fairness feedback, and will be
+re-adjudicated by the scheduled v11 rescreen with every other cohort member.
+
+- **Planner-forced tool execution — I7 breach (policy v11).** A separate
+  planner call (host rule, trained head, or second model turn) whose plan is
+  *enforced* against the deciding model fails I7. Evidence pattern
+  (`lets_v609` source): `planning.py` planner model, then `loop.py:425`
+  exposes only the next planned capability, `:480-482` makes the plan the
+  exact ordered capability plan, `:521-526` refuses unadvertised guesses,
+  `models.py:1030-1035` pins `tool_choice` with `parallel_tool_calls=false`.
+  Contrast `grandmaster-agent` v55 (`b590c74b`, reject): same
+  catalog-replacement shape, plan authorship ruled equivalent. Contrast
+  `whoamI` (`89ef6167`, clear): complete catalog stays available and the model
+  chooses arguments, order, and calls — that is the line.
 - **Intent routing alone — legitimate.** Grammar routers, per-intent
   lightweight classifiers, advisory relevance signals shown to the model, and
   precursor LLM passes all pass when the deciding model still sees the
