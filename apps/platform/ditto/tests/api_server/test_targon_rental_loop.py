@@ -288,6 +288,47 @@ async def test_reaps_terminal_source_review_rental(
 
 
 @pytest.mark.asyncio
+async def test_cancels_source_review_when_parent_attempt_is_terminal(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    async with session_maker() as session, session.begin():
+        review = await session.scalar(select(SubmissionSourceReview).limit(1))
+        assert review is not None
+        attempt = await session.get(ScreeningAttempt, review.attempt_id)
+        assert attempt is not None
+        review.status = "running"
+        review.provider = "targon"
+        review.provider_resource_id = "wrk-source-orphan"
+        review.job_token_hash = "ab" * 32
+        review.job_token_expires_at = datetime.now(UTC) + timedelta(minutes=30)
+        attempt.status = "failed"
+        attempt.finished_at = datetime.now(UTC)
+
+    targon.deleted.clear()
+    assert await loop.tick() is True
+    assert targon.deleted == ["wrk-source-orphan"]
+    async with session_maker() as session:
+        review = await session.scalar(select(SubmissionSourceReview).limit(1))
+        assert review is not None
+        assert review.status == "canceled"
+        assert review.error_code == "SCREENING_ATTEMPT_TERMINAL"
+        assert review.provider_resource_id is None
+        assert review.job_token_hash is None
+        assert review.job_token_expires_at is None
+        assert review.completed_at is not None
+
+
+@pytest.mark.asyncio
 async def test_launches_queued_kaniko_in_parallel(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
