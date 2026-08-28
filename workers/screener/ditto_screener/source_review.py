@@ -154,10 +154,12 @@ _RETRY_DELAYS_SECONDS = (0.5, 1.0)
 # object, or ``status: "failed"`` with an error type such as
 # ``rate_limit_exceeded``). Those are transport-class faults, not verdicts;
 # failing the stage on the first one burned whole reviews during sustained
-# rate limiting. Rate limits persist for tens of seconds, so this ladder
-# waits far longer than the sub-second transport retries (always bounded by
-# the stage deadline where one is enforced).
-_MODEL_ERROR_RETRY_DELAYS_SECONDS = (5.0, 15.0, 30.0)
+# rate limiting. Account-level throttling persists for MINUTES (observed
+# 2026-08-28: four consecutive 429s across a 50-second ladder), so the tail
+# reaches past short windows. Every rung is an unbilled error retry; the
+# stage deadline (and the L2 lease-budget check) stays the upper bound, so
+# the worst case converts a burned attempt into waited wall time.
+_MODEL_ERROR_RETRY_DELAYS_SECONDS = (5.0, 15.0, 30.0, 60.0, 120.0, 240.0)
 _RETRYABLE_MODEL_ERROR_TYPES = frozenset(
     {
         "rate_limit_exceeded",
@@ -2611,8 +2613,14 @@ class OpenRouterSourceReviewAgent:
                 # drift, where repetition buys little — it gets exactly one
                 # long retry before failing as before.
                 model_error = _retryable_model_error_type(payload)
+                # A billed completion is always JSON, so a non-JSON 200 body
+                # (CDN error page, truncated stream) is transport-class even
+                # when it names no fault — give it the full unbilled ladder.
+                # Only a PARSEABLE body of unknown shape can be a billed
+                # completion under contract drift; that keeps one retry.
+                retryable_shape = model_error is not None or payload is None
                 retry_budget = (
-                    len(_MODEL_ERROR_RETRY_DELAYS_SECONDS) if model_error else 1
+                    len(_MODEL_ERROR_RETRY_DELAYS_SECONDS) if retryable_shape else 1
                 )
                 if body_attempts >= retry_budget:
                     logger.warning(
@@ -2657,7 +2665,11 @@ class OpenRouterSourceReviewAgent:
                 "require_parameters": True,
             },
         }
-        for attempt in range(len(_RETRY_DELAYS_SECONDS) + 1):
+        # HTTP 429/5xx and transport faults ride the same long unbilled
+        # ladder as relayed 200-body faults: the sub-second ladder could not
+        # outlive account-level throttling, and raising here burns the whole
+        # review (see _MODEL_ERROR_RETRY_DELAYS_SECONDS).
+        for attempt in range(len(_MODEL_ERROR_RETRY_DELAYS_SECONDS) + 1):
             try:
                 response = await client.post(
                     f"{self._base_url}/chat/completions",
@@ -2676,21 +2688,23 @@ class OpenRouterSourceReviewAgent:
                 status = error.response.status_code
                 if status != 429 and status < 500:
                     raise
-                if attempt >= len(_RETRY_DELAYS_SECONDS):
+                if attempt >= len(_MODEL_ERROR_RETRY_DELAYS_SECONDS):
                     raise
                 logger.warning(
-                    "source review request transiently failed; retrying attempt=%d",
+                    "source review request transiently failed (HTTP %d); "
+                    "retrying attempt=%d",
+                    status,
                     attempt + 2,
                 )
-                await asyncio.sleep(_RETRY_DELAYS_SECONDS[attempt])
+                await asyncio.sleep(_MODEL_ERROR_RETRY_DELAYS_SECONDS[attempt])
             except httpx.TransportError:
-                if attempt >= len(_RETRY_DELAYS_SECONDS):
+                if attempt >= len(_MODEL_ERROR_RETRY_DELAYS_SECONDS):
                     raise
                 logger.warning(
                     "source review request transiently failed; retrying attempt=%d",
                     attempt + 2,
                 )
-                await asyncio.sleep(_RETRY_DELAYS_SECONDS[attempt])
+                await asyncio.sleep(_MODEL_ERROR_RETRY_DELAYS_SECONDS[attempt])
         raise RuntimeError("unreachable")
 
 

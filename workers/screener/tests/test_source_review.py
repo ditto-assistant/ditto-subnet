@@ -4438,3 +4438,111 @@ def test_body_signature_never_reproduces_content() -> None:
     assert "miner source text" not in signature
     assert "choices" in signature
     assert source_review_module._body_signature(None) == "non-json"
+
+
+async def test_non_json_body_rides_the_full_unbilled_ladder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-JSON 200 body cannot be a billed completion: retry it fully.
+
+    CDN error pages and truncated streams arrive as unparseable 200s during
+    provider throttling; one retry burned reviews the ladder could save.
+    """
+    monkeypatch.setattr(
+        source_review_module,
+        "_MODEL_ERROR_RETRY_DELAYS_SECONDS",
+        (0.0, 0.0, 0.0),
+    )
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    final = {
+        "risk_level": "low",
+        "confidence": 0.99,
+        "categories": ["none"],
+        "evidence": [],
+        "summary": "Inventory-only result.",
+    }
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls <= 3:
+            return httpx.Response(
+                200,
+                text="<html>upstream error</html>",
+                headers={"content-type": "text/html"},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [_tool("submit-1", "submit_review", final)],
+                        }
+                    }
+                ]
+            },
+        )
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok and observation.risk_level == "low"
+    assert calls == 4
+
+
+async def test_http_429_rides_the_long_ladder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real HTTP 429s wait like relayed ones instead of dying inside 1.5s."""
+    monkeypatch.setattr(
+        source_review_module,
+        "_MODEL_ERROR_RETRY_DELAYS_SECONDS",
+        (0.0, 0.0),
+    )
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    final = {
+        "risk_level": "low",
+        "confidence": 0.99,
+        "categories": ["none"],
+        "evidence": [],
+        "summary": "Inventory-only result.",
+    }
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            return httpx.Response(429, json={"error": "rate limited"})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [_tool("submit-1", "submit_review", final)],
+                        }
+                    }
+                ]
+            },
+        )
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok and observation.risk_level == "low"
+    assert calls == 3
