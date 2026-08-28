@@ -425,6 +425,30 @@ def test_disposable_admin_is_absent_by_default_and_has_no_dormant_principal() ->
     assert 'role               = "roles/iam.serviceAccountUser"' in actas
 
 
+def test_validator_iap_uses_exact_instance_project_conditions() -> None:
+    production = PROD_TERRAFORM.read_text()
+    admin = ADMIN_TERRAFORM.read_text()
+
+    assert 'resource "google_iap_tunnel_instance_iam_member"' not in production
+    assert 'resource "google_iap_tunnel_instance_iam_member"' not in admin
+
+    prod_iap = production.split(
+        'resource "google_project_iam_member" "validator_prod_operator_iap"',
+        1,
+    )[1].split("resource ", 1)[0]
+    assert 'role     = "roles/iap.tunnelResourceAccessor"' in prod_iap
+    assert "resource.name.extract('/instances/{name}') ==" in prod_iap
+    assert "module.validator_prod_vm[0].hostname" in prod_iap
+
+    admin_iap = admin.split(
+        'resource "google_project_iam_member" "validator_hotkey_admin_operator_iap"',
+        1,
+    )[1].split("resource ", 1)[0]
+    assert 'role     = "roles/iap.tunnelResourceAccessor"' in admin_iap
+    assert "resource.name.extract('/instances/{name}') ==" in admin_iap
+    assert "google_compute_instance_from_template.validator_hotkey_admin" in admin_iap
+
+
 def test_disposable_admin_arms_only_after_egress_is_restricted() -> None:
     terraform = ADMIN_TERRAFORM.read_text()
     startup = ADMIN_STARTUP.read_text()
