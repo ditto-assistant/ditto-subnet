@@ -1,0 +1,34 @@
+---
+validator_stack_user: "{{ deploy_user | default('deploy') }}"
+validator_stack_group: "{{ deploy_group | default('ditto') }}"
+validator_stack_project: "{{ gcp_project | default('ditto-app-dev') }}"
+
+validator_stack_root: /opt/ditto/validator-stack
+validator_stack_checkout: "{{ validator_stack_root }}/src"
+validator_stack_env_file: "{{ validator_stack_checkout }}/.env"
+validator_stack_wallet_root: /opt/ditto/validator-hotkey
+validator_stack_wallets_dir: "{{ validator_stack_wallet_root }}/wallets"
+validator_stack_wallet_name: validator
+validator_stack_hotkey_name: gcp-prod
+validator_stack_hotkey_file: "{{ validator_stack_wallets_dir }}/{{ validator_stack_wallet_name }}/hotkeys/{{ validator_stack_hotkey_name }}"
+validator_stack_materializer: "{{ validator_stack_wallet_root }}/materialize_wallet.py"
+validator_stack_pylon_token_file: "{{ validator_stack_wallet_root }}/pylon-token"
+validator_stack_broker_token_file: "{{ validator_stack_wallet_root }}/broker-control-token"
+
+validator_stack_repo: https://github.com/ditto-assistant/ditto-subnet.git
+validator_stack_revision: ""
+validator_stack_hotkey: ""
+validator_stack_hotkey_secret: validator-prod-hotkey-mnemonic
+validator_stack_hotkey_secret_version: ""
+validator_stack_benchmark_capacity: 8
+validator_stack_longmem_capacity: 4
+
+validator_stack_platform_api_url: https://platform-api.heyditto.ai/
+validator_stack_subtensor_network: finney
+validator_stack_disk_percent_ceiling: 90
+validator_stack_memory_percent_ceiling: 90
+validator_stack_cpu_percent_ceiling: 0
+
+validator_stack_cosign_version: v3.0.6
+validator_stack_cosign_linux_amd64_sha256: c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
+validator_stack_uv_bin: /usr/local/bin/uv

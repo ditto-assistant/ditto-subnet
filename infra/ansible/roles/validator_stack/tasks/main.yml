@@ -1,0 +1,350 @@
+---
+# Fail before mutating the host when the operator did not bind this converge to
+# an exact reviewed source revision and the generated public hotkey.
+- name: Validate production validator inputs
+  ansible.builtin.assert:
+    that:
+      - validator_stack_revision is match('^[0-9a-f]{40}$')
+      - validator_stack_hotkey is match('^5[1-9A-HJ-NP-Za-km-z]{47}$')
+      - validator_stack_hotkey_secret_version is match('^[1-9][0-9]*$')
+      - validator_stack_benchmark_capacity | int >= 1
+      - validator_stack_benchmark_capacity | int <= 8
+      - validator_stack_longmem_capacity | int >= 0
+      - validator_stack_longmem_capacity | int <= 4
+      - validator_stack_longmem_capacity | int <= ((validator_stack_benchmark_capacity | int) + 1) // 2
+    fail_msg: >-
+      Set VALIDATOR_STACK_REVISION to the reviewed 40-character main SHA and
+      VALIDATOR_PROD_HOTKEY plus VALIDATOR_PROD_HOTKEY_SECRET_VERSION to the
+      generated public SS58 address and its recorded numeric secret version.
+
+- name: Require the production amd64 host profile
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['architecture'] == 'x86_64'
+    fail_msg: The signed production stack currently requires amd64 Pylon images
+
+- name: Ensure gcloud is available
+  ansible.builtin.command: gcloud --version
+  register: validator_stack_gcloud_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Google Cloud CLI if missing
+  when: validator_stack_gcloud_check.rc != 0
+  block:
+    - name: Add Google Cloud apt key
+      ansible.builtin.get_url:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        dest: /usr/share/keyrings/cloud.google.gpg
+        mode: "0644"
+
+    - name: Add Google Cloud apt repository
+      ansible.builtin.apt_repository:
+        repo: deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main
+        filename: google-cloud-sdk
+        state: present
+
+    - name: Install Google Cloud CLI
+      ansible.builtin.apt:
+        name: google-cloud-cli
+        state: present
+        update_cache: true
+
+- name: Add Docker apt key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/debian/gpg
+    dest: /usr/share/keyrings/docker.asc
+    mode: "0644"
+
+- name: Add Docker apt repository
+  ansible.builtin.apt_repository:
+    repo: deb [arch=amd64 signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/debian {{ ansible_facts['distribution_release'] }} stable
+    filename: docker
+    state: present
+
+- name: Install Docker engine and Compose
+  ansible.builtin.apt:
+    name:
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-ce
+      - docker-ce-cli
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Bound Docker container logs
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {
+        "log-driver": "local",
+        "log-opts": {
+          "max-file": "3",
+          "max-size": "50m"
+        }
+      }
+  notify: restart docker
+
+- name: Enable Docker
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Add the validator operator to the Docker group
+  ansible.builtin.user:
+    name: "{{ validator_stack_user }}"
+    groups: docker
+    append: true
+
+- name: Install checksum-pinned Cosign verifier
+  ansible.builtin.get_url:
+    url: https://github.com/sigstore/cosign/releases/download/{{ validator_stack_cosign_version }}/cosign-linux-amd64
+    dest: /usr/local/bin/cosign
+    checksum: sha256:{{ validator_stack_cosign_linux_amd64_sha256 }}
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure validator directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ validator_stack_user }}"
+    group: "{{ validator_stack_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ validator_stack_root }}", mode: "0750" }
+    - { path: "{{ validator_stack_wallet_root }}", mode: "0700" }
+    - { path: "{{ validator_stack_wallets_dir }}/{{ validator_stack_wallet_name }}/hotkeys", mode: "0700" }
+
+- name: Clone the public monorepo at the reviewed revision
+  ansible.builtin.git:
+    repo: "{{ validator_stack_repo }}"
+    dest: "{{ validator_stack_checkout }}"
+    version: "{{ validator_stack_revision }}"
+    force: false
+  become_user: "{{ validator_stack_user }}"
+  register: validator_stack_clone
+
+- name: Verify the exact checked-out revision
+  ansible.builtin.command:
+    argv: [git, rev-parse, HEAD]
+    chdir: "{{ validator_stack_checkout }}"
+  become_user: "{{ validator_stack_user }}"
+  register: validator_stack_deployed_revision
+  changed_when: false
+
+- name: Verify the canonical origin URL
+  ansible.builtin.command:
+    argv: [git, remote, get-url, origin]
+    chdir: "{{ validator_stack_checkout }}"
+  become_user: "{{ validator_stack_user }}"
+  register: validator_stack_origin_url
+  changed_when: false
+
+- name: Require the canonical public repository
+  ansible.builtin.assert:
+    that: validator_stack_origin_url.stdout == validator_stack_repo
+    fail_msg: Validator checkout origin is not the canonical public repository
+
+- name: Fetch canonical main without executing checkout code
+  ansible.builtin.command:
+    argv:
+      - git
+      - fetch
+      - --force
+      - origin
+      - refs/heads/main:refs/remotes/origin/main
+    chdir: "{{ validator_stack_checkout }}"
+  become_user: "{{ validator_stack_user }}"
+  changed_when: false
+
+- name: Prove the reviewed revision belongs to canonical main
+  ansible.builtin.command:
+    argv:
+      - git
+      - merge-base
+      - --is-ancestor
+      - "{{ validator_stack_revision }}"
+      - refs/remotes/origin/main
+    chdir: "{{ validator_stack_checkout }}"
+  become_user: "{{ validator_stack_user }}"
+  changed_when: false
+
+- name: Require the exact reviewed checkout
+  ansible.builtin.assert:
+    that: validator_stack_deployed_revision.stdout == validator_stack_revision
+    fail_msg: Validator checkout does not match VALIDATOR_STACK_REVISION
+
+- name: Sync the locked Python environment for wallet materialization
+  ansible.builtin.command:
+    argv: ["{{ validator_stack_uv_bin }}", sync, --frozen, --no-dev]
+    chdir: "{{ validator_stack_checkout }}"
+  become_user: "{{ validator_stack_user }}"
+  environment:
+    UV_PROJECT_ENVIRONMENT: "{{ validator_stack_checkout }}/.venv"
+  register: validator_stack_uv_sync
+  changed_when: >-
+    ('Installed' in validator_stack_uv_sync.stderr)
+    or ('Uninstalled' in validator_stack_uv_sync.stderr)
+    or ('Prepared' in validator_stack_uv_sync.stderr)
+
+- name: Install the wallet materialization helper
+  ansible.builtin.template:
+    src: materialize_wallet.py.j2
+    dest: "{{ validator_stack_materializer }}"
+    owner: "{{ validator_stack_user }}"
+    group: "{{ validator_stack_group }}"
+    mode: "0700"
+
+- name: Check whether the production hotkey is already materialized
+  ansible.builtin.stat:
+    path: "{{ validator_stack_hotkey_file }}"
+  register: validator_stack_hotkey_stat
+
+- name: Materialize the production hotkey once
+  when: not validator_stack_hotkey_stat.stat.exists
+  block:
+    - name: Read the hotkey mnemonic from Secret Manager
+      ansible.builtin.command:
+        argv:
+          - gcloud
+          - secrets
+          - versions
+          - access
+          - "{{ validator_stack_hotkey_secret_version }}"
+          - "--secret={{ validator_stack_hotkey_secret }}"
+          - "--project={{ validator_stack_project }}"
+      register: validator_stack_hotkey_mnemonic
+      changed_when: false
+      no_log: true
+
+    - name: Write the unencrypted Pylon hotkey wallet
+      ansible.builtin.command:
+        argv:
+          - "{{ validator_stack_checkout }}/.venv/bin/python"
+          - "{{ validator_stack_materializer }}"
+      become_user: "{{ validator_stack_user }}"
+      environment:
+        VALIDATOR_MNEMONIC: "{{ validator_stack_hotkey_mnemonic.stdout }}"
+        EXPECTED_HOTKEY: "{{ validator_stack_hotkey }}"
+        BT_WALLET_PATH: "{{ validator_stack_wallets_dir }}"
+        BT_WALLET_NAME: "{{ validator_stack_wallet_name }}"
+        BT_HOTKEY_NAME: "{{ validator_stack_hotkey_name }}"
+      no_log: true
+
+- name: Verify the materialized wallet matches the intended public hotkey
+  ansible.builtin.command:
+    argv:
+      - "{{ validator_stack_checkout }}/.venv/bin/python"
+      - "{{ validator_stack_materializer }}"
+  become_user: "{{ validator_stack_user }}"
+  environment:
+    VERIFY_ONLY: "1"
+    EXPECTED_HOTKEY: "{{ validator_stack_hotkey }}"
+    BT_WALLET_PATH: "{{ validator_stack_wallets_dir }}"
+    BT_WALLET_NAME: "{{ validator_stack_wallet_name }}"
+    BT_HOTKEY_NAME: "{{ validator_stack_hotkey_name }}"
+  changed_when: false
+
+- name: Lock down the materialized hotkey file
+  ansible.builtin.file:
+    path: "{{ validator_stack_hotkey_file }}"
+    owner: "{{ validator_stack_user }}"
+    group: "{{ validator_stack_group }}"
+    mode: "0600"
+
+- name: Check for the host-local Pylon token
+  ansible.builtin.stat:
+    path: "{{ validator_stack_pylon_token_file }}"
+  register: validator_stack_pylon_token_stat
+
+- name: Generate a host-local Pylon token
+  ansible.builtin.command:
+    argv: [openssl, rand, -hex, "32"]
+  register: validator_stack_new_pylon_token
+  changed_when: true
+  no_log: true
+  when: not validator_stack_pylon_token_stat.stat.exists
+
+- name: Persist the host-local Pylon token
+  ansible.builtin.copy:
+    content: "{{ validator_stack_new_pylon_token.stdout }}\n"
+    dest: "{{ validator_stack_pylon_token_file }}"
+    owner: "{{ validator_stack_user }}"
+    group: "{{ validator_stack_group }}"
+    mode: "0600"
+  no_log: true
+  when: not validator_stack_pylon_token_stat.stat.exists
+
+- name: Check for the host-local broker token
+  ansible.builtin.stat:
+    path: "{{ validator_stack_broker_token_file }}"
+  register: validator_stack_broker_token_stat
+
+- name: Generate a host-local broker token
+  ansible.builtin.command:
+    argv: [openssl, rand, -hex, "32"]
+  register: validator_stack_new_broker_token
+  changed_when: true
+  no_log: true
+  when: not validator_stack_broker_token_stat.stat.exists
+
+- name: Persist the host-local broker token
+  ansible.builtin.copy:
+    content: "{{ validator_stack_new_broker_token.stdout }}\n"
+    dest: "{{ validator_stack_broker_token_file }}"
+    owner: "{{ validator_stack_user }}"
+    group: "{{ validator_stack_group }}"
+    mode: "0600"
+  no_log: true
+  when: not validator_stack_broker_token_stat.stat.exists
+
+- name: Read the host-local runtime tokens
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  loop:
+    - "{{ validator_stack_pylon_token_file }}"
+    - "{{ validator_stack_broker_token_file }}"
+  register: validator_stack_runtime_tokens
+  no_log: true
+
+- name: Bind the runtime tokens for the environment template
+  ansible.builtin.set_fact:
+    validator_stack_pylon_token: "{{ validator_stack_runtime_tokens.results[0].content | b64decode | trim }}"
+    validator_stack_broker_token: "{{ validator_stack_runtime_tokens.results[1].content | b64decode | trim }}"
+  no_log: true
+
+- name: Render the production validator environment
+  ansible.builtin.template:
+    src: validator.env.j2
+    dest: "{{ validator_stack_env_file }}"
+    owner: "{{ validator_stack_user }}"
+    group: "{{ validator_stack_group }}"
+    mode: "0600"
+  no_log: true
+
+- name: Validate the source Compose configuration without starting services
+  ansible.builtin.command:
+    argv:
+      - "{{ validator_stack_checkout }}/scripts/validator-compose.sh"
+      - config
+      - --quiet
+    chdir: "{{ validator_stack_checkout }}"
+  become_user: "{{ validator_stack_user }}"
+  environment:
+    HOME: "/home/{{ validator_stack_user }}"
+    DITTO_BITTENSOR_WALLETS_DIR: "{{ validator_stack_wallets_dir }}"
+  changed_when: false
+
+- name: Keep activation explicit
+  ansible.builtin.debug:
+    msg: >-
+      Production validator host prepared but not started. Disable the hotkey
+      secret version after a second verify-only converge, then follow the
+      supervised drain, SN118 hotkey swap, and immutable bootstrap runbook.

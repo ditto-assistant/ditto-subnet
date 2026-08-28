@@ -31,6 +31,7 @@ def test_update_state_is_atomic_bounded_and_private(tmp_path: Path) -> None:
         "heartbeat_protocol": HEARTBEAT_PROTOCOL_VERSION,
         "pid": payload["pid"],
         "platform_accepted": False,
+        "resume_ready": False,
         "state": "drained",
         "update_protocol": 1,
     }

@@ -4,6 +4,7 @@
 base_install_go: true
 base_install_uv: true
 base_install_caddy: true
+base_install_postgres_packages: true
 
 # Cloud Ops Agent (logs + host metrics -> Cloud Logging / Monitoring).
 # Default OFF: enabling it starts shipping logs and changes billing, so it is
@@ -40,6 +41,11 @@ base_system_packages:
   - debian-keyring
   - debian-archive-keyring
   - apt-transport-https
+
+base_ufw_open_ports:
+  - { port: "22", comment: SSH }
+  - { port: "80", comment: HTTP }
+  - { port: "443", comment: HTTPS }
 
 # Team members get sudo on the box. Single source of truth — see also
 # group_vars/all.yml.

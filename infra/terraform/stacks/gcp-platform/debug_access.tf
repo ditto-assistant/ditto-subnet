@@ -116,7 +116,7 @@ resource "google_project_iam_member" "debug_operator_iap" {
     expression  = <<-EOT
       resource.name.extract('/instances/{name}').startsWith('ditto-platform-')
       || resource.name.extract('/instances/{name}').startsWith('ditto-screener-')
-      || resource.name.extract('/instances/{name}').startsWith('ditto-validator-')
+      || resource.name.extract('/instances/{name}') == 'ditto-validator-dev'
     EOT
   }
 

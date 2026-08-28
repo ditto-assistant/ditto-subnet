@@ -102,6 +102,11 @@ Python and `uv` are only required for development.
 
 ## First deployment
 
+For the Terraform-owned production GCP host and its coldkey-isolated hotkey
+swap, follow [the GCP production validator runbook](../infra/docs/validator-gcp-production.md).
+That path provisions a private Shielded VM and bootstraps an authenticated
+managed stack directly; it does not use the source-build steps below.
+
 Clone the repository and create the one environment file used by Compose:
 
 ```sh

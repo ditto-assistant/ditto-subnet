@@ -2,12 +2,17 @@
 # automatically in local and GitHub Actions plans so an omitted CLI flag cannot
 # silently propose destroying an already-managed optional service.
 
-manage_dns           = true
-enable_datapipeline  = true
-enable_embedder      = true
-enable_validator     = true
-enable_screener      = true
-enable_screener_prod = true
+manage_dns            = true
+enable_datapipeline   = true
+enable_embedder       = true
+enable_validator      = true
+enable_validator_prod = true
+# The generator VM must never become persistent production intent. The
+# protected plan workflow overrides this only for a supervised bootstrap/armed
+# window, then seals a teardown plan returning it to absent.
+validator_hotkey_admin_phase = "absent"
+enable_screener              = true
+enable_screener_prod         = true
 
 # The fleet and its secret/IAM phase already exist in production. The
 # Targon-first controller starts with its hostile-runtime capability pinned to
