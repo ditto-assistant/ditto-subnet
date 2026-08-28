@@ -621,22 +621,6 @@ class TargonRentalLoop:
             if healthy:
                 stored.runtime_status = "succeeded"
                 stored.runtime_completed_at = datetime.now(UTC)
-                attempt = await session.get(ScreeningAttempt, stored.attempt_id)
-                if attempt is not None and not attempt.build_only:
-                    await session.execute(
-                        pg_insert(SubmissionSourceReview)
-                        .values(
-                            review_id=uuid4(),
-                            agent_id=stored.agent_id,
-                            attempt_id=stored.attempt_id,
-                            environment=stored.environment,
-                            artifact_sha256=stored.artifact_sha256,
-                            status="queued",
-                        )
-                        .on_conflict_do_nothing(
-                            constraint="submission_source_reviews_attempt_key"
-                        )
-                    )
             else:
                 stored.runtime_status = "fallback_required"
                 stored.runtime_error_code = error_code

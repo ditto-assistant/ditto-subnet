@@ -152,6 +152,11 @@ async def test_tick_admits_and_launches_kaniko(
         assert build is not None
         assert build.status == "running"
         assert UUID(env["DITTO_BUILD_ID"]) == build.build_id
+        review = await session.scalar(select(SubmissionSourceReview).limit(1))
+        assert review is not None
+        assert review.attempt_id == build.attempt_id
+        assert review.status == "queued"
+        assert review.created_at <= build.updated_at
 
 
 @pytest.mark.asyncio
