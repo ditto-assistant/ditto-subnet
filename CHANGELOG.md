@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.117.1 (2026-08-28)
+
+### Bug Fixes
+
+- **platform**: Persist platform-attested quarantine audits without 500
+  ([#1209](https://github.com/ditto-assistant/ditto-subnet/pull/1209),
+  [`93e7702`](https://github.com/ditto-assistant/ditto-subnet/commit/93e7702f62138b47d49691566ef4cc4c000a56f0))
+
+- **screener**: Retry model faults relayed inside HTTP 200 review bodies
+  ([#1210](https://github.com/ditto-assistant/ditto-subnet/pull/1210),
+  [`a2526bb`](https://github.com/ditto-assistant/ditto-subnet/commit/a2526bb6942bda30869504fc7e30064a8430fb10))
+
+
 ## v0.117.0 (2026-08-28)
 
 ### Features
