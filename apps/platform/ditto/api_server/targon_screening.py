@@ -168,6 +168,21 @@ async def admit_targon_screening_work(
             environment=environment,
             runtime_enabled=runtime_enabled,
         )
+        if not attempt.build_only:
+            await session.execute(
+                pg_insert(SubmissionSourceReview)
+                .values(
+                    review_id=uuid4(),
+                    agent_id=agent.agent_id,
+                    attempt_id=attempt.attempt_id,
+                    environment=environment,
+                    artifact_sha256=agent.sha256.lower(),
+                    status="queued",
+                )
+                .on_conflict_do_nothing(
+                    constraint="submission_source_reviews_attempt_key"
+                )
+            )
         admitted += 1
     return admitted
 
