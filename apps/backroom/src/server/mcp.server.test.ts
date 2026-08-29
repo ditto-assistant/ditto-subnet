@@ -80,6 +80,7 @@ describe('Backroom MCP tools', () => {
         'get_burn_settings',
         'get_copy_review_source_diff',
         'get_continual_retest_settings',
+        'get_core_qualification_policy',
         'get_confirmation_bundle_settings',
         'get_confirmation_bundle',
         'get_confirmation_lane_diagnosis',
@@ -104,6 +105,8 @@ describe('Backroom MCP tools', () => {
         'list_confirmation_bundles',
         'set_burn_settings',
         'set_continual_retest_settings',
+        'set_core_qualification_policy',
+        'refresh_agent_core_qualification',
         'set_efficiency_bonus_settings',
         'set_queue_policy_settings',
         'set_validator_slot_settings',
@@ -126,6 +129,7 @@ describe('Backroom MCP tools', () => {
         'batch_retry_validator_evaluation',
         'agent_scoring_readiness',
         'get_agent_coding_certifications',
+        'get_agent_core_qualification',
         'get_agent_scores',
         'get_leaderboard',
         'get_miner_owner_footprint',
@@ -189,23 +193,22 @@ describe('Backroom MCP tools', () => {
     // number is the coarse whole-payload backstop, and input schemas dominate
     // it. Curve v3 and the runtime metrics/capture contracts added legitimate,
     // bounded input schemas without relaxing either prose budget below. The
-    // 98_400 whole-payload includes the L1 model/timeout fields on the
+    // 102_400 whole-payload includes the L1 model/timeout fields on the
     // screener-review settings write schema, the validator fleet/assignment
     // read schemas, the three inference-trace archive tools, the operator
-    // screening-reject tool, the gradient-hold and adjudicator controls, and
-    // the screener policy-activation write schema (revision guard, versioned
-    // target, timezone-aware instant, rescreen flag), and the coding
-    // certification read tool (agent UUID + limit). Keep modest headroom for
-    // schema evolution; tighten the description budgets, not this
-    // whole-payload backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(99_400)
+    // screening-reject tool, the gradient-hold and adjudicator controls, the
+    // screener policy-activation write schema, the coding certification read
+    // tool, and the four bounded shadow core-qualification operations. Keep
+    // modest headroom for schema evolution; tighten the description budgets,
+    // not this whole-payload backstop, to push back on tutorials.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(102_400)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
-    // in get_backroom_tool_help, not here. 22_000 admits the screener
-    // policy-activation pair: one required catalog line each, with their
-    // operational tutorials kept in get_backroom_tool_help.
+    // in get_backroom_tool_help, not here. 22_400 admits the screener
+    // policy-activation pair plus four short shadow qualification catalog
+    // lines; operational tutorials stay in get_backroom_tool_help.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      22_000,
+      22_400,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -6240,6 +6243,151 @@ describe('Backroom MCP tools', () => {
         }),
       }),
     )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('controls and inspects shadow core qualification without activating it', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const policy = {
+      schema: 'ditto-core-qualification-policy-v1',
+      weight_eligible: false,
+      bench_version: 12,
+      enter_composite: 0.8,
+      enter_tool_mean: 0.8,
+      enter_memory_mean: 0.8,
+      exit_composite: 0.7,
+      exit_tool_mean: 0.7,
+      exit_memory_mean: 0.7,
+      enter_observations: 2,
+      exit_observations: 2,
+    }
+    const revision = {
+      revision: 1,
+      parent_revision: 0,
+      policy,
+      checksum: 'a'.repeat(64),
+      reason: 'calibrate shadow core qualification',
+      actor: 'peyton@omniaura.ai',
+      created_at: '2026-08-21T00:00:00Z',
+    }
+    const policyControl = {
+      bench_version: 12,
+      configured: true,
+      current: revision,
+      history: [revision],
+      required_confirmation: 'APPLY SHADOW CORE QUALIFICATION V12',
+      shadow_only: true,
+    }
+    const observation = {
+      sequence: 1,
+      observation_id: '11111111-1111-4111-8111-111111111111',
+      agent_id: agentId,
+      artifact_sha256: 'b'.repeat(64),
+      screened_image_sha256: 'c'.repeat(64),
+      bench_version: 12,
+      policy_revision: 1,
+      policy_checksum: 'a'.repeat(64),
+      score_evidence_sha256: 'd'.repeat(64),
+      score_count: 3,
+      full_size: true,
+      complete_wave: true,
+      validator_hotkeys: ['5ValA', '5ValB', '5ValC'],
+      run_ids: ['run-a', 'run-b', 'run-c'],
+      median_composite: 0.85,
+      median_tool_mean: 0.86,
+      median_memory_mean: 0.84,
+      entry_passed: true,
+      retention_passed: true,
+      qualified: true,
+      enter_streak: 2,
+      exit_streak: 0,
+      decision: 'entered',
+      source: 'score_commit',
+      actor: null,
+      reason: null,
+      observed_at: '2026-08-21T00:10:00Z',
+      weight_eligible: false,
+      current: true,
+      stale_reason: 'current',
+    }
+    const status = {
+      agent_id: agentId,
+      agent_name: 'core-agent',
+      miner_hotkey: '5Miner',
+      artifact_sha256: 'b'.repeat(64),
+      screened_image_sha256: 'c'.repeat(64),
+      bench_version: 12,
+      configured: true,
+      qualified: true,
+      current_observation: observation,
+      total: 1,
+      observations: [observation],
+      shadow_only: true,
+    }
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      return Response.json(url.includes(`/agents/${agentId}/`) ? status : policyControl)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const readPolicy = await client.callTool({
+      name: 'get_core_qualification_policy',
+      arguments: { benchVersion: 12, historyLimit: 10 },
+    })
+    expect(readPolicy.isError).not.toBe(true)
+    expect(readJsonResult(readPolicy)).toMatchObject({ configured: true, shadow_only: true })
+
+    const written = await client.callTool({
+      name: 'set_core_qualification_policy',
+      arguments: {
+        expectedRevision: 0,
+        policy,
+        reason: 'calibrate shadow core qualification',
+        confirmation: 'APPLY SHADOW CORE QUALIFICATION V12',
+      },
+    })
+    expect(written.isError).not.toBe(true)
+
+    const readAgent = await client.callTool({
+      name: 'get_agent_core_qualification',
+      arguments: { agentId, benchVersion: 12, limit: 25 },
+    })
+    expect(readAgent.isError).not.toBe(true)
+    expect(readJsonResult(readAgent)).toMatchObject({ qualified: true, shadow_only: true })
+
+    const refreshed = await client.callTool({
+      name: 'refresh_agent_core_qualification',
+      arguments: {
+        agentId,
+        benchVersion: 12,
+        reason: 'recover current score evidence after a shadow outage',
+        confirmation: 'REFRESH SHADOW CORE QUALIFICATION V12',
+      },
+    })
+    expect(refreshed.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/core-qualification?bench_version=12&limit=25`,
+      expect.anything(),
+    )
+    const writeCall = fetchMock.mock.calls.find(
+      ([url]) => String(url).endsWith('/api/v1/admin/core-qualification/policy'),
+    )
+    expect(JSON.parse(String(writeCall?.[1]?.body))).toMatchObject({
+      expected_revision: 0,
+      actor: 'peyton@omniaura.ai',
+      policy: { weight_eligible: false },
+    })
+    const refreshCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith(`/agents/${agentId}/core-qualification/refresh`),
+    )
+    expect(JSON.parse(String(refreshCall?.[1]?.body))).toMatchObject({
+      bench_version: 12,
+      actor: 'peyton@omniaura.ai',
+    })
 
     await client.close()
     await server.close()

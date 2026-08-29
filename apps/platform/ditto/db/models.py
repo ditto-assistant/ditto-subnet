@@ -20,6 +20,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKeyConstraint,
+    Identity,
     Index,
     Integer,
     MetaData,
@@ -1051,6 +1052,216 @@ class CodingCapabilityCertification(Base):
             "expires_at",
             "validator_hotkey",
             postgresql_where=text("status = 'certified'"),
+        ),
+    )
+
+
+class CoreQualificationPolicyRevision(Base):
+    """Append-only, benchmark-scoped shadow core qualification policy."""
+
+    __tablename__ = "core_qualification_policy_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    enter_composite: Mapped[float] = mapped_column(Float, nullable=False)
+    enter_tool_mean: Mapped[float] = mapped_column(Float, nullable=False)
+    enter_memory_mean: Mapped[float] = mapped_column(Float, nullable=False)
+    exit_composite: Mapped[float] = mapped_column(Float, nullable=False)
+    exit_tool_mean: Mapped[float] = mapped_column(Float, nullable=False)
+    exit_memory_mean: Mapped[float] = mapped_column(Float, nullable=False)
+    enter_observations: Mapped[int] = mapped_column(Integer, nullable=False)
+    exit_observations: Mapped[int] = mapped_column(Integer, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "bench_version >= 7 AND parent_revision >= 0",
+            name="core_qualification_policy_identity_check",
+        ),
+        CheckConstraint(
+            "enter_composite BETWEEN 0 AND 1 "
+            "AND enter_tool_mean BETWEEN 0 AND 1 "
+            "AND enter_memory_mean BETWEEN 0 AND 1 "
+            "AND exit_composite BETWEEN 0 AND 1 "
+            "AND exit_tool_mean BETWEEN 0 AND 1 "
+            "AND exit_memory_mean BETWEEN 0 AND 1",
+            name="core_qualification_policy_score_range_check",
+        ),
+        CheckConstraint(
+            "exit_composite <= enter_composite "
+            "AND exit_tool_mean <= enter_tool_mean "
+            "AND exit_memory_mean <= enter_memory_mean",
+            name="core_qualification_policy_hysteresis_check",
+        ),
+        CheckConstraint(
+            "enter_observations BETWEEN 1 AND 20 "
+            "AND exit_observations BETWEEN 1 AND 20",
+            name="core_qualification_policy_streak_check",
+        ),
+        CheckConstraint(
+            "weight_eligible = false",
+            name="core_qualification_policy_weight_ineligible",
+        ),
+        CheckConstraint(
+            "checksum ~ '^[0-9a-f]{64}$'",
+            name="core_qualification_policy_checksum_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="core_qualification_policy_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="core_qualification_policy_actor_check",
+        ),
+        UniqueConstraint(
+            "bench_version",
+            "parent_revision",
+            name="core_qualification_policy_parent_key",
+        ),
+        UniqueConstraint(
+            "revision",
+            "bench_version",
+            "checksum",
+            name="core_qualification_policy_binding_key",
+        ),
+        Index(
+            "core_qualification_policy_bench_revision_idx",
+            "bench_version",
+            "revision",
+            unique=True,
+        ),
+    )
+
+
+class CoreQualificationObservation(Base):
+    """One immutable score-snapshot transition under a shadow policy."""
+
+    __tablename__ = "core_qualification_observations"
+
+    sequence: Mapped[int] = mapped_column(
+        BigInteger,
+        Identity(),
+        nullable=False,
+        unique=True,
+    )
+    observation_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    screened_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    score_evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    full_size: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    complete_wave: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    score_evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    median_composite: Mapped[float] = mapped_column(Float, nullable=False)
+    median_tool_mean: Mapped[float] = mapped_column(Float, nullable=False)
+    median_memory_mean: Mapped[float] = mapped_column(Float, nullable=False)
+    entry_passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    retention_passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    qualified: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    enter_streak: Mapped[int] = mapped_column(Integer, nullable=False)
+    exit_streak: Mapped[int] = mapped_column(Integer, nullable=False)
+    decision: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="core_qualification_observations_agent_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["policy_revision", "bench_version", "policy_checksum"],
+            [
+                "core_qualification_policy_revisions.revision",
+                "core_qualification_policy_revisions.bench_version",
+                "core_qualification_policy_revisions.checksum",
+            ],
+            ondelete="RESTRICT",
+            name="core_qualification_observations_policy_fkey",
+        ),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND screened_image_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND policy_checksum ~ '^[0-9a-f]{64}$' "
+            "AND score_evidence_sha256 ~ '^[0-9a-f]{64}$'",
+            name="core_qualification_observations_hashes_check",
+        ),
+        CheckConstraint(
+            "bench_version >= 7 AND score_count >= 3",
+            name="core_qualification_observations_score_count_check",
+        ),
+        CheckConstraint(
+            "median_composite BETWEEN 0 AND 1 "
+            "AND median_tool_mean BETWEEN 0 AND 1 "
+            "AND median_memory_mean BETWEEN 0 AND 1",
+            name="core_qualification_observations_score_range_check",
+        ),
+        CheckConstraint(
+            "enter_streak BETWEEN 0 AND 20 AND exit_streak BETWEEN 0 AND 20",
+            name="core_qualification_observations_streak_check",
+        ),
+        CheckConstraint(
+            "decision IN ('partial_wave', 'below_entry', 'pending_entry', 'entered', "
+            "'held', 'pending_exit', 'exited')",
+            name="core_qualification_observations_decision_check",
+        ),
+        CheckConstraint(
+            "(complete_wave = false AND decision = 'partial_wave') OR "
+            "(complete_wave = true AND decision <> 'partial_wave')",
+            name="core_qualification_observations_wave_shape_check",
+        ),
+        CheckConstraint(
+            "decision = 'partial_wave' OR "
+            "(qualified = true AND decision IN ('entered', 'held', 'pending_exit')) "
+            "OR (qualified = false AND decision IN "
+            "('below_entry', 'pending_entry', 'exited'))",
+            name="core_qualification_observations_decision_state_check",
+        ),
+        CheckConstraint(
+            "(source = 'score_commit' AND actor IS NULL AND reason IS NULL) OR "
+            "(source = 'admin_refresh' AND length(trim(actor)) BETWEEN 1 AND 120 "
+            "AND length(trim(reason)) >= 8)",
+            name="core_qualification_observations_source_check",
+        ),
+        CheckConstraint(
+            "weight_eligible = false",
+            name="core_qualification_observations_weight_ineligible",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "artifact_sha256",
+            "screened_image_sha256",
+            "bench_version",
+            "policy_revision",
+            "score_evidence_sha256",
+            name="core_qualification_observations_evidence_key",
+        ),
+        Index(
+            "core_qualification_observations_agent_bench_sequence_idx",
+            "agent_id",
+            "bench_version",
+            "sequence",
         ),
     )
 

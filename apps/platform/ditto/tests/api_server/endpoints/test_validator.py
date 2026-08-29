@@ -8269,6 +8269,39 @@ class TestSubmitScore:
         assert response.status_code == 200, response.text
         activate.assert_not_awaited()
 
+    async def test_shadow_core_qualification_failure_never_rejects_score(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        observe = AsyncMock(side_effect=RuntimeError("shadow observer unavailable"))
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.validator.observe_core_qualification",
+            observe,
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        await _seed_ticket(session_maker, agent_id)
+
+        response = await client.post(
+            f"/api/v1/validator/agent/{agent_id}/score",
+            json=_score_payload(agent_id),
+        )
+
+        assert response.status_code == 200, response.text
+        observe.assert_awaited_once()
+        async with session_maker() as session:
+            assert (
+                await session.get(
+                    Score,
+                    (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY),
+                )
+                is not None
+            )
+
     async def test_finalized_score_retest_hot_swaps_without_leaving_finalized_state(
         self,
         app: FastAPI,
