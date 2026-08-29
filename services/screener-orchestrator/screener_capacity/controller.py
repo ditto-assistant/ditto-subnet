@@ -1,10 +1,9 @@
-"""GCE residual screener capacity reconciler.
+"""Fenced GCE outage and backlog-overflow capacity reconciler.
 
-Nested-Docker Targon screener slots are retired. Platform owns Kaniko, runtime
-smoke, and L1 one-shot Targon rentals. This process still fences GCE MIG
-mutations: Targon-first decomposed lanes keep the fleet at zero, and a GCE-only
-cutover scales the MIG to residual demand. Leftover ``ditto-screener-*-slot-*``
-rentals are drained and deleted; they are never created.
+The audited Hetzner node handles normal screening. GCE stays at zero until that
+node is unavailable or unclaimed demand exceeds its configured backlog
+multiple. A GCE worker claims new work and never retries a terminal Hetzner
+lane. Retired nested-Docker Targon workers are never recreated here.
 """
 
 from __future__ import annotations
@@ -51,11 +50,27 @@ class ProviderCounts:
 
 
 @dataclass(frozen=True)
+class OverflowPolicy:
+    enabled: bool
+    primary_node_id: str | None
+    backlog_multiplier: int
+    min_backlog: int
+    max_instances: int
+
+
+@dataclass(frozen=True)
 class ProviderRouting:
     revision: int
-    runtime_provider_priority: tuple[Literal["targon", "gcp"], ...]
-    source_review_provider_priority: tuple[Literal["targon", "gcp"], ...]
-    build_provider_priority: tuple[Literal["targon", "gcp"], ...]
+    runtime_provider_priority: tuple[Literal["hetzner", "targon", "gcp"], ...]
+    source_review_provider_priority: tuple[Literal["hetzner", "targon", "gcp"], ...]
+    build_provider_priority: tuple[Literal["hetzner", "targon", "gcp"], ...]
+    overflow: OverflowPolicy = OverflowPolicy(
+        enabled=False,
+        primary_node_id=None,
+        backlog_multiplier=3,
+        min_backlog=12,
+        max_instances=6,
+    )
 
     @property
     def targon_first(self) -> bool:
@@ -69,6 +84,28 @@ class ProviderRouting:
             and self.source_review_provider_priority[0] == "targon"
         )
 
+    @property
+    def gcp_first(self) -> bool:
+        return any(
+            priority and priority[0] == "gcp"
+            for priority in (
+                self.build_provider_priority,
+                self.runtime_provider_priority,
+                self.source_review_provider_priority,
+            )
+        )
+
+    @property
+    def hetzner_first(self) -> bool:
+        return all(
+            priority and priority[0] == "hetzner"
+            for priority in (
+                self.build_provider_priority,
+                self.runtime_provider_priority,
+                self.source_review_provider_priority,
+            )
+        )
+
 
 def desired_slots(*, runnable: int, active: int, jobs_per_slot: int, cap: int) -> int:
     """Keep every active lease supplied and add bounded catch-up capacity."""
@@ -80,6 +117,50 @@ def desired_slots(*, runnable: int, active: int, jobs_per_slot: int, cap: int) -
 def gce_capacity_target(*, demand: int) -> int:
     """Return the GCE worker capacity required by screening demand."""
     return demand
+
+
+def gce_overflow_target(
+    *,
+    demand: Demand,
+    routing: ProviderRouting,
+    primary_node: dict[str, Any] | None,
+    jobs_per_slot: int,
+    global_cap: int,
+) -> tuple[int, str]:
+    """Choose GCE only for an explicit GCP route, outage, or queue overflow."""
+    if jobs_per_slot < 1 or global_cap < 0:
+        raise ValueError("capacity inputs are out of range")
+    if routing.targon_first:
+        return (
+            min(global_cap, demand.desired),
+            "TARGON_NESTED_DOCKER_WORKER_LANE_RETIRED",
+        )
+    if routing.gcp_first:
+        return min(global_cap, demand.desired), "GCP_SCREENERS_PRIORITIZED_BY_POLICY"
+    policy = routing.overflow
+    if not routing.hetzner_first or not policy.enabled:
+        return 0, "GCE_OVERFLOW_DISABLED"
+    cap = min(global_cap, policy.max_instances)
+    if cap == 0:
+        return 0, "GCE_OVERFLOW_CAPPED_AT_ZERO"
+    primary_ready = primary_node is not None and bool(
+        primary_node.get("status") == "active" and primary_node.get("ready") is True
+    )
+    if not primary_ready:
+        return min(cap, demand.desired), "HETZNER_PRIMARY_UNAVAILABLE"
+    assert primary_node is not None
+    screening_concurrency = int(primary_node.get("screening_concurrency", 0))
+    threshold = max(
+        policy.min_backlog,
+        screening_concurrency * policy.backlog_multiplier,
+    )
+    if demand.runnable <= threshold:
+        return 0, "HETZNER_PRIMARY_HANDLING_BASE_LOAD"
+    overflow_jobs = demand.runnable - threshold
+    return (
+        min(cap, math.ceil(overflow_jobs / jobs_per_slot)),
+        "HETZNER_BACKLOG_OVERFLOW",
+    )
 
 
 def _read_secret_file(path: Path) -> str:
@@ -202,23 +283,48 @@ class PlatformControl:
         ):
             raise ControllerError("Platform provider settings response is invalid")
 
-        def priority(field: str) -> tuple[Literal["targon", "gcp"], ...]:
+        def priority(
+            field: str,
+        ) -> tuple[Literal["hetzner", "targon", "gcp"], ...]:
             raw = values.get(field)
             if (
                 not isinstance(raw, list)
                 or not raw
-                or not all(item in {"targon", "gcp"} for item in raw)
+                or not all(item in {"hetzner", "targon", "gcp"} for item in raw)
                 or len(raw) != len(set(raw))
                 or "gcp" not in raw
             ):
                 raise ControllerError("Platform provider priority is invalid")
-            return cast(tuple[Literal["targon", "gcp"], ...], tuple(raw))
+            return cast(tuple[Literal["hetzner", "targon", "gcp"], ...], tuple(raw))
+
+        try:
+            overflow = OverflowPolicy(
+                enabled=bool(values["gce_overflow_enabled"]),
+                primary_node_id=(
+                    str(values["primary_node_id"])
+                    if values.get("primary_node_id") is not None
+                    else None
+                ),
+                backlog_multiplier=int(values["gce_overflow_backlog_multiplier"]),
+                min_backlog=int(values["gce_overflow_min_backlog"]),
+                max_instances=int(values["gce_overflow_max_instances"]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise ControllerError("Platform overflow settings are invalid") from error
+        if (
+            not 2 <= overflow.backlog_multiplier <= 20
+            or not 1 <= overflow.min_backlog <= 1000
+            or not 0 <= overflow.max_instances <= 32
+            or (overflow.enabled and not overflow.primary_node_id)
+        ):
+            raise ControllerError("Platform overflow settings are invalid")
 
         return ProviderRouting(
             revision=revision,
             runtime_provider_priority=priority("runtime_provider_priority"),
             source_review_provider_priority=priority("source_review_provider_priority"),
             build_provider_priority=priority("build_provider_priority"),
+            overflow=overflow,
         )
 
     def fence(self, *, epoch: str) -> None:
@@ -243,13 +349,17 @@ class PlatformControl:
         rows = body.get("nodes") if isinstance(body, dict) else None
         if not isinstance(rows, list):
             raise ControllerError("Platform node readiness response is invalid")
-        return {
-            str(row["provider_resource_id"]): row
-            for row in rows
-            if isinstance(row, dict)
-            and isinstance(row.get("node_id"), str)
-            and isinstance(row.get("provider_resource_id"), str)
-        }
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if (
+                not isinstance(row, dict)
+                or not isinstance(row.get("node_id"), str)
+                or not isinstance(row.get("provider_resource_id"), str)
+            ):
+                continue
+            result[str(row["node_id"])] = row
+            result[str(row["provider_resource_id"])] = row
+        return result
 
     def drain_node(
         self, *, node_id: str, epoch: str, reason: str = "capacity scale-down"
@@ -633,6 +743,17 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         available=provider_routing_available,
         targon_first=targon_first,
     )
+    node_states_available = True
+    try:
+        node_states_reader = getattr(platform, "node_states", None)
+        if node_states_reader is None:
+            node_states_available = False
+            node_states = {}
+        else:
+            node_states = node_states_reader()
+    except ControllerError:
+        node_states_available = False
+        node_states = {}
     provider_success_at: str | None = None
     provider_error_code: str | None = None
     provider_error_at: str | None = None
@@ -649,9 +770,27 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     gce_counts = gce_fleet.counts()
     provider_success_at = datetime.now(UTC).isoformat()
 
-    target = gce_capacity_target(demand=demand.desired)
-    if target < current_target and demand.active > 0:
-        # Never remove GCE capacity while any provider still owns a live lease.
+    primary_node = node_states.get(provider_routing.overflow.primary_node_id or "")
+    target, reason = gce_overflow_target(
+        demand=demand,
+        routing=provider_routing,
+        primary_node=primary_node,
+        jobs_per_slot=settings.jobs_per_slot,
+        global_cap=settings.global_cap,
+    )
+    if not provider_routing_available:
+        reason = "PROVIDER_ROUTING_UNAVAILABLE"
+    gce_has_active_lease = any(
+        node.get("provider") == "gcp" and node.get("active_lease") is True
+        for node in node_states.values()
+    )
+    if target < current_target and gce_has_active_lease:
+        # Never remove GCE capacity while a GCE worker owns a live lease.
+        target = current_target
+    if target < current_target and not node_states_available and demand.active > 0:
+        # A missing node inventory means we cannot prove that none of the live
+        # attempts belongs to GCE. Keep current capacity until the authoritative
+        # inventory returns instead of guessing during scale-in.
         target = current_target
     events: list[dict[str, Any]] = []
     if target != current_target:
@@ -703,9 +842,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         )
         raise
     if target > current_target:
-        # Bring fallback capacity up before touching leftover Targon slots. A
-        # teardown failure must never prevent the GCE safety path from scaling
-        # out.
+        # Bring fallback capacity up before any later reconciliation work.
         try:
             platform.fence(epoch=settings.epoch)
             gce_fleet.resize(target)

@@ -1881,9 +1881,9 @@ describe('Backroom MCP tools', () => {
         current: {
           revision: 0,
           settings: {
-            build_provider_priority: ['targon'],
-            runtime_provider_priority: ['targon'],
-            source_review_provider_priority: ['targon'],
+            build_provider_priority: ['targon', 'gcp'],
+            runtime_provider_priority: ['targon', 'gcp'],
+            source_review_provider_priority: ['targon', 'gcp'],
           },
         },
       },

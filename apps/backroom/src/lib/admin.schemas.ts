@@ -407,10 +407,13 @@ export type ScreenerReviewControl = z.infer<typeof screenerReviewControlSchema>
 export type ScreenerReviewSettings = z.infer<typeof screenerReviewSettingsSchema>
 
 const screenerProviderSchema = z.enum(['gcp', 'targon', 'hetzner', 'home', 'test'])
-const capacityProviderSchema = z.enum(['targon', 'gcp'])
-const providerPrioritySchema = z.array(capacityProviderSchema).min(1).max(2).superRefine((value, context) => {
+const capacityProviderSchema = z.enum(['hetzner', 'targon', 'gcp'])
+const providerPrioritySchema = z.array(capacityProviderSchema).min(1).max(3).superRefine((value, context) => {
   if (new Set(value).size !== value.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'Provider priorities must be unique.' })
+  }
+  if (!value.includes('gcp')) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'Provider priorities must retain GCE fallback.' })
   }
 })
 
@@ -418,6 +421,11 @@ export const screenerProviderSettingsSchema = z.object({
   build_provider_priority: providerPrioritySchema,
   runtime_provider_priority: providerPrioritySchema,
   source_review_provider_priority: providerPrioritySchema,
+  gce_overflow_enabled: z.boolean().default(false),
+  primary_node_id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/).nullable().default(null),
+  gce_overflow_backlog_multiplier: z.number().int().min(2).max(20).default(3),
+  gce_overflow_min_backlog: z.number().int().min(1).max(1000).default(12),
+  gce_overflow_max_instances: z.number().int().min(0).max(32).default(6),
 })
 
 export const screenerProviderSettingsRevisionSchema = z.object({
@@ -445,7 +453,56 @@ export const setScreenerProviderSettingsInputSchema = z.object({
 export function screenerProviderSettingsConfirmation(
   settings: z.infer<typeof screenerProviderSettingsSchema>,
 ) {
-  return `APPLY SCREENER PROVIDERS BUILDS=${settings.build_provider_priority.join('>')} RUNTIME=${settings.runtime_provider_priority.join('>')} SOURCE_REVIEW=${settings.source_review_provider_priority.join('>')}`
+  const overflow = settings.gce_overflow_enabled
+    ? `ENABLED:${settings.primary_node_id}:${settings.gce_overflow_backlog_multiplier}X:MIN=${settings.gce_overflow_min_backlog}:MAX=${settings.gce_overflow_max_instances}`
+    : 'DISABLED'
+  return `APPLY SCREENER PROVIDERS BUILDS=${settings.build_provider_priority.join('>')} RUNTIME=${settings.runtime_provider_priority.join('>')} SOURCE_REVIEW=${settings.source_review_provider_priority.join('>')} GCE_OVERFLOW=${overflow}`
+}
+
+export const screenerNodeChannelSettingsSchema = z.object({
+  screening_concurrency: z.number().int().min(0).max(32),
+  sandbox_slots: z.number().int().min(0).max(16),
+  build_concurrency: z.number().int().min(0).max(16),
+  runtime_concurrency: z.number().int().min(0).max(16),
+  source_review_concurrency: z.number().int().min(0).max(32),
+})
+
+export const screenerNodeChannelSettingsRevisionSchema = z.object({
+  environment: z.string().min(1),
+  node_id: z.string().min(1),
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  settings: screenerNodeChannelSettingsSchema,
+  reason: z.string().min(1),
+  actor: z.string().min(1),
+  created_at: z.string().nullable(),
+})
+
+export const screenerNodeChannelSettingsControlSchema = z.object({
+  current: screenerNodeChannelSettingsRevisionSchema,
+  history: z.array(screenerNodeChannelSettingsRevisionSchema),
+  usage: z.object({
+    screening_active: z.number().int().nonnegative(),
+    sandbox_active: z.number().int().nonnegative(),
+    build_active: z.number().int().nonnegative(),
+    runtime_active: z.number().int().nonnegative(),
+    source_review_active: z.number().int().nonnegative(),
+  }).nullable(),
+})
+
+export const setScreenerNodeChannelSettingsInputSchema = z.object({
+  nodeId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+  expectedRevision: z.number().int().nonnegative(),
+  settings: screenerNodeChannelSettingsSchema,
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
+export function screenerNodeChannelSettingsConfirmation(
+  nodeId: string,
+  settings: z.infer<typeof screenerNodeChannelSettingsSchema>,
+) {
+  return `APPLY SCREENER NODE ${nodeId} SCREENING=${settings.screening_concurrency} SANDBOX=${settings.sandbox_slots} BUILD=${settings.build_concurrency} RUNTIME=${settings.runtime_concurrency} SOURCE_REVIEW=${settings.source_review_concurrency}`
 }
 const screenerNodeStatusSchema = z.enum(['active', 'draining', 'quarantined', 'revoked'])
 
@@ -524,7 +581,7 @@ export const trustedImageBuildSchema = z.object({
     'fallback_required',
     'canceled',
   ]),
-  provider: z.enum(['targon', 'gcp']).nullable(),
+  provider: z.enum(['hetzner', 'targon', 'gcp']).nullable(),
   provider_resource_id: z.string().nullable(),
   image_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/).nullable(),
   error_code: z.string().nullable(),
@@ -555,7 +612,8 @@ export const screenerCapacityViewSchema = z.object({
     job_id: z.string().uuid(),
     lane: z.enum(['build', 'runtime', 'source_review']),
     status: z.string().min(1),
-    provider: z.enum(['targon', 'gcp']).nullable(),
+    provider: z.enum(['hetzner', 'targon', 'gcp']).nullable(),
+    node_id: z.string().nullable().default(null),
     provider_resource_id: z.string().nullable(),
     image_reference: z.string().nullable(),
     error_code: z.string().nullable(),
@@ -568,9 +626,14 @@ export const screenerCapacityViewSchema = z.object({
       revision: 0,
       parent_revision: 0,
       settings: {
-        build_provider_priority: ['targon'],
-        runtime_provider_priority: ['targon'],
-        source_review_provider_priority: ['targon'],
+        build_provider_priority: ['targon', 'gcp'],
+        runtime_provider_priority: ['targon', 'gcp'],
+        source_review_provider_priority: ['targon', 'gcp'],
+        gce_overflow_enabled: false,
+        primary_node_id: null,
+        gce_overflow_backlog_multiplier: 3,
+        gce_overflow_min_backlog: 12,
+        gce_overflow_max_instances: 6,
       },
       reason: 'Built-in single-shot Targon settings',
       actor: 'platform',
@@ -578,6 +641,7 @@ export const screenerCapacityViewSchema = z.object({
     },
     history: [],
   }),
+  node_controls: z.array(screenerNodeChannelSettingsControlSchema).default([]),
 })
 
 export type ScreenerCapacityView = z.infer<typeof screenerCapacityViewSchema>
@@ -585,6 +649,8 @@ export type ScreenerCapacityNode = z.infer<typeof screenerCapacityNodeSchema>
 export type TrustedImageBuild = z.infer<typeof trustedImageBuildSchema>
 export type ScreenerProviderSettings = z.infer<typeof screenerProviderSettingsSchema>
 export type ScreenerProviderSettingsControl = z.infer<typeof screenerProviderSettingsControlSchema>
+export type ScreenerNodeChannelSettings = z.infer<typeof screenerNodeChannelSettingsSchema>
+export type ScreenerNodeChannelSettingsControl = z.infer<typeof screenerNodeChannelSettingsControlSchema>
 
 export const ARTIFACT_RELEASE_MIN_HOURS = 6
 // Mirrors the platform's range bound. 48 hours is still the community-agreed

@@ -51,6 +51,7 @@ from ditto.db.models import (
     ScreenerHeartbeat,
     ScreenerNode,
     ScreenerProviderSettingsRevision,
+    ScreeningAttempt,
     SubmissionImageBuild,
     SubmissionSourceReview,
     TrustedImageBuild,
@@ -202,6 +203,21 @@ async def _node_channel_control(
         )
         or 0
     )
+    node = await session.get(ScreenerNode, node_id)
+    screening_active = 0
+    if node is not None:
+        screening_active = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(ScreeningAttempt)
+                .where(
+                    ScreeningAttempt.screener_hotkey == node.screener_hotkey,
+                    ScreeningAttempt.status == "running",
+                    ScreeningAttempt.deadline > datetime.now(UTC),
+                )
+            )
+            or 0
+        )
     return ScreenerNodeChannelSettingsControl(
         current=(
             _node_channel_revision(rows[0])
@@ -212,6 +228,7 @@ async def _node_channel_control(
         ),
         history=[_node_channel_revision(row) for row in rows],
         usage=ScreenerNodeChannelUsage(
+            screening_active=screening_active,
             sandbox_active=build_active + runtime_active,
             build_active=build_active,
             runtime_active=runtime_active,

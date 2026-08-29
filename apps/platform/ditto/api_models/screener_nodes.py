@@ -110,6 +110,7 @@ class ScreenerControllerNodeState(BaseModel):
     status: ScreenerNodeStatus
     ready: bool
     active_lease: bool
+    screening_concurrency: Annotated[int, Field(ge=0)] = 0
     image_reference: str | None = None
     heartbeat_seen_at: datetime | None = None
 

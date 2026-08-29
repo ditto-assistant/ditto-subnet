@@ -1,0 +1,57 @@
+---
+# First converge intentionally uses root from Hetzner's Debian install. The
+# pre-tasks install an operator SSH key before the shared base role disables
+# root SSH and applies the normal Ditto account policy.
+- name: Converge the dedicated Hetzner screener fleet node
+  hosts: role_hetzner_screener
+  become: true
+  gather_facts: true
+  vars:
+    base_install_go: false
+    base_install_uv: true
+    base_install_caddy: false
+    base_install_postgres_packages: false
+    base_install_ops_agent: false
+    base_ufw_open_ports:
+      - { port: "22", comment: SSH }
+
+  pre_tasks:
+    - name: Require a bootstrap operator SSH key
+      ansible.builtin.assert:
+        that:
+          - screener_fleet_bootstrap_user in base_team_members
+          - screener_fleet_bootstrap_public_keys | length > 0
+        fail_msg: >-
+          Set screener_fleet_bootstrap_user and at least one public key before
+          the first root converge; the base role will disable root SSH.
+
+    - name: Create the bootstrap operator before SSH hardening
+      ansible.builtin.user:
+        name: "{{ screener_fleet_bootstrap_user }}"
+        groups: sudo
+        append: true
+        shell: /bin/bash
+        create_home: true
+        password: "*"
+
+    - name: Install bootstrap operator SSH keys
+      ansible.posix.authorized_key:
+        user: "{{ screener_fleet_bootstrap_user }}"
+        key: "{{ item }}"
+        state: present
+      loop: "{{ screener_fleet_bootstrap_public_keys }}"
+
+    - name: Grant the Ansible operator passwordless administrative access
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/ditto-ansible-operator
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s
+        content: |
+          # Managed by infra/ansible/playbooks/hetzner-screener-fleet.yml.
+          {{ screener_fleet_bootstrap_user }} ALL=(ALL:ALL) NOPASSWD: ALL
+
+  roles:
+    - base
+    - hetzner_screener_fleet

@@ -1,0 +1,174 @@
+# `subnet-screener-1` setup and operation
+
+`subnet-screener-1` is the normal-load screener. Eight full workers share one
+enrolled node identity, while Platform admits at most four disposable KVM
+build/smoke guests and four source reviews at once on the 64 GB host. Different
+submissions progress concurrently, but one submission is always ordered:
+
+```text
+static safety preflight -> build -> runtime smoke -> general source review -> verdict
+```
+
+GCE is overflow capacity for work that the primary node has not claimed. It is
+not an automatic retry destination after a failed Hetzner build, smoke, or
+review. The capacity controller starts GCE only when the primary heartbeat is
+not ready or the unclaimed queue exceeds the audited backlog multiple.
+
+## 0. Rehearse the host on disposable GCE
+
+Before changing the Robot server, use the protected `Infrastructure plan or
+apply` workflow with root `gcp-platform` and
+`screener_fleet_dev_host_enabled=true`. This creates
+`subnet-screener-dev-1`, an `n2-standard-16` Debian 12 host with 64 GB RAM,
+private networking, IAP SSH, and nested KVM. The flag defaults to false and the
+VM receives no screener identity, source-review key, or Platform secret.
+
+The checked-in GCE group variables pin the same versioned Debian 12 image and
+SHA-256 exercised during development. Run the preparation-only playbook through
+the existing GCP dynamic inventory:
+
+```bash
+export GCP_OSLOGIN_USER="$(gcloud compute os-login describe-profile \
+  --format='value(posixAccounts[0].username)')"
+ansible-playbook -i infra/ansible/inventory/gcp.yml \
+  infra/ansible/playbooks/gcp-screener-fleet-dev.yml
+```
+
+The rehearsal installs and verifies KVM/libvirt, produces the digest-verified
+guest base, and proves it installed no screener service. Re-run the protected
+plan/apply with `screener_fleet_dev_host_enabled=false`, then verify the output
+is empty and `subnet-screener-dev-1` no longer exists. The sealed state is
+always absence.
+
+## 1. Install Debian on the auction server
+
+In Hetzner Robot, boot the rescue system, add the operator SSH key, then run
+`installimage`. Select Debian 13, hostname `subnet-screener-1`, and RAID 1 across
+both NVMe drives. Keep the root filesystem large enough for image archives and
+KVM overlays; do not expose libvirt or Docker ports.
+
+Ghostty advertises `TERM=xterm-ghostty`, which Hetzner rescue's editor may not
+recognize and can accidentally splice an error into `HOSTNAME` and `IMAGE`.
+Normalize the terminal before starting:
+
+```bash
+export TERM=xterm-256color
+installimage
+```
+
+Use both NVMes, `SWRAID 1`, `SWRAIDLEVEL 1`, and this simple layout:
+
+```text
+PART /boot/efi esp 256M
+PART swap swap 32G
+PART /boot ext3 1024M
+PART / ext4 all
+```
+
+Before accepting the destructive confirmation, verify that `HOSTNAME` is
+exactly `subnet-screener-1` and `IMAGE` is a real Debian `.tar.zst` path with no
+terminal-error text.
+
+Reboot and verify root SSH before continuing. The first Ansible converge moves
+SSH access to the configured Ditto operator account and disables root login.
+
+## 2. Prepare immutable inputs and one-time authority
+
+Copy the public inventory example to the ignored inventory:
+
+```bash
+cp infra/ansible/inventory/hetzner-screener.example.yml \
+  infra/ansible/inventory/hetzner-screener.yml
+```
+
+The public inventory already pins the versioned Debian 12 genericcloud image
+exercised by the GCE rehearsal. If it changes, verify Debian's official checksum
+manifest and update its exact URL and digest together. Put the actual Hetzner
+Robot server ID, the exact 40-character public release commit, and a
+digest-pinned submission-builder image in the private inventory;
+mutable branches and image tags are rejected.
+
+In Backroom, create a single-use prod bootstrap grant for:
+
+- node ID `subnet-screener-1`;
+- provider `hetzner`;
+- provider resource ID equal to the Robot server ID.
+
+Create an encrypted variables file outside git containing the returned grant
+and the source-review API key:
+
+```yaml
+screener_fleet_registration_token: replace-with-single-use-grant
+screener_fleet_source_review_api_key: replace-with-review-only-key
+```
+
+Encrypt it with `ansible-vault encrypt`. The grant is placed in a mode-0600
+file, consumed once, and deleted after enrollment. Neither secret enters a KVM
+build or smoke guest.
+
+## 3. Converge from the default Debian install
+
+Install the pinned Ansible collections, check connectivity, then converge:
+
+```bash
+ansible-galaxy collection install -r infra/ansible/requirements.yml
+ansible -i infra/ansible/inventory/hetzner-screener.yml all -m ping
+ansible-playbook \
+  -i infra/ansible/inventory/hetzner-screener.yml \
+  infra/ansible/playbooks/hetzner-screener-fleet.yml \
+  --ask-vault-pass \
+  --extra-vars @/absolute/path/to/subnet-screener-1.vault.yml
+```
+
+The play installs KVM/libvirt and Docker, builds a verified disposable guest
+base, enrolls one node identity, starts the trusted lane agent, and starts eight
+full screener processes. The bootstrap operator receives a validated
+passwordless sudo rule for future Ansible converges; root SSH is disabled.
+Re-run with `ansible_user` set to that operator after the first converge.
+
+## 4. Shadow in production
+
+New nodes have zero capacity. Keep the existing provider routes unchanged and
+leave every `subnet-screener-1` channel at zero while verifying its heartbeat,
+Robot resource identity, exact code/image revisions, host metrics, KVM guest
+creation, and local build/smoke probes. This is shadow mode: the full service is
+running, but Platform cannot grant it a production lease.
+
+Prove a cold Rust build, successful runtime smoke, failed-build/no-review, and
+failed-smoke/no-review locally before changing routing. Shadow findings do not
+authorize a raw database update; Backroom remains the audited policy authority.
+
+## 5. Enforce in production
+
+Start with one canary lane by appending this node setting through Backroom:
+
+```text
+SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1
+```
+
+Set every lane to `hetzner > gcp`, enable GCE overflow with primary node
+`subnet-screener-1`, backlog multiplier `3`, minimum backlog `12`, and maximum
+GCE instances `6`. After one successful build -> smoke -> source-review
+sequence and one terminal build failure that consumed no review lease, raise
+the node to its 64 GB steady-state limits:
+
+```text
+SCREENING=8 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4
+```
+
+Backroom shows the exact confirmation phrase before it can append each
+revision. Eight worker processes keep independent submissions moving, while
+the four build/smoke slots cap memory pressure. For any one submission, build
+and smoke finish before source review begins.
+
+Leave the GCE MIG at zero during normal load. Before declaring the rollout
+complete, verify four simultaneous cold Rust builds, four smoke transitions,
+source review only after successful smoke, and one controlled primary-heartbeat
+outage that scales GCE out and back to zero without moving an already-failed
+job.
+
+## Drain and update
+
+Set the node to `draining` in Backroom before maintenance. This stops new full
+screens and lane claims while active leases finish. Re-run Ansible, confirm the
+heartbeat and channel usage return healthy, then set the node back to `active`.

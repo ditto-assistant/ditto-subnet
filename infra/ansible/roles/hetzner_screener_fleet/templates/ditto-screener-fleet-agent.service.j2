@@ -1,0 +1,45 @@
+[Unit]
+Description=Disposable-KVM build, smoke, and source-review lanes on {{ screener_fleet_node_id }}
+After=network-online.target libvirtd.service docker.service ditto-screener-enroll.service
+Wants=network-online.target
+Requires=libvirtd.service docker.service ditto-screener-enroll.service
+
+[Service]
+Type=simple
+User={{ screener_fleet_user }}
+Group={{ screener_fleet_group }}
+SupplementaryGroups=kvm libvirt docker
+WorkingDirectory={{ screener_fleet_orchestrator_dir }}
+ExecStart={{ screener_fleet_orchestrator_venv }}/bin/python -m screener_capacity.fleet_node \
+  --platform-url {{ screener_fleet_platform_url }} \
+  --credential-file {{ screener_fleet_credential_file }} \
+  --base-image {{ screener_fleet_base_image }} \
+  --builder-image {{ screener_fleet_builder_image }} \
+  --source-review-api-key-file {{ screener_fleet_source_review_key_file }} \
+  --jobs-root {{ screener_fleet_jobs_dir }} \
+  --interval-seconds {{ screener_fleet_poll_seconds }} \
+  --build-timeout-seconds {{ screener_fleet_build_timeout_seconds }} \
+  --runtime-timeout-seconds {{ screener_fleet_runtime_timeout_seconds }} \
+  --source-review-timeout-seconds {{ screener_fleet_source_review_timeout_seconds }} \
+  --max-workers {{ screener_fleet_agent_workers }} \
+  --vm-memory-mib {{ screener_fleet_vm_memory_mib }} \
+  --vm-vcpus {{ screener_fleet_vm_vcpus }}
+Restart=always
+RestartSec=10
+TimeoutStopSec=55min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ screener_fleet_state_dir }} {{ screener_fleet_logs_dir }}
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+DeviceAllow=/dev/kvm rw
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

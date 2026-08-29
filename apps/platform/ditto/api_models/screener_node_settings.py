@@ -19,6 +19,7 @@ class ScreenerNodeChannelSettings(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
+    screening_concurrency: Annotated[int, Field(ge=0, le=32)] = 0
     sandbox_slots: Annotated[int, Field(ge=0, le=16)] = 0
     build_concurrency: Annotated[int, Field(ge=0, le=16)] = 0
     runtime_concurrency: Annotated[int, Field(ge=0, le=16)] = 0
@@ -66,6 +67,7 @@ class ScreenerNodeChannelSettingsControl(BaseModel):
 class ScreenerNodeChannelUsage(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
+    screening_active: Annotated[int, Field(ge=0)] = 0
     sandbox_active: Annotated[int, Field(ge=0)] = 0
     build_active: Annotated[int, Field(ge=0)] = 0
     runtime_active: Annotated[int, Field(ge=0)] = 0
@@ -98,7 +100,9 @@ def node_channel_settings_confirmation(
     node_id: str, settings: ScreenerNodeChannelSettings
 ) -> str:
     return (
-        f"APPLY SCREENER NODE {node_id} SANDBOX={settings.sandbox_slots} "
+        f"APPLY SCREENER NODE {node_id} "
+        f"SCREENING={settings.screening_concurrency} "
+        f"SANDBOX={settings.sandbox_slots} "
         f"BUILD={settings.build_concurrency} "
         f"RUNTIME={settings.runtime_concurrency} "
         f"SOURCE_REVIEW={settings.source_review_concurrency}"

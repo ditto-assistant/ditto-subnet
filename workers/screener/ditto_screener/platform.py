@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fcntl
 import hashlib
 import logging
 import os
@@ -124,6 +125,14 @@ class PlatformClient:
         if path is None:
             return dict(self._headers)
         async with self._credential_lock:
+            return await self._refresh_auth_headers(Path(path))
+
+    async def _refresh_auth_headers(self, path: Path) -> dict[str, str]:
+        """Serialize credential rotation across every worker on one node."""
+        lock_path = path.with_name(f".{path.name}.refresh.lock")
+        descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o600)
+        await asyncio.to_thread(fcntl.flock, descriptor, fcntl.LOCK_EX)
+        try:
             credential = load_node_credential(path)
             expires_at = credential.expires_at
             if expires_at.tzinfo is None:
@@ -192,6 +201,9 @@ class PlatformClient:
             store_node_credential(path, rotated)
             self._headers["Authorization"] = f"Bearer {rotated.api_token}"
             return dict(self._headers)
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
 
     @property
     def review_settings_source(self) -> Literal["platform", "cache", "bootstrap"]:

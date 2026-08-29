@@ -352,9 +352,14 @@ describe('admin API schemas', () => {
     })
 
     expect(parsed.provider_control.current.settings).toEqual({
-      runtime_provider_priority: ['targon'],
-      source_review_provider_priority: ['targon'],
-      build_provider_priority: ['targon'],
+      runtime_provider_priority: ['targon', 'gcp'],
+      source_review_provider_priority: ['targon', 'gcp'],
+      build_provider_priority: ['targon', 'gcp'],
+      gce_overflow_enabled: false,
+      primary_node_id: null,
+      gce_overflow_backlog_multiplier: 3,
+      gce_overflow_min_backlog: 12,
+      gce_overflow_max_instances: 6,
     })
   })
 
@@ -366,7 +371,7 @@ describe('admin API schemas', () => {
     })
 
     expect(screenerProviderSettingsConfirmation(settings)).toBe(
-      'APPLY SCREENER PROVIDERS BUILDS=gcp>targon RUNTIME=gcp>targon SOURCE_REVIEW=gcp',
+      'APPLY SCREENER PROVIDERS BUILDS=gcp>targon RUNTIME=gcp>targon SOURCE_REVIEW=gcp GCE_OVERFLOW=DISABLED',
     )
   })
 

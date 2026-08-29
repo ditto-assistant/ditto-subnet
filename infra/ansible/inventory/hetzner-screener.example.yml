@@ -1,0 +1,18 @@
+---
+# Copy to hetzner-screener.yml (gitignored) and replace every example value.
+all:
+  children:
+    role_hetzner_screener:
+      hosts:
+        subnet-screener-1:
+          ansible_host: 62.238.87.113
+          ansible_user: root
+          ansible_ssh_private_key_file: /absolute/path/to/private-key
+          screener_fleet_bootstrap_user: peyton
+          screener_fleet_bootstrap_public_keys:
+            - ssh-ed25519 AAAA_REPLACE_ME peyton
+          screener_fleet_provider_resource_id: robot-server-id
+          screener_fleet_release_sha: REPLACE_WITH_40_CHARACTER_RELEASE_COMMIT
+          screener_fleet_debian_cloud_image_url: https://cloud.debian.org/images/cloud/bookworm/20260821-2577/debian-12-genericcloud-amd64-20260821-2577.qcow2
+          screener_fleet_debian_cloud_image_sha256: 3ac58d009df21d570bb10811ae1e07afd1125e9669c87897bfb58e52b8f5c937
+          screener_fleet_builder_image: registry.example/ditto/submission-builder@sha256:REPLACE_WITH_64_HEX_DIGEST

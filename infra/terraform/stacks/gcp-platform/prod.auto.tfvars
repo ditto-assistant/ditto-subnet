@@ -20,6 +20,8 @@ enable_screener_prod         = true
 enable_screener_fleet_secrets       = true
 enable_screener_fleet               = true
 enable_screener_capacity_controller = true
+# Rehearsal VM is opt-in through the protected workflow and absent otherwise.
+enable_screener_fleet_dev_host = false
 
 screener_fleet_min_replicas         = 0
 screener_fleet_max_replicas         = 6

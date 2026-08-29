@@ -57,10 +57,10 @@ import signal
 import tarfile
 import tempfile
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, BinaryIO, cast
+from typing import TYPE_CHECKING, Any, BinaryIO, cast
 from uuid import UUID
 
 import httpx
@@ -723,6 +723,9 @@ class BuildGate:
         gateway_state_dir, _ = _prepare_gateway_state()
         tmp_path: str | None = None
         review_task: asyncio.Task[SourceReviewObservation] | None = None
+        review_factory: (
+            Callable[[], Coroutine[Any, Any, SourceReviewObservation]] | None
+        ) = None
         used_local_docker = False
         remote_archive: RemoteImageArchive | None = None
         try:
@@ -762,13 +765,11 @@ class BuildGate:
                 )
             source_digest, source_paths = self._source_metadata(tmp_path)
 
-            # The agentic source review reads only the validated tarball, so
-            # it can run CONCURRENTLY with the docker build + serve + oracle
-            # stages instead of serially after them (prod baseline: ~430s
-            # review after a ~214s build; overlapping removes the build from
-            # the critical path of every passing screen). Its per-percent
-            # progress is muted until the policy phase so heartbeat stages
-            # keep their sequential meaning for operators.
+            # General source review is deliberately deferred until the image
+            # has built and passed its runtime contract. Broken Dockerfiles and
+            # unhealthy containers should not consume model-review capacity.
+            # The static preflight below remains before build because it is the
+            # safety boundary for submission-controlled Docker execution.
             in_policy_phase = False
 
             def report_review_progress(completed: int, total: int) -> None:
@@ -920,14 +921,14 @@ class BuildGate:
                             policy_version=policy_version,
                         )
 
-                    review_task = asyncio.create_task(review_with_selected_provider())
+                    review_factory = review_with_selected_provider
                 else:
 
                     async def cleared_preflight() -> SourceReviewObservation:
                         assert preflight_clearance is not None
                         return preflight_clearance
 
-                    review_task = asyncio.create_task(cleared_preflight())
+                    review_factory = cleared_preflight
 
             report("building")
             if (exhausted := self._lease_exhausted(deadline, "build")) is not None:
@@ -1093,6 +1094,9 @@ class BuildGate:
                 )
             if audit_runtime is None:
                 raise RuntimeError("healthy harness has no isolated audit runtime")
+
+            if review_factory is not None:
+                review_task = asyncio.create_task(review_factory())
 
             async def run_challenge(
                 challenge_id: str, request: Mapping[str, object], timeout: float

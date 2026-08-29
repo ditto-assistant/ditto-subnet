@@ -1,0 +1,15 @@
+---
+- name: Reload systemd for screener fleet
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart screener fleet agent
+  ansible.builtin.systemd:
+    name: ditto-screener-fleet-agent
+    state: restarted
+
+- name: Restart screener fleet workers
+  ansible.builtin.systemd:
+    name: "ditto-screener-worker@{{ item }}"
+    state: restarted
+  loop: "{{ range(1, screener_fleet_worker_processes + 1) | list }}"

@@ -1,0 +1,333 @@
+---
+- name: Assert immutable screener fleet inputs
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Debian'
+      - ansible_facts['distribution_major_version'] in ['12', '13']
+      - >-
+        (screener_fleet_runtime_enabled and
+         screener_fleet_node_id is regex('^subnet-screener-[1-9][0-9]*$')) or
+        (not screener_fleet_runtime_enabled and
+         screener_fleet_node_id is regex('^subnet-screener(?:-dev)?-[1-9][0-9]*$'))
+      - screener_fleet_debian_cloud_image_url.startswith('https://')
+      - screener_fleet_debian_cloud_image_sha256 | length == 64
+      - screener_fleet_worker_processes | int >= 1
+      - screener_fleet_worker_processes | int <= 16
+      - screener_fleet_vm_memory_mib | int >= 8192
+      - screener_fleet_vm_memory_mib | int <= 12288
+    fail_msg: >-
+      Use a supported Debian 12/13 host, a valid dedicated or rehearsal node
+      id, and a digest-verified Debian guest image before preparing the host.
+
+- name: Assert immutable screener runtime inputs
+  ansible.builtin.assert:
+    that:
+      - screener_fleet_provider_resource_id | length > 0
+      - screener_fleet_release_sha is regex('^[0-9a-f]{40}$')
+      - screener_fleet_builder_image is regex('^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$')
+    fail_msg: >-
+      Runtime convergence requires the Robot server id, immutable release SHA,
+      and digest-pinned builder image. Rehearsal mode deliberately requires no
+      production identity or source-review secret.
+  when: screener_fleet_runtime_enabled
+
+- name: Set the dedicated host name
+  ansible.builtin.hostname:
+    name: "{{ screener_fleet_node_id }}"
+
+- name: Install KVM, libvirt, cloud-init image, and trusted-container tools
+  ansible.builtin.apt:
+    name:
+      - qemu-system-x86
+      - qemu-utils
+      - libvirt-daemon-system
+      - libvirt-clients
+      - virtinst
+      - cloud-image-utils
+      - libguestfs-tools
+      - docker.io
+      - git
+      - curl
+      - ca-certificates
+    state: present
+    update_cache: true
+
+- name: Ensure the dedicated screener service group
+  ansible.builtin.group:
+    name: "{{ screener_fleet_group }}"
+    system: true
+    state: present
+
+- name: Ensure the dedicated screener service user
+  ansible.builtin.user:
+    name: "{{ screener_fleet_user }}"
+    group: "{{ screener_fleet_group }}"
+    groups: kvm,libvirt,docker
+    append: true
+    system: true
+    create_home: false
+    home: "{{ screener_fleet_root }}"
+    shell: /usr/sbin/nologin
+
+- name: Allow libvirt QEMU to read disposable screener disks
+  ansible.builtin.user:
+    name: libvirt-qemu
+    groups: "{{ screener_fleet_group }}"
+    append: true
+
+- name: Ensure screener fleet directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ screener_fleet_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ screener_fleet_root }}", mode: "0755" }
+    - { path: "{{ screener_fleet_config_dir }}", mode: "0700" }
+    - { path: "{{ screener_fleet_state_dir }}", mode: "0750" }
+    - { path: "{{ screener_fleet_jobs_dir }}", mode: "0770" }
+    - { path: "{{ screener_fleet_images_dir }}", mode: "0750" }
+    - { path: "{{ screener_fleet_logs_dir }}", mode: "0750" }
+
+- name: Ensure per-worker private state directories
+  ansible.builtin.file:
+    path: "{{ screener_fleet_state_dir }}/workers/{{ item }}"
+    state: directory
+    owner: "{{ screener_fleet_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "0700"
+  loop: "{{ range(1, screener_fleet_worker_processes + 1) | list }}"
+  when: screener_fleet_runtime_enabled
+
+- name: Clone or update the public subnet monorepo
+  ansible.builtin.git:
+    repo: "{{ screener_fleet_repo_url }}"
+    dest: "{{ screener_fleet_checkout }}"
+    version: "{{ screener_fleet_release_sha }}"
+    force: true
+  become_user: "{{ screener_fleet_user }}"
+  register: screener_fleet_checkout_result
+  when: screener_fleet_runtime_enabled
+
+- name: Inspect the screening worker environment
+  ansible.builtin.stat:
+    path: "{{ screener_fleet_worker_venv }}/bin/ditto-screener"
+  register: screener_fleet_worker_environment
+  when: screener_fleet_runtime_enabled
+
+- name: Sync the screening worker environment
+  ansible.builtin.command:
+    cmd: /usr/local/bin/uv sync --frozen
+    chdir: "{{ screener_fleet_worker_dir }}"
+  become_user: "{{ screener_fleet_user }}"
+  environment:
+    UV_PROJECT_ENVIRONMENT: "{{ screener_fleet_worker_venv }}"
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_checkout_result.changed or not screener_fleet_worker_environment.stat.exists
+  changed_when: true
+  notify: Restart screener fleet workers
+
+- name: Inspect the fleet-agent environment
+  ansible.builtin.stat:
+    path: "{{ screener_fleet_orchestrator_venv }}/bin/python"
+  register: screener_fleet_agent_environment
+  when: screener_fleet_runtime_enabled
+
+- name: Sync the fleet-agent environment
+  ansible.builtin.command:
+    cmd: /usr/local/bin/uv sync --frozen
+    chdir: "{{ screener_fleet_orchestrator_dir }}"
+  become_user: "{{ screener_fleet_user }}"
+  environment:
+    UV_PROJECT_ENVIRONMENT: "{{ screener_fleet_orchestrator_venv }}"
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_checkout_result.changed or not screener_fleet_agent_environment.stat.exists
+  changed_when: true
+  notify: Restart screener fleet agent
+
+- name: Download the verified Debian cloud base
+  ansible.builtin.get_url:
+    url: "{{ screener_fleet_debian_cloud_image_url }}"
+    dest: "{{ screener_fleet_images_dir }}/debian-cloud-source.qcow2"
+    checksum: "sha256:{{ screener_fleet_debian_cloud_image_sha256 }}"
+    owner: "{{ screener_fleet_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "0640"
+  register: screener_fleet_cloud_image
+
+- name: Inspect the customized disposable guest base
+  ansible.builtin.stat:
+    path: "{{ screener_fleet_base_image }}"
+  register: screener_fleet_base_image_state
+
+- name: Copy the cloud image before customization
+  ansible.builtin.copy:
+    src: "{{ screener_fleet_images_dir }}/debian-cloud-source.qcow2"
+    dest: "{{ screener_fleet_base_image }}"
+    remote_src: true
+    owner: "{{ screener_fleet_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "0640"
+  when:
+    - screener_fleet_cloud_image.changed or not screener_fleet_base_image_state.stat.exists
+  register: screener_fleet_base_image_copy
+
+- name: Install the disposable-guest runtime in the base image
+  ansible.builtin.command:
+    argv:
+      - virt-customize
+      - -a
+      - "{{ screener_fleet_base_image }}"
+      - --install
+      - docker.io,curl,ca-certificates
+      - --run-command
+      - systemctl enable docker
+      - --truncate
+      - /etc/machine-id
+  environment:
+    LIBGUESTFS_BACKEND: direct
+  when: screener_fleet_base_image_copy.changed
+  changed_when: true
+
+- name: Render the isolated libvirt NAT network
+  ansible.builtin.template:
+    src: libvirt-network.xml.j2
+    dest: "{{ screener_fleet_config_dir }}/libvirt-network.xml"
+    owner: root
+    group: root
+    mode: "0644"
+  register: screener_fleet_network_xml
+
+- name: Inspect the libvirt NAT network
+  ansible.builtin.command: virsh net-info ditto-screener-nat
+  register: screener_fleet_network
+  changed_when: false
+  failed_when: false
+
+- name: Define the libvirt NAT network
+  ansible.builtin.command: >-
+    virsh net-define {{ screener_fleet_config_dir }}/libvirt-network.xml
+  when: screener_fleet_network.rc != 0
+  changed_when: true
+
+- name: Autostart the libvirt NAT network
+  ansible.builtin.command: virsh net-autostart ditto-screener-nat
+  changed_when: false
+
+- name: Start the libvirt NAT network
+  ansible.builtin.command: virsh net-start ditto-screener-nat
+  register: screener_fleet_network_start
+  changed_when: screener_fleet_network_start.rc == 0
+  failed_when:
+    - screener_fleet_network_start.rc != 0
+    - "'already active' not in screener_fleet_network_start.stderr"
+
+- name: Inspect enrolled node credential
+  ansible.builtin.stat:
+    path: "{{ screener_fleet_credential_file }}"
+  register: screener_fleet_credential
+  when: screener_fleet_runtime_enabled
+
+- name: Require one-time registration authority before initial enrollment
+  ansible.builtin.assert:
+    that: screener_fleet_registration_token | length >= 43
+    fail_msg: >-
+      Pass screener_fleet_registration_token through Ansible Vault for the
+      first converge. It is consumed and removed after enrollment.
+  when:
+    - screener_fleet_runtime_enabled
+    - not screener_fleet_credential.stat.exists
+  no_log: true
+
+- name: Write the one-time registration token
+  ansible.builtin.copy:
+    content: "{{ screener_fleet_registration_token }}\n"
+    dest: "{{ screener_fleet_registration_token_file }}"
+    owner: "{{ screener_fleet_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "0600"
+  when:
+    - screener_fleet_runtime_enabled
+    - not screener_fleet_credential.stat.exists
+  no_log: true
+
+- name: Inspect source-review API key file
+  ansible.builtin.stat:
+    path: "{{ screener_fleet_source_review_key_file }}"
+  register: screener_fleet_source_review_key
+  when: screener_fleet_runtime_enabled
+
+- name: Require source-review authority before initial converge
+  ansible.builtin.assert:
+    that: screener_fleet_source_review_api_key | length >= 16
+    fail_msg: >-
+      Pass screener_fleet_source_review_api_key through Ansible Vault; it is
+      stored mode 0600 and never forwarded to a build or smoke guest.
+  when:
+    - screener_fleet_runtime_enabled
+    - not screener_fleet_source_review_key.stat.exists
+  no_log: true
+
+- name: Write the source-review API key
+  ansible.builtin.copy:
+    content: "{{ screener_fleet_source_review_api_key }}\n"
+    dest: "{{ screener_fleet_source_review_key_file }}"
+    owner: "{{ screener_fleet_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "0600"
+  when:
+    - screener_fleet_runtime_enabled
+    - not screener_fleet_source_review_key.stat.exists
+  no_log: true
+
+- name: Render the screener fleet environment
+  ansible.builtin.template:
+    src: fleet.env.j2
+    dest: "{{ screener_fleet_env_file }}"
+    owner: "{{ screener_fleet_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "0600"
+  notify:
+    - Restart screener fleet agent
+    - Restart screener fleet workers
+  when: screener_fleet_runtime_enabled
+
+- name: Install screener fleet systemd units
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/systemd/system/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - { src: ditto-screener-enroll.service.j2, dest: ditto-screener-enroll.service }
+    - { src: ditto-screener-fleet-agent.service.j2, dest: ditto-screener-fleet-agent.service }
+    - { src: ditto-screener-worker@.service.j2, dest: ditto-screener-worker@.service }
+  notify: Reload systemd for screener fleet
+  when: screener_fleet_runtime_enabled
+
+- name: Enable and run one-time node enrollment
+  ansible.builtin.systemd:
+    name: ditto-screener-enroll
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: screener_fleet_runtime_enabled
+
+- name: Enable and start the fleet lane agent
+  ansible.builtin.systemd:
+    name: ditto-screener-fleet-agent
+    enabled: true
+    state: started
+  when: screener_fleet_runtime_enabled
+
+- name: Enable and start full screening workers
+  ansible.builtin.systemd:
+    name: "ditto-screener-worker@{{ item }}"
+    enabled: true
+    state: started
+  loop: "{{ range(1, screener_fleet_worker_processes + 1) | list }}"
+  when: screener_fleet_runtime_enabled
