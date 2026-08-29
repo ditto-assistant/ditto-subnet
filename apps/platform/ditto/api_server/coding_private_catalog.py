@@ -36,7 +36,7 @@ from ditto.coding_selection import (
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _BUCKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 _OBJECT_PREFIX = "coding-catalog/v1"
-_DEFAULT_MAX_RECORD_BYTES = 64 << 10
+_DEFAULT_MAX_RECORD_BYTES = 1 << 20
 _DEFAULT_TIMEOUT_SECONDS = 10.0
 _MAX_JSON_DEPTH = 32
 _MAX_CATALOG_INDEX = 999_999
@@ -238,6 +238,20 @@ class S3CodingPrivateCatalogSource:
         commitment: CodingCatalogCommitment,
         catalog_index: int,
     ) -> tuple[CodingCatalogTaskVersion, CodingCatalogMembershipProof]:
+        record = await self.get_task_material(
+            commitment=commitment,
+            catalog_index=catalog_index,
+        )
+        return record.task_version, record.membership_proof
+
+    async def get_task_material(
+        self,
+        *,
+        commitment: CodingCatalogCommitment,
+        catalog_index: int,
+    ) -> CodingPrivateCatalogRecord:
+        """Return one fully hydrated, digest-verified private task envelope."""
+
         try:
             commitment = CodingCatalogCommitment.model_validate_json(
                 commitment.model_dump_json(by_alias=True)
@@ -314,7 +328,7 @@ class S3CodingPrivateCatalogSource:
             raise CodingSelectionCatalogIntegrityError(
                 "private catalog record does not match its registered commitment"
             )
-        return task, proof
+        return record
 
 
 def create_coding_private_catalog_source(
