@@ -20,6 +20,7 @@ from ditto.db.models import (
     CodingCapabilityCertification,
     CodingShadowResult,
     CodingShadowRun,
+    CodingShadowRunIssuance,
     CodingShadowTicket,
     CoreQualificationObservation,
 )
@@ -58,6 +59,7 @@ class CodingShadowInsertResult:
 @dataclass(frozen=True)
 class CodingShadowRunBundle:
     run: CodingShadowRun
+    issuance: CodingShadowRunIssuance | None
     tickets: list[CodingShadowTicket]
     results: dict[UUID, CodingShadowResult]
 
@@ -429,6 +431,13 @@ async def list_agent_coding_shadow_runs(
     if not runs:
         return [], total
     run_ids = [row.run_row_id for row in runs]
+    issuances = list(
+        await session.scalars(
+            select(CodingShadowRunIssuance).where(
+                CodingShadowRunIssuance.run_row_id.in_(run_ids)
+            )
+        )
+    )
     tickets = list(
         await session.scalars(
             select(CodingShadowTicket)
@@ -454,9 +463,11 @@ async def list_agent_coding_shadow_runs(
     for ticket in tickets:
         tickets_by_run[ticket.run_row_id].append(ticket)
     results_by_ticket = {result.ticket_id: result for result in results}
+    issuance_by_run = {issuance.run_row_id: issuance for issuance in issuances}
     return [
         CodingShadowRunBundle(
             run=run,
+            issuance=issuance_by_run.get(run.run_row_id),
             tickets=tickets_by_run[run.run_row_id],
             results={
                 ticket.ticket_id: results_by_ticket[ticket.ticket_id]

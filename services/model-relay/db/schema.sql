@@ -924,6 +924,37 @@ CREATE TABLE public.coding_shadow_results (
 
 
 --
+-- Name: coding_shadow_run_issuances; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_shadow_run_issuances (
+    assignment_row_id uuid NOT NULL,
+    run_row_id uuid NOT NULL,
+    assignment_sha256 text NOT NULL,
+    agent_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    screened_image_sha256 text NOT NULL,
+    bench_version integer NOT NULL,
+    coding_contract_version integer NOT NULL,
+    coding_run_id text NOT NULL,
+    corpus_release_id text NOT NULL,
+    selection_block_number bigint NOT NULL,
+    selection_block_hash text NOT NULL,
+    selection_candidate_probe integer NOT NULL,
+    selection_catalog_index integer NOT NULL,
+    selection_proof_sha256 text NOT NULL,
+    selection_block_timestamp timestamp with time zone NOT NULL,
+    task_count integer NOT NULL,
+    weight_eligible boolean NOT NULL,
+    issued_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_shadow_run_issuances_coding_shadow_run_issuan_1433 CHECK ((((octet_length(coding_run_id) >= 1) AND (octet_length(coding_run_id) <= 256)) AND ((octet_length(corpus_release_id) >= 1) AND (octet_length(corpus_release_id) <= 256)) AND (coding_run_id !~ '[[:space:][:cntrl:]]'::text) AND (corpus_release_id !~ '[[:space:][:cntrl:]]'::text))),
+    CONSTRAINT ck_coding_shadow_run_issuances_coding_shadow_run_issuan_2d09 CHECK ((selection_block_hash ~ '^0x[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_coding_shadow_run_issuances_coding_shadow_run_issuan_9293 CHECK (((bench_version >= 7) AND (coding_contract_version = 1) AND (selection_block_number > 0) AND (task_count = 1) AND ((selection_candidate_probe >= 0) AND (selection_candidate_probe <= 999999)) AND ((selection_catalog_index >= 0) AND (selection_catalog_index <= 999999)) AND (weight_eligible = false) AND (issued_at >= (selection_block_timestamp - '00:00:05'::interval)))),
+    CONSTRAINT ck_coding_shadow_run_issuances_coding_shadow_run_issuan_a61c CHECK (((assignment_sha256 ~ '^[0-9a-f]{64}$'::text) AND (artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND (selection_proof_sha256 ~ '^[0-9a-f]{64}$'::text)))
+);
+
+
+--
 -- Name: coding_shadow_runs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3481,6 +3512,14 @@ ALTER TABLE ONLY public.coding_selection_assignments
 
 
 --
+-- Name: coding_selection_assignments coding_selection_assignments_run_authority_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_selection_assignments
+    ADD CONSTRAINT coding_selection_assignments_run_authority_key UNIQUE (assignment_row_id, assignment_sha256, agent_id, artifact_sha256, screened_image_sha256, bench_version, coding_contract_version, coding_run_id, corpus_release_id, selection_block_number, task_count);
+
+
+--
 -- Name: coding_shadow_results coding_shadow_results_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3497,11 +3536,35 @@ ALTER TABLE ONLY public.coding_shadow_results
 
 
 --
+-- Name: coding_shadow_run_issuances coding_shadow_run_issuances_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_run_issuances
+    ADD CONSTRAINT coding_shadow_run_issuances_pkey PRIMARY KEY (assignment_row_id);
+
+
+--
+-- Name: coding_shadow_run_issuances coding_shadow_run_issuances_run_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_run_issuances
+    ADD CONSTRAINT coding_shadow_run_issuances_run_key UNIQUE (run_row_id);
+
+
+--
 -- Name: coding_shadow_runs coding_shadow_runs_identity_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.coding_shadow_runs
     ADD CONSTRAINT coding_shadow_runs_identity_key UNIQUE (agent_id, coding_contract_version, coding_run_id);
+
+
+--
+-- Name: coding_shadow_runs coding_shadow_runs_issuance_authority_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_runs
+    ADD CONSTRAINT coding_shadow_runs_issuance_authority_key UNIQUE (run_row_id, agent_id, artifact_sha256, screened_image_sha256, bench_version, coding_contract_version, coding_run_id, corpus_release_id, selection_block_number, selection_block_hash, task_count);
 
 
 --
@@ -4818,6 +4881,13 @@ CREATE INDEX coding_shadow_results_run_created_idx ON public.coding_shadow_resul
 
 
 --
+-- Name: coding_shadow_run_issuances_agent_issued_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_shadow_run_issuances_agent_issued_idx ON public.coding_shadow_run_issuances USING btree (agent_id, issued_at);
+
+
+--
 -- Name: coding_shadow_runs_agent_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5469,6 +5539,13 @@ CREATE TRIGGER coding_selection_assignments_append_only BEFORE DELETE OR UPDATE 
 
 
 --
+-- Name: coding_shadow_run_issuances coding_shadow_run_issuances_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_shadow_run_issuances_append_only BEFORE DELETE OR UPDATE ON public.coding_shadow_run_issuances FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
 -- Name: confirmation_bundles confirmation_bundles_immutability_guard; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -5627,6 +5704,22 @@ ALTER TABLE ONLY public.coding_selection_assignments
 
 ALTER TABLE ONLY public.coding_shadow_results
     ADD CONSTRAINT coding_shadow_results_ticket_fkey FOREIGN KEY (ticket_id, run_row_id, task_count) REFERENCES public.coding_shadow_tickets(ticket_id, run_row_id, task_count) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_shadow_run_issuances coding_shadow_run_issuances_assignment_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_run_issuances
+    ADD CONSTRAINT coding_shadow_run_issuances_assignment_fkey FOREIGN KEY (assignment_row_id, assignment_sha256, agent_id, artifact_sha256, screened_image_sha256, bench_version, coding_contract_version, coding_run_id, corpus_release_id, selection_block_number, task_count) REFERENCES public.coding_selection_assignments(assignment_row_id, assignment_sha256, agent_id, artifact_sha256, screened_image_sha256, bench_version, coding_contract_version, coding_run_id, corpus_release_id, selection_block_number, task_count) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_shadow_run_issuances coding_shadow_run_issuances_run_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_run_issuances
+    ADD CONSTRAINT coding_shadow_run_issuances_run_fkey FOREIGN KEY (run_row_id, agent_id, artifact_sha256, screened_image_sha256, bench_version, coding_contract_version, coding_run_id, corpus_release_id, selection_block_number, selection_block_hash, task_count) REFERENCES public.coding_shadow_runs(run_row_id, agent_id, artifact_sha256, screened_image_sha256, bench_version, coding_contract_version, coding_run_id, corpus_release_id, selection_block_number, selection_block_hash, task_count) ON DELETE RESTRICT;
 
 
 --
