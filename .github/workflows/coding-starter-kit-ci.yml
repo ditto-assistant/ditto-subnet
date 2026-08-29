@@ -1,0 +1,67 @@
+name: DittoBench coding starter kit CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - miners/dittobench-coding-starter-kit/**
+      - research/dittobench-coding-datagen/**
+      - packages/dittobench-coding-contract/**
+      - .github/workflows/coding-starter-kit-ci.yml
+      - scripts/test-coding-starter-practice-e2e.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coding-starter-kit-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: miners/dittobench-coding-starter-kit
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the pull request source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-coding-starter-kit-${{ hashFiles('miners/dittobench-coding-starter-kit/Cargo.lock') }}
+
+      - name: Verify format, lint, and tests
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features --verbose
+
+      - name: Run the scripted Rust and Python practice E2E
+        working-directory: .
+        run: bash scripts/test-coding-starter-practice-e2e.sh
+
+      - name: Build the shadow harness image
+        run: docker build --tag dittobench-coding-starter-kit:ci .

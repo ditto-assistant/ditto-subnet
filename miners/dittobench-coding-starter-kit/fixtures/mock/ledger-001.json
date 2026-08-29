@@ -1,0 +1,49 @@
+[
+  {
+    "toolCall": {
+      "id": "mock-read",
+      "name": "repo_read_file",
+      "args": {"path": "app.py"}
+    }
+  },
+  {
+    "toolCall": {
+      "id": "mock-edit",
+      "name": "repo_apply_patch",
+      "args": {
+        "path": "app.py",
+        "expected_sha256": "7eb7029d0c80edbfba4bc3a26634edc48e191608902cb4906125ace7b66a1016",
+        "replacements": [
+          {
+            "old_text": "    return str(int(value.strip()))\n",
+            "new_text": "    return value.strip()\n"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "toolCall": {
+      "id": "mock-test",
+      "name": "tests_run",
+      "args": {"command_id": "visible-unit"}
+    }
+  },
+  {
+    "toolCall": {
+      "id": "mock-status",
+      "name": "git_status",
+      "args": {}
+    }
+  },
+  {
+    "toolCall": {
+      "id": "mock-diff",
+      "name": "git_diff",
+      "args": {}
+    }
+  },
+  {
+    "text": "Preserved opaque reference identity while removing surrounding whitespace. The focused visible test passed and the final diff contains only app.py."
+  }
+]

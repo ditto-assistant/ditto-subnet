@@ -51,6 +51,7 @@ jobs:
       release_base: ${{ steps.release-base.outputs.sha }}
       miner_cli: ${{ steps.components.outputs.miner_cli }}
       miner_starter_kit: ${{ steps.components.outputs.miner_starter_kit }}
+      dittobench_coding_starter_kit: ${{ steps.components.outputs.dittobench_coding_starter_kit }}
       validator_stack: ${{ steps.components.outputs.validator_stack }}
       dittobench_api: ${{ steps.components.outputs.dittobench_api }}
       dittobench_datagen: ${{ steps.components.outputs.dittobench_datagen }}
@@ -121,6 +122,7 @@ jobs:
     if: >-
       needs.plan.outputs.miner_cli == 'true' ||
       needs.plan.outputs.miner_starter_kit == 'true' ||
+      needs.plan.outputs.dittobench_coding_starter_kit == 'true' ||
       needs.plan.outputs.validator_stack == 'true' ||
       needs.plan.outputs.dittobench_api == 'true' ||
       needs.plan.outputs.dittobench_datagen == 'true' ||
@@ -176,6 +178,7 @@ jobs:
       (
         needs.plan.outputs.miner_cli == 'true' ||
         needs.plan.outputs.miner_starter_kit == 'true' ||
+        needs.plan.outputs.dittobench_coding_starter_kit == 'true' ||
         needs.plan.outputs.validator_stack == 'true' ||
         needs.plan.outputs.dittobench_api == 'true' ||
         needs.plan.outputs.dittobench_datagen == 'true' ||
@@ -485,6 +488,61 @@ jobs:
           cargo test --locked --verbose
           python3 -m unittest scripts/test_submission_lab.py scripts/test_submission_workbench.py
 
+  verify-dittobench-coding-starter-kit:
+    needs: [plan, admit-current]
+    if: >-
+      needs.admit-current.outputs.current == 'true' &&
+      needs.plan.outputs.dittobench_coding_starter_kit == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: miners/dittobench-coding-starter-kit
+    steps:
+      - name: Check out the exact merge commit before release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install Rust for coding starter-kit verification
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install uv for coding practice verification
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12 for coding practice verification
+        run: uv python install 3.12
+
+      - name: Cache coding starter-kit Cargo dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-coding-starter-kit-${{ hashFiles('miners/dittobench-coding-starter-kit/Cargo.lock') }}
+
+      - name: Gate coding starter kit release on exact merge source
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features --verbose
+
+      - name: Run scripted coding practice E2E from exact merge source
+        working-directory: .
+        run: bash scripts/test-coding-starter-practice-e2e.sh
+
+      - name: Build coding starter kit image from exact merge source
+        run: docker build --tag dittobench-coding-starter-kit:release-gate .
+
   verify-platform:
     needs: [plan, admit-current]
     if: >-
@@ -748,6 +806,7 @@ jobs:
       - admit-current
       - verify-root
       - verify-starter-kit
+      - verify-dittobench-coding-starter-kit
       - verify-platform
       - verify-model-relay
       - verify-backroom
@@ -768,6 +827,8 @@ jobs:
           ROOT_RESULT: ${{ needs.verify-root.result }}
           STARTER_REQUIRED: ${{ needs.plan.outputs.miner_starter_kit }}
           STARTER_RESULT: ${{ needs.verify-starter-kit.result }}
+          CODING_STARTER_REQUIRED: ${{ needs.plan.outputs.dittobench_coding_starter_kit }}
+          CODING_STARTER_RESULT: ${{ needs.verify-dittobench-coding-starter-kit.result }}
           PLATFORM_REQUIRED: ${{ needs.plan.outputs.platform }}
           PLATFORM_RESULT: ${{ needs.verify-platform.result }}
           MODEL_RELAY_RESULT: ${{ needs.verify-model-relay.result }}
@@ -803,6 +864,7 @@ jobs:
             fi
           }
           require_selected "$STARTER_REQUIRED" "$STARTER_RESULT" starter-kit
+          require_selected "$CODING_STARTER_REQUIRED" "$CODING_STARTER_RESULT" dittobench-coding-starter-kit
           require_selected "$PLATFORM_REQUIRED" "$PLATFORM_RESULT" platform
           require_selected "$PLATFORM_REQUIRED" "$MODEL_RELAY_RESULT" model-relay
           require_selected "$BACKROOM_REQUIRED" "$BACKROOM_RESULT" backroom

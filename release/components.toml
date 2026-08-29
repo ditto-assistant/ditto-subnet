@@ -134,7 +134,18 @@ paths = [
 description = "Shadow-only coding-repair corpus compiler and public practice pack"
 paths = [
   "research/dittobench-coding-datagen/**",
+  "packages/dittobench-coding-contract/**",
   ".github/workflows/coding-datagen-ci.yml",
+]
+
+[components.dittobench_coding_starter_kit]
+description = "Shadow-only coding-agent reference harness and practice client"
+depends_on = ["dittobench_coding_datagen"]
+paths = [
+  "miners/dittobench-coding-starter-kit/**",
+  ".github/workflows/coding-starter-kit-ci.yml",
+  "scripts/test-coding-starter-practice-e2e.sh",
+  "packages/dittobench-coding-contract/**",
 ]
 
 [components.platform_api]
