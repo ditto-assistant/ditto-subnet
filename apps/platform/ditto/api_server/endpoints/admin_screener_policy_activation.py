@@ -18,7 +18,7 @@ the model cannot see:
   stored revision so two operators (or a stale Backroom tab) cannot schedule
   past each other; the write flushes inside the request transaction so the
   database's unique ``(parent_revision)`` constraint is the final arbiter.
-* **Fail-safe bounds.** ``target_policy_version`` must be above the floor and
+* **Fail-safe bounds.** ``target_policy_version`` must be at least the floor and
   at most the version this build implements: scheduling a version no deployed
   worker implements would fail the whole screening fleet closed at activation
   time.
@@ -145,11 +145,11 @@ async def schedule_activation(
                 "notice, not a retroactive rule change"
             ),
         )
-    if payload.target_policy_version <= SCREENING_FLOOR_POLICY_VERSION:
+    if payload.target_policy_version < SCREENING_FLOOR_POLICY_VERSION:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"target_policy_version must be above the current floor "
+                f"target_policy_version must be at least the current floor "
                 f"{SCREENING_FLOOR_POLICY_VERSION}"
             ),
         )
