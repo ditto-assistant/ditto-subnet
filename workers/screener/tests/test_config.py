@@ -24,6 +24,7 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SCREENER_GH_TOKEN_FILE",
         "SCREENER_BUILD_TIMEOUT_SECONDS",
         "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS",
+        "SCREENER_REMOTE_BUILD_MODE",
         "SCREENER_BUILD_MEMORY",
         "SCREENER_IMAGE_BUILD_MEMORY",
         "NETUID",
@@ -43,7 +44,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.container_port == 8080
     assert cfg.image_build_memory == "8g"
     assert cfg.remote_build_timeout_seconds == 1500
-    assert cfg.remote_build_mode == "prefer"
+    assert cfg.remote_build_mode == "off"
     assert cfg.gh_token_file is None
     # Must default to (at least) the platform's 20 MiB upload cap, else the gate
     # false-fails legitimately-uploaded tarballs.

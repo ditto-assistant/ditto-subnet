@@ -424,6 +424,17 @@ configure_docker_endpoint
 # rotation does not require an unrelated code change.
 materialize_source_review_key
 
+# A worker lease owns the complete build/runtime/review lifecycle. Older fleet
+# instances were bootstrapped with `prefer`/`require`, which silently delegated
+# builds to Platform's Cloud Run fallback even after the fleet-local default was
+# corrected. Reconcile the durable env on every release and force the full
+# restart path when repairing a running instance.
+remote_build_mode_changed=false
+if [[ "$(env_value SCREENER_REMOTE_BUILD_MODE)" != "off" ]]; then
+  upsert_env SCREENER_REMOTE_BUILD_MODE off
+  remote_build_mode_changed=true
+fi
+
 # Ensure the metadata guard before any path that could (re)start the worker or
 # leave it running — runs on both the fast path and a full deploy so a pet VM
 # that never had it, or an instance where it drifted, is protected every deploy.
@@ -442,6 +453,7 @@ requested_l2_mode="$(l2_mode)"
 if [[ -n "$deployed_sha" ]] && [[ "$deployed_sha" == "$SCREENER_EXPECTED_SHA" ]] && \
   [[ "$current_sha" == "$SCREENER_EXPECTED_SHA" ]] && \
   [[ "$deployed_l2_mode" == "$requested_l2_mode" ]] && \
+  [[ "$remote_build_mode_changed" == false ]] && \
   systemctl is-active --quiet "$SCREENER_UNIT" && \
   verify_installed_signing_contract; then
   ensure_l2_analyzer "$SCREENER_EXPECTED_SHA"

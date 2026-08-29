@@ -57,6 +57,17 @@ def test_bootstrap_preserves_separate_remote_and_local_build_budgets() -> None:
     assert "SCREENER_BUILD_TIMEOUT_SECONDS=2700" in bootstrap
 
 
+def test_deploy_repairs_legacy_remote_build_mode_and_restarts_worker() -> None:
+    updater = (ROOT / "scripts" / "update-screener.sh").read_text()
+
+    repair = 'if [[ "$(env_value SCREENER_REMOTE_BUILD_MODE)" != "off" ]]'
+    fast_path_guard = '[[ "$remote_build_mode_changed" == false ]]'
+    assert repair in updater
+    assert "upsert_env SCREENER_REMOTE_BUILD_MODE off" in updater
+    assert fast_path_guard in updater
+    assert updater.index(repair) < updater.index(fast_path_guard)
+
+
 def test_deploy_workflow_discovers_screeners_by_label_not_a_fixed_vm() -> None:
     workflow = workflow_text("screener-deploy.yml")
 

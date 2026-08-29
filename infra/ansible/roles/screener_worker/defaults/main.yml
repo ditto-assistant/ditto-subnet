@@ -47,13 +47,12 @@ screener_queue_limit: 20
 # build to the remaining lease, so a value above the lease is never used in full,
 # while a value below a legitimate cold dependency build false-fails it as a timeout.
 screener_build_timeout_seconds: 2700
-# Targon Kaniko gets its own 25-minute cap before the local Docker fallback.
-# Keep independent from screener_build_timeout_seconds: the 70-minute Platform
-# lease budgets both stages and stale local overrides must not shorten Targon.
+# Retained only for explicit decomposed-lane tests; production workers build
+# locally and do not delegate their leased work back to Platform.
 screener_remote_build_timeout_seconds: 1500
-# Screening does not build on GCE. Targon Kaniko plus runtime smoke are
-# authoritative; local Docker remains only if an operator sets prefer/off.
-screener_remote_build_mode: require
+# A worker lease owns the whole build/runtime/review lifecycle. Cloud Run and
+# Targon are separate decomposed capacity lanes, not a worker-side dependency.
+screener_remote_build_mode: off
 screener_run_timeout_seconds: 120
 screener_build_memory: 2g
 # The untrusted build runs one-at-a-time and needs enough bounded headroom for
