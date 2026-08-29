@@ -93,6 +93,7 @@ def test_updater_authenticates_before_fetch_or_drain() -> None:
     assert "runuser" not in updater
     assert "trap cleanup_staging RETURN" in updater
     assert updater.count("venv --relocatable") == 2
+    assert updater.count("sync --frozen --no-editable") == 2
 
 
 def test_updater_has_no_inbound_deploy_or_long_lived_cloud_credential() -> None:
