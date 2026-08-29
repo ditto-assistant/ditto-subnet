@@ -1983,6 +1983,46 @@ CREATE TABLE public.screener_node_bootstrap_grants (
 
 
 --
+-- Name: screener_node_channel_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screener_node_channel_settings_revisions (
+    revision integer NOT NULL,
+    environment text NOT NULL,
+    node_id text NOT NULL,
+    parent_revision integer NOT NULL,
+    settings jsonb NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screener_node_channel_settings_revisions_screener_no_3436 CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text)),
+    CONSTRAINT ck_screener_node_channel_settings_revisions_screener_no_6566 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_screener_node_channel_settings_revisions_screener_no_7809 CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_screener_node_channel_settings_revisions_screener_no_bcec CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
+-- Name: screener_node_channel_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.screener_node_channel_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: screener_node_channel_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.screener_node_channel_settings_revisions_revision_seq OWNED BY public.screener_node_channel_settings_revisions.revision;
+
+
+--
 -- Name: screener_nodes; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2365,6 +2405,8 @@ CREATE TABLE public.submission_image_builds (
     runtime_error_code text,
     runtime_completed_at timestamp with time zone,
     output_image_id text,
+    node_id text,
+    runtime_node_id text,
     CONSTRAINT ck_submission_image_builds_submission_image_builds_arti_3065 CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_atte_e3c5 CHECK (((attempt_count >= 0) AND (attempt_count <= 3))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_envi_043b CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text)),
@@ -2372,7 +2414,7 @@ CREATE TABLE public.submission_image_builds (
     CONSTRAINT ck_submission_image_builds_submission_image_builds_outp_270a CHECK (((output_size_bytes IS NULL) OR ((output_size_bytes >= 1) AND (output_size_bytes <= '4294967296'::bigint)))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_outp_4205 CHECK (((output_sha256 IS NULL) OR (output_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_outp_64a7 CHECK (((output_image_id IS NULL) OR (output_image_id ~ '^sha256:[0-9a-f]{64}$'::text))),
-    CONSTRAINT ck_submission_image_builds_submission_image_builds_prov_dba8 CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text])))),
+    CONSTRAINT ck_submission_image_builds_submission_image_builds_prov_dba8 CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text, 'hetzner'::text])))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_runt_165c CHECK ((runtime_status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'fallback_required'::text, 'skipped'::text]))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_runt_7180 CHECK (((runtime_image_reference IS NULL) OR (runtime_image_reference ~ '^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'running'::text, 'succeeded'::text, 'fallback_required'::text, 'canceled'::text, 'consumed'::text]))),
@@ -2470,11 +2512,12 @@ CREATE TABLE public.submission_source_reviews (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     provider_outage_epoch uuid,
     provider_outage_attempted_epoch uuid,
+    node_id text,
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__14fa CHECK (((job_token_hash IS NULL) OR (job_token_hash ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__43cb CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'running'::text, 'succeeded'::text, 'fallback_required'::text, 'canceled'::text, 'consumed'::text]))),
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__4bdc CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text)),
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__8b37 CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT ck_submission_source_reviews_submission_source_reviews__f22b CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text])))),
+    CONSTRAINT ck_submission_source_reviews_submission_source_reviews__f22b CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text, 'hetzner'::text])))),
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__fa74 CHECK (((attempt_count >= 0) AND (attempt_count <= 3)))
 );
 
@@ -2510,7 +2553,7 @@ CREATE TABLE public.trusted_image_builds (
     CONSTRAINT ck_trusted_image_builds_trusted_image_builds_component_check CHECK ((component = 'screener'::text)),
     CONSTRAINT ck_trusted_image_builds_trusted_image_builds_digest_check CHECK (((image_digest IS NULL) OR (image_digest ~ '^sha256:[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_trusted_image_builds_trusted_image_builds_environment_check CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text)),
-    CONSTRAINT ck_trusted_image_builds_trusted_image_builds_provider_check CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text])))),
+    CONSTRAINT ck_trusted_image_builds_trusted_image_builds_provider_check CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text, 'hetzner'::text])))),
     CONSTRAINT ck_trusted_image_builds_trusted_image_builds_source_sha_check CHECK ((source_sha ~ '^[0-9a-f]{40}$'::text)),
     CONSTRAINT ck_trusted_image_builds_trusted_image_builds_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'fallback_required'::text, 'canceled'::text])))
 );
@@ -2839,6 +2882,13 @@ ALTER TABLE ONLY public.queue_policy_settings_revisions ALTER COLUMN revision SE
 --
 
 ALTER TABLE ONLY public.score_audit_log ALTER COLUMN seq SET DEFAULT nextval('public.score_audit_log_seq_seq'::regclass);
+
+
+--
+-- Name: screener_node_channel_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_node_channel_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.screener_node_channel_settings_revisions_revision_seq'::regclass);
 
 
 --
@@ -3596,6 +3646,14 @@ ALTER TABLE ONLY public.screener_node_bootstrap_grants
 
 
 --
+-- Name: screener_node_channel_settings_revisions pk_screener_node_channel_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_node_channel_settings_revisions
+    ADD CONSTRAINT pk_screener_node_channel_settings_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: screener_nodes pk_screener_nodes; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3785,6 +3843,14 @@ ALTER TABLE ONLY public.scores
 
 ALTER TABLE ONLY public.screener_heartbeats
     ADD CONSTRAINT screener_heartbeats_pkey PRIMARY KEY (screener_hotkey, instance_id);
+
+
+--
+-- Name: screener_node_channel_settings_revisions screener_node_channel_settings_node_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_node_channel_settings_revisions
+    ADD CONSTRAINT screener_node_channel_settings_node_parent_key UNIQUE (node_id, parent_revision);
 
 
 --
@@ -4498,6 +4564,13 @@ CREATE INDEX screener_node_bootstrap_grants_node_idx ON public.screener_node_boo
 
 
 --
+-- Name: screener_node_channel_settings_node_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX screener_node_channel_settings_node_revision_idx ON public.screener_node_channel_settings_revisions USING btree (node_id, revision);
+
+
+--
 -- Name: screener_nodes_provider_status_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4589,6 +4662,13 @@ CREATE INDEX screening_retry_overrides_agent_created_idx ON public.screening_ret
 
 
 --
+-- Name: submission_image_builds_node_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX submission_image_builds_node_status_idx ON public.submission_image_builds USING btree (node_id, status);
+
+
+--
 -- Name: submission_image_builds_queue_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4596,10 +4676,24 @@ CREATE INDEX submission_image_builds_queue_idx ON public.submission_image_builds
 
 
 --
+-- Name: submission_image_builds_runtime_node_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX submission_image_builds_runtime_node_status_idx ON public.submission_image_builds USING btree (runtime_node_id, runtime_status);
+
+
+--
 -- Name: submission_retirements_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX submission_retirements_created_idx ON public.submission_retirements USING btree (created_at, retirement_id);
+
+
+--
+-- Name: submission_source_reviews_node_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX submission_source_reviews_node_status_idx ON public.submission_source_reviews USING btree (node_id, status);
 
 
 --
@@ -5130,6 +5224,14 @@ ALTER TABLE ONLY public.screener_heartbeats
 
 
 --
+-- Name: screener_node_channel_settings_revisions screener_node_channel_settings_node_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_node_channel_settings_revisions
+    ADD CONSTRAINT screener_node_channel_settings_node_id_fkey FOREIGN KEY (node_id) REFERENCES public.screener_nodes(node_id) ON DELETE CASCADE;
+
+
+--
 -- Name: screener_shadow_reviews screener_shadow_reviews_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5242,6 +5344,22 @@ ALTER TABLE ONLY public.submission_image_builds
 
 
 --
+-- Name: submission_image_builds submission_image_builds_node_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.submission_image_builds
+    ADD CONSTRAINT submission_image_builds_node_id_fkey FOREIGN KEY (node_id) REFERENCES public.screener_nodes(node_id) ON DELETE SET NULL;
+
+
+--
+-- Name: submission_image_builds submission_image_builds_runtime_node_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.submission_image_builds
+    ADD CONSTRAINT submission_image_builds_runtime_node_id_fkey FOREIGN KEY (runtime_node_id) REFERENCES public.screener_nodes(node_id) ON DELETE SET NULL;
+
+
+--
 -- Name: submission_retirements submission_retirements_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5263,6 +5381,14 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 ALTER TABLE ONLY public.submission_source_reviews
     ADD CONSTRAINT submission_source_reviews_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
+
+
+--
+-- Name: submission_source_reviews submission_source_reviews_node_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.submission_source_reviews
+    ADD CONSTRAINT submission_source_reviews_node_id_fkey FOREIGN KEY (node_id) REFERENCES public.screener_nodes(node_id) ON DELETE SET NULL;
 
 
 --

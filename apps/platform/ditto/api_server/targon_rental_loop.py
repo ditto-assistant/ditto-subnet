@@ -239,6 +239,9 @@ class TargonRentalLoop:
         handled = await self._reap_finished_rentals()
         handled = await self._park_source_reviews_for_outage() or handled
         async with self._session_maker() as session, session.begin():
+            _, provider_settings = await resolve_screener_provider_settings(
+                session, environment=self._config.environment
+            )
             archive_exists = getattr(self._storage, "object_exists", None)
             await admit_targon_screening_work(
                 session,
@@ -247,9 +250,12 @@ class TargonRentalLoop:
                 now=datetime.now(UTC),
                 archive_exists=archive_exists,
             )
-        handled = await self._launch_kaniko() or handled
-        handled = await self._launch_smoke() or handled
-        handled = await self._launch_source_review() or handled
+        if provider_settings.build_provider_priority[0] == "targon":
+            handled = await self._launch_kaniko() or handled
+        if provider_settings.runtime_provider_priority[0] == "targon":
+            handled = await self._launch_smoke() or handled
+        if provider_settings.source_review_provider_priority[0] == "targon":
+            handled = await self._launch_source_review() or handled
         handled = await self._finalize_ready_attempts() or handled
         handled = await self._repair_kaniko_image_ids() or handled
         return handled

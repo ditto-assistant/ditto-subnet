@@ -1,8 +1,9 @@
 """Audited Backroom control for screener and builder provider routing."""
 
+import hashlib
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import httpx
@@ -12,13 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server.dependencies import get_session
-from ditto.db.models import ScreenerCapacityEvent, TrustedImageBuild
+from ditto.db.models import ScreenerCapacityEvent, ScreenerNode, TrustedImageBuild
 
 pytestmark = pytest.mark.asyncio
 
 _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
 _HEADERS = {"Authorization": f"Bearer {_ADMIN_TOKEN}"}
 _PATH = "/api/v1/admin/screener-provider-settings"
+_NODE_TOKEN = "node-token-" + "x" * 48
 
 
 def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> None:
@@ -130,6 +132,192 @@ async def test_provider_settings_require_gcp_and_exact_confirmation(
         ),
     )
     assert wrong_confirmation.status_code == 409
+
+
+async def test_node_channel_settings_default_disabled_and_cas_guarded(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id="subnet-screener-1",
+                provider="hetzner",
+                provider_resource_id="robot-2984021",
+                screener_hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
+                token_hash=hashlib.sha256(_NODE_TOKEN.encode()).hexdigest(),
+                token_expires_at=now + timedelta(hours=6),
+                status="active",
+                capacity=3,
+            )
+        )
+
+    path = "/api/v1/admin/screener-nodes/subnet-screener-1/channel-settings"
+    initial = await client.get(path, headers=_HEADERS)
+    assert initial.status_code == 200, initial.text
+    assert initial.json()["current"]["revision"] == 0
+    assert initial.json()["current"]["settings"] == {
+        "sandbox_slots": 0,
+        "build_concurrency": 0,
+        "runtime_concurrency": 0,
+        "source_review_concurrency": 0,
+    }
+
+    settings = {
+        "sandbox_slots": 3,
+        "build_concurrency": 3,
+        "runtime_concurrency": 3,
+        "source_review_concurrency": 6,
+    }
+    applied = await client.post(
+        path,
+        headers=_HEADERS,
+        json={
+            "environment": "prod",
+            "expected_revision": 0,
+            "settings": settings,
+            "reason": "Activate the first dedicated 64 GB screener host",
+            "actor": "operator@example.com",
+            "confirmation": (
+                "APPLY SCREENER NODE subnet-screener-1 SANDBOX=3 BUILD=3 "
+                "RUNTIME=3 SOURCE_REVIEW=6"
+            ),
+        },
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["settings"] == settings
+
+    stale = await client.post(
+        path,
+        headers=_HEADERS,
+        json={
+            "environment": "prod",
+            "expected_revision": 0,
+            "settings": settings,
+            "reason": "Repeat a stale capacity mutation request",
+            "actor": "operator@example.com",
+            "confirmation": (
+                "APPLY SCREENER NODE subnet-screener-1 SANDBOX=3 BUILD=3 "
+                "RUNTIME=3 SOURCE_REVIEW=6"
+            ),
+        },
+    )
+    assert stale.status_code == 409
+
+    capacity = await client.get("/api/v1/admin/screener-capacity", headers=_HEADERS)
+    assert capacity.status_code == 200, capacity.text
+    assert capacity.json()["node_controls"][0]["current"]["settings"] == settings
+
+
+async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.api_models.agent_status import AgentStatus
+    from ditto.db.models import SubmissionImageBuild
+    from ditto.tests.api_server.endpoints.test_screener import (
+        _AUTH_HEADER,
+        _CLAIM_URL,
+        _SCREENER_HOTKEY,
+        _install_chain,
+        _install_db,
+        _install_storage,
+        _seed_agent,
+    )
+
+    _install(app, session_maker)
+    _install_db(app, session_maker)
+    _install_chain(app)
+    _install_storage(app)
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id="subnet-screener-1",
+                provider="hetzner",
+                provider_resource_id="robot-2984021",
+                screener_hotkey=_SCREENER_HOTKEY,
+                token_hash=hashlib.sha256(_NODE_TOKEN.encode()).hexdigest(),
+                token_expires_at=now + timedelta(hours=6),
+                status="active",
+                capacity=3,
+            )
+        )
+    provider = await client.post(
+        _PATH,
+        headers=_HEADERS,
+        json=_payload(
+            expected_revision=0,
+            screening=["hetzner", "gcp"],
+            builds=["hetzner", "gcp"],
+        ),
+    )
+    assert provider.status_code == 200, provider.text
+
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+    attempt_id = claim.json()["items"][0]["attempt_id"]
+    queued = await client.post(
+        f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
+        headers=_AUTH_HEADER,
+        json={"attempt_id": attempt_id},
+    )
+    assert queued.status_code == 200, queued.text
+    build_id = queued.json()["build_id"]
+    node_headers = {
+        "Authorization": f"Bearer {_NODE_TOKEN}",
+        "X-Screener-Hotkey": _SCREENER_HOTKEY,
+    }
+
+    disabled = await client.post(
+        "/api/v1/screener/nodes/jobs/submission-image-builds/claim",
+        headers=node_headers,
+        json={"environment": "prod"},
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["build"] is None
+
+    limits_path = "/api/v1/admin/screener-nodes/subnet-screener-1/channel-settings"
+    enabled = await client.post(
+        limits_path,
+        headers=_HEADERS,
+        json={
+            "environment": "prod",
+            "expected_revision": 0,
+            "settings": {
+                "sandbox_slots": 1,
+                "build_concurrency": 1,
+                "runtime_concurrency": 1,
+                "source_review_concurrency": 2,
+            },
+            "reason": "Enable one isolated VM slot for the node claim test",
+            "actor": "operator@example.com",
+            "confirmation": (
+                "APPLY SCREENER NODE subnet-screener-1 SANDBOX=1 BUILD=1 "
+                "RUNTIME=1 SOURCE_REVIEW=2"
+            ),
+        },
+    )
+    assert enabled.status_code == 200, enabled.text
+
+    leased = await client.post(
+        "/api/v1/screener/nodes/jobs/submission-image-builds/claim",
+        headers=node_headers,
+        json={"environment": "prod"},
+    )
+    assert leased.status_code == 200, leased.text
+    assert leased.json()["build"]["build_id"] == build_id
+    async with session_maker() as session:
+        row = await session.get(SubmissionImageBuild, build_id)
+        assert row is not None
+        assert row.node_id == "subnet-screener-1"
+        assert row.provider == "hetzner"
 
 
 async def test_failed_trusted_build_requires_exact_manual_retry(
