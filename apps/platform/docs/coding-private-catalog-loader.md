@@ -56,7 +56,8 @@ translated into either domain.
 ## Activation boundary
 
 The API lifespan constructs this source only when its separate configuration is
-present. No production caller is added here. Automatic scheduling, task
-delivery, Luna inference grants, validator tickets, scoring, deployment, and
-emissions require later reviewed layers. Coding contract v1 remains permanently
+present. The single-run reconciler may consume it only when explicitly invoked;
+there is no background or fleet caller. Automatic scheduling, task delivery,
+Luna inference grants, validator tickets, scoring, deployment, and emissions
+require later reviewed layers. Coding contract v1 remains permanently
 `weight_eligible=false`.

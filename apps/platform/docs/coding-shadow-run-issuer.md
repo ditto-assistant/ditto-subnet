@@ -63,7 +63,8 @@ grader material, issue text, or patches.
 ## Activation boundary
 
 This is an internal, caller-driven shadow transaction. A separate optional
-loader can now supply one commitment-addressed private record, but no automatic
-scheduler invokes the two components. This layer still adds no validator task
+loader supplies one commitment-addressed private record, and the single-run
+reconciler can invoke both components for one explicitly named artifact. No
+background or fleet scheduler exists. This layer still adds no validator task
 delivery, Luna grant, ticket issuer, score fold, deployment, or emissions
 reader. Coding contract v1 remains permanently `weight_eligible=false`.
