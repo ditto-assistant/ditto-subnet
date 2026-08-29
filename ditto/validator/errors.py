@@ -47,11 +47,11 @@ class DittobenchError(ValidatorError):
 
 
 class ValidatorInfrastructureError(DittobenchError):
-    """Retryable failure in validator-owned scoring infrastructure.
+    """Failure in validator-owned scoring infrastructure.
 
     Unlike an ordinary benchmark failure, this says nothing about the miner's
-    artifact. The current scoring sweep must stop and let any issued lease
-    expire so the submission remains eligible for another validator attempt.
+    artifact. The current scoring sweep stops and parks the ticket; only a
+    Backroom-issued manual retry may authorize another lease.
     """
 
 
@@ -61,12 +61,8 @@ class LeaseDeadlineError(DittobenchError):
     Terminal for this attempt, and deliberately **not** a
     :class:`ValidatorInfrastructureError`. A run that was given the whole lease
     and still produced nothing says something about the artifact, not about
-    this host. Reporting it as ``infrastructure`` would mint a no-fault retry
-    grant, apply the escalating infra backoff, and re-lease the same hanging
-    artifact indefinitely — the loop that let one miner family hold three
-    validator slots per round without ever reaching a verdict. It is handed
-    back as ``scoring_error`` instead, so the attempt is consumed and the agent
-    reaches a terminal outcome.
+    this host. It is handed back as ``scoring_error`` so the operator sees the
+    exact cause. Neither classification creates retry authority.
     """
 
 
@@ -104,7 +100,7 @@ class PlatformError(ValidatorError):
 
 
 class PlatformInfrastructureError(PlatformError):
-    """A retryable platform dependency failure unrelated to the submission."""
+    """A platform dependency failure unrelated to the submission."""
 
 
 FAILURE_DETAIL_MAX_LENGTH = 4096

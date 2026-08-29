@@ -1009,6 +1009,10 @@ def _validate_ablation_coordinator_policy(
     )
     if any(value <= 0 for value in values):
         raise ConfirmationEvidenceError("ablation coordinator policy must be positive")
+    if policy.max_attempts != 1:
+        raise ConfirmationEvidenceError(
+            "ablation coordinator automatic retries are disabled"
+        )
     minimum_requests = policy.sample_size * 3
     if (
         not minimum_requests

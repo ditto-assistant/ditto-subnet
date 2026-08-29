@@ -302,9 +302,9 @@ async def test_aggregate_mode_blocks_adaptive_controls_but_allows_logical_route(
         "profile_revision": profile,
         "provider_sort": "throughput",
         "provider_order": [],
-        "reliability_provider_order": ["DeepInfra", "Groq"],
+        "reliability_provider_order": [],
         "ignored_providers": ["CoreWeave"],
-        "allow_fallbacks": True,
+        "allow_fallbacks": False,
     }
     assert listing.json()["provider_telemetry"] == []
     assert listing.json()["relay_recovery_telemetry"] == {

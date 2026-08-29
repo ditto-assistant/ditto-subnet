@@ -33,7 +33,7 @@ The same fail-closed hold applies when runtime source explicitly describes a
 review channel and probe shape next to the model call that implements the
 special route. Review terminology, retry logic, or comments alone are
 insufficient: the three location-bound facts must co-locate in executable
-source. This preserves ordinary reliability retries and ignores decoy docs
+source. This ignores decoy docs
 while preventing multiple agreeing models from clearing review-adaptive code.
 Any inconclusive result or infrastructure failure cannot clear.
 Neither layer can reject or ban.
@@ -42,14 +42,12 @@ Neither layer can reject or ban.
 
 The OpenRouter catalog was verified on 2026-07-18:
 
-- L2 ordered models: `moonshotai/kimi-k3` (canonical
-  `moonshotai/kimi-k3-20260715`), then `z-ai/glm-5.2` (canonical
-  `z-ai/glm-5.2-20260616`), then `openai/gpt-5.6-sol`;
+- L2 exact model: `moonshotai/kimi-k3` (canonical
+  `moonshotai/kimi-k3-20260715`), with provider and model fallback disabled;
 - L3 critic and cause/safety adjudicators: exact model `openai/gpt-5.6-sol` (canonical
   `openai/gpt-5.6-sol-20260709`), with model fallback disabled;
 - Kimi reasoning is mandatory and currently exposes only its `max`/model-default
-  level. GLM supports `high` and `xhigh`; the shared failover request leaves each
-  L2 model at its model default. SOL L3 uses `medium` reasoning for the
+  level. SOL L3 uses `medium` reasoning for the
   clearance critic and violation-cause adjudicator, and `low` for the bounded
   safety-disagreement adjudicator. Mixed benchmark/scorer leads promote that
   final adjudicator to `medium` reasoning;
@@ -117,9 +115,8 @@ isolated-tool compatibility, but GLM did not produce a valid clearance within
 the bounded trials: separate attempts exhausted effective token, corrective
 tool-call, malformed-argument, or step limits. Every outcome remained
 `retryable_infra`; none cleared or rejected the artifact, and SOL L3 was not
-silently substituted after a model-behavior failure. GLM therefore remains an
-ordered availability fallback that must be measured in `shadow`, not a claimed
-anti-cheat effectiveness result.
+silently substituted after a model-behavior failure. GLM remains calibration
+history, not a production availability fallback.
 
 Catalog references:
 
@@ -237,12 +234,10 @@ platform contract tracked in issue #224.
 `scripts/run_l2_calibration.py` accepts a protected SHA-bound manifest plus a
 directory of already verified artifacts. It rechecks every tarball digest,
 runs the production reviewer and analyzer image with bounded concurrency, and
-writes a mode-0600 checkpoint after each case. Each checkpoint binds the exact
-prompt revisions to a violation confusion matrix, precision, recall, and false-
-positive rate so prompt changes can be compared without treating inconclusive
-transport outcomes as findings. Retryable infrastructure or model
-contract failures can get up to two bounded automatic retries; an L3 retry
-resumes from the sanitized Kimi and, when available, SOL-critic stage caches.
+writes a mode-0600 checkpoint after each case. Every item runs once per command.
+Retryable infrastructure or model-contract failures remain in the checkpoint;
+an operator must issue a new calibration command to retry them. A later manual
+run may resume from sanitized Kimi and, when available, SOL-critic stage caches.
 Output contains
 only disposition, resolution basis,
 categories, routing/model/provider metadata, attempts, latency, usage, and

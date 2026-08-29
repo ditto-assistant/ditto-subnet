@@ -16,6 +16,7 @@ import base64
 import hashlib
 import os
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -36,6 +37,35 @@ from ditto_screening_protocol import (
 )
 
 _MAX_SOURCE_BYTES = 20 * 1024 * 1024
+
+
+async def _notify_provider_event(
+    client: httpx.AsyncClient,
+    *,
+    platform: str,
+    headers: dict[str, str],
+    review_id: UUID,
+    status: int,
+    started_at: datetime,
+) -> None:
+    """Best-effort relay signal; an older rolling relay must not burn the review."""
+    payload = {
+        "review_id": str(review_id),
+        "status": status,
+        "started_at": started_at.isoformat(),
+    }
+    for _attempt in range(3):
+        try:
+            response = await client.post(
+                f"{platform}/api/v1/inference/source-review/provider-event",
+                headers=headers,
+                json=payload,
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            return
+        except httpx.HTTPError:
+            await asyncio.sleep(0.25)
 
 
 def _required(name: str) -> str:
@@ -207,6 +237,7 @@ async def _amain() -> int:
             reviewer = _build_reviewer(
                 key_file=key_file, timeout_seconds=timeout_seconds
             )
+            provider_started_at = datetime.now(UTC)
             observation = await reviewer.review(
                 archive_path,
                 artifact_sha256=expected_sha256,
@@ -233,6 +264,25 @@ async def _amain() -> int:
                     else None
                 ),
             )
+            provider_status = (
+                429
+                if observation.error_code == "source-review-http-429"
+                else (
+                    200
+                    if observation.ok
+                    or observation.failure_disposition != "retryable_infra"
+                    else None
+                )
+            )
+            if provider_status is not None:
+                await _notify_provider_event(
+                    client,
+                    platform=platform,
+                    headers=headers,
+                    review_id=review_id,
+                    status=provider_status,
+                    started_at=provider_started_at,
+                )
             complete = await client.post(
                 f"{base}/complete",
                 headers=headers,

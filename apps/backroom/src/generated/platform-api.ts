@@ -1623,7 +1623,7 @@ export interface paths {
         put?: never;
         /**
          * Retry Failed Screening Now
-         * @description Waive only one exact failed attempt's remaining automatic backoff.
+         * @description Authorize one manual retry of the exact latest failed attempt.
          */
         post: operations["retry_failed_screening_now_api_v1_admin_screening_submissions__agent_id__retry_now_post"];
         delete?: never;
@@ -1829,6 +1829,26 @@ export interface paths {
          * @description Queue one allowlisted monorepo image build; never accept arbitrary paths.
          */
         post: operations["create_trusted_image_build_api_v1_admin_trusted_image_builds_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/trusted-image-builds/{build_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Trusted Image Build
+         * @description Manually requeue one exact terminal trusted build without erasing attempts.
+         */
+        post: operations["retry_trusted_image_build_api_v1_admin_trusted_image_builds__build_id__retry_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2377,6 +2397,23 @@ export interface paths {
          *     ``agent_id``. Unknown and other-miners' agents are the same 404.
          */
         get: operations["my_harness_logs_api_v1_me_agents__agent_id__harness_logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/agents/{agent_id}/screening-feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My Screening Feedback */
+        get: operations["my_screening_feedback_api_v1_me_agents__agent_id__screening_feedback_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4494,16 +4531,14 @@ export interface paths {
         put?: never;
         /**
          * Fail Job
-         * @description Resolve a failed but still-leased ticket with reason-specific retry policy.
+         * @description Resolve a failed live ticket and park it with reason-specific evidence.
          *
          *     A validator whose scoring attempt failed calls this so the platform closes
          *     the live ticket now instead of leaving the lease idle until its own deadline.
-         *     Canonical scoring errors are immediately eligible for another bounded
-         *     attempt; infrastructure, sandbox OOM, and continual-retest failures apply
-         *     their dedicated cooldowns. Any later issue mints a **fresh** lease rather
-         *     than resuming the failed one. Additive and best-effort: an old validator
-         *     that never calls this behaves exactly as today (the ticket expires on its
-         *     own via the overdue sweep).
+         *     Every reason consumes this ticket's single base attempt. Any later issue
+         *     requires an audited Backroom grant and mints a **fresh** lease rather than
+         *     resuming the failed one. An old validator that never calls this is parked by
+         *     the overdue sweep instead.
          *
          *     Auth mirrors the job claim: the header must match the signed hotkey, the
          *     signature proves possession, ``requested_at`` is freshness-bounded, the
@@ -7884,10 +7919,9 @@ export interface components {
          *     ``retry_state`` is the operator-facing triage label:
          *
          *     * ``running`` — a validator holds a live ticket right now.
-         *     * ``retry_available`` — an expired ticket is off cooldown and will be
-         *       re-leased on the next sweep with budget to spare.
-         *     * ``cooling_down`` — an expired ticket still has budget but is waiting out
-         *       its retry cooldown.
+         *     * ``retry_available`` — an operator grant exists and the ticket can be
+         *       re-leased.
+         *     * ``cooling_down`` — a historical/manual grant is not eligible yet.
          *     * ``exhausted`` — no ticket can advance without an operator. Read
          *       ``recommended_action``: ``retry`` is a verified-infrastructure grant;
          *       ``withdraw`` is an agent-attributable dead end that should leave this
@@ -9469,8 +9503,11 @@ export interface components {
         };
         /** ConfirmationAblationCoordinatorProfile */
         ConfirmationAblationCoordinatorProfile: {
-            /** Max Attempts */
-            max_attempts: number;
+            /**
+             * Max Attempts
+             * @constant
+             */
+            max_attempts: 1;
             /** Max Requests */
             max_requests: number;
             /** Request Timeout Milliseconds */
@@ -11312,6 +11349,7 @@ export interface components {
              * Format: date-time
              */
             observed_at: string;
+            provider_circuit?: components["schemas"]["ProviderCircuitSnapshot"] | null;
             /** Relays */
             relays: components["schemas"]["RelayRuntimeSnapshot"][];
             /** Settings Checksum */
@@ -12138,6 +12176,53 @@ export interface components {
             /** X Url */
             x_url?: string | null;
         };
+        /** MinerScreeningFailure */
+        MinerScreeningFailure: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Captured At */
+            captured_at?: string | null;
+            /** Detail */
+            detail?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Lane */
+            lane?: string | null;
+            /** Log Tail */
+            log_tail?: string | null;
+            /** Policy Version */
+            policy_version: number;
+            /** Provider */
+            provider?: string | null;
+            /** Public Reason */
+            public_reason?: string | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Status */
+            status: string;
+        };
+        /** MinerScreeningFeedbackResponse */
+        MinerScreeningFeedbackResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Attempts */
+            attempts: components["schemas"]["MinerScreeningFailure"][];
+            /** Miner Hotkey */
+            miner_hotkey: string;
+        };
         /** MinerSessionView */
         MinerSessionView: {
             /**
@@ -12519,6 +12604,50 @@ export interface components {
              * @default true
              */
             require_desired_era_drained: boolean;
+        };
+        /** ProviderCircuitSnapshot */
+        ProviderCircuitSnapshot: {
+            /** Closed At */
+            closed_at: string | null;
+            /**
+             * Epoch
+             * Format: uuid
+             */
+            epoch: string;
+            /** Failure Count */
+            failure_count: number;
+            /** Last Error Code */
+            last_error_code: string;
+            /**
+             * Last Failure At
+             * Format: date-time
+             */
+            last_failure_at: string;
+            /** Last Status */
+            last_status: number | null;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Probe Expires At */
+            probe_expires_at: string | null;
+            /** Probe Key */
+            probe_key: string | null;
+            /** Probe Kind */
+            probe_kind: ("scoring" | "screening") | null;
+            /** Provider */
+            provider: string;
+            /**
+             * Retry At
+             * Format: date-time
+             */
+            retry_at: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "open" | "closed";
         };
         /**
          * ProviderTelemetryView
@@ -17918,30 +18047,31 @@ export interface components {
         };
         /**
          * ScreenerProviderSettings
-         * @description Ordered provider lists for build, runtime, and source-review lanes.
+         * @description Provider selections for build, runtime, and source-review lanes.
+         *
+         *     The tuple shape is retained for rolling wire compatibility. Only the first
+         *     provider is authoritative; Platform never advances to another provider
+         *     after a failed launch.
          */
         ScreenerProviderSettings: {
             /**
              * Build Provider Priority
              * @default [
-             *       "targon",
-             *       "gcp"
+             *       "targon"
              *     ]
              */
             build_provider_priority: ("targon" | "gcp")[];
             /**
              * Runtime Provider Priority
              * @default [
-             *       "targon",
-             *       "gcp"
+             *       "targon"
              *     ]
              */
             runtime_provider_priority: ("targon" | "gcp")[];
             /**
              * Source Review Provider Priority
              * @default [
-             *       "targon",
-             *       "gcp"
+             *       "targon"
              *     ]
              */
             source_review_provider_priority: ("targon" | "gcp")[];
@@ -19400,6 +19530,18 @@ export interface components {
             reason: string;
             /** Source Sha */
             source_sha: string;
+        };
+        /** TrustedImageBuildRetryRequest */
+        TrustedImageBuildRetryRequest: {
+            /** Expected Attempt Count */
+            expected_attempt_count: number;
+            /**
+             * Expected Status
+             * @enum {string}
+             */
+            expected_status: "failed" | "fallback_required" | "canceled";
+            /** Reason */
+            reason: string;
         };
         /** TrustedImageBuildUpdateRequest */
         TrustedImageBuildUpdateRequest: {
@@ -24169,6 +24311,44 @@ export interface operations {
             };
         };
     };
+    retry_trusted_image_build_api_v1_admin_trusted_image_builds__build_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustedImageBuildRetryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustedImageBuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_v9_contract_retests_api_v1_admin_v9_contract_retests_get: {
         parameters: {
             query?: {
@@ -25028,6 +25208,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MinerHarnessLogsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_screening_feedback_api_v1_me_agents__agent_id__screening_feedback_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerScreeningFeedbackResponse"];
                 };
             };
             /** @description Validation Error */

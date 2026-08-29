@@ -319,22 +319,12 @@ class TestLeaseLiveness:
         assert ticket.status == TicketStatus.ISSUED
 
 
-class TestRevocationDoesNotBillTheMiner:
-    """ditto-platform#460's rule, enforced on the path that actually revokes.
-
-    #460 put the compensation in the signed ``fail_job`` handler only. A
-    force-expired lease cannot reach it: the revocation sets ``EXPIRED`` and
-    rewrites ``deadline = now``, and ``get_open_ticket`` wants an ``ISSUED``
-    ticket whose deadline matches exactly and is still future, so a late
-    ``fail_job`` resolves to nothing. A validator proven idle usually never
-    reports at all. So the miner was billed for every lease the platform
-    destroyed, which is how a held agent reached ``attempt_count: 4,
-    retry_budget_exhausted: true`` without four real failures.
-    """
+class TestRevocationParksTheTicket:
+    """A revoked lease remains terminal until an operator grants a retry."""
 
     _IDLE = LeaseLiveness(idle=True, reason="idle_capacity_reports_slot_free")
 
-    async def test_force_expiry_grants_a_compensating_retry(
+    async def test_force_expiry_does_not_grant_an_automatic_retry(
         self, session: AsyncSession
     ) -> None:
         ticket = _ticket(issued_at=_NOW - timedelta(hours=1))
@@ -350,11 +340,9 @@ class TestRevocationDoesNotBillTheMiner:
                 context="issue_ticket",
             )
         assert ticket.status == TicketStatus.EXPIRED
-        # The cap moves, not the count: the ledger still says how many leases
-        # were consumed, the grant says how many were not the miner's fault.
-        assert ticket.infra_retry_grants == 1
+        assert ticket.infra_retry_grants == 0
         assert ticket.attempt_count == 1
-        assert ticket_attempt_cap(ticket) == MAX_ATTEMPTS_PER_VERSION + 1
+        assert ticket_attempt_cap(ticket) == MAX_ATTEMPTS_PER_VERSION
 
     async def test_the_grant_is_bounded(self, session: AsyncSession) -> None:
         """A persistently sick slot must not mint attempts forever."""
@@ -373,17 +361,10 @@ class TestRevocationDoesNotBillTheMiner:
         assert ticket.infra_retry_grants == MAX_INFRA_RETRY_GRANTS
         assert ticket.status == TicketStatus.EXPIRED
 
-    async def test_a_revoked_lease_does_not_lose_budget_across_reissue(
+    async def test_a_revoked_lease_has_no_automatic_reissue_headroom(
         self, session: AsyncSession
     ) -> None:
-        """The end-to-end claim: revoke then reissue leaves the budget intact.
-
-        This is what the held agents needed. Without the grant the reissue's
-        ``attempt_count += 1`` is charged against an unchanged cap, so each
-        platform revocation costs one of two genuine same-version attempts.
-        """
         ticket = _ticket(issued_at=_NOW - timedelta(hours=1))
-        headroom_before = ticket_attempt_cap(ticket) - ticket.attempt_count
         async with session.begin():
             # Transient on purpose: the ticket's agent is not seeded, and the
             # revocation only has to mutate the object and write its audit row.
@@ -394,9 +375,8 @@ class TestRevocationDoesNotBillTheMiner:
                 liveness=self._IDLE,
                 context="issue_ticket",
             )
-        # What every reissue lane does to a reused row.
-        ticket.attempt_count += 1
-        assert ticket_attempt_cap(ticket) - ticket.attempt_count == headroom_before
+        assert ticket.infra_retry_grants == 0
+        assert ticket_attempt_cap(ticket) - ticket.attempt_count == 0
 
 
 class TestScoreRetestLane:

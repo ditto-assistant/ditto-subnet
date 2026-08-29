@@ -170,7 +170,6 @@ from ditto.db.queries.payments import (
     get_miner_coldkey_for_agent,
     get_miner_coldkeys_for_agents,
 )
-from ditto.db.queries.screening import PROVIDER_BACKOFF_REASON_CODES
 from ditto.db.queries.tickets import RETRY_COOLDOWN, ticket_attempt_cap
 from ditto.screener_policy_state import effective_screening_policy_version
 
@@ -949,6 +948,24 @@ async def execute_quarantine_batch(
                 quarantine.resolved_by = x_admin_actor
                 quarantine.resolution = decision.resolution
                 quarantine.resolution_reason = decision.reason
+                if decision.resolution == "rescreen":
+                    score_count = int(
+                        await session.scalar(
+                            select(func.count())
+                            .select_from(Score)
+                            .where(Score.agent_id == agent.agent_id)
+                        )
+                        or 0
+                    )
+                    await _authorize_screening_retry(
+                        session,
+                        agent=agent,
+                        attempt_id=quarantine.attempt_id,
+                        expected_score_count=score_count,
+                        reason=decision.reason,
+                        actor=x_admin_actor,
+                        now=now,
+                    )
                 session.add(
                     ScreeningQuarantineResolution(
                         resolution_id=uuid4(),
@@ -1372,6 +1389,24 @@ async def resolve_quarantine(
         quarantine.resolved_by = x_admin_actor
         quarantine.resolution = payload.resolution
         quarantine.resolution_reason = payload.reason
+        if payload.resolution == "rescreen":
+            score_count = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Score)
+                    .where(Score.agent_id == agent.agent_id)
+                )
+                or 0
+            )
+            await _authorize_screening_retry(
+                session,
+                agent=agent,
+                attempt_id=quarantine.attempt_id,
+                expected_score_count=score_count,
+                reason=payload.reason,
+                actor=x_admin_actor,
+                now=quarantine.resolved_at,
+            )
         session.add(
             ScreeningQuarantineResolution(
                 resolution_id=uuid4(),
@@ -1794,8 +1829,28 @@ async def rescreen_rejected_submission(
             raise HTTPException(status_code=409, detail="screening attempt is active")
         if agent.status != AgentStatus.REJECTED:
             raise HTTPException(status_code=409, detail="submission is not rejected")
+        latest_attempt_id = await session.scalar(
+            select(ScreeningAttempt.attempt_id)
+            .where(ScreeningAttempt.agent_id == agent_id)
+            .order_by(
+                ScreeningAttempt.started_at.desc(),
+                ScreeningAttempt.attempt_id.desc(),
+            )
+            .limit(1)
+        )
+        if latest_attempt_id is None:
+            raise HTTPException(status_code=409, detail="screening attempt is missing")
         agent.status = AgentStatus.SCREENING_FAILED
         agent.screening_reason = "Operator requested a screening retry"
+        await _authorize_screening_retry(
+            session,
+            agent=agent,
+            attempt_id=latest_attempt_id,
+            expected_score_count=score_count,
+            reason=payload.reason,
+            actor=x_admin_actor,
+            now=datetime.now(UTC),
+        )
     logger.info(
         "admin_actor=%s requested rescreen agent_id=%s reason=%s",
         x_admin_actor,
@@ -1805,6 +1860,39 @@ async def rescreen_rejected_submission(
     return AdminScreeningRescreenResponse(
         agent_id=agent_id, agent_status=AgentStatus.SCREENING_FAILED
     )
+
+
+async def _authorize_screening_retry(
+    session: AsyncSession,
+    *,
+    agent: Agent,
+    attempt_id: UUID,
+    expected_score_count: int,
+    reason: str,
+    actor: str,
+    now: datetime,
+) -> ScreeningRetryOverride:
+    """Append or replay the one manual authorization for an exact attempt."""
+    existing = await session.scalar(
+        select(ScreeningRetryOverride).where(
+            ScreeningRetryOverride.attempt_id == attempt_id
+        )
+    )
+    if existing is not None:
+        return existing
+    override = ScreeningRetryOverride(
+        override_id=uuid4(),
+        agent_id=agent.agent_id,
+        attempt_id=attempt_id,
+        artifact_sha256=agent.sha256,
+        expected_score_count=expected_score_count,
+        reason=reason,
+        actor=actor,
+        created_at=now,
+    )
+    session.add(override)
+    await session.flush()
+    return override
 
 
 @router.post(
@@ -1818,7 +1906,7 @@ async def retry_failed_screening_now(
     session: SessionDep,
     x_admin_actor: Annotated[str | None, Header()] = None,
 ) -> AdminScreeningRetryNowResponse:
-    """Waive only one exact failed attempt's remaining automatic backoff."""
+    """Authorize one manual retry of the exact latest failed attempt."""
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
     now = datetime.now(UTC)
@@ -1880,38 +1968,30 @@ async def retry_failed_screening_now(
                 raise HTTPException(
                     status_code=409, detail="screening attempt is active"
                 )
-            if agent.status != AgentStatus.SCREENING_FAILED:
+            if agent.status not in {
+                AgentStatus.SCREENING_FAILED,
+                AgentStatus.ATH_PENDING_REVIEW,
+            }:
                 raise HTTPException(
                     status_code=409,
-                    detail="submission is not waiting after a failed screening",
+                    detail="submission is not parked after a failed screening",
                 )
-            provider_backoff = (
-                attempt.status == "failed"
-                and attempt.reason_code in PROVIDER_BACKOFF_REASON_CODES
-            )
-            if attempt.status != "expired" and not provider_backoff:
+            if attempt.status not in {"expired", "failed", "rejected", "quarantined"}:
                 raise HTTPException(
                     status_code=409,
-                    detail="screening attempt is not in retry backoff",
+                    detail="screening attempt is not terminal",
                 )
-            if attempt.deadline <= now:
-                raise HTTPException(
-                    status_code=409, detail="screening backoff has already elapsed"
-                )
-            override = ScreeningRetryOverride(
-                override_id=uuid4(),
-                agent_id=agent_id,
+            override = await _authorize_screening_retry(
+                session,
+                agent=agent,
                 attempt_id=attempt.attempt_id,
-                artifact_sha256=agent.sha256,
                 expected_score_count=score_count,
                 reason=payload.reason,
                 actor=x_admin_actor,
-                created_at=now,
+                now=now,
             )
-            session.add(override)
-            await session.flush()
     logger.info(
-        "admin_actor=%s waived screening backoff agent_id=%s attempt_id=%s "
+        "admin_actor=%s authorized screening retry agent_id=%s attempt_id=%s "
         "override_id=%s idempotent=%s reason=%s",
         x_admin_actor,
         agent_id,
@@ -2493,6 +2573,26 @@ async def refresh_benchmark_contract(
         agent.status = AgentStatus.SCREENING_FAILED
         agent.screening_reason = "Operator requested benchmark contract rebuild"
         agent.screening_reason_code = None
+        latest_attempt_id = await session.scalar(
+            select(ScreeningAttempt.attempt_id)
+            .where(ScreeningAttempt.agent_id == agent_id)
+            .order_by(
+                ScreeningAttempt.started_at.desc(),
+                ScreeningAttempt.attempt_id.desc(),
+            )
+            .limit(1)
+        )
+        if latest_attempt_id is None:
+            raise HTTPException(status_code=409, detail="screening attempt is missing")
+        await _authorize_screening_retry(
+            session,
+            agent=agent,
+            attempt_id=latest_attempt_id,
+            expected_score_count=score_count,
+            reason=payload.reason,
+            actor=x_admin_actor,
+            now=now,
+        )
 
     logger.warning(
         "admin_actor=%s refreshed benchmark contract agent_id=%s "
@@ -3170,6 +3270,26 @@ async def migrate_benchmark_contract(
             "Operator migrated zero-score benchmark contract from v2 to v3"
         )
         locked_agent.screening_reason_code = None
+        latest_attempt_id = await session.scalar(
+            select(ScreeningAttempt.attempt_id)
+            .where(ScreeningAttempt.agent_id == agent_id)
+            .order_by(
+                ScreeningAttempt.started_at.desc(),
+                ScreeningAttempt.attempt_id.desc(),
+            )
+            .limit(1)
+        )
+        if latest_attempt_id is None:
+            raise HTTPException(status_code=409, detail="screening attempt is missing")
+        await _authorize_screening_retry(
+            session,
+            agent=locked_agent,
+            attempt_id=latest_attempt_id,
+            expected_score_count=score_count,
+            reason=payload.reason,
+            actor=x_admin_actor,
+            now=now,
+        )
 
     logger.warning(
         "admin_actor=%s migrated zero-score benchmark contract agent_id=%s "

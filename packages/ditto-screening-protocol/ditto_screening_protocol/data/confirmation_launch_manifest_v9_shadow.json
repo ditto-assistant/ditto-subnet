@@ -5,8 +5,8 @@
     "minimum_base_score_micros": 950000,
     "mode": "score_threshold"
   },
-  "execution_profile_checksum": "23e7168e7ee874f1b13ae332297785f78af49fcbc8de1f55111138addaa9cfcb",
-  "execution_profile_revision": "v9-confirmation-shadow-bounded-2026-08-25-zdr-v7",
+  "execution_profile_checksum": "8e5be01e3efd17dbf6cc21e79b9d53d82d842b1563d403b0318f2a272d6297af",
+  "execution_profile_revision": "v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8",
   "guarantees": {
     "changes_canonical_scores": false,
     "changes_rewards": false,
@@ -22,6 +22,6 @@
   },
   "longmem_dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
   "mode": "shadow",
-  "revision": "v9-confirmation-shadow-launch-2026-08-25-zdr-v7",
+  "revision": "v9-confirmation-shadow-launch-2026-08-27-no-retry-v8",
   "schema_version": 1
 }

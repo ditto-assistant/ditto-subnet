@@ -53,7 +53,7 @@ func TestConfirmationReaderBackpressureDelay(t *testing.T) {
 	}
 }
 
-func TestConfirmationReaderBackpressureRespectsHardElapsedDeadline(t *testing.T) {
+func TestConfirmationReaderBackpressureDoesNotWaitForRetryDeadline(t *testing.T) {
 	var calls int
 	var slept time.Duration
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -85,14 +85,14 @@ func TestConfirmationReaderBackpressureRespectsHardElapsedDeadline(t *testing.T)
 		},
 		func(_ context.Context, delay time.Duration) { slept = delay },
 	)
-	if result != nil || callErr == nil || !callErr.timedOut {
+	if result == nil || result.status != http.StatusTooManyRequests || callErr != nil {
 		t.Fatalf("deadline result=%v error=%v", result, callErr)
 	}
 	if calls != 1 {
 		t.Fatalf("deadline attempts: got %d want 1", calls)
 	}
-	if slept <= 0 || slept > elapsedBudget {
-		t.Fatalf("deadline sleep: got %s want within (0s, %s]", slept, elapsedBudget)
+	if slept != 0 {
+		t.Fatalf("single-shot provider call slept for %s", slept)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestConfirmationReader503KeepsOrdinaryAttemptCap(t *testing.T) {
 	}
 }
 
-func TestConfirmationReaderBackpressurePropagatesParentCancellation(t *testing.T) {
+func TestConfirmationReaderBackpressureDoesNotScheduleCancellationWait(t *testing.T) {
 	var calls int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -145,7 +145,7 @@ func TestConfirmationReaderBackpressurePropagatesParentCancellation(t *testing.T
 		},
 		func(context.Context, time.Duration) { cancel() },
 	)
-	if result != nil || callErr == nil || !callErr.timedOut {
+	if result == nil || result.status != http.StatusTooManyRequests || callErr != nil {
 		t.Fatalf("cancel result=%v error=%v", result, callErr)
 	}
 	if calls != 1 {

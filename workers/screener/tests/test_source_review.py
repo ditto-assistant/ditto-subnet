@@ -2002,6 +2002,7 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
         for tool in request["tools"]
     )
     assert seen[0]["provider"] == {
+        "allow_fallbacks": False,
         "zdr": True,
         "data_collection": "deny",
         "require_parameters": True,
@@ -3235,9 +3236,7 @@ async def test_expired_lease_deadline_stops_review_before_first_call(
     assert observation.error_code == "source-review-lease-budget-exhausted"
 
 
-async def test_transient_openrouter_failure_is_retried(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_transient_openrouter_failure_is_single_shot(tmp_path: Path) -> None:
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     os.chmod(key, 0o600)
@@ -3276,17 +3275,15 @@ async def test_transient_openrouter_failure_is_retried(
             },
         )
 
-    async def no_sleep(_: float) -> None:
-        return None
-
-    monkeypatch.setattr("ditto_screener.source_review.asyncio.sleep", no_sleep)
     observation = await _agent(key, httpx.MockTransport(handler)).review(
         str(_archive(tmp_path, "fn main() { call_model(); }")),
         artifact_sha256=_SHA,
     )
 
-    assert observation.ok
-    assert calls == 2
+    assert not observation.ok
+    assert observation.failure_disposition == "retryable_infra"
+    assert observation.error_code == "source-review-http-503"
+    assert calls == 1
 
 
 async def test_hallucinated_citations_are_dropped_before_digest_binding(
@@ -3959,6 +3956,16 @@ def test_failure_codes_name_the_cause(error: Exception, expected: str) -> None:
     assert source_review_module._source_review_failure_code(error) == expected
 
 
+def test_failure_code_retains_openrouter_http_status() -> None:
+    request = httpx.Request("POST", "https://openrouter.test/chat/completions")
+    response = httpx.Response(429, request=request)
+    error = httpx.HTTPStatusError("rate limited", request=request, response=response)
+    assert (
+        source_review_module._source_review_failure_code(error)
+        == "source-review-http-429"
+    )
+
+
 @pytest.mark.parametrize(
     "message",
     [
@@ -4175,40 +4182,41 @@ async def test_a_dropped_comment_does_not_reapply_the_two_location_bar(
     assert [item.line for item in parsed.evidence] == [4]
 
 
-async def test_provider_error_body_is_retried_within_one_turn(
+async def test_provider_error_body_is_terminal_after_one_turn(
     tmp_path: Path,
 ) -> None:
     """A 200 whose body is an error object is a provider fault, not a verdict."""
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     os.chmod(key, 0o600)
-    final = {
-        "risk_level": "low",
-        "confidence": 0.9,
-        "categories": ["none"],
-        "evidence": [],
-        "summary": "General model-backed request path.",
-    }
     calls = 0
 
     def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        if calls == 1:
-            return httpx.Response(
-                200, json={"error": {"message": "provider overloaded"}}
-            )
-        if calls == 2:
-            tool_calls = [
-                _tool(
-                    "read-1",
-                    "read_file",
-                    {"path": "src/main.rs", "start_line": 1, "end_line": 400},
-                ),
-                _tool("search-1", "search", {"query": "call_model"}),
-            ]
-        else:
-            tool_calls = [_tool("submit-1", "submit_review", final)]
+        return httpx.Response(200, json={"error": {"message": "provider overloaded"}})
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert not observation.ok
+    assert observation.error_code == "source-review-model-response-invalid"
+    assert calls == 1
+
+
+async def test_toolless_prose_turn_is_terminal(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
         return httpx.Response(
             200,
             json={
@@ -4216,8 +4224,7 @@ async def test_provider_error_body_is_retried_within_one_turn(
                     {
                         "message": {
                             "role": "assistant",
-                            "content": None,
-                            "tool_calls": tool_calls,
+                            "content": "Let me start by reading the code.",
                         }
                     }
                 ]
@@ -4229,95 +4236,24 @@ async def test_provider_error_body_is_retried_within_one_turn(
         artifact_sha256=_SHA,
     )
 
-    assert observation.ok and observation.risk_level == "low"
-    assert calls >= 3
+    assert not observation.ok
+    assert observation.error_code == "source-review-model-response-invalid"
+    assert calls == 1
 
 
-async def test_toolless_prose_turn_is_nudged_back_to_tools(
+async def test_persistent_toolless_model_is_parked_after_one_call(
     tmp_path: Path,
 ) -> None:
+    """A stuck model yields one infrastructure record and no second paid turn."""
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     os.chmod(key, 0o600)
-    seen: list[dict[str, object]] = []
-    final = {
-        "risk_level": "low",
-        "confidence": 0.9,
-        "categories": ["none"],
-        "evidence": [],
-        "summary": "General model-backed request path.",
-    }
+
     calls = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal calls
-        seen.append(json.loads(request.content))
-        calls += 1
-        if calls == 1:
-            return httpx.Response(
-                200,
-                json={
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "content": "Let me start by reading the code.",
-                            }
-                        }
-                    ]
-                },
-            )
-        if calls == 2:
-            tool_calls = [
-                _tool(
-                    "read-1",
-                    "read_file",
-                    {"path": "src/main.rs", "start_line": 1, "end_line": 400},
-                ),
-                _tool("search-1", "search", {"query": "call_model"}),
-            ]
-        else:
-            tool_calls = [_tool("submit-1", "submit_review", final)]
-        return httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": tool_calls,
-                        }
-                    }
-                ]
-            },
-        )
-
-    observation = await _agent(key, httpx.MockTransport(handler)).review(
-        str(_archive(tmp_path, "fn main() { call_model(); }")),
-        artifact_sha256=_SHA,
-    )
-
-    assert observation.ok and observation.risk_level == "low"
-    nudged = [
-        message
-        for request in seen
-        for message in request["messages"]
-        if message.get("role") == "user"
-        and "Respond only with a tool call" in str(message.get("content"))
-    ]
-    assert nudged
-
-
-async def test_persistent_toolless_model_still_fails_retryable(
-    tmp_path: Path,
-) -> None:
-    """The nudge budget is bounded; a stuck model stays a hard, retryable fail."""
-    key = tmp_path / "key"
-    key.write_text("sk-test-private-review")
-    os.chmod(key, 0o600)
-
     def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
         return httpx.Response(
             200,
             json={
@@ -4340,55 +4276,26 @@ async def test_persistent_toolless_model_still_fails_retryable(
     assert not observation.ok
     assert observation.error_code == "source-review-model-response-invalid"
     assert observation.failure_disposition == "retryable_infra"
+    assert calls == 1
 
 
-async def test_relayed_rate_limit_error_body_is_retried(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_relayed_rate_limit_error_body_parks_after_one_post(
+    tmp_path: Path,
 ) -> None:
-    """A 200 body carrying ``{"error": {"code": 429}}`` retries, then reviews.
-
-    OpenRouter relays provider rate limits inside successful HTTP responses.
-    The sub-second malformed-body ladder was too short to outlive a real rate
-    limit, so the review burned as retryable_infra and the attempt rescreened.
-    """
-    monkeypatch.setattr(
-        source_review_module, "_MODEL_ERROR_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0)
-    )
+    """An HTTP-200 provider fault is evidence, not retry authority."""
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     os.chmod(key, 0o600)
-    final = {
-        "risk_level": "low",
-        "confidence": 0.99,
-        "categories": ["none"],
-        "evidence": [],
-        "summary": "Inventory-only result.",
-    }
     calls = 0
 
     def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        if calls <= 2:
-            return httpx.Response(
-                200,
-                json={
-                    "error": {"code": 429, "message": "Rate limit exceeded"},
-                    "user_id": "redacted",
-                },
-            )
         return httpx.Response(
             200,
             json={
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [_tool("submit-1", "submit_review", final)],
-                        }
-                    }
-                ]
+                "error": {"code": 429, "message": "Rate limit exceeded"},
+                "user_id": "redacted",
             },
         )
 
@@ -4397,8 +4304,10 @@ async def test_relayed_rate_limit_error_body_is_retried(
         artifact_sha256=_SHA,
     )
 
-    assert observation.ok and observation.risk_level == "low"
-    assert calls == 3
+    assert not observation.ok
+    assert observation.error_code == "source-review-model-response-invalid"
+    assert observation.failure_disposition == "retryable_infra"
+    assert calls == 1
 
 
 async def test_string_error_body_and_free_text_rate_limit_are_classified() -> None:
@@ -4427,67 +4336,34 @@ async def test_string_error_body_and_free_text_rate_limit_are_classified() -> No
     assert source_review_module._retryable_model_error_type({"choices": []}) is None
 
 
-async def test_unclassified_malformed_body_gets_exactly_one_long_retry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_unclassified_malformed_body_parks_after_one_post(
+    tmp_path: Path,
 ) -> None:
-    """A garbage 200 body means no verdict was authored: wait once, not thrice.
-
-    The sub-second malformed ladder could not outlive a real provider fault,
-    but an unclassified shape may be a BILLED completion under contract
-    drift, so it gets exactly one transport-ladder retry — classified
-    (unbilled) provider faults keep the full ladder.
-    """
-    monkeypatch.setattr(
-        source_review_module, "_MODEL_ERROR_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0)
-    )
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     os.chmod(key, 0o600)
-    final = {
-        "risk_level": "low",
-        "confidence": 0.99,
-        "categories": ["none"],
-        "evidence": [],
-        "summary": "Inventory-only result.",
-    }
     calls = 0
 
     def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        if calls == 1:
-            return httpx.Response(200, json={"unexpected": "shape"})
-        return httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [_tool("submit-1", "submit_review", final)],
-                        }
-                    }
-                ]
-            },
-        )
+        return httpx.Response(200, json={"unexpected": "shape"})
 
     observation = await _agent(key, httpx.MockTransport(handler)).review(
         str(_archive(tmp_path, "fn main() { call_model(); }")),
         artifact_sha256=_SHA,
     )
 
-    assert observation.ok and observation.risk_level == "low"
-    assert calls == 2
+    assert not observation.ok
+    assert observation.error_code == "source-review-model-response-invalid"
+    assert observation.failure_disposition == "retryable_infra"
+    assert calls == 1
 
 
-async def test_persistent_unclassified_body_fails_after_two_posts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_persistent_unclassified_body_fails_after_one_post(
+    tmp_path: Path,
 ) -> None:
-    """Contract drift must not become a paid retry loop: 2 posts, then fail."""
-    monkeypatch.setattr(
-        source_review_module, "_MODEL_ERROR_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0)
-    )
+    """Contract drift must not become a paid retry loop."""
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     os.chmod(key, 0o600)
@@ -4505,7 +4381,7 @@ async def test_persistent_unclassified_body_fails_after_two_posts(
 
     assert not observation.ok
     assert observation.failure_disposition == "retryable_infra"
-    assert calls == 2
+    assert calls == 1
 
 
 def test_body_signature_never_reproduces_content() -> None:
@@ -4517,53 +4393,20 @@ def test_body_signature_never_reproduces_content() -> None:
     assert source_review_module._body_signature(None) == "non-json"
 
 
-async def test_non_json_body_rides_the_full_unbilled_ladder(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A non-JSON 200 body cannot be a billed completion: retry it fully.
-
-    CDN error pages and truncated streams arrive as unparseable 200s during
-    provider throttling; one retry burned reviews the ladder could save.
-    """
-    monkeypatch.setattr(
-        source_review_module,
-        "_MODEL_ERROR_RETRY_DELAYS_SECONDS",
-        (0.0, 0.0, 0.0),
-    )
+async def test_non_json_body_parks_after_one_post(tmp_path: Path) -> None:
+    """A non-JSON response is failure evidence, not retry authority."""
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     os.chmod(key, 0o600)
-    final = {
-        "risk_level": "low",
-        "confidence": 0.99,
-        "categories": ["none"],
-        "evidence": [],
-        "summary": "Inventory-only result.",
-    }
     calls = 0
 
     def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        if calls <= 3:
-            return httpx.Response(
-                200,
-                text="<html>upstream error</html>",
-                headers={"content-type": "text/html"},
-            )
         return httpx.Response(
             200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [_tool("submit-1", "submit_review", final)],
-                        }
-                    }
-                ]
-            },
+            text="<html>upstream error</html>",
+            headers={"content-type": "text/html"},
         )
 
     observation = await _agent(key, httpx.MockTransport(handler)).review(
@@ -4571,58 +4414,33 @@ async def test_non_json_body_rides_the_full_unbilled_ladder(
         artifact_sha256=_SHA,
     )
 
-    assert observation.ok and observation.risk_level == "low"
-    assert calls == 4
+    assert not observation.ok
+    assert observation.error_code == "source-review-jsondecodeerror"
+    assert observation.failure_disposition == "retryable_infra"
+    assert calls == 1
 
 
-async def test_http_429_rides_the_long_ladder(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Real HTTP 429s wait like relayed ones instead of dying inside 1.5s."""
-    monkeypatch.setattr(
-        source_review_module,
-        "_MODEL_ERROR_RETRY_DELAYS_SECONDS",
-        (0.0, 0.0),
-    )
+async def test_http_429_parks_after_one_post(tmp_path: Path) -> None:
+    """An HTTP 429 parks the attempt for a manual retry."""
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     os.chmod(key, 0o600)
-    final = {
-        "risk_level": "low",
-        "confidence": 0.99,
-        "categories": ["none"],
-        "evidence": [],
-        "summary": "Inventory-only result.",
-    }
     calls = 0
 
-    def handler(_request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        if calls <= 2:
-            return httpx.Response(429, json={"error": "rate limited"})
-        return httpx.Response(
-            200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [_tool("submit-1", "submit_review", final)],
-                        }
-                    }
-                ]
-            },
-        )
+        return httpx.Response(429, request=request, json={"error": "rate limited"})
 
     observation = await _agent(key, httpx.MockTransport(handler)).review(
         str(_archive(tmp_path, "fn main() { call_model(); }")),
         artifact_sha256=_SHA,
     )
 
-    assert observation.ok and observation.risk_level == "low"
-    assert calls == 3
+    assert not observation.ok
+    assert observation.error_code == "source-review-http-429"
+    assert observation.failure_disposition == "retryable_infra"
+    assert calls == 1
 
 
 def _note_call(

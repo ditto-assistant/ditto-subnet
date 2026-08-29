@@ -32,11 +32,11 @@ from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.source_review import (
     _ADVISORY_CATEGORIES,
     _ALLOWED_CATEGORIES,
-    _MODEL_ERROR_RETRY_DELAYS_SECONDS,
     _MULTI_LOCATION_CATEGORIES,
     _OPENROUTER_ATTRIBUTION_HEADERS,
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
+    _body_signature,
     _retryable_model_error_type,
     ledger_disposition,
     policy_v10_static_assessment,
@@ -138,7 +138,6 @@ _MAX_ARCHIVE_FILES = 512
 _MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 _MAX_TOOL_BYTES = 256_000
 _MAX_AUDIT_TAIL_BYTES = 64 * 1024 * 1024
-_RETRY_DELAYS_SECONDS = (0.5, 1.0)
 _ROLES = frozenset({"trigger", "decision", "effect", "sink", "context"})
 _CAUSAL_EVIDENCE_ROLES = frozenset(role.value for role in SourceReviewEvidenceRole)
 _AUTHORITY_TRANSITIONS = frozenset(
@@ -1913,6 +1912,7 @@ class KimiSolSourceReviewAgent:
         transport: httpx.AsyncBaseTransport | None = None,
         local_address: str | None = None,
     ) -> None:
+        del fallback_models  # Rolling config compatibility; failovers are disabled.
         self._api_key_file = api_key_file
         self._base_url = base_url.rstrip("/")
         self._harness = harness
@@ -1932,7 +1932,9 @@ class KimiSolSourceReviewAgent:
         self._analyst_reasoning_effort = analyst_reasoning_effort
         self._critic_reasoning_effort = critic_reasoning_effort
         self._model = model
-        self._fallback_models = fallback_models
+        # A fallback model is another paid attempt. Keep accepting the rolling
+        # wire field, but execute and report only the selected primary model.
+        self._fallback_models: tuple[str, ...] = ()
         self._l3_enabled = l3_enabled
         self._critic_model = critic_model
         self._critic_provider = critic_provider
@@ -3242,7 +3244,6 @@ class KimiSolSourceReviewAgent:
         response_models: list[str] = []
         response_providers: list[str] = []
         trajectory_complete = dossier_complete
-        no_tool_retries = 0
         analyzer_calls = 0
         steps_used = 0
         read_bytes_used = 0
@@ -3301,27 +3302,7 @@ class KimiSolSourceReviewAgent:
             items.extend(output)
             calls = [item for item in output if item.get("type") == "function_call"]
             if not calls:
-                if no_tool_retries:
-                    raise failure("model-tool-contract")
-                no_tool_retries += 1
-                items.append(
-                    {
-                        "type": "message",
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_text",
-                                "text": (
-                                    "No tool call was emitted. Call exactly one "
-                                    "targeted analyzer now, or call submit_l2_review "
-                                    "with the compact final result."
-                                ),
-                            }
-                        ],
-                    }
-                )
-                continue
-            no_tool_retries = 0
+                raise failure("model-tool-contract")
             submitted = [
                 item for item in calls if item.get("name") == "submit_l2_review"
             ]
@@ -3330,24 +3311,8 @@ class KimiSolSourceReviewAgent:
                     raise failure("model-tool-contract")
                 try:
                     call_id, _name, arguments = _tool_call(submitted[0])
-                except json.JSONDecodeError:
-                    items.append(
-                        {
-                            "type": "function_call_output",
-                            "call_id": _call_id_value(submitted[0]),
-                            "output": json.dumps(
-                                {
-                                    "error": "invalid-or-truncated-arguments",
-                                    "action": (
-                                        "resubmit compactly with only materially "
-                                        "consulted analyzed_files"
-                                    ),
-                                },
-                                separators=(",", ":"),
-                            ),
-                        }
-                    )
-                    continue
+                except json.JSONDecodeError as error:
+                    raise failure("model-tool-contract") from error
                 except ValueError as error:
                     raise failure("model-tool-contract") from error
                 try:
@@ -3379,23 +3344,7 @@ class KimiSolSourceReviewAgent:
                         ),
                     )
                 except ValueError as error:
-                    items.append(
-                        {
-                            "type": "function_call_output",
-                            "call_id": call_id,
-                            "output": json.dumps(
-                                {
-                                    "error": "invalid-final-review",
-                                    "diagnostic": str(error),
-                                    "action": (
-                                        "correct the structured result and resubmit"
-                                    ),
-                                },
-                                separators=(",", ":"),
-                            ),
-                        }
-                    )
-                    continue
+                    raise failure("model-tool-contract") from error
                 return L2RunResult(
                     observation=observation,
                     analyzed_files=analyzed,
@@ -3411,15 +3360,8 @@ class KimiSolSourceReviewAgent:
             for call in calls:
                 try:
                     call_id, name, arguments = _tool_call(call)
-                except json.JSONDecodeError:
-                    items.append(
-                        {
-                            "type": "function_call_output",
-                            "call_id": _call_id_value(call),
-                            "output": '{"error":"invalid-or-truncated-arguments"}',
-                        }
-                    )
-                    continue
+                except json.JSONDecodeError as error:
+                    raise failure("model-tool-contract") from error
                 except ValueError as error:
                     raise failure("model-tool-contract") from error
                 analyzer_calls += 1
@@ -3438,28 +3380,8 @@ class KimiSolSourceReviewAgent:
                     read_files.add(path)
                 try:
                     _require_complete_analysis(tool_output, allow_tool_error=True)
-                except L2InconclusiveError:
-                    partial = json.loads(tool_output)
-                    if not isinstance(partial, dict) or partial.get("error"):
-                        raise
-                    items.append(
-                        {
-                            "type": "function_call_output",
-                            "call_id": call_id,
-                            "output": json.dumps(
-                                {
-                                    "error": "partial-analysis-not-admissible",
-                                    "action": (
-                                        "Issue a narrower read/search/structure "
-                                        "request. Partial output is withheld and "
-                                        "cannot support the final review."
-                                    ),
-                                },
-                                separators=(",", ":"),
-                            ),
-                        }
-                    )
-                    continue
+                except L2InconclusiveError as error:
+                    raise failure("analyzer-contract") from error
                 items.append(
                     {
                         "type": "function_call_output",
@@ -3519,7 +3441,7 @@ class KimiSolSourceReviewAgent:
             "prompt_cache_key": l2_prompt_cache_key(policy_version),
             "session_id": f"ditto-l2-{artifact_sha256[:32]}",
             "provider": {
-                "allow_fallbacks": bool(fallback_models),
+                "allow_fallbacks": False,
                 # Kimi's only current endpoint advertises every analyzer
                 # capability we use, but OpenRouter's Responses beta counts
                 # endpoint-level fields (for example instructions) when this
@@ -3531,81 +3453,35 @@ class KimiSolSourceReviewAgent:
                 "data_collection": "deny",
             },
         }
-        if fallback_models:
-            request["models"] = [model, *fallback_models]
+        del fallback_models
         if provider is not None:
             request["provider"]["only"] = [provider]  # type: ignore[index]
         if reasoning_effort != "model_default":
             request["reasoning"] = {"effort": reasoning_effort}
-        transport_attempts = 0
-        http_fault_attempts = 0
-        model_error_attempts = 0
-        while True:
-            try:
-                timeout = self._turn_timeout(deadline)
-                response = await client.post(
-                    f"{self._base_url}/responses",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "X-OpenRouter-Metadata": "enabled",
-                        **_OPENROUTER_ATTRIBUTION_HEADERS,
-                    },
-                    json=request,
-                    timeout=timeout,
-                )
-                if response.status_code != 429 and response.status_code < 500:
-                    response.raise_for_status()
-                    payload: object | None = None
-                    with contextlib.suppress(ValueError, TypeError):
-                        payload = response.json()
-                    incomplete = (
-                        isinstance(payload, dict)
-                        and payload.get("status") == "incomplete"
-                    )
-                    if incomplete and transport_attempts < len(_RETRY_DELAYS_SECONDS):
-                        delay = _RETRY_DELAYS_SECONDS[transport_attempts]
-                        transport_attempts += 1
-                        remaining = self._turn_timeout(deadline)
-                        if remaining > delay:
-                            await asyncio.sleep(delay)
-                            continue
-                    model_error = _retryable_model_error_type(payload)
-                    if model_error is not None and model_error_attempts < len(
-                        _MODEL_ERROR_RETRY_DELAYS_SECONDS
-                    ):
-                        delay = _MODEL_ERROR_RETRY_DELAYS_SECONDS[model_error_attempts]
-                        model_error_attempts += 1
-                        remaining = self._turn_timeout(deadline)
-                        if remaining > delay:
-                            logger.warning(
-                                "L2/L3 model relayed a retryable fault %s; "
-                                "retrying attempt=%d",
-                                model_error,
-                                model_error_attempts + 1,
-                            )
-                            await asyncio.sleep(delay)
-                            continue
-                    return response
-                response.raise_for_status()
-                raise RuntimeError("unreachable")
-            except (httpx.TransportError, httpx.HTTPStatusError) as error:
-                retryable = not isinstance(error, httpx.HTTPStatusError) or (
-                    error.response.status_code == 429
-                    or error.response.status_code >= 500
-                )
-                # HTTP 429/5xx are unbilled: ride the long fault ladder (still
-                # bounded by the lease-budget check below) instead of the
-                # sub-second transport ladder that cannot outlive throttling.
-                if not retryable or http_fault_attempts >= len(
-                    _MODEL_ERROR_RETRY_DELAYS_SECONDS
-                ):
-                    raise
-                delay = _MODEL_ERROR_RETRY_DELAYS_SECONDS[http_fault_attempts]
-                http_fault_attempts += 1
-                remaining = self._turn_timeout(deadline)
-                if remaining <= delay:
-                    raise ValueError("L2 review exceeded lease budget") from None
-                await asyncio.sleep(delay)
+        timeout = self._turn_timeout(deadline)
+        response = await client.post(
+            f"{self._base_url}/responses",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "X-OpenRouter-Metadata": "enabled",
+                **_OPENROUTER_ATTRIBUTION_HEADERS,
+            },
+            json=request,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload: object | None = None
+        with contextlib.suppress(ValueError, TypeError):
+            payload = response.json()
+        model_error = _retryable_model_error_type(payload)
+        if model_error is not None:
+            logger.warning(
+                "L2/L3 model body reported a provider fault; parking attempt: "
+                "fault=%s signature=%s",
+                model_error,
+                _body_signature(payload),
+            )
+        return response
 
     def _turn_timeout(self, deadline: float | None) -> float:
         if deadline is None:

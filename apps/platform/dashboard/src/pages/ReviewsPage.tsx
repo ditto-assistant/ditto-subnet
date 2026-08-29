@@ -89,6 +89,27 @@ interface MinerSubmission {
   created_at: string;
 }
 
+interface MinerScreeningFailure {
+  attempt_id: string;
+  status: string;
+  policy_version: number;
+  started_at: string;
+  finished_at?: string | null;
+  reason_code?: string | null;
+  public_reason?: string | null;
+  provider?: string | null;
+  lane?: string | null;
+  detail?: string | null;
+  log_tail?: string | null;
+  captured_at?: string | null;
+}
+
+interface MinerScreeningFeedback {
+  agent_id: string;
+  agent_status: string;
+  attempts: MinerScreeningFailure[];
+}
+
 interface MinerReview {
   kind: string;
   agent_id: string;
@@ -425,6 +446,9 @@ function AccountPanel(): JSX.Element {
   const [logAgent, setLogAgent] = createSignal<string | null>(null);
   const [logs, setLogs] = createSignal<MinerHarnessLogs | null>(null);
   const [logsError, setLogsError] = createSignal("");
+  const [screeningAgent, setScreeningAgent] = createSignal<string | null>(null);
+  const [screening, setScreening] = createSignal<MinerScreeningFeedback | null>(null);
+  const [screeningError, setScreeningError] = createSignal("");
   const [xUrl, setXUrl] = createSignal("");
   const [github, setGithub] = createSignal("");
   const [discord, setDiscord] = createSignal("");
@@ -480,6 +504,21 @@ function AccountPanel(): JSX.Element {
       setLogs(body);
     } catch (err) {
       setLogsError(err instanceof Error ? err.message : "Could not load harness logs.");
+    }
+  }
+
+  async function loadScreening(agentId: string): Promise<void> {
+    setScreeningAgent(agentId);
+    setScreening(null);
+    setScreeningError("");
+    try {
+      const body = await authJSON<MinerScreeningFeedback>(
+        `/me/agents/${agentId}/screening-feedback`,
+        { headers: sessionAuthHeader() },
+      );
+      setScreening(body);
+    } catch (err) {
+      setScreeningError(err instanceof Error ? err.message : "Could not load screening feedback.");
     }
   }
 
@@ -631,6 +670,9 @@ function AccountPanel(): JSX.Element {
                     <button class="btn ghost" onClick={() => void loadLogs(item.agent_id)}>
                       Logs
                     </button>
+                    <button class="btn ghost" onClick={() => void loadScreening(item.agent_id)}>
+                      Screening feedback
+                    </button>
                     <Show when={logAgent() === item.agent_id}>
                       <Show when={logsError()}>
                         <p class="account-error">{logsError()}</p>
@@ -658,6 +700,44 @@ function AccountPanel(): JSX.Element {
                                 </Show>
                                 <Show when={attempt.container_log_tail}>
                                   <pre>{attempt.container_log_tail}</pre>
+                                </Show>
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                      </Show>
+                    </Show>
+                    <Show when={screeningAgent() === item.agent_id}>
+                      <Show when={screeningError()}>
+                        <p class="account-error">{screeningError()}</p>
+                      </Show>
+                      <Show when={screening()}>
+                        <ul class="account-logs">
+                          <For each={screening()?.attempts || []}>
+                            {(attempt) => (
+                              <li>
+                                <p>
+                                  policy v{attempt.policy_version} · {attempt.status}
+                                  <Show when={attempt.provider || attempt.lane}>
+                                    <span class="muted">
+                                      {" "}
+                                      ·{" "}
+                                      {[attempt.provider, attempt.lane].filter(Boolean).join(" / ")}
+                                    </span>
+                                  </Show>
+                                </p>
+                                <Show when={attempt.reason_code || attempt.public_reason}>
+                                  <p class="muted">
+                                    {[attempt.reason_code, attempt.public_reason]
+                                      .filter(Boolean)
+                                      .join(": ")}
+                                  </p>
+                                </Show>
+                                <Show when={attempt.detail}>
+                                  <pre>{attempt.detail}</pre>
+                                </Show>
+                                <Show when={attempt.log_tail}>
+                                  <pre>{attempt.log_tail}</pre>
                                 </Show>
                               </li>
                             )}

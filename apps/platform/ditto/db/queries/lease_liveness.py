@@ -89,7 +89,6 @@ from sqlalchemy import func, select
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.db.models import ValidatorHeartbeat, ValidatorLeaseAudit, ValidatorTicket
-from ditto.db.queries.retry_budget import grant_no_fault_retry
 
 if TYPE_CHECKING:
     from sqlalchemy import Select
@@ -548,37 +547,13 @@ async def force_expire_lease(
     context: str,
     action: str = ACTION_FORCE_EXPIRED,
     requested_bench_version: int | None = None,
-    compensate: bool = True,
+    compensate: bool = False,
 ) -> ValidatorLeaseAudit:
     """Expire a lease proven idle, leaving a log line and an audit row behind.
 
-    Compensates the miner on the way out. ditto-platform#460 settled the rule --
-    "do not bill a miner for a lease the platform itself revoked" -- but put the
-    grant only in the signed ``fail_job`` handler, which this path cannot reach:
-    the revocation sets ``status = EXPIRED`` and rewrites ``deadline = now``, and
-    ``get_open_ticket`` requires an ``ISSUED`` ticket whose deadline matches
-    exactly and is still in the future, so a late ``fail_job`` for this lease
-    resolves to nothing and the compensation never fires. A validator that was
-    proven idle usually never reports at all, so in practice it never fired.
-
-    The miner was therefore billed an attempt for every lease the platform
-    destroyed -- which is how held agents reached ``attempt_count: 4,
-    retry_budget_exhausted: true`` without four real failures.
-
-    ``compensate=False`` suppresses that grant, and **only the operator eviction
-    route passes it.** The grant exists to offset the attempt the *coming
-    reissue* will charge; an eviction is precisely the decision that there will
-    be no reissue in this era, so there is no attempt to offset. Granting anyway
-    would raise the agent's cap on the way out and re-arm the exact amplifier
-    behind the 2026-07-27 incident: ditto-subnet#279 established that those
-    leases were not silent but *misclassified* -- all twelve expired ``mnemo*``
-    tickets carry the ``fail_job(reason="infrastructure")`` signature
-    (``retry_after - deadline`` of exactly +2min/+30min, the
-    :func:`~ditto.db.queries.retry_budget.infra_retry_backoff` base and cap) --
-    and ``infrastructure`` is the no-fault class, so every hang minted a grant,
-    raised the cap and re-leased. That is how ``mnemox-v55`` reached nine
-    attempts against a base budget of two with zero scores. An eviction must not
-    hand the artifact it just evicted another attempt.
+    Revocation never extends the attempt cap. ``compensate`` remains as a
+    rolling-call compatibility argument but is deliberately inert; a new lease
+    requires an audited Backroom grant.
 
     ``action`` names the *kind* of revocation for the audit feed and defaults to
     the automatic one. The eviction route passes :data:`ACTION_OPERATOR_EVICTED`
@@ -595,23 +570,10 @@ async def force_expire_lease(
         action=action,
         requested_bench_version=requested_bench_version,
     )
-    # Before the status change, so the grant is part of the same transaction the
-    # audit row records. Bounded, so a persistently sick slot cannot mint
-    # attempts forever; the audit row is the per-grant justification.
-    exhausted = compensate and not grant_no_fault_retry(ticket)
+    del compensate
     ticket.status = TicketStatus.EXPIRED
     ticket.deadline = now
     ticket.retry_after = now
-    if exhausted:
-        logger.warning(
-            "platform revoked a lease whose no-fault retry budget is already "
-            "exhausted; this revocation bills the miner agent=%s validator=%s "
-            "slot=%s grants=%s",
-            ticket.agent_id,
-            ticket.validator_hotkey,
-            ticket.slot_id,
-            ticket.infra_retry_grants,
-        )
     await session.flush()
     return audit
 
@@ -632,8 +594,7 @@ async def expire_issued_tickets(
 
     Used by operator eviction (canonical and continual-retest) and by ATH
     reject, which must free slots a banned agent is still occupying. Never
-    mints a no-fault grant unless the caller opts in: these paths are ending
-    the lease, not preparing a reissue.
+    mints a no-fault grant: these paths end and park the lease.
     """
     expired: list[tuple[ValidatorTicket, ValidatorLeaseAudit]] = []
     for ticket in sorted(tickets, key=lambda item: item.validator_hotkey):

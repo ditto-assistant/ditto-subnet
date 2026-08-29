@@ -7731,7 +7731,7 @@ class TestPublicActivity:
         }
         assert running_by_version[_PREV_ERA] is True
 
-    async def test_retry_state_surfaces_exhausted_and_cooling_submissions(
+    async def test_historical_infra_grant_does_not_surface_as_retryable(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -7822,11 +7822,10 @@ class TestPublicActivity:
         }
         assert by_id[str(exhausted_id)]["retry_state"] == "exhausted"
         assert by_id[str(exhausted_id)]["retry_after"] is None
-        assert by_id[str(cooling_id)]["retry_state"] == "cooling_down"
-        assert (
-            datetime.fromisoformat(by_id[str(cooling_id)]["retry_after"])
-            == cooldown_until
-        )
+        # Other validators may still take their one first attempt; the historical
+        # infra grant does not turn this exact failed ticket into a retry.
+        assert by_id[str(cooling_id)]["retry_state"] == "queued"
+        assert by_id[str(cooling_id)]["retry_after"] is None
         # Rejected history is intentionally omitted from the live board snapshot;
         # the complete Activity feed still exposes it without a retry label.
         assert str(rejected_id) not in by_id

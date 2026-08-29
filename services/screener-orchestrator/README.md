@@ -12,8 +12,9 @@ never created.
 Targon Rentals have three independently controlled one-shot jobs owned by
 Platform: credential-minimal Kaniko builds, direct-image runtime health checks,
 and L1/L2/L3 source review in the same screener rental (in-process analyzer,
-no nested Docker). Cloud Run is the capacity fallback. GCE remains only the
-GCE-only revision cutover, not the L2/L3 path.
+no nested Docker). Provider failure parks that exact job. GCE is used only when
+the Backroom revision selected the GCE lane before dispatch; it is never an
+automatic capacity fallback or a post-failure L2/L3 path.
 
 Provider credentials are accepted only through mode-0600 files. The operator
 smoke wrapper streams `TARGON_API_KEY` directly from GCP Secret Manager to the
@@ -53,7 +54,7 @@ Production is pinned to the non-secret `ditto` organization slug; operators may
 override it for smoke tests with `TARGON_ORG_SLUG`.
 
 Production runs `python -m screener_capacity.controller` as a separate systemd
-unit from Platform so provider retries, spend controls, and capacity locks do
+unit from Platform so provider state, spend controls, and capacity locks do
 not share the API process lifecycle.
 
 Trusted monorepo image builds run in the separate
@@ -61,8 +62,8 @@ Trusted monorepo image builds run in the separate
 component, exact SHA, Dockerfile, and destination. The builder mints a 30-minute
 Artifact Registry writer token, starts one Kaniko rental, stores only the digest
 and redacted status, and deletes the rental. Provider failure becomes
-`fallback_required` for the existing build runner and never recreates
-nested-Docker Targon screener workers.
+the parked `fallback_required` status and never starts the existing build
+runner or recreates nested-Docker Targon screener workers.
 
 Miner submission builds use the same separately locked process but a different
 contract. Platform mints a short-lived capability bound to one build, screening
@@ -85,9 +86,10 @@ mode-0600 auth file. Targon receives a distinct 30-minute
 `ditto-screening-candidate-pull` reader token, launches that digest as the
 Rental itself, and probes its proxied `/health`; no nested Docker is used. This
 result is advisory until provider egress containment is qualified. Failure or
-operator disablement releases the same verified archive to the GCE worker, which
-performs the authoritative isolated runtime gate. Trusted Kaniko rentals still
-use `ditto-image-builder`, which can write only `ditto-public-runtime`.
+operator disablement parks the runtime-smoke job. An operator may select GCE and
+manually retry it; no failed Targon job releases work automatically. Trusted
+Kaniko rentals still use `ditto-image-builder`, which can write only
+`ditto-public-runtime`.
 
 A source-review Rental uses the pinned reviewed screener image, one
 attempt-bound Platform capability, and a short-lived bootstrap token for the

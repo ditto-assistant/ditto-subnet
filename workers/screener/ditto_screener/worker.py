@@ -361,7 +361,7 @@ class ScreenerWorker:
                 ):
                     logger.warning(
                         "agent_id=%s claimed with insufficient lease budget; "
-                        "reporting retryable so the platform re-queues promptly",
+                        "reporting infrastructure failure for manual retry",
                         agent_id,
                     )
                     result = core_decision(
@@ -455,10 +455,10 @@ class ScreenerWorker:
                     artifact_sha256=item.sha256.lower(),
                     result=shadow_review,
                 )
-            # Typed non-verdicts still complete the attempt. The platform keeps
-            # INCONCLUSIVE in backoff until the original lease deadline, so
-            # reporting it removes the false "running" state without creating
-            # an immediate retry loop. During a platform-first rolling deploy,
+            # Typed non-verdicts still complete and park the attempt. Reporting
+            # removes the false "running" state; Platform requires an exact
+            # operator override before it can be claimed again. During a
+            # platform-first rolling deploy,
             # an older platform can reject this report safely: the worker logs
             # the failure and the legacy lease-expiry path remains authoritative.
             submits_result = result.submits_verdict or result.outcome in {

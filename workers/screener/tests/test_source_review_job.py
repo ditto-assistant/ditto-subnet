@@ -41,6 +41,7 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
     key_path = tmp_path / "source-review-key"
     archive_path = tmp_path / "source.tgz"
     posted: list[dict[str, Any]] = []
+    provider_events: list[dict[str, Any]] = []
     monkeypatch.setenv("DITTO_PLATFORM_URL", "https://platform.example")
     monkeypatch.setenv("DITTO_SOURCE_REVIEW_ID", review_id)
     monkeypatch.setenv("DITTO_SOURCE_REVIEW_ATTEMPT_ID", attempt_id)
@@ -89,6 +90,9 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
         async def post(
             self, url: str, *, json: dict[str, Any], **_kwargs: object
         ) -> Response:
+            if url.endswith("/api/v1/inference/source-review/provider-event"):
+                provider_events.append(json)
+                return Response({})
             assert url.endswith(f"/{review_id}/complete")
             posted.append(json)
             return Response({"verified": True})
@@ -142,6 +146,10 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
             }
         }
     ]
+    assert len(provider_events) == 1
+    assert provider_events[0]["review_id"] == review_id
+    assert provider_events[0]["status"] == 200
+    assert isinstance(provider_events[0]["started_at"], str)
     assert "DITTO_SOURCE_REVIEW_JOB_TOKEN" not in source_review_job.os.environ
     assert not key_path.exists()
     assert not archive_path.exists()

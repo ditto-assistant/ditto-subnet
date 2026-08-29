@@ -2,13 +2,16 @@
 
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from uuid import uuid4
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server.dependencies import get_session
+from ditto.db.models import ScreenerCapacityEvent, TrustedImageBuild
 
 pytestmark = pytest.mark.asyncio
 
@@ -63,9 +66,9 @@ async def test_provider_settings_are_atomic_audited_and_cas_guarded(
     assert initial.status_code == 200, initial.text
     assert initial.json()["current"]["revision"] == 0
     assert initial.json()["current"]["settings"] == {
-        "runtime_provider_priority": ["targon", "gcp"],
-        "source_review_provider_priority": ["targon", "gcp"],
-        "build_provider_priority": ["targon", "gcp"],
+        "runtime_provider_priority": ["targon"],
+        "source_review_provider_priority": ["targon"],
+        "build_provider_priority": ["targon"],
     }
 
     applied = await client.post(
@@ -98,13 +101,13 @@ async def test_provider_settings_are_atomic_audited_and_cas_guarded(
     assert stale.status_code == 409
 
 
-async def test_provider_settings_retain_gcp_and_exact_confirmation(
+async def test_provider_settings_allow_single_provider_and_require_exact_confirmation(
     app: FastAPI,
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     _install(app, session_maker)
-    missing_fallback = await client.post(
+    single_provider = await client.post(
         _PATH,
         headers=_HEADERS,
         json=_payload(
@@ -113,19 +116,84 @@ async def test_provider_settings_retain_gcp_and_exact_confirmation(
             builds=["targon"],
         ),
     )
-    assert missing_fallback.status_code == 422
+    assert single_provider.status_code == 200
 
     wrong_confirmation = await client.post(
         _PATH,
         headers=_HEADERS,
         json=_payload(
-            expected_revision=0,
+            expected_revision=single_provider.json()["revision"],
             screening=["gcp"],
             builds=["gcp"],
             confirmation="APPLY",
         ),
     )
     assert wrong_confirmation.status_code == 409
+
+
+async def test_failed_trusted_build_requires_exact_manual_retry(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    build_id = uuid4()
+    async with session_maker() as session, session.begin():
+        session.add(
+            TrustedImageBuild(
+                build_id=build_id,
+                environment="prod",
+                component="screener",
+                source_repository="https://github.com/ditto-assistant/ditto-subnet.git",
+                source_sha="a" * 40,
+                context_path=".",
+                dockerfile_path="workers/screener/Dockerfile",
+                destination="example.invalid/screener:sha-test",
+                status="failed",
+                provider="targon",
+                provider_resource_id="build-failed-1",
+                error_code="TARGON_BUILD_FAILED",
+                attempt_count=47,
+                controller_epoch="controller-before-repair",
+                created_by="release@example.com",
+                reason="Build the exact release candidate",
+            )
+        )
+
+    response = await client.post(
+        f"/api/v1/admin/trusted-image-builds/{build_id}/retry",
+        headers={**_HEADERS, "X-Admin-Actor": "operator@example.com"},
+        json={
+            "expected_status": "failed",
+            "expected_attempt_count": 47,
+            "reason": "Targon builder infrastructure has been repaired",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "queued"
+    assert response.json()["attempt_count"] == 47
+    assert response.json()["provider"] is None
+
+    stale = await client.post(
+        f"/api/v1/admin/trusted-image-builds/{build_id}/retry",
+        headers={**_HEADERS, "X-Admin-Actor": "operator@example.com"},
+        json={
+            "expected_status": "failed",
+            "expected_attempt_count": 47,
+            "reason": "Repeat the same stale operator request",
+        },
+    )
+    assert stale.status_code == 409
+
+    async with session_maker() as session:
+        event = await session.scalar(
+            select(ScreenerCapacityEvent).where(
+                ScreenerCapacityEvent.event_type == "trusted_build_manual_retry"
+            )
+        )
+    assert event is not None
+    assert str(build_id) in event.detail
+    assert "operator@example.com" in event.detail
 
 
 async def test_unknown_fields_ignored_and_gcp_first_disables_targon() -> None:

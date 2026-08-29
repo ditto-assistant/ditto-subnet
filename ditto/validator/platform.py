@@ -8,7 +8,6 @@ signature. It never touches the platform DB directly.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -22,7 +21,6 @@ from ditto.api_models.inference import (
     InferenceExchangeResponse,
 )
 from ditto.api_models.validator import (
-    LEGACY_FAILURE_DETAIL_MAX_LENGTH,
     ArtifactResponse,
     FailJobReason,
     FailJobRequest,
@@ -49,11 +47,7 @@ from ditto.api_models.validator_confirmation import (
     V9ConfirmationSubmitRequest,
     V9ConfirmationSubmitResponse,
 )
-from ditto.validator.errors import (
-    PlatformError,
-    PlatformInfrastructureError,
-    truncate_failure_detail,
-)
+from ditto.validator.errors import PlatformError, PlatformInfrastructureError
 from ditto.validator.signing import (
     sign_artifact_request,
     sign_inference_exchange,
@@ -78,13 +72,11 @@ logger = logging.getLogger(__name__)
 
 _PREFIX = "/api/v1/validator"
 # The scoring ledger lives under a sibling prefix, not /validator.
-_SCORE_SUBMIT_RETRY_DELAYS = (0.25, 1.0, 2.0)
 _SCORING_PREFIX = "/api/v1/scoring"
 # Exchange is idempotent for one signed nonce. Keep fast recovery for ordinary
 # blips, but survive a full relay handover window without throwing away a
 # benchmark ticket. This does not spend inference budget: no model request can
 # begin until the exchange succeeds.
-_INFERENCE_EXCHANGE_RETRY_DELAYS = (0.25, 1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 _INFERENCE_BUDGET_EVIDENCE_HEADERS = {
     "request_budget": "X-Ditto-Request-Budget",
     "token_budget": "X-Ditto-Token-Budget",
@@ -407,27 +399,14 @@ class PlatformClient:
             report=report,
         )
         url = f"{self._base}{_PREFIX}/v9-confirmation/bundle/{job.bundle_id}/report"
-        response: httpx.Response | None = None
-        for attempt, delay in enumerate((0.0, 0.25, 1.0)):
-            if delay:
-                await asyncio.sleep(delay)
-            try:
-                response = await self._client.post(
-                    url,
-                    headers=self._headers,
-                    json=payload.model_dump(mode="json"),
-                )
-            except httpx.HTTPError as error:
-                if attempt < 2:
-                    continue
-                raise PlatformError(
-                    f"v9 confirmation report failed after 3 attempts: {error}"
-                ) from error
-            if response.status_code == 200:
-                break
-            if response.status_code not in {408, 429} and response.status_code < 500:
-                break
-        assert response is not None
+        try:
+            response = await self._client.post(
+                url,
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"v9 confirmation report failed: {error}") from error
         if response.status_code != 200:
             raise PlatformError(
                 "v9 confirmation report rejected "
@@ -453,76 +432,60 @@ class PlatformClient:
     ) -> V9ConfirmationFailResponse:
         """Close one private v9 lease without touching canonical fail routes."""
         url = f"{self._base}{_PREFIX}/v9-confirmation/bundle/{job.bundle_id}/fail"
-        last_error: httpx.HTTPError | None = None
-        for delay in (0.0, 0.25, 1.0):
-            if delay:
-                await asyncio.sleep(delay)
-            requested_at = datetime.now(UTC)
-            nonce = uuid4()
-            payload = V9ConfirmationFailRequest(
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = V9ConfirmationFailRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            ticket_id=job.ticket_id,
+            reason=reason,
+            failure_class=failure_class,
+            failure_stage=failure_stage,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_v9_confirmation_fail(
+                self._keypair,
                 validator_hotkey=self._config.validator_hotkey,
+                bundle_id=job.bundle_id,
                 ticket_id=job.ticket_id,
                 reason=reason,
                 failure_class=failure_class,
                 failure_stage=failure_stage,
                 nonce=nonce,
                 requested_at=requested_at,
-                signature=sign_v9_confirmation_fail(
-                    self._keypair,
-                    validator_hotkey=self._config.validator_hotkey,
-                    bundle_id=job.bundle_id,
-                    ticket_id=job.ticket_id,
-                    reason=reason,
-                    failure_class=failure_class,
-                    failure_stage=failure_stage,
-                    nonce=nonce,
-                    requested_at=requested_at,
-                ),
+            ),
+        )
+        try:
+            response = await self._client.post(
+                url,
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
             )
-            try:
-                response = await self._client.post(
-                    url,
-                    headers=self._headers,
-                    json=payload.model_dump(mode="json"),
-                )
-            except httpx.HTTPError as error:
-                last_error = error
-                continue
-            if response.status_code == 200:
-                try:
-                    failed = V9ConfirmationFailResponse.model_validate(response.json())
-                except (ValidationError, ValueError) as error:
-                    raise PlatformError(
-                        "v9 confirmation failure response was invalid"
-                    ) from error
-                if (
-                    failed.bundle_id != job.bundle_id
-                    or failed.ticket_id != job.ticket_id
-                ):
-                    raise PlatformError(
-                        "v9 confirmation failure response identity mismatch"
-                    )
-                return failed
-            if response.status_code not in {408, 429} and response.status_code < 500:
-                raise PlatformError(
-                    "v9 confirmation failure rejected "
-                    f"({response.status_code}): {response.text[:200]}"
-                )
-        if last_error is not None:
+        except httpx.HTTPError as error:
             raise PlatformError(
-                f"v9 confirmation failure hand-back failed: {last_error}"
-            ) from last_error
-        raise PlatformError("v9 confirmation failure hand-back exhausted retries")
+                f"v9 confirmation failure hand-back failed: {error}"
+            ) from error
+        if response.status_code != 200:
+            raise PlatformError(
+                "v9 confirmation failure rejected "
+                f"({response.status_code}): {response.text[:200]}"
+            )
+        try:
+            failed = V9ConfirmationFailResponse.model_validate(response.json())
+        except (ValidationError, ValueError) as error:
+            raise PlatformError(
+                "v9 confirmation failure response was invalid"
+            ) from error
+        if failed.bundle_id != job.bundle_id or failed.ticket_id != job.ticket_id:
+            raise PlatformError("v9 confirmation failure response identity mismatch")
+        return failed
 
     async def exchange_inference_grant(
         self, grant_id: UUID, broker_public_key: str, exchange_url: str
     ) -> InferenceExchangeResponse:
         """Authorize one trusted broker key for the exact live ticket grant.
 
-        Exchange is safe to retry: every attempt is freshly signed and the
-        platform rotates the same live grant onto the same broker key. A brief
-        relay restart must not consume the miner's validation attempt before a
-        benchmark has even started.
+        This request is single-shot. Any transport or Platform failure parks
+        the validation attempt for an explicit Backroom retry.
         """
         # The platform may serve its inference plane on a different public
         # hostname than the API host this validator posts jobs and scores to
@@ -536,62 +499,48 @@ class PlatformClient:
         verified_url = exchange_url.rstrip("/")
         if verified_url not in permitted:
             raise PlatformError("ticket inference exchange URL is not the platform")
-        attempts = len(_INFERENCE_EXCHANGE_RETRY_DELAYS) + 1
-        for attempt in range(attempts):
-            requested_at = datetime.now(UTC)
-            nonce = uuid4()
-            payload = InferenceExchangeRequest(
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = InferenceExchangeRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            grant_id=grant_id,
+            broker_public_key=broker_public_key,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_inference_exchange(
+                self._keypair,
                 validator_hotkey=self._config.validator_hotkey,
                 grant_id=grant_id,
                 broker_public_key=broker_public_key,
                 nonce=nonce,
                 requested_at=requested_at,
-                signature=sign_inference_exchange(
-                    self._keypair,
-                    validator_hotkey=self._config.validator_hotkey,
-                    grant_id=grant_id,
-                    broker_public_key=broker_public_key,
-                    nonce=nonce,
-                    requested_at=requested_at,
-                ),
+            ),
+        )
+        try:
+            response = await self._client.post(
+                verified_url,
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
             )
-            try:
-                response = await self._client.post(
-                    verified_url,
-                    headers=self._headers,
-                    json=payload.model_dump(mode="json"),
-                )
-            except httpx.HTTPError as error:
-                if attempt < attempts - 1:
-                    await asyncio.sleep(_INFERENCE_EXCHANGE_RETRY_DELAYS[attempt])
-                    continue
-                raise PlatformInfrastructureError(
-                    f"inference exchange failed after {attempts} attempts: {error}"
-                ) from error
-            if response.status_code == 200:
-                exchange = InferenceExchangeResponse.model_validate(response.json())
-                # JSON is authoritative. Prefer it when complete so a Cloudflare
-                # hop that drops X-Ditto-* headers cannot disarm the broker.
-                json_evidence = _json_budget_evidence(exchange)
-                if json_evidence is not None:
-                    return exchange
-                return exchange.model_copy(update=_inference_budget_evidence(response))
-            retryable = (
-                response.status_code in {408, 429} or response.status_code >= 500
-            )
-            if retryable and attempt < attempts - 1:
-                await asyncio.sleep(_INFERENCE_EXCHANGE_RETRY_DELAYS[attempt])
-                continue
-            message = (
-                f"inference exchange rejected ({response.status_code}): "
-                f"{response.text[:200]}"
-            )
-            if retryable:
-                raise PlatformInfrastructureError(
-                    f"{message} after {attempts} attempts"
-                )
-            raise PlatformError(message)
-        raise AssertionError("inference exchange retry loop did not return")
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                f"inference exchange failed: {error}"
+            ) from error
+        if response.status_code == 200:
+            exchange = InferenceExchangeResponse.model_validate(response.json())
+            # JSON is authoritative. Prefer it when complete so a Cloudflare
+            # hop that drops X-Ditto-* headers cannot disarm the broker.
+            json_evidence = _json_budget_evidence(exchange)
+            if json_evidence is not None:
+                return exchange
+            return exchange.model_copy(update=_inference_budget_evidence(response))
+        message = (
+            f"inference exchange rejected ({response.status_code}): "
+            f"{response.text[:200]}"
+        )
+        if response.status_code in {408, 429} or response.status_code >= 500:
+            raise PlatformInfrastructureError(message)
+        raise PlatformError(message)
 
     async def report_ticket_failed(
         self,
@@ -600,12 +549,12 @@ class PlatformClient:
         failure_detail: str | None = None,
         container_log_tail: str | None = None,
     ) -> FailJobResponse:
-        """Hand a failed ticket back so the platform reissues a fresh lease.
+        """Report one failed ticket so Platform can park the attempt.
 
         POST /validator/job/fail closes the still-live lease for
         ``(job.agent_id, job.deadline)`` immediately (rather than waiting for it
-        to expire) so the next :meth:`request_job` mints a brand-new ticket
-        instead of resuming the failed attempt. Raises :class:`PlatformError` on
+        to expire) and preserves its terminal evidence for Backroom. It does
+        not authorize another lease. Raises :class:`PlatformError` on
         any non-200; callers MUST treat this as best-effort and never let a
         failed report crash the scoring sweep — an old platform without this
         endpoint just leaves the ticket to expire on its own, exactly as before.
@@ -622,19 +571,15 @@ class PlatformClient:
         one field an operator can group by. Optional and unsigned on the same
         terms.
 
-        It needs no skew handling, unlike the widening below. ``FailJobRequest``
+        It needs no skew handling. ``FailJobRequest``
         does not set ``extra="forbid"``, so a platform predating the field
         ignores the key rather than rejecting the report; and ``exclude_none`` in
         :meth:`_post_job_fail` drops it entirely when absent, keeping a
         tail-free hand-back byte-identical to the previous wire format. The
         sending-side cap in
         :data:`~ditto.validator.errors.CONTAINER_LOG_TAIL_MAX_LENGTH` means a
-        new platform's own bound can never be the thing that 422s.
-
-        The bound moved 200 -> 4096, and the fleet does not upgrade atomically,
-        so this method now also handles the one skew that widening creates: a
-        detail this validator considers legal that the platform on the other end
-        still rejects. See :meth:`_post_job_fail`.
+        new platform's own bound can never be the thing that 422s. A rejection
+        is terminal for this delivery; no compatibility replay is attempted.
         """
         requested_at = datetime.now(UTC)
         nonce = uuid4()
@@ -657,46 +602,6 @@ class PlatformClient:
             ),
         )
         resp = await self._post_job_fail(payload)
-        if (
-            resp.status_code == 422
-            and payload.failure_detail is not None
-            and len(payload.failure_detail) > LEGACY_FAILURE_DETAIL_MAX_LENGTH
-        ):
-            # Version skew, the only direction that can actually break. A
-            # platform that has not taken the widening still caps this field at
-            # 200 and answers 422 — and a 422 here is not a lost field, it is a
-            # lost *hand-back*: the lease stays live until its deadline and the
-            # slot sits idle, which is the silent expiry `failure_detail` was
-            # introduced to eliminate. Trading the tail of one message for the
-            # whole report is unambiguously the right side of that trade.
-            #
-            # Safe to replay with the same nonce and signature: a 422 is request
-            # validation, raised before the endpoint body runs, so the nonce was
-            # never consumed. And the signature does not cover `failure_detail`
-            # (it never has — the field is unsigned by design), so shortening it
-            # leaves the signed payload byte-identical. Nothing needs re-signing.
-            #
-            # Deliberately not a general retry: it fires once, only on 422, and
-            # only when the detail is long enough for the length bound to be a
-            # plausible cause. Any other 422 falls through to the raise below
-            # after one wasted round trip.
-            logger.info(
-                "job fail report rejected 422 with a %d-char detail; retrying "
-                "at the legacy %d-char bound (platform predates the widening) "
-                "agent=%s",
-                len(payload.failure_detail),
-                LEGACY_FAILURE_DETAIL_MAX_LENGTH,
-                job.agent_id,
-            )
-            resp = await self._post_job_fail(
-                payload.model_copy(
-                    update={
-                        "failure_detail": truncate_failure_detail(
-                            payload.failure_detail, LEGACY_FAILURE_DETAIL_MAX_LENGTH
-                        )
-                    }
-                )
-            )
         if resp.status_code != 200:
             raise PlatformError(
                 f"job fail report rejected ({resp.status_code}): {resp.text[:200]}"
@@ -704,13 +609,7 @@ class PlatformClient:
         return FailJobResponse.model_validate(resp.json())
 
     async def _post_job_fail(self, payload: FailJobRequest) -> httpx.Response:
-        """POST one hand-back attempt, returning the response uninterpreted.
-
-        Split out so the legacy-bound retry in :meth:`report_ticket_failed`
-        sends through exactly the same serialization as the first attempt — in
-        particular ``exclude_none``, which is what keeps a detail-free report
-        byte-identical to the pre-``failure_detail`` wire format.
-        """
+        """POST one hand-back attempt, returning the response uninterpreted."""
         try:
             return await self._client.post(
                 f"{self._base}{_PREFIX}/job/fail",
@@ -868,11 +767,8 @@ class PlatformClient:
     ) -> SubmitScoreResponse:
         """Report a signed score for ``agent_id``.
 
-        A 5xx or transport failure after a finished run is platform
-        infrastructure, not a scoring error. Retrying here is cheaper than
-        re-running the benchmark, and handing the ticket back as
-        ``scoring_error`` consumes the attempt for a Cloudflare/proxy blip
-        (empty 502) that has nothing to do with the harness.
+        A 5xx or transport failure after a finished run is Platform
+        infrastructure. It still parks the attempt; only Backroom may retry.
         """
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/score"
         payload = SubmitScoreRequest(
@@ -881,35 +777,20 @@ class PlatformClient:
             signature=signature,
             report=report,
         )
-        attempts = len(_SCORE_SUBMIT_RETRY_DELAYS) + 1
-        last_error: Exception | None = None
-        for attempt in range(attempts):
-            try:
-                resp = await self._client.post(
-                    url, json=payload.model_dump(mode="json"), headers=self._headers
-                )
-            except httpx.HTTPError as error:
-                last_error = error
-                if attempt < attempts - 1:
-                    await asyncio.sleep(_SCORE_SUBMIT_RETRY_DELAYS[attempt])
-                    continue
-                raise PlatformInfrastructureError(
-                    f"score submit failed after {attempts} attempts: {error}"
-                ) from error
-            if resp.status_code == 200:
-                return SubmitScoreResponse.model_validate(resp.json())
-            message = f"score rejected ({resp.status_code}): {resp.text[:200]}"
-            retryable = resp.status_code in {408, 429} or resp.status_code >= 500
-            if retryable and attempt < attempts - 1:
-                last_error = PlatformInfrastructureError(message)
-                await asyncio.sleep(_SCORE_SUBMIT_RETRY_DELAYS[attempt])
-                continue
-            if retryable:
-                raise PlatformInfrastructureError(
-                    f"{message} after {attempts} attempts"
-                )
-            raise PlatformError(message)
-        raise AssertionError(f"score submit retry loop did not return: {last_error}")
+        try:
+            resp = await self._client.post(
+                url, json=payload.model_dump(mode="json"), headers=self._headers
+            )
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                f"score submit failed: {error}"
+            ) from error
+        if resp.status_code == 200:
+            return SubmitScoreResponse.model_validate(resp.json())
+        message = f"score rejected ({resp.status_code}): {resp.text[:200]}"
+        if resp.status_code in {408, 429} or resp.status_code >= 500:
+            raise PlatformInfrastructureError(message)
+        raise PlatformError(message)
 
     async def submit_top5_confirmation_score(
         self,

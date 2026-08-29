@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	providerMaxAttempts                        = 3
+	providerMaxAttempts                        = 1
 	providerRetryAfterMaxSeconds               = 5
-	confirmationReaderBackpressureMaxAttempts  = 7
+	confirmationReaderBackpressureMaxAttempts  = 1
 	confirmationReaderBackpressureMaxElapsed   = 80 * time.Second
 	confirmationReaderRetryAfterMaxSeconds     = 60
 	confirmationReaderRetryAfterDefaultSeconds = 10
@@ -139,12 +139,8 @@ func classifyTransportError(err error) (dial bool, timeout bool) {
 	return false, false
 }
 
-// postProviderWithRetry mirrors _post_provider_with_retry: one logical
-// provider request under the shared bounded retry policy. Only connection
-// establishment failures and explicit transient HTTP statuses are repeated;
-// a read failure is ambiguous (the provider may have billed the request) and
-// fails closed. Each attempt gets its own timeout of timeoutSeconds. The
-// response body is buffered up to maxBody+1 bytes.
+// postProviderWithRetry retains the rolling wire name but performs exactly one
+// provider request. A failed scored request is parked for an operator retry.
 func postProviderWithRetry(ctx context.Context, client *http.Client, url string, payload any,
 	headers map[string]string, maxBody int64, timeoutSeconds int, retryBackpressure bool,
 	retryPreProviderNotFoundModel string, sleep sleepFunc) (*providerHTTPResult, *providerCallError) {
@@ -156,100 +152,28 @@ func postProviderWithRetry(ctx context.Context, client *http.Client, url string,
 		}, sleep)
 }
 
-// postProviderWithRetryPolicy keeps the ordinary provider policy fixed at
-// three attempts while allowing the purpose-bound confirmation reader lane to
-// wait longer only for an explicit, receipt-free 429. Confirmation 503s must
-// also prove they are receipt-free but retain the ordinary attempt budget. No
-// other status or transport class inherits the extended attempt budget.
+// postProviderWithRetryPolicy retains the legacy policy-shaped API for rolling
+// compatibility, but every live lane is structurally single-shot.
 func postProviderWithRetryPolicy(ctx context.Context, client *http.Client, url string, payload any,
 	headers map[string]string, maxBody int64, timeoutSeconds int, policy providerRetryPolicy,
 	sleep sleepFunc) (*providerHTTPResult, *providerCallError) {
 
-	retryCtx := ctx
-	if policy.maxElapsed > 0 {
-		var cancel context.CancelFunc
-		retryCtx, cancel = context.WithTimeout(ctx, policy.maxElapsed)
-		defer cancel()
-	}
+	_ = policy
+	_ = sleep
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil, &providerCallError{attempts: 1, timedOut: false}
 	}
-	maxAttempts := providerMaxAttempts
-	if policy.backpressureMaxAttempts > maxAttempts {
-		maxAttempts = policy.backpressureMaxAttempts
+	if ctx.Err() != nil {
+		return nil, &providerCallError{attempts: 1, timedOut: true}
 	}
-	var lastDialTimeout bool
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if retryCtx.Err() != nil {
-			return nil, &providerCallError{attempts: max(1, attempt-1), timedOut: true}
-		}
-		result, derr := postOnce(retryCtx, client, url, encoded, headers, maxBody, timeoutSeconds)
-		if derr != nil {
-			dial, timedOut := classifyTransportError(derr)
-			if dial {
-				lastDialTimeout = timedOut
-				if attempt >= providerMaxAttempts {
-					return nil, &providerCallError{attempts: attempt, timedOut: lastDialTimeout}
-				}
-				sleep(retryCtx, backoffDelay(attempt))
-				if retryCtx.Err() != nil {
-					return nil, &providerCallError{attempts: attempt, timedOut: true}
-				}
-				continue
-			}
-			return nil, &providerCallError{attempts: attempt, timedOut: timedOut}
-		}
-		retryableStatus := isProviderRetryStatus(result.status) ||
-			isRetryablePreProviderNotFound(result, policy.retryPreProviderNotFoundModel)
-		attemptLimit := providerMaxAttempts
-		delay := backoffDelay(attempt)
-		confirmationBackpressure := result.status == http.StatusTooManyRequests ||
-			result.status == http.StatusServiceUnavailable
-		if confirmationBackpressure && policy.requireReceiptFreeBackpressure {
-			if !providerBackpressureIsReceiptFree(result, policy.receiptFreeExpectedModel, policy.receiptFreeExpectedProvider) {
-				result.attempts = attempt
-				return result, nil
-			}
-			if result.status == http.StatusTooManyRequests &&
-				policy.backpressureMaxAttempts > providerMaxAttempts {
-				attemptLimit = policy.backpressureMaxAttempts
-				delay = confirmationReaderBackpressureDelay(result.header)
-			} else {
-				delay = time.Duration(providerRetryAfterSeconds(result.header)) * time.Second
-			}
-		}
-		if retryableStatus && attempt < attemptLimit &&
-			(policy.retryBackpressure || !providerIsBackpressure(result.status, result.header)) {
-			if !policy.requireReceiptFreeBackpressure && providerIsBackpressure(result.status, result.header) {
-				delay = time.Duration(providerRetryAfterSeconds(result.header)) * time.Second
-			}
-			if deadline, ok := retryCtx.Deadline(); ok {
-				remaining := time.Until(deadline)
-				if remaining <= 0 {
-					return nil, &providerCallError{attempts: attempt, timedOut: true}
-				}
-				if delay >= remaining {
-					// A retry scheduled at the deadline is already outside the
-					// elapsed-time budget. Treat it as terminal after waiting out
-					// the remaining budget instead of racing the backoff timer
-					// against context cancellation and possibly issuing one more
-					// provider request.
-					sleep(retryCtx, remaining)
-					return nil, &providerCallError{attempts: attempt, timedOut: true}
-				}
-			}
-			sleep(retryCtx, delay)
-			if retryCtx.Err() != nil {
-				return nil, &providerCallError{attempts: attempt, timedOut: true}
-			}
-			continue
-		}
-		result.attempts = attempt
-		return result, nil
+	result, requestErr := postOnce(ctx, client, url, encoded, headers, maxBody, timeoutSeconds)
+	if requestErr != nil {
+		_, timedOut := classifyTransportError(requestErr)
+		return nil, &providerCallError{attempts: 1, timedOut: timedOut}
 	}
-	// Unreachable: the loop always returns.
-	return nil, &providerCallError{attempts: maxAttempts, timedOut: false}
+	result.attempts = 1
+	return result, nil
 }
 
 func confirmationReaderBackpressureDelay(header http.Header) time.Duration {
@@ -597,7 +521,7 @@ func providerPreferences(routingMode, provider string, quantization string) map[
 		return map[string]any{
 			"sort":            "throughput",
 			"ignore":          []string{"coreweave"},
-			"allow_fallbacks": true,
+			"allow_fallbacks": false,
 			"data_collection": "deny",
 			"zdr":             true,
 		}
@@ -1026,8 +950,8 @@ type phaseTrace struct {
 
 func (e *chatProviderExhausted) Error() string { return e.terminalErrorCode }
 
-// completeChatWithRecovery mirrors _complete_chat_with_recovery: the fast
-// OpenRouter phase, then (aggregate mode only) the bounded reliable route.
+// completeChatWithRecovery retains its wire-compatible name but executes one
+// provider phase. Backroom must reissue the ticket after any failure.
 func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg config.InferenceProxyConfig,
 	payload map[string]any, model, expectedProvider, expectedQuantization string,
 	expectedPromptPrice, expectedCompletionPrice *float64, sleep sleepFunc) (*chatCompletionResult, *chatProviderExhausted) {
@@ -1043,14 +967,6 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 	}
 	primary["provider"] = providerPreferences(cfg.RoutingMode, expectedProvider, expectedQuantization)
 	phases := []phaseSpec{{phase: 0, payload: primary}}
-	if aggregate {
-		reliable := make(map[string]any, len(payload)+1)
-		for k, v := range payload {
-			reliable[k] = v
-		}
-		reliable["provider"] = reliabilityProviderPreferences()
-		phases = append(phases, phaseSpec{phase: 1, payload: reliable})
-	}
 	headers := openrouterHeaders(cfg.OpenRouterAPIKey, true)
 
 	totalAttempts := 0
@@ -1193,9 +1109,8 @@ type embeddingProviderResult struct {
 	direct   bool
 }
 
-// postEmbeddingProvider mirrors _post_embedding_provider: direct Perplexity
-// first when the key is configured, then OpenRouter for the same frozen
-// model. Neither route retries backpressure in place.
+// postEmbeddingProvider selects one configured route. It never falls through
+// to a second paid provider after the selected route fails.
 func postEmbeddingProvider(ctx context.Context, client *http.Client, cfg config.InferenceProxyConfig,
 	inputs []string, sleep sleepFunc) (*embeddingProviderResult, *providerCallError) {
 
@@ -1214,12 +1129,10 @@ func postEmbeddingProvider(ctx context.Context, client *http.Client, cfg config.
 				"Content-Type":  "application/json",
 			},
 			cfg.EmbeddingResponseBodyBytes, cfg.TimeoutSeconds, false, "", sleep)
-		if direct != nil && direct.status < 400 {
+		if direct != nil {
 			return &embeddingProviderResult{result: direct, attempts: direct.attempts, direct: true}, nil
 		}
-		if direct != nil && !isProviderRetryStatus(direct.status) {
-			return &embeddingProviderResult{result: direct, attempts: direct.attempts, direct: true}, nil
-		}
+		return nil, directErr
 	}
 	openrouter, orErr := postProviderWithRetry(ctx, client, cfg.EmbeddingUpstreamURL,
 		map[string]any{
@@ -1236,21 +1149,11 @@ func postEmbeddingProvider(ctx context.Context, client *http.Client, cfg config.
 		openrouterHeaders(cfg.OpenRouterAPIKey, false),
 		cfg.EmbeddingResponseBodyBytes, cfg.TimeoutSeconds, false, "", sleep)
 	if orErr != nil {
-		priorAttempts := 0
-		if directErr != nil {
-			priorAttempts = directErr.attempts
-		}
-		return nil, &providerCallError{attempts: priorAttempts + orErr.attempts, timedOut: orErr.timedOut}
-	}
-	priorAttempts := 0
-	if direct != nil {
-		priorAttempts = direct.attempts
-	} else if directErr != nil {
-		priorAttempts = directErr.attempts
+		return nil, orErr
 	}
 	return &embeddingProviderResult{
 		result:   openrouter,
-		attempts: priorAttempts + openrouter.attempts,
+		attempts: openrouter.attempts,
 		direct:   false,
 	}, nil
 }

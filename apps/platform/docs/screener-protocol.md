@@ -63,9 +63,12 @@ skipped until a screener-to-rental prompt tool exists.
 Source review is also attempt-bound. A pinned trusted worker may return a
 bounded L1 observation. Certified low-risk clearance is a pass without local
 L2. `require` mode uses the remote observation as-is (elevated findings
-quarantine). `prefer` mode still falls back to GCE L2/L3 for uncertified
-results. Platform also queues source review when runtime smoke succeeds so the
-lane does not depend on the GCE worker staying alive. Job tokens are
+quarantine). `prefer` mode follows the same single-provider rule: uncertified
+results quarantine, and provider failures park the attempt for a manual
+Backroom retry instead of falling back to GCE L2/L3. For full reviews, Platform
+queues source review at admission alongside the build so the independent lanes
+can run concurrently; finalization still waits for build, runtime smoke, and
+source review to finish. Job tokens are
 stored only as hashes and revoked at terminal completion; provider Rental
 identities and cleanup failures remain durable operator evidence.
 

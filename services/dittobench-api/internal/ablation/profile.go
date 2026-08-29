@@ -43,8 +43,8 @@ func (p CoordinatorPolicy) validate() error {
 	if p.SampleSize <= 0 || p.SampleSize > maximumPairedCases {
 		return fmt.Errorf("invalid profile paired sample size")
 	}
-	if p.MaxAttempts <= 0 || p.MaxAttempts > maximumAttemptsPerCase {
-		return fmt.Errorf("invalid profile maximum attempts")
+	if p.MaxAttempts != 1 {
+		return fmt.Errorf("profile maximum attempts must be one")
 	}
 	minimumRequests := p.SampleSize * 3
 	maximumUsefulRequests := minimumRequests * p.MaxAttempts

@@ -248,8 +248,8 @@ _AFFIRMATIVE_SAFE_STATIC_BASES = frozenset({"loopback-only-sink"})
 # "Screening infrastructure error" — a lie for the causes that are not
 # infrastructure at all (reviewer budget exhaustion, a malformed submission
 # archive, a self-inconsistent model verdict). The code only names the cause; the
-# failure disposition is unchanged, so an attempt that retried before still
-# retries now.
+# failure disposition is unchanged; every failed attempt remains parked until
+# an operator authorizes another one.
 _SOURCE_REVIEW_FAILURE_CODES: Mapping[str, str] = {
     # The submitted archive itself is malformed: this is the miner's input, not
     # our infrastructure.
@@ -325,17 +325,6 @@ _ADVISORY_CATEGORIES = frozenset(
 _MULTI_LOCATION_CATEGORIES = frozenset(
     {"benchmark_emulation", "scorer_contract_manipulation"}
 )
-_RETRY_DELAYS_SECONDS = (0.5, 1.0)
-# The router can relay a provider fault inside an HTTP 200 body (an ``error``
-# object, or ``status: "failed"`` with an error type such as
-# ``rate_limit_exceeded``). Those are transport-class faults, not verdicts;
-# failing the stage on the first one burned whole reviews during sustained
-# rate limiting. Account-level throttling persists for MINUTES (observed
-# 2026-08-28: four consecutive 429s across a 50-second ladder), so the tail
-# reaches past short windows. Every rung is an unbilled error retry; the
-# stage deadline (and the L2 lease-budget check) stays the upper bound, so
-# the worst case converts a burned attempt into waited wall time.
-_MODEL_ERROR_RETRY_DELAYS_SECONDS = (5.0, 15.0, 30.0, 60.0, 120.0, 240.0)
 _RETRYABLE_MODEL_ERROR_TYPES = frozenset(
     {
         "rate_limit_exceeded",
@@ -411,15 +400,6 @@ def _body_signature(payload: object) -> str:
     )
 
 
-# A reasoning model occasionally answers in prose instead of the tool
-# contract; one corrective turn recovers most of them. The budget keeps a
-# model that will not follow the contract a hard failure instead of a
-# silent step-burner.
-_MAX_TOOLLESS_TURNS = 2
-_TOOLLESS_NUDGE = (
-    "Respond only with a tool call: inspect the archive with the provided "
-    "tools, or call submit_review with your completed verdict."
-)
 _OPENROUTER_ATTRIBUTION_HEADERS = {
     # https://openrouter.ai/docs/app-attribution
     "HTTP-Referer": "https://heyditto.ai",
@@ -3294,7 +3274,6 @@ class OpenRouterSourceReviewAgent:
         ]
         delivered = 0
         inspection_calls = 0
-        toolless_turns = 0
         noteless_calls = 0
         coverage_nudged = False
         read_files: set[str] = set()
@@ -3332,11 +3311,7 @@ class OpenRouterSourceReviewAgent:
                 messages.append(message)
                 tool_calls = message.get("tool_calls")
                 if not isinstance(tool_calls, list) or not tool_calls:
-                    if toolless_turns >= _MAX_TOOLLESS_TURNS:
-                        raise ValueError("source reviewer returned no tool call")
-                    toolless_turns += 1
-                    messages.append({"role": "user", "content": _TOOLLESS_NUDGE})
-                    continue
+                    raise ValueError("source reviewer returned no tool call")
                 for call in tool_calls:
                     call_id, name, arguments = _tool_call(call)
                     if name == "submit_review":
@@ -3416,67 +3391,26 @@ class OpenRouterSourceReviewAgent:
         timeout: float | None = None,
         reasoning_effort: str,
     ) -> dict[str, object]:
-        """One model turn, retrying provider error bodies like transport faults.
-
-        The router can return HTTP 200 whose body is an error object with no
-        ``choices``. That is a provider fault, not a verdict, so it gets the
-        same bounded retry budget as a 5xx before the review is failed.
-        """
-        last_error: ValueError | None = None
-        body_attempts = 0
-        while True:
-            response = await self._post_completion(
-                client,
-                api_key,
-                messages,
-                timeout=timeout,
-                reasoning_effort=reasoning_effort,
+        """Issue one model turn and preserve safe body-shape failure evidence."""
+        response = await self._post_completion(
+            client,
+            api_key,
+            messages,
+            timeout=timeout,
+            reasoning_effort=reasoning_effort,
+        )
+        payload: object | None = None
+        try:
+            payload = response.json()
+            return _assistant_message(payload)
+        except ValueError:
+            logger.warning(
+                "source review model body was unusable; parking attempt: "
+                "fault=%s signature=%s",
+                _retryable_model_error_type(payload) or "unclassified",
+                _body_signature(payload),
             )
-            payload: object | None = None
-            try:
-                payload = response.json()
-                return _assistant_message(payload)
-            except ValueError as error:
-                last_error = error
-                # A body-level failure means the model authored no verdict.
-                # Classified provider faults (rate limits, overload, 5xx
-                # relays) are unbilled error bodies: waiting out the fault is
-                # strictly cheaper than burning the review and re-running the
-                # whole court next cycle, so they get the full ladder. An
-                # UNCLASSIFIED shape may be a billed completion under contract
-                # drift, where repetition buys little — it gets exactly one
-                # long retry before failing as before.
-                model_error = _retryable_model_error_type(payload)
-                # A billed completion is always JSON, so a non-JSON 200 body
-                # (CDN error page, truncated stream) is transport-class even
-                # when it names no fault — give it the full unbilled ladder.
-                # Only a PARSEABLE body of unknown shape can be a billed
-                # completion under contract drift; that keeps one retry.
-                retryable_shape = model_error is not None or payload is None
-                retry_budget = (
-                    len(_MODEL_ERROR_RETRY_DELAYS_SECONDS) if retryable_shape else 1
-                )
-                if body_attempts >= retry_budget:
-                    logger.warning(
-                        "source review model body failed after %d retries: "
-                        "fault=%s signature=%s",
-                        body_attempts,
-                        model_error or "unclassified",
-                        _body_signature(payload),
-                    )
-                    break
-                delay = _MODEL_ERROR_RETRY_DELAYS_SECONDS[body_attempts]
-                body_attempts += 1
-                logger.warning(
-                    "source review model body was unusable (fault=%s "
-                    "signature=%s); retrying attempt=%d",
-                    model_error or "unclassified",
-                    _body_signature(payload),
-                    body_attempts + 1,
-                )
-                await asyncio.sleep(delay)
-        assert last_error is not None
-        raise last_error
+            raise
 
     async def _post_completion(
         self,
@@ -3496,52 +3430,23 @@ class OpenRouterSourceReviewAgent:
             "reasoning": {"effort": reasoning_effort},
             "prompt_cache_key": _l1_prompt_cache_key(messages),
             "provider": {
+                "allow_fallbacks": False,
                 "zdr": True,
                 "data_collection": "deny",
                 "require_parameters": True,
             },
         }
-        # HTTP 429/5xx and transport faults ride the same long unbilled
-        # ladder as relayed 200-body faults: the sub-second ladder could not
-        # outlive account-level throttling, and raising here burns the whole
-        # review (see _MODEL_ERROR_RETRY_DELAYS_SECONDS).
-        for attempt in range(len(_MODEL_ERROR_RETRY_DELAYS_SECONDS) + 1):
-            try:
-                response = await client.post(
-                    f"{self._base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        **_OPENROUTER_ATTRIBUTION_HEADERS,
-                    },
-                    json=request,
-                    timeout=timeout if timeout is not None else self._timeout_seconds,
-                )
-                if response.status_code != 429 and response.status_code < 500:
-                    response.raise_for_status()
-                    return response
-                response.raise_for_status()
-            except httpx.HTTPStatusError as error:
-                status = error.response.status_code
-                if status != 429 and status < 500:
-                    raise
-                if attempt >= len(_MODEL_ERROR_RETRY_DELAYS_SECONDS):
-                    raise
-                logger.warning(
-                    "source review request transiently failed (HTTP %d); "
-                    "retrying attempt=%d",
-                    status,
-                    attempt + 2,
-                )
-                await asyncio.sleep(_MODEL_ERROR_RETRY_DELAYS_SECONDS[attempt])
-            except httpx.TransportError:
-                if attempt >= len(_MODEL_ERROR_RETRY_DELAYS_SECONDS):
-                    raise
-                logger.warning(
-                    "source review request transiently failed; retrying attempt=%d",
-                    attempt + 2,
-                )
-                await asyncio.sleep(_MODEL_ERROR_RETRY_DELAYS_SECONDS[attempt])
-        raise RuntimeError("unreachable")
+        response = await client.post(
+            f"{self._base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                **_OPENROUTER_ATTRIBUTION_HEADERS,
+            },
+            json=request,
+            timeout=timeout if timeout is not None else self._timeout_seconds,
+        )
+        response.raise_for_status()
+        return response
 
 
 def _source_review_failure_code(error: BaseException) -> str:
@@ -3551,6 +3456,8 @@ def _source_review_failure_code(error: BaseException) -> str:
     unrecognized, so an unmapped message degrades to exactly the old behavior
     instead of losing the failure.
     """
+    if isinstance(error, httpx.HTTPStatusError):
+        return f"source-review-http-{error.response.status_code}"
     message = str(error).strip()
     suffix = _SOURCE_REVIEW_FAILURE_CODES.get(message)
     if suffix is None and message.startswith("source review category "):

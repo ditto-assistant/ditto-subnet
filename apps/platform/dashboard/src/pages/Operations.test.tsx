@@ -1058,7 +1058,7 @@ describe("Targon submission build provenance", () => {
     const lane = container.querySelector(".submission-builds");
     expect(lane?.textContent).toContain("12Targon imports");
     expect(lane?.textContent).toContain("Targon TrialSubmission v3TargonImported1");
-    expect(lane?.textContent).toContain("Targon → local allowed");
+    expect(lane?.textContent).toContain("Manual retry required");
     expect(lane?.textContent).toContain("Builder container crashed");
     expect(lane?.textContent).toContain("this view tracks builders only");
     expect(container.querySelector("#fleet-table")).toBeNull();

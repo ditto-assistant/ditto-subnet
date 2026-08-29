@@ -429,6 +429,7 @@ def _ticket_item(ticket: ValidatorTicket) -> AdminValidationTicket:
         retry_after=ticket.retry_after,
         retry_budget_exhausted=(
             ticket.status == TicketStatus.EXPIRED
+            and ticket.provider_outage_epoch is None
             and ticket.attempt_count >= ticket_attempt_cap(ticket)
         ),
         failure_reason=ticket.failure_reason,

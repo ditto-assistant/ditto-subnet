@@ -2,10 +2,11 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ScreenerCapacityView } from '../lib/admin.schemas'
+import type { ScreenerCapacityView, TrustedImageBuild } from '../lib/admin.schemas'
 import { ScreenerCapacityPanel } from './ScreenerCapacityPanel'
 
 const getScreenerCapacity = vi.fn()
+const retryTrustedImageBuild = vi.fn()
 const updateScreenerProviderSettings = vi.fn()
 
 vi.mock('@tanstack/react-start', () => ({
@@ -14,12 +15,14 @@ vi.mock('@tanstack/react-start', () => ({
 
 vi.mock('../server/admin.functions', () => ({
   getScreenerCapacity: (...args: unknown[]) => getScreenerCapacity(...args),
+  retryTrustedImageBuild: (...args: unknown[]) => retryTrustedImageBuild(...args),
   updateScreenerProviderSettings: (...args: unknown[]) => updateScreenerProviderSettings(...args),
 }))
 
 afterEach(() => {
   cleanup()
   getScreenerCapacity.mockReset()
+  retryTrustedImageBuild.mockReset()
   updateScreenerProviderSettings.mockReset()
 })
 
@@ -206,14 +209,14 @@ describe('ScreenerCapacityPanel', () => {
     expect(screen.queryByText('runtime')).toBeNull()
   })
 
-  it('offers Targon-first and GCE-only controls without a GCP-first hybrid', () => {
+  it('offers single-shot Targon and GCE controls without a hybrid', () => {
     render(<ScreenerCapacityPanel initialState={capacity()} readOnly={false} />)
 
-    expect(screen.getAllByRole('button', { name: 'Targon first' })).toHaveLength(3)
+    expect(screen.getAllByRole('button', { name: 'Targon only' })).toHaveLength(3)
     expect(screen.getAllByRole('button', { name: 'Targon off (GCE only)' })).toHaveLength(3)
     expect(screen.queryByRole('button', { name: 'Cut over to GCE only' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Restore Targon-first' })).toBeNull()
-    expect(screen.getByText('All lanes Targon-first')).toBeTruthy()
+    expect(screen.getByText('All lanes Targon only')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'GCP first' })).toBeNull()
     expect(screen.queryByText('GCP first')).toBeNull()
   })
@@ -290,5 +293,67 @@ describe('ScreenerCapacityPanel', () => {
         },
       })
     })
+  })
+
+  it('manually retries an exact terminal trusted build with current-state guards', async () => {
+    const failedBuild: TrustedImageBuild = {
+      build_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      environment: 'prod',
+      component: 'screener',
+      source_repository: 'https://github.com/ditto-assistant/ditto-subnet.git',
+      source_sha: 'a'.repeat(40),
+      context_path: '.',
+      dockerfile_path: 'workers/screener/Dockerfile',
+      destination: 'example.invalid/screener:sha-test',
+      status: 'failed',
+      provider: 'targon',
+      provider_resource_id: 'build-failed-1',
+      image_digest: null,
+      error_code: 'TARGON_BUILD_FAILED',
+      attempt_count: 47,
+      controller_epoch: 'controller-before-repair',
+      lease_expires_at: null,
+      created_by: 'release@example.com',
+      reason: 'Build exact release candidate',
+      created_at: '2026-08-27T12:00:00Z',
+      started_at: '2026-08-27T12:01:00Z',
+      completed_at: '2026-08-27T12:02:00Z',
+      updated_at: '2026-08-27T12:02:00Z',
+    }
+    retryTrustedImageBuild.mockResolvedValue({
+      ...failedBuild,
+      status: 'queued',
+      provider: null,
+      provider_resource_id: null,
+      error_code: null,
+      controller_epoch: null,
+      started_at: null,
+      completed_at: null,
+      updated_at: '2026-08-27T12:03:00Z',
+    })
+
+    render(
+      <ScreenerCapacityPanel
+        initialState={capacity({ builds: [failedBuild] })}
+        readOnly={false}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Retry reason for aaaaaaaaaaaa'), {
+      target: { value: 'Targon builder infrastructure is repaired' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => {
+      expect(retryTrustedImageBuild).toHaveBeenCalledWith({
+        data: {
+          buildId: failedBuild.build_id,
+          expectedStatus: 'failed',
+          expectedAttemptCount: 47,
+          reason: 'Targon builder infrastructure is repaired',
+        },
+      })
+    })
+    expect(screen.getByText('queued')).toBeTruthy()
   })
 })

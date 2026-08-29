@@ -43,7 +43,7 @@ from ditto.db.queries.lease_liveness import (
 
 REPLACEMENT_TICKET_TTL = timedelta(minutes=180)
 V9_CONTRACT_RETEST_BASIS = "v9_contract_mismatch"
-MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS = 3
+MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS = 1
 _FINALIZED_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE)
 
 
@@ -154,8 +154,8 @@ async def _requeue_failed_contract_retests(
     ``score_retest_requested``. Without a matching transition the promoter sees
     neither an issued replacement nor a queued one, so the repair disappears
     forever. Restore the accepted score's consumed-ticket state and append a
-    fresh queue event. The exact request is bounded: persistent agent failures
-    close visibly after three attempts and require a new operator decision.
+    fresh queue event. Fail-once policy closes the first failed replacement and
+    requires a new operator decision.
     """
     for entry in tuple(latest.values()):
         if (
@@ -222,7 +222,7 @@ async def _requeue_failed_contract_retests(
                 session,
                 entry=entry,
                 now=now,
-                reason="replacement failed three times; operator review required",
+                reason="replacement failed once; operator retry required",
             )
             continue
 
@@ -534,7 +534,12 @@ async def activate_next_score_retest(
         ticket.slot_id = slot_id
         ticket.issued_at = now
         ticket.deadline = deadline
-        ticket.attempt_count += 1
+        parked_epoch = ticket.provider_outage_epoch
+        if parked_epoch is None:
+            ticket.attempt_count += 1
+        else:
+            ticket.provider_outage_attempted_epoch = parked_epoch
+        ticket.provider_outage_epoch = None
         ticket.retry_after = None
         ticket.first_reported_at = None
         payload = dict(entry.payload)

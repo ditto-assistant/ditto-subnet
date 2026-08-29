@@ -73,7 +73,7 @@ LONGMEM_DATASET_REVISION = (
     "huggingface-98d7416c24c778c2fee6e6f3006e7a073259d48f-"
     "longmemeval-9e0b455f4ef0e2ab8f2e582289761153549043fc"
 )
-PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-25-zdr-v7"
+PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8"
 LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-48-zdr-v4"
 ABLATION_PROFILE_REVISION = "dittobench-v9-ablation-shadow-6-v1"
 COMPOSITE_REVISION = "v9-confirmation-composite-shadow-70-30-v1"
@@ -240,11 +240,10 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
         ablation_projection_key_sha256=_domain_sha256("ablation-projection"),
         ablation_coordinator_policy=AblationCoordinatorPolicy(
             sample_size=4,
-            max_attempts=2,
+            max_attempts=1,
             # Floor is sample_size * 3 = 12 (one ordinary + two interventions).
-            # v5 used that floor and had no retry budget. The useful max is
-            # 12 * max_attempts = 24 so a retryable case can still finish.
-            max_requests=24,
+            # A failed case parks the bundle for a manual retest authorization.
+            max_requests=12,
             request_timeout_milliseconds=90_000,
             # Go hard-max is 30 minutes. Live v5 embedding exhausted the
             # request rail, not the clock; keep the full window.
@@ -311,11 +310,11 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
 
     launch = {
         "schema_version": 1,
-        "revision": "v9-confirmation-shadow-launch-2026-08-25-zdr-v7".replace(
+        "revision": "v9-confirmation-shadow-launch-2026-08-27-no-retry-v8".replace(
             "v9-", f"{tag}-", 1
         )
         if bench_version != BENCH_VERSION_V9
-        else "v9-confirmation-shadow-launch-2026-08-25-zdr-v7",
+        else "v9-confirmation-shadow-launch-2026-08-27-no-retry-v8",
         "mode": "shadow",
         "execution_profile_revision": profile.revision,
         "execution_profile_checksum": profile.checksum(),

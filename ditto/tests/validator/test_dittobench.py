@@ -977,7 +977,7 @@ async def test_submit_admission_failure_is_validator_infrastructure(
 
 
 @pytest.mark.asyncio
-async def test_submit_retries_transient_scorer_capacity_inside_live_lease(
+async def test_submit_parks_transient_scorer_capacity_inside_live_lease(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     statuses = iter((429, 503, 202))
@@ -999,22 +999,24 @@ async def test_submit_retries_transient_scorer_capacity_inside_live_lease(
         dittobench_api_url="http://dittobench.test", run_size="full"
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        run_id = await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
-            tarball_url="https://example.test/agent.tgz",
-            bench_version=8,
-            dataset_sha256="12" * 32,
-            screened_image_url="https://example.test/image.tar",
-            screened_image_sha256="34" * 32,
-            screened_image_size_bytes=123,
-            screened_image_id="sha256:" + "56" * 32,
-            screened_image_ref=(
-                "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
-            ),
-            ticket_deadline=datetime.now(UTC) + timedelta(minutes=90),
-        )
+        with pytest.raises(
+            ValidatorInfrastructureError, match="operator retry required"
+        ):
+            await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
+                tarball_url="https://example.test/agent.tgz",
+                bench_version=8,
+                dataset_sha256="12" * 32,
+                screened_image_url="https://example.test/image.tar",
+                screened_image_sha256="34" * 32,
+                screened_image_size_bytes=123,
+                screened_image_id="sha256:" + "56" * 32,
+                screened_image_ref=(
+                    "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+                ),
+                ticket_deadline=datetime.now(UTC) + timedelta(minutes=90),
+            )
 
-    assert run_id == "run-after-capacity"
-    assert sleeps == [1.0, 2.0]
+    assert sleeps == []
 
 
 @pytest.mark.parametrize(

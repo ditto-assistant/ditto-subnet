@@ -117,9 +117,20 @@ class TargonComputeProvider:
             state = await self._targon.state(resource_id)
         except TargonAPIError:
             return ProvisionObservation(status="")
+        status = str(state.get("status", "")).casefold()
+        ready: bool | None = None
+        if "ready_replicas" in state or "total_replicas" in state:
+            try:
+                ready = (
+                    int(state.get("ready_replicas", 0)) > 0
+                    and int(state.get("total_replicas", 0)) > 0
+                )
+            except (TypeError, ValueError):
+                ready = False
         return ProvisionObservation(
-            status=str(state.get("status", "")).casefold(),
+            status=status,
             message=str(state.get("message", "") or ""),
+            ready=ready,
         )
 
     async def replica_logs(self, resource_id: str, *, tail: int = 400) -> str:
@@ -132,8 +143,9 @@ class TargonComputeProvider:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_seconds
         while True:
-            status = await self.provision_status(resource_id)
-            if status == "running":
+            observation = await self.observe_provision(resource_id)
+            status = observation.status
+            if status == "running" and observation.ready is not False:
                 return "running"
             if status in _PROVISION_FAILED:
                 return "error"

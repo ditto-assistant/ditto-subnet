@@ -272,7 +272,7 @@ class TestDesiredEraWorkOutstanding:
             is True
         )
 
-    async def test_cooldown_is_temporary_and_holds_the_gate_after_it_lapses(
+    async def test_historical_infra_grant_does_not_reopen_work_after_cooldown(
         self, session: AsyncSession
     ) -> None:
         async with session.begin():
@@ -306,7 +306,7 @@ class TestDesiredEraWorkOutstanding:
                 now=_NOW + timedelta(hours=2),
                 capable_validator_hotkeys=_FLEET,
             )
-            is True
+            is False
         )
 
     async def test_previous_generation_rows_are_not_their_own_justification(

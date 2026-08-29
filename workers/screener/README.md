@@ -8,10 +8,10 @@ rules, builds the Docker image, starts it with resource caps and an internal fak
 gateway, waits for `/health`, then performs a bounded, read-only Luna source
 review before submitting a lease-bound sr25519 result. An optional, default-off
 Kimi K3 level-2 reviewer can resolve only medium/high L1 leads with an
-isolated, no-network coding-analysis harness; OpenRouter may fail over in order
-to GLM 5.2 and then GPT-5.6 SOL. A complete, very-high-confidence medium-risk
+isolated, no-network coding-analysis harness. Its exact model is single-shot;
+OpenRouter fallbacks are disabled. A complete, very-high-confidence medium-risk
 certificate from primary Kimi may clear directly; every static/high-risk,
-fallback-model, incomplete, or lower-confidence safe result requires the
+incomplete or lower-confidence safe result requires the
 independent GPT-5.6 SOL level-3 critic. A SOL challenge is decided by a second,
 low-reasoning SOL adjudicator rather than becoming an automatic violation.
 Obvious single-mechanism violations stop at L2; mixed benchmark/scorer/tool
@@ -136,8 +136,9 @@ Required values are supplied through the production host's protected
   for the private read-only source reviewer. The default model is
   `openai/gpt-5.6-luna`.
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
-- `SCREENER_L2_REVIEW_MODEL`: locked to `moonshotai/kimi-k3`, with
-  `SCREENER_L2_FALLBACK_MODELS=z-ai/glm-5.2,openai/gpt-5.6-sol`.
+- `SCREENER_L2_REVIEW_MODEL`: locked to `moonshotai/kimi-k3`. The rolling
+  `SCREENER_L2_FALLBACK_MODELS` field is still parsed for configuration
+  compatibility but is never dispatched; model failover is disabled.
 - `SCREENER_L3_REVIEW_ENABLED`: `true` (default) runs the independent SOL
   critic/adjudicator after L2. `false` keeps L1 routing and the Kimi L2 analyst
   active while making the L2 result authoritative. Platform review-settings

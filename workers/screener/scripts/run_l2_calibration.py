@@ -48,7 +48,6 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--cache-dir", type=Path)
     parser.add_argument("--audit-file", type=Path)
     parser.add_argument("--concurrency", type=int, default=4)
-    parser.add_argument("--max-attempts", type=int, default=2)
     parser.add_argument("--analyzer-timeout-seconds", type=float, default=30.0)
     parser.add_argument("--analyzer-cpus", type=float, default=0.5)
     parser.add_argument(
@@ -89,8 +88,6 @@ async def _main() -> None:
     args = _arguments()
     if not 1 <= args.concurrency <= 8:
         raise SystemExit("--concurrency must be between 1 and 8")
-    if not 1 <= args.max_attempts <= 3:
-        raise SystemExit("--max-attempts must be between 1 and 3")
     if not 30 <= args.analyzer_timeout_seconds <= 300:
         raise SystemExit("--analyzer-timeout-seconds must be between 30 and 300")
     if not 0.5 <= args.analyzer_cpus <= 2.0:
@@ -171,24 +168,6 @@ async def _main() -> None:
     artifact_locks: dict[str, asyncio.Lock] = {}
     results: list[dict[str, object]] = []
 
-    def add_usage(left: L2Usage, right: L2Usage) -> L2Usage:
-        reported = (
-            None
-            if left.reported_cost_usd is None and right.reported_cost_usd is None
-            else (left.reported_cost_usd or 0.0) + (right.reported_cost_usd or 0.0)
-        )
-        return L2Usage(
-            input_tokens=left.input_tokens + right.input_tokens,
-            output_tokens=left.output_tokens + right.output_tokens,
-            cached_input_tokens=(left.cached_input_tokens + right.cached_input_tokens),
-            cache_write_input_tokens=(
-                left.cache_write_input_tokens + right.cache_write_input_tokens
-            ),
-            reasoning_tokens=left.reasoning_tokens + right.reasoning_tokens,
-            estimated_cost_usd=(left.estimated_cost_usd + right.estimated_cost_usd),
-            reported_cost_usd=reported,
-        )
-
     async def run_once(item: dict[str, object]) -> None:
         async with semaphore:
             artifact_sha = str(item["artifact_sha256"])
@@ -202,28 +181,15 @@ async def _main() -> None:
             observation_value["categories"] = tuple(
                 observation_value.get("categories", ())
             )
-            usage = L2Usage()
-            review_attempts = 0
-            response_models: list[str] = []
-            response_providers: list[str] = []
             started = time.monotonic()
-            while review_attempts < args.max_attempts:
-                review_attempts += 1
-                deadline = asyncio.get_running_loop().time() + 900
-                result = await agent.review(
-                    str(archive),
-                    artifact_sha256=artifact_sha,
-                    attempt_id=UUID(str(item["attempt_id"])),
-                    l1_observation=SourceReviewObservation(**observation_value),
-                    deadline=deadline,
-                )
-                usage = add_usage(usage, result.usage)
-                response_models.extend(result.response_models)
-                response_providers.extend(result.response_providers)
-                if result.observation.ok or (
-                    result.observation.failure_disposition != "retryable_infra"
-                ):
-                    break
+            deadline = asyncio.get_running_loop().time() + 900
+            result = await agent.review(
+                str(archive),
+                artifact_sha256=artifact_sha,
+                attempt_id=UUID(str(item["attempt_id"])),
+                l1_observation=SourceReviewObservation(**observation_value),
+                deadline=deadline,
+            )
             observation = result.observation
             disposition = (
                 "safe"
@@ -245,11 +211,11 @@ async def _main() -> None:
                 "analyst_cache_hit": result.analyst_cache_hit,
                 "critic_cache_hit": result.critic_cache_hit,
                 "cache_hit": result.cache_hit,
-                "review_attempts": review_attempts,
+                "review_attempts": 1,
                 "latency_ms": round((time.monotonic() - started) * 1_000),
-                "response_models": response_models,
-                "response_providers": response_providers,
-                "usage": usage.__dict__,
+                "response_models": list(result.response_models),
+                "response_providers": list(result.response_providers),
+                "usage": result.usage.__dict__,
                 "error_code": observation.error_code,
                 **causal_audit_fields(observation.finding),
                 "disposition_match": disposition == item["expected_disposition"],

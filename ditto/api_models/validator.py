@@ -151,16 +151,7 @@ becoming a 422 in production.
 """
 
 LEGACY_FAILURE_DETAIL_MAX_LENGTH = 200
-"""The pre-widening cap. Still the safe value against an un-upgraded platform.
-
-Validators run mixed versions and so, at any moment, does the platform relative
-to them. Widening a ``max_length`` only ever admits more, so a validator still
-truncating to 200 keeps working against a widened platform with no change. The
-reverse -- this validator, widened, against a platform that still enforces 200 --
-is handled in :meth:`ditto.validator.platform.PlatformClient.report_ticket_failed`,
-which retries a 422'd hand-back once at this bound so the report still lands and
-only the tail of the message is lost.
-"""
+"""The pre-widening cap, retained for decoding historical evidence only."""
 
 CONTAINER_LOG_TAIL_MAX_LENGTH = 2048
 """Cap on ``FailJobRequest.container_log_tail``, matching the platform's.

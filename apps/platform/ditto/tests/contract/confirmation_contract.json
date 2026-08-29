@@ -41,7 +41,7 @@
       "ConfirmationAblationCoordinatorProfile": {
         "properties": {
           "max_attempts": {
-            "exclusiveMinimum": 0,
+            "const": 1,
             "type": "integer"
           },
           "max_requests": {
@@ -647,7 +647,7 @@
       "ConfirmationAblationCoordinatorProfile": {
         "properties": {
           "max_attempts": {
-            "exclusiveMinimum": 0,
+            "const": 1,
             "type": "integer"
           },
           "max_requests": {

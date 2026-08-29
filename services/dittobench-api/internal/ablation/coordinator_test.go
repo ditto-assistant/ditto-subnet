@@ -24,7 +24,7 @@ func (f caseRunnerFunc) RunCase(ctx context.Context, request RunRequest) (CaseRu
 
 func coordinatorConfig(sampleSize int) CoordinatorConfig {
 	config := CoordinatorConfig{
-		SampleSize: sampleSize, MaxAttempts: 3, MaxRequests: sampleSize * 3 * 3,
+		SampleSize: sampleSize, MaxAttempts: 1, MaxRequests: sampleSize * 3,
 		RequestTimeout: 500 * time.Millisecond, TotalTimeout: 5 * time.Second,
 		ArtifactSHA256: testArtifactSHA,
 		SelectionKey:   []byte("selection-key-32-bytes-long-fixed!"),
@@ -639,7 +639,7 @@ func TestSyntheticBudgetExhaustionOverridesRetryFailure(t *testing.T) {
 	}
 }
 
-func TestGlobalRequestCapStopsRetryAmplification(t *testing.T) {
+func TestRetryableOrdinaryFailureParksAllAblationLanes(t *testing.T) {
 	t.Parallel()
 	config := coordinatorConfig(2)
 	config.MaxRequests = 6
@@ -660,13 +660,11 @@ func TestGlobalRequestCapStopsRetryAmplification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !report.Ordinary.Complete || !report.InferenceIntervention.Complete {
-		t.Fatalf("earlier lanes unexpectedly incomplete: %+v", report)
-	}
-	if report.EmbeddingIntervention.Observation != ObservationUnavailable ||
-		report.EmbeddingIntervention.UnavailableReason != UnavailableRequestLimit ||
-		report.EmbeddingIntervention.CompletedCases != 1 {
-		t.Fatalf("global request cap report=%+v", report.EmbeddingIntervention)
+	if report.Ordinary.Observation != ObservationUnavailable ||
+		report.Ordinary.UnavailableReason != UnavailableRetryExhausted ||
+		report.Ordinary.AttemptCount != 1 || report.InferenceIntervention.AttemptCount != 0 ||
+		report.EmbeddingIntervention.AttemptCount != 0 {
+		t.Fatalf("single-shot ordinary failure report=%+v", report)
 	}
 }
 

@@ -383,7 +383,7 @@ func rewriteReaderRequest(raw []byte, policy ProviderPolicy, route string) ([]by
 	body["provider"] = map[string]any{
 		"sort":            "throughput",
 		"ignore":          []string{"coreweave"},
-		"allow_fallbacks": true,
+		"allow_fallbacks": false,
 		"data_collection": "deny",
 	}
 	encoded, err := json.Marshal(body)

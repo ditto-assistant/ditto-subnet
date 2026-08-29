@@ -17,12 +17,12 @@ const STATUS: Record<SubmissionImageBuildStatus, readonly [string, string]> = {
   running: ["Building", "progress"],
   succeeded: ["Ready", "good"],
   consumed: ["Imported", "good"],
-  fallback_required: ["Local fallback", "warn"],
+  fallback_required: ["Parked failure", "warn"],
   canceled: ["Canceled", "unknown"],
 };
 
 function buildRoute(build: SubmissionImageBuild): string {
-  if (build.status === "fallback_required") return "Targon → local allowed";
+  if (build.status === "fallback_required") return "Manual retry required";
   if (build.provider === "targon") return "Targon";
   if (build.provider === "gcp") return "Cloud Run";
   if (build.status === "queued") return "Awaiting Targon";

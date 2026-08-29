@@ -13,7 +13,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/netguard"
@@ -381,29 +380,6 @@ func RunCaseWithTelemetry(ctx context.Context, harnessURL, caseID, prompt string
 	return runOneWithTelemetry(ctx, harnessURL, protocol.ToolCase{ID: caseID, Prompt: prompt}, tools, opts)
 }
 
-// runAttemptBackoff is the fixed pause before the Nth retry (index 0 is the
-// pause before the first retry). No jitter: the delay only bounds retry rate,
-// and scores never depend on timing, so determinism is not affected.
-var runAttemptBackoff = []time.Duration{250 * time.Millisecond, 750 * time.Millisecond}
-
-// runAttempts is the total number of /run attempts per case (1 = no retry).
-// A harness under concurrent load, or the model relay, can return a transient
-// 429/5xx or drop the connection; without a retry that case silently scores a
-// miss, which becomes common once cases run in parallel. Retries only fire on
-// transient failures and stay inside the per-case deadline. Overridable so an
-// operator can disable retries (set 1) or widen them.
-var runAttempts = envInt("DITTOBENCH_RUN_ATTEMPTS", 3)
-
-// envInt reads a positive int from key, returning def when unset or invalid.
-func envInt(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return def
-}
-
 func runOne(ctx context.Context, harnessURL string, c protocol.ToolCase, tools []protocol.ToolDefinition, opts CaseOptions) (protocol.RunResponse, error) {
 	resp, _, err := runOneWithTelemetry(ctx, harnessURL, c, tools, opts)
 	return resp, err
@@ -411,7 +387,7 @@ func runOne(ctx context.Context, harnessURL string, c protocol.ToolCase, tools [
 
 func runOneWithTelemetry(ctx context.Context, harnessURL string, c protocol.ToolCase, tools []protocol.ToolDefinition, opts CaseOptions) (protocol.RunResponse, CaseExecution, error) {
 	started := time.Now()
-	execution := CaseExecution{Attempts: make([]AttemptTelemetry, 0, runAttempts)}
+	execution := CaseExecution{Attempts: make([]AttemptTelemetry, 0, 1)}
 	ctx, cancel := context.WithTimeout(ctx, perCaseTimeoutFor(opts.BenchVersion))
 	defer cancel()
 	finish := func(outcome string, err error) (protocol.RunResponse, CaseExecution, error) {
@@ -437,45 +413,15 @@ func runOneWithTelemetry(ctx context.Context, harnessURL string, c protocol.Tool
 		return finish("request_encode_error", fmt.Errorf("marshal run request: %w", err))
 	}
 
-	attempts := runAttempts
-	if attempts < 1 {
-		attempts = 1
+	resp, attemptTelemetry, _, attemptErr := runAttempt(ctx, harnessURL, buf)
+	attemptTelemetry.Attempt = 1
+	execution.Attempts = append(execution.Attempts, attemptTelemetry)
+	if attemptErr == nil {
+		execution.TotalDurationMs = time.Since(started).Milliseconds()
+		execution.TerminalOutcome = "success"
+		return resp, execution, nil
 	}
-	var lastErr error
-	for attempt := 0; attempt < attempts; attempt++ {
-		if attempt > 0 {
-			// Back off before a retry, but abandon if the per-case deadline is up.
-			pause := runAttemptBackoff[min(attempt-1, len(runAttemptBackoff)-1)]
-			select {
-			case <-ctx.Done():
-				outcome := "cancelled"
-				if ctx.Err() == context.DeadlineExceeded {
-					outcome = "timeout"
-				}
-				return finish(outcome, lastErr)
-			case <-time.After(pause):
-			}
-		}
-		resp, attemptTelemetry, retryable, err := runAttempt(ctx, harnessURL, buf)
-		attemptTelemetry.Attempt = attempt + 1
-		execution.Attempts = append(execution.Attempts, attemptTelemetry)
-		if err == nil {
-			execution.TotalDurationMs = time.Since(started).Milliseconds()
-			execution.TerminalOutcome = "success"
-			return resp, execution, nil
-		}
-		lastErr = err
-		// A non-retryable failure (a 4xx other than 429, or a valid 200 the
-		// harness returned as unparseable) will not change on a retry.
-		if !retryable {
-			return finish(attemptTelemetry.Outcome, err)
-		}
-	}
-	outcome := "retry_exhausted"
-	if len(execution.Attempts) > 0 {
-		outcome = execution.Attempts[len(execution.Attempts)-1].Outcome
-	}
-	return finish(outcome, lastErr)
+	return finish(attemptTelemetry.Outcome, attemptErr)
 }
 
 // harnessWireBenchVersion keeps unreleased scorer revisions behind the latest

@@ -2,6 +2,55 @@
 
 <!-- version list -->
 
+## v0.124.0 (2026-08-29)
+
+### Bug Fixes
+
+- Require manual retries for cost-bearing work
+  ([#1201](https://github.com/ditto-assistant/ditto-subnet/pull/1201),
+  [`6fec2ba`](https://github.com/ditto-assistant/ditto-subnet/commit/6fec2badb810108150bdd922e9303ed909fda0cb))
+
+- **platform**: Harden screening failure handling
+  ([#1260](https://github.com/ditto-assistant/ditto-subnet/pull/1260),
+  [`e096e09`](https://github.com/ditto-assistant/ditto-subnet/commit/e096e09453c000bcd8c628f81a3d6b2c6e9411a4))
+
+- **platform**: Park work during provider outages
+  ([#1226](https://github.com/ditto-assistant/ditto-subnet/pull/1226),
+  [`bc07ac1`](https://github.com/ditto-assistant/ditto-subnet/commit/bc07ac17a2de1fa377d2429198d6af11fd1e776b))
+
+### Documentation
+
+- **coding**: Define private execution protocol
+  ([`3f86008`](https://github.com/ditto-assistant/ditto-subnet/commit/3f8600893e5d7ff5e2eacefc3afe9b3ff7c3b39e))
+
+### Features
+
+- **coding**: Add typed public practice runtime
+  ([`b942ddc`](https://github.com/ditto-assistant/ditto-subnet/commit/b942ddc3ecec2aaf60f915671230fef4515b2853))
+
+
+## v0.123.0 (2026-08-29)
+
+### Bug Fixes
+
+- **infra**: Allow restricted iam preflight
+  ([#1258](https://github.com/ditto-assistant/ditto-subnet/pull/1258),
+  [`bfd4c53`](https://github.com/ditto-assistant/ditto-subnet/commit/bfd4c53fefcc80613992a598701462e80e08c7b3))
+
+- **infra**: Make hotkey bootstrap requirements readable
+  ([#1257](https://github.com/ditto-assistant/ditto-subnet/pull/1257),
+  [`dcdead8`](https://github.com/ditto-assistant/ditto-subnet/commit/dcdead898858510314eb734c0d4497913310cf3f))
+
+- **infra**: Run pinned hotkey generator directly
+  ([#1259](https://github.com/ditto-assistant/ditto-subnet/pull/1259),
+  [`1519155`](https://github.com/ditto-assistant/ditto-subnet/commit/151915569b1aef7c51540e444bafade210eceb7b))
+
+### Features
+
+- **coding**: Add shadow coding-datagen foundation
+  ([`b186ab5`](https://github.com/ditto-assistant/ditto-subnet/commit/b186ab5903dcceb2df72cbf0dd6dc0a8276e5893))
+
+
 ## v0.122.0 (2026-08-28)
 
 ### Bug Fixes

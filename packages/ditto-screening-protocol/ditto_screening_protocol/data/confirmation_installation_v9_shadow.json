@@ -2,19 +2,19 @@
   "ablation_dataset_path": "/opt/ditto/confirmation/confirmation_ablation_v9_shadow.json",
   "execution_profile": {
     "ablation_coordinator_policy": {
-      "max_attempts": 2,
-      "max_requests": 24,
+      "max_attempts": 1,
+      "max_requests": 12,
       "request_timeout_milliseconds": 90000,
       "sample_size": 4,
       "total_timeout_milliseconds": 1800000
     },
     "ablation_dataset_sha256": "8f6d94e18e25ceb6cd65d38ab62bd7815b234b0d0a442cca4f42a87a21904f8e",
-    "ablation_profile_checksum": "47d3596c278aa6dd94bf7cf40383004b882e53d3a1e289747cd5e801cb5d045f",
+    "ablation_profile_checksum": "ef82db80d0055b72f16077a0ad8a5c3c02395c23983dc86c67d44b071cf2ddd8",
     "ablation_profile_revision": "dittobench-v9-ablation-shadow-6-v1",
     "ablation_projection_key_sha256": "8a00a865d6d36f3e92f39a138ac6eabc627d4d9915440e589805a3d2677b668f",
     "ablation_selection_key_sha256": "2744541342deb53d3504556838313ba27d3bfca625db939054043f5e495b3831",
     "ablation_threshold_manifest_sha256": "fa0ad000b263d3660ad60d6a509573b3154fad8490a16320f34d99c72eaa0c21",
-    "checksum": "23e7168e7ee874f1b13ae332297785f78af49fcbc8de1f55111138addaa9cfcb",
+    "checksum": "8e5be01e3efd17dbf6cc21e79b9d53d82d842b1563d403b0318f2a272d6297af",
     "composite": {
       "base_weight_bps": 7000,
       "checksum": "1ce77c31a1b6f146c4eb79c2422f066441c0eaff6cf3ca67fa13989a87c8101f",
@@ -94,11 +94,11 @@
         "route_provider": "throughput"
       }
     ],
-    "revision": "v9-confirmation-shadow-bounded-2026-08-25-zdr-v7",
+    "revision": "v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8",
     "schema_version": 1
   },
   "launch_manifest_path": "/opt/ditto/confirmation/confirmation_launch_manifest_v9_shadow.json",
-  "launch_manifest_sha256": "b721ebf9b04a0b4129a42d820c559f5c43be71a240d1f21bb48847071541f6e4",
+  "launch_manifest_sha256": "709a3cc42476c9c2a4e7fc439658bd91380858cf08fae16b01c8fdbeddc5d21d",
   "longmem_dataset_path": "/opt/ditto/confirmation/longmemeval_s_cleaned.json",
   "sandbox_health_timeout_ms": 180000,
   "schema_version": 1

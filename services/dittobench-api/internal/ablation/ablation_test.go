@@ -76,7 +76,7 @@ func evaluationInput(intervention Intervention, mode Mode, usage Usage) Evaluate
 		Usage:    usage,
 	}
 	policy := CoordinatorPolicy{
-		SampleSize: len(input.Baseline), MaxAttempts: 3, MaxRequests: len(input.Baseline) * 9,
+		SampleSize: len(input.Baseline), MaxAttempts: 1, MaxRequests: len(input.Baseline) * 3,
 		RequestTimeoutMilliseconds: 100, TotalTimeoutMilliseconds: 2000,
 	}
 	inferenceBudgetValue := inferenceBudget(5, 4096)
@@ -159,7 +159,7 @@ func evaluationInput(intervention Intervention, mode Mode, usage Usage) Evaluate
 
 func rebindEvaluationPopulation(input *EvaluateInput) {
 	input.FrozenProfile.CoordinatorPolicy.SampleSize = len(input.Baseline)
-	input.FrozenProfile.CoordinatorPolicy.MaxRequests = len(input.Baseline) * 9
+	input.FrozenProfile.CoordinatorPolicy.MaxRequests = len(input.Baseline) * 3
 	input.Coordinator.CoordinatorPolicy = input.FrozenProfile.CoordinatorPolicy
 	input.Coordinator.SelectedCaseCount = len(input.Baseline)
 	input.Coordinator.Ordinary.Scores = input.Baseline

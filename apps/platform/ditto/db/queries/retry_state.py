@@ -32,7 +32,7 @@ from ditto.db.models import (
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
 from ditto.db.queries.queue_removal import is_in_force, removal_in_force
 from ditto.db.queries.scores import SCORING_QUORUM
-from ditto.db.queries.tickets import ticket_attempt_cap
+from ditto.db.queries.tickets import ticket_attempt_cap, ticket_retry_budget_spent
 from ditto.screener_policy_state import effective_screening_policy_version
 
 VALIDATOR_RETRY_ONLINE_WINDOW = timedelta(minutes=5)
@@ -124,10 +124,7 @@ def resolve_bench_version(
 
 def is_exhausted(ticket: ValidatorTicket) -> bool:
     """An expired ticket whose validator has spent its whole attempt budget."""
-    return (
-        ticket.status == TicketStatus.EXPIRED
-        and ticket.attempt_count >= ticket_attempt_cap(ticket)
-    )
+    return ticket.status == TicketStatus.EXPIRED and ticket_retry_budget_spent(ticket)
 
 
 def current_failure_detail(ticket: ValidatorTicket) -> str | None:
@@ -219,7 +216,7 @@ def recovery_gate(
     rollout_qualification: bool = False,
     work_available_hotkeys: set[str] | None = None,
 ) -> tuple[bool, bool, str | None, list[ValidatorTicket]]:
-    """Decide whether an automatic or operator retry is possible.
+    """Decide whether an operator retry is possible.
 
     Returns ``(automatic_retry_available, recovery_allowed, blocking_reason,
     tickets_to_grant)``. ``tickets_to_grant`` is the minimum set of expired,
@@ -245,25 +242,27 @@ def recovery_gate(
         and ticket.validator_hotkey not in score_hotkeys
         and ticket.bench_version == bench_version
     ]
-    naturally_retryable = [
+    # A ticket below its cap can only exist after an audited manual grant. It is
+    # already authorized work, not an automatic recovery classification.
+    authorized = [
         ticket
         for ticket in non_scored
         if ticket.status == TicketStatus.EXPIRED
-        and ticket.attempt_count < ticket_attempt_cap(ticket)
+        and not ticket_retry_budget_spent(ticket)
         and (
             work_available_hotkeys is None
             or ticket.validator_hotkey in work_available_hotkeys
         )
     ]
-    if naturally_retryable:
+    if authorized:
         available = any(
             ticket.retry_after is None or aware(ticket.retry_after) <= now
-            for ticket in naturally_retryable
+            for ticket in authorized
         )
         reason = (
-            "automatic validator retry is already available"
+            "operator-authorized validator retry is queued"
             if available
-            else "automatic validator retry is still cooling down"
+            else "operator-authorized validator retry is cooling down"
         )
         return available, False, reason, []
 

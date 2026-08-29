@@ -9,13 +9,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import httpx
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -40,29 +41,39 @@ from ditto.api_server.screening_traces import (
 from ditto.api_server.targon_provider import TargonComputeProvider, TargonRentals
 from ditto.api_server.targon_screening import admit_targon_screening_work
 from ditto.db.models import (
+    ProviderOutageCircuit,
     ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     SubmissionImageBuild,
     SubmissionSourceReview,
     TrustedImageBuild,
 )
+from ditto.db.queries.provider_outages import (
+    OPENROUTER_PROVIDER,
+    lock_provider_work_gate,
+    register_provider_probe,
+)
 
 logger = logging.getLogger(__name__)
 
 _BUILD_LEASE = timedelta(minutes=50)
 _JOB_TTL = timedelta(minutes=80)
-_SOURCE_LEASE = timedelta(minutes=75)
+_SOURCE_LEASE = timedelta(minutes=30)
 _REAP_LIMIT = 16
 _TERMINAL_JOB = ("succeeded", "consumed", "canceled", "fallback_required")
 _TERMINAL_RUNTIME = ("succeeded", "fallback_required", "skipped")
 _INFLIGHT_JOB = ("leased", "running")
 _PROVIDER_TERMINAL = frozenset({"error", "deleted", "suspended"})
-_TARGON_BUILD_FALLBACK_CODES = frozenset(
-    {"TARGON_PROVISION_ERROR", "TARGON_PROVISION_TIMEOUT"}
-)
 _CANDIDATE_REGISTRY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-screening-candidates/miner"
 )
+_PRIVATE_FAILURE_LIMIT = 16_000
+_PRIVATE_SECRET = re.compile(
+    r"(?i)\b(api[_-]?key|authorization|password|secret|token)\b"
+    r"(\s*[:=]\s*)([^\s,;]+)"
+)
+_PRIVATE_BEARER = re.compile(r"(?i)\bBearer\s+[^\s,;]+")
+_PRIVATE_SIGNED_TOKEN = re.compile(r"\bsvt_[A-Za-z0-9._-]+")
 
 
 async def _default_health_probe(url: str) -> bool:
@@ -76,6 +87,15 @@ async def _default_health_probe(url: str) -> bool:
 
 PromoteArchive = Callable[[str, str, str], Awaitable[str]]
 MintToken = Callable[[str], Awaitable[str]]
+
+
+def _private_failure_text(value: str) -> str:
+    redacted = _PRIVATE_BEARER.sub("Bearer [REDACTED]", value)
+    redacted = _PRIVATE_SIGNED_TOKEN.sub("[REDACTED]", redacted)
+    redacted = _PRIVATE_SECRET.sub(r"\1\2[REDACTED]", redacted)
+    if len(redacted) <= _PRIVATE_FAILURE_LIMIT:
+        return redacted
+    return f"[truncated]\n{redacted[-_PRIVATE_FAILURE_LIMIT:]}"
 
 
 def _source_review_layer_env(
@@ -211,18 +231,89 @@ class TargonRentalLoop:
     async def tick(self) -> bool:
         """Admit work and launch at most one job per lane. Returns if any ran."""
         handled = await self._reap_finished_rentals()
+        handled = await self._park_source_reviews_for_outage() or handled
         async with self._session_maker() as session, session.begin():
+            archive_exists = getattr(self._storage, "object_exists", None)
             await admit_targon_screening_work(
                 session,
                 screener_hotkey=self._screener_hotkey,
                 environment=self._config.environment,
                 now=datetime.now(UTC),
+                archive_exists=archive_exists,
             )
         handled = await self._launch_kaniko() or handled
         handled = await self._launch_smoke() or handled
         handled = await self._launch_source_review() or handled
         handled = await self._finalize_ready_attempts() or handled
         handled = await self._repair_kaniko_image_ids() or handled
+        return handled
+
+    async def _park_source_reviews_for_outage(self) -> bool:
+        """Delete and requeue every non-probe court rental while the relay is open."""
+        now = datetime.now(UTC)
+        pending: list[tuple[UUID, str, str | None]] = []
+        async with self._session_maker() as session, session.begin():
+            circuit = await session.scalar(
+                select(ProviderOutageCircuit)
+                .where(ProviderOutageCircuit.provider == OPENROUTER_PROVIDER)
+                .with_for_update()
+            )
+            if circuit is None or circuit.state != "open":
+                return False
+            probe_key = (
+                circuit.probe_key
+                if circuit.probe_kind == "screening"
+                and circuit.probe_expires_at is not None
+                and (
+                    circuit.probe_expires_at
+                    if circuit.probe_expires_at.tzinfo is not None
+                    else circuit.probe_expires_at.replace(tzinfo=UTC)
+                )
+                > now
+                else None
+            )
+            rows = list(
+                await session.scalars(
+                    select(SubmissionSourceReview)
+                    .where(
+                        or_(
+                            SubmissionSourceReview.status.in_(_INFLIGHT_JOB),
+                            and_(
+                                SubmissionSourceReview.status == "queued",
+                                SubmissionSourceReview.provider_resource_id.is_not(
+                                    None
+                                ),
+                            ),
+                        )
+                    )
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            for row in rows:
+                if probe_key == str(row.review_id):
+                    continue
+                if row.provider_resource_id is not None:
+                    pending.append(
+                        (row.review_id, row.provider_resource_id, row.provider)
+                    )
+                row.status = "queued"
+                # A logical source review gets one no-fault outage resume in
+                # its lifetime, not one per circuit epoch.  The latter turns a
+                # flapping provider into an unbounded model-spend reset.
+                row.provider_outage_epoch = (
+                    circuit.epoch
+                    if row.provider_outage_attempted_epoch is None
+                    else None
+                )
+                row.controller_epoch = None
+                row.lease_expires_at = None
+                row.job_token_hash = None
+                row.job_token_expires_at = None
+                row.updated_at = now
+        handled = bool(pending or rows)
+        for review_id, uid, stored_provider in pending:
+            if await self._delete_resource(stored_provider, uid):
+                await self._clear_resource_id("review", review_id)
         return handled
 
     async def _repair_kaniko_image_ids(self) -> bool:
@@ -234,7 +325,7 @@ class TargonRentalLoop:
         return repaired > 0
 
     async def _finalize_ready_attempts(self) -> bool:
-        """Attest Targon passes after smoke, or fail-retry after lane fallback."""
+        """Attest Targon passes after smoke, or park the failed lane."""
         if self._complete_screen is None:
             return False
         now = datetime.now(UTC)
@@ -286,9 +377,9 @@ class TargonRentalLoop:
     def _build_providers(
         self, pinned_provider: str | None
     ) -> list[ScreeningComputeProvider]:
-        """Use only the stored provider after a reaper pin."""
+        """Use exactly one provider, preserving an explicit operator pin."""
         if pinned_provider is None:
-            return list(self._providers)
+            return list(self._providers[:1])
         return [
             provider
             for provider in self._providers
@@ -406,10 +497,9 @@ class TargonRentalLoop:
         return await self._targon_inflight() < self._config.max_inflight
 
     async def _any_capacity(self) -> bool:
-        for provider in self._providers:
-            if await self._provider_has_capacity(provider):
-                return True
-        return False
+        return bool(
+            self._providers and await self._provider_has_capacity(self._providers[0])
+        )
 
     def _provision_cutoff(self, now: datetime) -> datetime:
         return now - timedelta(seconds=self._config.provision_timeout_seconds)
@@ -453,14 +543,7 @@ class TargonRentalLoop:
             row.job_token_expires_at = now + _JOB_TTL
             row.updated_at = now
             build_id = row.build_id
-            agent_id = row.agent_id
-            artifact_sha256 = row.artifact_sha256
             pinned_provider = row.provider
-            skip_targon = (row.error_code or "") in _TARGON_BUILD_FALLBACK_CODES
-        if not skip_targon:
-            skip_targon = await self._targon_provision_exhausted(
-                agent_id, artifact_sha256
-            )
         spec = BuildSpec(
             name=f"ditto-miner-build-{str(build_id).replace('-', '')[:12]}"[:32],
             image=image,
@@ -472,8 +555,6 @@ class TargonRentalLoop:
         )
         error_code = "TARGON_SUBMISSION_PROVIDER_ERROR"
         for provider in self._build_providers(pinned_provider):
-            if skip_targon and provider.stored_provider == "targon":
-                continue
             if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None
@@ -580,7 +661,7 @@ class TargonRentalLoop:
         last_uid: str | None = None
         last_provider: ScreeningComputeProvider | None = None
         healthy = False
-        for provider in self._providers:
+        for provider in self._providers[:1]:
             if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None
@@ -674,8 +755,23 @@ class TargonRentalLoop:
                 return False
             repository = image_build.destination.rsplit(":", 1)[0]
             image_reference = f"{repository}@{image_build.image_digest}"
-            row = await session.scalar(
-                select(SubmissionSourceReview)
+            await session.execute(
+                update(SubmissionSourceReview)
+                .where(
+                    SubmissionSourceReview.environment == self._config.environment,
+                    SubmissionSourceReview.status == "queued",
+                    SubmissionSourceReview.attempt_count >= 3,
+                    SubmissionSourceReview.provider_outage_epoch.is_(None),
+                )
+                .values(
+                    status="fallback_required",
+                    error_code="TARGON_SOURCE_REVIEW_LEASE_EXHAUSTED",
+                    completed_at=now,
+                    updated_at=now,
+                )
+            )
+            candidate_id = await session.scalar(
+                select(SubmissionSourceReview.review_id)
                 .join(
                     ScreeningAttempt,
                     ScreeningAttempt.attempt_id == SubmissionSourceReview.attempt_id,
@@ -686,10 +782,37 @@ class TargonRentalLoop:
                     ScreeningAttempt.build_only.is_(False),
                     ScreeningAttempt.deadline > now,
                     SubmissionSourceReview.status == "queued",
+                    SubmissionSourceReview.provider_resource_id.is_(None),
                 )
                 .order_by(SubmissionSourceReview.created_at)
-                .with_for_update(skip_locked=True)
                 .limit(1)
+            )
+            if candidate_id is None:
+                return False
+            provider_gate = await lock_provider_work_gate(
+                session,
+                now=now,
+                kind="screening",
+                key=str(candidate_id),
+            )
+            if not provider_gate.admitted:
+                return False
+            row = await session.scalar(
+                select(SubmissionSourceReview)
+                .join(
+                    ScreeningAttempt,
+                    ScreeningAttempt.attempt_id == SubmissionSourceReview.attempt_id,
+                )
+                .where(
+                    SubmissionSourceReview.review_id == candidate_id,
+                    SubmissionSourceReview.environment == self._config.environment,
+                    ScreeningAttempt.status == "running",
+                    ScreeningAttempt.build_only.is_(False),
+                    ScreeningAttempt.deadline > now,
+                    SubmissionSourceReview.status == "queued",
+                    SubmissionSourceReview.provider_resource_id.is_(None),
+                )
+                .with_for_update(skip_locked=True)
             )
             if row is None:
                 return False
@@ -697,11 +820,22 @@ class TargonRentalLoop:
             row.status = "leased"
             row.controller_epoch = self._epoch
             row.lease_expires_at = now + _SOURCE_LEASE
-            row.attempt_count += 1
+            parked_epoch = row.provider_outage_epoch
+            if parked_epoch is None:
+                row.attempt_count += 1
+            else:
+                row.provider_outage_attempted_epoch = parked_epoch
+            row.provider_outage_epoch = None
             row.job_token_hash = hashlib.sha256(token.encode()).hexdigest()
             row.job_token_expires_at = now + _JOB_TTL
             row.updated_at = now
             review_id = row.review_id
+            register_provider_probe(
+                provider_gate,
+                now=now,
+                kind="screening",
+                key=str(review_id),
+            )
             attempt_id = row.attempt_id
             artifact_sha256 = row.artifact_sha256
             settings_row = await session.scalar(
@@ -745,7 +879,7 @@ class TargonRentalLoop:
             args=("ditto_screener.source_review_job",),
         )
         error_code = "TARGON_SOURCE_REVIEW_PROVIDER_ERROR"
-        for provider in self._providers:
+        for provider in self._providers[:1]:
             if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None
@@ -782,67 +916,6 @@ class TargonRentalLoop:
         await self._fail_review_provision(review_id, error_code)
         return True
 
-    async def _targon_provision_exhausted(
-        self, agent_id: UUID, artifact_sha256: str
-    ) -> bool:
-        async with self._session_maker() as session:
-            code = await session.scalar(
-                select(SubmissionImageBuild.error_code)
-                .where(
-                    SubmissionImageBuild.agent_id == agent_id,
-                    SubmissionImageBuild.artifact_sha256 == artifact_sha256,
-                    SubmissionImageBuild.error_code.in_(
-                        tuple(_TARGON_BUILD_FALLBACK_CODES)
-                    ),
-                )
-                .limit(1)
-            )
-        return code is not None
-
-    async def _cloudrun_fallback_available(self) -> bool:
-        for provider in self._providers:
-            if provider.stored_provider != "gcp":
-                continue
-            if await provider.capacity_ok():
-                return True
-        return False
-
-    async def _requeue_build_for_cloudrun(
-        self, build_id: UUID, error_code: str
-    ) -> bool:
-        if error_code not in _TARGON_BUILD_FALLBACK_CODES:
-            return False
-        if not any(provider.stored_provider == "gcp" for provider in self._providers):
-            return False
-        now = datetime.now(UTC)
-        async with self._session_maker() as session, session.begin():
-            stored = await session.get(SubmissionImageBuild, build_id)
-            attempt = (
-                await session.get(ScreeningAttempt, stored.attempt_id)
-                if stored is not None
-                else None
-            )
-            if (
-                stored is None
-                or attempt is None
-                or stored.status not in _INFLIGHT_JOB
-                or stored.provider != "targon"
-                or attempt.status != "running"
-                or attempt.deadline <= now
-            ):
-                return False
-            stored.status = "queued"
-            stored.provider = "gcp"
-            stored.provider_resource_id = None
-            stored.error_code = error_code
-            stored.controller_epoch = None
-            stored.lease_expires_at = None
-            stored.job_token_hash = None
-            stored.job_token_expires_at = None
-            stored.completed_at = None
-            stored.updated_at = now
-        return True
-
     async def _capture_replica_trace(
         self,
         *,
@@ -853,8 +926,6 @@ class TargonRentalLoop:
         error_code: str,
         observation: ProvisionObservation | None = None,
     ) -> None:
-        if self._traces_put is None:
-            return
         log_tail = ""
         try:
             log_tail = await provider.replica_logs(uid, tail=400)
@@ -864,12 +935,33 @@ class TargonRentalLoop:
             )
         agent_id = None
         attempt_id = None
-        async with self._session_maker() as session:
-            stored = await session.get(SubmissionImageBuild, build_id)
-            if stored is not None:
-                agent_id = stored.agent_id
-                attempt_id = stored.attempt_id
         now = datetime.now(UTC)
+        detail = _private_failure_text(
+            observation.message if observation is not None else ""
+        )
+        log_tail = _private_failure_text(log_tail)
+        async with self._session_maker() as session, session.begin():
+            if kind == "review":
+                stored_review = await session.get(SubmissionSourceReview, build_id)
+                if stored_review is not None:
+                    agent_id = stored_review.agent_id
+                    attempt_id = stored_review.attempt_id
+            else:
+                stored_build = await session.get(SubmissionImageBuild, build_id)
+                if stored_build is not None:
+                    agent_id = stored_build.agent_id
+                    attempt_id = stored_build.attempt_id
+            attempt = (
+                await session.get(ScreeningAttempt, attempt_id)
+                if attempt_id is not None
+                else None
+            )
+            if attempt is not None:
+                attempt.failure_provider = provider.stored_provider
+                attempt.failure_lane = kind
+                attempt.private_failure_detail = detail or None
+                attempt.private_failure_log_tail = log_tail or None
+                attempt.failure_captured_at = now
         record = {
             "schema": SCREENING_TRACE_SCHEMA,
             "captured_at": now.isoformat(),
@@ -883,10 +975,12 @@ class TargonRentalLoop:
             "error_code": error_code,
             "observation": {
                 "status": observation.status if observation is not None else "",
-                "message": observation.message if observation is not None else "",
+                "message": detail,
             },
-            "log_tail": log_tail[-16000:],
+            "log_tail": log_tail,
         }
+        if self._traces_put is None:
+            return
         key = screening_trace_key(
             kind=kind,
             provider=provider.stored_provider,
@@ -1158,7 +1252,7 @@ class TargonRentalLoop:
             provider = self._provider_named(stored_provider)
             observation = await self._observe_provision(provider, uid)
             status = observation.status
-            if status == "running":
+            if status == "running" and observation.ready is not False:
                 continue
             seen = updated_at
             if seen.tzinfo is None:
@@ -1179,15 +1273,6 @@ class TargonRentalLoop:
                 error_code=error_code,
                 observation=observation,
             )
-            if (
-                kind == "build"
-                and provider.stored_provider == "targon"
-                and await self._cloudrun_fallback_available()
-            ):
-                await provider.delete(uid)
-                if await self._requeue_build_for_cloudrun(row_id, error_code):
-                    handled = True
-                    continue
             if kind == "build":
                 await self._fail_build_provision(row_id, error_code)
             elif kind == "runtime":

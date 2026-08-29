@@ -20,16 +20,15 @@ is application semantics, so the authoritative signal is the numeric
 ``middleware/error_envelope.py``, 41xx). The status is kept as a coarse,
 *honest* hint:
 
-* retryable  -> ``503`` + ``Retry-After``
+* busy       -> ``503`` + ``Retry-After`` without starting provider work
 * terminal   -> ``429``
 
 Choosing ``503`` for the retryable case is the entire backward-compatibility
 story, and it is forced rather than chosen. A broker pinned to an old build
 sees only the status, so:
 
-* ``503`` already falls in its transient class -- it backs off, retries, and on
-  final failure reports the same ``502`` to the harness it always did. Strictly
-  better than today, where the same event ends the run instantly.
+* ``503`` remains a capacity signal before provider work starts. Once a
+  provider request starts, any failure parks the evaluation for an operator.
 * ``409``/``403`` would be *worse* than today. The old broker forwards an
   unrecognised 4xx to the harness verbatim, changing the gateway contract
   mid-benchmark -- the one thing its own comments say must never happen.
@@ -110,10 +109,10 @@ _EMBEDDING_MAX_INPUTS = 256
 _PPLX_EMBED_CONTRACT_MODEL = "perplexity/pplx-embed-v1-0.6b"
 _PPLX_EMBED_RESPONSE_MODEL = "pplx-embed-v1-0.6b"
 _MIN_HOSTED_EMBEDDING_BENCH_VERSION = 7
-_PROVIDER_MAX_ATTEMPTS = 3
+_PROVIDER_MAX_ATTEMPTS = 1
 _PROVIDER_RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 _PROVIDER_RETRY_AFTER_MAX_SECONDS = 5
-_CONFIRMATION_READER_BACKPRESSURE_MAX_ATTEMPTS = 7
+_CONFIRMATION_READER_BACKPRESSURE_MAX_ATTEMPTS = 1
 _CONFIRMATION_READER_BACKPRESSURE_MAX_ELAPSED_SECONDS = 80.0
 _CONFIRMATION_READER_RETRY_AFTER_MAX_SECONDS = 60
 _CONFIRMATION_READER_RETRY_AFTER_DEFAULT_SECONDS = 10
@@ -457,89 +456,28 @@ async def _post_provider_with_retry(
     max_elapsed_seconds: float | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> _ProviderResult:
-    """Run one logical provider request under the shared bounded retry policy.
+    """Run exactly one cost-bearing provider request.
 
-    Only connection establishment failures and explicit transient HTTP statuses
-    are safe to repeat here. A read failure is ambiguous: the provider may have
-    completed and billed the request, so the caller fails closed and lets the
-    validator retry the whole benchmark later instead of duplicating execution.
+    The policy-shaped arguments remain for rolling callers, but none can
+    authorize a second dispatch. Failed work is parked for a Backroom retry.
     """
-    max_attempts = max(_PROVIDER_MAX_ATTEMPTS, backpressure_max_attempts)
-    attempt = 0
-    deadline = (
-        time.monotonic() + max_elapsed_seconds
-        if max_elapsed_seconds is not None
-        else None
+    _ = (
+        retry_backpressure,
+        retry_pre_provider_not_found_model,
+        backpressure_max_attempts,
+        require_receipt_free_backpressure,
+        receipt_free_expected_model,
+        receipt_free_expected_provider,
+        max_elapsed_seconds,
+        sleep,
     )
-
-    async def execute() -> _ProviderResult:
-        nonlocal attempt
-        for attempt in range(1, max_attempts + 1):
-            try:
-                response = await client.post(url, json=payload, headers=headers)
-            except (httpx.ConnectError, httpx.ConnectTimeout) as error:
-                if attempt >= _PROVIDER_MAX_ATTEMPTS:
-                    raise _ProviderCallError(
-                        attempts=attempt,
-                        timed_out=isinstance(error, httpx.TimeoutException),
-                    ) from error
-                await sleep(0.25 * (2 ** (attempt - 1)))
-                continue
-            except httpx.TimeoutException as error:
-                raise _ProviderCallError(attempts=attempt, timed_out=True) from error
-            except httpx.TransportError as error:
-                raise _ProviderCallError(attempts=attempt, timed_out=False) from error
-            retryable_status = response.status_code in _PROVIDER_RETRY_STATUSES or (
-                _is_retryable_pre_provider_not_found(
-                    response,
-                    expected_model=retry_pre_provider_not_found_model,
-                )
-            )
-            attempt_limit = _PROVIDER_MAX_ATTEMPTS
-            delay = 0.25 * (2 ** (attempt - 1))
-            confirmation_backpressure = response.status_code in {429, 503}
-            if confirmation_backpressure and require_receipt_free_backpressure:
-                if not _provider_backpressure_is_receipt_free(
-                    response,
-                    expected_model=receipt_free_expected_model,
-                    expected_provider=receipt_free_expected_provider,
-                ):
-                    return _ProviderResult(response=response, attempts=attempt)
-                if (
-                    response.status_code == 429
-                    and backpressure_max_attempts > _PROVIDER_MAX_ATTEMPTS
-                ):
-                    attempt_limit = backpressure_max_attempts
-                    delay = _confirmation_reader_backpressure_delay(response)
-                else:
-                    delay = float(_provider_retry_after_seconds(response))
-            if (
-                retryable_status
-                and attempt < attempt_limit
-                and (retry_backpressure or not _provider_is_backpressure(response))
-            ):
-                if not require_receipt_free_backpressure and _provider_is_backpressure(
-                    response
-                ):
-                    delay = _provider_retry_after_seconds(response)
-                if deadline is not None:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0 or delay >= remaining:
-                        await response.aclose()
-                        raise _ProviderCallError(attempts=attempt, timed_out=True)
-                await response.aclose()
-                await sleep(delay)
-                continue
-            return _ProviderResult(response=response, attempts=attempt)
-        raise AssertionError("provider retry loop exhausted without a terminal result")
-
-    if max_elapsed_seconds is None:
-        return await execute()
     try:
-        async with asyncio.timeout(max_elapsed_seconds):
-            return await execute()
-    except TimeoutError as error:
-        raise _ProviderCallError(attempts=max(1, attempt), timed_out=True) from error
+        response = await client.post(url, json=payload, headers=headers)
+    except httpx.TimeoutException as error:
+        raise _ProviderCallError(attempts=1, timed_out=True) from error
+    except httpx.TransportError as error:
+        raise _ProviderCallError(attempts=1, timed_out=False) from error
+    return _ProviderResult(response=response, attempts=1)
 
 
 def _is_retryable_pre_provider_not_found(
@@ -601,14 +539,7 @@ async def _post_embedding_provider(
     config: Any,
     inputs: list[str],
 ) -> _EmbeddingProviderResult:
-    """Use direct Perplexity first, then OpenRouter for the same frozen model.
-
-    Both routes serve the frozen ``pplx-embed-v1-0.6b`` identity and the direct
-    int8 response is normalized to the public float contract below.  Keeping
-    the direct endpoint first is operationally important: a hung OpenRouter
-    request may consume the full shared provider timeout, leaving no time in a
-    harness's embedding deadline to reach an otherwise healthy fallback.
-    """
+    """Use exactly one configured embedding route for the frozen model."""
     openrouter_payload = {
         "model": config.embedding_model,
         "input": inputs,
@@ -620,65 +551,36 @@ async def _post_embedding_provider(
             "data_collection": "deny",
         },
     }
-    direct: _ProviderResult | None = None
-    direct_error: _ProviderCallError | None = None
     if config.perplexity_api_key is not None:
-        try:
-            direct = await _post_provider_with_retry(
-                client,
-                config.embedding_fallback_url,
-                payload={
-                    "model": _PPLX_EMBED_RESPONSE_MODEL,
-                    "input": inputs,
-                    "dimensions": config.embedding_dimensions,
-                    "encoding_format": "base64_int8",
-                },
-                headers={
-                    "Authorization": f"Bearer {config.perplexity_api_key}",
-                    "Content-Type": "application/json",
-                },
-                retry_backpressure=False,
-            )
-        except _ProviderCallError as error:
-            direct_error = error
-        if direct is not None and direct.response.status_code < 400:
-            return _EmbeddingProviderResult(
-                response=direct.response, attempts=direct.attempts, direct=True
-            )
-        if (
-            direct is not None
-            and direct.response.status_code not in _PROVIDER_RETRY_STATUSES
-        ):
-            return _EmbeddingProviderResult(
-                response=direct.response, attempts=direct.attempts, direct=True
-            )
-        if direct is not None:
-            await direct.response.aclose()
-
-    try:
-        openrouter = await _post_provider_with_retry(
+        direct = await _post_provider_with_retry(
             client,
-            config.embedding_upstream_url,
-            payload=openrouter_payload,
-            headers=_openrouter_headers(config.openrouter_api_key),
+            config.embedding_fallback_url,
+            payload={
+                "model": _PPLX_EMBED_RESPONSE_MODEL,
+                "input": inputs,
+                "dimensions": config.embedding_dimensions,
+                "encoding_format": "base64_int8",
+            },
+            headers={
+                "Authorization": f"Bearer {config.perplexity_api_key}",
+                "Content-Type": "application/json",
+            },
             retry_backpressure=False,
         )
-    except _ProviderCallError as error:
-        raise _ProviderCallError(
-            attempts=(direct_error.attempts if direct_error is not None else 0)
-            + error.attempts,
-            timed_out=error.timed_out,
-        ) from error
+        return _EmbeddingProviderResult(
+            response=direct.response, attempts=direct.attempts, direct=True
+        )
+
+    openrouter = await _post_provider_with_retry(
+        client,
+        config.embedding_upstream_url,
+        payload=openrouter_payload,
+        headers=_openrouter_headers(config.openrouter_api_key),
+        retry_backpressure=False,
+    )
     return _EmbeddingProviderResult(
         response=openrouter.response,
-        attempts=(
-            direct.attempts
-            if direct is not None
-            else direct_error.attempts
-            if direct_error is not None
-            else 0
-        )
-        + openrouter.attempts,
+        attempts=openrouter.attempts,
         direct=False,
     )
 
@@ -899,7 +801,7 @@ def _provider_preferences(
             # objectives after this fast path has failed.
             "sort": "throughput",
             "ignore": ["coreweave"],
-            "allow_fallbacks": True,
+            "allow_fallbacks": False,
             "data_collection": "deny",
             "zdr": True,
         }
@@ -982,12 +884,7 @@ async def _complete_chat_with_recovery(
     expected_completion_price: float | None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> _ChatCompletionResult:
-    """Run fast OpenRouter, then the bounded reliable OpenRouter route.
-
-    Each phase is bounded. The first phase retains throughput routing; the
-    second restricts recovery to the reviewed reliable providers. No request
-    or response content is retained by this orchestration layer.
-    """
+    """Run exactly one provider phase for this cost-bearing request."""
     aggregate = config.routing_mode == "aggregate_throughput"
     phases: list[tuple[int, str, dict[str, str], dict[str, Any]]] = []
     primary = dict(payload)
@@ -1004,19 +901,6 @@ async def _complete_chat_with_recovery(
             primary,
         )
     )
-    if aggregate:
-        reliable = dict(payload)
-        reliable["provider"] = _reliability_provider_preferences()
-        phases.append(
-            (
-                1,
-                config.upstream_url,
-                _openrouter_headers(
-                    config.openrouter_api_key or "", include_metadata=True
-                ),
-                reliable,
-            )
-        )
 
     total_attempts = 0
     router_attempts = 0
@@ -2548,7 +2432,7 @@ def _locked_confirmation_chat_payload(
         expected_provider = {
             "sort": "throughput",
             "ignore": ["coreweave"],
-            "allow_fallbacks": True,
+            "allow_fallbacks": False,
             "data_collection": "deny",
         }
     else:
@@ -2692,8 +2576,8 @@ async def proxy_confirmation_chat_completions(
             headers=_openrouter_headers(
                 config.openrouter_api_key, include_metadata=True
             ),
-            # Keep all retries on the exact purpose-bound provider route. The
-            # shared loop is bounded and still fails closed on ambiguous reads.
+            # These policy-shaped fields remain for rolling compatibility; the
+            # provider dispatcher is structurally single-shot.
             retry_backpressure=True,
             retry_pre_provider_not_found_model=expected_model,
             backpressure_max_attempts=(

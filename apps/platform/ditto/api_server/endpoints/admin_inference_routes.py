@@ -141,9 +141,9 @@ async def list_inference_routes(
                 profile_revision=aggregate_profile_revision(aggregate_model),
                 provider_sort="throughput",
                 provider_order=[],
-                reliability_provider_order=["DeepInfra", "Groq"],
+                reliability_provider_order=[],
                 ignored_providers=["CoreWeave"],
-                allow_fallbacks=True,
+                allow_fallbacks=False,
             )
             if routing_mode == "aggregate_throughput"
             else None

@@ -10,6 +10,13 @@ The scorer's Go module replaces `dittobench-datagen` with the in-tree
 `research/dittobench-datagen` module. A datagen change therefore selects the
 generator, scorer, and validator-stack components in one release plan.
 
+The shadow-only coding-repair compiler under
+`research/dittobench-coding-datagen` is independently release-owned. It
+verifies public practice and curation tooling but does not select the scorer or
+validator stack, publish a runtime image, or affect weights. A future scored
+coding service must add its own explicit dependencies rather than silently
+joining the existing validator stack.
+
 The `Release` workflow first rejects a merge that a newer queued `main` push
 already superseded. For the current merge, affected root surfaces and every
 selected component verify the exact source in parallel before one aggregate
@@ -30,8 +37,8 @@ consume the resulting immutable release commit:
   Cloud Run revision, verifies an authenticated v8 generation, and only then
   promotes it to 100% traffic;
 - screener image publication queues a dedicated Targon Kaniko rental first,
-  then uses the existing GitHub/GCP build runner only after an explicit
-  provider fallback;
+  and parks on failure; the existing GitHub/GCP build runner is used only when
+  an operator selects that provider before a manual Backroom retry;
 - an assembled, signed validator-stack descriptor advances the non-activating
   `candidate-compat-2` channel while remaining smoke tests continue, allowing
   opted-in validators to authenticate and pre-pull its exact component images;
@@ -201,8 +208,9 @@ Only the scoped Cloudflare deployment token belongs in the GitHub environment.
 5. Enable and converge the capacity controller and separate image-builder unit.
    Later semantic releases deploy both units automatically; Ansible remains the
    first-boot/configuration path.
-6. Queue one screener build. Verify either a Targon immutable digest or an
-   audited GCP fallback in Backroom.
+6. Queue one screener build. Verify a Targon immutable digest; if it fails,
+   verify the parked attempt in Backroom before selecting GCP and manually
+   retrying it.
 7. Exercise GCE worker scale `0 -> 1 -> 0` before retiring the pet screener.
 
 Merging application source performs semantic release and automatic runtime

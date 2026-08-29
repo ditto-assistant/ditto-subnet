@@ -626,8 +626,8 @@ func TestChatUpstreamFailureDoesNotChargeReservation(t *testing.T) {
 	if prompt != 0 {
 		t.Fatalf("missing usage must not charge the reservation: prompt=%d reserved=%d", prompt, reserved)
 	}
-	// 3 bounded attempts per phase, 2 phases in aggregate mode.
-	if attempts != 6 || phase != 1 {
+	// Provider failures are single-shot and never enter a fallback phase.
+	if attempts != 1 || phase != 0 {
 		t.Fatalf("attempts/phase: %d/%d", attempts, phase)
 	}
 	var active int

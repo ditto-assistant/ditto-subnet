@@ -28,6 +28,7 @@ from ditto.api_server.endpoints.inference import (
     _REFUSED_REQUEST_FIELDS,
     _attach_platform_middle_out,
     _bounded_provider_cost,
+    _ChatProviderExhausted,
     _complete_chat_with_recovery,
     _estimated_tokens,
     _exchange_message,
@@ -82,7 +83,7 @@ def _embedding_config(**overrides: Any) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_embedding_gateway_falls_back_to_openrouter_on_direct_429() -> None:
+async def test_embedding_gateway_parks_direct_429_without_fallback() -> None:
     requests: list[httpx.Request] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -108,12 +109,10 @@ async def test_embedding_gateway_falls_back_to_openrouter_on_direct_429() -> Non
         result = await _post_embedding_provider(
             client, config=_embedding_config(), inputs=["private input"]
         )
-    assert not result.direct
-    assert result.attempts == 2
-    assert [request.url.host for request in requests] == [
-        "api.perplexity.ai",
-        "openrouter.ai",
-    ]
+    assert result.direct
+    assert result.response.status_code == 429
+    assert result.attempts == 1
+    assert [request.url.host for request in requests] == ["api.perplexity.ai"]
 
 
 @pytest.mark.asyncio
@@ -208,7 +207,7 @@ def test_direct_perplexity_conversion_fails_closed_on_invalid_vectors(
 
 
 @pytest.mark.asyncio
-async def test_provider_retry_policy_retries_explicit_transient_statuses() -> None:
+async def test_provider_policy_parks_first_transient_status() -> None:
     statuses = iter((503, 429, 200))
     calls = 0
 
@@ -229,13 +228,13 @@ async def test_provider_retry_policy_retries_explicit_transient_statuses() -> No
             sleep=no_sleep,
         )
 
-    assert result.response.status_code == 200
-    assert result.attempts == 3
-    assert calls == 3
+    assert result.response.status_code == 503
+    assert result.attempts == 1
+    assert calls == 1
 
 
 @pytest.mark.asyncio
-async def test_provider_retry_policy_honors_bounded_backpressure_hints() -> None:
+async def test_provider_policy_does_not_sleep_or_retry_backpressure() -> None:
     statuses = iter((429, 503, 200))
     sleeps: list[float] = []
 
@@ -256,9 +255,9 @@ async def test_provider_retry_policy_honors_bounded_backpressure_hints() -> None
             sleep=record_sleep,
         )
 
-    assert result.response.status_code == 200
-    assert result.attempts == 3
-    assert sleeps == [5, 5]
+    assert result.response.status_code == 429
+    assert result.attempts == 1
+    assert sleeps == []
 
 
 @pytest.mark.asyncio
@@ -744,7 +743,7 @@ def test_aggregate_route_is_throughput_sorted_and_excludes_unreviewed_routes() -
     ) == {
         "sort": "throughput",
         "ignore": ["coreweave"],
-        "allow_fallbacks": True,
+        "allow_fallbacks": False,
         "data_collection": "deny",
         "zdr": True,
     }
@@ -799,7 +798,7 @@ def _provider_completion(*, provider: str | None, attempt: int = 1) -> dict[str,
 
 
 @pytest.mark.asyncio
-async def test_invalid_fast_response_recovers_through_deepinfra() -> None:
+async def test_invalid_fast_response_parks_without_recovery_dispatch() -> None:
     requests: list[dict[str, Any]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -821,24 +820,24 @@ async def test_invalid_fast_response_recovers_through_deepinfra() -> None:
         return None
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        result = await _complete_chat_with_recovery(
-            client,
-            _recovery_config(),
-            payload={"model": "openai/gpt-oss-20b", "messages": []},
-            model="openai/gpt-oss-20b",
-            expected_provider="openrouter",
-            expected_quantization=None,
-            expected_prompt_price=None,
-            expected_completion_price=None,
-            sleep=no_sleep,
-        )
+        with pytest.raises(_ChatProviderExhausted) as raised:
+            await _complete_chat_with_recovery(
+                client,
+                _recovery_config(),
+                payload={"model": "openai/gpt-oss-20b", "messages": []},
+                model="openai/gpt-oss-20b",
+                expected_provider="openrouter",
+                expected_quantization=None,
+                expected_prompt_price=None,
+                expected_completion_price=None,
+                sleep=no_sleep,
+            )
 
     assert requests[0]["provider"]["sort"] == "throughput"
-    assert requests[1]["provider"]["order"] == ["deepinfra", "groq"]
-    assert result.upstream_provider == "DeepInfra"
-    assert result.fallback_phase == 1
-    assert result.upstream_attempts == 2
-    assert result.openrouter_attempts == 2
+    assert len(requests) == 1
+    assert raised.value.terminal_error_code == "provider_identity_mismatch"
+    assert raised.value.fallback_phase == 0
+    assert raised.value.upstream_attempts == 1
 
 
 def test_openrouter_headers_attribute_chat_and_embedding_traffic() -> None:
@@ -908,7 +907,7 @@ def _confirmation_reader_payload(model: str, **extra: Any) -> dict[str, Any]:
         "provider": {
             "sort": "throughput",
             "ignore": ["coreweave"],
-            "allow_fallbacks": True,
+            "allow_fallbacks": False,
             "data_collection": "deny",
         },
     }

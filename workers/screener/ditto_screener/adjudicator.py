@@ -39,7 +39,6 @@ import httpx
 
 from ditto_screener.evidence_quality import citation_admissibility
 from ditto_screener.source_review import (
-    _MODEL_ERROR_RETRY_DELAYS_SECONDS,
     _OPENROUTER_ATTRIBUTION_HEADERS,
     TarSourceRepository,
     _execute_tool,
@@ -596,32 +595,21 @@ class SourceReviewAdjudicator:
                 "require_parameters": True,
             },
         }
-        attempts = 0
-        while True:
-            response = await client.post(
-                f"{self._base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    **_OPENROUTER_ATTRIBUTION_HEADERS,
-                },
-                json=request,
-                timeout=timeout if timeout is not None else self._timeout_seconds,
-            )
-            payload: object = None
-            if response.status_code < 400:
-                payload = response.json()
-                fault = _retryable_model_error_type(payload)
-                if fault is None:
-                    return _assistant_message(payload)
-            elif response.status_code != 429 and response.status_code < 500:
-                response.raise_for_status()
-            # The router relays provider faults inside HTTP 200 bodies as well
-            # as as status codes; both ride the same unbilled ladder.
-            if attempts >= len(_MODEL_ERROR_RETRY_DELAYS_SECONDS):
-                response.raise_for_status()
-                raise ValueError("adjudicator model body was unusable")
-            await asyncio.sleep(_MODEL_ERROR_RETRY_DELAYS_SECONDS[attempts])
-            attempts += 1
+        response = await client.post(
+            f"{self._base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                **_OPENROUTER_ATTRIBUTION_HEADERS,
+            },
+            json=request,
+            timeout=timeout if timeout is not None else self._timeout_seconds,
+        )
+        if response.status_code >= 400:
+            response.raise_for_status()
+        payload: object = response.json()
+        if _retryable_model_error_type(payload) is not None:
+            raise ValueError("adjudicator model body was unusable")
+        return _assistant_message(payload)
 
 
 def _assistant_message(payload: object) -> dict[str, object]:
