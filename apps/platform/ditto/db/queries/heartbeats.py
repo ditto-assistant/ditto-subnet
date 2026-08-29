@@ -691,6 +691,7 @@ async def upsert_screener_heartbeat(
     screening_progress: dict | None,
     system_metrics: dict | None,
     review_settings: dict | None,
+    host_specs: dict | None,
     reported_at: datetime,
     seen_at: datetime,
     signature: str,
@@ -723,8 +724,11 @@ async def upsert_screener_heartbeat(
             "system_metrics": system_metrics,
             "screening_progress": screening_progress,
             "review_settings": review_settings,
+            "host_specs": host_specs,
         }
-        if screening_progress is not None or review_settings is not None
+        if screening_progress is not None
+        or review_settings is not None
+        or host_specs is not None
         else system_metrics
     )
     row.reported_at = reported_at

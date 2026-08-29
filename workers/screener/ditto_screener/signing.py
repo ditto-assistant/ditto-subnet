@@ -12,9 +12,11 @@ from typing import TYPE_CHECKING, Any
 
 from ditto_screener.errors import ScreenerConfigError
 from ditto_screener.heartbeat import (
+    HostSpecs,
     ReviewSettingsStatus,
     ScreenerProgress,
     SystemMetrics,
+    host_specs_signing_token,
     review_settings_signing_token,
     screener_progress_signing_token,
     system_metrics_signing_token,
@@ -125,6 +127,7 @@ def heartbeat_signing_message(
     progress: ScreenerProgress | None = None,
     system_metrics: SystemMetrics | None,
     review_settings: ReviewSettingsStatus | None = None,
+    host_specs: HostSpecs | None = None,
     timestamp: int,
 ) -> bytes:
     """Build the versioned heartbeat payload mirrored by the platform."""
@@ -142,18 +145,30 @@ def heartbeat_signing_message(
             raise ValueError(
                 "heartbeat protocol v4 requires instance_id and review settings"
             )
+        if protocol_version >= 6 and host_specs is None:
+            raise ValueError("heartbeat protocol v6 requires host specs")
         review_settings_token = review_settings_signing_token(
             review_settings, protocol_version=protocol_version
         )
-        return (
-            "ditto-screener-heartbeat:v4:"
-            f"{screener_hotkey}:{software_version}:{protocol_version}:{policy_version}:"
-            f"{state}:{active_agent_id or ''}:{instance_id}:"
-            f"{screener_progress_signing_token(progress)}:"
-            f"{system_metrics_signing_token(system_metrics)}:"
-            f"{review_settings_token}:"
-            f"{timestamp}"
-        ).encode()
+        # v5 and v6 extend the v4 field list rather than opening a new prefix:
+        # protocol_version is itself signed, so appending a field can never make
+        # an older message re-read as a newer one.
+        fields = [
+            screener_hotkey,
+            software_version,
+            str(protocol_version),
+            str(policy_version),
+            state,
+            str(active_agent_id or ""),
+            instance_id,
+            screener_progress_signing_token(progress),
+            system_metrics_signing_token(system_metrics),
+            review_settings_token,
+        ]
+        if protocol_version >= 6:
+            fields.append(host_specs_signing_token(host_specs))
+        fields.append(str(timestamp))
+        return ("ditto-screener-heartbeat:v4:" + ":".join(fields)).encode()
     if protocol_version >= 3:
         # v3 adds the per-instance identity so the fleet's shared hotkey no
         # longer collapses every worker into one heartbeat row. instance_id is
@@ -190,6 +205,7 @@ def sign_heartbeat(
     progress: ScreenerProgress | None = None,
     system_metrics: SystemMetrics | None,
     review_settings: ReviewSettingsStatus | None = None,
+    host_specs: HostSpecs | None = None,
     timestamp: int,
 ) -> str:
     message = heartbeat_signing_message(
@@ -203,6 +219,7 @@ def sign_heartbeat(
         progress=progress,
         system_metrics=system_metrics,
         review_settings=review_settings,
+        host_specs=host_specs,
         timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -10,9 +11,11 @@ from pydantic import ValidationError
 
 from ditto_screener.heartbeat import (
     DockerHealth,
+    HostSpecs,
     ScreenerHeartbeatRequest,
     ScreenerProgress,
     SystemMetricsCollector,
+    collect_host_specs,
     probe_docker_health,
     source_review_progress_stage,
 )
@@ -188,3 +191,180 @@ def test_v4_requires_bounded_review_settings_status() -> None:
     del payload["review_settings"]
     with pytest.raises(ValidationError, match="requires review settings"):
         ScreenerHeartbeatRequest.model_validate(payload)
+
+
+_V6_REVIEW_SETTINGS = {
+    "revision": 43,
+    "scope": "*",
+    "mode": "enforce",
+    "checksum": "cd" * 32,
+    "source": "platform",
+    "policy_manifest_profile": "l1_l2",
+    "policy_manifest_rotation_id": "policy-v11-l1-l2",
+    "policy_manifest_digest": "ef" * 32,
+}
+
+
+def _cpu_counter(
+    logical_cpus: int, physical_cores: int | None = None
+) -> Callable[..., int | None]:
+    """Stand in for ``psutil.cpu_count``, which selects on a ``logical`` kwarg."""
+
+    def count(logical: bool = True) -> int | None:
+        return logical_cpus if logical else physical_cores
+
+    return count
+
+
+def _v6_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "screener_hotkey": _HOTKEY,
+        "software_version": "0.16.0",
+        "protocol_version": 6,
+        "policy_version": 11,
+        "state": "polling",
+        "instance_id": "ditto-screener-prod",
+        "timestamp": 120,
+        "signature": "ab" * 64,
+        "review_settings": dict(_V6_REVIEW_SETTINGS),
+        "host_specs": {
+            "cpu_count": 16,
+            "cpu_physical_cores": 8,
+            "memory_total_mib": 64000,
+            "disk_total_gib": 500,
+            "architecture": "x86_64",
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_v6_requires_the_host_specs_it_announces() -> None:
+    assert ScreenerHeartbeatRequest.model_validate(_v6_payload()).host_specs is not None
+    payload = _v6_payload()
+    del payload["host_specs"]
+    with pytest.raises(ValidationError, match="requires host specs"):
+        ScreenerHeartbeatRequest.model_validate(payload)
+
+
+def test_host_specs_are_refused_below_v6() -> None:
+    with pytest.raises(ValidationError, match="require heartbeat protocol v6"):
+        ScreenerHeartbeatRequest.model_validate(_v6_payload(protocol_version=5))
+
+
+def test_host_specs_stay_inside_the_announced_allowlist() -> None:
+    """The specs are a fixed shape, not a channel for host identity."""
+    specs = ScreenerHeartbeatRequest.model_validate(
+        _v6_payload(
+            host_specs={
+                "cpu_count": 16,
+                "cpu_physical_cores": 8,
+                "memory_total_mib": 64000,
+                "disk_total_gib": 500,
+                "architecture": "x86_64",
+                "hostname": "must-not-leave-the-host",
+                "serial_number": "must-not-leave-the-host",
+            }
+        )
+    ).host_specs
+    assert specs is not None
+    assert set(specs.model_dump()) == {
+        "cpu_count",
+        "cpu_physical_cores",
+        "memory_total_mib",
+        "disk_total_gib",
+        "architecture",
+    }
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"cpu_count": 0},
+        {"cpu_count": 2048},
+        {"memory_total_mib": 0},
+        {"disk_total_gib": 0},
+        {"architecture": "x86_64:with:delimiters"},
+        {"architecture": "x86_64,with,commas"},
+        {"architecture": ""},
+        # Physical cores above logical CPUs cannot describe a real host, and
+        # would let two different machines share one signing token.
+        {"cpu_count": 4, "cpu_physical_cores": 8},
+    ],
+)
+def test_host_specs_reject_unrepresentable_hardware(override: dict) -> None:
+    specs = {
+        "cpu_count": 16,
+        "cpu_physical_cores": 8,
+        "memory_total_mib": 64000,
+        "disk_total_gib": 500,
+        "architecture": "x86_64",
+    }
+    specs.update(override)
+    with pytest.raises(ValidationError):
+        ScreenerHeartbeatRequest.model_validate(_v6_payload(host_specs=specs))
+
+
+def test_collect_host_specs_reports_whole_units() -> None:
+    specs = collect_host_specs(
+        cpu_count=_cpu_counter(16, 8),
+        virtual_memory=lambda: SimpleNamespace(total=64 * 1024**3),
+        disk_usage=lambda _path: SimpleNamespace(total=500 * 1024**3),
+        machine=lambda: "x86_64",
+    )
+    assert specs == HostSpecs(
+        cpu_count=16,
+        cpu_physical_cores=8,
+        memory_total_mib=65536,
+        disk_total_gib=500,
+        architecture="x86_64",
+    )
+
+
+def test_collect_host_specs_tolerates_a_kernel_without_physical_cores() -> None:
+    specs = collect_host_specs(
+        cpu_count=_cpu_counter(4),
+        virtual_memory=lambda: SimpleNamespace(total=8 * 1024**3),
+        disk_usage=lambda _path: SimpleNamespace(total=80 * 1024**3),
+        machine=lambda: "aarch64",
+    )
+    assert specs is not None
+    assert specs.cpu_physical_cores is None
+
+
+def test_an_unfamiliar_architecture_costs_only_its_own_label() -> None:
+    specs = collect_host_specs(
+        cpu_count=_cpu_counter(4),
+        virtual_memory=lambda: SimpleNamespace(total=8 * 1024**3),
+        disk_usage=lambda _path: SimpleNamespace(total=80 * 1024**3),
+        machine=lambda: "riscv64:experimental",
+    )
+    assert specs is not None
+    assert specs.architecture == "riscv64-experimental"
+    assert specs.cpu_count == 4
+
+
+def test_a_host_that_reports_no_architecture_still_announces_its_size() -> None:
+    specs = collect_host_specs(
+        cpu_count=_cpu_counter(4),
+        virtual_memory=lambda: SimpleNamespace(total=8 * 1024**3),
+        disk_usage=lambda _path: SimpleNamespace(total=80 * 1024**3),
+        machine=lambda: "",
+    )
+    assert specs is not None
+    assert specs.architecture == "unknown"
+
+
+def test_unreadable_hardware_never_costs_a_heartbeat() -> None:
+    def explode() -> object:
+        raise OSError("/proc is not readable in this sandbox")
+
+    assert (
+        collect_host_specs(
+            cpu_count=_cpu_counter(4),
+            virtual_memory=explode,
+            disk_usage=lambda _path: SimpleNamespace(total=80 * 1024**3),
+            machine=lambda: "x86_64",
+        )
+        is None
+    )

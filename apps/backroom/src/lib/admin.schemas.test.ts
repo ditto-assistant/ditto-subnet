@@ -363,6 +363,43 @@ describe('admin API schemas', () => {
     })
   })
 
+  it('carries announced host specs, and survives a node that has not reported any', () => {
+    const base = {
+      environment: 'prod', node_id: 'ditto-screener-prod', provider: 'hetzner',
+      provider_resource_id: 'hz-1', screener_hotkey: '5Node', status: 'active',
+      capacity: 1, token_expires_at: '2026-08-29T06:00:00Z',
+      registered_at: '2026-08-29T00:00:00Z', rotated_at: '2026-08-29T00:00:00Z',
+      revoked_at: null, status_reason: null, heartbeat_seen_at: null,
+      software_version: null, protocol_version: null, policy_version: null,
+      current_phase: null,
+    }
+    const parsed = screenerCapacityViewSchema.parse({
+      snapshot: null,
+      events: [],
+      builds: [],
+      nodes: [
+        {
+          ...base,
+          host_specs: {
+            cpu_count: 16, cpu_physical_cores: 8, memory_total_mib: 64000,
+            disk_total_gib: 500, architecture: 'x86_64',
+          },
+        },
+        // A pre-v6 worker announces nothing; a Platform that predates the field
+        // omits the key entirely. Neither may fail the whole capacity view.
+        { ...base, node_id: 'gce-overflow-1', host_specs: null },
+        { ...base, node_id: 'gce-overflow-2' },
+      ],
+    })
+
+    expect(parsed.nodes[0].host_specs).toEqual({
+      cpu_count: 16, cpu_physical_cores: 8, memory_total_mib: 64000,
+      disk_total_gib: 500, architecture: 'x86_64',
+    })
+    expect(parsed.nodes[1].host_specs).toBeNull()
+    expect(parsed.nodes[2].host_specs).toBeNull()
+  })
+
   it('accepts a gcp-then-targon list but confirms it as an exact first-provider string', () => {
     const settings = screenerProviderSettingsSchema.parse({
       runtime_provider_priority: ['gcp', 'targon'],

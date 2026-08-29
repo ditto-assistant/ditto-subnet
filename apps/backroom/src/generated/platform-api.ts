@@ -12224,6 +12224,37 @@ export interface components {
              */
             slot_id: string;
         };
+        /**
+         * HostSpecs
+         * @description What a fleet host is built from, not what it is doing right now.
+         *
+         *     ``SystemMetrics`` is a coarse load sample; this is the fixed hardware the
+         *     worker announces once per boot. Mirrors ``ditto_screener.heartbeat``.
+         */
+        HostSpecs: {
+            /**
+             * Architecture
+             * @description e.g. x86_64, aarch64.
+             */
+            architecture: string;
+            /**
+             * Cpu Count
+             * @description Logical CPUs visible to the worker.
+             */
+            cpu_count: number;
+            /** Cpu Physical Cores */
+            cpu_physical_cores?: number | null;
+            /**
+             * Disk Total Gib
+             * @description Total size of / in GiB.
+             */
+            disk_total_gib: number;
+            /**
+             * Memory Total Mib
+             * @description Total RAM in MiB.
+             */
+            memory_total_mib: number;
+        };
         /** InferenceCalibrationRoute */
         InferenceCalibrationRoute: {
             /** Model */
@@ -15772,6 +15803,22 @@ export interface components {
             total_scores: number;
         };
         /**
+         * PublicHostSpecs
+         * @description Hardware a screener announced about itself, not what it is doing.
+         */
+        PublicHostSpecs: {
+            /** Architecture */
+            architecture: string;
+            /** Cpu Count */
+            cpu_count: number;
+            /** Cpu Physical Cores */
+            cpu_physical_cores?: number | null;
+            /** Disk Total Gib */
+            disk_total_gib: number;
+            /** Memory Total Mib */
+            memory_total_mib: number;
+        };
+        /**
          * PublicInferenceRun
          * @description Platform-metered inference spend for one validator benchmark lease.
          *
@@ -16838,6 +16885,7 @@ export interface components {
              * @enum {string}
              */
             health: "healthy" | "warning" | "critical" | "unknown";
+            host_specs?: components["schemas"]["PublicHostSpecs"] | null;
             /**
              * Instance Id
              * @description Per-worker instance id (fleet shares one hotkey).
@@ -19130,6 +19178,7 @@ export interface components {
         ScreenerHeartbeatRequest: {
             /** Active Agent Id */
             active_agent_id?: string | null;
+            host_specs?: components["schemas"]["HostSpecs"] | null;
             /** Instance Id */
             instance_id?: string | null;
             /** Policy Version */
@@ -19416,6 +19465,7 @@ export interface components {
             environment: string;
             /** Heartbeat Seen At */
             heartbeat_seen_at?: string | null;
+            host_specs?: components["schemas"]["HostSpecs"] | null;
             /** Image Reference */
             image_reference?: string | null;
             /** Node Id */

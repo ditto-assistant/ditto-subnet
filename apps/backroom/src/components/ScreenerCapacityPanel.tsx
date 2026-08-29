@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react'
 import type {
   ScreenerCapacityNode,
   ScreenerCapacityView,
+  ScreenerHostSpecs,
   ScreenerNodeChannelSettings,
   ScreenerNodeChannelSettingsControl,
   ScreenerProviderSettings,
@@ -45,6 +46,24 @@ function formatWhen(value: string | null) {
 
 function shortIdentity(value: string) {
   return value.length > 24 ? `${value.slice(0, 14)}…${value.slice(-6)}` : value
+}
+
+/** The worker's own account of its hardware. Read against `capacity` and the
+ * channel limits below it, this is what separates "this node is oversubscribed"
+ * from "this node is small" — two states that look identical in a backlog. */
+function hostSpecsLine(specs: ScreenerHostSpecs) {
+  const memoryGib = Math.round(specs.memory_total_mib / 1024)
+  return `${specs.cpu_count} vCPU · ${memoryGib} GiB · ${specs.disk_total_gib} GiB disk`
+}
+
+function hostSpecsTitle(specs: ScreenerHostSpecs) {
+  const cores =
+    specs.cpu_physical_cores === null ? '' : `${specs.cpu_physical_cores} physical cores, `
+  const memoryGib = Math.round(specs.memory_total_mib / 1024)
+  return (
+    `Announced by the worker's own signed heartbeat · ${specs.cpu_count} logical CPUs ` +
+    `(${cores}${specs.architecture}) · ${memoryGib} GiB RAM · ${specs.disk_total_gib} GiB disk`
+  )
 }
 
 function nodeTone(status: ScreenerCapacityNode['status']) {
@@ -810,12 +829,13 @@ export function ScreenerCapacityPanel({
           </p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left text-xs">
+            <table className="w-full min-w-[900px] text-left text-xs">
               <thead className="bg-[var(--panel-soft)] text-[var(--muted)]">
                 <tr>
                   <th className="px-4 py-3 font-medium sm:px-5">Node</th>
                   <th className="px-4 py-3 font-medium">Provider</th>
                   <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Announced host</th>
                   <th className="px-4 py-3 font-medium">Version</th>
                   <th className="px-4 py-3 font-medium">Current phase</th>
                   <th className="px-4 py-3 font-medium">Last heartbeat</th>
@@ -834,6 +854,15 @@ export function ScreenerCapacityPanel({
                       <span className={`rounded-full px-2 py-1 font-medium ${nodeTone(node.status)}`}>
                         {node.status}
                       </span>
+                    </td>
+                    <td className="px-4 py-3.5 text-[var(--muted-strong)]">
+                      {node.host_specs ? (
+                        <span title={hostSpecsTitle(node.host_specs)}>
+                          {hostSpecsLine(node.host_specs)}
+                        </span>
+                      ) : (
+                        <span className="text-[var(--muted)]">Not announced</span>
+                      )}
                     </td>
                     <td className="px-4 py-3.5 text-[var(--muted-strong)]">
                       {node.software_version ?? '—'}

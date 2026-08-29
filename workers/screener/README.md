@@ -81,10 +81,22 @@ defined by the open platform fleet-health work. It reports only five-point
 CPU/memory/disk buckets, aggregate Docker health/counts, worker state, and the
 active agent ID. Heartbeat protocol v2 may also include one allowlisted stage
 (`preparing`, `downloading`, `validating`, `building`, `starting`,
-`health_check`, or `submitting`) and the current job's signed start time. It
-never includes artifact contents, build output, dependency or image metadata,
-policy internals, paths, prompts, evidence, or secrets. An older platform can
-reject the optional endpoint without blocking or changing screening.
+`health_check`, or `submitting`) and the current job's signed start time.
+
+Heartbeat protocol v6 additionally announces the worker's own hardware, so an
+operator can tell a node that is *slow* from a node that is *small*: logical
+CPU count, physical cores when the kernel reports them, total RAM, the total
+size of `/`, and the machine architecture. These are whole-unit sizes of the
+machine, not an inventory of it — no hostname, serial, provider metadata,
+image, mount layout, or free-space trace. They are sampled once at startup and
+signed with the rest of the heartbeat, so a worker cannot advertise hardware
+its hotkey did not sign for. A worker that cannot read its own hardware
+reports at v5 rather than going dark.
+
+The heartbeat never includes artifact contents, build output, dependency or
+image metadata, policy internals, paths, prompts, evidence, or secrets. An
+older platform can reject the optional endpoint without blocking or changing
+screening.
 
 ## Local development
 

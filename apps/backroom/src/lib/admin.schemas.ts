@@ -579,6 +579,17 @@ export const screenerCapacitySnapshotSchema = z.object({
   updated_at: z.string(),
 })
 
+/** Hardware the worker announced about itself in its own signed heartbeat
+ * (protocol v6+), not what the provider was asked to allocate. Absent while a
+ * node has yet to report, and during a Backroom-first rolling deploy. */
+export const screenerHostSpecsSchema = z.object({
+  cpu_count: z.number().int().positive(),
+  cpu_physical_cores: z.number().int().positive().nullish().transform((value) => value ?? null),
+  memory_total_mib: z.number().int().positive(),
+  disk_total_gib: z.number().int().positive(),
+  architecture: z.string().min(1),
+})
+
 export const screenerCapacityNodeSchema = z.object({
   environment: z.string().min(1),
   node_id: z.string().min(1),
@@ -597,6 +608,7 @@ export const screenerCapacityNodeSchema = z.object({
   protocol_version: z.number().int().nullable(),
   policy_version: z.number().int().nullable(),
   current_phase: z.string().nullable(),
+  host_specs: screenerHostSpecsSchema.nullish().transform((value) => value ?? null),
 })
 
 export const trustedImageBuildSchema = z.object({
@@ -682,6 +694,7 @@ export const screenerCapacityViewSchema = z.object({
 
 export type ScreenerCapacityView = z.infer<typeof screenerCapacityViewSchema>
 export type ScreenerCapacityNode = z.infer<typeof screenerCapacityNodeSchema>
+export type ScreenerHostSpecs = z.infer<typeof screenerHostSpecsSchema>
 export type TrustedImageBuild = z.infer<typeof trustedImageBuildSchema>
 export type ScreenerProviderSettings = z.infer<typeof screenerProviderSettingsSchema>
 export type ScreenerProviderSettingsControl = z.infer<typeof screenerProviderSettingsControlSchema>

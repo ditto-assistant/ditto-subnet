@@ -96,6 +96,7 @@ from ditto.api_models import (
     PublicEfficiencyStatus,
     PublicEmissionRecipient,
     PublicHealthResponse,
+    PublicHostSpecs,
     PublicInferenceRun,
     PublicKothEmissions,
     PublicLeaderboardEntry,
@@ -165,7 +166,10 @@ from ditto.api_models.screener import (
     SourceReviewFinding,
 )
 from ditto.api_models.stack_health import ValidatorStackHealth
-from ditto.api_models.system_health import SystemMetrics
+from ditto.api_models.system_health import (
+    SystemMetrics,
+    host_specs_from_heartbeat_envelope,
+)
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator import (
     V9BaseEvidence,
@@ -985,6 +989,20 @@ def _screener_system_metrics(raw: dict | None) -> PublicSystemMetrics | None:
         nested = raw.get("system_metrics")
         return _public_system_metrics(nested if isinstance(nested, dict) else None)
     return _public_system_metrics(raw)
+
+
+def _public_host_specs(raw: dict | None) -> PublicHostSpecs | None:
+    """Expose the announced hardware allowlist from a stored v6 envelope."""
+    specs = host_specs_from_heartbeat_envelope(raw)
+    if specs is None:
+        return None
+    return PublicHostSpecs(
+        cpu_count=specs.cpu_count,
+        cpu_physical_cores=specs.cpu_physical_cores,
+        memory_total_mib=specs.memory_total_mib,
+        disk_total_gib=specs.disk_total_gib,
+        architecture=specs.architecture,
+    )
 
 
 def _stored_screener_progress(raw: dict | None) -> ScreenerProgress | None:
@@ -4412,6 +4430,7 @@ async def screeners(
                 availability=availability,
                 health=health,
                 system_metrics=metrics,
+                host_specs=_public_host_specs(row.system_metrics),
             )
         )
     return PublicScreenerHeartbeatsResponse(
