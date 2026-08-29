@@ -29,6 +29,8 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
 ProtectControlGroups=true
-RestrictSUIDSGID=true
+# The updater must drop to the service user for unprivileged checkout/build work.
+# NoNewPrivileges still prevents gaining privileges through exec.
+RestrictSUIDSGID=false
 LockPersonality=true
 UMask=0077
