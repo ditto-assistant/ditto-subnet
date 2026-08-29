@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.129.0 (2026-08-29)
+
+### Features
+
+- **coding**: Add shadow pristine grader
+  ([`0e18a8c`](https://github.com/ditto-assistant/ditto-subnet/commit/0e18a8c731af2d2aa33fc19a618eb05f99f547cf))
+
+
 ## v0.128.0 (2026-08-29)
 
 ### Features
