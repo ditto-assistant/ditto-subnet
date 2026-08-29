@@ -87,6 +87,7 @@ import {
   rotateScreenerPolicyManifestInputSchema,
   setQueuePolicySettingsInputSchema,
   scheduleScreenerPolicyActivationInputSchema,
+  restoreScoredScreeningSnapshotInputSchema,
   setValidatorSlotSettingsInputSchema,
   updateSubmissionSettingsInputSchema,
   unbanHotkeyInputSchema,
@@ -183,6 +184,7 @@ import {
   fetchQueuePolicySettings,
   fetchScreenerPolicyActivation,
   scheduleScreenerPolicyActivation,
+  restoreScoredScreeningSnapshot,
   createScreenerBootstrapGrant,
   fetchScreenerCapacity,
   fetchScreenerReviewControl,
@@ -264,6 +266,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'apply_screener_review_settings',
   'rotate_screener_policy_manifest',
   'schedule_screener_policy_activation',
+  'restore_scored_screening_snapshot',
   'set_validator_slot_settings',
   'set_inference_concurrency_settings',
   'start_runtime_profile',
@@ -529,6 +532,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read the scheduled screening-policy activation and its revision history; latest is null when none was ever scheduled.',
   schedule_screener_policy_activation:
     'Schedule one future screening-policy activation. Confirmation: "SCHEDULE SCREENER POLICY ACTIVATION". 409 stale revision; 422 bad phrase, naive/past time, or out-of-range target.',
+  restore_scored_screening_snapshot:
+    'Atomically restore a scored cohort displaced by one scored-rescreen activation. Confirmation: "RESTORE SCORED SCREENING SNAPSHOT". Requires exact activation revisions, policy versions, benchmark version, and cohort count.',
   get_continual_retest_settings:
     'Read effective continual-retest policy, fleet readiness, compatibility field_support, defaults, and optionally paged newest-first revision history. historyLimit defaults to 0.',
   get_agent_scores:
@@ -1728,6 +1733,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => scheduleScreenerPolicyActivation(input, props.session.email)),
+  )
+
+  registerTool(
+    'restore_scored_screening_snapshot',
+    {
+      title: 'Restore scored screening snapshot',
+      description:
+        'Incident recovery for a cohort that already has a complete benchmark score quorum but was displaced by a later scored-rescreen activation. The Platform derives the exact cohort under row locks, requires its latest attempt to belong to sourcePolicyVersion after sourceActivationRevision, restores each submission to its last successful screening attempt at or below targetPolicyVersion, and appends one immutable audit row per submission. It does not create screening attempts, builds, datasets, scores, or validator leases. Supply expectedCurrentActivationRevision, sourceActivationRevision, sourcePolicyVersion, targetPolicyVersion, benchVersion, expectedCount, an auditable reason, and exact confirmation "RESTORE SCORED SCREENING SNAPSHOT". Requires backroom:write.',
+      inputSchema: restoreScoredScreeningSnapshotInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => restoreScoredScreeningSnapshot(input, props.session.email)),
   )
 
   registerTool(

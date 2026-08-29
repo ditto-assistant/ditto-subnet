@@ -10,16 +10,25 @@ and verdict paths depend on.
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
 )
 
+from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.dependencies import get_session
+from ditto.db.models import (
+    Agent,
+    Score,
+    ScoredScreeningSnapshotRestoration,
+    ScreeningAttempt,
+)
 from ditto.db.queries.screener_policy_activation import (
     insert_screener_policy_activation,
 )
@@ -34,6 +43,7 @@ _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
 _HEADERS = {"Authorization": f"Bearer {_ADMIN_TOKEN}"}
 _URL = "/api/v1/admin/screener-policy-activation"
 _CONFIRMATION = "SCHEDULE SCREENER POLICY ACTIVATION"
+_RESTORE_CONFIRMATION = "RESTORE SCORED SCREENING SNAPSHOT"
 
 
 @pytest.fixture
@@ -343,3 +353,178 @@ class TestResolverDueActivation:
             await session.commit()
             policy = await resolve_screener_policy_activation(session)
             assert policy.required_policy_version == SCREENING_POLICY_VERSION
+
+
+class TestRestoreScoredSnapshot:
+    async def test_restores_exact_historical_pass_without_requeueing(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        activation_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, activation_maker)
+        now = datetime.now(UTC)
+        agent_id = uuid4()
+        prior_attempt_id = uuid4()
+        displaced_attempt_id = uuid4()
+        async with activation_maker() as session:
+            source = await insert_screener_policy_activation(
+                session,
+                parent_revision=0,
+                target_policy_version=SCREENING_POLICY_VERSION,
+                activate_at=now - timedelta(hours=2),
+                rescreen_scored=True,
+                reason="test source activation rescreened the scored cohort",
+                actor="test",
+            )
+            current = await insert_screener_policy_activation(
+                session,
+                parent_revision=source.revision,
+                target_policy_version=SCREENING_FLOOR_POLICY_VERSION,
+                activate_at=now - timedelta(hours=1),
+                rescreen_scored=False,
+                reason="test rollback disabled automatic scored rescreening",
+                actor="test",
+            )
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey="5HK-restore-test",
+                    name="restore-test",
+                    sha256="12" * 32,
+                    status=AgentStatus.SCREENING_FAILED,
+                    screening_policy_version=SCREENING_POLICY_VERSION,
+                    screening_reason="Screening was interrupted",
+                    screening_reason_code="source-review-http-502",
+                )
+            )
+            session.add_all(
+                [
+                    ScreeningAttempt(
+                        attempt_id=prior_attempt_id,
+                        agent_id=agent_id,
+                        screener_hotkey="5Screener",
+                        policy_version=SCREENING_FLOOR_POLICY_VERSION - 1,
+                        status="passed",
+                        started_at=now - timedelta(hours=4),
+                        deadline=now - timedelta(hours=3, minutes=30),
+                        finished_at=now - timedelta(hours=3, minutes=45),
+                    ),
+                    ScreeningAttempt(
+                        attempt_id=displaced_attempt_id,
+                        agent_id=agent_id,
+                        screener_hotkey="5Screener",
+                        policy_version=SCREENING_POLICY_VERSION,
+                        status="failed",
+                        started_at=now - timedelta(minutes=110),
+                        deadline=now - timedelta(minutes=40),
+                        finished_at=now - timedelta(minutes=100),
+                        reason_code="source-review-http-502",
+                    ),
+                ]
+            )
+            for index in range(3):
+                session.add(
+                    Score(
+                        agent_id=agent_id,
+                        validator_hotkey=f"5Validator-{index}",
+                        bench_version=12,
+                        run_id=f"run-{index}",
+                        signature=None,
+                        seed=42,
+                        composite=0.7,
+                        tool_mean=0.7,
+                        memory_mean=0.7,
+                        median_ms=100,
+                        n=10,
+                        details=None,
+                        generated_at=now - timedelta(hours=3),
+                    )
+                )
+            await session.commit()
+
+        response = await client.post(
+            f"{_URL}/restore-scored-snapshot",
+            headers=_HEADERS,
+            json={
+                "expected_current_activation_revision": current.revision,
+                "source_activation_revision": source.revision,
+                "source_policy_version": SCREENING_POLICY_VERSION,
+                "target_policy_version": SCREENING_FLOOR_POLICY_VERSION,
+                "bench_version": 12,
+                "expected_count": 1,
+                "reason": "restore the pre-v11 scored screening snapshot",
+                "actor": "backroom:test",
+                "confirmation": _RESTORE_CONFIRMATION,
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["restored_count"] == 1
+        assert body["submissions"][0]["restored_policy_version"] == 9
+
+        async with activation_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.status == AgentStatus.SCORED
+            assert agent.screening_policy_version == 9
+            assert agent.screening_reason is None
+            assert agent.screening_reason_code is None
+            displaced = await session.get(ScreeningAttempt, displaced_attempt_id)
+            assert displaced is not None and displaced.status == "failed"
+            audits = list(
+                await session.scalars(
+                    select(ScoredScreeningSnapshotRestoration).where(
+                        ScoredScreeningSnapshotRestoration.agent_id == agent_id
+                    )
+                )
+            )
+            assert len(audits) == 1
+            assert audits[0].restored_attempt_id == prior_attempt_id
+            assert audits[0].score_count == 3
+
+    async def test_expected_count_guard_leaves_cohort_untouched(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        activation_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, activation_maker)
+        now = datetime.now(UTC)
+        async with activation_maker() as session:
+            source = await insert_screener_policy_activation(
+                session,
+                parent_revision=0,
+                target_policy_version=SCREENING_POLICY_VERSION,
+                activate_at=now - timedelta(hours=2),
+                rescreen_scored=True,
+                reason="test source activation rescreened the scored cohort",
+                actor="test",
+            )
+            current = await insert_screener_policy_activation(
+                session,
+                parent_revision=source.revision,
+                target_policy_version=SCREENING_FLOOR_POLICY_VERSION,
+                activate_at=now - timedelta(hours=1),
+                rescreen_scored=False,
+                reason="test rollback disabled automatic scored rescreening",
+                actor="test",
+            )
+            await session.commit()
+
+        response = await client.post(
+            f"{_URL}/restore-scored-snapshot",
+            headers=_HEADERS,
+            json={
+                "expected_current_activation_revision": current.revision,
+                "source_activation_revision": source.revision,
+                "source_policy_version": SCREENING_POLICY_VERSION,
+                "target_policy_version": SCREENING_FLOOR_POLICY_VERSION,
+                "bench_version": 12,
+                "expected_count": 1,
+                "reason": "restore the pre-v11 scored screening snapshot",
+                "confirmation": _RESTORE_CONFIRMATION,
+            },
+        )
+        assert response.status_code == 409
+        assert "expected 1, current 0" in response.json()["message"]

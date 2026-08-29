@@ -2176,6 +2176,37 @@ ALTER SEQUENCE public.score_audit_log_seq_seq OWNED BY public.score_audit_log.se
 
 
 --
+-- Name: scored_screening_snapshot_restorations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scored_screening_snapshot_restorations (
+    restoration_id uuid NOT NULL,
+    batch_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    displaced_attempt_id uuid NOT NULL,
+    restored_attempt_id uuid NOT NULL,
+    source_activation_revision integer NOT NULL,
+    current_activation_revision integer NOT NULL,
+    source_policy_version integer NOT NULL,
+    target_policy_version integer NOT NULL,
+    bench_version integer NOT NULL,
+    previous_status text NOT NULL,
+    previous_policy_version integer NOT NULL,
+    restored_policy_version integer NOT NULL,
+    score_count integer NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_scored_screening_snapshot_restorations_scored_screen_0035 CHECK (((bench_version > 0) AND (score_count >= 3))),
+    CONSTRAINT ck_scored_screening_snapshot_restorations_scored_screen_2097 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_scored_screening_snapshot_restorations_scored_screen_942b CHECK ((previous_status = ANY (ARRAY['screening_failed'::text, 'rejected'::text]))),
+    CONSTRAINT ck_scored_screening_snapshot_restorations_scored_screen_a2a1 CHECK ((restored_policy_version <= target_policy_version)),
+    CONSTRAINT ck_scored_screening_snapshot_restorations_scored_screen_b2b6 CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_scored_screening_snapshot_restorations_scored_screen_bed0 CHECK ((source_policy_version > target_policy_version))
+);
+
+
+--
 -- Name: scores; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4232,6 +4263,14 @@ ALTER TABLE ONLY public.queue_policy_settings_revisions
 
 
 --
+-- Name: scored_screening_snapshot_restorations pk_scored_screening_snapshot_restorations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scored_screening_snapshot_restorations
+    ADD CONSTRAINT pk_scored_screening_snapshot_restorations PRIMARY KEY (restoration_id);
+
+
+--
 -- Name: screened_image_uploads pk_screened_image_uploads; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4437,6 +4476,14 @@ ALTER TABLE ONLY public.score_audit_log
 
 ALTER TABLE ONLY public.score_audit_log
     ADD CONSTRAINT score_audit_log_pkey PRIMARY KEY (seq);
+
+
+--
+-- Name: scored_screening_snapshot_restorations scored_screening_restorations_displaced_attempt_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scored_screening_snapshot_restorations
+    ADD CONSTRAINT scored_screening_restorations_displaced_attempt_key UNIQUE (displaced_attempt_id);
 
 
 --
@@ -5186,6 +5233,13 @@ CREATE UNIQUE INDEX queue_policy_settings_scope_revision_idx ON public.queue_pol
 --
 
 CREATE INDEX score_audit_log_agent_id_idx ON public.score_audit_log USING btree (agent_id);
+
+
+--
+-- Name: scored_screening_restorations_batch_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX scored_screening_restorations_batch_idx ON public.scored_screening_snapshot_restorations USING btree (batch_id, created_at);
 
 
 --
@@ -6048,6 +6102,30 @@ ALTER TABLE ONLY public.miner_session_tokens
 
 ALTER TABLE ONLY public.name_claim_endorsements
     ADD CONSTRAINT name_claim_endorsements_claim_id_fkey FOREIGN KEY (claim_id) REFERENCES public.name_claims(claim_id) ON DELETE CASCADE;
+
+
+--
+-- Name: scored_screening_snapshot_restorations scored_screening_restorations_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scored_screening_snapshot_restorations
+    ADD CONSTRAINT scored_screening_restorations_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: scored_screening_snapshot_restorations scored_screening_restorations_displaced_attempt_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scored_screening_snapshot_restorations
+    ADD CONSTRAINT scored_screening_restorations_displaced_attempt_fkey FOREIGN KEY (displaced_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: scored_screening_snapshot_restorations scored_screening_restorations_restored_attempt_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scored_screening_snapshot_restorations
+    ADD CONSTRAINT scored_screening_restorations_restored_attempt_fkey FOREIGN KEY (restored_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
 
 
 --

@@ -1304,6 +1304,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screener-policy-activation/restore-scored-snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore Scored Snapshot
+         * @description Atomically restore the pre-activation pass for a displaced scored cohort.
+         *
+         *     The cohort is derived under row locks from immutable score and screening
+         *     history. Nothing is requeued and no historical attempt is changed.
+         */
+        post: operations["restore_scored_snapshot_api_v1_admin_screener_policy_activation_restore_scored_snapshot_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-provider-settings": {
         parameters: {
             query?: never;
@@ -18084,6 +18107,71 @@ export interface components {
             target: "platform-relay-1" | "platform-relay-2";
         };
         /**
+         * RestoreScoredScreeningSnapshotRequest
+         * @description Restore the last pre-activation pass for an exact scored cohort.
+         *
+         *     This is an incident-recovery operation, not a retry: it never creates a
+         *     screening attempt, build, dataset, score, or validator lease.
+         */
+        RestoreScoredScreeningSnapshotRequest: {
+            /** Actor */
+            actor?: string | null;
+            /** Bench Version */
+            bench_version: number;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Count */
+            expected_count: number;
+            /** Expected Current Activation Revision */
+            expected_current_activation_revision: number;
+            /** Reason */
+            reason: string;
+            /** Source Activation Revision */
+            source_activation_revision: number;
+            /** Source Policy Version */
+            source_policy_version: number;
+            /** Target Policy Version */
+            target_policy_version: number;
+        };
+        /**
+         * RestoreScoredScreeningSnapshotResponse
+         * @description Result of one atomic scored-snapshot restoration batch.
+         */
+        RestoreScoredScreeningSnapshotResponse: {
+            /** Batch Id */
+            batch_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Current Activation Revision */
+            current_activation_revision: number;
+            /** Restored Count */
+            restored_count: number;
+            /** Source Activation Revision */
+            source_activation_revision: number;
+            /** Source Policy Version */
+            source_policy_version: number;
+            /** Submissions */
+            submissions: components["schemas"]["RestoredScoredSubmission"][];
+            /** Target Policy Version */
+            target_policy_version: number;
+        };
+        /**
+         * RestoredScoredSubmission
+         * @description One immutable restoration audit result.
+         */
+        RestoredScoredSubmission: {
+            /** Agent Id */
+            agent_id: string;
+            /** Displaced Attempt Id */
+            displaced_attempt_id: string;
+            /** Restored Attempt Id */
+            restored_attempt_id: string;
+            /** Restored Policy Version */
+            restored_policy_version: number;
+            /** Score Count */
+            score_count: number;
+        };
+        /**
          * RouteCalibrationRequest
          * @description Exact reviewed manifest decision for one immutable route profile.
          */
@@ -24851,6 +24939,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScreenerPolicyActivationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_scored_snapshot_api_v1_admin_screener_policy_activation_restore_scored_snapshot_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreScoredScreeningSnapshotRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreScoredScreeningSnapshotResponse"];
                 };
             };
             /** @description Validation Error */

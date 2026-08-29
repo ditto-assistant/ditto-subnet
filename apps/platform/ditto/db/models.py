@@ -5581,6 +5581,91 @@ class ScreenerPolicyActivation(Base):
     )
 
 
+class ScoredScreeningSnapshotRestoration(Base):
+    """Append-only audit for restoring a scored row displaced by a rescreen.
+
+    The displaced attempt remains untouched. This row records the exact prior
+    successful attempt whose policy attestation was restored, plus the score
+    quorum observed while the agent row was locked.
+    """
+
+    __tablename__ = "scored_screening_snapshot_restorations"
+
+    restoration_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    batch_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    displaced_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    restored_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    source_activation_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    current_activation_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_status: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    restored_policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="scored_screening_restorations_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["displaced_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+            name="scored_screening_restorations_displaced_attempt_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["restored_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+            name="scored_screening_restorations_restored_attempt_fkey",
+        ),
+        CheckConstraint(
+            "source_policy_version > target_policy_version",
+            name="scored_screening_restorations_policy_order_check",
+        ),
+        CheckConstraint(
+            "restored_policy_version <= target_policy_version",
+            name="scored_screening_restorations_restored_policy_check",
+        ),
+        CheckConstraint(
+            "bench_version > 0 AND score_count >= 3",
+            name="scored_screening_restorations_score_check",
+        ),
+        CheckConstraint(
+            "previous_status IN ('screening_failed', 'rejected')",
+            name="scored_screening_restorations_previous_status_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="scored_screening_restorations_actor_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="scored_screening_restorations_reason_check",
+        ),
+        UniqueConstraint(
+            "displaced_attempt_id",
+            name="scored_screening_restorations_displaced_attempt_key",
+        ),
+        Index("scored_screening_restorations_batch_idx", "batch_id", "created_at"),
+    )
+
+
 class InferenceConcurrencySettingsRevision(Base):
     """Append-only operator policy for hosted inference admission.
 

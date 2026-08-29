@@ -6853,6 +6853,8 @@ export const tracePeekResponseSchema = z.object({
 // time ("due" once now >= activate_at), so it is never stored and never
 // defaulted here.
 export const SCREENER_POLICY_ACTIVATION_CONFIRMATION = 'SCHEDULE SCREENER POLICY ACTIVATION'
+export const RESTORE_SCORED_SCREENING_SNAPSHOT_CONFIRMATION =
+  'RESTORE SCORED SCREENING SNAPSHOT'
 export const MAX_SCREENER_POLICY_ACTIVATION_REVISIONS = 200
 
 export const screenerPolicyActivationRevisionSchema = z.object({
@@ -6891,6 +6893,36 @@ export const scheduleScreenerPolicyActivationInputSchema = z.object({
   rescreenScored: z.boolean().default(true),
   reason: auditReasonSchema(8),
   confirmation: z.literal(SCREENER_POLICY_ACTIVATION_CONFIRMATION),
+})
+
+export const restoreScoredScreeningSnapshotInputSchema = z.object({
+  expectedCurrentActivationRevision: z.number().int().positive(),
+  sourceActivationRevision: z.number().int().positive(),
+  sourcePolicyVersion: z.number().int().positive(),
+  targetPolicyVersion: z.number().int().positive(),
+  benchVersion: z.number().int().positive(),
+  expectedCount: z.number().int().min(1).max(500),
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(RESTORE_SCORED_SCREENING_SNAPSHOT_CONFIRMATION),
+})
+
+export const restoreScoredScreeningSnapshotResponseSchema = z.object({
+  batch_id: z.string().uuid(),
+  restored_count: z.number().int().nonnegative(),
+  source_activation_revision: z.number().int().positive(),
+  current_activation_revision: z.number().int().positive(),
+  source_policy_version: z.number().int().positive(),
+  target_policy_version: z.number().int().positive(),
+  bench_version: z.number().int().positive(),
+  submissions: z.array(
+    z.object({
+      agent_id: z.string().uuid(),
+      displaced_attempt_id: z.string().uuid(),
+      restored_attempt_id: z.string().uuid(),
+      restored_policy_version: z.number().int().positive(),
+      score_count: z.number().int().min(3),
+    }),
+  ),
 })
 
 export type ScreenerPolicyActivationView = z.infer<typeof screenerPolicyActivationViewSchema>
