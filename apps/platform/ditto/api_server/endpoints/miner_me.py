@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.miner_avatar import MinerAvatarResponse
 from ditto.api_models.miner_logs import MinerHarnessLogsResponse
+from ditto.api_models.miner_screening_feedback import MinerScreeningFeedbackResponse
 from ditto.api_models.miner_session import (
     MinerCommand,
     MinerMeResponse,
@@ -37,6 +38,9 @@ from ditto.api_server.endpoints.miner_auth import (
     resolve_miner_session,
 )
 from ditto.api_server.endpoints.miner_logs import load_owned_agent_logs
+from ditto.api_server.endpoints.miner_screening_feedback import (
+    load_owned_screening_feedback,
+)
 from ditto.api_server.hippius import HippiusClient
 from ditto.api_server.miner_avatar import (
     MAX_AVATAR_BYTES,
@@ -385,6 +389,26 @@ async def my_submissions(
         )
         for agent in agents
     ]
+
+
+@router.get(
+    "/agents/{agent_id}/screening-feedback",
+    response_model=MinerScreeningFeedbackResponse,
+)
+async def my_screening_feedback(
+    agent_id: UUID,
+    request: Request,
+    session: SessionDep,
+) -> MinerScreeningFeedbackResponse:
+    async with session.begin():
+        row, _token = await resolve_miner_session(request, session)
+        require_scope(row, "read")
+        payload = await load_owned_screening_feedback(
+            session, hotkey=row.miner_hotkey, agent_id=agent_id
+        )
+    if payload is None:
+        raise HTTPException(status_code=404, detail="no such agent for this hotkey")
+    return payload
 
 
 @router.get("/reviews", response_model=MinerMeReviewsResponse)

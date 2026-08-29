@@ -410,6 +410,13 @@ class ScreeningAttempt(Base):
     )
     public_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     reason_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_lane: Mapped[str | None] = mapped_column(Text, nullable=True)
+    private_failure_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    private_failure_log_tail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_captured_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     duplicate_of: Mapped[UUID | None] = mapped_column(
         SaUUID(as_uuid=True), nullable=True
     )

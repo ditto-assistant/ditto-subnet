@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
@@ -57,7 +58,7 @@ logger = logging.getLogger(__name__)
 
 _BUILD_LEASE = timedelta(minutes=50)
 _JOB_TTL = timedelta(minutes=80)
-_SOURCE_LEASE = timedelta(minutes=75)
+_SOURCE_LEASE = timedelta(minutes=30)
 _REAP_LIMIT = 16
 _TERMINAL_JOB = ("succeeded", "consumed", "canceled", "fallback_required")
 _TERMINAL_RUNTIME = ("succeeded", "fallback_required", "skipped")
@@ -69,6 +70,13 @@ _TARGON_BUILD_FALLBACK_CODES = frozenset(
 _CANDIDATE_REGISTRY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-screening-candidates/miner"
 )
+_PRIVATE_FAILURE_LIMIT = 16_000
+_PRIVATE_SECRET = re.compile(
+    r"(?i)\b(api[_-]?key|authorization|password|secret|token)\b"
+    r"(\s*[:=]\s*)([^\s,;]+)"
+)
+_PRIVATE_BEARER = re.compile(r"(?i)\bBearer\s+[^\s,;]+")
+_PRIVATE_SIGNED_TOKEN = re.compile(r"\bsvt_[A-Za-z0-9._-]+")
 
 
 async def _default_health_probe(url: str) -> bool:
@@ -82,6 +90,15 @@ async def _default_health_probe(url: str) -> bool:
 
 PromoteArchive = Callable[[str, str, str], Awaitable[str]]
 MintToken = Callable[[str], Awaitable[str]]
+
+
+def _private_failure_text(value: str) -> str:
+    redacted = _PRIVATE_BEARER.sub("Bearer [REDACTED]", value)
+    redacted = _PRIVATE_SIGNED_TOKEN.sub("[REDACTED]", redacted)
+    redacted = _PRIVATE_SECRET.sub(r"\1\2[REDACTED]", redacted)
+    if len(redacted) <= _PRIVATE_FAILURE_LIMIT:
+        return redacted
+    return f"[truncated]\n{redacted[-_PRIVATE_FAILURE_LIMIT:]}"
 
 
 def _source_review_layer_env(
@@ -219,11 +236,13 @@ class TargonRentalLoop:
         handled = await self._reap_finished_rentals()
         handled = await self._park_source_reviews_for_outage() or handled
         async with self._session_maker() as session, session.begin():
+            archive_exists = getattr(self._storage, "object_exists", None)
             await admit_targon_screening_work(
                 session,
                 screener_hotkey=self._screener_hotkey,
                 environment=self._config.environment,
                 now=datetime.now(UTC),
+                archive_exists=archive_exists,
             )
         handled = await self._launch_kaniko() or handled
         handled = await self._launch_smoke() or handled
@@ -981,8 +1000,6 @@ class TargonRentalLoop:
         error_code: str,
         observation: ProvisionObservation | None = None,
     ) -> None:
-        if self._traces_put is None:
-            return
         log_tail = ""
         try:
             log_tail = await provider.replica_logs(uid, tail=400)
@@ -992,12 +1009,33 @@ class TargonRentalLoop:
             )
         agent_id = None
         attempt_id = None
-        async with self._session_maker() as session:
-            stored = await session.get(SubmissionImageBuild, build_id)
-            if stored is not None:
-                agent_id = stored.agent_id
-                attempt_id = stored.attempt_id
         now = datetime.now(UTC)
+        detail = _private_failure_text(
+            observation.message if observation is not None else ""
+        )
+        log_tail = _private_failure_text(log_tail)
+        async with self._session_maker() as session, session.begin():
+            if kind == "review":
+                stored_review = await session.get(SubmissionSourceReview, build_id)
+                if stored_review is not None:
+                    agent_id = stored_review.agent_id
+                    attempt_id = stored_review.attempt_id
+            else:
+                stored_build = await session.get(SubmissionImageBuild, build_id)
+                if stored_build is not None:
+                    agent_id = stored_build.agent_id
+                    attempt_id = stored_build.attempt_id
+            attempt = (
+                await session.get(ScreeningAttempt, attempt_id)
+                if attempt_id is not None
+                else None
+            )
+            if attempt is not None:
+                attempt.failure_provider = provider.stored_provider
+                attempt.failure_lane = kind
+                attempt.private_failure_detail = detail or None
+                attempt.private_failure_log_tail = log_tail or None
+                attempt.failure_captured_at = now
         record = {
             "schema": SCREENING_TRACE_SCHEMA,
             "captured_at": now.isoformat(),
@@ -1011,10 +1049,12 @@ class TargonRentalLoop:
             "error_code": error_code,
             "observation": {
                 "status": observation.status if observation is not None else "",
-                "message": observation.message if observation is not None else "",
+                "message": detail,
             },
-            "log_tail": log_tail[-16000:],
+            "log_tail": log_tail,
         }
+        if self._traces_put is None:
+            return
         key = screening_trace_key(
             kind=kind,
             provider=provider.stored_provider,
@@ -1286,7 +1326,7 @@ class TargonRentalLoop:
             provider = self._provider_named(stored_provider)
             observation = await self._observe_provision(provider, uid)
             status = observation.status
-            if status == "running":
+            if status == "running" and observation.ready is not False:
                 continue
             seen = updated_at
             if seen.tzinfo is None:

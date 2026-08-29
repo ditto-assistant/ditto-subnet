@@ -182,6 +182,34 @@ class AsyncCloudRunClient:
             url = execution_name
         return await self._request("GET", url)
 
+    async def list_job_logs(self, job_id: str, *, limit: int = 400) -> list[str]:
+        """Return a bounded Cloud Logging tail for one Cloud Run Job."""
+        safe_limit = max(1, min(int(limit), 1_000))
+        response = await self._request(
+            "POST",
+            "https://logging.googleapis.com/v2/entries:list",
+            payload={
+                "resourceNames": [f"projects/{self._project}"],
+                "filter": (
+                    'resource.type="cloud_run_job" AND '
+                    f'resource.labels.job_name="{job_id}"'
+                ),
+                "orderBy": "timestamp desc",
+                "pageSize": safe_limit,
+            },
+        )
+        entries = response.get("entries")
+        if not isinstance(entries, list):
+            return []
+        messages: list[str] = []
+        for entry in reversed(entries):
+            if not isinstance(entry, dict):
+                continue
+            message = _log_entry_message(entry)
+            if message:
+                messages.append(message)
+        return messages
+
     async def delete_job(self, job_id: str) -> None:
         await self._request("DELETE", self.job_name(job_id), allow_missing=True)
 
@@ -305,3 +333,22 @@ class AsyncCloudRunClient:
                 reason="invalid response shape",
             )
         return value
+
+
+def _log_entry_message(entry: dict[str, Any]) -> str:
+    text = entry.get("textPayload")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    json_payload = entry.get("jsonPayload")
+    if isinstance(json_payload, dict):
+        message = json_payload.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    proto_payload = entry.get("protoPayload")
+    if isinstance(proto_payload, dict):
+        status = proto_payload.get("status")
+        if isinstance(status, dict):
+            message = status.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+    return ""
