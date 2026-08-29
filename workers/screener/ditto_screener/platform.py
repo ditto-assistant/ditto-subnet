@@ -311,7 +311,11 @@ class PlatformClient:
     async def claim_next(self, *, policy_version: int) -> ScreenerQueueResponse:
         """Lease one agent for screening, oldest eligible first."""
         url = f"{self._base}{_PREFIX}/claim"
-        params = {"limit": 1, "policy_version": policy_version}
+        params: dict[str, str | int] = {
+            "limit": 1,
+            "policy_version": policy_version,
+            "renewable_lease": "true",
+        }
         try:
             resp = await self._client.post(
                 url, params=params, headers=await self._auth_headers()

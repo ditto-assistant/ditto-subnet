@@ -64,6 +64,9 @@ _TERMINAL_JOB = ("succeeded", "consumed", "canceled", "fallback_required")
 _TERMINAL_RUNTIME = ("succeeded", "fallback_required", "skipped")
 _INFLIGHT_JOB = ("leased", "running")
 _PROVIDER_TERMINAL = frozenset({"error", "deleted", "suspended"})
+_TARGON_BUILD_FALLBACK_CODES = frozenset(
+    {"TARGON_PROVISION_ERROR", "TARGON_PROVISION_TIMEOUT"}
+)
 _CANDIDATE_REGISTRY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-screening-candidates/miner"
 )
@@ -377,9 +380,9 @@ class TargonRentalLoop:
     def _build_providers(
         self, pinned_provider: str | None
     ) -> list[ScreeningComputeProvider]:
-        """Use exactly one provider, preserving an explicit operator pin."""
+        """Try each configured provider once, preserving an explicit reaper pin."""
         if pinned_provider is None:
-            return list(self._providers[:1])
+            return list(self._providers)
         return [
             provider
             for provider in self._providers
@@ -497,9 +500,10 @@ class TargonRentalLoop:
         return await self._targon_inflight() < self._config.max_inflight
 
     async def _any_capacity(self) -> bool:
-        return bool(
-            self._providers and await self._provider_has_capacity(self._providers[0])
-        )
+        for provider in self._providers:
+            if await self._provider_has_capacity(provider):
+                return True
+        return False
 
     def _provision_cutoff(self, now: datetime) -> datetime:
         return now - timedelta(seconds=self._config.provision_timeout_seconds)
@@ -543,7 +547,14 @@ class TargonRentalLoop:
             row.job_token_expires_at = now + _JOB_TTL
             row.updated_at = now
             build_id = row.build_id
+            agent_id = row.agent_id
+            artifact_sha256 = row.artifact_sha256
             pinned_provider = row.provider
+            skip_targon = (row.error_code or "") in _TARGON_BUILD_FALLBACK_CODES
+        if not skip_targon:
+            skip_targon = await self._targon_provision_exhausted(
+                agent_id, artifact_sha256
+            )
         spec = BuildSpec(
             name=f"ditto-miner-build-{str(build_id).replace('-', '')[:12]}"[:32],
             image=image,
@@ -555,6 +566,8 @@ class TargonRentalLoop:
         )
         error_code = "TARGON_SUBMISSION_PROVIDER_ERROR"
         for provider in self._build_providers(pinned_provider):
+            if skip_targon and provider.stored_provider == "targon":
+                continue
             if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None
@@ -661,7 +674,7 @@ class TargonRentalLoop:
         last_uid: str | None = None
         last_provider: ScreeningComputeProvider | None = None
         healthy = False
-        for provider in self._providers[:1]:
+        for provider in self._providers:
             if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None
@@ -879,7 +892,7 @@ class TargonRentalLoop:
             args=("ditto_screener.source_review_job",),
         )
         error_code = "TARGON_SOURCE_REVIEW_PROVIDER_ERROR"
-        for provider in self._providers[:1]:
+        for provider in self._providers:
             if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None
@@ -914,6 +927,67 @@ class TargonRentalLoop:
                 await provider.delete(uid)
                 await self._clear_resource_id("review", review_id)
         await self._fail_review_provision(review_id, error_code)
+        return True
+
+    async def _targon_provision_exhausted(
+        self, agent_id: UUID, artifact_sha256: str
+    ) -> bool:
+        async with self._session_maker() as session:
+            code = await session.scalar(
+                select(SubmissionImageBuild.error_code)
+                .where(
+                    SubmissionImageBuild.agent_id == agent_id,
+                    SubmissionImageBuild.artifact_sha256 == artifact_sha256,
+                    SubmissionImageBuild.error_code.in_(
+                        tuple(_TARGON_BUILD_FALLBACK_CODES)
+                    ),
+                )
+                .limit(1)
+            )
+        return code is not None
+
+    async def _cloudrun_fallback_available(self) -> bool:
+        for provider in self._providers:
+            if provider.stored_provider != "gcp":
+                continue
+            if await provider.capacity_ok():
+                return True
+        return False
+
+    async def _requeue_build_for_cloudrun(
+        self, build_id: UUID, error_code: str
+    ) -> bool:
+        if error_code not in _TARGON_BUILD_FALLBACK_CODES:
+            return False
+        if not any(provider.stored_provider == "gcp" for provider in self._providers):
+            return False
+        now = datetime.now(UTC)
+        async with self._session_maker() as session, session.begin():
+            stored = await session.get(SubmissionImageBuild, build_id)
+            attempt = (
+                await session.get(ScreeningAttempt, stored.attempt_id)
+                if stored is not None
+                else None
+            )
+            if (
+                stored is None
+                or attempt is None
+                or stored.status not in _INFLIGHT_JOB
+                or stored.provider != "targon"
+                or attempt.status != "running"
+                or attempt.deadline <= now
+            ):
+                return False
+            stored.status = "queued"
+            stored.provider = "gcp"
+            stored.provider_resource_id = None
+            stored.error_code = error_code
+            stored.controller_epoch = None
+            stored.lease_expires_at = None
+            stored.job_token_hash = None
+            stored.job_token_expires_at = None
+            stored.completed_at = None
+            stored.updated_at = now
         return True
 
     async def _capture_replica_trace(
@@ -1273,6 +1347,15 @@ class TargonRentalLoop:
                 error_code=error_code,
                 observation=observation,
             )
+            if (
+                kind == "build"
+                and provider.stored_provider == "targon"
+                and await self._cloudrun_fallback_available()
+            ):
+                await provider.delete(uid)
+                if await self._requeue_build_for_cloudrun(row_id, error_code):
+                    handled = True
+                    continue
             if kind == "build":
                 await self._fail_build_provision(row_id, error_code)
             elif kind == "runtime":

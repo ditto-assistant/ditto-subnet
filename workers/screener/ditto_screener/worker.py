@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from ditto_screener import __version__
 from ditto_screener.errors import PlatformError
+from ditto_screener.gate import LeaseDeadline
 from ditto_screener.heartbeat import (
     ReviewSettingsStatus,
     ScreenerHeartbeatRequest,
@@ -107,6 +108,7 @@ class ScreenerWorker:
         self._instance_id = config.node_id or _resolve_instance_id()
         self._active_agent_id: UUID | None = None
         self._active_progress_stage: ScreenerProgressStage | None = None
+        self._active_lease_deadline: LeaseDeadline | None = None
         self._job_started_at: int | None = None
         self._last_heartbeat_timestamp = 0
         self._last_heartbeat_monotonic = float("-inf")
@@ -140,7 +142,7 @@ class ScreenerWorker:
         self._progress_heartbeat_tasks.add(task)
         task.add_done_callback(self._progress_heartbeat_tasks.discard)
 
-    def _screen_deadline(self, lease_deadline: datetime | None) -> float | None:
+    def _screen_deadline(self, lease_deadline: datetime | None) -> LeaseDeadline | None:
         """Monotonic budget for one screen, or ``None`` when the lease is open.
 
         Converts the platform's wall-clock ``lease_deadline`` into a
@@ -153,7 +155,7 @@ class ScreenerWorker:
         remaining = (
             lease_deadline - datetime.now(UTC)
         ).total_seconds() - _LEASE_SUBMIT_MARGIN_SECONDS
-        return asyncio.get_running_loop().time() + remaining
+        return LeaseDeadline(asyncio.get_running_loop().time() + remaining)
 
     async def run_forever(self, stop: asyncio.Event) -> None:
         """Sweep until ``stop`` is set, sleeping when the queue is empty."""
@@ -238,7 +240,15 @@ class ScreenerWorker:
                 timestamp=timestamp,
                 signature=signature,
             )
-            await self._platform.submit_heartbeat(request)
+            response = await self._platform.submit_heartbeat(request)
+            if (
+                response.accepted
+                and response.lease_deadline is not None
+                and self._active_lease_deadline is not None
+            ):
+                renewed = self._screen_deadline(response.lease_deadline)
+                if renewed is not None:
+                    self._active_lease_deadline.renew(renewed.expires_at)
         except Exception as error:  # noqa: BLE001 - observability is best effort
             logger.warning("screener heartbeat failed (screening continues): %s", error)
         finally:
@@ -305,6 +315,7 @@ class ScreenerWorker:
             return
         attempt_id = item.attempt_id
         self._active_agent_id = agent_id
+        self._active_lease_deadline = self._screen_deadline(item.lease_deadline)
         self._job_started_at = int(time.time())
         self._set_progress("preparing")
         heartbeat_stop = asyncio.Event()
@@ -341,10 +352,10 @@ class ScreenerWorker:
                     detail="exact cross-miner duplicate",
                 )
             else:
-                screen_deadline = self._screen_deadline(item.lease_deadline)
+                screen_deadline = self._active_lease_deadline
                 if (
                     screen_deadline is not None
-                    and screen_deadline <= asyncio.get_running_loop().time()
+                    and screen_deadline.expires_at <= asyncio.get_running_loop().time()
                 ):
                     logger.warning(
                         "agent_id=%s claimed with insufficient lease budget; "
@@ -639,6 +650,7 @@ class ScreenerWorker:
             self._progress_heartbeat_tasks.clear()
             self._active_agent_id = None
             self._active_progress_stage = None
+            self._active_lease_deadline = None
             self._job_started_at = None
             await self._report_heartbeat("polling", force=True)
 

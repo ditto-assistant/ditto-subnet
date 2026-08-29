@@ -212,10 +212,14 @@ _ARTIFACT_URL_TTL = timedelta(minutes=5)
 _SCREENED_IMAGE_UPLOAD_TTL = timedelta(minutes=15)
 _SCREENED_IMAGE_PART_SIZE = 64 * 1024**2
 # One screening attempt: download + Docker build + serve/health + bounded source
-# review + image export + multipart upload. Must exceed the worker's build cap
-# (SCREENER_BUILD_TIMEOUT_SECONDS, 45m) plus those finalization stages. Keep this
-# in step with the screener's build and upload deadlines when either moves.
-_SCREENING_LEASE_TTL = timedelta(minutes=70)
+# review + image export + multipart upload. Renewable workers carry only a short
+# liveness window; accepted signed progress keeps that window ahead of active
+# work instead of pre-granting the full worst-case pipeline duration.
+# Legacy workers derive a fixed local deadline and cannot consume renewals.
+# Keep their old lease until the fleet rolls, while new workers explicitly opt
+# into a short lease extended by accepted signed progress heartbeats.
+_LEGACY_SCREENING_LEASE_TTL = timedelta(minutes=70)
+_RENEWABLE_SCREENING_LEASE_TTL = timedelta(minutes=10)
 _HEARTBEAT_MAX_SKEW_SECONDS = 300
 _HEARTBEAT_MAX_BYTES = 4096
 _INSTANCE_ID_PATTERN = r"^[a-zA-Z0-9._-]{1,63}$"
@@ -2932,6 +2936,7 @@ async def heartbeat(
 
     reported_at = datetime.fromtimestamp(request_body.timestamp, tz=UTC)
     instance_id = request_body.instance_id or _LEGACY_INSTANCE_ID
+    renewed_lease_deadline: datetime | None = None
     async with session.begin():
         row, accepted = await upsert_screener_heartbeat(
             session,
@@ -2972,6 +2977,27 @@ async def heartbeat(
             seen_at=now,
             signature=request_body.signature,
         )
+        if (
+            accepted
+            and request_body.state == "screening"
+            and request_body.active_agent_id is not None
+            and request_body.progress is not None
+        ):
+            attempt = await session.scalar(
+                select(ScreeningAttempt)
+                .where(
+                    ScreeningAttempt.agent_id == request_body.active_agent_id,
+                    ScreeningAttempt.screener_hotkey == screener_hotkey,
+                    ScreeningAttempt.status == "running",
+                    ScreeningAttempt.deadline > now,
+                )
+                .order_by(ScreeningAttempt.started_at.desc())
+                .with_for_update()
+                .limit(1)
+            )
+            if attempt is not None:
+                renewed_lease_deadline = now + _RENEWABLE_SCREENING_LEASE_TTL
+                attempt.deadline = renewed_lease_deadline
         # Reap heartbeats from long-gone instances (scaled-in fleet workers)
         # so the per-instance list stays bounded. Cheap indexed delete.
         await prune_stale_screener_heartbeats(
@@ -2980,7 +3006,11 @@ async def heartbeat(
     seen_at = row.seen_at
     if seen_at.tzinfo is None:
         seen_at = seen_at.replace(tzinfo=UTC)
-    return ScreenerHeartbeatResponse(accepted=accepted, seen_at=seen_at)
+    return ScreenerHeartbeatResponse(
+        accepted=accepted,
+        seen_at=seen_at,
+        lease_deadline=renewed_lease_deadline,
+    )
 
 
 @router.get(
@@ -3087,6 +3117,7 @@ async def claim(
     session: SessionDep,
     policy_version: Annotated[int, Query(ge=1)],
     limit: Annotated[int, Query(ge=1, le=20)] = 1,
+    renewable_lease: Annotated[bool, Query()] = False,
 ) -> ScreenerQueueResponse:
     """Lease pending work and make its active screening state public."""
     response.headers["Cache-Control"] = "no-store"
@@ -3101,6 +3132,11 @@ async def claim(
             f"{SCREENING_POLICY_VERSION}, worker declared {policy_version}"
         )
     now = datetime.now(UTC)
+    lease_ttl = (
+        _RENEWABLE_SCREENING_LEASE_TTL
+        if renewable_lease
+        else _LEGACY_SCREENING_LEASE_TTL
+    )
     if session.get_bind().dialect.name == "postgresql":
         async with session.begin():
             queue_settings = await resolve_queue_policy_settings(session)
@@ -3108,7 +3144,7 @@ async def claim(
                 session,
                 screener_hotkey=screener_hotkey,
                 now=now,
-                ttl=_SCREENING_LEASE_TTL,
+                ttl=lease_ttl,
                 limit=limit,
                 netuid=expected_netuid(),
                 deferred_review_mode=queue_settings.deferred_source_review.mode,
@@ -3123,7 +3159,7 @@ async def claim(
                 session,
                 screener_hotkey=screener_hotkey,
                 now=now,
-                ttl=_SCREENING_LEASE_TTL,
+                ttl=lease_ttl,
                 limit=limit,
                 netuid=expected_netuid(),
                 deferred_review_mode=queue_settings.deferred_source_review.mode,

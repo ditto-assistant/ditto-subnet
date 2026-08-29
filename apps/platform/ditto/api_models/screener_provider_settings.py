@@ -11,18 +11,22 @@ ScreenerCapacityProvider = Literal["targon", "gcp"]
 
 
 class ScreenerProviderSettings(BaseModel):
-    """Provider selections for build, runtime, and source-review lanes.
-
-    The tuple shape is retained for rolling wire compatibility. Only the first
-    provider is authoritative; Platform never advances to another provider
-    after a failed launch.
-    """
+    """Ordered provider lists for build, runtime, and source-review lanes."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    runtime_provider_priority: tuple[ScreenerCapacityProvider, ...] = ("targon",)
-    source_review_provider_priority: tuple[ScreenerCapacityProvider, ...] = ("targon",)
-    build_provider_priority: tuple[ScreenerCapacityProvider, ...] = ("targon",)
+    runtime_provider_priority: tuple[ScreenerCapacityProvider, ...] = (
+        "targon",
+        "gcp",
+    )
+    source_review_provider_priority: tuple[ScreenerCapacityProvider, ...] = (
+        "targon",
+        "gcp",
+    )
+    build_provider_priority: tuple[ScreenerCapacityProvider, ...] = (
+        "targon",
+        "gcp",
+    )
 
     @model_validator(mode="after")
     def validate_provider_lists(self) -> ScreenerProviderSettings:
@@ -38,6 +42,8 @@ class ScreenerProviderSettings(BaseModel):
                 raise ValueError(f"{field} must not be empty")
             if len(providers) != len(set(providers)):
                 raise ValueError(f"{field} must not contain duplicates")
+            if "gcp" not in providers:
+                raise ValueError(f"{field} must retain the GCP safety fallback")
         return self
 
     def targon_runtime_enabled(self) -> bool:
