@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.126.0 (2026-08-29)
+
+### Features
+
+- **dashboard**: Segment admission progress and separate queued work
+  ([#1273](https://github.com/ditto-assistant/ditto-subnet/pull/1273),
+  [`4675211`](https://github.com/ditto-assistant/ditto-subnet/commit/467521134a2e27c6ca4cad9efed71b0275e8a4c6))
+
+
 ## v0.125.0 (2026-08-29)
 
 ### Documentation
