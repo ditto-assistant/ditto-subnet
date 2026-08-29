@@ -12,20 +12,26 @@ import pytest
 from pydantic import ValidationError
 
 from ditto.api_models.coding import (
+    CodingBudgets,
     CodingCapabilityCertificationReceipt,
     CodingGraderExecutionReceipt,
     CodingGraderPlan,
     CodingGraderResourceProfile,
+    CodingIssue,
     CodingRunEvidence,
     CodingRunManifest,
     CodingRunRequest,
+    CodingRuntimePolicy,
     CodingSeedRequest,
     CodingTaskEvidence,
     SubmitCodingCertificationRequest,
     canonical_digest,
     canonical_json_bytes,
+    coding_budgets_digest,
     coding_certification_receipt_digest,
     coding_certification_signing_message,
+    coding_issue_digest,
+    coding_runtime_policy_digest,
     grader_execution_receipt_root,
     grader_plan_digest,
     grader_resource_profile_digest,
@@ -43,6 +49,10 @@ _VECTOR_PATH = (
 _CERTIFICATION_VECTOR_PATH = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_certification_v1.json"
+)
+_SELECTION_VECTOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_selection_v1.json"
 )
 
 
@@ -106,6 +116,26 @@ def test_coding_v1_golden_vectors_have_stable_known_field_digests(
     parsed = parse_canonical_json(model, _body(vectors[key]))
     assert canonical_digest(parsed) == vectors["digests"][key]
     assert canonical_json_bytes(parsed).endswith(b"\n")
+
+
+def test_private_selection_vector_matches_validator_run_manifest() -> None:
+    vector = json.loads(_SELECTION_VECTOR_PATH.read_text(encoding="utf-8"))
+    manifest = parse_canonical_json(CodingRunManifest, _body(vector["run_manifest"]))
+    issue = CodingIssue.model_validate(vector["issue"])
+    runtime_policy = CodingRuntimePolicy.model_validate(vector["runtime_policy"])
+    budgets = CodingBudgets.model_validate(vector["budgets"])
+    assert canonical_digest(manifest) == vector["run_authority"]["run_manifest_sha256"]
+    assert (
+        coding_issue_digest(issue) == vector["task_version"]["payload"]["issue_sha256"]
+    )
+    assert (
+        coding_runtime_policy_digest(runtime_policy)
+        == vector["task_version"]["payload"]["runtime_policy_sha256"]
+    )
+    assert (
+        coding_budgets_digest(budgets)
+        == vector["task_version"]["payload"]["budgets_sha256"]
+    )
 
 
 def test_evidence_golden_vectors_require_manifest_authority() -> None:

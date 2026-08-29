@@ -1,0 +1,230 @@
+{
+  "commitment": {
+    "schema": "dittobench-coding-catalog-commitment-v1",
+    "coding_contract_version": 1,
+    "weight_eligible": false,
+    "corpus_release_id": "private-coding-corpus-v1",
+    "catalog_merkle_root": "0f832d36b225cee4abf6b04ebcc50f697cc86a4132a43fa0c67c4993003ab3cc",
+    "selection_derivation_id": "coding-selection-v1",
+    "selection_chain_genesis_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+    "grader_contract_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "inference_grant_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "task_version_count": 5,
+    "curator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "committed_at_unix": 1787310000,
+    "commitment_sha256": "628a8a4c1a7bf74a42bbfb5bb1520dfcd0ba325c44903bc7a74611be866a519a"
+  },
+  "assignment": {
+    "schema": "dittobench-coding-selection-assignment-v1",
+    "coding_contract_version": 1,
+    "weight_eligible": false,
+    "bench_version": 12,
+    "coding_run_id": "coding-run-private-001",
+    "agent_id": "00000000-0000-4000-8000-000000000001",
+    "agent_artifact_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "screened_image_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "corpus_release_id": "private-coding-corpus-v1",
+    "catalog_commitment_sha256": "628a8a4c1a7bf74a42bbfb5bb1520dfcd0ba325c44903bc7a74611be866a519a",
+    "selection_block_number": 123456,
+    "assigned_at": "2026-08-21T00:00:00Z",
+    "task_count": 1,
+    "assignment_sha256": "4e368d1947281f4ffd0fed3ceafba9c1846eda504c359dcbaa1b3d0b2f56d1c6"
+  },
+  "selection_seed_sha256": "b23caf88cf81f1fa385411c76a23ccc51f16be583ccaf235acc7337efb5e9789",
+  "issue": {
+    "title": "Repair synthetic private task 3",
+    "description": "Correct the selected behavior for private task 3.",
+    "constraints": [
+      "Do not add a runtime dependency."
+    ]
+  },
+  "runtime_policy": {
+    "editable_paths": [
+      "src/app.py"
+    ],
+    "test_command_ids": [
+      "visible-tests-3"
+    ],
+    "build_command_ids": [
+      "build-check-3"
+    ]
+  },
+  "budgets": {
+    "model_input_tokens": 200003,
+    "model_output_tokens": 30000,
+    "workspace_tool_calls": 150,
+    "wall_time_seconds": 1800
+  },
+  "task_version": {
+    "payload": {
+      "schema": "dittobench-coding-catalog-task-v1",
+      "coding_contract_version": 1,
+      "weight_eligible": false,
+      "corpus_release_id": "private-coding-corpus-v1",
+      "catalog_index": 3,
+      "task_version_id": "private-task-v003",
+      "repository_epoch": "repository-epoch-003",
+      "issue_sha256": "d8ad025870c27d203b2c9466862cb607818eb57ce34376b675c618a75b7baa09",
+      "runtime_policy_sha256": "0fb0f698a8d978035ec0001e7c93f5deb532d5320ace36ee5104dffc94d668ce",
+      "budgets_sha256": "e50c3848ee8f802a56ac13f61c9ad4bcdbcc5af877c7705ee42257c6aa3f7836",
+      "task": {
+        "case_id": "private-case-003",
+        "variant_id": "v1",
+        "profile_capability_id": "private-profile-0",
+        "visible_bundle_sha256": "0404040404040404040404040404040404040404040404040404040404040404",
+        "base_tree_sha256": "1414141414141414141414141414141414141414141414141414141414141414",
+        "memory_bundle_sha256": "2424242424242424242424242424242424242424242424242424242424242424",
+        "environment_image_digest": "sha256:3434343434343434343434343434343434343434343434343434343434343434",
+        "environment_platform": "linux/amd64",
+        "resource_profile_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "grader_bundle_sha256": "5454545454545454545454545454545454545454545454545454545454545454",
+        "grader_image_digest": "sha256:6464646464646464646464646464646464646464646464646464646464646464",
+        "grader_platform": "linux/amd64",
+        "test_manifest_sha256": "7474747474747474747474747474747474747474747474747474747474747474",
+        "grader_plan_sha256": "8484848484848484848484848484848484848484848484848484848484848484"
+      }
+    },
+    "task_commitment_sha256": "934a0e16ddfc9757266b6a031fa5378b4dca862f45309b53e8477f57acb90fe3"
+  },
+  "membership_proof": {
+    "schema": "dittobench-coding-catalog-membership-proof-v1",
+    "coding_contract_version": 1,
+    "corpus_release_id": "private-coding-corpus-v1",
+    "catalog_merkle_root": "0f832d36b225cee4abf6b04ebcc50f697cc86a4132a43fa0c67c4993003ab3cc",
+    "task_version_count": 5,
+    "catalog_index": 3,
+    "task_commitment_sha256": "934a0e16ddfc9757266b6a031fa5378b4dca862f45309b53e8477f57acb90fe3",
+    "sibling_sha256": [
+      "f510b5329fa1cc9aa20bdb7eda59c891a32fd7af83948644d72d556312b7ea85",
+      "07800c89908bbcaf9bc4d088767be21a6bd049efe291b2e0651c09b90f430605",
+      "3a59c117a409f6b49e417042c938eba28c18de9f5faa65c6e99e7df562b0fc70"
+    ],
+    "catalog_membership_proof_sha256": "45a3dfae579ec3e428bab94cf099affa6e2a0c6ee31c82c5306a054430949ebe"
+  },
+  "selection_proof": {
+    "schema": "dittobench-coding-selection-proof-v1",
+    "coding_contract_version": 1,
+    "assignment_sha256": "4e368d1947281f4ffd0fed3ceafba9c1846eda504c359dcbaa1b3d0b2f56d1c6",
+    "selection_block_hash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+    "candidate_probe": 0,
+    "catalog_index": 3,
+    "task_version_id": "private-task-v003",
+    "task_commitment_sha256": "934a0e16ddfc9757266b6a031fa5378b4dca862f45309b53e8477f57acb90fe3",
+    "catalog_membership_proof_sha256": "45a3dfae579ec3e428bab94cf099affa6e2a0c6ee31c82c5306a054430949ebe",
+    "selection_proof_sha256": "2a8594ae897850de4174baf1bd602cf4a2307b19aafeffd85ddded2f28ec23a8"
+  },
+  "task_set_manifest": {
+    "schema": "dittobench-coding-task-set-v1",
+    "coding_contract_version": 1,
+    "weight_eligible": false,
+    "coding_run_id": "coding-run-private-001",
+    "assignment_sha256": "4e368d1947281f4ffd0fed3ceafba9c1846eda504c359dcbaa1b3d0b2f56d1c6",
+    "selection_block_number": 123456,
+    "selection_block_hash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+    "tasks": [
+      {
+        "manifest_index": 0,
+        "task_version_id": "private-task-v003",
+        "task_commitment_sha256": "934a0e16ddfc9757266b6a031fa5378b4dca862f45309b53e8477f57acb90fe3",
+        "selection_proof_sha256": "2a8594ae897850de4174baf1bd602cf4a2307b19aafeffd85ddded2f28ec23a8",
+        "catalog_membership_proof_sha256": "45a3dfae579ec3e428bab94cf099affa6e2a0c6ee31c82c5306a054430949ebe",
+        "repository_epoch": "repository-epoch-003",
+        "issue_sha256": "d8ad025870c27d203b2c9466862cb607818eb57ce34376b675c618a75b7baa09",
+        "runtime_policy_sha256": "0fb0f698a8d978035ec0001e7c93f5deb532d5320ace36ee5104dffc94d668ce",
+        "budgets_sha256": "e50c3848ee8f802a56ac13f61c9ad4bcdbcc5af877c7705ee42257c6aa3f7836",
+        "task": {
+          "case_id": "private-case-003",
+          "variant_id": "v1",
+          "profile_capability_id": "private-profile-0",
+          "visible_bundle_sha256": "0404040404040404040404040404040404040404040404040404040404040404",
+          "base_tree_sha256": "1414141414141414141414141414141414141414141414141414141414141414",
+          "memory_bundle_sha256": "2424242424242424242424242424242424242424242424242424242424242424",
+          "environment_image_digest": "sha256:3434343434343434343434343434343434343434343434343434343434343434",
+          "environment_platform": "linux/amd64",
+          "resource_profile_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+          "grader_bundle_sha256": "5454545454545454545454545454545454545454545454545454545454545454",
+          "grader_image_digest": "sha256:6464646464646464646464646464646464646464646464646464646464646464",
+          "grader_platform": "linux/amd64",
+          "test_manifest_sha256": "7474747474747474747474747474747474747474747474747474747474747474",
+          "grader_plan_sha256": "8484848484848484848484848484848484848484848484848484848484848484"
+        }
+      }
+    ]
+  },
+  "run_manifest": {
+    "schema": "dittobench-coding-run-manifest-v1",
+    "coding_contract_version": 1,
+    "bench_family": "coding",
+    "weight_eligible": false,
+    "coding_run_id": "coding-run-private-001",
+    "agent_id": "00000000-0000-4000-8000-000000000001",
+    "agent_artifact_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "corpus_release_id": "private-coding-corpus-v1",
+    "catalog_merkle_root": "0f832d36b225cee4abf6b04ebcc50f697cc86a4132a43fa0c67c4993003ab3cc",
+    "selection_derivation_id": "coding-selection-v1",
+    "selection_chain_genesis_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+    "selection_block_number": 123456,
+    "selection_block_hash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+    "inference_grant_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "grader_contract_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "task_set_id": "coding-task-set-v1-e598c0572f82a3e34d04c603d294cf85103c0ec1d5f5978267087e73cfb46acb",
+    "task_set_manifest_sha256": "e598c0572f82a3e34d04c603d294cf85103c0ec1d5f5978267087e73cfb46acb",
+    "tasks": [
+      {
+        "case_id": "private-case-003",
+        "variant_id": "v1",
+        "profile_capability_id": "private-profile-0",
+        "visible_bundle_sha256": "0404040404040404040404040404040404040404040404040404040404040404",
+        "base_tree_sha256": "1414141414141414141414141414141414141414141414141414141414141414",
+        "memory_bundle_sha256": "2424242424242424242424242424242424242424242424242424242424242424",
+        "environment_image_digest": "sha256:3434343434343434343434343434343434343434343434343434343434343434",
+        "environment_platform": "linux/amd64",
+        "resource_profile_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "grader_bundle_sha256": "5454545454545454545454545454545454545454545454545454545454545454",
+        "grader_image_digest": "sha256:6464646464646464646464646464646464646464646464646464646464646464",
+        "grader_platform": "linux/amd64",
+        "test_manifest_sha256": "7474747474747474747474747474747474747474747474747474747474747474",
+        "grader_plan_sha256": "8484848484848484848484848484848484848484848484848484848484848484"
+      }
+    ]
+  },
+  "run_authority": {
+    "schema": "dittobench-coding-shadow-run-authority-v1",
+    "bench_family": "coding",
+    "coding_contract_version": 1,
+    "weight_eligible": false,
+    "bench_version": 12,
+    "coding_run_id": "coding-run-private-001",
+    "agent_id": "00000000-0000-4000-8000-000000000001",
+    "agent_artifact_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "screened_image_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "corpus_release_id": "private-coding-corpus-v1",
+    "catalog_merkle_root": "0f832d36b225cee4abf6b04ebcc50f697cc86a4132a43fa0c67c4993003ab3cc",
+    "selection_derivation_id": "coding-selection-v1",
+    "selection_chain_genesis_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+    "selection_block_number": 123456,
+    "selection_block_hash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+    "inference_grant_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "grader_contract_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "task_set_id": "coding-task-set-v1-e598c0572f82a3e34d04c603d294cf85103c0ec1d5f5978267087e73cfb46acb",
+    "task_set_manifest_sha256": "e598c0572f82a3e34d04c603d294cf85103c0ec1d5f5978267087e73cfb46acb",
+    "run_manifest_sha256": "f244f2a48c72260ecd82c5332f64f10a2e8218ee4e7aeb574f2224e8f7d94f69",
+    "task_count": 1
+  },
+  "exposure": {
+    "manifest_index": 0,
+    "task_version_id": "private-task-v003",
+    "task_commitment_sha256": "934a0e16ddfc9757266b6a031fa5378b4dca862f45309b53e8477f57acb90fe3",
+    "selection_proof_sha256": "2a8594ae897850de4174baf1bd602cf4a2307b19aafeffd85ddded2f28ec23a8",
+    "catalog_membership_proof_sha256": "45a3dfae579ec3e428bab94cf099affa6e2a0c6ee31c82c5306a054430949ebe",
+    "visible_bundle_sha256": "0404040404040404040404040404040404040404040404040404040404040404",
+    "base_tree_sha256": "1414141414141414141414141414141414141414141414141414141414141414",
+    "memory_bundle_sha256": "2424242424242424242424242424242424242424242424242424242424242424",
+    "environment_image_digest": "sha256:3434343434343434343434343434343434343434343434343434343434343434",
+    "resource_profile_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "grader_bundle_sha256": "5454545454545454545454545454545454545454545454545454545454545454",
+    "grader_image_digest": "sha256:6464646464646464646464646464646464646464646464646464646464646464",
+    "test_manifest_sha256": "7474747474747474747474747474747474747474747474747474747474747474",
+    "grader_plan_sha256": "8484848484848484848484848484848484848484848484848484848484848484"
+  }
+}

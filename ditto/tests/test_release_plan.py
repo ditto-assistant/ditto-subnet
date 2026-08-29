@@ -212,14 +212,24 @@ def test_shadow_coding_execution_selects_only_scorer_stack(
     ) == {"dittobench_api", "validator_stack"}
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "packages/dittobench-coding-contract/testdata/coding_contract_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_catalog_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_selection_v1.json",
+    ],
+)
 def test_shared_coding_contract_vectors_select_every_consumer(
-    components, ignored_paths
+    components, ignored_paths, path: str
 ) -> None:
-    path = "packages/dittobench-coding-contract/testdata/coding_contract_v1.json"
     assert selected(components, ignored_paths, path) == {
+        "backroom",
         "dittobench_api",
         "dittobench_coding_datagen",
         "dittobench_coding_starter_kit",
+        "platform",
+        "platform_api",
         "validator",
         "validator_stack",
     }
@@ -231,6 +241,14 @@ def test_platform_change_does_not_release_validator_stack(
 ) -> None:
     assert selected(
         components, ignored_paths, "apps/platform/ditto/api_server/factory.py"
+    ) == {"platform_api", "platform", "backroom"}
+
+
+def test_platform_workflow_is_release_owned(components, ignored_paths) -> None:
+    assert selected(
+        components,
+        ignored_paths,
+        ".github/workflows/platform-ci.yml",
     ) == {"platform_api", "platform", "backroom"}
 
 
