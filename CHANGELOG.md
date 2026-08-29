@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v0.143.0 (2026-08-29)
+
+### Bug Fixes
+
+- **infra**: Install Docker CLI for screener updater
+  ([#1302](https://github.com/ditto-assistant/ditto-subnet/pull/1302),
+  [`4b770e9`](https://github.com/ditto-assistant/ditto-subnet/commit/4b770e9d98e944522dcf82655ecb8b7995aeb77f))
+
+- **screener**: Finalize evidence-bearing reviews
+  ([#1304](https://github.com/ditto-assistant/ditto-subnet/pull/1304),
+  [`52ddb58`](https://github.com/ditto-assistant/ditto-subnet/commit/52ddb58836307f58286d116981182c2eeaed906c))
+
+### Features
+
+- **platform**: Build shadow coding task leases
+  ([#1053](https://github.com/ditto-assistant/ditto-subnet/pull/1053),
+  [`033ac1d`](https://github.com/ditto-assistant/ditto-subnet/commit/033ac1d0fc250551f8d6c7c78981adf2350e85a3))
+
+- **platform**: Hydrate private coding task inputs
+  ([#1051](https://github.com/ditto-assistant/ditto-subnet/pull/1051),
+  [`2798ba0`](https://github.com/ditto-assistant/ditto-subnet/commit/2798ba0dabb0bb74b862eed2e154ba871b98ec1f))
+
+- **platform**: Mint shadow coding artifact capabilities
+  ([#1055](https://github.com/ditto-assistant/ditto-subnet/pull/1055),
+  [`cfbe744`](https://github.com/ditto-assistant/ditto-subnet/commit/cfbe744f25a650204c438a9767d820c0da39f34f))
+
+
 ## v0.142.0 (2026-08-29)
 
 ### Features
