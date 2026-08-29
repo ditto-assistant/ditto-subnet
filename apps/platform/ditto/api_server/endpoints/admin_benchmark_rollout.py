@@ -560,7 +560,6 @@ async def select_active_contract(
 ) -> dict[str, object]:
     """Select a fully qualified superseded contract as weight authority."""
     target = _parse_desired_version(desired_version)
-    _require_confirmation(payload.confirmation, action="ACTIVATE", version=target)
     current = await active_bench_version(session)
     if payload.expected_active_version != current:
         raise HTTPException(
@@ -569,6 +568,19 @@ async def select_active_contract(
                 "active benchmark changed: expected "
                 f"v{payload.expected_active_version}, found v{current}"
             ),
+        )
+    if target < current:
+        expected_confirmation = f"ROLL BACK BENCHMARK V{target} FROM V{current}"
+        if payload.confirmation != expected_confirmation:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f'type "{expected_confirmation}" exactly to confirm this operation'
+                ),
+            )
+    else:
+        _require_confirmation(
+            payload.confirmation, action="ACTIVATE", version=target
         )
     try:
         await select_active_bench_version(

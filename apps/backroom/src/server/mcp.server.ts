@@ -56,6 +56,7 @@ import {
   benchmarkRolloutQualificationLookupInputSchema,
   qualifyBenchmarkRolloutInputSchema,
   expandBenchmarkRolloutInputSchema,
+  selectActiveBenchmarkInputSchema,
   startBenchmarkRolloutInputSchema,
   validationRetryLookupInputSchema,
   listStuckSubmissionsInputSchema,
@@ -156,6 +157,7 @@ import {
   qualifyBenchmarkRollout,
   expandBenchmarkRollout,
   fetchBenchmarkRolloutControl,
+  selectActiveBenchmark,
   startBenchmarkRollout,
   retryValidation,
   withdrawValidation,
@@ -256,6 +258,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'qualify_scored_benchmark_rollout',
   'expand_benchmark_rollout_cohort',
   'start_benchmark_rollout',
+  'select_active_benchmark',
   'set_efficiency_bonus_settings',
   'set_continual_retest_settings',
   'set_core_qualification_policy',
@@ -585,6 +588,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read rollout control: versions, start_ready, cohort, targets. Starts nothing.',
   start_benchmark_rollout:
     'Start a forward-only rollout. Confirmation: START BENCHMARK V{n}.',
+  select_active_benchmark:
+    'Select qualified benchmark authority. Incident rollback is one version only and requires an empty current board.',
   authorize_confirmation_bundle_retest:
     'Authorize one manual retest for a completed or failed bundle. Requires current generation, request UUID, reason, and exact phrase. Automatic retries stay disabled.',
   remove_failed_submission_from_queue:
@@ -2249,6 +2254,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => startBenchmarkRollout(props.session.email, input)),
+  )
+
+  registerTool(
+    'select_active_benchmark',
+    {
+      title: 'Select active benchmark authority',
+      description:
+        'Select one fully qualified terminal benchmark as leaderboard and validator-weight authority. Forward recovery uses "ACTIVATE BENCHMARK V{n}". Incident rollback is limited to the immediately preceding version and is accepted only when the current authority has zero ranked quorum agents; confirm with "ROLL BACK BENCHMARK V{target} FROM V{current}". This preserves all screening, ATH, score, and rollout history. Requires backroom:write.',
+      inputSchema: selectActiveBenchmarkInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => selectActiveBenchmark(props.session.email, input)),
   )
 
   registerTool(

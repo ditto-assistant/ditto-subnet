@@ -5728,10 +5728,10 @@ export const selectActiveBenchmarkInputSchema = z
     confirmation: z.string().max(80),
   })
   .superRefine((input, context) => {
-    if (
-      input.confirmation !==
-      benchmarkRolloutConfirmation('ACTIVATE', input.desiredVersion)
-    ) {
+    const expected = input.desiredVersion < input.expectedActiveVersion
+      ? `ROLL BACK BENCHMARK V${input.desiredVersion} FROM V${input.expectedActiveVersion}`
+      : benchmarkRolloutConfirmation('ACTIVATE', input.desiredVersion)
+    if (input.confirmation !== expected) {
       context.addIssue({
         code: 'custom',
         path: ['confirmation'],

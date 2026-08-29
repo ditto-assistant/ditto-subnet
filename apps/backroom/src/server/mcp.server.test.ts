@@ -158,6 +158,7 @@ describe('Backroom MCP tools', () => {
         'reinstate_evicted_submission_to_queue',
         'qualify_scored_benchmark_rollout',
         'start_benchmark_rollout',
+        'select_active_benchmark',
         'resolve_screening_quarantine',
         'resolve_screening_dispute',
         'resolve_ath_review',

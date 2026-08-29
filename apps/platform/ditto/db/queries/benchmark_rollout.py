@@ -1126,12 +1126,15 @@ async def select_active_bench_version(
     now: datetime,
     inference_requirements: InferenceActivationRequirements | None = None,
 ) -> BenchmarkRollout:
-    """Select a fully qualified historical contract as active authority.
+    """Select a fully qualified terminal contract as active authority.
 
     This is a recovery/control-plane action, not an arbitrary version setter.
-    It is forward-only, requires the rollout target to be terminal, and refuses
-    to race an open rollout. The append-only audit event becomes the durable
-    authority decision while the superseded rollout row remains immutable.
+    Normal selection is forward-only. One-step rollback is allowed only when
+    the current authority has no ranked quorum agents at all; that incident
+    escape hatch restores the immediately preceding, still-qualified ledger
+    without reviving rejected agents or rewriting rollout history. The
+    append-only audit event becomes the durable authority decision while every
+    terminal rollout row remains immutable.
     """
     rows = list(
         (
@@ -1147,18 +1150,34 @@ async def select_active_bench_version(
             "supersede the open benchmark rollout before changing active authority"
         )
     current = await persisted_active_bench_version(session)
-    if bench_version <= current:
+    if bench_version == current:
         raise RolloutConflictError(
-            f"active benchmark selection is forward-only: current v{current}, "
-            f"requested v{bench_version}"
+            f"benchmark v{bench_version} already owns active authority"
         )
+    rollback = bench_version < current
+    if rollback:
+        if bench_version != current - 1:
+            raise RolloutConflictError(
+                "incident benchmark rollback is limited to the immediately "
+                f"preceding version: current v{current}, requested v{bench_version}"
+            )
+        from ditto.db.queries.scores import count_ranked_quorum_agents
+
+        current_ranked = await count_ranked_quorum_agents(
+            session, bench_version=current
+        )
+        if current_ranked != 0:
+            raise RolloutConflictError(
+                "incident benchmark rollback requires the current authority to "
+                f"have zero ranked quorum agents; v{current} has {current_ranked}"
+            )
     rollout = next(
         (row for row in reversed(rows) if row.desired_version == bench_version),
         None,
     )
-    if rollout is None or rollout.status != "superseded":
+    if rollout is None or rollout.status not in ("activated", "superseded"):
         raise RolloutConflictError(
-            "only a fully qualified superseded rollout can be selected for recovery"
+            "only a fully qualified terminal rollout can be selected for recovery"
         )
     readiness = await authority_selection_state(session, bench_version=bench_version)
     if not readiness["ready"]:
@@ -1181,6 +1200,7 @@ async def select_active_bench_version(
             "reason": reason,
             "previous_active_version": current,
             "bench_version": bench_version,
+            "incident_rollback": rollback,
             "ranked_quorum_agents": readiness["ranked_quorum_agents"],
         },
         now=now,

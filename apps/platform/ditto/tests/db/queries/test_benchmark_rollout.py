@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -3094,6 +3094,105 @@ async def test_operator_can_select_fully_qualified_superseded_authority(
         assert audit is not None
         assert audit.payload["previous_active_version"] == 2
         assert audit.payload["bench_version"] == CANARY_BENCH_VERSION
+
+
+async def test_operator_can_roll_back_one_version_when_current_board_is_empty(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (_agent_ids, current_rollout)):
+        previous_version = CANARY_BENCH_VERSION - 1
+        await session.execute(
+            update(Score)
+            .where(Score.bench_version == CANARY_BENCH_VERSION)
+            .values(bench_version=previous_version)
+        )
+        previous_rollout = BenchmarkRollout(
+            rollout_id=uuid4(),
+            from_version=previous_version - 1,
+            desired_version=previous_version,
+            status="activated",
+            cohort_size=5,
+            rescore_cohort_target=5,
+            priority_cohort_target=5,
+            created_at=now - timedelta(days=2),
+            activated_at=now - timedelta(days=1),
+        )
+        session.add(previous_rollout)
+        current_rollout.from_version = previous_version
+        current_rollout.status = "activated"
+        current_rollout.activated_at = now
+        await session.flush()
+
+        assert await active_bench_version(session) == CANARY_BENCH_VERSION
+        assert (
+            await count_ranked_quorum_agents(
+                session, bench_version=CANARY_BENCH_VERSION
+            )
+            == 0
+        )
+
+        selected = await select_active_bench_version(
+            session,
+            bench_version=previous_version,
+            actor="operator",
+            reason="restore the last populated leaderboard during incident",
+            now=now + timedelta(minutes=1),
+            inference_requirements=_activation_requirements(),
+        )
+
+        assert selected.rollout_id == previous_rollout.rollout_id
+        assert await active_bench_version(session) == previous_version
+        audit = await session.scalar(
+            select(BenchmarkRolloutAudit).where(
+                BenchmarkRolloutAudit.rollout_id == previous_rollout.rollout_id,
+                BenchmarkRolloutAudit.event == "authority_selected",
+            )
+        )
+        assert audit is not None
+        assert audit.payload["incident_rollback"] is True
+
+
+async def test_operator_cannot_roll_back_a_nonempty_current_board(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (_agent_ids, current_rollout)):
+        previous_version = CANARY_BENCH_VERSION - 1
+        session.add(
+            BenchmarkRollout(
+                rollout_id=uuid4(),
+                from_version=previous_version - 1,
+                desired_version=previous_version,
+                status="activated",
+                cohort_size=5,
+                rescore_cohort_target=5,
+                priority_cohort_target=5,
+                created_at=now - timedelta(days=2),
+                activated_at=now - timedelta(days=1),
+            )
+        )
+        current_rollout.from_version = previous_version
+        current_rollout.status = "activated"
+        current_rollout.activated_at = now
+        await session.flush()
+
+        with pytest.raises(
+            RolloutConflictError,
+            match="requires the current authority to have zero ranked quorum agents",
+        ):
+            await select_active_bench_version(
+                session,
+                bench_version=previous_version,
+                actor="operator",
+                reason="must not replace a populated current leaderboard",
+                now=now + timedelta(minutes=1),
+                inference_requirements=_activation_requirements(),
+            )
 
 
 async def test_operator_cannot_select_v7_after_proxy_key_rollback(
