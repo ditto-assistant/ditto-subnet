@@ -187,7 +187,12 @@ activate_release() {
 [[ "$WORKER_PROCESSES" =~ ^[1-9][0-9]*$ ]] || die "worker process count is invalid"
 id "$SERVICE_USER" >/dev/null 2>&1 || die "service user does not exist"
 for command in cosign docker git runuser "$UV_BIN" "$SYSTEMCTL"; do
-  command -v "$command" >/dev/null 2>&1 || die "required command is unavailable: $command"
+  if ! command -v "$command" >/dev/null 2>&1; then
+    if [ "$command" = docker ]; then
+      die "required command is unavailable: docker (install the Docker CLI; Debian 13 package: docker-cli)"
+    fi
+    die "required command is unavailable: $command"
+  fi
 done
 install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0750 "$RELEASES_DIR"
 install -d -o root -g root -m 0700 "$STATE_DIR"
