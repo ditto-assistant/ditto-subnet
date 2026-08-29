@@ -1,9 +1,11 @@
 # SN118 preview control harness
 
-This directory provides preview plan validation plus a loopback-only mock
-control and inference fault proxy. The same checks run locally and in GitHub
-Actions. It does **not** launch or deploy Platform, dashboard, Backroom, a
-chain, scorer, or validator, and it never publishes a release or `compat-2`.
+This directory provides two related surfaces. Local `preview up` remains a
+loopback-only mock control and inference fault proxy; it does **not** launch
+Platform, dashboard, Backroom, a chain, scorer, or validator. Pull requests can
+also receive bounded cloud `stack` and `stack-copy` deployments through the
+trusted controller in `.github/workflows/preview-stack.yml`. Neither surface
+publishes a release or `compat-2`.
 
 ## Profiles
 
@@ -12,6 +14,12 @@ chain, scorer, or validator, and it never publishes a release or `compat-2`.
 | `dashboard` | Public dashboard plan; may attach to production Platform |
 | `stack` | Isolated-stack requirements, including one localnet validator |
 | `stack-copy` | `stack` requirements plus a sanitized Postgres snapshot |
+
+Cloud stack previews run on credential-empty ephemeral GCE VMs. Eight atomic
+lease objects are the global admission limit: an update reuses its PR's slot, a
+ninth distinct PR fails closed, and close/TTL reconciliation deletes the VM.
+The controller comments dashboard, Platform, and isolated Backroom URLs only
+after readiness succeeds.
 
 Backroom is an authenticated write control plane. It is only part of an
 isolated `stack` plan and must never receive production OAuth, session, MCP, or
@@ -66,6 +74,14 @@ It runs destructive `pg_restore --clean`, so other hosts, ports, users, and
 database names fail closed. Restoring a snapshot does not launch a stack or
 connect the in-memory overlay to Platform/validator behavior.
 
+Cloud `stack-copy` never reads production itself. The main-only
+`preview-snapshot.yml` workflow exports into a disposable Postgres, applies the
+explicit policy in `preview/cloud/sanitize.sql`, and uploads only the sanitized
+custom-format dump. Authentication, payments, artifacts, source-review
+evidence, bearer material, signatures, and operator identity are stripped. The
+controller supplies the VM a two-hour signed URL; the source dump is never
+uploaded and is removed from the runner even on failure.
+
 ## GitHub Actions
 
 `.github/workflows/preview.yml` checks out one exact SHA, resolves a plan, and
@@ -78,6 +94,14 @@ any artifact-supplied Worker with the trusted
 API-reported immutable `pages.dev` deployment URL on the PR. The stable Pages
 branch is `pr-<number>`; each update replaces its branch alias while preserving
 exact-SHA deployment metadata. Fork PRs never enter the publisher.
+
+Same-repository PRs selected as `stack` or `stack-copy` use the narrowly
+allowlisted `pull_request_target` controller. It checks out only the default
+branch, re-reads the current PR head, acquires one of eight slots, then starts
+the exact SHA on a separate VM. PR code never runs on the privileged runner.
+The VM identity has no project roles and RFC1918 egress is denied. Close,
+profile changes, failed readiness, and the 24-hour TTL all tear down the VM and
+release its slot.
 
 The preview proxy permits only `GET`/`HEAD` under `/api/v1/public/` and strips
 cookies and authorization. Trusted response headers restrict connections,

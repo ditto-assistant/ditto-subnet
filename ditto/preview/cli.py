@@ -48,6 +48,11 @@ def main(argv: list[str] | None = None) -> int:
     serve_p.add_argument(
         "--netuid", type=int, default=int(os.environ.get("PREVIEW_NETUID", "3"))
     )
+    serve_p.add_argument(
+        "--validator-hotkey",
+        default=os.environ.get("PREVIEW_VALIDATOR_HOTKEY", ""),
+        help="optional localnet validator to register and permit at boot",
+    )
 
     up_p = sub.add_parser("up", help="Start a local preview for the given profiles")
     up_p.add_argument("profiles")
@@ -116,6 +121,8 @@ def _dispatch(args: argparse.Namespace) -> int:
             endpoint=args.endpoint,
             netuid=args.netuid,
         )
+        if args.validator_hotkey:
+            engine.register(args.validator_hotkey, permit=True, stake=1.0)
         print(
             f"preview-control on http://{args.host}:{args.port} network={args.network}",
             flush=True,

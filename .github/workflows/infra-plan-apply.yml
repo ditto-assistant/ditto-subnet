@@ -12,7 +12,7 @@ on:
         description: Terraform state root
         required: true
         type: choice
-        options: [gcp-platform, cloudflare-dittobench]
+        options: [gcp-platform, gcp-preview, cloudflare-dittobench]
       plan_sha:
         description: Exact main commit used by the plan (required for apply)
         required: false
@@ -85,6 +85,7 @@ jobs:
         run: |
           case '${{ inputs.root }}' in
             gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
+            gcp-preview) root=infra/terraform/stacks/gcp-preview ;;
             cloudflare-dittobench) root=infra/terraform/stacks/cloudflare-dittobench ;;
             *) exit 2 ;;
           esac
@@ -251,6 +252,7 @@ jobs:
         run: |
           case '${{ inputs.root }}' in
             gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
+            gcp-preview) root=infra/terraform/stacks/gcp-preview ;;
             cloudflare-dittobench) root=infra/terraform/stacks/cloudflare-dittobench ;;
             *) exit 2 ;;
           esac

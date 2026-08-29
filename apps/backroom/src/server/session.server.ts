@@ -56,6 +56,26 @@ function validSession(value: BackroomSession | null): value is BackroomSession {
   )
 }
 
+export function previewSessionFromEnv(now = Date.now()): BackroomSession | null {
+  if (process.env.BACKROOM_PREVIEW_MODE !== 'true') return null
+  if (process.env.DITTO_PLATFORM_API_BASE_URL !== 'http://platform:8000') {
+    throw new Error('BACKROOM_PREVIEW_MODE requires the isolated preview Platform URL')
+  }
+  if (!process.env.DITTO_ADMIN_API_TOKEN || process.env.DITTO_ADMIN_API_TOKEN.length < 32) {
+    throw new Error('BACKROOM_PREVIEW_MODE requires an isolated admin token')
+  }
+  return {
+    version: 2,
+    uid: 'sn118-preview',
+    email: 'preview@localhost.invalid',
+    name: 'SN118 preview operator',
+    picture: '',
+    accessLevel: 'write',
+    issuedAt: now,
+    expiresAt: now + SESSION_MAX_AGE_SECONDS * 1000,
+  }
+}
+
 export async function setSessionCookie(session: BackroomSession) {
   writeCookie(activeCookieName('session'), await sealToken(session), SESSION_MAX_AGE_SECONDS)
 }
@@ -65,6 +85,8 @@ export function clearSessionCookie() {
 }
 
 export async function readSession() {
+  const preview = previewSessionFromEnv()
+  if (preview) return preview
   const token = readCookie(SESSION_COOKIE_SECURE, SESSION_COOKIE_LOCAL)
   if (!token) return null
   const session = await unsealToken<BackroomSession>(token)

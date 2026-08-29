@@ -1,0 +1,157 @@
+name: sn118-preview
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ditto
+      POSTGRES_PASSWORD: ${PREVIEW_POSTGRES_PASSWORD}
+      POSTGRES_DB: ditto_platform_preview
+    volumes: [preview-postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U ditto -d ditto_platform_preview"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: server /data
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: preview
+      MINIO_ROOT_PASSWORD: preview-only-object-store
+    volumes: [preview-minio:/data]
+    healthcheck:
+      test: [CMD, mc, ready, local]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-07-21T05-28-08Z
+    depends_on:
+      minio: {condition: service_healthy}
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - mc alias set preview http://minio:9000 preview preview-only-object-store && mc mb --ignore-existing preview/ditto-preview
+
+  platform:
+    build:
+      context: ../..
+      dockerfile: preview/cloud/platform.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+      minio: {condition: service_healthy}
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: "8000"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ditto
+      POSTGRES_PASSWORD: ${PREVIEW_POSTGRES_PASSWORD}
+      POSTGRES_DB: ditto_platform_preview
+      DITTO_UPLOAD_PAYMENT_ADDRESS: 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+      PYLON_URL: http://127.0.0.1:8080
+      PYLON_OPEN_ACCESS_TOKEN: preview-only
+      STORAGE_ENDPOINT_URL: http://minio:9000
+      STORAGE_BUCKET: ditto-preview
+      STORAGE_ACCESS_KEY: preview
+      STORAGE_SECRET_KEY: preview-only-object-store
+      STORAGE_REGION: us-east-1
+      STORAGE_USE_TLS: "false"
+      DITTO_ADMIN_API_TOKEN: ${PREVIEW_ADMIN_TOKEN}
+      DITTO_INFERENCE_PROXY_ENABLED: "false"
+      DITTO_ENV: preview
+      DITTO_PREVIEW_SHA: ${PREVIEW_SHA}
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:8000/health]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+  dashboard:
+    build:
+      context: ../..
+      dockerfile: preview/cloud/dashboard.Dockerfile
+      args:
+        VITE_API_BASE_URL: https://platform.${PREVIEW_BASE_DOMAIN}
+    restart: unless-stopped
+
+  backroom:
+    build:
+      context: ../..
+      dockerfile: preview/cloud/backroom.Dockerfile
+    restart: unless-stopped
+    environment:
+      DITTO_PLATFORM_API_BASE_URL: http://platform:8000
+      DITTO_ADMIN_API_TOKEN: ${PREVIEW_ADMIN_TOKEN}
+      SESSION_SECRET: ${PREVIEW_SESSION_SECRET}
+      BACKROOM_PREVIEW_MODE: "true"
+      BACKROOM_PREVIEW_SHA: ${PREVIEW_SHA}
+    depends_on:
+      platform: {condition: service_healthy}
+
+  preview-control:
+    build:
+      context: ../..
+      dockerfile: preview/cloud/control.Dockerfile
+    restart: unless-stopped
+    network_mode: service:platform
+    environment:
+      PREVIEW_CONTROL_TOKEN: preview-only
+    command: [uv, run, python, -m, ditto.preview, serve, --host, 127.0.0.1, --port, "8080", --network, preview, --endpoint, ws://127.0.0.1:9944, --netuid, "118", --validator-hotkey, 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY]
+
+  validator:
+    build:
+      context: ../..
+      dockerfile: preview/cloud/validator.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      platform: {condition: service_healthy}
+      preview-control: {condition: service_started}
+    environment:
+      NETUID: "118"
+      SUBTENSOR_NETWORK: local
+      VALIDATOR_PLATFORM_API_URL: http://platform:8000
+      VALIDATOR_PLATFORM_INFERENCE_BASE_URL: http://platform:8000
+      VALIDATOR_DITTOBENCH_MOCK: "true"
+      VALIDATOR_HOTKEY: 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+      VALIDATOR_WALLET_NAME: preview
+      VALIDATOR_WALLET_HOTKEY: default
+      VALIDATOR_BENCHMARK_CAPACITY: "1"
+      VALIDATOR_LONGMEM_CAPACITY: "1"
+      VALIDATOR_INFERENCE_PROXY_REQUIRED: "false"
+      VALIDATOR_SWEEP_SECONDS: "10"
+      PYLON_URL: http://platform:8080
+      PYLON_IDENTITY_NAME: preview
+      PYLON_TOKEN: preview-only
+    healthcheck:
+      test: [CMD, uv, run, python, -c, "import urllib.request; data=urllib.request.urlopen('http://platform:8000/api/v1/public/operations', timeout=5).read(); assert b'5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY' in data"]
+      interval: 10s
+      timeout: 8s
+      retries: 60
+
+  gateway:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    depends_on:
+      platform: {condition: service_healthy}
+      validator: {condition: service_healthy}
+      dashboard: {condition: service_started}
+      backroom: {condition: service_started}
+    environment:
+      PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN}
+      PREVIEW_SHA: ${PREVIEW_SHA}
+      PREVIEW_PROFILE: ${PREVIEW_PROFILE}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - preview-caddy-data:/data
+
+volumes:
+  preview-postgres:
+  preview-minio:
+  preview-caddy-data:

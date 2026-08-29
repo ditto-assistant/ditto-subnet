@@ -6,6 +6,7 @@ import hmac
 import json
 import secrets
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,60 @@ def make_handler(engine: PreviewEngine, token: str) -> type[BaseHTTPRequestHandl
             if path in {"/health", "/v1/health"}:
                 self._send(200, {"ok": True, "network": engine.network})
                 return
+            if path == "/api/v1/identities":
+                self._send(200, {"identities": {"preview": engine.netuid}})
+                return
+            if path.endswith("/block/latest") and path.startswith("/api/v1/"):
+                with engine_lock:
+                    self._send(
+                        200,
+                        {
+                            "number": engine.block,
+                            "hash": f"0x{engine.block:064x}",
+                            "timestamp": int(time.time()),
+                        },
+                    )
+                return
+            if path.endswith("/block/recent/neurons") and path.startswith("/api/v1/"):
+                with engine_lock:
+                    neurons = {
+                        hotkey: {
+                            "uid": neuron.uid,
+                            "coldkey": hotkey,
+                            "hotkey": hotkey,
+                            "active": neuron.registered,
+                            "axon_info": {"ip": "127.0.0.1", "port": 0, "protocol": 4},
+                            "stake": neuron.stake,
+                            "rank": 0.0,
+                            "emission": 0.0,
+                            "incentive": 0.0,
+                            "consensus": 0.0,
+                            "trust": 0.0,
+                            "validator_trust": 0.0,
+                            "dividends": 0.0,
+                            "last_update": engine.block,
+                            "validator_permit": neuron.permit,
+                            "pruning_score": 0.0,
+                            "stakes": {
+                                "alpha": neuron.stake,
+                                "tao": 0.0,
+                                "total": neuron.stake,
+                            },
+                        }
+                        for hotkey, neuron in engine.neurons.items()
+                        if neuron.registered
+                    }
+                    self._send(
+                        200,
+                        {
+                            "block": {
+                                "number": engine.block,
+                                "hash": f"0x{engine.block:064x}",
+                            },
+                            "neurons": neurons,
+                        },
+                    )
+                return
             if path == "/v1/state":
                 if not self._authorized():
                     return
@@ -116,6 +171,16 @@ def make_handler(engine: PreviewEngine, token: str) -> type[BaseHTTPRequestHandl
                 self._send(404, {"error": "not found"})
                 return
             self._send(200, payload)
+
+        def do_PUT(self) -> None:  # noqa: N802
+            path = urlparse(self.path).path
+            if path.startswith("/api/v1/identity/") and path.endswith("/weights"):
+                self._json()
+                self._send(200, {})
+                return
+            if not self._authorized():
+                return
+            self._send(404, {"error": "not found"})
 
         def _dispatch(self, path: str, body: dict[str, Any]) -> dict[str, Any] | None:
             if path == "/v1/cheat/register":
