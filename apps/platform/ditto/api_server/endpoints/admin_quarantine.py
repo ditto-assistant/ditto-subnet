@@ -85,7 +85,6 @@ from ditto.api_models.admin_quarantine import (
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_models.screener import (
-    SCREENING_POLICY_VERSION,
     ScreenEvidenceItem,
     ScreenReviewAudit,
     SourceReviewFinding,
@@ -172,6 +171,7 @@ from ditto.db.queries.payments import (
     get_miner_coldkeys_for_agents,
 )
 from ditto.db.queries.tickets import RETRY_COOLDOWN, ticket_attempt_cap
+from ditto.screener_policy_state import effective_screening_policy_version
 
 logger = logging.getLogger(__name__)
 
@@ -2263,7 +2263,7 @@ async def reject_screening_submission(
         agent.status = AgentStatus.REJECTED
         agent.screening_reason = payload.reason
         agent.screening_reason_code = _OPERATOR_REJECT_REASON_CODE
-        agent.screening_policy_version = SCREENING_POLICY_VERSION
+        agent.screening_policy_version = effective_screening_policy_version()
     logger.info(
         "admin_actor=%s rejected screening agent_id=%s attempt_id=%s "
         "builds=%s reason=%s",
@@ -2328,7 +2328,7 @@ async def _screened_image_rebuild_detail(
         blocking_reason = "submission already has an accepted active-version score"
     elif screening_attempt_active:
         blocking_reason = "screening attempt is active"
-    elif agent.screening_policy_version < SCREENING_POLICY_VERSION:
+    elif agent.screening_policy_version < effective_screening_policy_version():
         blocking_reason = "submission is not on the current screening policy"
     elif agent.screened_image_sha256 is None or agent.screened_image_upload_id is None:
         blocking_reason = "submission has no complete screened image to replace"

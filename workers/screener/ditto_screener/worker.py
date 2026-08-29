@@ -44,6 +44,7 @@ from ditto_screener.review_settings import (
 )
 from ditto_screener.signing import sign_heartbeat, sign_verdict
 from ditto_screening_protocol import (
+    SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
     ScreenerQueueItem,
     ScreenEvidenceItem,
@@ -283,12 +284,24 @@ class ScreenerWorker:
             policy_manifest_digest=manifest.digest,
         )
         required_policy = await self._platform.get_required_policy_version()
-        if required_policy != SCREENING_POLICY_VERSION:
+        if required_policy > SCREENING_POLICY_VERSION:
             raise PlatformError(
-                "screening policy mismatch before claim: platform requires "
-                f"{required_policy}, worker supports {SCREENING_POLICY_VERSION}"
+                "screening policy newer than this build before claim: platform "
+                f"requires {required_policy}, worker supports "
+                f"{SCREENING_POLICY_VERSION}. The platform activates each policy "
+                "version on a schedule; deploy a build implementing the target "
+                "version before its activation time."
             )
-        queue = await self._platform.claim_next(policy_version=SCREENING_POLICY_VERSION)
+        if required_policy < SCREENING_FLOOR_POLICY_VERSION:
+            raise PlatformError(
+                "screening policy older than this build supports before claim: "
+                f"platform requires {required_policy}, worker supports "
+                f"{SCREENING_FLOOR_POLICY_VERSION}-{SCREENING_POLICY_VERSION}"
+            )
+        # A mixed-fleet platform may require the older policy during a
+        # scheduled activation window; screen under exactly what it requires.
+        screen_version = min(required_policy, SCREENING_POLICY_VERSION)
+        queue = await self._platform.claim_next(policy_version=screen_version)
         if queue.required_policy_version != required_policy:
             raise PlatformError(
                 "platform changed screening policy during claim: expected "
@@ -301,7 +314,7 @@ class ScreenerWorker:
         for item in queue.items:
             if stop.is_set():
                 break
-            await self._screen_one(item, policy_version=required_policy)
+            await self._screen_one(item, policy_version=screen_version)
             done += 1
         return done
 
@@ -443,6 +456,7 @@ class ScreenerWorker:
                         # spending private-policy/model budget.
                         build_only=item.build_only,
                         deferred_source_review=item.deferred_source_review,
+                        policy_version=policy_version,
                     )
             shadow_review = self._gate.pop_shadow_review(attempt_id)
             if shadow_review is not None:

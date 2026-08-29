@@ -96,6 +96,8 @@ describe('Backroom MCP tools', () => {
         'apply_screener_review_settings',
         'get_screener_policy_manifest',
         'rotate_screener_policy_manifest',
+        'get_screener_policy_activation',
+        'schedule_screener_policy_activation',
         'get_validator_fleet',
         'get_validator_slot_settings',
         'list_validator_assignments',
@@ -186,18 +188,22 @@ describe('Backroom MCP tools', () => {
     // number is the coarse whole-payload backstop, and input schemas dominate
     // it. Curve v3 and the runtime metrics/capture contracts added legitimate,
     // bounded input schemas without relaxing either prose budget below. The
-    // 97_000 whole-payload includes the L1 model/timeout fields on the
+    // 98_400 whole-payload includes the L1 model/timeout fields on the
     // screener-review settings write schema, the validator fleet/assignment
     // read schemas, the three inference-trace archive tools, the operator
-    // screening-reject tool, and the gradient-hold and adjudicator controls.
-    // Keep modest headroom for schema evolution; tighten the description
-    // budgets, not this whole-payload backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(97_000)
+    // screening-reject tool, the gradient-hold and adjudicator controls, and
+    // the screener policy-activation write schema (revision guard, versioned
+    // target, timezone-aware instant, rescreen flag). Keep modest headroom for
+    // schema evolution; tighten the description budgets, not this
+    // whole-payload backstop, to push back on tutorials.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(98_400)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
-    // in get_backroom_tool_help, not here.
+    // in get_backroom_tool_help, not here. 22_000 admits the screener
+    // policy-activation pair: one required catalog line each, with their
+    // operational tutorials kept in get_backroom_tool_help.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      21_700,
+      22_000,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -2844,6 +2850,153 @@ describe('Backroom MCP tools', () => {
         settings: { prev_gen_carryover: { enabled: true } },
         reason: 'admit stranded prior-generation submissions for one wave',
         confirmation: 'APPLY QUEUE POLICY SETTINGS',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  const screenerPolicyActivationView = {
+    effective_policy_version: 10,
+    floor_policy_version: 10,
+    builtin_policy_version: 11,
+    latest: {
+      revision: 3,
+      parent_revision: 2,
+      target_policy_version: 11,
+      activate_at: '2026-08-29T13:00:00Z',
+      rescreen_scored: true,
+      reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+      actor: 'peyton@omniaura.ai',
+      created_at: '2026-08-28T12:00:00Z',
+      state: 'pending',
+    },
+    revisions: [
+      {
+        revision: 3,
+        parent_revision: 2,
+        target_policy_version: 11,
+        activate_at: '2026-08-29T13:00:00Z',
+        rescreen_scored: true,
+        reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+        actor: 'peyton@omniaura.ai',
+        created_at: '2026-08-28T12:00:00Z',
+        state: 'pending',
+      },
+    ],
+  }
+
+  it('reads the future screening-policy activation', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(screenerPolicyActivationView))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_screener_policy_activation',
+      arguments: {},
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toEqual(screenerPolicyActivationView)
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('schedules one screener policy activation with the exact platform contract', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ revision: 4 }))
+      .mockResolvedValueOnce(Response.json(screenerPolicyActivationView))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'schedule_screener_policy_activation',
+      arguments: {
+        expectedRevision: 3,
+        targetPolicyVersion: 11,
+        activateAt: '2026-08-29T09:00:00-04:00',
+        rescreenScored: true,
+        reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+        confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      latest: { revision: 3, state: 'pending' },
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation')
+    expect(init.method).toBe('POST')
+    expect(init.headers).toMatchObject({
+      Authorization: 'Bearer platform-admin-token',
+      'X-Admin-Actor': 'peyton@omniaura.ai',
+    })
+    // The audited actor is always the signed-in operator, never a tool argument.
+    expect(JSON.parse(String(init.body))).toEqual({
+      expected_revision: 3,
+      target_policy_version: 11,
+      activate_at: '2026-08-29T09:00:00-04:00',
+      rescreen_scored: true,
+      reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+      actor: 'peyton@omniaura.ai',
+      confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('rejects a screener policy activation with the wrong confirmation before any admin call', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'schedule_screener_policy_activation',
+      arguments: {
+        expectedRevision: 3,
+        targetPolicyVersion: 11,
+        activateAt: '2026-08-29T09:00:00-04:00',
+        reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+        confirmation: 'SCHEDULE SCREENER POLICY',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('does not schedule a screener policy activation without the write scope', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'schedule_screener_policy_activation',
+      arguments: {
+        expectedRevision: 3,
+        targetPolicyVersion: 11,
+        activateAt: '2026-08-29T09:00:00-04:00',
+        reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+        confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
       },
     })
 

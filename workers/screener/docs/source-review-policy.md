@@ -4,12 +4,110 @@ The source reviewer identifies submissions that replace a general agent with
 benchmark-, scorer-, or audit-specific behavior. Its findings select operator
 quarantine; they never create an automatic terminal rejection.
 
-Screening policy v10 makes the seven strict integrity invariants below part of
+Screening policy v10 made the seven strict integrity invariants below part of
 the signed source-review contract. It changes neither benchmark activation nor
 operator decision authority: model review may select quarantine, but only an
 operator may reject a submission. Historical v9 findings retain their original
 wire identity and are not silently reinterpreted; v10 applies to new or
 explicitly rescreened attempts.
+
+## Policy v11 (in place, activation scheduled)
+
+Policy v11 is the first scheduled activation under the subnet's bench-scaling
+loop: observe field strategies at the current bench version, codify owner
+rulings, then make the unwanted strategy uncompetitive in the next bench
+version. v11 tightens reviewer tracing, three invariants, and the evidence
+standard:
+
+- **Complete served-path tracing.** Reviewers must trace every retry, review,
+  fallback, merge, and final response writer from the served entrypoint to the
+  graded slot — not merely the first model invocation. Confirming the initial
+  turn saw the full catalog does not clear a downstream controller that swaps
+  prompts, gates calls, or merges results. Inventory every writer of the
+  served text field and every caller that can alter tool execution after the
+  deciding model has spoken.
+- **I3 covers selection between model drafts.** When two or more parseable
+  model drafts exist, host code may not choose between them by semantic
+  content: expected values, evidence-number matching, refusal detection,
+  missing-information classification, or answer-family rules breach I3 even
+  though both drafts are model-authored. Allowed: shape recovery, schema
+  validation, and one final deciding model whose parseable result always
+  ships.
+- **I4 applies to every scorer-visible value** — `answer`, `final_text`, tool
+  names, tool arguments, abstention state, and workflow payloads. Derived
+  authority moving into tool arguments instead of the answer is still I4. A
+  derived tool-argument candidate passes only with complete raw evidence on
+  the deciding turn, untrusted labeling, the model free to choose a different
+  value, and no exact-value acceptance gate. A genuine enum/const already in
+  the live trusted schema passes; a const manufactured from retrieval or host
+  parsing is not automatically "schema-derived."
+- **I5 inspects prompt text, not only functions.** A family compiler can be
+  static prose: closed balance/remainder/total sheets, minor-unit conversion
+  rules, address/email extraction recipes, lesson/saying/takeaway
+  inventories, totals/intervals/comparison/update checklists, and exact
+  output formats tied to those families are I5 breaches even delivered as
+  prompt text. The discriminator is unchanged: generic instruction grounded in
+  live schemas and arbitrary records passes; a finite benchmark-shaped
+  value-family or operand recipe breaches.
+- **I7 requires the complete enforcement test.** Full-catalog visibility alone
+  never clears I7. Answer all four: (1) can the deciding model choose another
+  tool? (2) can it skip the proposed tool? (3) can it add or reorder tools?
+  (4) will an unexpected but valid call actually execute and remain in the
+  result? Any "no" caused by a host plan, an exact retry, a pinned choice, a
+  catalog replacement, or an acceptance gate breaches I7.
+- **I7 — enforced planner plans breach.** A plan authored by a separate
+  planner turn (host rule, trained head, or second model call) breaches I7
+  when it is ENFORCED against the deciding model — the catalog is replaced
+  per step, only the next planned capability is exposed, the step is pinned
+  with an exact `tool_choice`, or unadvertised model guesses are refused. The
+  deciding turn must remain free to deviate, skip, add, or reorder calls.
+  Advisory intent/relevance signals shown to a deciding model that still sees
+  the live catalog pass, as do grammar routing and precursor passes on their
+  own.
+- **Calibration.** `bench_version` branching is a warning sign, never an
+  independent reject; request-scoped duplicate suppression after a genuine
+  first successful execution is production behavior; plain answer
+  normalization is a scorer-fidelity gap, not a violation.
+- **Required causal evidence.** For every alleged breach, the causal chain is
+  `served_trigger → authority_transition → scorer_visible_effect → reachable
+  production path`, recorded with: exact artifact SHA, whether the default
+  configuration enables the path, entrypoint-to-function reachability, exact
+  file and line citations, the applicable pass clause and why it does not
+  remove the breach, the matching precedent, and whether the behavior is
+  production or diagnostics/test-only.
+
+### Regression fixtures (required pass/fail matrix)
+
+Synthetic source fixtures must encode the adjudicated top-five patterns:
+
+| Fixture | Expected |
+| --- | --- |
+| Full catalog followed by `skipped_*` exact-tool retry | fail I3/I7 |
+| Host-derived email converted into a schema `const` | fail I4 |
+| Static cents/address/takeaway prompt sheet | fail I5 |
+| Two model drafts with host semantic selection | fail I3 |
+| Dead trained classifier with no served caller | pass |
+| Diagnostics-only worksheet feature disabled in release | pass |
+| Untrusted advisory beside complete records, disagreement accepted | pass |
+| Request-wide routing retaining several live alternatives | pass I7 |
+
+### Fairness rules for the activation
+
+- The version the screening queue REQUIRES is the floor (`v10`) until the
+  scheduled activation time passes; dual-text workers screen under — and stamp
+  outcomes with — the required version, not merely the newest one they ship.
+- The activation is scheduled through `POST /admin/screener-policy-activation`
+  (Backroom MCP: `schedule_screener_policy_activation`) with a timezone-aware
+  `activate_at`, an optimistic-revision guard, and the confirmation phrase
+  `SCHEDULE SCREENER POLICY ACTIVATION`.
+- When an activation is due, agents screened under a stale version re-enter
+  the screening queue on the same criteria. Evaluating/rejected rows always
+  rescreen; scored and live rows rescreen only when the activation row sets
+  `rescreen_scored`, so a version bump cannot silently pull champions off the
+  ledger without an operator decision recorded on the schedule.
+- Agents are held to the policy version that screened them: a v10-screened
+  agent is not retroactively judged by the v11 I7 letter. The scheduled
+  re-screen is the fair mechanism, not retroactive enforcement.
 
 A deterministic source-review step, read, token, or cost budget exhaustion is
 not infrastructure failure and must not retry forever. After archive, build,

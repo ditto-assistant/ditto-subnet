@@ -99,6 +99,7 @@ from ditto_screener.source_review import (
     SourceReviewObservation,
     TarSourceRepository,
 )
+from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
@@ -671,6 +672,7 @@ class BuildGate:
         | None = None,
         build_only: bool = False,
         deferred_source_review: bool = False,
+        policy_version: int = SCREENING_POLICY_VERSION,
     ) -> ScreeningDecision:
         """Screen one agent end-to-end; never raises.
 
@@ -829,6 +831,7 @@ class BuildGate:
                             )
                         ),
                         deadline=deadline,
+                        policy_version=policy_version,
                     )
                     if resolved_preflight.ok and resolved_preflight.risk_level == "low":
                         preflight_clearance = resolved_preflight
@@ -914,6 +917,7 @@ class BuildGate:
                             attempt_id=attempt_id,
                             progress=report_review_progress,
                             deadline=deadline,
+                            policy_version=policy_version,
                         )
 
                     review_task = asyncio.create_task(review_with_selected_provider())

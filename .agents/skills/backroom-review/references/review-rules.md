@@ -124,7 +124,10 @@ Before you reject:
   calls. I7 fails only when an enforced plan predetermines the executed tool
   count/set/order against a deciding turn that cannot deviate, skip, add, or
   reorder (see the owner rulings in review-bar.md; live precedent
-  `lets_v609` reject `c8bf0641` vs `whoamI` clear).
+  `lets_v609`, rejected then reinstated, re-adjudication deferred to the
+  scheduled policy-v11 rescreen). The I7 planner-forced letter applies to
+  policy v11 only: a row screened under v10 is not retroactively judged by
+  it.
 - **`bench_version` branching flagged as benchmark fingerprinting.** Behavior
   that switches on `bench_version` is a warning sign warranting a second
   look, never an independent reject; require a companion violation on the

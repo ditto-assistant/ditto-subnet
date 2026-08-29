@@ -6,6 +6,7 @@ tests) so the attempt/quarantine rows and the agent transition are real.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -13,7 +14,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.db.models import (
     Agent,
     AgentStatus,
@@ -32,6 +32,13 @@ from ditto.db.queries.screening import (
     MAX_SCREENING_EXPIRIES,
     claim_screening_attempts,
 )
+from ditto.screener_policy_state import update_effective_screener_policy
+from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
+
+# Seeded versions mean "the version the platform REQUIRES" — the floor in the
+# default no-scheduled-activation state, since these tests call the query
+# builders directly and no resolver refreshes the global snapshot.
+SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 
 _SCREENER = "5GScreenerHotkeyForClaimTests000000000000000000000"
 # The era that has activated, and the one a rollout would be collecting toward.
@@ -1934,3 +1941,95 @@ async def test_effective_rollout_authority_dataset_is_not_reclaimed(
     claimed = await _claim(session)
 
     assert agent.agent_id not in {a.agent_id for a, _, _ in claimed}
+
+
+@contextmanager
+def _due_activation(*, rescreen_scored: bool):
+    """Publish a due activation to the process-global snapshot, then restore it.
+
+    These tests call the query builders directly, so nothing refreshes the
+    snapshot that ``claim_screening_attempts`` reads. Set it by hand and always
+    put the floor back: it is module state shared by every later test.
+    """
+    update_effective_screener_policy(
+        SCREENING_FLOOR_POLICY_VERSION + 1, rescreen_scored=rescreen_scored
+    )
+    try:
+        yield
+    finally:
+        update_effective_screener_policy(
+            SCREENING_FLOOR_POLICY_VERSION, rescreen_scored=False
+        )
+
+
+def _scored_agent(*, hotkey: str, name: str, created_at: datetime | None = None):
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey=hotkey,
+        name=name,
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.SCORED,
+        **({"created_at": created_at} if created_at is not None else {}),
+    )
+    agent.screening_policy_version = SCREENING_FLOOR_POLICY_VERSION
+    _complete_screened_image(agent)
+    return agent
+
+
+async def test_scheduled_rescreen_requeues_current_era_scored_agent(
+    session: AsyncSession,
+) -> None:
+    """``rescreen_scored`` returns a stale current-era scored row to the queue."""
+    await _activate_current_era(session)
+    agent = _scored_agent(hotkey="5HK-scored-current", name="scored-current")
+    async with session.begin():
+        session.add(agent)
+
+    with _due_activation(rescreen_scored=True):
+        claimed = await _claim(session)
+
+    assert agent.agent_id in {a.agent_id for a, _, _ in claimed}
+
+
+async def test_scheduled_rescreen_skips_scored_agent_when_flag_is_off(
+    session: AsyncSession,
+) -> None:
+    """Without the operator's opt-in, an activation leaves the ledger alone."""
+    await _activate_current_era(session)
+    agent = _scored_agent(hotkey="5HK-scored-optout", name="scored-optout")
+    async with session.begin():
+        session.add(agent)
+
+    with _due_activation(rescreen_scored=False):
+        claimed = await _claim(session)
+
+    assert agent.agent_id not in {a.agent_id for a, _, _ in claimed}
+
+
+async def test_scheduled_rescreen_does_not_requeue_unadmitted_historical_scored(
+    session: AsyncSession,
+) -> None:
+    """The scored rescreen lane honours the same era boundary as the stale lane.
+
+    At activation the entire scored field goes stale in one step. Without the
+    admission gate that is every historical row on the board enqueued at once,
+    for a rescreen the validator allocator would never lease anyway — the
+    failure ``test_policy_bump_does_not_requeue_unadmitted_historical_agent``
+    already pins for EVALUATING.
+    """
+    now = datetime.now(UTC)
+    agent = _scored_agent(
+        hotkey="5HK-scored-historical",
+        name="scored-historical",
+        created_at=now - timedelta(days=30),
+    )
+    async with session.begin():
+        session.add(agent)
+    await _activate_current_era(session)
+
+    with _due_activation(rescreen_scored=True):
+        claimed = await _claim(session)
+
+    assert agent.agent_id not in {a.agent_id for a, _, _ in claimed}
+    refreshed = await session.get(Agent, agent.agent_id)
+    assert refreshed is not None and refreshed.status == AgentStatus.SCORED

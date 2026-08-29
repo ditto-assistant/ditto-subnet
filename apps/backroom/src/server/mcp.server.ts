@@ -77,6 +77,7 @@ import {
   applyScreenerReviewSettingsInputSchema,
   rotateScreenerPolicyManifestInputSchema,
   setQueuePolicySettingsInputSchema,
+  scheduleScreenerPolicyActivationInputSchema,
   setValidatorSlotSettingsInputSchema,
   updateSubmissionSettingsInputSchema,
   unbanHotkeyInputSchema,
@@ -161,6 +162,8 @@ import {
   captureRuntimeProfile,
   downloadRuntimeProfile,
   fetchQueuePolicySettings,
+  fetchScreenerPolicyActivation,
+  scheduleScreenerPolicyActivation,
   fetchScreenerCapacity,
   fetchScreenerReviewControl,
   applyScreenerReviewSettings,
@@ -235,6 +238,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_queue_policy_settings',
   'apply_screener_review_settings',
   'rotate_screener_policy_manifest',
+  'schedule_screener_policy_activation',
   'set_validator_slot_settings',
   'set_inference_concurrency_settings',
   'start_runtime_profile',
@@ -478,6 +482,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Reject a screening row. Confirmation: REJECT SCREENING SUBMISSION. Requires backroom:write.',
   get_queue_policy_settings:
     'Read effective queue policy, rollout-locked fields, defaults, and optionally paged newest-first revision history. Open-rollout targets are snapshots: settings do not resize an in-flight rollout. historyLimit defaults to 0.',
+  get_screener_policy_activation:
+    'Read the scheduled screening-policy activation and its revision history; latest is null when none was ever scheduled.',
+  schedule_screener_policy_activation:
+    'Schedule one future screening-policy activation. Confirmation: "SCHEDULE SCREENER POLICY ACTIVATION". 409 stale revision; 422 bad phrase, naive/past time, or out-of-range target.',
   get_continual_retest_settings:
     'Read effective continual-retest policy, fleet readiness, compatibility field_support, defaults, and optionally paged newest-first revision history. historyLimit defaults to 0.',
   get_agent_scores:
@@ -1530,6 +1538,30 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => rotateScreenerPolicyManifest(props.session.email, input)),
+  )
+
+  registerTool(
+    'get_screener_policy_activation',
+    {
+      title: 'Get screener policy activation',
+      description:
+        'Read the screening-policy activation schedule: the effective policy version in force, the floor and builtin versions bounding what can be scheduled, the latest scheduled activation (null when none has ever been written), and the append-only revision history newest-first. `state` is computed at read time — "due" once now >= activate_at, "pending" before it. Read this before schedule_screener_policy_activation to get the expectedRevision and version bounds. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchScreenerPolicyActivation()),
+  )
+
+  registerTool(
+    'schedule_screener_policy_activation',
+    {
+      title: 'Schedule screener policy activation',
+      description:
+        'Schedule one future screening-policy activation, append-only: expectedRevision as the concurrent-write guard (409 stale), targetPolicyVersion within the floor..builtin bounds the read reports (422 out of range), activateAt as ISO-8601 that MUST carry a timezone offset (422 naive or in the past), rescreenScored (default true) deciding whether already-scored submissions rescreen under the new policy, and an auditable reason. The activation lands at the scheduled instant without a redeploy; a new schedule supersedes the pending one. Exact confirmation "SCHEDULE SCREENER POLICY ACTIVATION" required. Requires backroom:write.',
+      inputSchema: scheduleScreenerPolicyActivationInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => scheduleScreenerPolicyActivation(input, props.session.email)),
   )
 
   registerTool(

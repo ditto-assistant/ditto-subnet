@@ -13,7 +13,6 @@ from sqlalchemy.sql.selectable import ScalarSelect
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contracts
-from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.db.models import (
     Agent,
     AthReview,
@@ -36,6 +35,10 @@ from ditto.db.queries.benchmark_admission import (
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
 from ditto.db.queries.scores import SCORING_QUORUM
+from ditto.screener_policy_state import (
+    effective_rescreen_scored,
+    effective_screening_policy_version,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -134,7 +137,7 @@ def screening_last_served_at() -> ColumnElement[Any]:
         )
         .where(
             ScreeningAttempt.agent_id == Agent.agent_id,
-            ScreeningAttempt.policy_version == SCREENING_POLICY_VERSION,
+            ScreeningAttempt.policy_version == effective_screening_policy_version(),
         )
         .correlate(Agent)
         .scalar_subquery()
@@ -546,7 +549,7 @@ async def _inconclusive_attempt_count(session: AsyncSession, *, agent_id: UUID) 
     peer_passed_in_window = exists(
         select(peer.attempt_id).where(
             peer.agent_id != agent_id,
-            peer.policy_version == SCREENING_POLICY_VERSION,
+            peer.policy_version == effective_screening_policy_version(),
             peer.status == "passed",
             peer.finished_at >= ScreeningAttempt.started_at,
             peer.finished_at <= ScreeningAttempt.deadline,
@@ -557,7 +560,7 @@ async def _inconclusive_attempt_count(session: AsyncSession, *, agent_id: UUID) 
         .select_from(ScreeningAttempt)
         .where(
             ScreeningAttempt.agent_id == agent_id,
-            ScreeningAttempt.policy_version == SCREENING_POLICY_VERSION,
+            ScreeningAttempt.policy_version == effective_screening_policy_version(),
             or_(
                 ScreeningAttempt.status == "expired",
                 and_(
@@ -591,7 +594,7 @@ async def _park_repeatedly_inconclusive(
         attempt_id=uuid4(),
         agent_id=agent.agent_id,
         screener_hotkey=screener_hotkey,
-        policy_version=SCREENING_POLICY_VERSION,
+        policy_version=effective_screening_policy_version(),
         status="quarantined",
         started_at=now,
         deadline=now,
@@ -609,7 +612,7 @@ async def _park_repeatedly_inconclusive(
             agent_id=agent.agent_id,
             attempt_id=attempt.attempt_id,
             screener_hotkey=screener_hotkey,
-            policy_version=SCREENING_POLICY_VERSION,
+            policy_version=effective_screening_policy_version(),
             manifest_digest=_EXHAUSTED_MANIFEST_DIGEST,
             finding_digest=None,
             reason_code=_EXHAUSTED_REASON_CODE,
@@ -729,7 +732,7 @@ async def claim_screening_attempts(
         )
     )
     missing_v3_screen = (
-        (Agent.screening_policy_version < SCREENING_POLICY_VERSION)
+        (Agent.screening_policy_version < effective_screening_policy_version())
         | Agent.screened_image_sha256.is_(None)
         | Agent.screened_image_size_bytes.is_(None)
         | Agent.screened_image_id.is_(None)
@@ -807,13 +810,31 @@ async def claim_screening_attempts(
         # must not consume screener capacity on a rescreen they can never use.
         (
             (Agent.status == AgentStatus.EVALUATING)
-            & (Agent.screening_policy_version < SCREENING_POLICY_VERSION)
+            & (Agent.screening_policy_version < effective_screening_policy_version())
             & prerequisite_admitted
         ),
         (
             Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE))
             & rolling_qualified
             & missing_v3_screen
+        ),
+        # A due scheduled activation that opted scored/live rows in re-queues
+        # them alongside everything else screened under the stale policy, on
+        # the same criteria. The flag lives on the governing activation row so
+        # a routine version bump cannot silently pull champions off the ledger
+        # without an operator decision recorded on the schedule.
+        #
+        # Gated on ``prerequisite_admitted`` for the same reason the stale
+        # EVALUATING lane above is: a scored row from a superseded benchmark
+        # era can never be leased again, so rescreening it burns screener
+        # capacity that the current-era backlog needs. At activation the whole
+        # scored field goes stale at once, so an ungated lane would enqueue
+        # every historical row on the board behind one flag flip.
+        (
+            Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE))
+            & effective_rescreen_scored()
+            & (Agent.screening_policy_version < effective_screening_policy_version())
+            & prerequisite_admitted
         ),
         (
             (Agent.status == AgentStatus.EVALUATING)
@@ -1041,14 +1062,15 @@ async def claim_screening_attempts(
             mechanical_first
             or (
                 agent.status == AgentStatus.EVALUATING
-                and agent.screening_policy_version >= SCREENING_POLICY_VERSION
+                and agent.screening_policy_version
+                >= effective_screening_policy_version()
             )
         )
         attempt = ScreeningAttempt(
             attempt_id=uuid4(),
             agent_id=agent.agent_id,
             screener_hotkey=screener_hotkey,
-            policy_version=SCREENING_POLICY_VERSION,
+            policy_version=effective_screening_policy_version(),
             status="running",
             started_at=now,
             deadline=now + ttl,

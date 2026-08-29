@@ -52,6 +52,8 @@ import {
   setContinualRetestSettings,
   fetchQueuePolicySettings,
   setQueuePolicySettings,
+  fetchScreenerPolicyActivation,
+  scheduleScreenerPolicyActivation,
   fetchValidatorSlotSettings,
   setValidatorSlotSettings,
   setValidatorIssuancePause,
@@ -1885,6 +1887,224 @@ describe('queue policy administration', () => {
       ),
     ).rejects.toThrow()
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('screener policy activation', () => {
+  const revision = (n: number) => ({
+    revision: n,
+    parent_revision: n - 1,
+    target_policy_version: 11,
+    activate_at: '2026-08-29T13:00:00Z',
+    rescreen_scored: true,
+    reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+    actor: 'peyton@omniaura.ai',
+    created_at: '2026-08-28T12:00:00Z',
+    state: 'pending',
+  })
+  const view = {
+    effective_policy_version: 10,
+    floor_policy_version: 10,
+    builtin_policy_version: 11,
+    latest: revision(3),
+    revisions: [revision(3), revision(2)],
+  }
+
+  it('parses the activation view the platform answers with', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(view))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchScreenerPolicyActivation()).resolves.toEqual(view)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('parses an untouched surface that has never scheduled an activation', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValueOnce(
+        Response.json({
+          effective_policy_version: 10,
+          floor_policy_version: 10,
+          builtin_policy_version: 11,
+          latest: null,
+          revisions: [],
+        }),
+      ),
+    )
+
+    await expect(fetchScreenerPolicyActivation()).resolves.toMatchObject({
+      latest: null,
+      revisions: [],
+    })
+  })
+
+  it('schedules one activation with the exact platform contract', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const scheduled = {
+      ...view,
+      latest: revision(4),
+      revisions: [revision(4), revision(3), revision(2)],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ revision: 4 }))
+      .mockResolvedValueOnce(Response.json(scheduled))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      scheduleScreenerPolicyActivation(
+        {
+          expectedRevision: 3,
+          targetPolicyVersion: 11,
+          activateAt: '2026-08-29T09:00:00-04:00',
+          rescreenScored: true,
+          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).resolves.toEqual(scheduled)
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          expected_revision: 3,
+          target_policy_version: 11,
+          activate_at: '2026-08-29T09:00:00-04:00',
+          rescreen_scored: true,
+          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+          actor: 'operator@omniaura.ai',
+          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
+        }),
+      }),
+    )
+  })
+
+  it('defaults rescreenScored to true when the operator omits it', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ revision: 4 }))
+      .mockResolvedValueOnce(Response.json(view))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      scheduleScreenerPolicyActivation(
+        {
+          expectedRevision: 3,
+          targetPolicyVersion: 11,
+          activateAt: '2026-08-29T09:00:00-04:00',
+          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).resolves.toEqual(view)
+
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({
+      rescreen_scored: true,
+    })
+  })
+
+  it('rejects a timezone-naive activate_at before any admin call', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      scheduleScreenerPolicyActivation(
+        {
+          expectedRevision: 3,
+          targetPolicyVersion: 11,
+          activateAt: '2026-08-29T09:00:00',
+          rescreenScored: true,
+          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects the wrong confirmation phrase before any admin call', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      scheduleScreenerPolicyActivation(
+        {
+          expectedRevision: 3,
+          targetPolicyVersion: 11,
+          activateAt: '2026-08-29T09:00:00-04:00',
+          rescreenScored: true,
+          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+          confirmation: 'SCHEDULE SCREENER POLICY',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('surfaces the stale-revision 409 detail verbatim', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const detail =
+      'screener policy activation changed; refresh before scheduling (expected 3, current 4)'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ detail }, { status: 409 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      scheduleScreenerPolicyActivation(
+        {
+          expectedRevision: 3,
+          targetPolicyVersion: 11,
+          activateAt: '2026-08-29T09:00:00-04:00',
+          rescreenScored: true,
+          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow(detail)
+    // Nothing is re-read after a refusal, so the operator cannot mistake a
+    // fresh GET for a successful schedule.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('surfaces the platform 422 refusal detail verbatim', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const detail = 'target_policy_version 12 is above builtin_policy_version 11'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ detail }, { status: 422 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      scheduleScreenerPolicyActivation(
+        {
+          expectedRevision: 3,
+          targetPolicyVersion: 12,
+          activateAt: '2026-08-29T09:00:00-04:00',
+          rescreenScored: true,
+          reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+          confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow(detail)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
 

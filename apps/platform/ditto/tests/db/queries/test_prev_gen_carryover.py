@@ -27,7 +27,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.queue_policy_settings import PrevGenCarryoverSettings
-from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.db.models import (
     Agent,
@@ -55,6 +54,14 @@ from ditto.tests.legacy_era import (
     grandfather_active_era,
     retired_era_writes_allowed,
 )
+from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
+
+# Every use of SCREENING_POLICY_VERSION in this module means "the version the
+# platform REQUIRES," which — with no scheduled activation written — is the
+# floor, not the newest text the deployed build implements. The runtime query
+# builders read the effective snapshot, which defaults to the floor.
+SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
+
 
 _ROLLOUT_START = datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC)
 _NOW = _ROLLOUT_START + timedelta(days=2)

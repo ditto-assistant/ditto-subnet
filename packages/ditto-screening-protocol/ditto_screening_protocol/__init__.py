@@ -7,6 +7,7 @@ from ditto_screening_protocol.confirmation_progress import (
     confirmation_progress_signing_token,
 )
 from ditto_screening_protocol.models import (
+    SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
     TYPED_OUTCOME_POLICY_VERSION,
     AdjudicationClearClause,
@@ -55,6 +56,7 @@ from ditto_screening_protocol.signing import verdict_signing_message
 
 __all__ = [
     "MAX_CONFIRMATION_SLOTS",
+    "SCREENING_FLOOR_POLICY_VERSION",
     "SCREENING_POLICY_VERSION",
     "TYPED_OUTCOME_POLICY_VERSION",
     "AgentStatus",

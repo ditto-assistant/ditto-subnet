@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.queue_policy_settings import DeferredSourceReviewSettings
-from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_server.deferred_source_review import (
     DeferredReviewDecision,
     evaluate_deferred_review,
@@ -28,6 +27,11 @@ from ditto.db.models import (
     ScreeningQuarantine,
 )
 from ditto.db.queries.scores import LedgerRow
+from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
+
+# Seeded versions mean "the version the platform REQUIRES" — the floor in the
+# default no-scheduled-activation state.
+SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 
 
 def _row(

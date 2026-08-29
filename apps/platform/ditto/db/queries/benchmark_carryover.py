@@ -32,7 +32,7 @@ undoing one is a deliberate operator act, not a side effect of a policy flag.
 
 **Adoption adds no new gate.** In particular it does not introduce a rescreening
 requirement. ``issue_ticket`` already refuses to lease an agent whose
-``screening_policy_version`` is below :data:`SCREENING_POLICY_VERSION`, so an
+``screening_policy_version`` is below the effective required version, so an
 agent below it could never run no matter what this module admitted. Filtering on
 it here only avoids paying a dataset generation for work that can never be
 leased; an operator rescreen brings the agent in on the next convergence pass,
@@ -52,7 +52,6 @@ from sqlalchemy.orm.util import AliasedClass
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.queue_policy_settings import PrevGenCarryoverSettings
-from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.db.models import (
     Agent,
     BenchmarkDataset,
@@ -69,6 +68,7 @@ from ditto.db.queries.benchmark_rollout import DatasetPin, append_rollout_audit
 from ditto.db.queries.retirement import retirement_admission_predicate
 from ditto.db.queries.retry_state import classify_agent_retry_states
 from ditto.db.queries.scores import SCORING_QUORUM, emission_owner_key
+from ditto.screener_policy_state import effective_screening_policy_version
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -214,7 +214,7 @@ async def stranded_prev_gen_candidates(
         .where(
             Agent.status == AgentStatus.EVALUATING,
             Agent.created_at < rollout.created_at,
-            Agent.screening_policy_version >= SCREENING_POLICY_VERSION,
+            Agent.screening_policy_version >= effective_screening_policy_version(),
             prev_score_count >= settings.min_score_count,
             prev_score_count < SCORING_QUORUM,
             ~already_member,

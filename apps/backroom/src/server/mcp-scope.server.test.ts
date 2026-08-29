@@ -349,6 +349,42 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(read)).toEqual([])
   })
 
+  it('recognizes a screener policy activation schedule as write-scoped and its read as not', async () => {
+    const write = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'schedule_screener_policy_activation',
+          arguments: {
+            expectedRevision: 3,
+            targetPolicyVersion: 11,
+            activateAt: '2026-08-29T09:00:00-04:00',
+            rescreenScored: true,
+            reason: 'scheduled v11 activation for the planner-forced I7 amendment',
+            confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
+          },
+        },
+      }),
+    })
+    expect(await callsWriteTool(write)).toBe(true)
+    expect(await requiredScopesForRequest(write)).toEqual([BACKROOM_WRITE_SCOPE])
+
+    const read = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'get_screener_policy_activation', arguments: {} },
+      }),
+    })
+    expect(await callsWriteTool(read)).toBe(false)
+    expect(await requiredScopesForRequest(read)).toEqual([])
+  })
+
   it('recognizes a validator slot revision as write-scoped and its read as not', async () => {
     const write = new Request('https://backroom.dittobench.ai/mcp', {
       method: 'POST',

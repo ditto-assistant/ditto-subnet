@@ -20,7 +20,6 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.onchain_seed import derive_seed
@@ -41,6 +40,7 @@ from ditto.db.queries.screener_provider_settings import (
     resolve_screener_provider_settings,
 )
 from ditto.db.queries.screening import claim_screening_attempts, get_screening_attempt
+from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol import (
     SourceReviewAdjudication,
     SourceReviewObservationPayload,
@@ -214,7 +214,7 @@ async def admit_targon_screening_work(
             agent.screening_reason = attempt.public_reason
             agent.screening_reason_code = attempt.reason_code
             agent.duplicate_of = duplicate_of
-            agent.screening_policy_version = SCREENING_POLICY_VERSION
+            agent.screening_policy_version = effective_screening_policy_version()
             continue
         await _queue_kaniko(
             session,
@@ -507,7 +507,7 @@ async def maybe_finalize_targon_screen(
     agent.screening_reason = None
     agent.screening_reason_code = None
     agent.duplicate_of = None
-    agent.screening_policy_version = SCREENING_POLICY_VERSION
+    agent.screening_policy_version = effective_screening_policy_version()
     agent.screened_image_sha256 = upload.sha256
     agent.screened_image_size_bytes = upload.size_bytes
     agent.screened_image_id = upload.image_id
@@ -654,7 +654,7 @@ async def _reject_build(
         agent.status = AgentStatus.REJECTED
         agent.screening_reason = reason
         agent.screening_reason_code = code
-        agent.screening_policy_version = SCREENING_POLICY_VERSION
+        agent.screening_policy_version = effective_screening_policy_version()
 
 
 async def _fail_retryable(
@@ -736,7 +736,7 @@ async def _quarantine(
     agent.status = AgentStatus.QUARANTINED
     agent.screening_reason = public_reason
     agent.screening_reason_code = reason_code
-    agent.screening_policy_version = SCREENING_POLICY_VERSION
+    agent.screening_policy_version = effective_screening_policy_version()
     attempt.status = "quarantined"
     attempt.finished_at = now
     attempt.public_reason = public_reason
@@ -747,7 +747,7 @@ async def _quarantine(
             agent_id=agent.agent_id,
             attempt_id=attempt.attempt_id,
             screener_hotkey=screener_hotkey,
-            policy_version=SCREENING_POLICY_VERSION,
+            policy_version=effective_screening_policy_version(),
             manifest_digest=(
                 review_audit.canonical_digest()
                 if review_audit is not None
