@@ -104,13 +104,21 @@ resource "google_compute_instance_iam_member" "screener_fleet_dev_host_osadmin" 
   member        = each.value
 }
 
-resource "google_iap_tunnel_instance_iam_member" "screener_fleet_dev_host_iap" {
-  for_each   = local.screener_fleet_dev_ssh_users
-  project    = var.project
-  zone       = var.zone
-  instance   = google_compute_instance.screener_fleet_dev_host[0].name
-  role       = "roles/iap.tunnelResourceAccessor"
-  member     = each.value
+// The stack apply service account cannot administer instance-level IAP IAM.
+// Keep this project-level binding as narrow as the discarded VM resource by
+// conditioning it on the exact rehearsal hostname.
+resource "google_project_iam_member" "screener_fleet_dev_host_iap" {
+  for_each = local.screener_fleet_dev_ssh_users
+  project  = var.project
+  role     = "roles/iap.tunnelResourceAccessor"
+  member   = each.value
+
+  condition {
+    title       = "only_${replace(var.screener_fleet_dev_host_name, "-", "_")}"
+    description = "IAP access only to the disposable screener fleet rehearsal host."
+    expression  = "resource.name.extract('/instances/{name}') == '${var.screener_fleet_dev_host_name}'"
+  }
+
   depends_on = [google_project_service.iap]
 }
 
