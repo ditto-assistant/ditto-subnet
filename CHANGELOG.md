@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v0.141.0 (2026-08-29)
+
+### Bug Fixes
+
+- **miner**: Keep starter database on writable tmpfs
+  ([#1298](https://github.com/ditto-assistant/ditto-subnet/pull/1298),
+  [`f49ee49`](https://github.com/ditto-assistant/ditto-subnet/commit/f49ee49914f5d2171ed0972aa8b51b2bfd23ffa7))
+
+- **platform**: Restore scored screener snapshots
+  ([#1301](https://github.com/ditto-assistant/ditto-subnet/pull/1301),
+  [`7929ed8`](https://github.com/ditto-assistant/ditto-subnet/commit/7929ed822f73b6f10c1d5cb95edf70e778612967))
+
+- **screener**: Harden disposable fleet guests
+  ([#1299](https://github.com/ditto-assistant/ditto-subnet/pull/1299),
+  [`3b989df`](https://github.com/ditto-assistant/ditto-subnet/commit/3b989df2d1673bf5425a06d0c5b3bb9577e55ee8))
+
+### Features
+
+- **platform**: Reconcile shadow coding runs
+  ([`2041a77`](https://github.com/ditto-assistant/ditto-subnet/commit/2041a7732f04d56b190d94d39b34909af069eea7))
+
+
 ## v0.140.0 (2026-08-29)
 
 ### Features
