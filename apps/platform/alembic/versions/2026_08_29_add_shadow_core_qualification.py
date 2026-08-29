@@ -1,7 +1,7 @@
 """add append-only shadow core qualification
 
 Revision ID: d8e41a7c3f20
-Revises: c7d91f4a2e60
+Revises: a7d1f3c5e902
 Create Date: 2026-08-29
 
 The policy and observations are diagnostic only. Nothing in the score, rank,
@@ -16,7 +16,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "d8e41a7c3f20"
-down_revision: str | Sequence[str] | None = "c7d91f4a2e60"
+down_revision: str | Sequence[str] | None = "a7d1f3c5e902"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
