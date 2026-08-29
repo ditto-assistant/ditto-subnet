@@ -9,6 +9,7 @@ screener_fleet_netuid: 118
 screener_fleet_user: ditto-screener
 screener_fleet_group: ditto-screener
 screener_fleet_root: /opt/ditto/screener-fleet
+screener_fleet_bittensor_dir: "{{ screener_fleet_root }}/.bittensor"
 screener_fleet_releases_dir: "{{ screener_fleet_root }}/releases"
 screener_fleet_release_dir: "{{ screener_fleet_releases_dir }}/{{ screener_fleet_release_sha }}"
 screener_fleet_current: "{{ screener_fleet_root }}/current"
@@ -59,11 +60,12 @@ screener_fleet_release_sha: ""
 screener_fleet_worker_processes: 8
 screener_fleet_agent_workers: 12
 screener_fleet_poll_seconds: 2
-screener_fleet_build_timeout_seconds: 3000
+screener_fleet_build_timeout_seconds: 2400
 screener_fleet_runtime_timeout_seconds: 300
 screener_fleet_source_review_timeout_seconds: 1800
 screener_fleet_vm_memory_mib: 10240
 screener_fleet_vm_vcpus: 8
+screener_fleet_vm_disk_gib: 80
 
 # Both images execute trusted Ditto code and must be immutable release digests.
 screener_fleet_builder_image: ""
