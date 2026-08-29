@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.144.2 (2026-08-29)
+
+### Bug Fixes
+
+- **infra**: Keep screener updater in private state
+  ([#1313](https://github.com/ditto-assistant/ditto-subnet/pull/1313),
+  [`e6a5d16`](https://github.com/ditto-assistant/ditto-subnet/commit/e6a5d161b30a98187b170c0e2c7aedf98e901b2e))
+
+
 ## v0.144.1 (2026-08-29)
 
 ### Bug Fixes
