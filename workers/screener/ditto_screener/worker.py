@@ -18,6 +18,7 @@ import logging
 import re
 import socket
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -25,11 +26,13 @@ from ditto_screener import __version__
 from ditto_screener.errors import PlatformError
 from ditto_screener.gate import LeaseDeadline
 from ditto_screener.heartbeat import (
+    DockerHealth,
     ReviewSettingsStatus,
     ScreenerHeartbeatRequest,
     ScreenerProgress,
     ScreenerProgressStage,
     ScreenerRuntimeState,
+    probe_docker_health,
 )
 from ditto_screener.policy import (
     ScreeningOutcome,
@@ -61,6 +64,7 @@ if TYPE_CHECKING:
     from ditto_screener.heartbeat import SystemMetricsCollector
     from ditto_screener.l2_review import L2RunResult
     from ditto_screener.platform import PlatformClient
+    from ditto_screener.readiness import ReadinessServer
 
 logger = logging.getLogger(__name__)
 
@@ -100,12 +104,16 @@ class ScreenerWorker:
         gate: BuildGate,
         keypair: Any,
         system_metrics: SystemMetricsCollector | None = None,
+        readiness: ReadinessServer | None = None,
+        executor_health_probe: Callable[[], DockerHealth] = probe_docker_health,
     ) -> None:
         self._config = config
         self._platform = platform
         self._gate = gate
         self._keypair = keypair
         self._system_metrics = system_metrics
+        self._readiness = readiness
+        self._executor_health_probe = executor_health_probe
         self._instance_id = config.node_id or _resolve_instance_id()
         self._active_agent_id: UUID | None = None
         self._active_progress_stage: ScreenerProgressStage | None = None
@@ -267,6 +275,18 @@ class ScreenerWorker:
 
     async def _sweep(self, stop: asyncio.Event) -> int:
         """Lease and screen the next eligible agent; return how many were done."""
+        if self._config.require_rootless_docker:
+            executor_health = await asyncio.to_thread(self._executor_health_probe)
+            if executor_health.status == "unavailable":
+                if self._readiness is not None:
+                    self._readiness.set_unready()
+                logger.warning(
+                    "rootless Docker unavailable before claim; waiting for MIG "
+                    "autohealing without leasing work"
+                )
+                return 0
+            if self._readiness is not None:
+                self._readiness.set_ready()
         review_settings = await self._platform.get_review_settings(self._instance_id)
         self._gate.apply_review_settings(review_settings)
         manifest = builtin_policy_manifest(

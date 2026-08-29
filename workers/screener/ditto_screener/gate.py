@@ -2584,7 +2584,8 @@ sys.stdout.buffer.write(output)
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except TimeoutError:
-            proc.kill()
+            with contextlib.suppress(Exception):
+                proc.kill()
             with contextlib.suppress(Exception):
                 await proc.wait()
             return 124, f"[timeout after {timeout:g}s]"

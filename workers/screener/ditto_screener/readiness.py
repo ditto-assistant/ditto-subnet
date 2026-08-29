@@ -61,8 +61,16 @@ class ReadinessServer:
         )
 
     def set_ready(self) -> None:
+        if self._ready.is_set():
+            return
         self._ready.set()
         logger.info("readiness server now reporting ready")
+
+    def set_unready(self) -> None:
+        if not self._ready.is_set():
+            return
+        self._ready.clear()
+        logger.warning("readiness server now reporting unready")
 
     def stop(self) -> None:
         self._ready.clear()

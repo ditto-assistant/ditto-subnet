@@ -3539,7 +3539,22 @@ def _validated_invariant_assessment(
 ) -> SourceReviewInvariantAssessment:
     """Filter invariant citations through the host evidence boundary."""
 
-    parsed = SourceReviewInvariantAssessment.model_validate({"decisions": value})
+    # PASS evidence cannot support a violation and is never authoritative. Some
+    # otherwise valid model replies echo inspected citation indices on PASS
+    # decisions; discard only those indices before strict typed validation so
+    # harmless formatting variation cannot become an infrastructure failure.
+    # BREACH and INCONCLUSIVE decisions retain their exact submitted shape.
+    normalized_value = value
+    if isinstance(value, list):
+        normalized_value = [
+            {**item, "evidence_indices": []}
+            if isinstance(item, dict) and item.get("disposition") == "pass"
+            else item
+            for item in value
+        ]
+    parsed = SourceReviewInvariantAssessment.model_validate(
+        {"decisions": normalized_value}
+    )
     final_indices: dict[tuple[str, int, str], int] = {}
     for index, item in enumerate(finding_evidence):
         line = item["line"]

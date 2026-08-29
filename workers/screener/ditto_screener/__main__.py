@@ -110,9 +110,10 @@ async def _amain() -> int:
             gate=gate,
             keypair=keypair,
             system_metrics=SystemMetricsCollector(),
+            readiness=readiness,
         )
         _apply_ditto_logging()  # re-assert after bittensor init (see validator)
-        if readiness is not None:
+        if readiness is not None and not config.require_rootless_docker:
             readiness.set_ready()
         try:
             await worker.run_forever(stop)

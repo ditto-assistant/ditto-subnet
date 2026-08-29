@@ -11,7 +11,11 @@ from uuid import UUID, uuid4
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.errors import PlatformError
 from ditto_screener.gate import BuiltImageArtifact, LeaseDeadline
-from ditto_screener.heartbeat import ReviewSettingsStatus, ScreenerHeartbeatResponse
+from ditto_screener.heartbeat import (
+    DockerHealth,
+    ReviewSettingsStatus,
+    ScreenerHeartbeatResponse,
+)
 from ditto_screener.l2_review import L2RunResult, L2Usage
 from ditto_screener.policy import (
     PolicyEvidence,
@@ -220,14 +224,72 @@ class _FakePlatform:
         return _R()
 
 
-def _worker(cfg: ScreenerConfig, platform, gate) -> ScreenerWorker:  # type: ignore[no-untyped-def]
+def _worker(cfg: ScreenerConfig, platform, gate, **kwargs: Any) -> ScreenerWorker:  # type: ignore[no-untyped-def]
     if isinstance(platform, _FakePlatform):
         from ditto_screener.review_settings import bootstrap_review_settings
 
         platform.review_settings = bootstrap_review_settings(cfg)
     return ScreenerWorker(
-        config=cfg, platform=platform, gate=gate, keypair=_FakeKeypair()
+        config=cfg,
+        platform=platform,
+        gate=gate,
+        keypair=_FakeKeypair(),
+        **kwargs,
     )
+
+
+class _FakeReadiness:
+    def __init__(self) -> None:
+        self.ready = True
+
+    def set_ready(self) -> None:
+        self.ready = True
+
+    def set_unready(self) -> None:
+        self.ready = False
+
+
+async def test_unavailable_rootless_executor_is_autohealed_before_claim(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([[_item(uuid4())]])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    readiness = _FakeReadiness()
+    worker = _worker(
+        make_config(require_rootless_docker=True),
+        platform,
+        gate,
+        readiness=readiness,
+        executor_health_probe=lambda: DockerHealth(
+            status="unavailable", running_containers=0, unhealthy_containers=0
+        ),
+    )
+
+    assert await worker._sweep(asyncio.Event()) == 0
+    assert platform.claim_calls == 0
+    assert not readiness.ready
+
+
+async def test_healthy_rootless_executor_can_claim(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([[]])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    readiness = _FakeReadiness()
+    readiness.ready = False
+    worker = _worker(
+        make_config(require_rootless_docker=True),
+        platform,
+        gate,
+        readiness=readiness,
+        executor_health_probe=lambda: DockerHealth(
+            status="healthy", running_containers=0, unhealthy_containers=0
+        ),
+    )
+
+    assert await worker._sweep(asyncio.Event()) == 0
+    assert platform.claim_calls == 1
+    assert readiness.ready
 
 
 async def test_screen_one_pass_posts_signed_pass_verdict(

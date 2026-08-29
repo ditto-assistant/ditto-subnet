@@ -178,6 +178,38 @@ async def _screen(  # type: ignore[no-untyped-def]
     )
 
 
+async def test_timed_out_docker_process_may_exit_before_kill(
+    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class ExitedProcess:
+        returncode = 1
+
+        async def communicate(self) -> tuple[bytes, None]:
+            raise TimeoutError
+
+        def kill(self) -> None:
+            raise ProcessLookupError
+
+        async def wait(self) -> int:
+            return 1
+
+    async def create_process(*_args: object, **_kwargs: object) -> ExitedProcess:
+        return ExitedProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    async with httpx.AsyncClient() as client:
+        gate = BuildGate(
+            make_config(),
+            client,
+            policy=PolicyEngine(CORE_ONLY_MANIFEST),
+            journal=ReviewJournal(None),
+        )
+        code, output = await gate._run(["info"], timeout=0.01)
+
+    assert code == 124
+    assert output == "[timeout after 0.01s]"
+
+
 def test_root_and_log_helpers() -> None:
     assert dockerfile_at_root(["Dockerfile", "src/lib.rs"])
     assert dockerfile_at_root(["./Dockerfile", "Cargo.toml"])
