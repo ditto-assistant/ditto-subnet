@@ -27,6 +27,10 @@ const (
 
 	pplxEmbedContractModel = "perplexity/pplx-embed-v1-0.6b"
 	pplxEmbedResponseModel = "pplx-embed-v1-0.6b"
+
+	structuredOutputInvalidCode      = "structured_output_invalid"
+	minerRecoverableFailureHeader    = "X-Ditto-Inference-Failure-Class"
+	minerRecoverableStructuredOutput = "miner_recoverable_structured_output"
 )
 
 func isProviderRetryStatus(status int) bool {
@@ -719,6 +723,51 @@ func phaseErrorCode(err *httpError) string {
 	return "provider_unavailable"
 }
 
+// providerErrorEnvelope recognizes OpenRouter's body-level error transport.
+// Some providers return HTTP 200 while the JSON body carries an upstream 5xx;
+// that envelope has no completion identity and must be classified before the
+// normal model/provider checks.
+func providerErrorEnvelope(payload map[string]any) (int64, string, bool) {
+	if len(payload) != 1 {
+		return 0, "", false
+	}
+	errorPayload, ok := payload["error"].(map[string]any)
+	if !ok || len(errorPayload) != 2 {
+		return 0, "", false
+	}
+	codeNumber, ok := isIntLiteral(errorPayload["code"])
+	if !ok {
+		return 0, "", false
+	}
+	code, err := codeNumber.Int64()
+	if err != nil || code < 400 || code > 599 {
+		return 0, "", false
+	}
+	message, ok := errorPayload["message"].(string)
+	if !ok || message == "" {
+		return 0, "", false
+	}
+	return code, message, true
+}
+
+// structuredOutputProviderError is intentionally narrower than a generic
+// provider 502. The request must have asked for strict JSON Schema output and
+// OpenRouter must have returned the exact body-level validation failure shape.
+// That makes this a response the miner can handle, while transport failures and
+// unrelated provider outages remain validator infrastructure failures.
+func structuredOutputProviderError(request, response map[string]any) bool {
+	responseFormat, ok := request["response_format"].(map[string]any)
+	if !ok || responseFormat["type"] != "json_schema" {
+		return false
+	}
+	jsonSchema, ok := responseFormat["json_schema"].(map[string]any)
+	if !ok || jsonSchema["strict"] != true {
+		return false
+	}
+	code, message, ok := providerErrorEnvelope(response)
+	return ok && code == http.StatusBadGateway && strings.Contains(message, "Failed to validate JSON")
+}
+
 func providerRejectionIsRouteObservable(status int) bool {
 	return status >= 400 && status != 400 && status != 422
 }
@@ -951,7 +1000,8 @@ type phaseTrace struct {
 func (e *chatProviderExhausted) Error() string { return e.terminalErrorCode }
 
 // completeChatWithRecovery retains its wire-compatible name but executes one
-// provider phase. Backroom must reissue the ticket after any failure.
+// provider phase. The miner owns any response-level repair; Backroom must
+// reissue the ticket after an enclosing scoring failure.
 func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg config.InferenceProxyConfig,
 	payload map[string]any, model, expectedProvider, expectedQuantization string,
 	expectedPromptPrice, expectedCompletionPrice *float64, sleep sleepFunc) (*chatCompletionResult, *chatProviderExhausted) {
@@ -1025,6 +1075,18 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 		decodedMap, ok := decoded.(map[string]any)
 		if !ok {
 			lastCode = "invalid_provider_response"
+			trace.errorCode = lastCode
+			traced = append(traced, trace)
+			continue
+		}
+		if structuredOutputProviderError(spec.payload, decodedMap) {
+			lastCode = structuredOutputInvalidCode
+			trace.errorCode = lastCode
+			traced = append(traced, trace)
+			continue
+		}
+		if _, _, providerError := providerErrorEnvelope(decodedMap); providerError {
+			lastCode = "provider_unavailable"
 			trace.errorCode = lastCode
 			traced = append(traced, trace)
 			continue

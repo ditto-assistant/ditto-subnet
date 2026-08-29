@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ditto-assistant/model-relay/internal/config"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -276,6 +278,96 @@ func TestPublicProviderResponseKeepsEmptyToolCallsArray(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "tool_calls") {
 		t.Fatalf("absent tool_calls must not materialize a key: %s", raw)
+	}
+}
+
+const structuredOutputFailureBody = `{"error":{"message":"Upstream error from Groq: Failed to validate JSON. Please adjust your prompt. See 'failed_generation' for more details.","code":502}}`
+
+func aggregateChatConfig(upstreamURL string) config.InferenceProxyConfig {
+	return config.InferenceProxyConfig{
+		OpenRouterAPIKey:  "test-key",
+		UpstreamURL:       upstreamURL,
+		RoutingMode:       config.RoutingModeAggregateThroughput,
+		ResponseBodyBytes: 1 << 20,
+		TimeoutSeconds:    5,
+	}
+}
+
+func TestProviderErrorEnvelopePrecedesIdentityValidation(t *testing.T) {
+	var calls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(structuredOutputFailureBody))
+	}))
+	defer upstream.Close()
+
+	payload := map[string]any{
+		"model": "openai/gpt-oss-20b",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "answer exactly"},
+		},
+		"response_format": map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   "answer",
+				"schema": map[string]any{"type": "object"},
+				"strict": true,
+			},
+		},
+	}
+	completed, exhausted := completeChatWithRecovery(
+		context.Background(), upstream.Client(), aggregateChatConfig(upstream.URL), payload,
+		"openai/gpt-oss-20b", "openrouter", "", nil, nil,
+		func(context.Context, time.Duration) {},
+	)
+	if completed != nil || exhausted == nil {
+		t.Fatalf("result=%v exhausted=%v", completed, exhausted)
+	}
+	if calls != 1 || exhausted.upstreamAttempts != 1 || exhausted.fallbackPhase != 0 {
+		t.Fatalf("calls/attempts/phase=%d/%d/%d", calls, exhausted.upstreamAttempts, exhausted.fallbackPhase)
+	}
+	if exhausted.terminalErrorCode != structuredOutputInvalidCode {
+		t.Fatalf("terminal code=%q want %s", exhausted.terminalErrorCode, structuredOutputInvalidCode)
+	}
+	if len(exhausted.phases) != 1 || exhausted.phases[0].errorCode != structuredOutputInvalidCode {
+		t.Fatalf("phase trace=%+v", exhausted.phases)
+	}
+}
+
+func TestStructuredOutputProviderErrorRequiresStrictSchema(t *testing.T) {
+	var response map[string]any
+	decoder := json.NewDecoder(strings.NewReader(structuredOutputFailureBody))
+	decoder.UseNumber()
+	if err := decoder.Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	for name, request := range map[string]map[string]any{
+		"missing response format": {},
+		"non-schema format":       {"response_format": map[string]any{"type": "json_object"}},
+		"non-strict schema": {"response_format": map[string]any{
+			"type": "json_schema", "json_schema": map[string]any{"strict": false},
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if structuredOutputProviderError(request, response) {
+				t.Fatal("classified a non-strict request as miner-recoverable")
+			}
+		})
+	}
+}
+
+func TestChatProviderFailureMarksOnlyStructuredOutput(t *testing.T) {
+	recoverable := chatProviderFailure(&chatProviderExhausted{terminalErrorCode: structuredOutputInvalidCode})
+	if recoverable.status != http.StatusBadGateway || recoverable.message != "inference provider unavailable" {
+		t.Fatalf("public failure changed: %+v", recoverable)
+	}
+	if got := recoverable.headers[minerRecoverableFailureHeader]; got != minerRecoverableStructuredOutput {
+		t.Fatalf("failure class=%q want %q", got, minerRecoverableStructuredOutput)
+	}
+
+	ordinary := chatProviderFailure(&chatProviderExhausted{terminalErrorCode: "provider_unavailable"})
+	if len(ordinary.headers) != 0 {
+		t.Fatalf("ordinary provider failure was marked recoverable: %+v", ordinary.headers)
 	}
 }
 

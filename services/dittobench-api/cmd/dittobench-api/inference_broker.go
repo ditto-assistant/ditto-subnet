@@ -41,6 +41,16 @@ import (
 )
 
 const (
+	minerRecoverableFailureHeader    = "X-Ditto-Inference-Failure-Class"
+	minerRecoverableStructuredOutput = "miner_recoverable_structured_output"
+)
+
+func minerRecoverablePlatformFailure(legacyGateway string, trustedChatHandler http.Handler, status int, class string) bool {
+	return legacyGateway == "" && trustedChatHandler == nil &&
+		status == http.StatusBadGateway && class == minerRecoverableStructuredOutput
+}
+
+const (
 	brokerBodyLimit = 4 << 20
 	// Must exceed the longest live Platform grant. Canonical scoring is
 	// 180 minutes; confirmation is 4h; in-flight 430-minute tickets still
@@ -231,9 +241,13 @@ type brokerSession struct {
 	requests            uint64
 	successes           uint64
 	failures            uint64
-	grantDenials        uint64
-	usageAvailable      uint64
-	usageUnavailable    uint64
+	// minerRecoverableFailures counts authenticated Platform responses that
+	// the harness can handle itself. They remain failed requests and are
+	// returned unchanged, but do not make the validator infrastructure degraded.
+	minerRecoverableFailures uint64
+	grantDenials             uint64
+	usageAvailable           uint64
+	usageUnavailable         uint64
 	// grantAgentDeclines is the SUBSET of grantDenials the harness caused: it
 	// spent the request or token allowance its own ticket granted, or sent one
 	// request too large to reserve. Kept as a subset rather than as a split of
@@ -1261,8 +1275,8 @@ func newInferenceBroker(maxSessions int, embeddingCapacity ...int) *inferenceBro
 			envOr("DITTOBENCH_EMBEDDING_UPSTREAM_URL", "http://host.docker.internal:11434/api/embed"),
 		),
 		embeddingRequestTTL: 65 * time.Second,
-		delayFP: parseDelayFingerprintConfig(),
-		sleep:   brokerSleep,
+		delayFP:             parseDelayFingerprintConfig(),
+		sleep:               brokerSleep,
 	}
 }
 
@@ -3727,6 +3741,7 @@ func (b *inferenceBroker) health(w http.ResponseWriter, session *brokerSession) 
 		Requests:                  session.requests,
 		Successes:                 session.successes,
 		InfrastructureFailures:    session.failures,
+		MinerRecoverableFailures:  session.minerRecoverableFailures,
 		GrantDenials:              session.grantDenials,
 		GrantAgentDeclines:        session.grantAgentDeclines,
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
@@ -3925,6 +3940,7 @@ func (b *inferenceBroker) proxy(
 	}
 	var responseBody []byte
 	var responseStatus int
+	var responseFailureClass string
 	var preReservationReaderRejection bool
 	var totalLatency uint64
 	// Every ticket-scoped provider call is single-shot. Platform and the broker
@@ -3981,6 +3997,7 @@ func (b *inferenceBroker) proxy(
 		candidateBody, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
 		_ = resp.Body.Close()
 		responseStatus = resp.StatusCode
+		responseFailureClass = resp.Header.Get(minerRecoverableFailureHeader)
 		if readErr != nil || len(candidateBody) > 16<<20 {
 			return
 		}
@@ -4103,7 +4120,14 @@ func (b *inferenceBroker) proxy(
 	}
 	if responseStatus < 200 || responseStatus >= 300 || len(responseBody) == 0 {
 		session.mu.Lock()
-		session.failures++
+		// Only the authenticated Platform proxy may classify a response as
+		// miner-recoverable. Legacy gateways and in-process readers cannot spoof
+		// this opt-out from fail-closed infrastructure accounting.
+		if minerRecoverablePlatformFailure(legacyGateway, trustedChatHandler, responseStatus, responseFailureClass) {
+			session.minerRecoverableFailures++
+		} else {
+			session.failures++
+		}
 		session.providerLatency += totalLatency
 		session.mu.Unlock()
 		writeError(w, http.StatusBadGateway, "inference provider unavailable")
@@ -4229,7 +4253,8 @@ func (b *inferenceBroker) snapshot(id string) (relayHealthSnapshot, error) {
 	return relayHealthSnapshot{
 		AccountingVersion: 2, Status: "ok", Requests: session.requests,
 		Successes: session.successes, InfrastructureFailures: session.failures,
-		GrantDenials: session.grantDenials, EmbeddingRetries: session.embeddingRetries,
+		MinerRecoverableFailures: session.minerRecoverableFailures,
+		GrantDenials:             session.grantDenials, EmbeddingRetries: session.embeddingRetries,
 		GrantAgentDeclines:        session.grantAgentDeclines,
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
 		BudgetEvidenceAbsences:    session.budgetEvidenceAbsences,

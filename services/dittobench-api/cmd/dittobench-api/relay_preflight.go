@@ -27,6 +27,10 @@ type relayHealthSnapshot struct {
 	Requests               uint64 `json:"requests"`
 	Successes              uint64 `json:"successes"`
 	InfrastructureFailures uint64 `json:"infrastructure_failures"`
+	// MinerRecoverableFailures counts strict structured-output generation
+	// failures returned to the miner. A successful later request can complete
+	// the run; the scorer does not relabel these as validator infrastructure.
+	MinerRecoverableFailures uint64 `json:"miner_recoverable_failures"`
 	// GrantDenials counts platform-side refusals to reserve capacity for this
 	// ticket's grant (revoked lease, rewritten/passed ticket deadline,
 	// exhausted budget, per-ticket concurrency). Deliberately separate from
@@ -97,6 +101,7 @@ type relayExecutionSummary struct {
 	Requests                  uint64 `json:"requests"`
 	Successes                 uint64 `json:"successes"`
 	InfrastructureFailures    uint64 `json:"infrastructure_failures"`
+	MinerRecoverableFailures  uint64 `json:"miner_recoverable_failures,omitempty"`
 	GrantDenials              uint64 `json:"grant_denials,omitempty"`
 	GrantAgentDeclines        uint64 `json:"grant_agent_declines,omitempty"`
 	DeclineEvidenceMismatches uint64 `json:"decline_evidence_mismatches,omitempty"`
@@ -444,6 +449,7 @@ func unusedV8ChatLane(benchVersion int, usage protocol.TokenUsage, execution rel
 		execution.Requests == 0 &&
 		execution.Successes == 0 &&
 		execution.InfrastructureFailures == 0 &&
+		execution.MinerRecoverableFailures == 0 &&
 		execution.GrantDenials == 0 &&
 		execution.AgentRequestRejections == 0 &&
 		execution.CapacityExhaustions == 0 &&
@@ -527,6 +533,7 @@ func relayDegradedSince(start, end relayHealthSnapshot) error {
 func relayRestarted(start, end relayHealthSnapshot) bool {
 	return end.Requests < start.Requests || end.Successes < start.Successes ||
 		end.InfrastructureFailures < start.InfrastructureFailures ||
+		end.MinerRecoverableFailures < start.MinerRecoverableFailures ||
 		end.GrantDenials < start.GrantDenials ||
 		end.GrantAgentDeclines < start.GrantAgentDeclines ||
 		end.DeclineEvidenceMismatches < start.DeclineEvidenceMismatches ||
@@ -538,6 +545,7 @@ func relayRestarted(start, end relayHealthSnapshot) bool {
 		end.EmbeddingRetries < start.EmbeddingRetries ||
 		end.CallerCancellations < start.CallerCancellations ||
 		end.UpstreamAttempts < start.UpstreamAttempts ||
+		end.MinerRecoverableFailures-start.MinerRecoverableFailures > end.Requests-start.Requests ||
 		// A subset counter that outran its total means the two were updated
 		// inconsistently; refuse to classify on it rather than guess.
 		end.GrantAgentDeclines-start.GrantAgentDeclines > end.GrantDenials-start.GrantDenials ||
@@ -554,6 +562,7 @@ func relayExecutionSince(start, end relayHealthSnapshot) (relayExecutionSummary,
 		Requests:                  end.Requests - start.Requests,
 		Successes:                 end.Successes - start.Successes,
 		InfrastructureFailures:    end.InfrastructureFailures - start.InfrastructureFailures,
+		MinerRecoverableFailures:  end.MinerRecoverableFailures - start.MinerRecoverableFailures,
 		GrantDenials:              end.GrantDenials - start.GrantDenials,
 		GrantAgentDeclines:        end.GrantAgentDeclines - start.GrantAgentDeclines,
 		DeclineEvidenceMismatches: end.DeclineEvidenceMismatches - start.DeclineEvidenceMismatches,
