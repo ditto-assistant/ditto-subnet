@@ -97,6 +97,54 @@ def _adjudicator(key: Path, transport: httpx.MockTransport) -> SourceReviewAdjud
     )
 
 
+async def test_request_uses_provider_supported_completion_parameter(
+    tmp_path: Path,
+) -> None:
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                _call(
+                                    "submit_adjudication",
+                                    {
+                                        "decision": "clear",
+                                        "clear_clause": (
+                                            "retrieval_ranking_not_family_engine"
+                                        ),
+                                        "reason": "bounded request contract test",
+                                        "citations": [],
+                                    },
+                                )
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    await _adjudicator(_key(tmp_path), httpx.MockTransport(handler)).adjudicate(
+        _archive(tmp_path), notes=[_CONCERN]
+    )
+
+    assert len(requests) == 1
+    assert requests[0]["max_tokens"] == 6_000
+    assert "max_completion_tokens" not in requests[0]
+    assert requests[0]["provider"] == {
+        "zdr": True,
+        "data_collection": "deny",
+        "require_parameters": True,
+    }
+
+
 _CONCERN = {
     "kind": "concern",
     "category": "benchmark_emulation",
