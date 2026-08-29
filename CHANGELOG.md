@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.138.0 (2026-08-29)
+
+### Features
+
+- **platform**: Persist shadow coding selection assignments
+  ([`a9fad22`](https://github.com/ditto-assistant/ditto-subnet/commit/a9fad22d6a2745f43a17272427d09c906f79261f))
+
+
 ## v0.137.0 (2026-08-29)
 
 ### Bug Fixes
