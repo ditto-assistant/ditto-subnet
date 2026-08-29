@@ -579,9 +579,7 @@ async def select_active_contract(
                 ),
             )
     else:
-        _require_confirmation(
-            payload.confirmation, action="ACTIVATE", version=target
-        )
+        _require_confirmation(payload.confirmation, action="ACTIVATE", version=target)
     try:
         await select_active_bench_version(
             session,
