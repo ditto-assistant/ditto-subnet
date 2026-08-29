@@ -774,7 +774,7 @@ async def test_catalog_exposure_is_single_use_and_retirement_is_terminal(
         corpus_release_id="private-coding-corpus-v2",
     )
     async with session.begin():
-        second_catalog = await insert_coding_catalog_release(
+        await insert_coding_catalog_release(
             session,
             commitment=second_commitment,
             signature="77" * 64,
