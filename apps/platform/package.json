@@ -5,7 +5,7 @@
     "lint:copy": "faircopy lint"
   },
   "devDependencies": {
-    "@faircopy/astro": "1.15.0",
+    "@faircopy/astro": "1.19.0",
     "faircopy": "1.15.0"
   }
 }
