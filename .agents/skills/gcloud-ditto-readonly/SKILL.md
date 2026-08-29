@@ -60,11 +60,14 @@ Production screening workers are ephemeral instances labeled
 `env=prod,role=screener-fleet`. Discover the current names and zones first;
 never assume a previous instance still exists. The bounded helper opens no
 free-form shell and reads only the bounded worker logfile or
-`ditto-screener` systemd journal through IAP SSH.
+`ditto-screener` systemd journal through IAP SSH. Its `audit` mode reads the
+retention-bounded, transcript-free L2 provenance journal; use it to correlate
+private failure codes with the analyzer tools already attempted.
 
 ```bash
 .agents/skills/gcloud-ditto-readonly/scripts/read_screener_worker_logs.sh list
 .agents/skills/gcloud-ditto-readonly/scripts/read_screener_worker_logs.sh logs ditto-screener-fleet-ab12 500
+.agents/skills/gcloud-ditto-readonly/scripts/read_screener_worker_logs.sh audit ditto-screener-fleet-ab12 20
 .agents/skills/gcloud-ditto-readonly/scripts/read_screener_worker_logs.sh journal ditto-screener-fleet-ab12 15 500
 ```
 

@@ -5,7 +5,7 @@ project="ditto-app-dev"
 mode="${1:-}"
 
 usage() {
-  echo "usage: $0 list | logs <ditto-screener-fleet-name> [lines] | journal <ditto-screener-fleet-name> [minutes] [lines]" >&2
+  echo "usage: $0 list | logs <ditto-screener-fleet-name> [lines] | audit <ditto-screener-fleet-name> [lines] | journal <ditto-screener-fleet-name> [minutes] [lines]" >&2
   exit 64
 }
 
@@ -17,9 +17,9 @@ if [[ "$mode" == "list" ]]; then
   exit 0
 fi
 
-[[ "$mode" == "logs" || "$mode" == "journal" ]] || usage
+[[ "$mode" == "logs" || "$mode" == "audit" || "$mode" == "journal" ]] || usage
 instance="${2:-}"
-if [[ "$mode" == "logs" ]]; then
+if [[ "$mode" == "logs" || "$mode" == "audit" ]]; then
   minutes=15
   lines="${3:-500}"
 else
@@ -44,6 +44,8 @@ zone="$({
 
 if [[ "$mode" == "logs" ]]; then
   remote_command="sudo tail -n ${lines} /opt/ditto/logs/ditto-screener.log"
+elif [[ "$mode" == "audit" ]]; then
+  remote_command="sudo tail -n ${lines} /opt/ditto/screener/state/l2-audit.jsonl"
 else
   remote_command="sudo journalctl -u ditto-screener --since '${minutes} minutes ago' -n ${lines} --no-pager -o short-iso"
 fi

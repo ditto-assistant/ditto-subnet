@@ -1629,6 +1629,11 @@ async def test_model_tool_argument_error_is_private_and_correctable(
     with pytest.raises(L2InconclusiveError, match="output was truncated"):
         _require_complete_analysis(oversized)
 
+    broad_search = '{"hits":[],"truncated":true}'
+    _require_complete_analysis(broad_search, allow_tool_error=True)
+    with pytest.raises(L2InconclusiveError, match="result was incomplete"):
+        _require_complete_analysis(broad_search)
+
 
 def _tool_call(
     call_id: str, name: str, arguments: dict[str, object]
@@ -2922,7 +2927,7 @@ async def test_incomplete_main_graph_allows_violation_but_never_clear(
     assert safe_requests == 6
 
 
-async def test_partial_exploratory_tool_is_withheld_and_safety_still_runs(
+async def test_partial_exploratory_tool_requires_correction_before_submission(
     tmp_path: Path,
 ) -> None:
     source = "fn main() { let answer = bypass(); serve(answer); }"
@@ -2989,10 +2994,16 @@ async def test_partial_exploratory_tool_is_withheld_and_safety_still_runs(
         deadline=None,
     )
 
-    assert requests == 2
+    assert requests == 3
     assert not result.observation.ok
     assert result.observation.error_code == "l3-critic-analyzer-contract"
     assert result.dossier_complete
+    critic_items = request_payloads[2]["input"]  # type: ignore[index]
+    assert any(
+        item.get("type") == "function_call_output"
+        and '"truncated": true' in item.get("output", "")
+        for item in critic_items
+    )
 
 
 async def test_critic_challenge_keeps_quarantine(tmp_path: Path) -> None:
