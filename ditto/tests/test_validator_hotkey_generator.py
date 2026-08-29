@@ -498,6 +498,21 @@ def test_disposable_admin_verifies_checkout_as_its_temporary_owner() -> None:
     ) in checkout
 
 
+def test_disposable_admin_uses_a_user_readable_requirements_file() -> None:
+    startup = ADMIN_STARTUP.read_text()
+
+    install = startup.split("readonly UV_REQUIREMENTS=", 1)[1].split(
+        'runuser -u "$${BOOTSTRAP_USER}" -- env', 1
+    )[0]
+    assert (
+        'chown "$${BOOTSTRAP_USER}:$${BOOTSTRAP_USER}" "$${UV_REQUIREMENTS}"' in install
+    )
+    assert 'chmod 0400 "$${UV_REQUIREMENTS}"' in install
+    assert '--require-hashes -r "$${UV_REQUIREMENTS}"' in install
+    assert 'rm -f "$${UV_REQUIREMENTS}"' in install
+    assert "/dev/stdin" not in install
+
+
 def test_protected_workflow_requires_bootstrap_revision_for_arming() -> None:
     workflow = INFRA_WORKFLOW.read_text()
 
