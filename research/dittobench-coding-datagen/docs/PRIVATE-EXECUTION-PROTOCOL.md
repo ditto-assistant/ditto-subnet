@@ -106,8 +106,10 @@ otherwise binds:
 corpus_release_id
 catalog_merkle_root
 selection_derivation_id
+selection_chain_genesis_hash
 coding_contract_version
 grader_contract_digest
+inference_grant_digest
 public verification key
 ```
 
@@ -134,14 +136,17 @@ the same canonical `CodingRunManifest`:
   "bench_family": "coding",
   "coding_contract_version": 1,
   "weight_eligible": false,
-  "ticket_id": "opaque-ticket-id",
+  "coding_run_id": "opaque-shared-run-id",
   "agent_id": "opaque-agent-id",
   "agent_artifact_sha256": "lowercase-sha256",
   "corpus_release_id": "private-coding-corpus-v1",
   "catalog_merkle_root": "lowercase-sha256",
   "selection_derivation_id": "coding-selection-v1",
+  "selection_chain_genesis_hash": "canonical-chain-genesis-hash",
   "selection_block_number": 1,
   "selection_block_hash": "canonical-chain-hash",
+  "inference_grant_sha256": "lowercase-sha256",
+  "grader_contract_sha256": "lowercase-sha256",
   "task_set_id": "opaque-task-set-id",
   "task_set_manifest_sha256": "lowercase-sha256",
   "tasks": [
@@ -165,6 +170,11 @@ the same canonical `CodingRunManifest`:
 
 URLs are short-lived transport details and do not enter identity. Digests are
 the authority.
+
+`coding_run_id` and the manifest are shared across k=3. Validator-specific
+ticket IDs, deadlines, hotkeys, and transport capabilities remain in each lease
+envelope and signed validator evidence; they cannot make the selected task-set
+manifest differ between validators.
 
 ## Scoped miner memory
 
@@ -381,6 +391,14 @@ verified and recorded. A provider or model-revision change requires a new route
 profile and calibration; an alias alone is not treated as an immutable model
 snapshot.
 
+Canonical model evidence retains the expected model/route/grant identity even
+when the miner never invokes the provider. `usage_status=not_invoked` requires
+zero requests, tokens, retries, cost, and no receipt root. Invoked and
+provider-failure forms require a provider receipt-set root, declare
+`fallback_used=false`, and identify provider-receipt USD cost as the accounting
+source. This makes no-op, hardcoded, and pre-model failures representable
+without fabricating provider use.
+
 The existing Chat Completions broker is the compatibility baseline. A Responses
 API transport requires its own reviewed relay contract and is not implied by
 the model's feature set.
@@ -472,20 +490,31 @@ has no reward or weight effect in contract v1. Any LLM memory/engineering review
 has weight zero; it may identify curation defects but never decides correctness,
 waives integrity, or supplies partial repair credit.
 
-## Failure domains
+## Terminal domains
 
 Terminal outcomes are mutually exclusive:
 
+- `resolved`: authoritative authoring and fresh-grader evidence proves the
+  complete repair; this is the only domain with
+  `repair_score_micros = 1_000_000`;
 - `repair_failure`: candidate build/test failure, protected-path change,
   dependency-policy violation, or calibrated candidate timeout/OOM;
 - `validator_infrastructure`: capsule transport, daemon, host, runner, broker,
   or grader startup failed before candidate execution became authoritative;
 - `task_invalid`: base/gold validation, environment, test, or curator metadata
   is defective; quarantine the task and do not charge the miner;
-- `candidate_integrity`: miner-attributable egress, capability, cross-user,
-  workspace, or protected-material violation; fail closed and score zero;
-- `control_plane_integrity`: catalog, signature, transport, grader, or
-  validator-controlled digest mismatch; fail closed without charging the miner.
+- `candidate_integrity`: authoritative authoring proves miner-attributable
+  protected-path, cross-user, capability, egress, network, or workspace abuse;
+  score a zero and retain bounded evidence;
+- `control_plane_integrity`: catalog, signature, transport, grader, lease, or
+  validator-controlled digest mismatch; fail closed, quarantine/retry by stage,
+  and do not charge the miner.
+
+`failure_code` is null only for `resolved`; every non-resolved terminal domain
+has a bounded machine-readable failure code. Infrastructure, task-invalid, and
+control-plane-integrity outcomes are excluded from the repair mean. Only
+candidate-integrity incidents are attributable scoreable zeroes. The repair
+mean is integer floor division over the scoreable binary task vector.
 
 Retry policy is bounded by the ticket lease and terminal domain. A repair
 failure is not retried as infrastructure, and an invalid task is not scored as a
@@ -497,7 +526,7 @@ Each `CodingTaskEvidence` binds:
 
 ```text
 coding_contract_version and weight_eligible
-ticket, agent artifact, corpus release, task set, case, and variant identities
+shared coding run, validator ticket, agent artifact, corpus release, task set, case, and variant identities
 visible bundle, base tree, memory bundle, resource profile, and environment digests
 model, provider route/profile, reasoning, prompt/tool-schema, usage, and retry identity
 authoring event root and bounded transcript digest
@@ -511,6 +540,20 @@ terminal domain and integer repair_score_micros
 binary task vector, pass/fail/invalid counts, and integer repair mean. Its digest
 must become a first-class score-signature field before any weighted activation;
 placing it only in advisory report details is insufficient.
+
+Contract v1 canonical bytes are the validated known-field JSON projection with
+lexicographically sorted object keys, compact separators, UTF-8 encoding, and
+one trailing newline. Evidence decoders reject duplicate fields; harness
+decoders reject duplicate known fields. All decoders reject missing known
+fields, ignore unknown fields for rolling compatibility, and exclude unknown
+fields from the canonical digest. JSON input is bounded to 4 MiB and 32 nesting
+levels. The public Python/Go/Rust vectors under
+`packages/dittobench-coding-contract/testdata` are the cross-language authority
+for these bytes and roots, including Unicode separators and nullable fields.
+
+Task evidence is not independently signable: its digest requires the exact run
+manifest and validator ticket. Run-evidence digesting additionally replays every
+manifest task, task-evidence root, terminal domain, score, and aggregate count.
 
 ## Retirement
 

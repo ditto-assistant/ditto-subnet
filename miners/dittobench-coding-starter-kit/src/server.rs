@@ -344,7 +344,7 @@ mod tests {
                 valid_from_epoch: None,
                 valid_until_epoch: None,
                 supersedes: Vec::new(),
-                confidence_micros: Some(900_000),
+                confidence_micros: 900_000,
             }],
         };
         request.memory_bundle_sha256 = memory_bundle_sha256(&request).unwrap();

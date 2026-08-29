@@ -47,6 +47,7 @@ coding_contract_version
 weight_eligible = false
 agent_id and agent_artifact_sha256
 ticket_id, validator_hotkey, deadline
+coding_run_id shared by all scoring validators
 corpus_release_id and corpus_merkle_root
 selection_derivation_id
 selection_block_number and independently verified block_hash
@@ -102,14 +103,23 @@ reviewed activation; neither diagnostic can rescue an incorrect patch.
 
 Terminal domains are disjoint:
 
+- `resolved`: complete authoritative authoring and fresh-grader evidence proves
+  the repair and yields exactly `1_000_000` micros.
 - `repair_failure`: candidate compile/test failure, calibrated timeout/OOM,
   protected-path change, or dependency/network violation.
 - `validator_infrastructure`: capsule transport, host, daemon, or grader startup
   failed before candidate execution became authoritative.
 - `task_invalid`: gold/base validation or curator metadata failed; quarantine
   the task and do not charge the miner.
-- `integrity_incident`: digest/signature mismatch; fail closed without an
-  unbounded retry loop.
+- `candidate_integrity`: miner-attributable protected-path, capability,
+  cross-user, network, or workspace abuse; score zero.
+- `control_plane_integrity`: catalog, signature, transport, grader, lease, or
+  validator-controlled mismatch; fail closed without charging the miner.
+
+Every non-resolved domain has a bounded `failure_code` and scores zero.
+Infrastructure, task-invalid, and control-plane-integrity outcomes are excluded
+from the repair mean; candidate-integrity incidents remain attributable
+scoreable zeroes.
 
 ## Signed evidence root
 
