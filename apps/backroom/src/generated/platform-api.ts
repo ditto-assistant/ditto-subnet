@@ -18541,6 +18541,9 @@ export interface components {
          *     }
          */
         ScreenResultRequest: {
+            adjudication?: components["schemas"]["SourceReviewAdjudication"] | null;
+            /** Adjudication Digest */
+            adjudication_digest?: string | null;
             /**
              * Attempt Id
              * @description Claimed screening-attempt lease. Required by lease-aware platforms and bound into the v2 verdict signature.

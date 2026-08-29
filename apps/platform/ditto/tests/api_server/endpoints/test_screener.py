@@ -105,6 +105,7 @@ from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     ScreenResultOutcome,
     ScreenReviewAudit,
+    SourceReviewAdjudication,
     verdict_signing_message,
 )
 
@@ -258,6 +259,9 @@ def _result_payload(
             else None,
             review_audit_digest=overrides.get("review_audit_digest")
             if isinstance(overrides.get("review_audit_digest"), str)
+            else None,
+            adjudication_digest=overrides.get("adjudication_digest")
+            if isinstance(overrides.get("adjudication_digest"), str)
             else None,
             deferred_source_review=bool(overrides.get("deferred_source_review", False)),
             review_settings_revision=overrides.get("review_settings_revision")
@@ -3703,6 +3707,76 @@ class TestClaim:
             quarantines = (await session.scalars(select(ScreeningQuarantine))).all()
             assert attempt is not None and attempt.status == "quarantined"
             assert len(quarantines) == 1
+
+    async def test_local_adjudicated_reject_is_executed_from_bound_settings(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        settings = ScreenerReviewSettings(mode="enforce", adjudicator_mode="enforce")
+        checksum = _review_settings_checksum(settings)
+        async with session_maker() as session, session.begin():
+            revision = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=settings.model_dump(mode="json"),
+                checksum=checksum,
+                reason="one exact L4 canary",
+                actor="test",
+            )
+            session.add(revision)
+            await session.flush()
+            revision_id = revision.revision
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claimed = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+        attempt_id = UUID(claimed.json()["items"][0]["attempt_id"])
+        adjudication = SourceReviewAdjudication(
+            decision="reject",
+            reason="served code fixes the graded answer family at src/main.rs:6",
+            reject_invariant="i5_production_engine",
+            citations=[{"path": "src/main.rs", "line": 6}],
+            notes_considered=1,
+            model="z-ai/glm-5.3-flash",
+            prompt_revision="adjudicator-v1-policy-v10",
+        )
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="quarantine",
+                manifest_digest="12" * 32,
+                reason_code="source-review-adjudicated",
+                review_settings_revision=revision_id,
+                review_settings_instance_id="ditto-screener-prod",
+                review_settings_scope="*",
+                review_settings_checksum=checksum,
+                adjudication_digest=adjudication.canonical_digest(),
+                adjudication=adjudication.model_dump(mode="json"),
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == AgentStatus.REJECTED
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            retained = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt_id
+                )
+            )
+            assert agent is not None and agent.status == AgentStatus.REJECTED
+            assert agent.screening_reason == adjudication.reason
+            assert attempt is not None and attempt.status == "rejected"
+            assert retained is not None and retained.status == "resolved"
+            assert retained.evidence is not None
+            assert retained.evidence[-1]["code"] == ("adjudicated-source-review-reject")
 
     async def test_deferred_mechanical_admission_retains_signed_audit_once(
         self,

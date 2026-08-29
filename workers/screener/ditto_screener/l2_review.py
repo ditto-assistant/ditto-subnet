@@ -3896,6 +3896,7 @@ class LayeredSourceReviewAgent:
         observation: SourceReviewObservation,
         *,
         archive_path: str,
+        deadline: float | None = None,
     ) -> SourceReviewObservation:
         """Decide a hold-bound outcome instead of parking it on an operator.
 
@@ -3906,13 +3907,14 @@ class LayeredSourceReviewAgent:
         weigh -- adjudicating either spends a model call to re-derive an
         answer the pipeline already has.
         """
-        if self._adjudicator is None or not _would_hold(observation):
+        if self._adjudicator is None or not _needs_final_adjudication(observation):
             return observation
         adjudication = await self._adjudicator.adjudicate(
             archive_path,
             notes=observation.notes,
             finding=observation.finding,
             error_code=observation.error_code,
+            deadline=deadline,
         )
         return replace(observation, adjudication=adjudication.model_dump(mode="json"))
 
@@ -3997,7 +3999,9 @@ class LayeredSourceReviewAgent:
         if self._mode == "off" or not l1.ok or not should_escalate:
             if progress is not None:
                 progress(2, 2)
-            return await self._adjudicate(l1, archive_path=archive_path)
+            return await self._adjudicate(
+                l1, archive_path=archive_path, deadline=deadline
+            )
         if progress is not None:
             progress(1, 2)
         result = await self._l2.review(
@@ -4024,11 +4028,14 @@ class LayeredSourceReviewAgent:
                 notes=l1.notes,
             )
             return await self._adjudicate(
-                self._settle_gradient(carried), archive_path=archive_path
+                self._settle_gradient(carried),
+                archive_path=archive_path,
+                deadline=deadline,
             )
         return await self._adjudicate(
             _carry_l1_notes(_enforce_causal_authority(result.observation), l1),
             archive_path=archive_path,
+            deadline=deadline,
         )
 
 
@@ -4039,6 +4046,19 @@ def _would_hold(observation: SourceReviewObservation) -> bool:
         # a selector tripwire and quarantines.
         return observation.risk_level in {"medium", "high"}
     return observation.failure_disposition != "retryable_infra"
+
+
+def _needs_final_adjudication(observation: SourceReviewObservation) -> bool:
+    """Close every evidence-bearing review that would otherwise retry or hold.
+
+    A transport failure before the reviewer records anything still has no
+    material for a court to weigh and remains retryable infrastructure. Once
+    the typed notes ledger contains evidence, however, a deadline, step cap,
+    incomplete dossier, or later provider fault must not discard that work and
+    start the submission over. L4 receives the accumulated notes and makes the
+    final clear/reject decision under the same renewable lease deadline.
+    """
+    return _would_hold(observation) or bool(observation.notes)
 
 
 def _carry_l1_notes(

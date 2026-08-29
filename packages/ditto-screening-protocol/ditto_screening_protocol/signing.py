@@ -23,6 +23,7 @@ def verdict_signing_message(
     manifest_digest: str | None = None,
     finding_digest: str | None = None,
     review_audit_digest: str | None = None,
+    adjudication_digest: str | None = None,
     deferred_source_review: bool = False,
     policy_only: bool = False,
     review_settings_revision: int | None = None,
@@ -68,6 +69,8 @@ def verdict_signing_message(
             )
         if review_audit_digest is not None:
             fields["review_audit_digest"] = review_audit_digest
+        if adjudication_digest is not None:
+            fields["adjudication_digest"] = adjudication_digest
         # Omit the false default so mixed-version signatures remain byte-for-byte
         # compatible. A true deferred claim is explicitly bound against replay.
         if deferred_source_review:

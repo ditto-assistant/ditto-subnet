@@ -1096,6 +1096,15 @@ class SourceReviewAdjudication(BaseModel):
             raise ValueError("an escalation must name why the decision was refused")
         return self
 
+    def canonical_digest(self) -> str:
+        """Bind the complete court result into the signed worker verdict."""
+        payload = json.dumps(
+            self.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        return hashlib.sha256(payload).hexdigest()
+
 
 class SourceReviewObservationPayload(BaseModel):
     """Bounded source-review observation safe to cross provider boundaries."""
@@ -1191,6 +1200,9 @@ class ScreenResultRequest(BaseModel):
     manifest_digest: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
     finding_digest: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
     review_audit_digest: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
+    adjudication_digest: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = (
+        None
+    )
     review_settings_revision: Annotated[int | None, Field(ge=1)] = None
     review_settings_instance_id: Annotated[
         str | None, Field(pattern=r"^[a-zA-Z0-9._-]{1,63}$")
@@ -1240,6 +1252,7 @@ class ScreenResultRequest(BaseModel):
             )
         ),
     ] = None
+    adjudication: SourceReviewAdjudication | None = None
     policy_version: Annotated[
         int,
         Field(
@@ -1394,6 +1407,25 @@ class ScreenResultRequest(BaseModel):
                 raise ValueError("review audit does not match review_audit_digest")
         elif self.review_audit is not None or self.review_audit_digest is not None:
             raise ValueError("review audit requires pass-inconclusive outcome")
+        if (self.adjudication is None) != (self.adjudication_digest is None):
+            raise ValueError(
+                "adjudication and adjudication_digest must travel together"
+            )
+        if self.adjudication is not None:
+            if self.review_settings_revision is None:
+                raise ValueError("adjudication requires reviewer settings binding")
+            if self.adjudication.canonical_digest() != self.adjudication_digest:
+                raise ValueError("adjudication does not match adjudication_digest")
+            if self.outcome not in {
+                ScreenResultOutcome.PASS,
+                ScreenResultOutcome.QUARANTINE,
+            }:
+                raise ValueError("adjudication requires a pass or quarantine outcome")
+            if (
+                self.adjudication.decision == "reject"
+                and self.outcome != ScreenResultOutcome.QUARANTINE
+            ):
+                raise ValueError("adjudicated reject requires quarantine transport")
         return self
 
     @model_validator(mode="after")
