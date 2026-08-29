@@ -150,6 +150,7 @@ from ditto.api_server.storage import (
 from ditto.api_server.targon_screening import (
     admit_targon_screening_work,
     finalize_targon_screen_and_pin_dataset,
+    remote_lane_selected,
 )
 from ditto.chain import ChainError
 from ditto.db.models import (
@@ -255,10 +256,6 @@ def _targon_trusted_builder_enabled(providers: tuple[str, ...]) -> bool:
     # miner submission work. GCP-first applies to the decomposed miner lanes;
     # keeping Targon second must not strand new screener release images.
     return "targon" in providers
-
-
-def _remote_lane_enabled(providers: tuple[str, ...]) -> bool:
-    return bool(providers)
 
 
 def _platform_owns_miner_rentals(request: Request) -> bool:
@@ -1312,8 +1309,8 @@ async def queue_submission_image_build(
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment="prod"
         )
-        targon_enabled = _remote_lane_enabled(provider_settings.build_provider_priority)
-        runtime_targon_enabled = _remote_lane_enabled(
+        targon_enabled = remote_lane_selected(provider_settings.build_provider_priority)
+        runtime_targon_enabled = remote_lane_selected(
             provider_settings.runtime_provider_priority
         )
         agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
@@ -1488,7 +1485,7 @@ async def claim_submission_image_build(
             session, environment=payload.environment
         )
         attester = request.app.state.config.screener_auth.hotkey
-        if attester is not None and _remote_lane_enabled(
+        if attester is not None and remote_lane_selected(
             provider_settings.build_provider_priority
         ):
             await admit_targon_screening_work(
@@ -1498,7 +1495,7 @@ async def claim_submission_image_build(
                 now=now,
                 archive_exists=storage.object_exists,
             )
-        if not _remote_lane_enabled(provider_settings.build_provider_priority):
+        if not remote_lane_selected(provider_settings.build_provider_priority):
             await session.execute(
                 update(SubmissionImageBuild)
                 .where(
@@ -1685,7 +1682,7 @@ async def claim_submission_runtime_smoke(
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment=payload.environment
         )
-        if not _remote_lane_enabled(provider_settings.runtime_provider_priority):
+        if not remote_lane_selected(provider_settings.runtime_provider_priority):
             await session.execute(
                 update(SubmissionImageBuild)
                 .where(
@@ -1803,7 +1800,7 @@ async def complete_submission_runtime_smoke(
             if deadline.tzinfo is None:
                 deadline = deadline.replace(tzinfo=UTC)
             if (
-                _remote_lane_enabled(provider_settings.source_review_provider_priority)
+                remote_lane_selected(provider_settings.source_review_provider_priority)
                 and attempt is not None
                 and not attempt.build_only
                 and attempt.status == "running"
@@ -2112,7 +2109,7 @@ async def queue_submission_source_review(
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment="prod"
         )
-        targon_enabled = _remote_lane_enabled(
+        targon_enabled = remote_lane_selected(
             provider_settings.source_review_provider_priority
         )
         agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
@@ -2245,7 +2242,7 @@ async def claim_submission_source_review(
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment=payload.environment
         )
-        if not _remote_lane_enabled(provider_settings.source_review_provider_priority):
+        if not remote_lane_selected(provider_settings.source_review_provider_priority):
             await session.execute(
                 update(SubmissionSourceReview)
                 .where(

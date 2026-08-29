@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
+from ditto.api_models.screener_provider_settings import ScreenerProviderSettings
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_server.config import TargonRentalConfig
 from ditto.api_server.screening_provider import (
@@ -25,11 +26,14 @@ from ditto.api_server.targon_rental_loop import (
     TargonRentalLoop,
     _source_review_layer_env,
 )
-from ditto.api_server.targon_screening import _LEASE_TTL, _queue_kaniko
+from ditto.api_server.targon_screening import (
+    _LEASE_TTL,
+    _queue_kaniko,
+    remote_lane_selected,
+)
 from ditto.db.models import (
     Agent,
     ProviderOutageCircuit,
-    ScreenerProviderSettingsRevision,
     ScreeningAttempt,
     SubmissionImageBuild,
     SubmissionSourceReview,
@@ -41,23 +45,26 @@ from ditto.tests.api_server.endpoints.test_screener import (
 )
 
 
-async def _seed_targon_first(
-    session_maker: async_sessionmaker[AsyncSession],
+@pytest.fixture(autouse=True)
+def _use_explicit_remote_routing(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async with session_maker() as session, session.begin():
-        session.add(
-            ScreenerProviderSettingsRevision(
-                environment="prod",
-                parent_revision=0,
-                settings={
-                    "runtime_provider_priority": ["targon", "gcp"],
-                    "source_review_provider_priority": ["targon", "gcp"],
-                    "build_provider_priority": ["targon", "gcp"],
-                },
-                reason="Exercise the explicit Targon-first fallback path",
-                actor="test",
-            )
-        )
+    """Rental-loop tests opt into the decomposed lane they exercise."""
+    monkeypatch.setattr(
+        "ditto.db.queries.screener_provider_settings."
+        "DEFAULT_SCREENER_PROVIDER_SETTINGS",
+        ScreenerProviderSettings(
+            runtime_provider_priority=("targon", "gcp"),
+            source_review_provider_priority=("targon", "gcp"),
+            build_provider_priority=("targon", "gcp"),
+        ),
+    )
+
+
+def test_gce_first_keeps_submission_work_on_the_local_fleet() -> None:
+    assert remote_lane_selected(("gcp", "targon")) is False
+    assert remote_lane_selected(("gcp",)) is False
+    assert remote_lane_selected(("targon", "gcp")) is True
 
 
 def test_source_review_layer_env_pins_l2_and_l3() -> None:
@@ -866,7 +873,7 @@ async def test_runtime_smoke_provision_timeout(
 
 
 @pytest.mark.asyncio
-async def test_runtime_smoke_prefers_cloudrun_without_waiting_for_targon(
+async def test_remote_runtime_smoke_falls_back_after_targon_timeout(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -912,8 +919,7 @@ async def test_runtime_smoke_prefers_cloudrun_without_waiting_for_targon(
         assert build.runtime_status == "succeeded"
         assert build.runtime_error_code is None
     assert cloudrun.smokes
-    assert targon.created == []
-    assert targon.deleted == []
+    assert "wrk-2" in targon.deleted
 
 
 @pytest.mark.asyncio
@@ -1055,7 +1061,6 @@ async def test_kaniko_falls_back_to_cloudrun_after_targon_provision_timeout(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-    await _seed_targon_first(session_maker)
     targon = _FakeTargon(status="provisioning")
     cloudrun = _FakeCloudRun()
     config = _config(provision_timeout_seconds=0)
@@ -1115,7 +1120,6 @@ async def test_targon_inflight_cap_overflows_to_cloudrun(
     await _seed_agent(
         session_maker, status=AgentStatus.UPLOADED, name="one", sha256="aa" * 32
     )
-    await _seed_targon_first(session_maker)
     await _seed_agent(
         session_maker, status=AgentStatus.UPLOADED, name="two", sha256="bb" * 32
     )
@@ -1177,7 +1181,6 @@ async def test_reaper_hands_dead_targon_kaniko_to_cloudrun(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-    await _seed_targon_first(session_maker)
     targon = _FakeTargon()
     cloudrun = _FakeCloudRun()
     traces: list[tuple[str, bytes, str]] = []
@@ -1231,7 +1234,6 @@ async def test_kaniko_exit_72_does_not_requeue_to_cloudrun(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-    await _seed_targon_first(session_maker)
     targon = _FakeTargon()
     cloudrun = _FakeCloudRun()
     config = _config()
@@ -1324,7 +1326,6 @@ async def test_kaniko_skips_targon_after_provision_error(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-    await _seed_targon_first(session_maker)
     targon = _FakeTargon()
     cloudrun = _FakeCloudRun()
     config = _config()
