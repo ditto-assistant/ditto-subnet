@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import httpx
@@ -66,9 +67,9 @@ async def test_provider_settings_are_atomic_audited_and_cas_guarded(
     assert initial.status_code == 200, initial.text
     assert initial.json()["current"]["revision"] == 0
     assert initial.json()["current"]["settings"] == {
-        "runtime_provider_priority": ["targon", "gcp"],
-        "source_review_provider_priority": ["targon", "gcp"],
-        "build_provider_priority": ["targon", "gcp"],
+        "runtime_provider_priority": ["gcp", "targon"],
+        "source_review_provider_priority": ["gcp", "targon"],
+        "build_provider_priority": ["gcp", "targon"],
     }
 
     applied = await client.post(
@@ -196,7 +197,7 @@ async def test_failed_trusted_build_requires_exact_manual_retry(
     assert "operator@example.com" in event.detail
 
 
-async def test_unknown_fields_ignored_and_gcp_first_disables_targon() -> None:
+async def test_unknown_fields_ignored_and_gcp_first_keeps_targon_fallback() -> None:
     from ditto.api_models.screener_provider_settings import (
         ScreenerProviderSettings,
         ScreenerProviderSettingsWriteRequest,
@@ -211,10 +212,10 @@ async def test_unknown_fields_ignored_and_gcp_first_disables_targon() -> None:
         }
     )
     assert settings.runtime_provider_priority == ("gcp", "targon")
-    assert settings.targon_runtime_enabled() is False
+    assert settings.targon_runtime_enabled() is True
     assert settings.targon_source_review_enabled() is False
-    assert settings.targon_builders_enabled() is False
-    assert settings.all_lanes_gcp_only() is True
+    assert settings.targon_builders_enabled() is True
+    assert settings.all_lanes_gcp_only() is False
     assert settings.all_lanes_targon_first() is False
 
     payload = ScreenerProviderSettingsWriteRequest.model_validate(
@@ -231,12 +232,17 @@ async def test_unknown_fields_ignored_and_gcp_first_disables_targon() -> None:
     )
     assert "unknown_operator_hint" not in payload.model_dump()
 
-    targon_first = ScreenerProviderSettings()
+    targon_first = ScreenerProviderSettings(
+        runtime_provider_priority=("targon", "gcp"),
+        source_review_provider_priority=("targon", "gcp"),
+        build_provider_priority=("targon", "gcp"),
+    )
     assert targon_first.all_lanes_targon_first() is True
     assert targon_first.all_lanes_gcp_only() is False
+    assert ScreenerProviderSettings().all_lanes_targon_first() is False
 
 
-async def test_all_lanes_gcp_only_then_restore_targon_claims(
+async def test_all_lanes_gcp_only_still_use_decomposed_controller_lanes(
     app: FastAPI,
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
@@ -267,6 +273,30 @@ async def test_all_lanes_gcp_only_then_restore_targon_claims(
     claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
     attempt_id = claim.json()["items"][0]["attempt_id"]
     controller_headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
+    async with session_maker() as session, session.begin():
+        session.add(
+            TrustedImageBuild(
+                build_id=uuid4(),
+                environment="prod",
+                component="screener",
+                source_repository=(
+                    "https://github.com/ditto-assistant/ditto-subnet.git"
+                ),
+                source_sha="a" * 40,
+                context_path=".",
+                dockerfile_path="workers/screener/Dockerfile",
+                destination=(
+                    "us-central1-docker.pkg.dev/ditto-app-dev/"
+                    "ditto-public-runtime/screener:sha-test"
+                ),
+                status="succeeded",
+                provider="gcp",
+                image_digest="sha256:" + "b" * 64,
+                completed_at=datetime.now(UTC),
+                created_by="test",
+                reason="provide a pinned reviewed source worker image",
+            )
+        )
 
     cutover = await client.post(
         _PATH,
@@ -285,11 +315,9 @@ async def test_all_lanes_gcp_only_then_restore_targon_claims(
         json={"attempt_id": attempt_id},
     )
     assert queued_build.status_code == 200, queued_build.text
-    assert queued_build.json()["status"] == "fallback_required"
-    assert queued_build.json()["error_code"] == (
-        "TARGON_SUBMISSION_BUILD_DISABLED_BY_POLICY"
-    )
-    assert queued_build.json()["runtime_status"] == "skipped"
+    assert queued_build.json()["status"] == "queued"
+    assert queued_build.json()["error_code"] is None
+    assert queued_build.json()["runtime_status"] == "pending"
 
     queued_review = await client.post(
         f"/api/v1/screener/agent/{agent_id}/submission-source-reviews",
@@ -297,10 +325,8 @@ async def test_all_lanes_gcp_only_then_restore_targon_claims(
         json={"attempt_id": attempt_id},
     )
     assert queued_review.status_code == 200, queued_review.text
-    assert queued_review.json()["status"] == "fallback_required"
-    assert (
-        queued_review.json()["error_code"] == "TARGON_SOURCE_REVIEW_DISABLED_BY_POLICY"
-    )
+    assert queued_review.json()["status"] == "queued"
+    assert queued_review.json()["error_code"] is None
 
     build_claim = await client.post(
         "/api/v1/screener/controller/submission-image-builds/claim",
@@ -308,7 +334,7 @@ async def test_all_lanes_gcp_only_then_restore_targon_claims(
         json={"environment": "prod", "controller_epoch": "builder:cutover"},
     )
     assert build_claim.status_code == 200, build_claim.text
-    assert build_claim.json()["build"] is None
+    assert build_claim.json()["build"]["build_id"] == queued_build.json()["build_id"]
 
     runtime_claim = await client.post(
         "/api/v1/screener/controller/submission-runtime-smokes/claim",
@@ -324,7 +350,9 @@ async def test_all_lanes_gcp_only_then_restore_targon_claims(
         json={"environment": "prod", "controller_epoch": "builder:cutover"},
     )
     assert review_claim.status_code == 200, review_claim.text
-    assert review_claim.json()["review"] is None
+    assert (
+        review_claim.json()["review"]["review_id"] == queued_review.json()["review_id"]
+    )
 
     restored = await client.post(
         _PATH,
@@ -356,7 +384,7 @@ async def test_all_lanes_gcp_only_then_restore_targon_claims(
     assert leased.json()["build"]["build_id"] == restored_build.json()["build_id"]
 
 
-async def test_gcp_then_targon_is_accepted_but_disables_targon(
+async def test_gcp_then_targon_queues_decomposed_work_with_targon_fallback(
     app: FastAPI,
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
@@ -404,5 +432,5 @@ async def test_gcp_then_targon_is_accepted_but_disables_targon(
         json={"attempt_id": attempt_id},
     )
     assert queued.status_code == 200, queued.text
-    assert queued.json()["status"] == "fallback_required"
-    assert queued.json()["error_code"] == ("TARGON_SUBMISSION_BUILD_DISABLED_BY_POLICY")
+    assert queued.json()["status"] == "queued"
+    assert queued.json()["error_code"] is None

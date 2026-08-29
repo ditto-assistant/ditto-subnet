@@ -29,6 +29,7 @@ from ditto.api_server.targon_screening import _LEASE_TTL, _queue_kaniko
 from ditto.db.models import (
     Agent,
     ProviderOutageCircuit,
+    ScreenerProviderSettingsRevision,
     ScreeningAttempt,
     SubmissionImageBuild,
     SubmissionSourceReview,
@@ -38,6 +39,25 @@ from ditto.tests.api_server.endpoints.test_screener import (
     _SHA256,
     _seed_agent,
 )
+
+
+async def _seed_targon_first(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerProviderSettingsRevision(
+                environment="prod",
+                parent_revision=0,
+                settings={
+                    "runtime_provider_priority": ["targon", "gcp"],
+                    "source_review_provider_priority": ["targon", "gcp"],
+                    "build_provider_priority": ["targon", "gcp"],
+                },
+                reason="Exercise the explicit Targon-first fallback path",
+                actor="test",
+            )
+        )
 
 
 def test_source_review_layer_env_pins_l2_and_l3() -> None:
@@ -461,7 +481,15 @@ async def test_launches_queued_kaniko_in_parallel(
     await _seed_agent(
         session_maker, status=AgentStatus.UPLOADED, name="three", sha256="cc" * 32
     )
-    targon = _FakeTargon()
+
+    class _SlowTargon(_FakeTargon):
+        async def wait_until_running(
+            self, resource_id: str, timeout_seconds: float
+        ) -> str:
+            del resource_id, timeout_seconds
+            raise AssertionError("Kaniko launch must not block on provisioning")
+
+    targon = _SlowTargon()
     loop = TargonRentalLoop(
         session_maker=session_maker,
         config=_config(),
@@ -473,6 +501,44 @@ async def test_launches_queued_kaniko_in_parallel(
     await loop.tick()
     await loop.tick()
     assert len(targon.created) == 3
+
+
+@pytest.mark.asyncio
+async def test_kaniko_launch_does_not_resurrect_worker_cancellation(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+
+    class _CancelDuringCreate(_FakeTargon):
+        async def create_rental(self, **payload: Any) -> dict[str, Any]:
+            rental = await super().create_rental(**payload)
+            async with session_maker() as session, session.begin():
+                build = await session.scalar(select(SubmissionImageBuild).limit(1))
+                assert build is not None
+                assert build.status == "leased"
+                build.status = "canceled"
+                build.job_token_hash = None
+                build.job_token_expires_at = None
+                build.completed_at = datetime.now(UTC)
+                build.updated_at = datetime.now(UTC)
+            return rental
+
+    targon = _CancelDuringCreate()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    assert await loop.tick() is True
+    assert targon.deployed == []
+    assert targon.deleted == ["wrk-1"]
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.status == "canceled"
+        assert build.provider_resource_id is None
 
 
 @pytest.mark.asyncio
@@ -519,6 +585,8 @@ async def test_kaniko_provision_timeout_deletes_rental(
     )
     assert await loop.tick() is True
     assert targon.deployed == ["wrk-1"]
+    assert targon.deleted == []
+    assert await loop.tick() is True
     assert targon.deleted == ["wrk-1"]
     async with session_maker() as session:
         build = await session.scalar(select(SubmissionImageBuild).limit(1))
@@ -541,6 +609,8 @@ async def test_kaniko_provision_error_deletes_rental(
         screener_hotkey=_SCREENER_HOTKEY,
         interval_seconds=60,
     )
+    assert await loop.tick() is True
+    assert targon.deleted == []
     assert await loop.tick() is True
     assert targon.deleted == ["wrk-1"]
     async with session_maker() as session:
@@ -796,7 +866,7 @@ async def test_runtime_smoke_provision_timeout(
 
 
 @pytest.mark.asyncio
-async def test_runtime_smoke_falls_back_to_cloudrun_after_short_targon_timeout(
+async def test_runtime_smoke_prefers_cloudrun_without_waiting_for_targon(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -842,7 +912,8 @@ async def test_runtime_smoke_falls_back_to_cloudrun_after_short_targon_timeout(
         assert build.runtime_status == "succeeded"
         assert build.runtime_error_code is None
     assert cloudrun.smokes
-    assert "wrk-2" in targon.deleted
+    assert targon.created == []
+    assert targon.deleted == []
 
 
 @pytest.mark.asyncio
@@ -984,6 +1055,7 @@ async def test_kaniko_falls_back_to_cloudrun_after_targon_provision_timeout(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    await _seed_targon_first(session_maker)
     targon = _FakeTargon(status="provisioning")
     cloudrun = _FakeCloudRun()
     config = _config(provision_timeout_seconds=0)
@@ -995,6 +1067,9 @@ async def test_kaniko_falls_back_to_cloudrun_after_targon_provision_timeout(
         providers=[TargonComputeProvider(targon, config), cloudrun],
         interval_seconds=60,
     )
+    assert await loop.tick() is True
+    assert targon.deleted == []
+    assert cloudrun.builds == []
     assert await loop.tick() is True
     assert targon.deleted == ["wrk-1"]
     assert cloudrun.builds
@@ -1040,6 +1115,7 @@ async def test_targon_inflight_cap_overflows_to_cloudrun(
     await _seed_agent(
         session_maker, status=AgentStatus.UPLOADED, name="one", sha256="aa" * 32
     )
+    await _seed_targon_first(session_maker)
     await _seed_agent(
         session_maker, status=AgentStatus.UPLOADED, name="two", sha256="bb" * 32
     )
@@ -1101,6 +1177,7 @@ async def test_reaper_hands_dead_targon_kaniko_to_cloudrun(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    await _seed_targon_first(session_maker)
     targon = _FakeTargon()
     cloudrun = _FakeCloudRun()
     traces: list[tuple[str, bytes, str]] = []
@@ -1137,7 +1214,9 @@ async def test_reaper_hands_dead_targon_kaniko_to_cloudrun(
         assert build is not None
         assert build.provider == "gcp"
         assert build.status == "running"
-        assert build.error_code == "TARGON_PROVISION_ERROR"
+        # The active row describes the GCP attempt; the prior Targon failure
+        # remains on the screening attempt's private evidence fields below.
+        assert build.error_code is None
         attempt = await session.get(ScreeningAttempt, build.attempt_id)
         assert attempt is not None
         assert attempt.failure_provider == "targon"
@@ -1152,6 +1231,7 @@ async def test_kaniko_exit_72_does_not_requeue_to_cloudrun(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    await _seed_targon_first(session_maker)
     targon = _FakeTargon()
     cloudrun = _FakeCloudRun()
     config = _config()
@@ -1244,6 +1324,7 @@ async def test_kaniko_skips_targon_after_provision_error(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    await _seed_targon_first(session_maker)
     targon = _FakeTargon()
     cloudrun = _FakeCloudRun()
     config = _config()

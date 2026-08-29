@@ -250,9 +250,15 @@ _HEARTBEAT_MAX_BYTES = 4096
 _INSTANCE_ID_PATTERN = r"^[a-zA-Z0-9._-]{1,63}$"
 
 
-def _targon_first(providers: tuple[str, ...]) -> bool:
-    # A non-leading targon entry is treated as disabled (cutover), not later fallback.
-    return bool(providers) and providers[0] == "targon"
+def _targon_trusted_builder_enabled(providers: tuple[str, ...]) -> bool:
+    # Trusted release-image builds have a dedicated Targon builder and are not
+    # miner submission work. GCP-first applies to the decomposed miner lanes;
+    # keeping Targon second must not strand new screener release images.
+    return "targon" in providers
+
+
+def _remote_lane_enabled(providers: tuple[str, ...]) -> bool:
+    return bool(providers)
 
 
 def _platform_owns_miner_rentals(request: Request) -> bool:
@@ -1024,7 +1030,9 @@ async def queue_release_image_build(
         provider_revision, provider_settings = await resolve_screener_provider_settings(
             session, environment="prod"
         )
-        targon_enabled = _targon_first(provider_settings.build_provider_priority)
+        targon_enabled = _targon_trusted_builder_enabled(
+            provider_settings.build_provider_priority
+        )
         values = {
             "build_id": uuid4(),
             "environment": "prod",
@@ -1125,7 +1133,9 @@ async def claim_trusted_image_build(
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment=payload.environment
         )
-        if not _targon_first(provider_settings.build_provider_priority):
+        if not _targon_trusted_builder_enabled(
+            provider_settings.build_provider_priority
+        ):
             await session.execute(
                 update(TrustedImageBuild)
                 .where(
@@ -1302,8 +1312,8 @@ async def queue_submission_image_build(
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment="prod"
         )
-        targon_enabled = _targon_first(provider_settings.build_provider_priority)
-        runtime_targon_enabled = _targon_first(
+        targon_enabled = _remote_lane_enabled(provider_settings.build_provider_priority)
+        runtime_targon_enabled = _remote_lane_enabled(
             provider_settings.runtime_provider_priority
         )
         agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
@@ -1478,7 +1488,7 @@ async def claim_submission_image_build(
             session, environment=payload.environment
         )
         attester = request.app.state.config.screener_auth.hotkey
-        if attester is not None and _targon_first(
+        if attester is not None and _remote_lane_enabled(
             provider_settings.build_provider_priority
         ):
             await admit_targon_screening_work(
@@ -1488,7 +1498,7 @@ async def claim_submission_image_build(
                 now=now,
                 archive_exists=storage.object_exists,
             )
-        if not _targon_first(provider_settings.build_provider_priority):
+        if not _remote_lane_enabled(provider_settings.build_provider_priority):
             await session.execute(
                 update(SubmissionImageBuild)
                 .where(
@@ -1675,7 +1685,7 @@ async def claim_submission_runtime_smoke(
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment=payload.environment
         )
-        if not _targon_first(provider_settings.runtime_provider_priority):
+        if not _remote_lane_enabled(provider_settings.runtime_provider_priority):
             await session.execute(
                 update(SubmissionImageBuild)
                 .where(
@@ -1793,7 +1803,7 @@ async def complete_submission_runtime_smoke(
             if deadline.tzinfo is None:
                 deadline = deadline.replace(tzinfo=UTC)
             if (
-                _targon_first(provider_settings.source_review_provider_priority)
+                _remote_lane_enabled(provider_settings.source_review_provider_priority)
                 and attempt is not None
                 and not attempt.build_only
                 and attempt.status == "running"
@@ -2102,7 +2112,7 @@ async def queue_submission_source_review(
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment="prod"
         )
-        targon_enabled = _targon_first(
+        targon_enabled = _remote_lane_enabled(
             provider_settings.source_review_provider_priority
         )
         agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
@@ -2235,7 +2245,7 @@ async def claim_submission_source_review(
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment=payload.environment
         )
-        if not _targon_first(provider_settings.source_review_provider_priority):
+        if not _remote_lane_enabled(provider_settings.source_review_provider_priority):
             await session.execute(
                 update(SubmissionSourceReview)
                 .where(
