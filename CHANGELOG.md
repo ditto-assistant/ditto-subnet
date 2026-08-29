@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.127.0 (2026-08-29)
+
+### Features
+
+- **coding**: Add reference coding-agent starter
+  ([#985](https://github.com/ditto-assistant/ditto-subnet/pull/985),
+  [`eda3c1a`](https://github.com/ditto-assistant/ditto-subnet/commit/eda3c1ae34d86510b6cc726819a498d70a29e924))
+
+
 ## v0.126.1 (2026-08-29)
 
 ### Bug Fixes
