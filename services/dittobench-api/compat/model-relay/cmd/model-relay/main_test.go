@@ -7,15 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
-
-// testRetry is a fast retry policy for tests: several attempts, but since the
-// sleeper is always stubbed no real time elapses.
-var testRetry = retryConfig{maxAttempts: 6, base: time.Millisecond, cap: 4 * time.Millisecond, factor: 2}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -29,9 +24,6 @@ func (b cancelingBody) Read([]byte) (int, error) {
 }
 
 func (cancelingBody) Close() error { return nil }
-
-// noSleep is a stubbed relay.sleep that never blocks.
-func noSleep(context.Context, time.Duration) error { return nil }
 
 func TestDisabledHandlerHasNoInferenceSurface(t *testing.T) {
 	recorder := httptest.NewRecorder()
@@ -76,10 +68,8 @@ func postAndHealth(t *testing.T, r *relay, reqBody string) (*http.Response, rela
 	return resp, got
 }
 
-// TestRelayRetriesTransientThenSucceeds: an upstream that fails K<limit times
-// (503) then returns a real completion is retried to success — the relay returns
-// 200 and never increments infrastructure_failures, so the run is not tainted.
-func TestRelayRetriesTransientThenSucceeds(t *testing.T) {
+// A transient first response parks the run without reaching a later success.
+func TestRelayTransientFailureIsSingleShot(t *testing.T) {
 	const k = 3
 	var hits int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -93,28 +83,25 @@ func TestRelayRetriesTransientThenSucceeds(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := &relay{upstream: upstream.URL, apiKey: "k", model: "m", client: &http.Client{Timeout: 5 * time.Second}, retry: testRetry, sleep: noSleep}
+	r := &relay{upstream: upstream.URL, apiKey: "k", model: "m", client: &http.Client{Timeout: 5 * time.Second}}
 	resp, got := postAndHealth(t, r, `{"messages":[]}`)
 
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("want 200 after retry, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("want first 503 to surface, got %d", resp.StatusCode)
 	}
-	if got.Requests != 1 || got.Successes != 1 || got.InfrastructureFailures != 0 {
-		t.Fatalf("health = %#v (want requests=1 successes=1 failures=0)", got)
+	if got.Requests != 1 || got.Successes != 0 || got.InfrastructureFailures != 1 {
+		t.Fatalf("health = %#v (want requests=1 successes=0 failures=1)", got)
 	}
-	if got.UsageAvailable != 1 || got.UsageUnavailable != 0 || got.PromptTokens != 11 || got.CompletionTokens != 2 {
-		t.Fatalf("final successful attempt usage must be counted exactly once: %#v", got)
+	if got.UsageAvailable != 0 || got.PromptTokens != 0 || got.CompletionTokens != 0 {
+		t.Fatalf("failed single dispatch must not report successful usage: %#v", got)
 	}
-	if n := atomic.LoadInt32(&hits); n != k+1 {
-		t.Fatalf("upstream hit %d times, want %d (K failures + 1 success)", n, k+1)
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("upstream hit %d times, want one", n)
 	}
 }
 
-// TestRelayExhaustsRetriesCountsInfraOnce: a persistently failing upstream (503)
-// is retried up to the limit and then counted as infrastructure_failure EXACTLY
-// once — never per attempt, which would over-taint the fail-closed scorer — and
-// the failing status surfaces to the sandbox.
-func TestRelayExhaustsRetriesCountsInfraOnce(t *testing.T) {
+// A persistently failing upstream is called once and counted once.
+func TestRelayPersistentFailureIsSingleShot(t *testing.T) {
 	var hits int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&hits, 1)
@@ -123,7 +110,7 @@ func TestRelayExhaustsRetriesCountsInfraOnce(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := &relay{upstream: upstream.URL, apiKey: "k", model: "m", client: &http.Client{Timeout: 5 * time.Second}, retry: testRetry, sleep: noSleep}
+	r := &relay{upstream: upstream.URL, apiKey: "k", model: "m", client: &http.Client{Timeout: 5 * time.Second}}
 	resp, got := postAndHealth(t, r, `{"messages":[]}`)
 
 	if resp.StatusCode != http.StatusServiceUnavailable {
@@ -132,21 +119,19 @@ func TestRelayExhaustsRetriesCountsInfraOnce(t *testing.T) {
 	if got.Requests != 1 || got.Successes != 0 || got.InfrastructureFailures != 1 {
 		t.Fatalf("health = %#v (want requests=1 successes=0 failures=1)", got)
 	}
-	if n := atomic.LoadInt32(&hits); n != int32(testRetry.maxAttempts) {
-		t.Fatalf("upstream hit %d times, want maxAttempts=%d", n, testRetry.maxAttempts)
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("upstream hit %d times, want one", n)
 	}
 }
 
-// TestRelayTransportErrorExhaustsToBadGateway: a transport-level failure (no
-// listener) is retried and, once exhausted, surfaces the existing 502 with a
-// single infrastructure_failure.
-func TestRelayTransportErrorExhaustsToBadGateway(t *testing.T) {
+// A transport-level failure surfaces immediately as one infrastructure failure.
+func TestRelayTransportErrorIsSingleShot(t *testing.T) {
 	// A closed listener yields a connection error on every attempt.
 	closed := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	addr := closed.URL
 	closed.Close()
 
-	r := &relay{upstream: addr, apiKey: "k", model: "m", client: &http.Client{Timeout: 2 * time.Second}, retry: testRetry, sleep: noSleep}
+	r := &relay{upstream: addr, apiKey: "k", model: "m", client: &http.Client{Timeout: 2 * time.Second}}
 	resp, got := postAndHealth(t, r, `{"messages":[]}`)
 
 	if resp.StatusCode != http.StatusBadGateway {
@@ -169,7 +154,7 @@ func TestRelayDoesNotRetryClientError(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := &relay{upstream: upstream.URL, apiKey: "k", model: "m", client: &http.Client{Timeout: 5 * time.Second}, retry: testRetry, sleep: noSleep}
+	r := &relay{upstream: upstream.URL, apiKey: "k", model: "m", client: &http.Client{Timeout: 5 * time.Second}}
 	resp, got := postAndHealth(t, r, `{"messages":[]}`)
 
 	if resp.StatusCode != http.StatusBadRequest {
@@ -180,70 +165,6 @@ func TestRelayDoesNotRetryClientError(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&hits); n != 1 {
 		t.Fatalf("client error must not be retried: upstream hit %d times", n)
-	}
-}
-
-// TestRelayBackoffBounded: every backoff delay stays within the configured cap
-// and the loop only retries maxAttempts-1 times. The sleeper is stubbed so the
-// test records the requested delays without ever sleeping real seconds.
-func TestRelayBackoffBounded(t *testing.T) {
-	var (
-		mu        sync.Mutex
-		delays    []time.Duration
-		recording = func(_ context.Context, d time.Duration) error {
-			mu.Lock()
-			delays = append(delays, d)
-			mu.Unlock()
-			return nil
-		}
-	)
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer upstream.Close()
-
-	r := &relay{upstream: upstream.URL, apiKey: "k", model: "m", client: &http.Client{Timeout: 5 * time.Second}, retry: testRetry, sleep: recording}
-	if _, got := postAndHealth(t, r, `{"messages":[]}`); got.InfrastructureFailures != 1 {
-		t.Fatalf("health = %#v (want failures=1)", got)
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(delays) != testRetry.maxAttempts-1 {
-		t.Fatalf("recorded %d backoffs, want maxAttempts-1=%d", len(delays), testRetry.maxAttempts-1)
-	}
-	for i, d := range delays {
-		if d < 0 || d > testRetry.cap {
-			t.Fatalf("backoff[%d]=%s exceeds cap=%s", i, d, testRetry.cap)
-		}
-	}
-}
-
-// TestRelayRetryRespectsContext: when the request context ends during backoff,
-// the retry loop stops immediately (no further upstream attempts) and records a
-// single infrastructure_failure rather than looping past the deadline.
-func TestRelayRetryRespectsContext(t *testing.T) {
-	var hits int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&hits, 1)
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer upstream.Close()
-
-	// A sleeper that reports the context is done stops the loop after the first
-	// failed attempt.
-	cancelingSleep := func(context.Context, time.Duration) error { return context.DeadlineExceeded }
-	r := &relay{upstream: upstream.URL, apiKey: "k", model: "m", client: &http.Client{Timeout: 5 * time.Second}, retry: testRetry, sleep: cancelingSleep}
-
-	resp, got := postAndHealth(t, r, `{"messages":[]}`)
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("want failing status to surface, got %d", resp.StatusCode)
-	}
-	if got.InfrastructureFailures != 1 {
-		t.Fatalf("health = %#v (want failures=1)", got)
-	}
-	if n := atomic.LoadInt32(&hits); n != 1 {
-		t.Fatalf("loop must stop at the deadline: upstream hit %d times, want 1", n)
 	}
 }
 
@@ -284,7 +205,7 @@ func TestRelayCallerCancellationVsDeadline(t *testing.T) {
 				ctx = c
 			}
 
-			r := &relay{upstream: upstream.URL, apiKey: "k", model: "m", client: &http.Client{}, retry: testRetry}
+			r := &relay{upstream: upstream.URL, apiKey: "k", model: "m", client: &http.Client{}}
 			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"messages":[]}`)).WithContext(ctx)
 			req.Header.Set("Content-Type", "application/json")
 			r.handle(httptest.NewRecorder(), req)
@@ -317,7 +238,7 @@ func TestRelayCallerCancellationDuringBodyReadDoesNotTaintRun(t *testing.T) {
 			Body:       cancelingBody{cancel: cancel},
 		}, nil
 	})}
-	r := &relay{upstream: "http://provider.invalid", apiKey: "k", model: "m", client: client, retry: testRetry}
+	r := &relay{upstream: "http://provider.invalid", apiKey: "k", model: "m", client: client}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"messages":[]}`)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	r.handle(httptest.NewRecorder(), req)

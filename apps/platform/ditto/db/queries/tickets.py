@@ -102,10 +102,9 @@ def _as_utc(dt: datetime) -> datetime:
 # expired ticket does not count, so its slot re-opens.
 _LIVE_TICKET_STATUSES = (TicketStatus.ISSUED, TicketStatus.SCORED)
 
-# A timed-out artifact must not monopolize one validator. Give each validator
-# one base attempt while allowing other validators to make an independent
-# attempt immediately. Signed infrastructure failures and audited operator
-# actions grant their own bounded retries below.
+# Every validator gets one initial attempt. A failed attempt is terminal until
+# an audited operator action grants another one; infrastructure classification
+# remains evidence, never automatic retry authority.
 RETRY_COOLDOWN = timedelta(hours=6)
 MAX_ATTEMPTS_PER_VERSION = 1
 
@@ -113,16 +112,12 @@ MAX_ATTEMPTS_PER_VERSION = 1
 def ticket_attempt_cap(ticket: ValidatorTicket) -> int:
     """Total leases a validator may spend on this agent+version.
 
-    The base per-version budget, plus audited operator grants, plus
-    infrastructure-failure compensation. ``attempt_count`` is compared against
-    this everywhere issuance, exhaustion, and natural-retry eligibility are
-    decided, so the three surfaces agree on one budget.
+    The base per-version budget plus audited operator grants. Historical
+    ``infra_retry_grants`` remain in the ledger as evidence but deliberately no
+    longer authorize work: after the no-automatic-retry policy activates, even
+    an old unused infrastructure grant must not wake up by itself.
     """
-    return (
-        MAX_ATTEMPTS_PER_VERSION
-        + ticket.manual_retry_grants
-        + ticket.infra_retry_grants
-    )
+    return MAX_ATTEMPTS_PER_VERSION + ticket.manual_retry_grants
 
 
 def ticket_retry_budget_spent(ticket: ValidatorTicket) -> bool:
@@ -145,11 +140,7 @@ def retry_budget_spent() -> ColumnElement[bool]:
     return and_(
         ValidatorTicket.provider_outage_epoch.is_(None),
         ValidatorTicket.attempt_count
-        >= (
-            MAX_ATTEMPTS_PER_VERSION
-            + ValidatorTicket.manual_retry_grants
-            + ValidatorTicket.infra_retry_grants
-        ),
+        >= (MAX_ATTEMPTS_PER_VERSION + ValidatorTicket.manual_retry_grants),
     )
 
 

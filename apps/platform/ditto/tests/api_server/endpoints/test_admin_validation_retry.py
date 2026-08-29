@@ -450,9 +450,9 @@ async def test_stale_snapshot_and_active_or_natural_retry_fail_closed(
     changed = await client.get(
         f"/api/v1/admin/validation-retries/{agent_id}", headers=_HEADERS
     )
-    assert changed.json()["automatic_retry_available"] is True
-    assert changed.json()["recovery_allowed"] is False
-    denied = await client.post(
+    assert changed.json()["automatic_retry_available"] is False
+    assert changed.json()["recovery_allowed"] is True
+    granted = await client.post(
         f"/api/v1/admin/validation-retries/{agent_id}/retry",
         json={
             "request_id": str(uuid4()),
@@ -461,7 +461,7 @@ async def test_stale_snapshot_and_active_or_natural_retry_fail_closed(
         },
         headers=_HEADERS,
     )
-    assert denied.status_code == 409
+    assert granted.status_code == 200
 
 
 async def test_offline_natural_retry_does_not_block_healthy_sibling_recovery(
@@ -588,7 +588,7 @@ async def test_many_operator_grants_do_not_block_fresh_audited_recovery(
     assert after.json()["automatic_retry_available"] is True
     assert after.json()["recovery_allowed"] is False
     assert after.json()["blocking_reason"] == (
-        "automatic validator retry is already available"
+        "operator-authorized validator retry is queued"
     )
     by_hotkey = {
         ticket["validator_hotkey"]: ticket for ticket in after.json()["tickets"]
@@ -993,7 +993,8 @@ async def test_evict_never_mints_a_no_fault_retry_grant(
     await _seed_live_lease(retry_maker, automatic)
     await _seed_live_lease(retry_maker, evicted, validator_hotkey="validator-1")
 
-    # Automatic revocation on a proven-idle lease: the miner IS compensated.
+    # Automatic revocation on a proven-idle lease records evidence but does not
+    # authorize another attempt.
     async with retry_maker() as session, session.begin():
         ticket = await session.get(
             ValidatorTicket, (automatic, _BENCH_VERSION, "validator-0")
@@ -1012,7 +1013,7 @@ async def test_evict_never_mints_a_no_fault_retry_grant(
         compensated = await session.get(
             ValidatorTicket, (automatic, _BENCH_VERSION, "validator-0")
         )
-    assert compensated is not None and compensated.infra_retry_grants == 1
+    assert compensated is not None and compensated.infra_retry_grants == 0
 
     # The same primitive, reached through eviction: the miner is NOT compensated.
     _install(app, retry_maker)
@@ -1037,10 +1038,10 @@ async def test_evict_never_mints_a_no_fault_retry_grant(
     assert uncompensated is not None
     assert uncompensated.infra_retry_grants == 0
     assert uncompensated.attempt_count == 1
-    # So the cap is untouched: the evicted artifact gained no attempt, while the
-    # automatically-revoked one gained exactly the attempt it was billed.
+    # Both caps are untouched: neither automated liveness expiry nor eviction
+    # authorizes another attempt.
     assert ticket_attempt_cap(uncompensated) == MAX_ATTEMPTS_PER_VERSION
-    assert ticket_attempt_cap(compensated) == MAX_ATTEMPTS_PER_VERSION + 1
+    assert ticket_attempt_cap(compensated) == MAX_ATTEMPTS_PER_VERSION
 
 
 async def test_evict_records_what_the_platform_could_see_about_the_slot(
@@ -1824,7 +1825,7 @@ async def test_reinstatement_cannot_launder_the_retry_budget(
         # is checkable from the audit row and not only from this test.
         assert recorded["attempts_used"] == before[0]
         assert recorded["agent_infra_retry_grants"] == before[1]
-        assert recorded["max_agent_infra_retry_grants"] == 12
+        assert recorded["max_agent_infra_retry_grants"] == 0
         assert recorded["manual_retry_grants"] == before[2]
         assert recorded["operator_recoveries"] == before[3]
         assert recorded["max_operator_recoveries"] is None
@@ -2948,17 +2949,15 @@ async def test_list_classifies_every_retry_state(
     by_name = {item["agent_name"]: item["retry_state"] for item in body["submissions"]}
     assert by_name == {
         "exhausted-agent": "exhausted",
-        "cooling-agent": "cooling_down",
-        "available-agent": "retry_available",
+        "cooling-agent": "queued",
+        "available-agent": "queued",
         "running-agent": "running",
         "queued-agent": "queued",
     }
     assert body["counts"] == {
         "exhausted": 1,
-        "cooling_down": 1,
-        "retry_available": 1,
         "running": 1,
-        "queued": 1,
+        "queued": 3,
     }
     assert body["quorum"] == 3
 
@@ -3199,7 +3198,7 @@ async def test_rollout_cohort_recovery_keeps_settled_status_and_history(
             )
         )
     assert agent is not None and agent.status == AgentStatus.SCORED
-    assert [ticket.manual_retry_grants for ticket in tickets] == [44, 43, 57, 0]
+    assert [ticket.manual_retry_grants for ticket in tickets] == [47, 48, 61, 0]
     assert all(
         ticket.attempt_count < ticket_attempt_cap(ticket) for ticket in tickets[:3]
     )
@@ -3385,7 +3384,7 @@ async def test_timeout_exhaustion_still_recommends_retry(
     assert item["dominant_failure_code"] is None
 
 
-async def test_infra_grant_lifts_a_would_be_exhausted_ticket(
+async def test_historical_infra_grant_does_not_authorize_retry(
     app: FastAPI,
     client: httpx.AsyncClient,
     retry_maker: async_sessionmaker[AsyncSession],
@@ -3432,7 +3431,7 @@ async def test_infra_grant_lifts_a_would_be_exhausted_ticket(
         for entry in response.json()["submissions"]
         if entry["agent_id"] == str(agent_id)
     )
-    assert item["retry_state"] == "retry_available"
+    assert item["retry_state"] == "queued"
     assert item["ticket_states"] == {"expired": 1}
 
     detail = await client.get(
@@ -3440,7 +3439,7 @@ async def test_infra_grant_lifts_a_would_be_exhausted_ticket(
     )
     assert detail.status_code == 200, detail.text
     assert detail.json()["tickets"][0]["infra_retry_grants"] == 1
-    assert detail.json()["tickets"][0]["retry_budget_exhausted"] is False
+    assert detail.json()["tickets"][0]["retry_budget_exhausted"] is True
 
 
 # --- batch retry-grant ----------------------------------------------------

@@ -1028,7 +1028,7 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	const installationSHA = "1b8f966e4c62c4c74888cb4b2d671e3b03e2775b003f63383d80ca4827da2c88"
+	const installationSHA = "62c5daa7326166ade81cea09eb4486bcb0e82f8e8552f2154a8219d16b1ae26c"
 	if digestBytes(installationRaw) != installationSHA {
 		t.Fatalf("installation digest = %s", digestBytes(installationRaw))
 	}
@@ -1044,7 +1044,7 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Revision != "v9-confirmation-shadow-bounded-2026-08-25-zdr-v7" ||
+	if profile.Revision != "v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8" ||
 		profile.LongMemCasesPerCapability != 8 || profile.AblationCoordinatorPolicy.SampleSize != 4 ||
 		profile.Composite.BaseWeightBPS != 7000 || profile.Composite.LongMemWeightBPS != 3000 {
 		t.Fatalf("unexpected bounded profile: %+v", profile)

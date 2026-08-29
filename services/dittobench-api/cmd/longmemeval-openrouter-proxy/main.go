@@ -27,7 +27,7 @@ const (
 	judgeRevision        = "longmemeval-official-gpt4o-openrouter-v1"
 	maximumBody          = 4 << 20
 	maximumResponse      = 16 << 20
-	maximumAttempts      = 4
+	maximumAttempts      = 1
 )
 
 type profile struct {
@@ -75,6 +75,9 @@ func configuredReaderProfile(
 ) (profile, error) {
 	if selected.Name != "reader" {
 		return profile{}, errors.New("only the reader profile is configurable")
+	}
+	if allowFallback {
+		return profile{}, errors.New("LongMemEval provider fallbacks are disabled")
 	}
 	acceptedModel = strings.TrimSpace(acceptedModel)
 	upstreamModel = strings.TrimSpace(upstreamModel)
@@ -182,47 +185,26 @@ func retryable(status int) bool {
 }
 
 func (p *proxy) forward(ctx context.Context, body []byte) (int, []byte, error) {
-	var lastStatus int
-	for attempt := 1; attempt <= maximumAttempts; attempt++ {
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.upstreamURL, bytes.NewReader(body))
-		if err != nil {
-			return 0, nil, err
-		}
-		request.Header.Set("Authorization", "Bearer "+p.apiKey)
-		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("HTTP-Referer", p.profile.HTTPReferer)
-		request.Header.Set("X-Title", p.profile.Title)
-		started := time.Now()
-		response, err := p.client.Do(request)
-		p.latencyMS.Add(uint64(time.Since(started).Milliseconds()))
-		if err != nil {
-			if attempt < maximumAttempts && ctx.Err() == nil {
-				select {
-				case <-time.After(time.Duration(1<<(attempt-1)) * time.Second):
-					continue
-				case <-ctx.Done():
-					return 0, nil, ctx.Err()
-				}
-			}
-			return 0, nil, err
-		}
-		responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, maximumResponse+1))
-		_ = response.Body.Close()
-		if readErr != nil || len(responseBody) > maximumResponse {
-			return 0, nil, errors.New("OpenRouter returned an unreadable response")
-		}
-		lastStatus = response.StatusCode
-		if retryable(response.StatusCode) && attempt < maximumAttempts {
-			select {
-			case <-time.After(time.Duration(1<<(attempt-1)) * time.Second):
-				continue
-			case <-ctx.Done():
-				return 0, nil, ctx.Err()
-			}
-		}
-		return response.StatusCode, responseBody, nil
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, p.upstreamURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
 	}
-	return lastStatus, nil, errors.New("OpenRouter retry budget exhausted")
+	request.Header.Set("Authorization", "Bearer "+p.apiKey)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("HTTP-Referer", p.profile.HTTPReferer)
+	request.Header.Set("X-Title", p.profile.Title)
+	started := time.Now()
+	response, err := p.client.Do(request)
+	p.latencyMS.Add(uint64(time.Since(started).Milliseconds()))
+	if err != nil {
+		return 0, nil, err
+	}
+	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, maximumResponse+1))
+	_ = response.Body.Close()
+	if readErr != nil || len(responseBody) > maximumResponse {
+		return 0, nil, errors.New("OpenRouter returned an unreadable response")
+	}
+	return response.StatusCode, responseBody, nil
 }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {

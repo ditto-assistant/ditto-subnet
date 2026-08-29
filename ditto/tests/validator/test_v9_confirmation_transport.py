@@ -180,8 +180,8 @@ def _execution_profile(bench_version: int = 9) -> dict[str, Any]:
         "ablation_projection_key_sha256": "05" * 32,
         "ablation_coordinator_policy": {
             "sample_size": 4,
-            "max_attempts": 2,
-            "max_requests": 24,
+            "max_attempts": 1,
+            "max_requests": 12,
             "request_timeout_milliseconds": 1_000,
             "total_timeout_milliseconds": 5_000,
         },

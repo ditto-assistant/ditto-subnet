@@ -54,7 +54,8 @@ chain, storage, fingerprinting, and atomic-commit contracts have parity tests.
   one-block snapshot caching and single-flight refreshes.
 - `internal/upload` — pricing and common pre-payment admission, including
   sr25519 ownership, registration, ban, duplicate, cooldown, and atomic
-  reservation checks. Paid recovery remains a transparent Python fallback.
+  reservation checks. Paid recovery is disabled; failures park the ticket for
+  an audited Backroom retry.
 - `internal/postgres` — sqlc layer: hand-written `*_queries.sql`, generated
   `*.sql.go`/`models.go`/`db.go`, hand-written `connection.go`.
 - `internal/traces` — inference trace capture: record schema, disk spool,

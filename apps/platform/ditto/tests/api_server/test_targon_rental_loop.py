@@ -796,7 +796,7 @@ async def test_runtime_smoke_provision_timeout(
 
 
 @pytest.mark.asyncio
-async def test_runtime_smoke_falls_back_to_cloudrun_after_short_targon_timeout(
+async def test_runtime_smoke_parks_after_short_targon_timeout(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -839,14 +839,14 @@ async def test_runtime_smoke_falls_back_to_cloudrun_after_short_targon_timeout(
     async with session_maker() as session:
         build = await session.scalar(select(SubmissionImageBuild).limit(1))
         assert build is not None
-        assert build.runtime_status == "succeeded"
-        assert build.runtime_error_code is None
-    assert cloudrun.smokes
+        assert build.runtime_status == "fallback_required"
+        assert build.runtime_error_code == "TARGON_PROVISION_TIMEOUT"
+    assert cloudrun.smokes == []
     assert "wrk-2" in targon.deleted
 
 
 @pytest.mark.asyncio
-async def test_runtime_smoke_reclaims_running_without_resource(
+async def test_runtime_smoke_parks_running_without_resource(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -890,8 +890,9 @@ async def test_runtime_smoke_reclaims_running_without_resource(
     async with session_maker() as session:
         build = await session.scalar(select(SubmissionImageBuild).limit(1))
         assert build is not None
-        assert build.runtime_status == "succeeded"
-    assert cloudrun.smokes
+        assert build.runtime_status == "fallback_required"
+        assert build.runtime_error_code == "TARGON_PROVISION_TIMEOUT"
+    assert cloudrun.smokes == []
 
 
 class _FakeCloudRun:
@@ -947,7 +948,7 @@ class _FakeCloudRun:
 
 
 @pytest.mark.asyncio
-async def test_kaniko_falls_back_to_cloudrun_when_targon_has_no_capacity(
+async def test_kaniko_waits_before_dispatch_when_targon_has_no_capacity(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -967,20 +968,20 @@ async def test_kaniko_falls_back_to_cloudrun_when_targon_has_no_capacity(
         providers=[TargonComputeProvider(targon, config), cloudrun],
         interval_seconds=60,
     )
-    assert await loop.tick() is True
+    assert await loop.tick() is False
     assert targon.created == []
-    assert cloudrun.builds
-    assert cloudrun.started
+    assert cloudrun.builds == []
+    assert cloudrun.started == []
     async with session_maker() as session:
         build = await session.scalar(select(SubmissionImageBuild).limit(1))
         assert build is not None
-        assert build.provider == "gcp"
-        assert build.status == "running"
-        assert build.provider_resource_id == f"job:{cloudrun.builds[0]}"
+        assert build.provider is None
+        assert build.status == "queued"
+        assert build.provider_resource_id is None
 
 
 @pytest.mark.asyncio
-async def test_kaniko_falls_back_to_cloudrun_after_targon_provision_timeout(
+async def test_kaniko_parks_after_targon_provision_timeout(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -997,13 +998,13 @@ async def test_kaniko_falls_back_to_cloudrun_after_targon_provision_timeout(
     )
     assert await loop.tick() is True
     assert targon.deleted == ["wrk-1"]
-    assert cloudrun.builds
+    assert cloudrun.builds == []
     async with session_maker() as session:
         build = await session.scalar(select(SubmissionImageBuild).limit(1))
         assert build is not None
-        assert build.provider == "gcp"
-        assert build.status == "running"
-        assert build.error_code is None
+        assert build.provider == "targon"
+        assert build.status == "fallback_required"
+        assert build.error_code == "TARGON_PROVISION_TIMEOUT"
 
 
 @pytest.mark.asyncio
@@ -1034,7 +1035,7 @@ async def test_targon_inflight_cap_holds_eleventh_without_fallback(
 
 
 @pytest.mark.asyncio
-async def test_targon_inflight_cap_overflows_to_cloudrun(
+async def test_targon_inflight_cap_does_not_overflow_to_cloudrun(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(
@@ -1057,11 +1058,11 @@ async def test_targon_inflight_cap_overflows_to_cloudrun(
     await loop.tick()
     await loop.tick()
     assert len(targon.created) == 1
-    assert cloudrun.builds
+    assert cloudrun.builds == []
     async with session_maker() as session:
         builds = (await session.scalars(select(SubmissionImageBuild))).all()
-        providers = sorted(str(build.provider) for build in builds)
-        assert providers == ["gcp", "targon"]
+        statuses = sorted(build.status for build in builds)
+        assert statuses == ["queued", "running"]
 
 
 @pytest.mark.asyncio
@@ -1097,7 +1098,7 @@ async def test_tick_finalizes_running_attempt_after_smoke(
 
 
 @pytest.mark.asyncio
-async def test_reaper_hands_dead_targon_kaniko_to_cloudrun(
+async def test_reaper_parks_dead_targon_kaniko_without_cloudrun(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -1129,14 +1130,14 @@ async def test_reaper_hands_dead_targon_kaniko_to_cloudrun(
     targon.message = "Container failed (Error) — exit code 1"
     assert await loop.tick() is True
     assert targon.deleted == ["wrk-1"]
-    assert cloudrun.builds
+    assert cloudrun.builds == []
     assert traces
     assert traces[0][0].startswith("traces/v1/lane=screening/kind=kaniko/")
     async with session_maker() as session:
         build = await session.scalar(select(SubmissionImageBuild).limit(1))
         assert build is not None
-        assert build.provider == "gcp"
-        assert build.status == "running"
+        assert build.provider == "targon"
+        assert build.status == "fallback_required"
         assert build.error_code == "TARGON_PROVISION_ERROR"
         attempt = await session.get(ScreeningAttempt, build.attempt_id)
         assert attempt is not None
@@ -1178,7 +1179,7 @@ async def test_kaniko_exit_72_does_not_requeue_to_cloudrun(
 
 
 @pytest.mark.asyncio
-async def test_prior_gcp_infra_failure_keeps_next_attempt_off_targon(
+async def test_prior_gcp_infra_failure_stays_parked_without_manual_retry(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING_FAILED)
@@ -1227,22 +1228,20 @@ async def test_prior_gcp_infra_failure_keeps_next_attempt_off_targon(
         providers=[TargonComputeProvider(targon, config), cloudrun],
         interval_seconds=60,
     )
-    assert await loop.tick() is True
+    assert await loop.tick() is False
     async with session_maker() as session:
         current = await session.scalar(
             select(SubmissionImageBuild)
             .where(SubmissionImageBuild.build_id != prior_build_id)
             .limit(1)
         )
-        assert current is not None
-        assert current.provider == "gcp"
-        assert current.status == "running"
+        assert current is None
     assert targon.created == []
-    assert len(cloudrun.builds) == 1
+    assert cloudrun.builds == []
 
 
 @pytest.mark.asyncio
-async def test_kaniko_skips_targon_after_provision_error(
+async def test_kaniko_queued_row_keeps_selected_targon_provider(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -1266,12 +1265,12 @@ async def test_kaniko_skips_targon_after_provision_error(
         build.provider = None
         build.provider_resource_id = None
     assert await loop.tick() is True
-    assert len(targon.created) == 1
-    assert cloudrun.builds
+    assert len(targon.created) == 2
+    assert cloudrun.builds == []
     async with session_maker() as session:
         build = await session.scalar(select(SubmissionImageBuild).limit(1))
         assert build is not None
-        assert build.provider == "gcp"
+        assert build.provider == "targon"
 
 
 @pytest.mark.asyncio
@@ -1338,7 +1337,7 @@ async def test_tick_finalizes_succeeded_build_after_runtime_fallback(
 
 
 @pytest.mark.asyncio
-async def test_runtime_cloudrun_provision_failure_reuses_kaniko_archive(
+async def test_runtime_cloudrun_provision_failure_stays_parked(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING_FAILED)
@@ -1407,20 +1406,16 @@ async def test_runtime_cloudrun_provision_failure_reuses_kaniko_archive(
         providers=[TargonComputeProvider(targon, config), cloudrun],
         interval_seconds=60,
     )
-    assert await loop.tick() is True
+    assert await loop.tick() is False
     async with session_maker() as session:
         current = await session.scalar(
             select(SubmissionImageBuild)
             .where(SubmissionImageBuild.build_id != prior_build_id)
             .limit(1)
         )
-        assert current is not None
-        assert current.status == "succeeded"
-        assert current.output_key == archive_key
-        assert current.output_sha256 == "12" * 32
-        assert current.provider == "targon"
+        assert current is None
     assert cloudrun.builds == []
-    assert promoted == [archive_key]
+    assert promoted == []
 
 
 @pytest.mark.asyncio

@@ -55,7 +55,6 @@ def _request(
     *,
     token: str,
     payload: dict[str, Any] | None = None,
-    retryable: bool = False,
 ) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
@@ -71,25 +70,15 @@ def _request(
         },
         method=method,
     )
-    attempts = 3 if retryable else 1
-    for attempt in range(attempts):
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                body = response.read()
-            break
-        except urllib.error.HTTPError as error:
-            transient = error.code == 429 or error.code >= 500
-            if transient and attempt + 1 < attempts:
-                time.sleep(0.5 * (2**attempt))
-                continue
-            raise ControllerError(
-                f"Platform trusted-build {method} failed with HTTP {error.code}"
-            ) from None
-        except (TimeoutError, urllib.error.URLError, OSError) as error:
-            if attempt + 1 < attempts:
-                time.sleep(0.5 * (2**attempt))
-                continue
-            raise ControllerError("Platform trusted-build transport failed") from error
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = response.read()
+    except urllib.error.HTTPError as error:
+        raise ControllerError(
+            f"Platform trusted-build {method} failed with HTTP {error.code}"
+        ) from None
+    except (TimeoutError, urllib.error.URLError, OSError) as error:
+        raise ControllerError("Platform trusted-build transport failed") from error
     try:
         value = json.loads(body) if body else {}
     except json.JSONDecodeError as error:
@@ -200,7 +189,6 @@ class SubmissionBuildControl:
                     "provider_resource_id": provider_resource_id,
                     "error_code": error_code,
                 },
-                retryable=True,
             )
         except ControllerError:
             # A proxy may lose the response after Platform committed the
@@ -218,7 +206,6 @@ class SubmissionBuildControl:
             f"{self.base}/api/v1/screener/controller/"
             f"submission-image-builds/{build_id}?{query}",
             token=self.token,
-            retryable=True,
         )
         status = value.get("status")
         if not isinstance(status, str):
@@ -279,7 +266,6 @@ class SourceReviewControl:
                 "provider_resource_id": provider_resource_id,
                 "error_code": error_code,
             },
-            retryable=True,
         )
 
     def status(self, review_id: str) -> str:
@@ -291,7 +277,6 @@ class SourceReviewControl:
             f"{self.base}/api/v1/screener/controller/submission-source-reviews/"
             f"{review_id}?{query}",
             token=self.token,
-            retryable=True,
         )
         status = value.get("status")
         if not isinstance(status, str):
@@ -355,7 +340,6 @@ class RuntimeSmokeControl:
                 "image_reference": image_reference,
                 "error_code": error_code,
             },
-            retryable=True,
         )
 
     def cleanup_required(self, build_id: str, *, provider_resource_id: str) -> None:
@@ -587,14 +571,12 @@ def _image_archive_names(archive: Path) -> frozenset[str]:
         raise ControllerError("runtime archive is not a readable image tar") from error
 
 
-def _image_archive_sources(archive: Path) -> tuple[str, ...]:
+def _image_archive_source(archive: Path) -> str:
     names = _image_archive_names(archive)
-    docker = f"docker-archive:{archive}"
-    oci = f"oci-archive:{archive}"
     if "oci-layout" in names or "index.json" in names:
-        return (oci, docker)
+        return f"oci-archive:{archive}"
     if "manifest.json" in names:
-        return (docker, oci)
+        return f"docker-archive:{archive}"
     raise ControllerError("runtime archive has neither manifest.json nor oci-layout")
 
 
@@ -668,32 +650,25 @@ def _promote_runtime_archive(
     unpacked: Path | None = None
     try:
         unpacked = _materialize_image_archive(archive)
-        last_error: BaseException | None = None
-        copied = False
         registry_host = destination.split("/", 1)[0]
-        for source in _image_archive_sources(unpacked):
-            result = _run_skopeo(
-                [
-                    "skopeo",
-                    "copy",
-                    source,
-                    f"docker://{destination}",
-                ],
-                registry_host=registry_host,
-                access_token=access_token,
-                timeout=600,
-            )
-            if result.returncode == 0:
-                copied = True
-                break
-            last_error = subprocess.CalledProcessError(
+        result = _run_skopeo(
+            [
+                "skopeo",
+                "copy",
+                _image_archive_source(unpacked),
+                f"docker://{destination}",
+            ],
+            registry_host=registry_host,
+            access_token=access_token,
+            timeout=600,
+        )
+        if result.returncode != 0:
+            error = subprocess.CalledProcessError(
                 result.returncode, result.args, result.stdout, result.stderr
             )
-        if not copied:
-            assert last_error is not None
             raise ControllerError(
-                f"runtime image promotion failed: {_skopeo_detail(last_error)}"
-            ) from last_error
+                f"runtime image promotion failed: {_skopeo_detail(error)}"
+            ) from error
         inspect = _run_skopeo(
             [
                 "skopeo",

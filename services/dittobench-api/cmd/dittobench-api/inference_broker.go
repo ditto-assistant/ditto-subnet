@@ -22,7 +22,6 @@ import (
 	"io"
 	"log"
 	"math"
-	mathrand "math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -76,29 +75,6 @@ const (
 func usesPlatformEmbedding(benchVersion int) bool {
 	return benchVersion >= protocol.BenchVersionV7
 }
-
-// ticketTransientMaxAttempts bounds the embedding lane's short retry window.
-// Chat uses ticketChatFastMaxAttempts because one Platform response already
-// represents exhausted throughput and reliability phases; repeating that whole
-// stack six more times before announcing a wait would multiply provider work
-// without giving the heartbeat a chance to explain the pause.
-//
-// Why so small. Each broker-level attempt is a NEW nonce and therefore a NEW
-// platform request (`grant.request_count += 1`). Failed attempts no longer
-// charge the reservation estimate onto the token grant, but they still spend
-// the request-count budget. A large cap here could still exhaust that budget
-// mid-run and convert a survivable blip into a 4102.
-//
-// Each extra broker delivery is a NEW reservation. Chat therefore makes one
-// fast delivery, then at most four slow recovery deliveries. Even a pathological
-// all-retry run stays below the 8,192-request ticket budget, while every
-// delivery remains independently reserved, signed, and recorded.
-const (
-	ticketTransientMaxAttempts = 6
-	ticketChatFastMaxAttempts  = 1
-	ticketRecoveryMaxAttempts  = 4
-	ticketRecoveryBackoff      = 15 * time.Second
-)
 
 type brokerTicketIdentity struct {
 	GrantID        string
@@ -587,7 +563,6 @@ type inferenceBroker struct {
 	embeddingSlots        chan struct{}
 	embeddingBackpressure embeddingBackpressureGate
 	embeddingRequestTTL   time.Duration
-	retry                 brokerRetryConfig
 	delayFP               delayFingerprintConfig
 	sleep                 func(context.Context, time.Duration) error
 	relayWait             func(string, bool)
@@ -829,8 +804,8 @@ const (
 // ditto/db/queries/inference.py:329-335, which sets `grant.status = "revoked"`
 // when the owning ticket is no longer ISSUED, its deadline was rewritten, or
 // its deadline has passed). A genuine provider rate limit can never surface
-// here as a 429: the platform retries 408/429/5xx upstream itself and converts
-// every remaining provider rejection into a 502.
+// here as a 429: the platform maps every provider rejection into a 502 after
+// its single upstream dispatch.
 //
 // So a 429 on the ticket-scoped path means the validator's LEASE went away --
 // platform-side eviction, budget exhaustion, or per-ticket concurrency -- and
@@ -889,27 +864,6 @@ type platformEmbeddingAtCapacity struct {
 func (platformEmbeddingAtCapacity) Error() string {
 	return "embedding platform lane is at capacity"
 }
-
-// platformEmbeddingCapacityMaxWaits is a pathological-loop guard, not the
-// ordinary throttle window. retryAfterDuration has a 250ms floor and the HTTP
-// request context is 65 seconds, so a real call reaches its context deadline
-// before this 260-wait ceiling. Keeping the ceiling protects injected clocks
-// and malformed responders without recreating the old twelve-second cutoff.
-const platformEmbeddingCapacityMaxWaits = 260
-
-// platformChatCapacityMaxWaits bounds how long one chat completion will queue
-// behind platform backpressure, for the same reason its embedding twin exists:
-// the request context already caps the call, and this is the second bound so a
-// platform pinned at zero headroom surfaces as a failed run in bounded time
-// rather than holding every check open until the ticket deadline.
-//
-// Must outlast the platform's rolling one-minute RPM window. Retry-After is 1s,
-// so 12 waits (12s) cannot survive a per-ticket rate cap: 8-wide tickets sit on
-// 240 starts/min, every extra call 503s, and the run fail-closes as
-// inference_lane_saturated while concurrency peaks stay idle. 70 waits cover
-// the 60s window plus Retry-After jitter without holding a check open for the
-// whole ticket.
-const platformChatCapacityMaxWaits = 70
 
 // platformEmbeddingIsAtCapacity recognises the platform's backpressure answer.
 // Both conditions are required: 503 alone is the generic transient class, and
@@ -1261,24 +1215,6 @@ func platformIsAtCapacity(response *http.Response) bool {
 		strings.TrimSpace(response.Header.Get("Retry-After")) != ""
 }
 
-type brokerRetryConfig struct {
-	maxAttempts int
-	base        time.Duration
-	cap         time.Duration
-	factor      float64
-}
-
-func (c brokerRetryConfig) backoff(attempt int) time.Duration {
-	delay := float64(c.base) * math.Pow(c.factor, float64(attempt-1))
-	if maximum := float64(c.cap); c.cap > 0 && delay > maximum {
-		delay = maximum
-	}
-	if delay <= 0 {
-		return 0
-	}
-	return time.Duration(delay/2 + mathrand.Float64()*(delay/2))
-}
-
 func brokerSleep(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -1325,12 +1261,6 @@ func newInferenceBroker(maxSessions int, embeddingCapacity ...int) *inferenceBro
 			envOr("DITTOBENCH_EMBEDDING_UPSTREAM_URL", "http://host.docker.internal:11434/api/embed"),
 		),
 		embeddingRequestTTL: 65 * time.Second,
-		retry: brokerRetryConfig{
-			maxAttempts: envIntDefault("RELAY_RETRY_MAX_ATTEMPTS", 6),
-			base:        time.Duration(envIntDefault("RELAY_RETRY_BASE_MS", 200)) * time.Millisecond,
-			cap:         time.Duration(envIntDefault("RELAY_RETRY_CAP_MS", 2000)) * time.Millisecond,
-			factor:      envFloatDefault("RELAY_RETRY_FACTOR", 2),
-		},
 		delayFP: parseDelayFingerprintConfig(),
 		sleep:   brokerSleep,
 	}
@@ -3353,9 +3283,9 @@ func (b *inferenceBroker) handleEmbeddingWithLease(w http.ResponseWriter, r *htt
 		// response is then replayed by the paid-free intervention round; only
 		// that replay/synthetic work is allowed to avoid the purpose-bound
 		// Platform grant.
-		decoded, err = b.forwardPlatformEmbeddingWithRetry(requestContext, session, payload.Input, caseGeneration)
+		decoded, err = b.forwardPlatformEmbeddingOnce(requestContext, session, payload.Input, caseGeneration)
 	} else if usesPlatformEmbedding(benchVersion) {
-		decoded, err = b.forwardPlatformEmbeddingWithRetry(requestContext, session, payload.Input, caseGeneration)
+		decoded, err = b.forwardPlatformEmbeddingOnce(requestContext, session, payload.Input, caseGeneration)
 	} else {
 		decoded, err = b.forwardLocalEmbedding(requestContext, payload.Input)
 	}
@@ -3448,106 +3378,33 @@ func (b *inferenceBroker) handleEmbeddingWithLease(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, decoded)
 }
 
-// forwardPlatformEmbeddingWithRetry gives the v7 embedding lane the same tiny
-// second line of defence the chat lane has. Embeddings are roughly two thirds
-// of a v7 run's ~1,067 inference requests and had NO retry at all, so they were
-// the most likely place for a single transient fault to discard a whole run.
-//
-// The retryable class is exactly the transient one: a transport failure, or a
-// platform 5xx (which is what the platform returns after its own 3-attempt
-// provider loop gives up). A grant denial is auth class and returns
-// immediately -- retrying a revoked lease cannot succeed and would burn a fresh
-// reservation each time. Every extra delivery is recorded in the session's
-// retry ledger so a run that survived a fault stays distinguishable from one
-// that never faulted.
-func (b *inferenceBroker) forwardPlatformEmbeddingWithRetry(
+// forwardPlatformEmbeddingOnce performs one dispatch. The shared gate may delay
+// before dispatch when another
+// request already observed saturation; once this request receives any failure,
+// the score attempt parks until Backroom authorizes another ticket.
+func (b *inferenceBroker) forwardPlatformEmbeddingOnce(
 	ctx context.Context, session *brokerSession, inputs []string, caseGeneration ...uint64,
 ) (embeddingResponse, error) {
 	generation := uint64(0)
 	if len(caseGeneration) > 0 {
 		generation = caseGeneration[0]
 	}
-	var lastErr error
-	var lastCapacityErr error
-	capacityWaits := 0
-	for attempt := 1; attempt <= ticketTransientMaxAttempts; {
-		probe, waitErr := b.embeddingBackpressure.wait(ctx)
-		if waitErr != nil {
-			if lastCapacityErr != nil {
-				return embeddingResponse{}, lastCapacityErr
-			}
-			if lastErr != nil {
-				return embeddingResponse{}, lastErr
-			}
-			return embeddingResponse{}, waitErr
-		}
-		decoded, err := b.forwardPlatformEmbedding(ctx, session, inputs, generation)
-		if err == nil {
-			b.embeddingBackpressure.finishProbe(probe)
-			return decoded, nil
-		}
-		lastErr = err
-
-		// Backpressure first. A capacity wait does NOT consume a transient
-		// attempt and does NOT touch the retry ledger: the platform is telling
-		// this call to queue, which is a scheduling event, not a fault. Folding
-		// it into the fault budget would spend the run's three real recovery
-		// attempts on a healthy platform that was merely busy.
-		var atCapacity platformEmbeddingAtCapacity
-		if errors.As(err, &atCapacity) {
-			lastCapacityErr = err
-			b.embeddingBackpressure.backpressure(atCapacity.retryAfter)
-			if capacityWaits >= platformEmbeddingCapacityMaxWaits || ctx.Err() != nil {
-				return embeddingResponse{}, err
-			}
-			capacityWaits++
-			session.mu.Lock()
-			runID := session.boundRunID
-			session.mu.Unlock()
-			log.Printf(
-				"run %s: platform embedding lane is at capacity; waiting %s (wait %d/%d) -- healthy lease, not a fault",
-				runID, atCapacity.retryAfter, capacityWaits, platformEmbeddingCapacityMaxWaits,
-			)
-			if b.sleep(ctx, atCapacity.retryAfter) != nil {
-				break
-			}
-			continue
-		}
-		// The half-open probe reached the provider and received something other
-		// than a backpressure response. The shared throttle has recovered; the
-		// ordinary transient/integrity classification below remains unchanged.
-		b.embeddingBackpressure.finishProbe(probe)
-
-		var transient platformEmbeddingTransient
-		if ctx.Err() != nil && lastCapacityErr != nil {
-			// A transport can surface the request deadline while the half-open
-			// probe is in flight. Preserve the capacity cause that consumed the
-			// bounded recovery window so finalization names the validator rail,
-			// rather than misclassifying provider saturation as an unrelated
-			// infrastructure failure.
-			return embeddingResponse{}, lastCapacityErr
-		}
-		if !errors.As(err, &transient) || ctx.Err() != nil {
-			return embeddingResponse{}, err
-		}
-		attempt++
-		if attempt > ticketTransientMaxAttempts {
-			break
-		}
-		if b.sleep(ctx, b.retry.backoff(attempt-1)) != nil {
-			break
-		}
-		session.mu.Lock()
-		session.embeddingRetries++
-		retries := session.embeddingRetries
-		runID := session.boundRunID
-		session.mu.Unlock()
-		log.Printf(
-			"run %s: retrying v7 embedding attempt %d/%d after a transient platform fault (%v); run retry ledger=%d",
-			runID, attempt, ticketTransientMaxAttempts, lastErr, retries,
-		)
+	probe, waitErr := b.embeddingBackpressure.wait(ctx)
+	if waitErr != nil {
+		return embeddingResponse{}, waitErr
 	}
-	return embeddingResponse{}, lastErr
+	decoded, err := b.forwardPlatformEmbedding(ctx, session, inputs, generation)
+	if err == nil {
+		b.embeddingBackpressure.finishProbe(probe)
+		return decoded, nil
+	}
+	var atCapacity platformEmbeddingAtCapacity
+	if errors.As(err, &atCapacity) {
+		b.embeddingBackpressure.backpressure(atCapacity.retryAfter)
+		return embeddingResponse{}, err
+	}
+	b.embeddingBackpressure.finishProbe(probe)
+	return embeddingResponse{}, err
 }
 
 func (b *inferenceBroker) forwardLocalEmbedding(ctx context.Context, inputs []string) (embeddingResponse, error) {
@@ -4070,47 +3927,14 @@ func (b *inferenceBroker) proxy(
 	var responseStatus int
 	var preReservationReaderRejection bool
 	var totalLatency uint64
-	// The platform owns the FIRST line of provider retry for ticket-scoped v7
-	// inference (_PROVIDER_MAX_ATTEMPTS=3 over 408/429/5xx, all under one
-	// reservation), so #97 collapsed this loop to a single attempt rather than
-	// multiply provider work. That is still the right default, but one attempt
-	// means a fault the platform could not absorb discards ~18 minutes of work,
-	// so v7 keeps a deliberately tiny second line of defence. See
-	// ticketTransientMaxAttempts for why the cap spans the complete backoff window.
-	maxAttempts := ticketChatFastMaxAttempts + ticketRecoveryMaxAttempts
-	if trustedChatHandler != nil {
-		maxAttempts = 1
-	} else if legacyGateway != "" {
-		maxAttempts = b.retry.maxAttempts
-	}
-	if maxAttempts < 1 {
-		maxAttempts = 1
-	}
-	capacityWaits := 0
-	var endRelayWait func()
-	defer func() {
-		if endRelayWait != nil {
-			endRelayWait()
-		}
-	}()
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		if attempt > 1 {
-			delay := b.retry.backoff(attempt - 1)
-			if legacyGateway == "" && attempt > ticketChatFastMaxAttempts {
-				if endRelayWait == nil {
-					endRelayWait = b.beginRelayWait(session)
-				}
-				delay = ticketRecoveryBackoff
-			}
-			if b.sleep(requestCtx, delay) != nil {
-				break
-			}
-		}
+	// Every ticket-scoped provider call is single-shot. Platform and the broker
+	// both park failures; only a Backroom ticket retry may repeat paid work.
+	func() {
 		nonce := uuid.NewString()
 		requested := time.Now().UTC().Format("2006-01-02T15:04:05.000000+00:00")
 		req, buildErr := http.NewRequestWithContext(requestCtx, http.MethodPost, proxyURL, bytes.NewReader(body))
 		if buildErr != nil {
-			break
+			return
 		}
 		req.Header.Set("Content-Type", "application/json")
 		if legacyGateway == "" && trustedChatHandler == nil {
@@ -4149,48 +3973,26 @@ func (b *inferenceBroker) proxy(
 		totalLatency += uint64(time.Since(started).Milliseconds())
 		if requestErr != nil {
 			if requestCtx.Err() != nil {
-				break
+				return
 			}
-			continue
+			return
 		}
 		atCapacity := legacyGateway == "" && trustedChatHandler == nil && platformIsAtCapacity(resp)
-		capacityPause := retryAfterDuration(resp.Header.Get("Retry-After"))
 		candidateBody, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
 		_ = resp.Body.Close()
 		responseStatus = resp.StatusCode
 		if readErr != nil || len(candidateBody) > 16<<20 {
-			continue
+			return
 		}
 		responseBody = candidateBody
-		// Backpressure, not a fault: the lease is healthy and the lane was
-		// momentarily full. Handled before the transient branch below because
-		// it IS a 5xx, and waiting out a queue is not the same event as
-		// surviving a provider blip -- charging it to the transient
-		// transient budget would spend a run's whole margin on a busy minute.
-		// This is the chat-lane twin of the embedding path, which has answered
-		// backpressure this way since dittobench-api #103.
+		// Backpressure is terminal for this ticket-scoped request. Record its
+		// distinct infrastructure cause, then park the score attempt without a
+		// second nonce or provider reservation.
 		if atCapacity {
-			if capacityWaits >= platformChatCapacityMaxWaits {
-				// The whole bounded wait budget went by and the lane was still
-				// full. This is genuinely ambiguous -- a saturated rail can be
-				// an under-provisioned platform OR one embed-heavy ticket
-				// crowding out its neighbours -- and it is deliberately NOT
-				// reclassified as the agent's fault. A miner cannot provision
-				// the lane, and blaming one for a platform running at its limit
-				// is the same error as this change is fixing, pointed the other
-				// way. It gets its own CODE so an operator can see it; it keeps
-				// the infrastructure CLASS so it keeps its grant.
-				session.mu.Lock()
-				session.capacityExhaustions++
-				session.mu.Unlock()
-				break
-			}
-			capacityWaits++
-			if b.sleep(requestCtx, capacityPause) != nil {
-				break
-			}
-			attempt--
-			continue
+			session.mu.Lock()
+			session.capacityExhaustions++
+			session.mu.Unlock()
+			return
 		}
 		// Auth class: the platform declined the grant. The lease is gone, or its
 		// budget is spent, so every further attempt would fail identically while
@@ -4198,13 +4000,12 @@ func (b *inferenceBroker) proxy(
 		// that cannot serve it. Stop immediately -- both terminal reasons want
 		// the same action here, and only the reporting below tells them apart.
 		if platformDeniesGrant(grantDenialRoute, responseStatus) {
-			break
+			return
 		}
 		if responseStatus == http.StatusRequestTimeout || responseStatus == http.StatusTooManyRequests || responseStatus >= 500 {
-			continue
+			return
 		}
-		break
-	}
+	}()
 	if requestCtx.Err() != nil {
 		session.mu.Lock()
 		session.callerCancels++
@@ -4303,9 +4104,6 @@ func (b *inferenceBroker) proxy(
 	if responseStatus < 200 || responseStatus >= 300 || len(responseBody) == 0 {
 		session.mu.Lock()
 		session.failures++
-		if endRelayWait != nil {
-			session.recoveryExhaustions++
-		}
 		session.providerLatency += totalLatency
 		session.mu.Unlock()
 		writeError(w, http.StatusBadGateway, "inference provider unavailable")
@@ -4408,7 +4206,7 @@ func (b *inferenceBroker) trustedProbe(ctx context.Context, id string) error {
 	benchVersion := session.benchVersion
 	session.mu.Unlock()
 	if usesPlatformEmbedding(benchVersion) {
-		embedding, err := b.forwardPlatformEmbeddingWithRetry(ctx, session, []string{"validator embedding preflight"})
+		embedding, err := b.forwardPlatformEmbeddingOnce(ctx, session, []string{"validator embedding preflight"})
 		if err != nil {
 			return fmt.Errorf("ticket embedding probe failed: %w", err)
 		}

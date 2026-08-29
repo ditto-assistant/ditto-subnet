@@ -144,8 +144,8 @@ def _profile(
             "ablation_projection_key_sha256": "78" * 32,
             "ablation_coordinator_policy": {
                 "sample_size": 2,
-                "max_attempts": 2,
-                "max_requests": 12,
+                "max_attempts": 1,
+                "max_requests": 6,
                 "request_timeout_milliseconds": 1_000,
                 "total_timeout_milliseconds": 10_000,
             },

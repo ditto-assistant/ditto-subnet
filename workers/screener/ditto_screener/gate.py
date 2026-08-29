@@ -26,7 +26,8 @@ Flow for one agent:
 
 A pass is "built, served, and cleared by bounded source review" under the
 default production-v8 manifest.
-Deterministic contract violations fail; infrastructure failures are retryable.
+Deterministic contract violations fail; infrastructure failures are reported
+separately so Platform can park them for an operator-issued retry.
 Failures include a short ``detail``
 (response body, container-log tail, or failing stage) for the miner and operator.
 Every stage is best-effort and never raises into the worker loop: an
@@ -77,6 +78,7 @@ from ditto_screener.l2_review import (
     L2RunResult,
     LayeredSourceReviewAgent,
 )
+from ditto_screener.platform import LocalScreeningProviderSelected
 from ditto_screener.policy import (
     ChallengeObservation,
     PolicyContext,
@@ -112,9 +114,8 @@ _MAX_GATE_DETAIL_CHARS = 3900
 _PROBE_INTERVAL_SECONDS = 1.0
 # Refuse to begin a screening stage that cannot plausibly finish and still leave
 # the worker time to sign and post a verdict before the lease deadline. A stage
-# entered with less than this many seconds of lease budget is abandoned as
-# retryable-infra so the platform re-queues promptly instead of the loop burning
-# the whole lease on work whose verdict would arrive after expiry.
+# entered with less than this many seconds of lease budget is abandoned as an
+# infrastructure failure so Platform can park it with exact evidence.
 _LEASE_MIN_STAGE_SECONDS = 5.0
 _MAX_UNPACKED_BYTES = 64 * 1024 * 1024
 _MAX_ARCHIVE_MEMBERS = 20_000
@@ -158,7 +159,7 @@ _DOCKER_INFRASTRUCTURE_MARKERS = (
     # A build the daemon or worker was restarted out from under (deploy /
     # `systemctl restart docker`) aborts with BuildKit's cancellation marker.
     # That is our own interruption, never the miner's crate failing to compile,
-    # so it must requeue as retryable-infra rather than terminally reject.
+    # so it is reported as infrastructure rather than rejecting the artifact.
     "context canceled",
     "context cancelled",
     "buildkit",
@@ -354,7 +355,7 @@ def _with_image_binding_advisory(
     The heuristic is text matching, so it can neither prove nor disprove that
     the image runs the reviewed source. It therefore never rejects: a PASS
     becomes an operator-reviewed QUARANTINE and an existing QUARANTINE gains
-    the evidence item; terminal rejections and retryable failures are
+    the evidence item; terminal rejections and parked infrastructure failures are
     untouched.
     """
     if advisory is None or decision.outcome not in {
@@ -825,17 +826,25 @@ class BuildGate:
 
                 if preflight_clearance is None:
 
-                    async def review_with_provider_fallback() -> (
+                    async def review_with_selected_provider() -> (
                         SourceReviewObservation
                     ):
-                        remote_only = self._config.remote_build_mode == "require"
+                        remote_only = self._config.remote_build_mode != "off"
                         if remote_source_review is not None:
                             try:
                                 remote = await remote_source_review()
-                            except Exception:  # noqa: BLE001 - local is authoritative fallback
+                            except LocalScreeningProviderSelected:
+                                return await self._source_reviewer.review(
+                                    tmp_path,
+                                    artifact_sha256=sha256.lower(),
+                                    attempt_id=attempt_id,
+                                    progress=report_review_progress,
+                                    deadline=deadline,
+                                )
+                            except Exception:  # noqa: BLE001 - terminal provider failure
                                 logger.warning(
                                     "remote source reviewer raised unexpectedly; "
-                                    "using local reviewer",
+                                    "parking screening attempt",
                                     exc_info=True,
                                 )
                             else:
@@ -848,7 +857,7 @@ class BuildGate:
                                     )
                                     if not remote_failed or remote_only:
                                         return remote
-                        if remote_only:
+                        if remote_only and remote_source_review is not None:
                             return SourceReviewObservation(
                                 ok=False,
                                 risk_level=None,
@@ -865,7 +874,7 @@ class BuildGate:
                             deadline=deadline,
                         )
 
-                    review_task = asyncio.create_task(review_with_provider_fallback())
+                    review_task = asyncio.create_task(review_with_selected_provider())
                 else:
 
                     async def cleared_preflight() -> SourceReviewObservation:
@@ -886,12 +895,15 @@ class BuildGate:
             build_detail = ""
             built_image_id: str | None = None
             targon_runtime_ok = False
+            local_build_selected = False
             if remote_build is not None:
                 try:
                     remote_archive = await remote_build()
-                except Exception:  # noqa: BLE001 - local build is the fallback
+                except LocalScreeningProviderSelected:
+                    local_build_selected = True
+                except Exception:  # noqa: BLE001 - terminal provider failure
                     logger.warning(
-                        "remote builder raised unexpectedly; using local Docker",
+                        "remote builder raised unexpectedly; parking screening attempt",
                         exc_info=True,
                     )
             targon_runtime_ok = (
@@ -905,7 +917,11 @@ class BuildGate:
                 built = True
                 built_image_id = f"sha256:{remote_archive.sha256}"
                 build_detail = "targon-runtime-health"
-            elif self._config.remote_build_mode == "require":
+            elif (
+                remote_build is not None
+                and self._config.remote_build_mode != "off"
+                and not local_build_selected
+            ):
                 return core_decision(
                     ScreeningOutcome.RETRYABLE_INFRA,
                     code="targon-runtime-unavailable",
@@ -1172,7 +1188,7 @@ class BuildGate:
                             "screener error: lease budget exhausted during image upload"
                         ),
                     )
-                except Exception as error:  # noqa: BLE001 - publish is retryable infra
+                except Exception as error:  # noqa: BLE001 - publish is parked infra
                     return core_decision(
                         ScreeningOutcome.RETRYABLE_INFRA,
                         code="image-upload-failed",
@@ -1239,12 +1255,12 @@ class BuildGate:
     def _lease_exhausted(
         self, deadline: float | None, stage: str
     ) -> ScreeningDecision | None:
-        """A retryable decision when too little lease remains to run ``stage``."""
+        """A parked infrastructure decision when the lease cannot fit ``stage``."""
         remaining = self._lease_remaining(deadline)
         if remaining is not None and remaining <= _LEASE_MIN_STAGE_SECONDS:
             logger.warning(
                 "screening lease budget exhausted before %s (%.1fs left); "
-                "reporting retryable so the platform re-queues",
+                "reporting infrastructure failure for manual retry",
                 stage,
                 remaining,
             )

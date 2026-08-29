@@ -1594,7 +1594,7 @@ export interface paths {
         put?: never;
         /**
          * Retry Failed Screening Now
-         * @description Waive only one exact failed attempt's remaining automatic backoff.
+         * @description Authorize one manual retry of the exact latest failed attempt.
          */
         post: operations["retry_failed_screening_now_api_v1_admin_screening_submissions__agent_id__retry_now_post"];
         delete?: never;
@@ -1800,6 +1800,26 @@ export interface paths {
          * @description Queue one allowlisted monorepo image build; never accept arbitrary paths.
          */
         post: operations["create_trusted_image_build_api_v1_admin_trusted_image_builds_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/trusted-image-builds/{build_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Trusted Image Build
+         * @description Manually requeue one exact terminal trusted build without erasing attempts.
+         */
+        post: operations["retry_trusted_image_build_api_v1_admin_trusted_image_builds__build_id__retry_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4482,16 +4502,14 @@ export interface paths {
         put?: never;
         /**
          * Fail Job
-         * @description Resolve a failed but still-leased ticket with reason-specific retry policy.
+         * @description Resolve a failed live ticket and park it with reason-specific evidence.
          *
          *     A validator whose scoring attempt failed calls this so the platform closes
          *     the live ticket now instead of leaving the lease idle until its own deadline.
-         *     Canonical scoring errors are immediately eligible for another bounded
-         *     attempt; infrastructure, sandbox OOM, and continual-retest failures apply
-         *     their dedicated cooldowns. Any later issue mints a **fresh** lease rather
-         *     than resuming the failed one. Additive and best-effort: an old validator
-         *     that never calls this behaves exactly as today (the ticket expires on its
-         *     own via the overdue sweep).
+         *     Every reason consumes this ticket's single base attempt. Any later issue
+         *     requires an audited Backroom grant and mints a **fresh** lease rather than
+         *     resuming the failed one. An old validator that never calls this is parked by
+         *     the overdue sweep instead.
          *
          *     Auth mirrors the job claim: the header must match the signed hotkey, the
          *     signature proves possession, ``requested_at`` is freshness-bounded, the
@@ -7872,10 +7890,9 @@ export interface components {
          *     ``retry_state`` is the operator-facing triage label:
          *
          *     * ``running`` — a validator holds a live ticket right now.
-         *     * ``retry_available`` — an expired ticket is off cooldown and will be
-         *       re-leased on the next sweep with budget to spare.
-         *     * ``cooling_down`` — an expired ticket still has budget but is waiting out
-         *       its retry cooldown.
+         *     * ``retry_available`` — an operator grant exists and the ticket can be
+         *       re-leased.
+         *     * ``cooling_down`` — a historical/manual grant is not eligible yet.
          *     * ``exhausted`` — no ticket can advance without an operator. Read
          *       ``recommended_action``: ``retry`` is a verified-infrastructure grant;
          *       ``withdraw`` is an agent-attributable dead end that should leave this
@@ -9457,8 +9474,11 @@ export interface components {
         };
         /** ConfirmationAblationCoordinatorProfile */
         ConfirmationAblationCoordinatorProfile: {
-            /** Max Attempts */
-            max_attempts: number;
+            /**
+             * Max Attempts
+             * @constant
+             */
+            max_attempts: 1;
             /** Max Requests */
             max_requests: number;
             /** Request Timeout Milliseconds */
@@ -17920,30 +17940,31 @@ export interface components {
         };
         /**
          * ScreenerProviderSettings
-         * @description Ordered provider lists for build, runtime, and source-review lanes.
+         * @description Provider selections for build, runtime, and source-review lanes.
+         *
+         *     The tuple shape is retained for rolling wire compatibility. Only the first
+         *     provider is authoritative; Platform never advances to another provider
+         *     after a failed launch.
          */
         ScreenerProviderSettings: {
             /**
              * Build Provider Priority
              * @default [
-             *       "targon",
-             *       "gcp"
+             *       "targon"
              *     ]
              */
             build_provider_priority: ("targon" | "gcp")[];
             /**
              * Runtime Provider Priority
              * @default [
-             *       "targon",
-             *       "gcp"
+             *       "targon"
              *     ]
              */
             runtime_provider_priority: ("targon" | "gcp")[];
             /**
              * Source Review Provider Priority
              * @default [
-             *       "targon",
-             *       "gcp"
+             *       "targon"
              *     ]
              */
             source_review_provider_priority: ("targon" | "gcp")[];
@@ -19402,6 +19423,18 @@ export interface components {
             reason: string;
             /** Source Sha */
             source_sha: string;
+        };
+        /** TrustedImageBuildRetryRequest */
+        TrustedImageBuildRetryRequest: {
+            /** Expected Attempt Count */
+            expected_attempt_count: number;
+            /**
+             * Expected Status
+             * @enum {string}
+             */
+            expected_status: "failed" | "fallback_required" | "canceled";
+            /** Reason */
+            reason: string;
         };
         /** TrustedImageBuildUpdateRequest */
         TrustedImageBuildUpdateRequest: {
@@ -24082,6 +24115,44 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["TrustedImageBuildCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustedImageBuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_trusted_image_build_api_v1_admin_trusted_image_builds__build_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustedImageBuildRetryRequest"];
             };
         };
         responses: {

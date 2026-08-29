@@ -404,11 +404,9 @@ func TestEmbeddingQueueTimeoutIsAttributedToValidatorCapacity(t *testing.T) {
 	}
 }
 
-// TestPlatformCapacityBackpressureIsWaitedOutNotCountedAsAFault covers the
-// change that makes the platform's concurrency board safe to lower under live
-// runs. Without it, the emergency brake would itself be the outage: every
-// throttled run would be discarded as if its lease had been revoked.
-func TestPlatformCapacityBackpressureIsWaitedOutNotCountedAsAFault(t *testing.T) {
+// A request that reaches Platform and receives capacity backpressure is
+// terminal for this ticket. A later dispatch needs manual retry authority.
+func TestPlatformCapacityBackpressureParksWithoutRedispatch(t *testing.T) {
 	vector := make([]float64, embeddingDimensions)
 	var attempts atomic.Int64
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -441,19 +439,19 @@ func TestPlatformCapacityBackpressureIsWaitedOutNotCountedAsAFault(t *testing.T)
 		t.Fatal(err)
 	}
 
-	if response := callEmbedding(broker, "192.0.2.153", "hosted text"); response.Code != http.StatusOK {
-		t.Fatalf("backpressure was not absorbed: status=%d body=%s", response.Code, response.Body.String())
+	if response := callEmbedding(broker, "192.0.2.153", "hosted text"); response.Code != http.StatusBadGateway {
+		t.Fatalf("backpressure did not park: status=%d body=%s", response.Code, response.Body.String())
 	}
-	if attempts.Load() != 3 {
-		t.Fatalf("deliveries=%d, want 3 (two waits then success)", attempts.Load())
+	if attempts.Load() != 1 {
+		t.Fatalf("deliveries=%d, want one", attempts.Load())
 	}
 
 	end, err := broker.snapshot(prepared["session_id"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := relayDegradedSince(start, end); err != nil {
-		t.Fatalf("waiting out backpressure failed the run closed: %v", err)
+	if err := relayDegradedSince(start, end); err == nil {
+		t.Fatal("capacity failure did not fail the run closed")
 	}
 	execution, err := relayExecutionSince(start, end)
 	if err != nil {
@@ -466,17 +464,12 @@ func TestPlatformCapacityBackpressureIsWaitedOutNotCountedAsAFault(t *testing.T)
 	if execution.EmbeddingRetries != 0 {
 		t.Fatalf("capacity waits were booked as fault retries: %+v", execution)
 	}
-	if execution.InfrastructureFailures != 0 || execution.GrantDenials != 0 {
-		t.Fatalf("capacity waits were booked as failures: %+v", execution)
+	if execution.InfrastructureFailures != 1 || execution.GrantDenials != 0 || execution.CapacityExhaustions != 1 {
+		t.Fatalf("capacity failure classification = %+v", execution)
 	}
 }
 
-// TestPlatformCapacityBackpressureUsesTheRequestDeadlineRatherThanACount
-// protects long rolling provider windows. Twelve Retry-After responses used to
-// terminate a healthy ticket even though the request still had time remaining.
-// The HTTP request context is already the authoritative 65-second bound, so the
-// broker must keep waiting until that deadline or a successful response.
-func TestPlatformCapacityBackpressureUsesTheRequestDeadlineRatherThanACount(t *testing.T) {
+func TestPlatformCapacityBackpressureDoesNotWaitForLaterSuccess(t *testing.T) {
 	vector := make([]float64, embeddingDimensions)
 	var attempts atomic.Int64
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -505,19 +498,18 @@ func TestPlatformCapacityBackpressureUsesTheRequestDeadlineRatherThanACount(t *t
 	}
 	defer broker.endEmbeddingPhase(prepared["session_id"], runID)
 
-	if response := callEmbedding(broker, "192.0.2.155", "hosted text"); response.Code != http.StatusOK {
-		t.Fatalf("rolling backpressure was not absorbed: status=%d body=%s", response.Code, response.Body.String())
+	if response := callEmbedding(broker, "192.0.2.155", "hosted text"); response.Code != http.StatusBadGateway {
+		t.Fatalf("rolling backpressure did not park: status=%d body=%s", response.Code, response.Body.String())
 	}
-	if attempts.Load() != 14 {
-		t.Fatalf("deliveries=%d, want 14 (thirteen waits then success)", attempts.Load())
+	if attempts.Load() != 1 {
+		t.Fatalf("deliveries=%d, want one", attempts.Load())
 	}
 }
 
-// TestPlatformFiveHundredThreeWithoutRetryAfterIsStillAFault guards the
-// boundary. Only 503 WITH Retry-After is backpressure; a bare 503 is the
-// platform giving up after its own provider loop, which #103 established as the
-// transient fault class and which must keep its retry ledger entry.
-func TestPlatformFiveHundredThreeWithoutRetryAfterIsStillAFault(t *testing.T) {
+// TestPlatformFiveHundredThreeWithoutRetryAfterParksImmediately guards the
+// single-shot boundary. A bare 503 is a terminal provider fault; only an
+// operator may start another scored attempt.
+func TestPlatformFiveHundredThreeWithoutRetryAfterParksImmediately(t *testing.T) {
 	vector := make([]float64, embeddingDimensions)
 	var attempts atomic.Int64
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -549,8 +541,8 @@ func TestPlatformFiveHundredThreeWithoutRetryAfterIsStillAFault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if response := callEmbedding(broker, "192.0.2.154", "hosted text"); response.Code != http.StatusOK {
-		t.Fatalf("transient fault was not absorbed: status=%d", response.Code)
+	if response := callEmbedding(broker, "192.0.2.154", "hosted text"); response.Code != http.StatusBadGateway {
+		t.Fatalf("transient fault was not parked: status=%d", response.Code)
 	}
 	end, err := broker.snapshot(prepared["session_id"])
 	if err != nil {
@@ -560,8 +552,8 @@ func TestPlatformFiveHundredThreeWithoutRetryAfterIsStillAFault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if execution.EmbeddingRetries != 1 {
-		t.Fatalf("a bare 503 stopped being a recorded fault retry: %+v", execution)
+	if attempts.Load() != 1 || execution.EmbeddingRetries != 0 || execution.InfrastructureFailures != 1 {
+		t.Fatalf("a bare 503 was not recorded as one terminal fault: attempts=%d execution=%+v", attempts.Load(), execution)
 	}
 }
 

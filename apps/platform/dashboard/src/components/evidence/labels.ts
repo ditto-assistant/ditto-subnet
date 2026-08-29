@@ -148,9 +148,9 @@ export function validationAttemptView(a: ValidationAttempt): ValidationAttemptVi
         : a.failure_code === "model_inference_required" && currentFailure
           ? "The scorer could not prove the harness reached hosted inference. It is not validator infrastructure and does not receive an automatic infrastructure retry."
           : a.failure_code === "inference_lane_saturated" && currentFailure
-            ? "The hosted inference rail was full, so the scorer refused to publish a score. This is not the agent's fault; another validator retries automatically."
+            ? "The hosted inference rail was full, so the scorer refused to publish a score. This is not the agent's fault; the failed assignment is parked until an operator retries it."
             : isInfraRelayCause(a.failure_code) && currentFailure
-              ? "Hosted inference failed as validator infrastructure. This is not the agent's fault; another validator retries automatically."
+              ? "Hosted inference failed as validator infrastructure. This is not the agent's fault; the failed assignment is parked until an operator retries it."
               : canonical && (a.actively_running ? "running" : a.status) === "expired"
                 ? VALIDATOR_RETRY_EXPLANATION
                 : null;

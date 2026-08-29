@@ -249,9 +249,10 @@ calibration manifest digest with whether v7 is advertised.
 
 The endpoint fails closed with 503 when the winning identity is absent or
 malformed (including a deliberately stamped-but-malformed build). Validators
-also fall back to v2 for an older scorer (404), an unreachable endpoint, a
-malformed response, or any descriptor identity mismatch. This makes scorer and
-validator upgrades order-independent without an `.env` cutover.
+park the scoring attempt when an older scorer returns 404, the endpoint is
+unreachable, the response is malformed, or the descriptor identity mismatches.
+They do not replay the score against v2; an operator must issue a validator
+retry from Backroom after correcting the scorer deployment.
 
 New validators send canonical work to `POST /v2/score`, where
 `bench_version` is required and must be `2` or `3`. The accepted response and

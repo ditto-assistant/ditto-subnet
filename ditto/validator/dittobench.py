@@ -74,13 +74,6 @@ _FAILED = "failed"
 # by design: it is spent out of the lease's reporting margin.
 _CANCEL_TIMEOUT_SECONDS = 15.0
 _UNCHANGED_PROGRESS_TIMEOUT_SECONDS = 15 * 60.0
-# A full scorer can clear as sibling runs finalize. Keep the leased job in hand
-# long enough to ride out that local hand-off instead of expiring it and
-# restarting the same 351 cases, but never spend an unbounded share of a lease
-# waiting outside the scorer.
-_SCORER_ADMISSION_RETRY_SECONDS = 5 * 60.0
-_SCORER_ADMISSION_MAX_BACKOFF_SECONDS = 15.0
-
 _CONFIRMATION_FAILURE_CLASS_HEADER = "X-Ditto-Confirmation-Failure-Class"
 _CONFIRMATION_FAILURE_STATUS_HEADER = "X-Ditto-Confirmation-Failure-Status"
 _CONFIRMATION_ZERO_STATUS_FAILURES = frozenset(
@@ -1280,6 +1273,7 @@ class DittobenchClient:
         ticket_deadline: datetime | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
     ) -> str:
+        del ticket_deadline  # Manual retry policy forbids admission replay.
         if bench_version is None or bench_version not in SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
         body: dict[str, object] = {
@@ -1363,42 +1357,15 @@ class DittobenchClient:
             body["benchmark_runtime"] = benchmark_runtime.model_dump(mode="json")
         endpoint = "/v2/score"
         url = f"{self._config.dittobench_api_url}{endpoint}"
-        admission_budget = (
-            min(
-                _SCORER_ADMISSION_RETRY_SECONDS,
-                max(0.0, lease_budget_seconds(ticket_deadline)),
+        try:
+            resp = await self._client.post(url, json=body)
+        except httpx.HTTPError as e:
+            raise DittobenchError(f"submit failed: {e}") from e
+        if resp.status_code in (429, 503):
+            raise ValidatorInfrastructureError(
+                f"scorer admission unavailable ({resp.status_code}); "
+                "operator retry required"
             )
-            if ticket_deadline is not None
-            else 0.0
-        )
-        admission_until = time.monotonic() + admission_budget
-        backoff = 1.0
-        while True:
-            try:
-                resp = await self._client.post(url, json=body)
-            except httpx.HTTPError as e:
-                raise DittobenchError(f"submit failed: {e}") from e
-            if resp.status_code not in (429, 503):
-                break
-            remaining = admission_until - time.monotonic()
-            if remaining <= 0:
-                raise ValidatorInfrastructureError(
-                    f"scorer admission unavailable ({resp.status_code})"
-                )
-            delay = min(
-                backoff,
-                _SCORER_ADMISSION_MAX_BACKOFF_SECONDS,
-                remaining,
-            )
-            logger.info(
-                "scorer admission returned %d; retrying in %.1fs with %.1fs "
-                "left in the bounded admission window",
-                resp.status_code,
-                delay,
-                remaining,
-            )
-            await asyncio.sleep(delay)
-            backoff = min(backoff * 2.0, _SCORER_ADMISSION_MAX_BACKOFF_SECONDS)
         if resp.status_code not in (200, 202):
             raise DittobenchError(
                 f"submit rejected ({resp.status_code}): {resp.text[:200]}"

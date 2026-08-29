@@ -27,14 +27,7 @@
 //   - PORT            listen port (default 11434, the gateway port the sandbox
 //     already expects)
 //
-// Retry env (deployment-tunable, transport-layer only — never touches the pins):
-// a transient upstream failure (dropped connection, read error, 408/429/5xx) is
-// retried with capped exponential backoff+jitter before it is ever counted as an
-// infrastructure_failure, so a flaky provider does not discard whole runs.
-//   - RELAY_RETRY_MAX_ATTEMPTS  total upstream attempts incl. the first (default 6)
-//   - RELAY_RETRY_BASE_MS       first backoff delay in ms (default 200)
-//   - RELAY_RETRY_CAP_MS        ceiling on any single backoff in ms (default 2000)
-//   - RELAY_RETRY_FACTOR        exponential growth per attempt (default 2)
+// Provider calls are single-shot. A failed benchmark must be manually retried.
 package main
 
 import (
@@ -42,15 +35,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
-	"math"
-	"math/rand"
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -146,49 +135,15 @@ const maxResponseBody = 16 << 20
 // it can poison a run total. It is deliberately far above every case budget.
 const maxUsageTokensPerCompletion = 10_000_000
 
-// retryConfig bounds how aggressively the relay re-sends a transiently-failed
-// upstream request before it counts as an infrastructure_failure. The scorer is
-// fail-closed on that counter, so turning a flaky upstream (dropped connections,
-// 429s, 5xx) into a success is what keeps whole runs from being discarded. A
-// zero-value config means maxAttempts==0, i.e. a single shot with no retry — the
-// exact pre-retry behavior, which keeps the relay honest under tests that do not
-// opt in.
-type retryConfig struct {
-	maxAttempts int           // total upstream attempts, including the first
-	base        time.Duration // first backoff delay
-	cap         time.Duration // ceiling on any single backoff delay
-	factor      float64       // exponential growth per attempt
-}
-
-// backoff returns the delay before the next attempt after `attempt` (1-based)
-// has failed: exponential base*factor^(attempt-1), capped, with full jitter in
-// [d/2, d] so a saturated upstream is not hammered in lockstep. The result never
-// exceeds cap.
-func (c retryConfig) backoff(attempt int) time.Duration {
-	d := float64(c.base) * math.Pow(c.factor, float64(attempt-1))
-	if capF := float64(c.cap); c.cap > 0 && d > capF {
-		d = capF
-	}
-	if d <= 0 {
-		return 0
-	}
-	return time.Duration(d/2 + rand.Float64()*(d/2))
-}
-
 type relay struct {
-	provider        string
-	profileRevision string
-	upstream        string
-	apiKey          string
-	model           string
-	thinking        bool
-	pinBody         func(body map[string]any)
-	client          *http.Client
-	retry           retryConfig
-	// sleep waits for d or until ctx is done, returning ctx.Err() if the
-	// context ends first. Injected so tests can assert backoff bounds without
-	// real delay; nil falls back to the context-aware real sleep.
-	sleep                  func(ctx context.Context, d time.Duration) error
+	provider               string
+	profileRevision        string
+	upstream               string
+	apiKey                 string
+	model                  string
+	thinking               bool
+	pinBody                func(body map[string]any)
+	client                 *http.Client
 	requests               atomic.Uint64
 	successes              atomic.Uint64
 	infrastructureFailures atomic.Uint64
@@ -200,22 +155,6 @@ type relay struct {
 	promptBytes            atomic.Uint64
 	completionTokens       atomic.Uint64
 	providerLatencyMs      atomic.Uint64
-}
-
-// ctxSleep is the default relay.sleep: it honors the incoming request deadline
-// so retries never outlive the sandbox's context.
-func ctxSleep(ctx context.Context, d time.Duration) error {
-	if d <= 0 {
-		return ctx.Err()
-	}
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
 }
 
 type relayHealth struct {
@@ -263,13 +202,6 @@ func main() {
 		thinking:        lockedThinking,
 		pinBody:         profile.pinBody,
 		client:          &http.Client{Timeout: 300 * time.Second},
-		retry: retryConfig{
-			maxAttempts: envInt("RELAY_RETRY_MAX_ATTEMPTS", 6),
-			base:        time.Duration(envInt("RELAY_RETRY_BASE_MS", 200)) * time.Millisecond,
-			cap:         time.Duration(envInt("RELAY_RETRY_CAP_MS", 2000)) * time.Millisecond,
-			factor:      envFloat("RELAY_RETRY_FACTOR", 2),
-		},
-		sleep: ctxSleep,
 	}
 	if r.apiKey == "" {
 		log.Fatal("RELAY_API_KEY is required")
@@ -340,15 +272,9 @@ func (r *relay) handle(w http.ResponseWriter, req *http.Request) {
 	r.promptBytes.Add(uint64(len(out)))
 	r.requests.Add(1)
 
-	// One relayed request may take several upstream attempts: a transient
-	// upstream failure (dropped connection, read error, 429, or 5xx) is retried
-	// with capped exponential backoff before it is ever counted as an
-	// infrastructure_failure. `out` is already a buffered []byte, so each attempt
-	// rebuilds a fresh single-use bytes.Reader over the same bytes. The counters
-	// are authoritative-outcome counters: requests is incremented once above, and
-	// infrastructure_failures / successes are incremented exactly once below, on
-	// the final outcome — never per attempt.
-	for attempt := 1; ; attempt++ {
+	// Every provider outcome is terminal. Only an operator may issue another
+	// scored attempt after this request returns.
+	{
 		r.upstreamAttempts.Add(1)
 		up, err := http.NewRequestWithContext(req.Context(), http.MethodPost, r.upstream, bytes.NewReader(out))
 		if err != nil {
@@ -370,17 +296,14 @@ func (r *relay) handle(w http.ResponseWriter, req *http.Request) {
 			// cancellation trip the fail-closed relay-health check and kill an
 			// otherwise-healthy run. A context that expired because the upstream
 			// was genuinely too slow surfaces as context.DeadlineExceeded, which
-			// is a real (retryable) infrastructure failure and flows through the
+			// is a real infrastructure failure and flows through the
 			// normal path below.
 			if callerCanceled(req, err) {
 				r.callerCancellations.Add(1)
 				log.Print("model-relay: caller cancelled upstream call; not counted as an infrastructure failure")
 				return
 			}
-			// Transport/connection failure — transient, retryable.
-			if r.retryUpstream(req.Context(), attempt, fmt.Sprintf("transport error: %v", err)) {
-				continue
-			}
+			// Transport/connection failures park the scored attempt.
 			r.infrastructureFailures.Add(1)
 			http.Error(w, "upstream unreachable", http.StatusBadGateway)
 			return
@@ -397,10 +320,7 @@ func (r *relay) handle(w http.ResponseWriter, req *http.Request) {
 				log.Print("model-relay: caller cancelled response body read; not counted as an infrastructure failure")
 				return
 			}
-			// Truncated/failed body read — transient, retryable.
-			if r.retryUpstream(req.Context(), attempt, "read upstream response error") {
-				continue
-			}
+			// A truncated body is ambiguous and therefore terminal.
 			r.infrastructureFailures.Add(1)
 			http.Error(w, "read upstream response", http.StatusBadGateway)
 			return
@@ -411,13 +331,8 @@ func (r *relay) handle(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "upstream response too large", http.StatusBadGateway)
 			return
 		}
-		if isRetryableStatus(resp.StatusCode) {
-			// 408/429/5xx — transient upstream saturation/outage, retryable.
-			if r.retryUpstream(req.Context(), attempt, fmt.Sprintf("upstream status %d", resp.StatusCode)) {
-				continue
-			}
-			// Attempts exhausted (or deadline): the existing infra path, exactly
-			// once, forwarding the real upstream response as before.
+		if isTransientInfrastructureStatus(resp.StatusCode) {
+			// 408/429/5xx park immediately after this one provider dispatch.
 			r.infrastructureFailures.Add(1)
 			r.forward(w, resp, responseBody)
 			return
@@ -461,32 +376,6 @@ func (r *relay) forward(w http.ResponseWriter, resp *http.Response, body []byte)
 	_, _ = w.Write(body)
 }
 
-// retryUpstream reports whether the caller should re-attempt the upstream call.
-// It returns false — meaning "take the terminal path now" — when attempts are
-// exhausted or the request context ends during backoff. Backoff is gated on the
-// context so retries never outlive the sandbox deadline. Nothing here touches the
-// counters; the caller records the single authoritative outcome. Logs are
-// low-level and never include the body, key, or Authorization header.
-func (r *relay) retryUpstream(ctx context.Context, attempt int, reason string) bool {
-	if attempt >= r.retry.maxAttempts {
-		if r.retry.maxAttempts > 1 {
-			log.Printf("model-relay: upstream retries exhausted after %d attempts (%s)", attempt, reason)
-		}
-		return false
-	}
-	d := r.retry.backoff(attempt)
-	log.Printf("model-relay: retrying upstream attempt %d/%d in %s (%s)", attempt+1, r.retry.maxAttempts, d, reason)
-	sleep := r.sleep
-	if sleep == nil {
-		sleep = ctxSleep
-	}
-	if err := sleep(ctx, d); err != nil {
-		log.Printf("model-relay: upstream retry aborted, context ended (%s)", reason)
-		return false
-	}
-	return true
-}
-
 type providerUsage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
@@ -514,11 +403,9 @@ func isInfrastructureStatus(status int) bool {
 	}
 }
 
-// isRetryableStatus is the transient subset of the infrastructure statuses:
-// server-side timeouts (408), rate limits (429), and any 5xx are worth another
-// attempt. 401/403 are deterministic (bad key / forbidden) and stay terminal —
-// they still count as infrastructure exactly once via isInfrastructureStatus.
-func isRetryableStatus(status int) bool {
+// isTransientInfrastructureStatus identifies the statuses that used to be
+// retried. They now remain useful only for failure accounting; all are terminal.
+func isTransientInfrastructureStatus(status int) bool {
 	switch status {
 	case http.StatusRequestTimeout, http.StatusTooManyRequests:
 		return true
@@ -553,24 +440,6 @@ func (r *relay) health(w http.ResponseWriter, _ *http.Request) {
 func envOr(name, def string) string {
 	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
 		return v
-	}
-	return def
-}
-
-func envInt(name string, def int) int {
-	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return def
-}
-
-func envFloat(name string, def float64) float64 {
-	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			return f
-		}
 	}
 	return def
 }

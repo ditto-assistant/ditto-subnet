@@ -153,6 +153,7 @@ describe('Backroom MCP tools', () => {
         'resolve_ath_review',
         'rescreen_rejected_submission',
         'retry_failed_screening_now',
+        'retry_trusted_image_build',
         'expire_running_screening',
         'reject_screening_submission',
         'retry_validator_evaluation',
@@ -1872,9 +1873,9 @@ describe('Backroom MCP tools', () => {
         current: {
           revision: 0,
           settings: {
-            build_provider_priority: ['targon', 'gcp'],
-            runtime_provider_priority: ['targon', 'gcp'],
-            source_review_provider_priority: ['targon', 'gcp'],
+            build_provider_priority: ['targon'],
+            runtime_provider_priority: ['targon'],
+            source_review_provider_priority: ['targon'],
           },
         },
       },

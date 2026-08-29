@@ -969,14 +969,15 @@ func TestResponseLostDispatchRemainsInBudgetEvidence(t *testing.T) {
 	request.SetPathValue("rest", "v1/chat/completions")
 	recorder := httptest.NewRecorder()
 	broker.handle(recorder, request)
-	if recorder.Code != http.StatusBadGateway || calls.Load() != 2 {
-		t.Fatalf("status=%d dispatches=%d, want 502 after two signed dispatches", recorder.Code, calls.Load())
+	if recorder.Code != http.StatusBadGateway || calls.Load() != 1 {
+		t.Fatalf("status=%d dispatches=%d, want 502 after one signed dispatch", recorder.Code, calls.Load())
 	}
 	snapshot, err := broker.snapshot(prepared["session_id"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.GrantAgentDeclines != 1 || snapshot.DeclineEvidenceMismatches != 0 || terminalFailures != 1 {
+	if snapshot.GrantAgentDeclines != 0 || snapshot.DeclineEvidenceMismatches != 0 ||
+		snapshot.InfrastructureFailures != 1 || terminalFailures != 0 {
 		t.Fatalf("response-lost reservation possibility was discarded: snapshot=%+v callbacks=%d", snapshot, terminalFailures)
 	}
 }

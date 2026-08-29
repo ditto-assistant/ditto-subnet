@@ -57,7 +57,7 @@ func TestReaderProfileCanMapV8HarnessModelToAnyOpenRouterModel(t *testing.T) {
 		"anthropic/claude-sonnet-4",
 		"auto",
 		"longmemeval-v8-claude-sonnet-4-v1",
-		true,
+		false,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestReaderProfileCanMapV8HarnessModelToAnyOpenRouterModel(t *testing.T) {
 	if _, constrained := provider["only"]; constrained {
 		t.Fatalf("automatic routing unexpectedly constrained: %#v", provider)
 	}
-	if provider["allow_fallbacks"] != true || provider["data_collection"] != "deny" {
+	if provider["allow_fallbacks"] != false || provider["data_collection"] != "deny" {
 		t.Fatalf("provider=%#v", provider)
 	}
 }

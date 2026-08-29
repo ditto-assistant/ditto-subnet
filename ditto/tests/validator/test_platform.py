@@ -300,16 +300,10 @@ async def test_a_long_detail_reaches_an_upgraded_platform_whole() -> None:
     assert seen[0].endswith("before reserving any capacity")
 
 
-async def test_a_long_detail_is_retried_at_the_legacy_bound_on_422() -> None:
-    # Fleet version skew, the direction that can actually break something.
-    # Validators run 0.34.1 through 0.37.3 concurrently, and the platform is
-    # independently versioned relative to all of them. A widened validator
-    # reporting to a platform that still enforces 200 gets a 422 -- and a 422
-    # here does not lose a field, it loses the entire hand-back: the lease stays
-    # live to its deadline and the slot idles, which is precisely the silent
-    # expiry `failure_detail` was introduced to eliminate.
-    #
-    # So the client gives up the tail of the message rather than the report.
+async def test_a_long_detail_is_not_replayed_on_legacy_422() -> None:
+    # A rolling old Platform may reject the widened detail. Replaying a mutated
+    # failure report would still be an automatic retry, so the validator parks
+    # locally and lets the lease expire with the original request as evidence.
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     job = _fail_job()
     detail = "D" * (LEGACY_FAILURE_DETAIL_MAX_LENGTH * 3)
@@ -318,49 +312,22 @@ async def test_a_long_detail_is_retried_at_the_legacy_bound_on_422() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         seen.append(body)
-        if len(body["failure_detail"]) > LEGACY_FAILURE_DETAIL_MAX_LENGTH:
-            # Exactly what an un-upgraded platform's pydantic layer answers.
-            return httpx.Response(422, text="string_too_long")
-        return httpx.Response(
-            200, json={"agent_id": str(job.agent_id), "reopened": True}
-        )
+        return httpx.Response(422, text="string_too_long")
 
     config = SimpleNamespace(
         platform_api_url="https://platform.test",
         validator_hotkey=keypair.ss58_address,
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        response = await PlatformClient(
-            config,  # type: ignore[arg-type]
-            http,
-            keypair,
-        ).report_ticket_failed(job, "infrastructure", detail)
+        with pytest.raises(PlatformError):
+            await PlatformClient(
+                config,  # type: ignore[arg-type]
+                http,
+                keypair,
+            ).report_ticket_failed(job, "infrastructure", detail)
 
-    # The hand-back landed. That is the property being defended.
-    assert response.reopened is True
-    assert len(seen) == 2
-    assert len(seen[1]["failure_detail"]) == LEGACY_FAILURE_DETAIL_MAX_LENGTH
-    # Re-truncation is visible too, so an operator reading the old platform's
-    # ticket row knows the message was cut and by how much.
-    assert seen[1]["failure_detail"].endswith("chars]")
-
-    # The retry replays the *same* signed payload. `failure_detail` is unsigned
-    # by design, so shortening it leaves the signed fields byte-identical --
-    # nothing is re-signed, and the nonce is reused deliberately: a 422 is
-    # request validation, raised before the endpoint consumes the nonce.
-    for field in ("validator_hotkey", "agent_id", "ticket_deadline", "reason"):
-        assert seen[0][field] == seen[1][field]
-    assert seen[0]["nonce"] == seen[1]["nonce"]
-    assert seen[0]["requested_at"] == seen[1]["requested_at"]
-    assert seen[0]["signature"] == seen[1]["signature"]
-    message = job_fail_signing_message(
-        validator_hotkey=seen[1]["validator_hotkey"],
-        agent_id=UUID(seen[1]["agent_id"]),
-        ticket_deadline=datetime.fromisoformat(seen[1]["ticket_deadline"]),
-        nonce=UUID(seen[1]["nonce"]),
-        requested_at=datetime.fromisoformat(seen[1]["requested_at"]),
-    )
-    assert keypair.verify(message, bytes.fromhex(seen[1]["signature"]))
+    assert len(seen) == 1
+    assert len(seen[0]["failure_detail"]) > LEGACY_FAILURE_DETAIL_MAX_LENGTH
 
 
 async def test_a_short_detail_is_not_retried_on_422() -> None:
@@ -938,57 +905,34 @@ async def test_exchange_inference_grant_rejects_partial_budget_evidence() -> Non
             )
 
 
-async def test_exchange_inference_grant_retries_transient_503(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_exchange_inference_grant_parks_transient_503() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     grant_id = UUID("00000000-0000-0000-0000-000000000001")
-    expires_at = datetime.now(UTC)
     attempts: list[UUID] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         attempts.append(UUID(payload["nonce"]))
-        if len(attempts) < 3:
-            return httpx.Response(503)
-        return httpx.Response(
-            200,
-            json={
-                "grant_id": str(grant_id),
-                "bearer": "b" * 32,
-                "proxy_url": "https://platform.test/api/v1/inference/chat/completions",
-                "expires_at": expires_at.isoformat(),
-                "generation": 3,
-                "provider": "WandB",
-                "profile_revision": "openrouter-route-wandb-v1",
-                "model": "openai/gpt-oss-20b",
-            },
-        )
+        return httpx.Response(503)
 
-    monkeypatch.setattr(
-        "ditto.validator.platform._INFERENCE_EXCHANGE_RETRY_DELAYS", (0, 0)
-    )
     config = SimpleNamespace(
         platform_api_url="https://platform.test",
         validator_hotkey=keypair.ss58_address,
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        response = await PlatformClient(
-            cast(Any, config), http, keypair
-        ).exchange_inference_grant(
-            grant_id,
-            "A" * 43,
-            "https://platform.test/api/v1/inference/exchange",
-        )
+        with pytest.raises(PlatformInfrastructureError, match="rejected \\(503\\)"):
+            await PlatformClient(
+                cast(Any, config), http, keypair
+            ).exchange_inference_grant(
+                grant_id,
+                "A" * 43,
+                "https://platform.test/api/v1/inference/exchange",
+            )
 
-    assert response.generation == 3
-    assert len(attempts) == 3
-    assert len(set(attempts)) == 3
+    assert len(attempts) == 1
 
 
-async def test_exchange_inference_grant_exhausted_503_is_infrastructure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_exchange_inference_grant_single_503_is_infrastructure() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     attempts = 0
 
@@ -997,15 +941,12 @@ async def test_exchange_inference_grant_exhausted_503_is_infrastructure(
         attempts += 1
         return httpx.Response(503)
 
-    monkeypatch.setattr(
-        "ditto.validator.platform._INFERENCE_EXCHANGE_RETRY_DELAYS", (0, 0)
-    )
     config = SimpleNamespace(
         platform_api_url="https://platform.test",
         validator_hotkey=keypair.ss58_address,
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        with pytest.raises(PlatformInfrastructureError, match="after 3 attempts"):
+        with pytest.raises(PlatformInfrastructureError, match="rejected \\(503\\)"):
             await PlatformClient(
                 cast(Any, config), http, keypair
             ).exchange_inference_grant(
@@ -1014,7 +955,7 @@ async def test_exchange_inference_grant_exhausted_503_is_infrastructure(
                 "https://platform.test/api/v1/inference/exchange",
             )
 
-    assert attempts == 3
+    assert attempts == 1
 
 
 def _score_report() -> ScoreReport:
@@ -1033,9 +974,7 @@ def _score_report() -> ScoreReport:
     )
 
 
-async def test_submit_score_retries_empty_502_as_infrastructure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_submit_score_parks_empty_502_as_infrastructure() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
     attempts = 0
@@ -1045,7 +984,6 @@ async def test_submit_score_retries_empty_502_as_infrastructure(
         attempts += 1
         return httpx.Response(502, text="")
 
-    monkeypatch.setattr("ditto.validator.platform._SCORE_SUBMIT_RETRY_DELAYS", (0, 0))
     config = SimpleNamespace(
         platform_api_url="https://platform.test",
         validator_hotkey=keypair.ss58_address,
@@ -1060,12 +998,10 @@ async def test_submit_score_retries_empty_502_as_infrastructure(
                 report=_score_report(),
             )
 
-    assert attempts == 3
+    assert attempts == 1
 
 
-async def test_submit_score_recovers_after_transient_502(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_submit_score_does_not_replay_transient_502() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
     attempts = 0
@@ -1084,18 +1020,19 @@ async def test_submit_score_recovers_after_transient_502(
             },
         )
 
-    monkeypatch.setattr("ditto.validator.platform._SCORE_SUBMIT_RETRY_DELAYS", (0, 0))
     config = SimpleNamespace(
         platform_api_url="https://platform.test",
         validator_hotkey=keypair.ss58_address,
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        response = await PlatformClient(cast(Any, config), http, keypair).submit_score(
-            agent_id, signature="ab" * 64, report=_score_report()
-        )
+        with pytest.raises(
+            PlatformInfrastructureError, match="score rejected \\(502\\)"
+        ):
+            await PlatformClient(cast(Any, config), http, keypair).submit_score(
+                agent_id, signature="ab" * 64, report=_score_report()
+            )
 
-    assert attempts == 2
-    assert response.accepted is True
+    assert attempts == 1
 
 
 async def test_submit_score_4xx_stays_a_scoring_error() -> None:

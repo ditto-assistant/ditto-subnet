@@ -157,6 +157,8 @@ import {
   screenerCapacityViewSchema,
   screenerProviderSettingsControlSchema,
   setScreenerProviderSettingsInputSchema,
+  retryTrustedImageBuildInputSchema,
+  trustedImageBuildSchema,
   inferenceRouteCalibrationInputSchema,
   inferenceRoutingInventorySchema,
   inferenceRoutingPolicyInputSchema,
@@ -447,6 +449,23 @@ export async function fetchScreenerPolicyManifestControl() {
 export async function fetchScreenerCapacity() {
   const payload = await platformAdminRequest('/api/v1/admin/screener-capacity')
   return screenerCapacityViewSchema.parse(payload)
+}
+
+export async function retryTrustedImageBuild(rawInput: unknown, actor: string) {
+  const input = retryTrustedImageBuildInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/trusted-image-builds/${encodeURIComponent(input.buildId)}/retry`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        expected_status: input.expectedStatus,
+        expected_attempt_count: input.expectedAttemptCount,
+        reason: input.reason,
+      },
+    },
+  )
+  return trustedImageBuildSchema.parse(payload)
 }
 
 export async function updateScreenerProviderSettings(actor: string, rawInput: unknown) {

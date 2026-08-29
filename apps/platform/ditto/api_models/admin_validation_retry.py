@@ -1,4 +1,4 @@
-"""Private operator contract for bounded validator-infrastructure retries."""
+"""Private operator contract for manual validator retry control."""
 
 from __future__ import annotations
 
@@ -136,9 +136,9 @@ class AdminReinstatementRetryBudget(BaseModel):
     attempts_used: int
     """Highest ``attempt_count`` across the era's tickets, unchanged by this."""
     agent_infra_retry_grants: int
-    """No-fault grants every validator has minted for this agent this era."""
+    """Historical no-fault grants recorded for this agent and era."""
     max_agent_infra_retry_grants: int
-    """The bound those grants are counted against (ditto-platform#522)."""
+    """Zero under fail-once policy; retained for wire compatibility."""
     manual_retry_grants: int
     """Operator-granted attempts already spent on the era's tickets."""
     operator_recoveries: int
@@ -210,10 +210,9 @@ class AdminStuckSubmission(BaseModel):
     ``retry_state`` is the operator-facing triage label:
 
     * ``running`` — a validator holds a live ticket right now.
-    * ``retry_available`` — an expired ticket is off cooldown and will be
-      re-leased on the next sweep with budget to spare.
-    * ``cooling_down`` — an expired ticket still has budget but is waiting out
-      its retry cooldown.
+    * ``retry_available`` — an operator grant exists and the ticket can be
+      re-leased.
+    * ``cooling_down`` — a historical/manual grant is not eligible yet.
     * ``exhausted`` — no ticket can advance without an operator. Read
       ``recommended_action``: ``retry`` is a verified-infrastructure grant;
       ``withdraw`` is an agent-attributable dead end that should leave this

@@ -190,7 +190,7 @@ def test_unknown_container_contract_detail_stays_public_safe() -> None:
             "Dockerfile for UID 197108",
             "docker-build-infrastructure",
             "Docker build infrastructure failed before screening completed. This "
-            "is an operator-owned, retryable failure.",
+            "is operator-owned and requires a manual retry.",
         ),
     ],
 )
@@ -2942,7 +2942,7 @@ class TestQueue:
         assert response.status_code == 200
         assert response.json()["count"] == 1
 
-    async def test_requeues_retryable_failures_regardless_of_policy(
+    async def test_queue_lists_parked_failures_for_operator_visibility(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -3418,7 +3418,7 @@ class TestClaim:
         assert claimed["precheck_reason_code"] is None
         assert claimed["duplicate_of"] is None
 
-    async def test_rescreened_older_hash_does_not_use_later_submission_as_owner(
+    async def test_manually_rescreened_older_hash_does_not_use_later_owner(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -3438,6 +3438,34 @@ class TestClaim:
             miner_hotkey="5LaterMinerHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
             created_at=now - timedelta(minutes=1),
         )
+        attempt_id = uuid4()
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, older)
+            assert agent is not None
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=older,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="failed",
+                    started_at=now - timedelta(minutes=1),
+                    deadline=now,
+                    finished_at=now,
+                )
+            )
+            session.add(
+                ScreeningRetryOverride(
+                    override_id=uuid4(),
+                    agent_id=older,
+                    attempt_id=attempt_id,
+                    artifact_sha256=agent.sha256,
+                    expected_score_count=0,
+                    reason="verify historical owner selection",
+                    actor="operator@example.com",
+                    created_at=now,
+                )
+            )
         _install_db(app, session_maker)
 
         claimed = (await client.post(_CLAIM_URL)).json()["items"][0]
@@ -3911,7 +3939,7 @@ class TestClaim:
                 "Late deep-review evidence retained after operator action"
             )
 
-    async def test_deferred_review_health_miss_preserves_hold_and_retries(
+    async def test_deferred_review_health_miss_parks_the_hold(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -3985,12 +4013,15 @@ class TestClaim:
             assert agent.status == AgentStatus.ATH_PENDING_REVIEW
             assert agent.screening_reason == (
                 "Deferred source review runtime verification was interrupted; "
-                "retry scheduled"
+                "manual retry required"
             )
             assert agent.screening_reason_code == "health-contract"
             assert attempt is not None and attempt.status == "failed"
             assert review is not None and review.status == "pending"
             assert review.resolution is None
+        parked = await client.post(_CLAIM_URL)
+        assert parked.status_code == 200
+        assert parked.json()["items"] == []
 
     async def test_ordinary_health_contract_failure_still_rejects_submission(
         self,
@@ -5126,7 +5157,7 @@ class TestQuarantineAdmin:
                     started_at=now - timedelta(minutes=10),
                     deadline=original_deadline,
                     finished_at=now,
-                    public_reason="Screening was inconclusive; retry scheduled",
+                    public_reason=("Screening was inconclusive; manual retry required"),
                     reason_code=reason_code,
                 )
             )
@@ -6707,7 +6738,7 @@ class TestSubmitResult:
         assert response.status_code == 200
         assert response.json()["status"] == expected
 
-    async def test_current_pass_recovers_stale_screening_failure(
+    async def test_stale_screening_failure_remains_parked_without_override(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -6721,23 +6752,15 @@ class TestSubmitResult:
         _install_db(app, session_maker)
         _install_chain(app)
         claim = await client.post(_CLAIM_URL)
-        attempt_id = UUID(claim.json()["items"][0]["attempt_id"])
-        await _seed_verified_image_upload(
-            session_maker, agent_id=agent_id, attempt_id=attempt_id
-        )
-        response = await client.post(
-            f"/api/v1/screener/agent/{agent_id}/result",
-            json=_result_payload(agent_id, passed=True, attempt_id=attempt_id),
-        )
-
-        assert response.status_code == 200
-        assert response.json()["status"] == AgentStatus.EVALUATING
+        assert claim.status_code == 200
+        assert claim.json()["items"] == []
         async with session_maker() as s:
             agent = await s.get(Agent, agent_id)
             assert agent is not None
-            assert agent.screening_policy_version == SCREENING_POLICY_VERSION
+            assert agent.status == AgentStatus.SCREENING_FAILED
+            assert agent.screening_policy_version == SCREENING_POLICY_VERSION - 1
 
-    async def test_infrastructure_failure_is_retryable_not_rejected(
+    async def test_infrastructure_failure_is_parked_not_rejected(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -6758,9 +6781,9 @@ class TestSubmitResult:
         assert response.status_code == 200
         assert response.json()["status"] == AgentStatus.SCREENING_FAILED
 
-        retry = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-        assert retry.status_code == 200
-        assert retry.json()["items"][0]["agent_id"] == str(agent_id)
+        parked = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+        assert parked.status_code == 200
+        assert parked.json()["items"] == []
 
     async def test_model_canary_failure_has_public_safe_reason(
         self,
@@ -7899,18 +7922,13 @@ class TestQuarantineReviewContext:
             "agentic-source-review-tripwire"
         ]
 
-    async def test_retryable_infra_tells_the_miner_a_retry_is_scheduled(
+    async def test_retryable_infra_tells_the_miner_manual_retry_is_required(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        """A retried attempt must not read as a hard subnet failure.
-
-        A retryable outcome is re-queued and normally passes on the next
-        attempt. Reporting it as a bare "Screening infrastructure error" made
-        a self-healing interruption look like the subnet was broken.
-        """
+        """The legacy worker outcome must describe the fail-closed policy."""
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
         _install_chain(app)
@@ -7933,16 +7951,15 @@ class TestQuarantineReviewContext:
         async with session_maker() as session:
             refreshed = await session.get(Agent, agent_id)
             assert refreshed is not None
-            # The status and the retry are unchanged; only the sentence is.
             assert refreshed.status == AgentStatus.SCREENING_FAILED
             assert refreshed.screening_reason == (
-                "Screening was interrupted; retry scheduled"
+                "Screening was interrupted; manual retry required"
             )
             attempt = await session.get(ScreeningAttempt, attempt_id)
             assert attempt is not None
             assert attempt.reason_code == "source-review-model-response-invalid"
 
-    async def test_inconclusive_finishes_attempt_and_preserves_lease_backoff(
+    async def test_inconclusive_finishes_attempt_and_stays_parked(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -7970,7 +7987,7 @@ class TestQuarantineReviewContext:
             assert refreshed is not None
             assert refreshed.status == AgentStatus.SCREENING_FAILED
             assert refreshed.screening_reason == (
-                "Screening was inconclusive; retry scheduled"
+                "Screening was inconclusive; manual retry required"
             )
             attempt = await session.get(ScreeningAttempt, attempt_id)
             assert attempt is not None
@@ -7984,15 +8001,15 @@ class TestQuarantineReviewContext:
         assert blocked.status_code == 200
         assert blocked.json()["items"] == []
 
-        # Once the original lease deadline passes, the ordinary bounded retry
-        # path becomes eligible again.
+        # Even after the old deadline passes, no new attempt is claimable until
+        # an operator authorizes it.
         async with session_maker() as session, session.begin():
             attempt = await session.get(ScreeningAttempt, attempt_id)
             assert attempt is not None
             attempt.deadline = attempt.started_at
-        retry = await client.post(_CLAIM_URL)
-        assert retry.status_code == 200
-        assert retry.json()["items"][0]["agent_id"] == str(agent_id)
+        parked = await client.post(_CLAIM_URL)
+        assert parked.status_code == 200
+        assert parked.json()["items"] == []
 
     async def test_missing_context_is_404(
         self,

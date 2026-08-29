@@ -67,7 +67,7 @@ def aggregate_profile_revision(model: str, *, bench_version: int = 7) -> str:
     profile = {
         "model": model,
         "provider": {
-            "allow_fallbacks": True,
+            "allow_fallbacks": False,
             "data_collection": "deny",
             "zdr": True,
         },

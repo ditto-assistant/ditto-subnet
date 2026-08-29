@@ -177,7 +177,7 @@ async def _seed_contract_retest(
 
 
 class TestScoreRetestLockingAndPriority:
-    async def test_failed_contract_replacement_requeues_and_reissues(
+    async def test_failed_contract_replacement_parks_after_one_attempt(
         self, session: AsyncSession
     ) -> None:
         agent_id = uuid4()
@@ -203,11 +203,11 @@ class TestScoreRetestLockingAndPriority:
                 allow_parallel_contract_retests=True,
             )
 
-            assert promoted is not None
-            assert promoted.agent_id == agent_id
-            assert promoted.status == TicketStatus.ISSUED
-            assert promoted.slot_id == "slot-1"
-            assert promoted.retry_after is None
+            assert promoted is None
+            ticket = await session.get(ValidatorTicket, (agent_id, 9, _HOTKEY))
+            assert ticket is not None
+            assert ticket.status == TicketStatus.SCORED
+            assert ticket.retry_after is None
             lifecycle = list(
                 (
                     await session.scalars(
@@ -219,15 +219,12 @@ class TestScoreRetestLockingAndPriority:
             )
             assert [entry.event for entry in lifecycle] == [
                 EVENT_SCORE_RETEST_REQUESTED,
-                EVENT_SCORE_RETEST_QUEUED,
-                EVENT_SCORE_RETEST_REQUESTED,
+                EVENT_SCORE_RETEST_RELEASED,
             ]
-            assert lifecycle[1].payload["automatic_requeue"] is True
-            assert lifecycle[1].payload["failed_replacement_attempts"] == 1
-            assert "replacement_deadline" not in lifecycle[1].payload
-            assert lifecycle[2].payload["request_id"] == request_id
+            assert lifecycle[1].payload["automatic"] is True
+            assert "operator retry required" in lifecycle[1].payload["reason"]
 
-    async def test_failed_contract_replacement_stops_after_three_attempts(
+    async def test_historical_replacement_attempts_still_park_immediately(
         self, session: AsyncSession
     ) -> None:
         agent_id = uuid4()
@@ -279,7 +276,7 @@ class TestScoreRetestLockingAndPriority:
             assert latest is not None
             assert latest.event == EVENT_SCORE_RETEST_RELEASED
             assert latest.payload["automatic"] is True
-            assert "failed three times" in latest.payload["reason"]
+            assert "failed once" in latest.payload["reason"]
 
     async def test_rollout_cohort_contract_repair_precedes_older_queue_work(
         self, session: AsyncSession
