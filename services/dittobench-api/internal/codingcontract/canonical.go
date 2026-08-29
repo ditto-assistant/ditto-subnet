@@ -281,7 +281,7 @@ func validateManifestTaskShape(object map[string]any, path string) error {
 	return requireFields(object, path,
 		"case_id", "variant_id", "profile_capability_id", "visible_bundle_sha256", "base_tree_sha256",
 		"memory_bundle_sha256", "environment_image_digest", "environment_platform", "resource_profile_sha256",
-		"grader_bundle_sha256", "grader_image_digest", "test_manifest_sha256",
+		"grader_bundle_sha256", "grader_image_digest", "grader_platform", "test_manifest_sha256", "grader_plan_sha256",
 	)
 }
 
@@ -366,7 +366,8 @@ func validateTestGroupShape(object map[string]any, path string) error {
 
 func validateGraderShape(object map[string]any, path string) error {
 	if err := requireFields(object, path, "grader_contract_sha256", "grader_bundle_sha256",
-		"grader_image_digest", "test_manifest_sha256",
+		"grader_image_digest", "grader_platform", "test_manifest_sha256", "grader_plan_sha256", "resource_profile_sha256",
+		"execution_receipt_root_sha256", "execution_receipt_count",
 		"grader_integrity_before_sha256", "grader_integrity_after_sha256", "build", "test_groups"); err != nil {
 		return err
 	}
