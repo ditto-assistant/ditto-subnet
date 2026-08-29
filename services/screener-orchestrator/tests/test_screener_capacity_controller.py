@@ -362,6 +362,7 @@ class CapacityDecisionTests(unittest.TestCase):
                 snapshot["fallback_reason"], "TARGON_NESTED_DOCKER_WORKER_LANE_RETIRED"
             )
 
+
 class RetiredUnitFlagTests(unittest.TestCase):
     def test_parser_accepts_retired_nested_docker_unit_flags(self) -> None:
         args = build_parser().parse_args(
