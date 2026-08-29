@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.141.1 (2026-08-29)
+
+### Bug Fixes
+
+- **ci**: Tolerate postgres initdb handoff
+  ([#1303](https://github.com/ditto-assistant/ditto-subnet/pull/1303),
+  [`37d3b58`](https://github.com/ditto-assistant/ditto-subnet/commit/37d3b58b4342cc3adf7fe202c6c9dad364cbc294))
+
+
 ## v0.141.0 (2026-08-29)
 
 ### Bug Fixes
