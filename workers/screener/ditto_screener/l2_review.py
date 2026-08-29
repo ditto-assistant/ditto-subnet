@@ -64,6 +64,13 @@ L2_MODEL = "moonshotai/kimi-k3"
 L2_FALLBACK_MODELS = ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
 L3_MODEL = "openai/gpt-5.6-sol"
 L3_PROVIDER = "openrouter"
+# Every policy version whose L2/L3 policy text this build carries. The
+# platform may require any one of them during a scheduled activation window.
+_SUPPORTED_POLICY_VERSIONS = tuple(
+    range(SCREENING_FLOOR_POLICY_VERSION, SCREENING_POLICY_VERSION + 1)
+)
+
+
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     return f"l2-kimi-source-review-v35-policy-v{policy_version}"
