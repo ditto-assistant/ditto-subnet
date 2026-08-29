@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.144.0 (2026-08-29)
+
+### Bug Fixes
+
+- **screener**: Honor rollback policy floor
+  ([#1311](https://github.com/ditto-assistant/ditto-subnet/pull/1311),
+  [`efeee63`](https://github.com/ditto-assistant/ditto-subnet/commit/efeee636e29355d1cffb88f86f4a48f994cff1bd))
+
+### Features
+
+- **platform**: Show the four source-review stages on admission cards
+  ([#1305](https://github.com/ditto-assistant/ditto-subnet/pull/1305),
+  [`870ad36`](https://github.com/ditto-assistant/ditto-subnet/commit/870ad3681c9e66aa5ad42e24acb21d5648dd2abd))
+
+
 ## v0.143.3 (2026-08-29)
 
 ### Bug Fixes
