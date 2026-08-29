@@ -26,6 +26,7 @@ resource "google_project_iam_custom_role" "screening_cloudrun_operator" {
     "run.jobs.update",
     "run.executions.get",
     "run.executions.delete",
+    "logging.logEntries.list",
     "run.services.create",
     "run.services.get",
     "run.services.delete",
