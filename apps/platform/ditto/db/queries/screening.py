@@ -823,10 +823,18 @@ async def claim_screening_attempts(
         # the same criteria. The flag lives on the governing activation row so
         # a routine version bump cannot silently pull champions off the ledger
         # without an operator decision recorded on the schedule.
+        #
+        # Gated on ``prerequisite_admitted`` for the same reason the stale
+        # EVALUATING lane above is: a scored row from a superseded benchmark
+        # era can never be leased again, so rescreening it burns screener
+        # capacity that the current-era backlog needs. At activation the whole
+        # scored field goes stale at once, so an ungated lane would enqueue
+        # every historical row on the board behind one flag flip.
         (
             Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE))
             & effective_rescreen_scored()
             & (Agent.screening_policy_version < effective_screening_policy_version())
+            & prerequisite_admitted
         ),
         (
             (Agent.status == AgentStatus.EVALUATING)
