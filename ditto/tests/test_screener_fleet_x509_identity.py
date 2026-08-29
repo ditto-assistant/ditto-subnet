@@ -61,6 +61,27 @@ def test_x509_credential_renderer_is_idempotent() -> None:
     assert 'creates: "{{ screener_fleet_x509_credential_file }}"' in tasks
 
 
+def test_repeat_converge_reuses_verified_installed_public_certificates() -> None:
+    tasks = (ROLE / "tasks/main.yml").read_text()
+
+    assert "Inspect the installed X.509 public trust anchor" in tasks
+    assert "Inspect the installed X.509 client certificate" in tasks
+    assert "screener_fleet_x509_ca_certificate_state.stat.isreg" in tasks
+    assert "screener_fleet_x509_certificate_state.stat.isreg" in tasks
+    assert tasks.count("screener_fleet_x509_ca_certificate_pem | length > 0") == 1
+    assert tasks.count("screener_fleet_x509_certificate_pem | length > 0") == 1
+    for task_name in (
+        "Verify the client certificate chain and purpose",
+        "Require at least fourteen days of client certificate validity",
+        "Read the client certificate URI SAN",
+        "Read the private-key public modulus",
+        "Read the certificate public modulus",
+    ):
+        task = tasks[tasks.index(f"- name: {task_name}") :]
+        task = task[: task.index("\n- name:")]
+        assert "check_mode: false" in task
+
+
 def test_signed_updater_installs_the_split_debian_docker_cli() -> None:
     tasks = (ROLE / "tasks/main.yml").read_text()
 

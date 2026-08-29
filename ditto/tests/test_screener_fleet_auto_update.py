@@ -98,6 +98,8 @@ def test_updater_authenticates_before_fetch_or_drain() -> None:
     assert activation.index(
         '"$release_dir/src/scripts/screener-fleet-auto-update.sh"'
     ) < (activation.index("stop_fleet\n"))
+    assert '"$SELF_PATH"' in activation
+    assert '[[ "$SELF_PATH" = "$STATE_DIR/"* ]]' in updater
 
 
 def test_updater_has_no_inbound_deploy_or_long_lived_cloud_credential() -> None:
@@ -115,9 +117,25 @@ def test_updater_has_no_inbound_deploy_or_long_lived_cloud_credential() -> None:
     assert "nonewprivileges=true" in service
     assert "protectsystem=strict" in service
     assert "readwritepaths=" in service
-    assert "/usr/local/sbin/ditto-screener-fleet-auto-update" in service
+    assert "/usr/local/sbin/ditto-screener-fleet-auto-update" not in service
+    assert (
+        "environment=screener_fleet_self_path={{ screener_fleet_updater_path }}"
+        in service
+    )
+    assert "execstart={{ screener_fleet_updater_path }}" in service
     assert "environment=home={{ screener_fleet_update_state_dir }}" in service
     assert "restrictsuidsgid=true" in service
+
+
+def test_role_keeps_updater_self_replacement_in_its_private_state_dir() -> None:
+    defaults = (ROLE / "defaults/main.yml").read_text()
+    tasks = (ROLE / "tasks/main.yml").read_text()
+
+    assert (
+        "{{ screener_fleet_update_state_dir }}/ditto-screener-fleet-auto-update"
+        in defaults
+    )
+    assert 'dest: "{{ screener_fleet_updater_path }}"' in tasks
 
 
 def test_updater_reports_the_debian_13_docker_cli_package() -> None:

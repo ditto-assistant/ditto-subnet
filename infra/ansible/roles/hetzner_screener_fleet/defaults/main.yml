@@ -53,6 +53,8 @@ screener_fleet_source_review_key_file: >-
 screener_fleet_env_file: "{{ screener_fleet_config_dir }}/fleet.env"
 screener_fleet_release_env_file: "{{ screener_fleet_config_dir }}/release.env"
 screener_fleet_update_state_dir: "{{ screener_fleet_state_dir }}/updater"
+screener_fleet_updater_path: >-
+  {{ screener_fleet_update_state_dir }}/ditto-screener-fleet-auto-update
 
 screener_fleet_repo_url: https://github.com/ditto-assistant/ditto-subnet.git
 # Exact public release commit to run. Mutable branches are deliberately rejected.
