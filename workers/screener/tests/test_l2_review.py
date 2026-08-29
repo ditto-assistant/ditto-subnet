@@ -1504,8 +1504,9 @@ async def test_rootless_harness_shares_private_workspace_with_daemon_group(
     source.write_text("print('safe')\n")
     source.chmod(0o400)
 
-    async def create(*args: str, **_kwargs: object) -> _FakeProcess:
+    async def create(*args: str, **kwargs: object) -> _FakeProcess:
         captured["args"] = args
+        captured["kwargs"] = kwargs
         return proc
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
@@ -1522,6 +1523,10 @@ async def test_rootless_harness_shares_private_workspace_with_daemon_group(
     assert source.stat().st_gid == socket_path.stat().st_gid
     assert workspace.stat().st_mode & 0o777 == 0o550
     assert source.stat().st_mode & 0o777 == 0o440
+    assert captured["kwargs"]["env"] == {  # type: ignore[index]
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "DOCKER_HOST": f"unix://{socket_path}",
+    }
 
 
 def test_harness_rejects_unbounded_calibration_cpu_override() -> None:
