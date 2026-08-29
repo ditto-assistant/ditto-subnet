@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.128.0 (2026-08-29)
+
+### Features
+
+- **coding**: Add shadow coding-runner freezer
+  ([`090e23d`](https://github.com/ditto-assistant/ditto-subnet/commit/090e23deec0778a9be920b9f8b295738090376c4))
+
+- **coding**: Add shadow evidence contracts
+  ([`b2f44fe`](https://github.com/ditto-assistant/ditto-subnet/commit/b2f44fe0f130ce2b63e9826f1f6775ac4bf1f168))
+
+
 ## v0.127.0 (2026-08-29)
 
 ### Features
