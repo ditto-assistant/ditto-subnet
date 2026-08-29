@@ -475,6 +475,7 @@ class ScreenerWorker:
                         # builds, serves, isolates, and exports the image without
                         # spending private-policy/model budget.
                         build_only=item.build_only,
+                        policy_only=item.policy_only,
                         deferred_source_review=item.deferred_source_review,
                         policy_version=policy_version,
                     )
@@ -512,7 +513,11 @@ class ScreenerWorker:
                 ScreenResultOutcome.PASS,
                 ScreenResultOutcome.PASS_INCONCLUSIVE,
             }
-            if passed and (screened_image is None or screened_image_upload_id is None):
+            if (
+                passed
+                and not item.policy_only
+                and (screened_image is None or screened_image_upload_id is None)
+            ):
                 raise PlatformError("passing screen did not publish a prebuilt image")
             is_quarantine = typed_outcome == ScreenResultOutcome.QUARANTINE
             is_audited_result = typed_outcome in {
@@ -587,6 +592,7 @@ class ScreenerWorker:
                 finding_digest=finding_digest,
                 review_audit_digest=review_audit_digest,
                 deferred_source_review=item.deferred_source_review,
+                policy_only=item.policy_only,
                 review_settings_revision=(
                     self._review_settings_status.revision
                     if self._review_settings_status.revision >= 1
@@ -656,6 +662,7 @@ class ScreenerWorker:
                 image_upload_id=screened_image_upload_id,
                 build_only=item.build_only,
                 deferred_source_review=item.deferred_source_review,
+                policy_only=item.policy_only,
             )
             logger.info(
                 "screened agent_id=%s miner=%s outcome=%s passed=%s "

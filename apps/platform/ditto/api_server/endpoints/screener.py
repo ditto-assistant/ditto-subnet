@@ -193,6 +193,7 @@ from ditto.db.queries.screener_provider_settings import (
     resolve_screener_provider_settings,
 )
 from ditto.db.queries.screening import (
+    POLICY_ONLY_RESCREEN_REASON,
     claim_screening_attempts,
     get_screening_attempt,
     prerequisite_screening_predicates,
@@ -3235,6 +3236,7 @@ async def claim(
             ),
             duplicate_of=duplicate_of,
             build_only=attempt.build_only,
+            policy_only=attempt.reason_code == POLICY_ONLY_RESCREEN_REASON,
             deferred_source_review=(
                 attempt.build_only and attempt.reason_code == DEFERRED_MECHANICAL_REASON
             ),
@@ -4027,6 +4029,7 @@ async def submit_result(
             finding_digest=payload.finding_digest,
             review_audit_digest=payload.review_audit_digest,
             deferred_source_review=payload.deferred_source_review,
+            policy_only=payload.policy_only,
             review_settings_revision=payload.review_settings_revision,
             review_settings_instance_id=payload.review_settings_instance_id,
             review_settings_scope=payload.review_settings_scope,
@@ -4119,6 +4122,7 @@ async def submit_result(
     }
     deferred_review: AthReview | None = None
     reported_attempt: ScreeningAttempt | None = None
+    current_agent: Agent | None = None
     deferred_attempt_lifecycle = False
     deferred_deep_attempt = False
     restore_status = AgentStatus.SCORED
@@ -4164,12 +4168,46 @@ async def submit_result(
         and reported_attempt.build_only
         and reported_attempt.reason_code == DEFERRED_MECHANICAL_REASON
     )
+    policy_only_rescreen = bool(
+        reported_attempt is not None
+        and reported_attempt.reason_code == POLICY_ONLY_RESCREEN_REASON
+    )
     if (
         reported_attempt is not None
         and payload.deferred_source_review != deferred_mechanical_admission
     ):
         raise AgentNotScreenableError(
             "verdict execution mode does not match the claimed screening attempt"
+        )
+    # A worker from before the policy-only contract ignores the unknown queue
+    # field and performs a normal full screen. Permit that conservative path
+    # during a rolling deploy; its passing payload still carries a newly
+    # verified image. Never permit the inverse replay (policy_only=true for an
+    # attempt Platform did not mark for reuse).
+    if payload.policy_only and not policy_only_rescreen:
+        raise AgentNotScreenableError(
+            "verdict policy-only mode does not match the claimed screening attempt"
+        )
+    if (
+        policy_only_rescreen
+        and payload.passed
+        and (
+            current_agent is None
+            or any(
+                value is None
+                for value in (
+                    current_agent.screened_image_sha256,
+                    current_agent.screened_image_size_bytes,
+                    current_agent.screened_image_id,
+                    current_agent.screened_image_ref,
+                    current_agent.screened_image_upload_id,
+                    current_agent.screened_image_verified_at,
+                )
+            )
+        )
+    ):
+        raise AgentNotScreenableError(
+            "policy-only rescreen requires a retained verified screened image"
         )
     public_reason: str | None
     if deferred_deep_attempt and outcome_value == "pass":
@@ -4540,7 +4578,7 @@ async def submit_result(
         # remain retryable under the same policy.
         if not late_deferred_result and payload.policy_version == required_policy:
             agent.screening_policy_version = payload.policy_version
-        if payload.passed and not late_deferred_result:
+        if payload.passed and not late_deferred_result and not payload.policy_only:
             agent.screened_image_sha256 = payload.image_sha256
             agent.screened_image_size_bytes = payload.image_size_bytes
             agent.screened_image_id = payload.image_id
@@ -4602,7 +4640,10 @@ async def submit_result(
             attempt.status = attempt_status
             attempt.finished_at = datetime.now(UTC)
             attempt.public_reason = public_reason
-            if attempt.reason_code != DEFERRED_MECHANICAL_REASON:
+            if attempt.reason_code not in {
+                DEFERRED_MECHANICAL_REASON,
+                POLICY_ONLY_RESCREEN_REASON,
+            }:
                 attempt.reason_code = payload.reason_code
             attempt.review_settings_revision = payload.review_settings_revision
             attempt.review_settings_instance_id = payload.review_settings_instance_id

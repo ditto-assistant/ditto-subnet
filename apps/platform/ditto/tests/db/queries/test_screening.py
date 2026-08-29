@@ -1989,6 +1989,11 @@ async def test_scheduled_rescreen_requeues_current_era_scored_agent(
         claimed = await _claim(session)
 
     assert agent.agent_id in {a.agent_id for a, _, _ in claimed}
+    attempt = next(
+        attempt for row, attempt, _ in claimed if row.agent_id == agent.agent_id
+    )
+    assert attempt.reason_code == "policy-only-rescreen"
+    assert attempt.build_only is False
 
 
 async def test_scheduled_rescreen_skips_scored_agent_when_flag_is_off(

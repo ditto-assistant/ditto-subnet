@@ -204,6 +204,23 @@ def test_build_only_pass_is_accepted() -> None:
     assert request.outcome == ScreenResultOutcome.PASS
 
 
+def test_policy_only_pass_reuses_retained_image() -> None:
+    request = _pass_request(
+        policy_only=True,
+        image_sha256=None,
+        image_size_bytes=None,
+        image_id=None,
+        image_ref=None,
+        image_upload_id=None,
+    )
+    assert request.policy_only is True
+
+
+def test_policy_only_pass_rejects_replacement_image() -> None:
+    with pytest.raises(ValidationError, match="must reuse the retained image"):
+        _pass_request(policy_only=True)
+
+
 def test_build_only_result_cannot_quarantine() -> None:
     # A build-only pass skips review, so it can never carry a quarantine.
     with pytest.raises(

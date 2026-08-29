@@ -74,6 +74,7 @@ class _FakeGate:
         self.calls: list[UUID] = []
         self.deadlines: list[float | None] = []
         self.build_only_calls: list[bool] = []
+        self.policy_only_calls: list[bool] = []
         self.deferred_source_review_calls: list[bool] = []
         self.policy_versions: list[int] = []
         self.shadow_result: Any = None
@@ -92,6 +93,7 @@ class _FakeGate:
         deadline: float | None = None,
         publish_image: Any = None,
         build_only: bool = False,
+        policy_only: bool = False,
         deferred_source_review: bool = False,
         policy_version: int | None = None,
         **_: Any,
@@ -99,6 +101,7 @@ class _FakeGate:
         self.calls.append(agent_id)
         self.deadlines.append(deadline)
         self.build_only_calls.append(build_only)
+        self.policy_only_calls.append(policy_only)
         self.deferred_source_review_calls.append(deferred_source_review)
         if policy_version is not None:
             self.policy_versions.append(policy_version)
@@ -109,6 +112,7 @@ class _FakeGate:
                 ScreeningOutcome.PASS_INCONCLUSIVE,
             }
             and publish_image is not None
+            and not policy_only
         ):
             await publish_image(
                 BuiltImageArtifact(
@@ -389,6 +393,26 @@ async def test_default_item_screens_full_pipeline(
     await worker._screen_one(_item(agent), policy_version=SCREENING_POLICY_VERSION)
     assert gate.build_only_calls == [False]
     assert platform.verdicts[0]["build_only"] is False
+
+
+async def test_policy_only_item_reuses_image_without_upload(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    agent = uuid4()
+    platform = _FakePlatform([])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+
+    await worker._screen_one(
+        _item(agent, policy_only=True), policy_version=SCREENING_POLICY_VERSION
+    )
+
+    assert gate.policy_only_calls == [True]
+    assert platform.image_uploads == []
+    verdict = platform.verdicts[0]
+    assert verdict["policy_only"] is True
+    assert verdict["image_sha256"] is None
+    assert verdict["image_upload_id"] is None
 
 
 async def test_remote_build_gets_full_timeout_despite_stale_local_override(

@@ -81,6 +81,7 @@ _EXHAUSTED_PUBLIC_REASON = (
     "Screening was inconclusive repeatedly; held for operator review"
 )
 _DEFERRED_MECHANICAL_REASON = "deferred-mechanical-admission"
+POLICY_ONLY_RESCREEN_REASON = "policy-only-rescreen"
 _ORPHANED_ATTEMPT_REASON_CODE = "worker-lease-orphaned"
 _ORPHANED_ATTEMPT_REASON = (
     "Screening worker stopped reporting this attempt; manual retry required"
@@ -1066,6 +1067,22 @@ async def claim_screening_attempts(
                 >= effective_screening_policy_version()
             )
         )
+        policy_only = (
+            not build_only
+            and agent.screening_policy_version
+            < effective_screening_policy_version()
+            and all(
+                value is not None
+                for value in (
+                    agent.screened_image_sha256,
+                    agent.screened_image_size_bytes,
+                    agent.screened_image_id,
+                    agent.screened_image_ref,
+                    agent.screened_image_upload_id,
+                    agent.screened_image_verified_at,
+                )
+            )
+        )
         attempt = ScreeningAttempt(
             attempt_id=uuid4(),
             agent_id=agent.agent_id,
@@ -1079,6 +1096,8 @@ async def claim_screening_attempts(
                 if duplicate_of is not None
                 else _DEFERRED_MECHANICAL_REASON
                 if mechanical_first
+                else POLICY_ONLY_RESCREEN_REASON
+                if policy_only
                 else None
             ),
             duplicate_of=duplicate_of,
