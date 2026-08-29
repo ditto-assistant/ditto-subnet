@@ -4043,6 +4043,16 @@ class PublicScreenerProgress(BaseModel):
     started_at: datetime
 
 
+class PublicHostSpecs(BaseModel):
+    """Hardware a screener announced about itself, not what it is doing."""
+
+    cpu_count: Annotated[int, Field(ge=1, le=1024)]
+    cpu_physical_cores: Annotated[int, Field(ge=1, le=1024)] | None = None
+    memory_total_mib: Annotated[int, Field(ge=1, le=1 << 24)]
+    disk_total_gib: Annotated[int, Field(ge=1, le=1 << 20)]
+    architecture: str
+
+
 class PublicScreenerHeartbeat(BaseModel):
     """Latest public-safe report from one authenticated screener instance."""
 
@@ -4072,6 +4082,7 @@ class PublicScreenerHeartbeat(BaseModel):
     availability: FleetAvailability
     health: FleetHealth
     system_metrics: PublicSystemMetrics | None = None
+    host_specs: PublicHostSpecs | None = None
 
 
 class PublicScreenerHeartbeatsResponse(BaseModel):

@@ -14,7 +14,7 @@ import type { JSX } from "solid-js";
 import { pct, relTime, relTimeUntil, shortKey } from "../../lib/format";
 import type { ValidatorWeightView } from "../../lib/scoring";
 import { pushEntityRoute } from "../../stores/routeStore";
-import type { ConfirmationProgress, FleetEntry, SystemMetrics } from "../../types/fleet";
+import type { ConfirmationProgress, FleetEntry, HostSpecs, SystemMetrics } from "../../types/fleet";
 import type { BenchmarkProgress } from "../../types/pipeline";
 import { CopyButton } from "../shell/CopyButton";
 import { EntityButton } from "../ui/EntityButton";
@@ -271,6 +271,39 @@ function ResourceChart(props: { metrics: SystemMetrics }): JSX.Element {
   );
 }
 
+/** What the machine is, beside what it is doing. A screener announces its own
+ * hardware, so "this worker is slow" and "this worker is small" stop being the
+ * same observation: the load chart underneath is read against a known size
+ * rather than an assumed one. Only the three numbers that bound a screening
+ * job lead; architecture and core split ride the tooltip. */
+function hostSpecsLine(specs: HostSpecs): string {
+  return (
+    String(specs.cpu_count) +
+    " vCPU · " +
+    String(Math.round(specs.memory_total_mib / 1024)) +
+    " GiB · " +
+    String(specs.disk_total_gib) +
+    " GiB disk"
+  );
+}
+
+function hostSpecsTitle(specs: HostSpecs): string {
+  const cores =
+    specs.cpu_physical_cores != null ? String(specs.cpu_physical_cores) + " physical cores, " : "";
+  return (
+    "Announced host · " +
+    String(specs.cpu_count) +
+    " logical CPUs (" +
+    cores +
+    specs.architecture +
+    ") · " +
+    String(Math.round(specs.memory_total_mib / 1024)) +
+    " GiB RAM · " +
+    String(specs.disk_total_gib) +
+    " GiB disk"
+  );
+}
+
 /** The host cell: what this node is running, what it may be given, and what
  * it has left. Container counts and heartbeat protocol are in the drill-down
  * — neither changes what the fleet does next. */
@@ -295,6 +328,13 @@ export function FleetHostCell(props: {
         </span>
         <Show when={props.singular === "validator" ? updaterModeLine(props.entry) : null}>
           {(mode) => <span class="fleet-updater-mode">{mode()}</span>}
+        </Show>
+        <Show when={props.entry.host_specs}>
+          {(specs) => (
+            <span class="fleet-host-specs" title={hostSpecsTitle(specs())}>
+              {hostSpecsLine(specs())}
+            </span>
+          )}
         </Show>
         <Show
           when={props.entry.system_metrics}

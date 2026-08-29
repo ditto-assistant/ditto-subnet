@@ -48,6 +48,7 @@ from ditto.api_models.screener_provider_settings import (
 from ditto.api_models.screener_provider_settings import (
     ScreenerProviderSettingsRevision as ProviderSettingsRevisionModel,
 )
+from ditto.api_models.system_health import host_specs_from_heartbeat_envelope
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.db.models import (
@@ -758,6 +759,11 @@ async def screener_capacity(
             if isinstance(progress, dict) and progress.get("stage")
             else (heartbeat.state if heartbeat is not None else None)
         )
+        host_specs = (
+            host_specs_from_heartbeat_envelope(heartbeat.system_metrics)
+            if heartbeat is not None
+            else None
+        )
         nodes.append(
             ScreenerNodeView(
                 environment=node.environment,
@@ -786,6 +792,7 @@ async def screener_capacity(
                     heartbeat.policy_version if heartbeat is not None else None
                 ),
                 current_phase=phase,
+                host_specs=host_specs,
             )
         )
     events = [

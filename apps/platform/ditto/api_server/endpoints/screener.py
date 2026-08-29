@@ -119,7 +119,10 @@ from ditto.api_models.screener_review_settings import (
     EffectiveScreenerReviewSettings,
     ScreenerReviewSettings,
 )
-from ditto.api_models.system_health import system_metrics_signing_token
+from ditto.api_models.system_health import (
+    host_specs_signing_token,
+    system_metrics_signing_token,
+)
 from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.benchmark_rollout import refresh_rolling_qualification
@@ -3470,15 +3473,25 @@ def _heartbeat_signing_message(payload: ScreenerHeartbeatRequest) -> bytes:
                 )
             )
         review_token = ",".join(review_fields)
-        return (
-            "ditto-screener-heartbeat:v4:"
-            f"{payload.screener_hotkey}:{payload.software_version}:"
-            f"{payload.protocol_version}:{payload.policy_version}:{payload.state}:"
-            f"{payload.active_agent_id or ''}:{payload.instance_id}:"
-            f"{progress}:"
-            f"{system_metrics_signing_token(payload.system_metrics)}:"
-            f"{review_token}:{payload.timestamp}"
-        ).encode()
+        # v5 and v6 extend the v4 field list rather than opening a new prefix:
+        # protocol_version is itself signed, so appending a field can never make
+        # an older message re-read as a newer one.
+        fields = [
+            payload.screener_hotkey,
+            payload.software_version,
+            str(payload.protocol_version),
+            str(payload.policy_version),
+            payload.state,
+            str(payload.active_agent_id or ""),
+            str(payload.instance_id),
+            progress,
+            system_metrics_signing_token(payload.system_metrics),
+            review_token,
+        ]
+        if payload.protocol_version >= 6:
+            fields.append(host_specs_signing_token(payload.host_specs))
+        fields.append(str(payload.timestamp))
+        return ("ditto-screener-heartbeat:v4:" + ":".join(fields)).encode()
     if payload.protocol_version >= 3:
         # v3 signs the per-instance identity (the fleet shares one hotkey).
         # instance_id is required for v3 (validated on the request model).
@@ -3587,6 +3600,11 @@ async def heartbeat(
                     ),
                 )
                 if request_body.review_settings is not None
+                else None
+            ),
+            host_specs=(
+                request_body.host_specs.model_dump(mode="json")
+                if request_body.host_specs is not None
                 else None
             ),
             reported_at=reported_at,

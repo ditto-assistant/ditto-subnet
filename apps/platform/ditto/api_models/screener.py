@@ -8,7 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ditto.api_models.system_health import SystemMetrics
+from ditto.api_models.system_health import HostSpecs, SystemMetrics
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScreenedImageCompletedPart,
@@ -134,6 +134,8 @@ class ScreenerHeartbeatRequest(BaseModel):
     progress: ScreenerProgress | None = None
     system_metrics: SystemMetrics | None = None
     review_settings: ScreenerReviewSettingsStatus | None = None
+    # Announced hardware; required from heartbeat protocol v6.
+    host_specs: HostSpecs | None = None
     timestamp: Annotated[int, Field(ge=0)]
     signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
 
@@ -169,6 +171,14 @@ class ScreenerHeartbeatRequest(BaseModel):
             and self.review_settings.policy_manifest_digest == "0" * 64
         ):
             raise ValueError("heartbeat protocol v5 requires a policy manifest digest")
+        return self
+
+    @model_validator(mode="after")
+    def validate_host_specs(self) -> ScreenerHeartbeatRequest:
+        if self.protocol_version >= 6 and self.host_specs is None:
+            raise ValueError("heartbeat protocol v6 requires host specs")
+        if self.protocol_version < 6 and self.host_specs is not None:
+            raise ValueError("host specs require heartbeat protocol v6")
         return self
 
 

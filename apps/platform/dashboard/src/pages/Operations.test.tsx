@@ -787,6 +787,71 @@ describe("accessible benchmark progress (row 22)", () => {
     );
   });
 
+  it("announces screener hardware beside the load it is carrying", async () => {
+    const screening = {
+      screeners: [
+        {
+          screener_hotkey: "5ScreenerHotkey000000000000000000000000000000000",
+          instance_id: "screener-1",
+          availability: "available",
+          health: "healthy",
+          state: "polling",
+          protocol_version: 6,
+          policy_version: 11,
+          reported_at: "2026-07-31T13:55:00Z",
+          seen_at: "2026-07-31T13:55:00Z",
+          host_specs: {
+            cpu_count: 16,
+            cpu_physical_cores: 8,
+            memory_total_mib: 64000,
+            disk_total_gib: 500,
+            architecture: "x86_64",
+          },
+          system_metrics: { cpu_percent: 20, memory_percent: 35, disk_percent: 45 },
+        },
+        {
+          screener_hotkey: "5ScreenerHotkey000000000000000000000000000000000",
+          instance_id: "screener-legacy",
+          availability: "available",
+          health: "healthy",
+          state: "polling",
+          protocol_version: 5,
+          policy_version: 11,
+          reported_at: "2026-07-31T13:55:00Z",
+          seen_at: "2026-07-31T13:55:00Z",
+        },
+      ],
+    };
+    restoreFetch?.();
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/public/screeners")) {
+        return Promise.resolve(new Response(JSON.stringify(screening), { status: 200 }));
+      }
+      if (url.includes("/public/operations")) {
+        return Promise.resolve(new Response(JSON.stringify(operations), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ validators: [] }), { status: 200 }));
+    }) as typeof fetch;
+    render(() => <OperationsPage />);
+    await waitFor(() =>
+      expect(document.querySelector("#fleet-rows tr[data-entity-id]")).toBeTruthy(),
+    );
+    fireEvent.click(document.getElementById("operations-tab-screeners") as HTMLButtonElement);
+    await waitFor(() => expect(document.querySelector(".fleet-host-specs")).toBeTruthy());
+
+    const announced = document.querySelectorAll(".fleet-host-specs");
+    // Only the v6 worker announced anything; the v5 worker stays silent rather
+    // than rendering an invented default.
+    expect(announced).toHaveLength(1);
+    const specs = announced[0] as HTMLElement;
+    expect(specs.textContent).toBe("16 vCPU · 63 GiB · 500 GiB disk");
+    expect(specs).toHaveAttribute(
+      "title",
+      "Announced host · 16 logical CPUs (8 physical cores, x86_64) · 63 GiB RAM · 500 GiB disk",
+    );
+  });
+
   it("shows LongMem confirmation separately from ordinary validator slots", async () => {
     const confirmation = {
       ...operations,

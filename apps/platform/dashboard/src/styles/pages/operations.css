@@ -303,6 +303,12 @@
   line-height: 1.4;
   color: var(--text-faint);
 }
+.fleet-host-specs {
+  display: block;
+  margin-top: 3px;
+  font: 500 11px/1.4 var(--mono);
+  color: var(--text-dim);
+}
 .fleet-updater-mode {
   display: block;
   margin-top: 5px;

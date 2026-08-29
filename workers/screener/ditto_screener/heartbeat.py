@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import platform
+import re
 import subprocess
 import time
 from collections.abc import Callable
@@ -54,6 +56,9 @@ _SOFTWARE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
 # Per-instance identity (v3). Excludes ':' so it can never break the
 # colon-delimited heartbeat signing message. GCE hostnames fit RFC1035.
 _INSTANCE_ID_PATTERN = r"^[a-zA-Z0-9._-]{1,63}$"
+# Machine architecture as reported by ``platform.machine()``. Excludes ':'
+# and ',' so it can never break the heartbeat signing message.
+_ARCHITECTURE_PATTERN = r"^[a-zA-Z0-9_.-]{1,32}$"
 _SYSTEM_METRICS_SAMPLE_SECONDS = 120.0
 
 
@@ -91,6 +96,34 @@ class SystemMetrics(BaseModel):
     memory_percent: Annotated[int, Field(ge=0, le=100, multiple_of=5)]
     disk_percent: Annotated[int, Field(ge=0, le=100, multiple_of=5)]
     docker: DockerHealth
+
+
+class HostSpecs(BaseModel):
+    """What the screener host is built from, not what it is doing right now.
+
+    ``SystemMetrics`` answers "is this worker under load"; this answers "how
+    big is this worker". Specs are fixed for the life of a boot, so the worker
+    samples them once at startup: a resized VM announces its new shape on its
+    next restart rather than drifting mid-heartbeat.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    cpu_count: Annotated[int, Field(ge=1, le=1024)]
+    # psutil returns None for physical cores on some kernels and containers.
+    cpu_physical_cores: Annotated[int, Field(ge=1, le=1024)] | None = None
+    memory_total_mib: Annotated[int, Field(ge=1, le=1 << 24)]
+    disk_total_gib: Annotated[int, Field(ge=1, le=1 << 20)]
+    architecture: Annotated[str, Field(pattern=_ARCHITECTURE_PATTERN)]
+
+    @model_validator(mode="after")
+    def physical_cores_within_logical(self) -> HostSpecs:
+        if (
+            self.cpu_physical_cores is not None
+            and self.cpu_physical_cores > self.cpu_count
+        ):
+            raise ValueError("cpu_physical_cores cannot exceed cpu_count")
+        return self
 
 
 class ScreenerProgress(BaseModel):
@@ -134,6 +167,7 @@ class ScreenerHeartbeatRequest(BaseModel):
     progress: ScreenerProgress | None = None
     system_metrics: SystemMetrics | None = None
     review_settings: ReviewSettingsStatus | None = None
+    host_specs: HostSpecs | None = None
     timestamp: Annotated[int, Field(ge=0)]
     signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
 
@@ -163,6 +197,14 @@ class ScreenerHeartbeatRequest(BaseModel):
             raise ValueError("heartbeat protocol v4 requires review settings status")
         if self.protocol_version < 4 and self.review_settings is not None:
             raise ValueError("review settings status requires heartbeat protocol v4")
+        return self
+
+    @model_validator(mode="after")
+    def validate_host_specs(self) -> ScreenerHeartbeatRequest:
+        if self.protocol_version >= 6 and self.host_specs is None:
+            raise ValueError("heartbeat protocol v6 requires host specs")
+        if self.protocol_version < 6 and self.host_specs is not None:
+            raise ValueError("host specs require heartbeat protocol v6")
         return self
 
 
@@ -227,6 +269,22 @@ def system_metrics_signing_token(metrics: SystemMetrics | None) -> str:
     )
 
 
+def host_specs_signing_token(specs: HostSpecs | None) -> str:
+    """Return the canonical v6 token for the announced hardware allowlist."""
+    if specs is None:
+        return "-"
+    return ",".join(
+        str(value)
+        for value in (
+            specs.cpu_count,
+            specs.cpu_physical_cores if specs.cpu_physical_cores is not None else "-",
+            specs.memory_total_mib,
+            specs.disk_total_gib,
+            specs.architecture,
+        )
+    )
+
+
 def screener_progress_signing_token(progress: ScreenerProgress | None) -> str:
     """Return the canonical v2 token for the optional progress allowlist."""
     if progress is None:
@@ -280,6 +338,49 @@ def probe_docker_health() -> DockerHealth:
     )
 
 
+_MIB = 1024**2
+_GIB = 1024**3
+
+
+def _sanitized_architecture(machine: str) -> str:
+    """Coerce ``platform.machine()`` into the signed architecture charset.
+
+    Sanitized rather than validated: an unfamiliar arch string should cost the
+    architecture label, never the CPU/RAM/disk numbers next to it.
+    """
+    cleaned = re.sub(r"[^a-zA-Z0-9_.-]", "-", machine or "")[:32].strip("-")
+    return cleaned or "unknown"
+
+
+def collect_host_specs(
+    *,
+    cpu_count: Callable[..., int | None] = psutil.cpu_count,
+    virtual_memory: Callable[[], Any] = psutil.virtual_memory,
+    disk_usage: Callable[[str], Any] = psutil.disk_usage,
+    machine: Callable[[], str] = platform.machine,
+) -> HostSpecs | None:
+    """Describe this host once, or return None if it cannot be described.
+
+    Announcing specs must never cost a heartbeat: every probe here is on the
+    fleet-health path, not the screening path, so an unreadable /proc or an
+    exotic architecture degrades the worker back to protocol v5 instead of
+    dropping the report that carries its liveness.
+    """
+    try:
+        logical = cpu_count()
+        physical = cpu_count(logical=False)
+        specs = HostSpecs(
+            cpu_count=int(logical or 1),
+            cpu_physical_cores=int(physical) if physical else None,
+            memory_total_mib=max(1, int(virtual_memory().total) // _MIB),
+            disk_total_gib=max(1, int(disk_usage("/").total) // _GIB),
+            architecture=_sanitized_architecture(machine()),
+        )
+    except Exception:  # noqa: BLE001 - fleet telemetry never blocks screening
+        return None
+    return specs
+
+
 class SystemMetricsCollector:
     """Cache an allowlisted five-point sample for two minutes."""
 
@@ -322,6 +423,7 @@ class SystemMetricsCollector:
 
 __all__ = [
     "DockerHealth",
+    "HostSpecs",
     "ScreenerHeartbeatRequest",
     "ScreenerHeartbeatResponse",
     "ScreenerProgress",
@@ -329,6 +431,8 @@ __all__ = [
     "ScreenerRuntimeState",
     "SystemMetrics",
     "SystemMetricsCollector",
+    "collect_host_specs",
+    "host_specs_signing_token",
     "screener_progress_signing_token",
     "system_metrics_signing_token",
 ]

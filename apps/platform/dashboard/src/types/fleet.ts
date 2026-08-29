@@ -130,6 +130,16 @@ export interface SystemMetrics {
   unhealthy_containers?: number | null;
 }
 
+/** What a screener announced its host is built from (heartbeat protocol v6+).
+ * Fixed hardware, not load: SystemMetrics above is the load sample. */
+export interface HostSpecs {
+  cpu_count: number;
+  cpu_physical_cores?: number | null;
+  memory_total_mib: number;
+  disk_total_gib: number;
+  architecture: string;
+}
+
 export interface ScreeningProgress {
   /** "preparing" | "downloading" | … | "source_review_<n>". */
   stage?: string;
@@ -211,6 +221,8 @@ export interface FleetEntry {
   updater_status?: ValidatorUpdaterStatus | null;
   stack_health?: Record<string, StackComponentHealth | null | undefined> | null;
   system_metrics?: SystemMetrics | null;
+  /** Screeners only, from heartbeat protocol v6. */
+  host_specs?: HostSpecs | null;
 }
 
 /** /public/screeners, and the validators slice of /public/operations. */

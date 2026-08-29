@@ -12,6 +12,7 @@ from ditto.api_models.screener_node_settings import (
     ScreenerNodeChannelSettingsControl,
 )
 from ditto.api_models.screener_provider_settings import ScreenerProviderSettingsControl
+from ditto.api_models.system_health import HostSpecs
 from ditto_screening_protocol import SourceReviewObservationPayload
 
 ScreenerProvider = Literal["gcp", "targon", "hetzner", "home", "test"]
@@ -215,6 +216,9 @@ class ScreenerNodeView(BaseModel):
     protocol_version: int | None = None
     policy_version: int | None = None
     current_phase: str | None = None
+    # Hardware the worker announced in its own heartbeat (protocol v6+), not
+    # what the provider was asked to allocate. Absent until it reports.
+    host_specs: HostSpecs | None = None
 
 
 class ScreenerCapacityEventView(BaseModel):

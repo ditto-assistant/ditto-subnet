@@ -27,11 +27,13 @@ from ditto_screener.errors import PlatformError
 from ditto_screener.gate import LeaseDeadline
 from ditto_screener.heartbeat import (
     DockerHealth,
+    HostSpecs,
     ReviewSettingsStatus,
     ScreenerHeartbeatRequest,
     ScreenerProgress,
     ScreenerProgressStage,
     ScreenerRuntimeState,
+    collect_host_specs,
     probe_docker_health,
 )
 from ditto_screener.policy import (
@@ -71,7 +73,10 @@ logger = logging.getLogger(__name__)
 
 EXACT_CROSS_MINER_DUPLICATE = "exact-cross-miner-duplicate"
 
-_HEARTBEAT_PROTOCOL_VERSION = 5
+# v6 adds the announced host specs (CPU/RAM/disk). A worker that cannot read
+# its own hardware still reports at v5 rather than going dark.
+_HEARTBEAT_PROTOCOL_VERSION = 6
+_HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS = 5
 
 
 def _resolve_instance_id() -> str:
@@ -107,6 +112,7 @@ class ScreenerWorker:
         system_metrics: SystemMetricsCollector | None = None,
         readiness: ReadinessServer | None = None,
         executor_health_probe: Callable[[], DockerHealth] = probe_docker_health,
+        host_specs_probe: Callable[[], HostSpecs | None] = collect_host_specs,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -115,6 +121,10 @@ class ScreenerWorker:
         self._system_metrics = system_metrics
         self._readiness = readiness
         self._executor_health_probe = executor_health_probe
+        # Hardware is fixed for this boot: sample it once here rather than on
+        # every heartbeat, so the announced shape can never disagree with
+        # itself between two reports from the same process.
+        self._host_specs = host_specs_probe()
         self._instance_id = config.node_id or _resolve_instance_id()
         self._active_agent_id: UUID | None = None
         self._active_progress_stage: ScreenerProgressStage | None = None
@@ -222,11 +232,17 @@ class ScreenerWorker:
                 and self._job_started_at is not None
                 else None
             )
+            host_specs = self._host_specs
+            protocol_version = (
+                _HEARTBEAT_PROTOCOL_VERSION
+                if host_specs is not None
+                else _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS
+            )
             signature = sign_heartbeat(
                 self._keypair,
                 screener_hotkey=self._config.screener_hotkey,
                 software_version=__version__,
-                protocol_version=_HEARTBEAT_PROTOCOL_VERSION,
+                protocol_version=protocol_version,
                 policy_version=SCREENING_POLICY_VERSION,
                 state=state,
                 active_agent_id=self._active_agent_id,
@@ -234,12 +250,13 @@ class ScreenerWorker:
                 progress=progress,
                 system_metrics=metrics,
                 review_settings=self._review_settings_status,
+                host_specs=host_specs,
                 timestamp=timestamp,
             )
             request = ScreenerHeartbeatRequest(
                 screener_hotkey=self._config.screener_hotkey,
                 software_version=__version__,
-                protocol_version=_HEARTBEAT_PROTOCOL_VERSION,
+                protocol_version=protocol_version,
                 policy_version=SCREENING_POLICY_VERSION,
                 state=state,
                 active_agent_id=self._active_agent_id,
@@ -247,6 +264,7 @@ class ScreenerWorker:
                 progress=progress,
                 system_metrics=metrics,
                 review_settings=self._review_settings_status,
+                host_specs=host_specs,
                 timestamp=timestamp,
                 signature=signature,
             )

@@ -9,6 +9,7 @@ import pytest
 
 from ditto_screener.heartbeat import (
     DockerHealth,
+    HostSpecs,
     ReviewSettingsStatus,
     ScreenerProgress,
     SystemMetrics,
@@ -300,3 +301,115 @@ def test_v5_heartbeat_binds_policy_manifest_identity() -> None:
         timestamp=456,
     )
     assert f",l1_l2,incident-2026-08-27,{'cd' * 32}:456".encode() in message
+
+
+def _v5_review_settings() -> ReviewSettingsStatus:
+    return ReviewSettingsStatus(
+        revision=43,
+        scope="*",
+        mode="enforce",
+        checksum="ab" * 32,
+        source="platform",
+        policy_manifest_profile="l1_l2",
+        policy_manifest_rotation_id="incident-2026-08-27",
+        policy_manifest_digest="cd" * 32,
+    )
+
+
+def test_v6_heartbeat_binds_announced_host_specs() -> None:
+    message = heartbeat_signing_message(
+        screener_hotkey=_HOTKEY,
+        software_version="0.16.0",
+        protocol_version=6,
+        policy_version=11,
+        state="polling",
+        active_agent_id=None,
+        instance_id="ditto-screener-prod",
+        progress=None,
+        system_metrics=None,
+        review_settings=_v5_review_settings(),
+        host_specs=HostSpecs(
+            cpu_count=16,
+            cpu_physical_cores=8,
+            memory_total_mib=64000,
+            disk_total_gib=500,
+            architecture="x86_64",
+        ),
+        timestamp=456,
+    )
+    assert message.endswith(b":16,8,64000,500,x86_64:456")
+
+
+def test_v6_absent_physical_core_count_is_still_unambiguous() -> None:
+    message = heartbeat_signing_message(
+        screener_hotkey=_HOTKEY,
+        software_version="0.16.0",
+        protocol_version=6,
+        policy_version=11,
+        state="polling",
+        active_agent_id=None,
+        instance_id="ditto-screener-prod",
+        progress=None,
+        system_metrics=None,
+        review_settings=_v5_review_settings(),
+        host_specs=HostSpecs(
+            cpu_count=4,
+            memory_total_mib=8000,
+            disk_total_gib=80,
+            architecture="aarch64",
+        ),
+        timestamp=456,
+    )
+    assert message.endswith(b":4,-,8000,80,aarch64:456")
+
+
+def test_v6_refuses_to_sign_without_the_specs_it_promises() -> None:
+    with pytest.raises(ValueError, match="requires host specs"):
+        heartbeat_signing_message(
+            screener_hotkey=_HOTKEY,
+            software_version="0.16.0",
+            protocol_version=6,
+            policy_version=11,
+            state="polling",
+            active_agent_id=None,
+            instance_id="ditto-screener-prod",
+            progress=None,
+            system_metrics=None,
+            review_settings=_v5_review_settings(),
+            host_specs=None,
+            timestamp=456,
+        )
+
+
+def test_v5_bytes_are_unchanged_by_the_v6_extension() -> None:
+    """A v6-capable platform must still verify a v5 worker byte-for-byte."""
+    message = heartbeat_signing_message(
+        screener_hotkey=_HOTKEY,
+        software_version="0.15.0",
+        protocol_version=5,
+        policy_version=10,
+        state="polling",
+        active_agent_id=None,
+        instance_id="ditto-screener-prod",
+        progress=None,
+        system_metrics=None,
+        review_settings=_v5_review_settings(),
+        host_specs=HostSpecs(
+            cpu_count=16,
+            memory_total_mib=64000,
+            disk_total_gib=500,
+            architecture="x86_64",
+        ),
+        timestamp=456,
+    )
+    review_token = (
+        f"43,*,enforce,{'ab' * 32},platform,l1_l2,incident-2026-08-27,{'cd' * 32}"
+    )
+    assert (
+        message
+        == (
+            "ditto-screener-heartbeat:v4:"
+            f"{_HOTKEY}:0.15.0:5:10:polling::ditto-screener-prod:-:-:"
+            f"{review_token}:456"
+        ).encode()
+    )
