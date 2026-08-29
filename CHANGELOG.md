@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v0.123.0 (2026-08-29)
+
+### Bug Fixes
+
+- **infra**: Allow restricted iam preflight
+  ([#1258](https://github.com/ditto-assistant/ditto-subnet/pull/1258),
+  [`bfd4c53`](https://github.com/ditto-assistant/ditto-subnet/commit/bfd4c53fefcc80613992a598701462e80e08c7b3))
+
+- **infra**: Make hotkey bootstrap requirements readable
+  ([#1257](https://github.com/ditto-assistant/ditto-subnet/pull/1257),
+  [`dcdead8`](https://github.com/ditto-assistant/ditto-subnet/commit/dcdead898858510314eb734c0d4497913310cf3f))
+
+- **infra**: Run pinned hotkey generator directly
+  ([#1259](https://github.com/ditto-assistant/ditto-subnet/pull/1259),
+  [`1519155`](https://github.com/ditto-assistant/ditto-subnet/commit/151915569b1aef7c51540e444bafade210eceb7b))
+
+### Features
+
+- **coding**: Add shadow coding-datagen foundation
+  ([`b186ab5`](https://github.com/ditto-assistant/ditto-subnet/commit/b186ab5903dcceb2df72cbf0dd6dc0a8276e5893))
+
+
 ## v0.122.0 (2026-08-28)
 
 ### Bug Fixes
