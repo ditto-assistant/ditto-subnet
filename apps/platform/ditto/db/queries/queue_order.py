@@ -388,8 +388,7 @@ def _top_provisional_contenders(
         )
         .where(
             contender.status == AgentStatus.EVALUATING,
-            contender.screening_policy_version
-            >= effective_screening_policy_version(),
+            contender.screening_policy_version >= effective_screening_policy_version(),
             contender_accepted_score_count.between(1, SCORING_QUORUM - 1),
             contender_recorded_score_count >= contender_accepted_score_count,
             (

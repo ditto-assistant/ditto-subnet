@@ -1029,7 +1029,8 @@ async def claim_screening_attempts(
             mechanical_first
             or (
                 agent.status == AgentStatus.EVALUATING
-                and agent.screening_policy_version >= effective_screening_policy_version()
+                and agent.screening_policy_version
+                >= effective_screening_policy_version()
             )
         )
         attempt = ScreeningAttempt(

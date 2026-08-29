@@ -200,12 +200,12 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 
 
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
-    assert l2_prompt_revision(11) == "l2-kimi-source-review-v35-policy-v11"
-    assert l2_prompt_revision(10) == "l2-kimi-source-review-v35-policy-v10"
+    assert l2_prompt_revision(11) == "l2-kimi-source-review-v36-policy-v11"
+    assert l2_prompt_revision(10) == "l2-kimi-source-review-v36-policy-v10"
     assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v10"
-    assert l2_cause_prompt_revision(11) == "l3-sol-violation-cause-v26-policy-v11"
+    assert l2_cause_prompt_revision(11) == "l3-sol-violation-cause-v27-policy-v11"
     assert l2_cause_tiebreaker_prompt_revision(11) == (
-        "l3-sol-cause-disagreement-v6-policy-v11"
+        "l3-sol-cause-disagreement-v7-policy-v11"
     )
     assert "Generator mirroring is earlier and therefore" in _VIOLATION_CAUSE_TASK
     assert "without those copied input-construction" in _VIOLATION_CAUSE_TASK
@@ -326,8 +326,8 @@ def test_l1_mechanism_narrowed_away_by_kimi_still_requires_sol() -> None:
 
 
 def test_request_local_identical_tool_memoization_is_not_fabrication() -> None:
-    assert l2_critic_prompt_revision(11) == "l3-sol-adversarial-critic-v20-policy-v11"
-    assert l2_safety_prompt_revision(11) == "l3-sol-safety-adjudicator-v23-policy-v11"
+    assert l2_critic_prompt_revision(11) == "l3-sol-adversarial-critic-v21-policy-v11"
+    assert l2_safety_prompt_revision(11) == "l3-sol-safety-adjudicator-v24-policy-v11"
     assert "Request-local memoization of an identical invocation" in SYSTEM_PROMPT
     assert "deduplication is not fabricated telemetry" in SYSTEM_PROMPT
     assert "distinguish execution from transport" in _SAFETY_ADJUDICATOR_TASK

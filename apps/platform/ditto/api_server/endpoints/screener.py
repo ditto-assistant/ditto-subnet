@@ -4403,9 +4403,12 @@ async def submit_result(
             pass
         elif stale_scored_rescreen and payload.passed:
             pass
-        elif rolling_rescreen or stale_scored_rescreen or agent.status in (
-            _SCREENABLE_STATUSES
-        ) or rescreening:
+        elif (
+            rolling_rescreen
+            or stale_scored_rescreen
+            or agent.status in (_SCREENABLE_STATUSES)
+            or rescreening
+        ):
             agent.status = target
         elif agent.status == target:
             pass  # idempotent re-report of the same verdict
@@ -4436,10 +4439,7 @@ async def submit_result(
         # Persist the policy that produced either terminal verdict. Rejected
         # submissions retry only after a policy bump; infrastructure failures
         # remain retryable under the same policy.
-        if (
-            not late_deferred_result
-            and payload.policy_version == required_policy
-        ):
+        if not late_deferred_result and payload.policy_version == required_policy:
             agent.screening_policy_version = payload.policy_version
         if payload.passed and not late_deferred_result:
             agent.screened_image_sha256 = payload.image_sha256

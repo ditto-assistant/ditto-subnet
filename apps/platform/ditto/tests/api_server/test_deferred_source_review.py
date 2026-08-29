@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.queue_policy_settings import DeferredSourceReviewSettings
-from ditto.api_models.screener import SCREENING_POLICY_VERSION as _BUILTIN_POLICY_VERSION
+from ditto.api_models.screener import (
+    SCREENING_POLICY_VERSION as _BUILTIN_POLICY_VERSION,
+)
 from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 
 # Seeded versions mean "the version the platform REQUIRES" — the floor in the

@@ -26,9 +26,7 @@ def upgrade() -> None:
         sa.Column("revision", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("parent_revision", sa.Integer(), nullable=False),
         sa.Column("target_policy_version", sa.Integer(), nullable=False),
-        sa.Column(
-            "activate_at", sa.TIMESTAMP(timezone=True), nullable=False
-        ),
+        sa.Column("activate_at", sa.TIMESTAMP(timezone=True), nullable=False),
         sa.Column("rescreen_scored", sa.Boolean(), nullable=False),
         sa.Column("reason", sa.Text(), nullable=False),
         sa.Column("actor", sa.Text(), nullable=False),

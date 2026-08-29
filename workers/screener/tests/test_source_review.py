@@ -768,7 +768,7 @@ fn run() -> String {
     assert observation.risk_level == "high"
     assert observation.categories == ("benchmark_emulation",)
     assert observation.finding is not None
-    assert observation.finding["prompt_revision"] == "source-review-v23-policy-v11"
+    assert observation.finding["prompt_revision"] == "source-review-v24-policy-v11"
     assert observation.finding["evidence"] == [
         {
             "path": "src/memory_solver.rs",
@@ -2027,7 +2027,7 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     assert observation.finding is not None
     assert "use\nanalyze_binary only when" in prompt
     assert 'compact, precomputed\n"binary_analysis"' in prompt
-    assert observation.finding["prompt_revision"] == "source-review-v23-policy-v11"
+    assert observation.finding["prompt_revision"] == "source-review-v24-policy-v11"
     assert len(observation.finding["invariant_assessment"]["decisions"]) == 7
     initial_inventory = json.loads(
         seen[0]["messages"][1]["content"]
@@ -2806,7 +2806,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
         _source_review_system_prompt as _prompt,
     )
 
-    assert _prompt_revision(11) == "source-review-v23-policy-v11"
+    assert _prompt_revision(11) == "source-review-v24-policy-v11"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",

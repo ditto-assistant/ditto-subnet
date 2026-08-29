@@ -1947,6 +1947,46 @@ CREATE TABLE public.screener_nodes (
 
 
 --
+-- Name: screener_policy_activations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screener_policy_activations (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    target_policy_version integer NOT NULL,
+    activate_at timestamp with time zone NOT NULL,
+    rescreen_scored boolean NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screener_policy_activations_screener_policy_activati_1ae6 CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_screener_policy_activations_screener_policy_activati_555e CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_screener_policy_activations_screener_policy_activati_7fca CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_screener_policy_activations_screener_policy_activati_b3e0 CHECK ((target_policy_version >= 1))
+);
+
+
+--
+-- Name: screener_policy_activations_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.screener_policy_activations_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: screener_policy_activations_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.screener_policy_activations_revision_seq OWNED BY public.screener_policy_activations.revision;
+
+
+--
 -- Name: screener_provider_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2724,6 +2764,13 @@ ALTER TABLE ONLY public.score_audit_log ALTER COLUMN seq SET DEFAULT nextval('pu
 
 
 --
+-- Name: screener_policy_activations revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_policy_activations ALTER COLUMN revision SET DEFAULT nextval('public.screener_policy_activations_revision_seq'::regclass);
+
+
+--
 -- Name: screener_provider_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -3463,6 +3510,14 @@ ALTER TABLE ONLY public.screener_nodes
 
 
 --
+-- Name: screener_policy_activations pk_screener_policy_activations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_policy_activations
+    ADD CONSTRAINT pk_screener_policy_activations PRIMARY KEY (revision);
+
+
+--
 -- Name: screener_provider_settings_revisions pk_screener_provider_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3636,6 +3691,14 @@ ALTER TABLE ONLY public.screener_heartbeats
 
 ALTER TABLE ONLY public.screener_nodes
     ADD CONSTRAINT screener_nodes_provider_resource_key UNIQUE (environment, provider, provider_resource_id);
+
+
+--
+-- Name: screener_policy_activations screener_policy_activation_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_policy_activations
+    ADD CONSTRAINT screener_policy_activation_parent_key UNIQUE (parent_revision);
 
 
 --

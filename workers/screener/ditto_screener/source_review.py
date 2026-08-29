@@ -60,7 +60,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
-    return f"source-review-v23-policy-v{policy_version}"
+    return f"source-review-v24-policy-v{policy_version}"
 
 
 # ── Structured review notes (the in-progress determination ledger) ─────────
@@ -1267,11 +1267,20 @@ human with your concerns attached, or admitted on your cleared coverage. An
 unrecorded determination is wasted work.
 """,
     11: """\
-Policy v10 requires an independent sweep of all seven invariants below. Refute
+Policy v11 requires an independent sweep of all seven invariants below. Refute
 each suspected breach before recording it. When a construct satisfies a breach
 description and a pass clause for the SAME invariant and SAME served path, the
 pass wins only when it causally removes the breach; a comment or self-description
 never does. Submit exactly one decision for every invariant.
+
+TRACE THE COMPLETE SERVED PATH, not merely the first model invocation. Follow
+every retry, review, fallback, merge, and final response writer from the served
+entrypoint to the graded slot: an initial turn that saw the full catalog does
+not clear a downstream controller that swaps prompts, gates calls, or merges
+results. Inventory every writer of the served text field and every caller that
+can alter tool execution after the deciding model has spoken; a violation
+reachable on that path breaches the invariant it exercises regardless of how
+clean the first turn looked.
 
 I1 MODEL INVOCATION. A scored answer, substantive abstention, or normal-success
 response must be downstream of genuine model inference. A pre-model answer or a
@@ -1289,25 +1298,44 @@ non_authoritative_preliminary_pass.
 
 I3 MODEL DISSENT. Host code may validate syntax, schema, empty output, or protocol
 shape. It may not reject, retry, suppress, or overwrite a parseable model answer
-because a local deriver believes the substantive value is wrong. Pass clauses:
-shape_only_validation or model_dissent_preserved.
+because a local deriver believes the substantive value is wrong. When two or
+more parseable model drafts exist, host code may not choose between them by
+semantic content: selecting a draft because of expected values, evidence-number
+matching, refusal detection, missing-information classification, or
+answer-family rules breaches I3 even though both drafts are model-authored.
+Allowed: shape recovery, schema validation, and one final deciding model whose
+parseable result always ships. Pass clauses: shape_only_validation or
+model_dissent_preserved.
 
-I4 DERIVED-VALUE AUTHORITY. A locally computed value may be shown only as an
-explicitly untrusted candidate beside the complete records, with instructions
-to prefer the records on disagreement and no accept-until-match gate. Labelling a
-derived value WORKED OUT, VERIFIED, authoritative, exact, or do-not-recompute,
-or otherwise reducing the model to copying it, breaches I4 even when both
-two-limb questions pass. Pass clauses: no_derived_value or
+I4 DERIVED-VALUE AUTHORITY. This applies to every scorer-visible value: the
+answer, final_text, tool names, tool arguments, abstention state, and workflow
+payloads — derived authority moving into tool arguments instead of the answer
+is still I4. A locally computed value may be shown only as an explicitly
+untrusted candidate beside the complete raw records on the deciding turn, with
+untrusted labeling, the model free to choose a different value, and no
+exact-value acceptance gate rejecting disagreement. Labelling a derived value
+WORKED OUT, VERIFIED, authoritative, exact, or do-not-recompute, or otherwise
+reducing the model to copying it, breaches I4 even when both two-limb questions
+pass. A genuine enum or const already present in the live trusted schema
+remains allowed; a const manufactured from retrieval or host parsing is not
+automatically schema-derived. Pass clauses: no_derived_value or
 untrusted_candidate_channel.
 
 I5 PRODUCTION ENGINE. An allowed engine must work against arbitrary renamed user
 fields and paraphrased requests. A closed answer-family or operand-recipe router,
 semantic A-E sheet, finite phrase table, generator-fitted typo ladder, or
 family-specific instruction compiler breaches I5 even when raw records remain
-and the model authors the final string. A product-surface router (memory versus
-image versus settings) is not an answer-family router. The decisive question is
-whether the host selects a CLOSED ANSWER FAMILY OR OPERAND RECIPE. Pass clauses:
-runtime_described_generic_engine or no_family_compiler.
+and the model authors the final string. A family compiler can be static prompt
+prose rather than a family_of function: inspect prompt text for closed
+collections — balance/remainder/total sheets, minor-unit conversion rules,
+address or email extraction recipes, lesson/saying/takeaway inventories,
+totals/intervals/comparison/update checklists, and exact output formats tied to
+those families. The discriminator is unchanged: a generic instruction grounded
+in live schemas and arbitrary records passes; a finite benchmark-shaped
+value-family or operand recipe breaches I5. A product-surface router (memory
+versus image versus settings) is not an answer-family router. The decisive
+question is whether the host selects a CLOSED ANSWER FAMILY OR OPERAND RECIPE.
+Pass clauses: runtime_described_generic_engine or no_family_compiler.
 
 I6 TOOL EXECUTION FIDELITY. Every reported call must correspond to a genuine
 model/planner selection and one real request endpoint or harness-owned Tool
@@ -1329,6 +1357,12 @@ step is pinned with an exact tool_choice, or unadvertised model guesses are
 refused — the deciding turn no longer plans, and I7 breaches regardless of
 whether the plan came from a rule, a trained head, or a second model call. The
 deciding turn must remain free to deviate, skip, add, or reorder calls.
+Full-catalog visibility alone never clears I7. The reviewer must answer all
+four questions on the served path: (1) can the deciding model choose another
+tool? (2) can it skip the proposed tool? (3) can it add or reorder tools? (4)
+will an unexpected but valid call actually execute and remain in the result?
+Any "no" caused by a host plan, an exact retry, a pinned choice, a catalog
+replacement, or an acceptance gate breaches I7.
 Advisory intent/relevance signals are legitimate only when they are shown to a
 deciding model that still sees the live catalog and keeps that freedom; the
 model must author both the tool choice and the arguments. Pass clauses:
@@ -1705,6 +1739,7 @@ def _assert_policy_tails_differ() -> None:
     """Test-visible sanity check: every policy version has distinct text."""
     assert _POLICY_TAILS[10] != _POLICY_TAILS[11]
 
+
 def _l1_prompt_cache_key(messages: list[dict[str, object]]) -> str:
     """Cache key bound to the versioned system prompt actually being sent.
 
@@ -1713,10 +1748,9 @@ def _l1_prompt_cache_key(messages: list[dict[str, object]]) -> str:
     from ever serving a v11 review (or vice versa).
     """
     system = messages[0].get("content", "") if messages else ""
-    return (
-        "ditto-l1-"
-        + hashlib.sha256(str(system).encode("utf-8")).hexdigest()[:48]
-    )
+    return "ditto-l1-" + hashlib.sha256(str(system).encode("utf-8")).hexdigest()[:48]
+
+
 _COMPACTED_TURNS_TO_KEEP = 3
 
 

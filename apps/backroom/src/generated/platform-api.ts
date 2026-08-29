@@ -1090,6 +1090,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screener-policy-activation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Activation
+         * @description The effective required version, the governing schedule, and history.
+         */
+        get: operations["get_activation_api_v1_admin_screener_policy_activation_get"];
+        put?: never;
+        /**
+         * Schedule Activation
+         * @description Append one optimistic, confirmation-gated schedule revision.
+         *
+         *     The required version rises to ``target_policy_version`` when
+         *     ``activate_at`` passes, not when this row is written — miners get the full
+         *     notice window. Superseding an earlier schedule is a normal append: the
+         *     newest due revision governs.
+         */
+        post: operations["schedule_activation_api_v1_admin_screener_policy_activation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-provider-settings": {
         parameters: {
             query?: never;
@@ -16820,6 +16849,36 @@ export interface components {
             target: "platform-relay-1" | "platform-relay-2";
         };
         /**
+         * ScheduleScreenerPolicyActivationRequest
+         * @description Append one optimistic, confirmation-gated schedule revision.
+         *
+         *     ``activate_at`` MUST carry a UTC offset (or be an explicit ``Z`` instant):
+         *     a timezone-naive datetime is rejected so an operator who means 9 a.m.
+         *     Eastern cannot silently schedule 9 a.m. server time. The row stores UTC.
+         */
+        ScheduleScreenerPolicyActivationRequest: {
+            /**
+             * Activate At
+             * Format: date-time
+             */
+            activate_at: string;
+            /** Actor */
+            actor?: string | null;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            /**
+             * Rescreen Scored
+             * @default true
+             */
+            rescreen_scored: boolean;
+            /** Target Policy Version */
+            target_policy_version: number;
+        };
+        /**
          * ScoreReport
          * @description A completed DittoBench evaluation result for one agent.
          *
@@ -17020,7 +17079,7 @@ export interface components {
          * @example {
          *       "detail": "",
          *       "passed": true,
-         *       "policy_version": 10,
+         *       "policy_version": 11,
          *       "screener_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
          *       "signature": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
          *     }
@@ -17733,6 +17792,54 @@ export interface components {
              */
             token_expires_at: string;
         };
+        /**
+         * ScreenerPolicyActivationRevision
+         * @description One immutable schedule revision.
+         */
+        ScreenerPolicyActivationRevision: {
+            /**
+             * Activate At
+             * Format: date-time
+             */
+            activate_at: string;
+            /** Actor */
+            actor: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Rescreen Scored */
+            rescreen_scored: boolean;
+            /** Revision */
+            revision: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "due";
+            /** Target Policy Version */
+            target_policy_version: number;
+        };
+        /**
+         * ScreenerPolicyActivationView
+         * @description What the screening queue requires now, plus the governing schedule.
+         */
+        ScreenerPolicyActivationView: {
+            /** Builtin Policy Version */
+            builtin_policy_version: number;
+            /** Effective Policy Version */
+            effective_policy_version: number;
+            /** Floor Policy Version */
+            floor_policy_version: number;
+            latest: components["schemas"]["ScreenerPolicyActivationRevision"] | null;
+            /** Revisions */
+            revisions: components["schemas"]["ScreenerPolicyActivationRevision"][];
+        };
         /** ScreenerPolicyManifestView */
         ScreenerPolicyManifestView: {
             /** Actor */
@@ -18351,7 +18458,7 @@ export interface components {
             notes_considered: number;
             /**
              * Policy Version
-             * @default 10
+             * @default 11
              */
             policy_version: number;
             /** Prompt Revision */
@@ -22495,6 +22602,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScreenerCapacityView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_activation_api_v1_admin_screener_policy_activation_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreenerPolicyActivationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    schedule_activation_api_v1_admin_screener_policy_activation_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleScreenerPolicyActivationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreenerPolicyActivationView"];
                 };
             };
             /** @description Validation Error */

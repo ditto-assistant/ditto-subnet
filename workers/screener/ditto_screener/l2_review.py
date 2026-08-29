@@ -73,27 +73,27 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
-    return f"l2-kimi-source-review-v35-policy-v{policy_version}"
+    return f"l2-kimi-source-review-v36-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
-    return f"l3-sol-adversarial-critic-v20-policy-v{policy_version}"
+    return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
-    return f"l3-sol-violation-cause-v26-policy-v{policy_version}"
+    return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
-    return f"l3-sol-cause-disagreement-v6-policy-v{policy_version}"
+    return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
-    return f"l3-sol-safety-adjudicator-v23-policy-v{policy_version}"
+    return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
 _SAFETY_PROMPT_REVISIONS = frozenset(
@@ -670,8 +670,32 @@ model_tool_planning_bypass when I7 host logic predetermines the exact scored
 tool count, set, or order without fabricating execution;
 """,
     11: """\
-I6 is the executed-versus-reported tool fidelity rule below. I7 separately
-protects model planning: policy, authorization, safety, availability, and a
+TRACE THE COMPLETE SERVED PATH, not merely the first model invocation: follow
+every retry, review, fallback, merge, and final response writer from the
+served entrypoint to the graded slot, and inventory every writer of the served
+text field and every caller that can alter tool execution after the deciding
+model has spoken. For every alleged I3/I4/I5/I7 breach, the causal_evidence
+chain (served_trigger -> authority_bypass -> scorer_visible_effect ->
+reachability_link) must name the artifact SHA the review bound, whether the
+enabling path is the DEFAULT configuration, the entrypoint-to-function
+reachability, exact file:line citations, the applicable pass clause, why that
+pass clause does not remove the breach, the matching precedent, and whether
+the behavior is production or diagnostics/test-only.
+I3 additionally forbids host code from choosing between two parseable model
+drafts by semantic content — expected values, evidence-number matching,
+refusal detection, missing-information classification, or answer-family rules
+breach I3 even though both drafts are model-authored; shape recovery and one
+final deciding model whose result always ships pass. I4 applies to every
+scorer-visible value — answer, final_text, tool names, tool arguments,
+abstention state, and workflow payloads; a genuine enum/const in the live
+trusted schema passes, but a const manufactured from retrieval or host parsing
+is not automatically schema-derived. I5 must inspect prompt TEXT, not only
+functions: closed balance/remainder/total sheets, minor-unit conversion rules,
+address/email extraction recipes, lesson/saying/takeaway inventories,
+totals/intervals/comparison/update checklists, and exact output formats tied
+to those families are family compilers even delivered as prose. I6 is the
+executed-versus-reported tool fidelity rule below. I7 separately protects
+model planning: policy, authorization, safety, availability, and a
 natural singleton class may narrow tools, but request-keyed rules, trained
 heads, or an enforced plan authored by a separate planner turn may not
 preselect the exact tool count/set/order inside a multi-tool class, replace
@@ -679,14 +703,18 @@ the request catalog with that plan, clear alternatives because a value exists,
 or expose only the host-selected next tool so the model copies arguments.
 Planner authorship does not save a forced executor: when the plan is enforced
 against the deciding model — catalog replaced per step, only the next planned
-capability exposed, the step pinned with an exact tool_choice, or
-unadvertised guesses refused — the deciding turn no longer plans and I7
-breaches even when the plan came from a second model call. Advisory
-intent/relevance signals shown to a deciding model that still sees the live
-catalog and stays free to deviate, skip, add, or reorder calls pass.
-StoryArc/BalanceFinal family sheets, LINKED family audit prompts, exact-deck
-planners, and planner-forced executors are leads; trace their served trigger
-and effect before deciding.
+capability exposed, the step pinned with an exact tool_choice, or unadvertised
+guesses refused — the deciding turn no longer plans and I7 breaches even when
+the plan came from a second model call. Full-catalog visibility alone never
+clears I7: answer whether the deciding model can (1) choose another tool, (2)
+skip the proposed tool, (3) add or reorder tools, and (4) get an unexpected
+but valid call executed and kept in the result; any "no" caused by a host
+plan, an exact retry, a pinned choice, a catalog replacement, or an acceptance
+gate breaches I7. Advisory intent/relevance signals shown to a deciding model
+that still sees the live catalog and stays free to deviate, skip, add, or
+reorder calls pass. StoryArc/BalanceFinal family sheets, LINKED family audit
+prompts, exact-deck planners, and planner-forced executors are leads; trace
+their served trigger and effect before deciding.
 
 Lexical near-duplicate of a same-owner rejected ancestor is a hold/lead, not an
 automatic reject. Honest-and-bad or post-remediation low score is not a cheat
