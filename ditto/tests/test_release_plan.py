@@ -216,6 +216,7 @@ def test_shadow_coding_execution_selects_only_scorer_stack(
     "path",
     [
         "packages/dittobench-coding-contract/testdata/coding_contract_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_catalog_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_selection_v1.json",
     ],
 )
