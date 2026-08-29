@@ -167,6 +167,8 @@ import {
   screenerReviewRevisionSchema,
   screenerPolicyManifestControlSchema,
   screenerCapacityViewSchema,
+  createScreenerBootstrapGrantInputSchema,
+  screenerBootstrapGrantResponseSchema,
   screenerProviderSettingsControlSchema,
   setScreenerProviderSettingsInputSchema,
   setScreenerNodeChannelSettingsInputSchema,
@@ -463,6 +465,26 @@ export async function fetchScreenerPolicyManifestControl() {
 export async function fetchScreenerCapacity() {
   const payload = await platformAdminRequest('/api/v1/admin/screener-capacity')
   return screenerCapacityViewSchema.parse(payload)
+}
+
+export async function createScreenerBootstrapGrant(actor: string, rawInput: unknown) {
+  const input = createScreenerBootstrapGrantInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/screener-bootstrap-grants', {
+    method: 'POST',
+    actor,
+    body: {
+      environment: 'prod',
+      node_id: input.nodeId,
+      provider: input.provider,
+      provider_resource_id: input.providerResourceId,
+      image_reference: input.imageReference,
+      expected_controller_epoch: input.expectedControllerEpoch,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return screenerBootstrapGrantResponseSchema.parse(payload)
 }
 
 export async function retryTrustedImageBuild(rawInput: unknown, actor: string) {

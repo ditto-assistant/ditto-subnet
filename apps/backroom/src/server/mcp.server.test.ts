@@ -93,6 +93,7 @@ describe('Backroom MCP tools', () => {
         'download_runtime_profile',
         'get_queue_policy_settings',
         'get_screener_capacity',
+        'create_screener_bootstrap_grant',
         'get_screener_review_settings',
         'apply_screener_review_settings',
         'get_screener_policy_manifest',
@@ -194,16 +195,17 @@ describe('Backroom MCP tools', () => {
     // number is the coarse whole-payload backstop, and input schemas dominate
     // it. Curve v3 and the runtime metrics/capture contracts added legitimate,
     // bounded input schemas without relaxing either prose budget below. The
-    // 104_400 whole-payload includes the L1 model/timeout fields on the
+    // 105_000 whole-payload includes the L1 model/timeout fields on the
     // screener-review settings write schema, the validator fleet/assignment
     // read schemas, the three inference-trace archive tools, the operator
     // screening-reject tool, the gradient-hold and adjudicator controls, the
     // screener policy-activation write schema, the coding certification read
     // tool, the four bounded shadow core-qualification operations, and the
-    // shadow coding-evaluation ledger read. Keep modest headroom for schema
-    // evolution; tighten the description budgets, not this whole-payload
-    // backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(104_400)
+    // shadow coding-evaluation ledger read and the exact
+    // node/resource/image/controller bootstrap-grant schema. Keep
+    // modest headroom for schema evolution; tighten the description budgets,
+    // not this whole-payload backstop, to push back on tutorials.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(105_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. 22_500 admits the screener
@@ -1897,6 +1899,61 @@ describe('Backroom MCP tools', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       'https://platform-api.heyditto.ai/api/v1/admin/screener-capacity',
       expect.any(Object),
+    )
+    await client.close()
+    await server.close()
+  })
+
+  it('creates one fenced screener bootstrap grant as the connected operator', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const imageReference =
+      'us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-runtime/screener@sha256:' +
+      'a'.repeat(64)
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        grant_id: '93fc1dcb-9a7d-4c53-986f-d50121b478e0',
+        registration_token: 'token-' + 'x'.repeat(48),
+        expires_at: '2026-08-29T15:00:00Z',
+      }, { status: 201 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const confirmation =
+      `CREATE SCREENER BOOTSTRAP GRANT NODE=subnet-screener-1 PROVIDER=hetzner ` +
+      `RESOURCE=3062657 IMAGE=${imageReference}`
+    const response = await client.callTool({
+      name: 'create_screener_bootstrap_grant',
+      arguments: {
+        nodeId: 'subnet-screener-1',
+        provider: 'hetzner',
+        providerResourceId: '3062657',
+        imageReference,
+        expectedControllerEpoch: 'prod:controller-1',
+        reason: 'Enroll the prepared primary Hetzner screener at zero capacity',
+        confirmation,
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      grant_id: '93fc1dcb-9a7d-4c53-986f-d50121b478e0',
+      expires_at: '2026-08-29T15:00:00Z',
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-bootstrap-grants',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          environment: 'prod',
+          node_id: 'subnet-screener-1',
+          provider: 'hetzner',
+          provider_resource_id: '3062657',
+          image_reference: imageReference,
+          expected_controller_epoch: 'prod:controller-1',
+          reason: 'Enroll the prepared primary Hetzner screener at zero capacity',
+          actor: 'peyton@omniaura.ai',
+          confirmation,
+        }),
+      }),
     )
     await client.close()
     await server.close()

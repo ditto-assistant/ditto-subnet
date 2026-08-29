@@ -94,6 +94,7 @@ import {
   summarizeScreeningFailuresInputSchema,
   confirmationBundleStateSchema,
   confirmationBundleDetailInputSchema,
+  createScreenerBootstrapGrantInputSchema,
   setConfirmationBundleSettingsInputSchema,
   authorizeConfirmationBundleRetestInputSchema,
   retryTrustedImageBuildInputSchema,
@@ -176,6 +177,7 @@ import {
   fetchQueuePolicySettings,
   fetchScreenerPolicyActivation,
   scheduleScreenerPolicyActivation,
+  createScreenerBootstrapGrant,
   fetchScreenerCapacity,
   fetchScreenerReviewControl,
   applyScreenerReviewSettings,
@@ -222,6 +224,7 @@ export type BackroomEnv = {
 }
 
 export const WRITE_TOOL_NAMES = new Set([
+  'create_screener_bootstrap_grant',
   'resolve_screening_quarantine',
   'resolve_screening_dispute',
   'rescreen_rejected_submission',
@@ -457,6 +460,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read screener capacity, provider priorities, and recent build, runtime, and source-review jobs before manual retry.',
   get_agent_coding_shadow_evaluations:
     'Read separate weight-zero coding runs, leases, and repair outcomes.',
+  create_screener_bootstrap_grant:
+    'Mint one short-lived, single-use, controller-fenced node enrollment grant. Returns the only token copy.',
   get_core_qualification_policy:
     'Read the benchmark-scoped shadow core qualification policy.',
   set_core_qualification_policy:
@@ -1577,6 +1582,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerCapacity()),
+  )
+
+  registerTool(
+    'create_screener_bootstrap_grant',
+    {
+      title: 'Create screener bootstrap grant',
+      description:
+        'Mint one single-use grant for an exact node, resource, image digest, and live controller epoch. Returns the only plaintext token copy; new nodes still enroll at zero capacity. Requires backroom:write.',
+      inputSchema: createScreenerBootstrapGrantInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => createScreenerBootstrapGrant(props.session.email, input)),
   )
 
   registerTool(
