@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.145.0 (2026-08-29)
+
+### Bug Fixes
+
+- **screener**: Bind review settings when claiming work
+  ([#1314](https://github.com/ditto-assistant/ditto-subnet/pull/1314),
+  [`9582fe0`](https://github.com/ditto-assistant/ditto-subnet/commit/9582fe0050668b66c31ce51229bd984866a6ec48))
+
+### Features
+
+- **screener**: Announce worker host specs on the heartbeat
+  ([#1312](https://github.com/ditto-assistant/ditto-subnet/pull/1312),
+  [`5dcd624`](https://github.com/ditto-assistant/ditto-subnet/commit/5dcd624ae72aca6c32b05c34cf8090b6cf7e3c19))
+
+
 ## v0.144.2 (2026-08-29)
 
 ### Bug Fixes

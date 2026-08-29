@@ -3,4 +3,4 @@ package version
 
 // Version is updated by semantic-release. Runtime behavior must not branch on
 // this value; benchmark behavior is selected only by the explicit bench version.
-const Version = "0.144.2"
+const Version = "0.145.0"
