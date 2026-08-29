@@ -87,6 +87,12 @@ its side, so an overloaded host is refused work even if it asks.
 
 ## Requirements
 
+- A dedicated **non-root** operator account that owns the repository checkout,
+  wallet directory, updater state, and Docker access. Clone the repository under
+  that account's home directory (for example, `/home/ditto-ops/ditto-subnet`),
+  never under `/root`, and do not run the deployment or updater commands from a
+  root login shell. Use `sudo` only for the explicitly documented host-level
+  installation commands.
 - Linux x86-64 with at least 4 vCPU, 160 GB free disk, and 32 GB RAM to serve
   the default eight slots. Disk is the constraint that binds in practice; see
   the sizing table above to run a smaller host.
@@ -107,11 +113,26 @@ swap, follow [the GCP production validator runbook](../infra/docs/validator-gcp-
 That path provisions a private Shielded VM and bootstraps an authenticated
 managed stack directly; it does not use the source-build steps below.
 
-Clone the repository and create the one environment file used by Compose:
+Log in as the dedicated non-root Docker operator. The preflight below must pass
+before you clone the repository or create any validator files. Do not use
+`sudo git clone`, `sudo -i`, `su -`, `/root/ditto-subnet`, or a root-owned
+checkout: those layouts split ownership between the running validator and the
+transactional updater, which can leave updater state unreadable and make future
+releases fail or report misleading status.
+
+Clone the repository under the operator's home directory and create the one
+environment file used by Compose:
 
 ```sh
+test "$(id -u)" -ne 0 || {
+  printf '%s\n' 'error: run validator setup as a dedicated non-root Docker operator' >&2
+  exit 1
+}
+docker info >/dev/null
+cd "$HOME"
 git clone https://github.com/ditto-assistant/ditto-subnet
 cd ditto-subnet
+test "$(id -u)" -eq "$(stat -c '%u' .)"
 cp .env.example .env
 openssl rand -base64 32
 ```
