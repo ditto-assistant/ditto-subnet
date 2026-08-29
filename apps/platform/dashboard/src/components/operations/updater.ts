@@ -50,6 +50,9 @@ export function updaterModeLine(entry: FleetEntry): string | null {
   }
   if (updater.state === "not_managed") return "Source-managed";
   if (updater.state === "disabled") return "Managed · updates off";
+  if (updater.self_refresh_installed === false) {
+    return "Managed · updater refresh missing";
+  }
   return "Managed · " + (updater.channel || "channel unknown");
 }
 

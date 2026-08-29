@@ -11,6 +11,7 @@ _DESCRIPTOR_PATTERN = (
     r"^ghcr\.io/ditto-assistant/ditto-subnet-stack@sha256:[0-9a-f]{64}$"
 )
 _VERSION_PATTERN = r"^[0-9]+\.[0-9]+\.[0-9]+$"
+_REVISION_PATTERN = r"^[0-9a-f]{40}$"
 
 ValidatorUpdaterPhase = Literal[
     "prepared",
@@ -64,6 +65,11 @@ class ValidatorUpdaterStatus(BaseModel):
     last_success_at: Annotated[int | None, Field(ge=0)] = None
     last_failure_at: Annotated[int | None, Field(ge=0)] = None
     last_failure_reason: ValidatorUpdaterFailureReason | None = None
+    self_refresh_installed: bool | None = None
+    self_refresh_revision: Annotated[str | None, Field(pattern=_REVISION_PATTERN)] = (
+        None
+    )
+    self_refresh_last_success_at: Annotated[int | None, Field(ge=0)] = None
     observed_at: Annotated[int, Field(ge=0)]
 
     @model_validator(mode="after")
@@ -84,13 +90,29 @@ class ValidatorUpdaterStatus(BaseModel):
                         self.last_success_at,
                         self.last_failure_at,
                         self.last_failure_reason,
+                        self.self_refresh_revision,
+                        self.self_refresh_last_success_at,
                     )
                 )
                 or self.failed_candidate_count
                 or self.suppressed
+                or self.self_refresh_installed
             ):
                 raise ValueError("not_managed telemetry cannot claim updater state")
             return self
+        if self.self_refresh_installed is False and (
+            self.self_refresh_revision is not None
+            or self.self_refresh_last_success_at is not None
+        ):
+            raise ValueError(
+                "missing self-refresh cannot claim successful refresh state"
+            )
+        if (self.self_refresh_revision is None) != (
+            self.self_refresh_last_success_at is None
+        ):
+            raise ValueError(
+                "self-refresh revision and timestamp must be reported together"
+            )
         if not self.enabled:
             if self.state != "disabled" or self.channel != "compat-2":
                 raise ValueError("disabled managed telemetry must retain its channel")

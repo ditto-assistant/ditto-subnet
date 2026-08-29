@@ -21,6 +21,9 @@ function status(overrides: Partial<ValidatorUpdaterStatus> = {}): ValidatorUpdat
     last_success_at: null,
     last_failure_at: null,
     last_failure_reason: null,
+    self_refresh_installed: true,
+    self_refresh_revision: null,
+    self_refresh_last_success_at: null,
     observed_at: 1_786_820_512,
     ...overrides,
   };
@@ -39,6 +42,11 @@ describe("managed updater display", () => {
     const validator = entry(status());
     expect(updaterModeLine(validator)).toBe("Managed · compat-2");
     expect(updaterView(validator)).toBeNull();
+  });
+
+  it("calls out a managed host missing updater self-refresh", () => {
+    const validator = entry(status({ self_refresh_installed: false }));
+    expect(updaterModeLine(validator)).toBe("Managed · updater refresh missing");
   });
 
   it("explains a safe drain and falls back to the signed digest target", () => {

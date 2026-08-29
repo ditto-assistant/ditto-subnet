@@ -443,6 +443,11 @@ or noncanonical checkouts fail closed. Re-run the installer manually after a
 reviewed change to its systemd units; the updater cannot grant itself root
 authority to rewrite those units.
 
+Heartbeat protocol v26 reports whether that one-time self-refresh bootstrap was
+installed, plus the last successfully refreshed canonical revision and time.
+Operators can therefore distinguish a current stack from a host whose updater
+launcher will become stranded on its present checkout.
+
 Existing managed validators need one manual bootstrap when this refresh timer
 is first introduced. Do this only from the canonical checkout with no tracked
 changes, while logged in as the non-root checkout owner and Docker operator;

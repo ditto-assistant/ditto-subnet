@@ -21,6 +21,7 @@ _DESCRIPTOR = re.compile(
     r"^ghcr\.io/ditto-assistant/ditto-subnet-stack@sha256:[0-9a-f]{64}$"
 )
 _VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+_REVISION = re.compile(r"^[0-9a-f]{40}$")
 _PHASE_STATES: dict[ValidatorUpdaterPhase, ValidatorUpdaterState] = {
     "prepared": "draining",
     "drained": "draining",
@@ -97,6 +98,14 @@ def _version(value: str | None) -> str | None:
     return value
 
 
+def _revision(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not _REVISION.fullmatch(value):
+        raise _MalformedState
+    return value
+
+
 def _integer(value: str | None, *, maximum: int | None = None) -> int | None:
     if value is None:
         return None
@@ -113,6 +122,7 @@ def _unavailable(observed_at: int) -> ValidatorUpdaterStatus:
         enabled=True,
         channel="compat-2",
         state="unavailable",
+        self_refresh_installed=False,
         observed_at=observed_at,
     )
 
@@ -140,6 +150,7 @@ def collect_updater_status(
         return ValidatorUpdaterStatus(
             enabled=False,
             state="not_managed",
+            self_refresh_installed=False,
             observed_at=now,
         )
 
@@ -148,6 +159,36 @@ def collect_updater_status(
             os.environ.get("VALIDATOR_STACK_DESCRIPTOR_REF")
         )
         current_version = _version(os.environ.get("VALIDATOR_STACK_VERSION"))
+        refresh_install = _read_env(
+            state_dir / "updater-refresh-installed.env",
+            {"INSTALLED_REVISION", "INSTALLED_AT"},
+        )
+        self_refresh_installed = refresh_install is not None
+        if refresh_install is not None:
+            _revision(refresh_install.get("INSTALLED_REVISION"))
+            _integer(refresh_install.get("INSTALLED_AT"))
+        last_refresh = _read_env(
+            state_dir / "last-updater-refresh.env",
+            {
+                "UPDATER_PREVIOUS_REVISION",
+                "UPDATER_CURRENT_REVISION",
+                "UPDATER_REFRESHED_AT",
+            },
+        )
+        self_refresh_revision = None
+        self_refresh_last_success_at = None
+        if last_refresh is not None:
+            if not self_refresh_installed:
+                raise _MalformedState
+            _revision(last_refresh.get("UPDATER_PREVIOUS_REVISION"))
+            self_refresh_revision = _revision(
+                last_refresh.get("UPDATER_CURRENT_REVISION")
+            )
+            self_refresh_last_success_at = _integer(
+                last_refresh.get("UPDATER_REFRESHED_AT")
+            )
+            if self_refresh_revision is None or self_refresh_last_success_at is None:
+                raise _MalformedState
         if not enabled:
             return ValidatorUpdaterStatus(
                 enabled=False,
@@ -155,6 +196,9 @@ def collect_updater_status(
                 state="disabled",
                 current_descriptor=current_descriptor,
                 current_version=current_version,
+                self_refresh_installed=self_refresh_installed,
+                self_refresh_revision=self_refresh_revision,
+                self_refresh_last_success_at=self_refresh_last_success_at,
                 observed_at=now,
             )
         transaction = _read_env(
@@ -257,6 +301,9 @@ def collect_updater_status(
             last_success_at=last_success_at,
             last_failure_at=last_failure_at,
             last_failure_reason=last_failure_reason,
+            self_refresh_installed=self_refresh_installed,
+            self_refresh_revision=self_refresh_revision,
+            self_refresh_last_success_at=self_refresh_last_success_at,
             observed_at=now,
         )
     except (OSError, _MalformedState, ValueError):

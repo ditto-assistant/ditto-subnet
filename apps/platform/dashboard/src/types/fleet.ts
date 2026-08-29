@@ -91,7 +91,8 @@ export type ValidatorUpdaterState =
   | "retry_ready"
   | "suppressed";
 
-/** Privacy-safe managed updater telemetry signed into heartbeat protocol v23. */
+/** Privacy-safe managed updater telemetry signed into heartbeat protocol v23+.
+ * Protocol v26 explicitly reports the updater self-refresh bootstrap. */
 export interface ValidatorUpdaterStatus {
   enabled: boolean;
   channel?: "compat-2" | null;
@@ -107,6 +108,11 @@ export interface ValidatorUpdaterStatus {
   suppressed: boolean;
   /** Unix seconds. */
   last_success_at?: number | null;
+  self_refresh_installed?: boolean | null;
+  /** Canonical checkout revision from the last successful self-refresh. */
+  self_refresh_revision?: string | null;
+  /** Unix seconds. */
+  self_refresh_last_success_at?: number | null;
   /** Unix seconds. */
   last_failure_at?: number | null;
   last_failure_reason?: string | null;

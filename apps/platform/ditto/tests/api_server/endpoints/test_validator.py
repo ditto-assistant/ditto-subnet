@@ -1890,6 +1890,9 @@ class TestHeartbeat:
             **updater,
             "transaction_phase": None,
             "last_success_at": None,
+            "self_refresh_installed": None,
+            "self_refresh_revision": None,
+            "self_refresh_last_success_at": None,
         }
         assert "error" not in json.dumps(member["updater_status"])
 
