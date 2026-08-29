@@ -21,9 +21,11 @@ class _FakeCloudRunClient:
         *,
         job: dict[str, Any] | None = None,
         fail_get_execution: bool = False,
+        logs: list[str] | None = None,
     ) -> None:
         self.execution = execution
         self.fail_get_execution = fail_get_execution
+        self.logs = logs or []
         self.job = job or {
             "status": {
                 "latestCreatedExecution": {
@@ -43,12 +45,17 @@ class _FakeCloudRunClient:
             raise AssertionError("get_execution must not run for a v2 running ref")
         return self.execution
 
+    async def list_job_logs(self, job_id: str, *, limit: int = 400) -> list[str]:
+        del job_id
+        return self.logs[-limit:]
+
 
 def _provider(
     execution: dict[str, Any],
     *,
     job: dict[str, Any] | None = None,
     fail_get_execution: bool = False,
+    logs: list[str] | None = None,
 ) -> CloudRunComputeProvider:
     targon = TargonRentalConfig(
         api_key="k" * 32,
@@ -68,7 +75,10 @@ def _provider(
         cast(
             AsyncCloudRunClient,
             _FakeCloudRunClient(
-                execution, job=job, fail_get_execution=fail_get_execution
+                execution,
+                job=job,
+                fail_get_execution=fail_get_execution,
+                logs=logs,
             ),
         ),
         CloudRunScreeningConfig(
@@ -163,6 +173,42 @@ async def test_observe_failed_job_maps_kaniko_exit() -> None:
         inflight_failure_code("gcp", observation.status, observation.message)
         == "CLOUDRUN_SUBMISSION_KANIKO_FAILED"
     )
+
+
+@pytest.mark.asyncio
+async def test_observe_failed_job_uses_redacted_log_marker() -> None:
+    job = {
+        "status": {
+            "latestCreatedExecution": {
+                "name": "projects/p/locations/us-central1/jobs/job/executions/ex",
+                "completionStatus": "EXECUTION_FAILED",
+            }
+        }
+    }
+    provider = _provider(
+        {"status": {"conditions": []}},
+        job=job,
+        logs=[
+            "api_key=do-not-return",
+            "DITTO_SUBMISSION_BUILD_FAILED=KANIKO",
+        ],
+    )
+    observation = await provider.observe_provision("job:ditto-miner-build-test")
+    assert "do-not-return" not in observation.message
+    assert "api_key=[REDACTED]" in observation.message
+    assert (
+        inflight_failure_code("gcp", observation.status, observation.message)
+        == "CLOUDRUN_SUBMISSION_KANIKO_FAILED"
+    )
+
+
+@pytest.mark.asyncio
+async def test_replica_logs_returns_redacted_job_tail() -> None:
+    provider = _provider({}, logs=["Bearer private-token", "useful failure"])
+    logs = await provider.replica_logs("job:ditto-miner-build-test", tail=2)
+    assert "private-token" not in logs
+    assert "Bearer [REDACTED]" in logs
+    assert "useful failure" in logs
 
 
 @pytest.mark.asyncio

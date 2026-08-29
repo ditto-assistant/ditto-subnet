@@ -304,6 +304,17 @@ describe('admin API schemas', () => {
         current_phase: null,
       }],
       events: [],
+      provider_jobs: [{
+        job_id: '0e919235-8a08-492e-a38d-0fa89fd5e0a3',
+        lane: 'source_review',
+        status: 'running',
+        provider: 'gcp',
+        provider_resource_id: 'screening-source-review-123',
+        image_reference: null,
+        error_code: null,
+        created_at: '2026-08-02T00:00:00Z',
+        updated_at: '2026-08-02T00:01:00Z',
+      }],
       provider_control: {
         current: {
           environment: 'prod', revision: 0, parent_revision: 0,
@@ -320,6 +331,7 @@ describe('admin API schemas', () => {
     expect(parsed.snapshot?.gce_target).toBe(2)
     expect(parsed.nodes[0].provider_resource_id).toBe('wk-123456')
     expect(parsed.builds).toEqual([])
+    expect(parsed.provider_jobs[0].provider).toBe('gcp')
   })
 
   it('preserves detailed operator reasons without an upper bound', () => {

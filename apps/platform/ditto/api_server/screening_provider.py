@@ -14,6 +14,9 @@ from typing import Protocol
 _SUBMISSION_EXIT_CODE = re.compile(
     r"(?:^|\D)exit(?: code)?[:\s(]+(71|72|73|74|75|76)(?:\D|$)"
 )
+_SUBMISSION_STAGE_MARKER = re.compile(
+    r"DITTO_SUBMISSION_BUILD_FAILED=(SOURCE|KANIKO|ARCHIVE|UPLOAD|COMPLETE|CONTRACT)"
+)
 _SUBMISSION_STAGE_BY_EXIT_CODE = {
     "71": "SOURCE",
     "72": "KANIKO",
@@ -63,6 +66,14 @@ class ProvisionObservation:
 
     status: str
     message: str = ""
+    ready: bool | None = None
+    """Replica readiness when the provider exposes it.
+
+    ``None`` means the provider has no separate readiness signal.  Targon
+    reports ``status=running`` before it owns a replica, so its adapter sets
+    this explicitly and callers must not treat ``running`` plus ``False`` as
+    provisioned.
+    """
 
 
 class ScreeningComputeProvider(Protocol):
@@ -116,6 +127,10 @@ def inflight_failure_code(stored_provider: str, status: str, message: str = "") 
     those codes stays ``TARGON_PROVISION_ERROR``.
     """
     if status in _PROVIDER_TERMINAL:
+        marker = _SUBMISSION_STAGE_MARKER.search(message)
+        if marker is not None:
+            prefix = "TARGON" if stored_provider == "targon" else "CLOUDRUN"
+            return f"{prefix}_SUBMISSION_{marker.group(1)}_FAILED"
         match = _SUBMISSION_EXIT_CODE.search(message)
         if match is not None:
             prefix = "TARGON" if stored_provider == "targon" else "CLOUDRUN"

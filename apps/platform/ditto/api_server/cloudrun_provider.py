@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 import httpx
@@ -95,6 +96,13 @@ _SMOKE_EXTRA_ENV = (
     ("CHUTES_API_KEY", "relay"),
     ("DITTOBENCH_PROVIDER", "chutes"),
 )
+_LOG_LIMIT = 16_000
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(api[_-]?key|authorization|password|secret|token)\b"
+    r"(\s*[:=]\s*)([^\s,;]+)"
+)
+_BEARER_TOKEN = re.compile(r"(?i)\bBearer\s+[^\s,;]+")
+_SIGNED_TOKEN = re.compile(r"\bsvt_[A-Za-z0-9._-]+")
 
 
 class CloudRunComputeProvider:
@@ -267,8 +275,14 @@ class CloudRunComputeProvider:
         return True
 
     async def replica_logs(self, resource_id: str, *, tail: int = 400) -> str:
-        del resource_id, tail
-        return ""
+        kind, name = _split(resource_id)
+        if kind != "job":
+            return ""
+        try:
+            messages = await self._client.list_job_logs(name, limit=tail)
+        except CloudRunAPIError:
+            return ""
+        return _redact_log_tail("\n".join(messages))
 
     async def _healthy(self, uri: str) -> bool:
         try:
@@ -289,21 +303,24 @@ class CloudRunComputeProvider:
         job = await self._client.get_job(job_id)
         execution = _job_execution_ref(job)
         name = str(execution.get("name", "")) if execution is not None else ""
-        if not name:
-            return ""
-        detail = await self._client.get_execution(name)
-        status = _execution_status(detail)
-        conditions = status.get("conditions", detail.get("conditions"))
-        if not isinstance(conditions, list):
-            return ""
         parts: list[str] = []
-        for row in conditions:
-            if not isinstance(row, dict):
-                continue
-            message = str(row.get("message") or "").strip()
-            if message:
-                parts.append(message)
-        return " ".join(parts)
+        if name:
+            detail = await self._client.get_execution(name)
+            status = _execution_status(detail)
+            conditions = status.get("conditions", detail.get("conditions"))
+            if isinstance(conditions, list):
+                for row in conditions:
+                    if not isinstance(row, dict):
+                        continue
+                    message = str(row.get("message") or "").strip()
+                    if message:
+                        parts.append(message)
+        try:
+            messages = await self._client.list_job_logs(job_id, limit=400)
+        except CloudRunAPIError:
+            messages = []
+        parts.extend(messages)
+        return _redact_log_tail("\n".join(parts))
 
     async def _job_status(self, job_id: str) -> str:
         job = await self._client.get_job(job_id)
@@ -382,3 +399,12 @@ def _split(resource_id: str) -> tuple[str, str]:
     if resource_id.startswith(_SERVICE_PREFIX):
         return "service", resource_id[len(_SERVICE_PREFIX) :]
     return "job", resource_id
+
+
+def _redact_log_tail(value: str) -> str:
+    redacted = _BEARER_TOKEN.sub("Bearer [REDACTED]", value)
+    redacted = _SIGNED_TOKEN.sub("[REDACTED]", redacted)
+    redacted = _SECRET_ASSIGNMENT.sub(r"\1\2[REDACTED]", redacted)
+    if len(redacted) <= _LOG_LIMIT:
+        return redacted
+    return f"[truncated]\n{redacted[-_LOG_LIMIT:]}"

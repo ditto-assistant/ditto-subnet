@@ -2356,6 +2356,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/agents/{agent_id}/screening-feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My Screening Feedback */
+        get: operations["my_screening_feedback_api_v1_me_agents__agent_id__screening_feedback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/avatar": {
         parameters: {
             query?: never;
@@ -12109,6 +12126,53 @@ export interface components {
             github_url?: string | null;
             /** X Url */
             x_url?: string | null;
+        };
+        /** MinerScreeningFailure */
+        MinerScreeningFailure: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Captured At */
+            captured_at?: string | null;
+            /** Detail */
+            detail?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Lane */
+            lane?: string | null;
+            /** Log Tail */
+            log_tail?: string | null;
+            /** Policy Version */
+            policy_version: number;
+            /** Provider */
+            provider?: string | null;
+            /** Public Reason */
+            public_reason?: string | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Status */
+            status: string;
+        };
+        /** MinerScreeningFeedbackResponse */
+        MinerScreeningFeedbackResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Attempts */
+            attempts: components["schemas"]["MinerScreeningFailure"][];
+            /** Miner Hotkey */
+            miner_hotkey: string;
         };
         /** MinerSessionView */
         MinerSessionView: {
@@ -24900,6 +24964,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MinerHarnessLogsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_screening_feedback_api_v1_me_agents__agent_id__screening_feedback_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerScreeningFeedbackResponse"];
                 };
             };
             /** @description Validation Error */

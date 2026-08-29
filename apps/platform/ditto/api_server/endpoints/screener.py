@@ -1446,6 +1446,7 @@ async def claim_submission_image_build(
     request: Request,
     _controller: ControllerDep,
     session: SessionDep,
+    storage: StorageDep,
 ) -> SubmissionImageBuildClaimResponse:
     """Lease one miner build and mint only its short-lived job capability."""
     if _platform_owns_miner_rentals(request):
@@ -1464,6 +1465,7 @@ async def claim_submission_image_build(
                 screener_hotkey=attester,
                 environment=payload.environment,
                 now=now,
+                archive_exists=storage.object_exists,
             )
         if not _targon_first(provider_settings.build_provider_priority):
             await session.execute(

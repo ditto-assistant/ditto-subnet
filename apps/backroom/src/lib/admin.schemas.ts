@@ -551,7 +551,7 @@ export const screenerCapacityViewSchema = z.object({
     job_id: z.string().uuid(),
     lane: z.enum(['build', 'runtime', 'source_review']),
     status: z.string().min(1),
-    provider: z.literal('targon').nullable(),
+    provider: z.enum(['targon', 'gcp']).nullable(),
     provider_resource_id: z.string().nullable(),
     image_reference: z.string().nullable(),
     error_code: z.string().nullable(),

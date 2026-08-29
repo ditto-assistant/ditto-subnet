@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
@@ -54,7 +55,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_LEASE_TTL = timedelta(minutes=120)
+_LEASE_TTL = timedelta(minutes=45)
 _SCREENED_IMAGE_TTL = timedelta(days=1)
 _PLATFORM_COPY_PREFIX = "platform-targon-copy:"
 _KANIKO_FAILED_SUFFIX = "_SUBMISSION_KANIKO_FAILED"
@@ -183,6 +184,7 @@ async def admit_targon_screening_work(
     environment: str,
     now: datetime,
     limit: int = 1,
+    archive_exists: Callable[..., Awaitable[bool]] | None = None,
 ) -> int:
     """Open Platform-owned attempts and queue Kaniko for Targon-first lanes."""
     _, provider_settings = await resolve_screener_provider_settings(
@@ -220,6 +222,7 @@ async def admit_targon_screening_work(
             attempt=attempt,
             environment=environment,
             runtime_enabled=runtime_enabled,
+            archive_exists=archive_exists,
         )
         if not attempt.build_only:
             await session.execute(
@@ -247,6 +250,7 @@ async def _queue_kaniko(
     attempt: ScreeningAttempt,
     environment: str,
     runtime_enabled: bool,
+    archive_exists: Callable[..., Awaitable[bool]] | None = None,
 ) -> None:
     build_id = uuid4()
     artifact_sha256 = agent.sha256.lower()
@@ -265,6 +269,18 @@ async def _queue_kaniko(
         .order_by(SubmissionImageBuild.completed_at.desc())
         .limit(1)
     )
+    if (
+        prior_archive is not None
+        and archive_exists is not None
+        and not await archive_exists(key=prior_archive.output_key)
+    ):
+        logger.warning(
+            "submission archive reuse skipped because object is missing "
+            "agent_id=%s output_key=%s",
+            agent.agent_id,
+            prior_archive.output_key,
+        )
+        prior_archive = None
     if prior_archive is not None:
         now = datetime.now(UTC)
         reuse_runtime = bool(

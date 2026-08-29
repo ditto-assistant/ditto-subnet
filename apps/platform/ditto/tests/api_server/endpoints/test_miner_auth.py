@@ -105,6 +105,7 @@ async def test_device_login_sets_profile_and_session(
     names = [tool["name"] for tool in mcp.json()["result"]["tools"]]
     assert "whoami" in names
     assert "get_my_harness_logs" in names
+    assert "get_my_screening_feedback" in names
     assert "prepare_signed_action" in names
 
     command = await client.post(
