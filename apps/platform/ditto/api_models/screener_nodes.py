@@ -44,12 +44,38 @@ class ScreenerBootstrapGrantRequest(BaseModel):
     image_reference: Annotated[str, Field(pattern=_IMAGE_REFERENCE)] | None = None
 
 
+class ScreenerBootstrapGrantAdminRequest(BaseModel):
+    """Audited operator request for one controller-fenced enrollment grant."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
+    node_id: Annotated[str, Field(pattern=_NODE_ID)]
+    provider: ScreenerProvider
+    provider_resource_id: Annotated[str, Field(min_length=1, max_length=200)]
+    image_reference: Annotated[str, Field(pattern=_IMAGE_REFERENCE)]
+    expected_controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)]
+    confirmation: Annotated[str, Field(min_length=1, max_length=600)]
+
+
 class ScreenerBootstrapGrantResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     grant_id: UUID
     registration_token: Annotated[str, Field(min_length=43, max_length=128)]
     expires_at: datetime
+
+
+def screener_bootstrap_grant_confirmation(
+    payload: ScreenerBootstrapGrantAdminRequest,
+) -> str:
+    return (
+        f"CREATE SCREENER BOOTSTRAP GRANT NODE={payload.node_id} "
+        f"PROVIDER={payload.provider} RESOURCE={payload.provider_resource_id} "
+        f"IMAGE={payload.image_reference}"
+    )
 
 
 class ScreenerNodeRegistrationRequest(BaseModel):

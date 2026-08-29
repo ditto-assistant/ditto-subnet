@@ -450,6 +450,42 @@ export const setScreenerProviderSettingsInputSchema = z.object({
   confirmation: z.string(),
 })
 
+const screenerBootstrapGrantBaseSchema = z.object({
+  nodeId: z.string().regex(/^[a-zA-Z0-9._-]{1,63}$/),
+  provider: screenerProviderSchema,
+  providerResourceId: z.string().min(1).max(200),
+  imageReference: z.string().regex(
+    /^[a-z0-9.-]+(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$/,
+  ),
+  expectedControllerEpoch: z.string().regex(/^[a-zA-Z0-9._:-]{1,100}$/),
+  reason: auditReasonSchema(8),
+})
+
+export function screenerBootstrapGrantConfirmation(
+  input: z.infer<typeof screenerBootstrapGrantBaseSchema>,
+) {
+  return `CREATE SCREENER BOOTSTRAP GRANT NODE=${input.nodeId} PROVIDER=${input.provider} RESOURCE=${input.providerResourceId} IMAGE=${input.imageReference}`
+}
+
+export const createScreenerBootstrapGrantInputSchema = screenerBootstrapGrantBaseSchema
+  .extend({ confirmation: z.string() })
+  .superRefine((input, context) => {
+    const expected = screenerBootstrapGrantConfirmation(input)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['confirmation'],
+        message: `confirmation must be exactly ${expected}`,
+      })
+    }
+  })
+
+export const screenerBootstrapGrantResponseSchema = z.object({
+  grant_id: z.string().uuid(),
+  registration_token: z.string().min(43).max(128),
+  expires_at: z.string(),
+})
+
 export function screenerProviderSettingsConfirmation(
   settings: z.infer<typeof screenerProviderSettingsSchema>,
 ) {

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import hashlib
+import secrets
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +24,8 @@ from ditto.api_models.screener_node_settings import (
     node_status_confirmation,
 )
 from ditto.api_models.screener_nodes import (
+    ScreenerBootstrapGrantAdminRequest,
+    ScreenerBootstrapGrantResponse,
     ScreenerCapacityEventView,
     ScreenerCapacitySnapshotResponse,
     ScreenerCapacityView,
@@ -33,6 +37,7 @@ from ditto.api_models.screener_nodes import (
     TrustedImageBuildRetryRequest,
     TrustedImageBuildStatus,
     TrustedImageBuildView,
+    screener_bootstrap_grant_confirmation,
 )
 from ditto.api_models.screener_provider_settings import (
     ScreenerProviderSettings,
@@ -50,6 +55,7 @@ from ditto.db.models import (
     ScreenerCapacitySnapshot,
     ScreenerHeartbeat,
     ScreenerNode,
+    ScreenerNodeBootstrapGrant,
     ScreenerProviderSettingsRevision,
     ScreeningAttempt,
     SubmissionImageBuild,
@@ -267,6 +273,104 @@ async def _provider_control(
             else _default_provider_revision(environment)
         ),
         history=[_provider_revision(row) for row in rows],
+    )
+
+
+@router.post(
+    "/screener-bootstrap-grants",
+    response_model=ScreenerBootstrapGrantResponse,
+    status_code=201,
+)
+async def create_screener_bootstrap_grant(
+    payload: ScreenerBootstrapGrantAdminRequest,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> ScreenerBootstrapGrantResponse:
+    """Mint one audited, node-bound grant against the live controller fence."""
+    expected_confirmation = screener_bootstrap_grant_confirmation(payload)
+    if payload.confirmation != expected_confirmation:
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirmation must be exactly {expected_confirmation}",
+        )
+
+    now = datetime.now(UTC)
+    registration_token = secrets.token_urlsafe(48)
+    grant_id = uuid4()
+    expires_at = now + timedelta(
+        seconds=request.app.state.config.screener_auth.bootstrap_ttl_seconds
+    )
+    async with session.begin():
+        snapshot = await session.scalar(
+            select(ScreenerCapacitySnapshot)
+            .where(ScreenerCapacitySnapshot.environment == payload.environment)
+            .with_for_update()
+        )
+        if snapshot is None:
+            raise HTTPException(
+                status_code=409, detail="capacity controller has not checked in"
+            )
+        if snapshot.controller_epoch != payload.expected_controller_epoch:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "capacity controller epoch changed; refresh before creating grant"
+                ),
+            )
+        if now >= _required_aware(snapshot.controller_lease_expires_at):
+            raise HTTPException(
+                status_code=409, detail="capacity controller lease has expired"
+            )
+        if await session.get(ScreenerNode, payload.node_id) is not None:
+            raise HTTPException(
+                status_code=409, detail="screener node is already enrolled"
+            )
+        active_grant = await session.scalar(
+            select(ScreenerNodeBootstrapGrant.grant_id).where(
+                ScreenerNodeBootstrapGrant.environment == payload.environment,
+                ScreenerNodeBootstrapGrant.node_id == payload.node_id,
+                ScreenerNodeBootstrapGrant.consumed_at.is_(None),
+                ScreenerNodeBootstrapGrant.expires_at > now,
+            )
+        )
+        if active_grant is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="an unexpired bootstrap grant already exists for this node",
+            )
+        session.add(
+            ScreenerNodeBootstrapGrant(
+                grant_id=grant_id,
+                environment=payload.environment,
+                node_id=payload.node_id,
+                provider=payload.provider,
+                provider_resource_id=payload.provider_resource_id,
+                controller_epoch=snapshot.controller_epoch,
+                image_reference=payload.image_reference,
+                token_hash=hashlib.sha256(registration_token.encode()).hexdigest(),
+                expires_at=expires_at,
+            )
+        )
+        session.add(
+            ScreenerCapacityEvent(
+                event_id=uuid4(),
+                environment=payload.environment,
+                event_type="node_bootstrap_grant_created",
+                provider=payload.provider,
+                node_id=payload.node_id,
+                detail=(
+                    f"grant_id={grant_id} actor={payload.actor.strip()} "
+                    f"reason={payload.reason.strip()}"
+                )[:500],
+                controller_epoch=snapshot.controller_epoch,
+                created_at=now,
+            )
+        )
+    return ScreenerBootstrapGrantResponse(
+        grant_id=grant_id,
+        registration_token=registration_token,
+        expires_at=expires_at,
     )
 
 

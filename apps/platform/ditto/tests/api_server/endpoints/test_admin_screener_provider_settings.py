@@ -13,7 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server.dependencies import get_session
-from ditto.db.models import ScreenerCapacityEvent, ScreenerNode, TrustedImageBuild
+from ditto.db.models import (
+    ScreenerCapacityEvent,
+    ScreenerCapacitySnapshot,
+    ScreenerNode,
+    ScreenerNodeBootstrapGrant,
+    TrustedImageBuild,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -21,6 +27,12 @@ _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
 _HEADERS = {"Authorization": f"Bearer {_ADMIN_TOKEN}"}
 _PATH = "/api/v1/admin/screener-provider-settings"
 _NODE_TOKEN = "node-token-" + "x" * 48
+_BOOTSTRAP_PATH = "/api/v1/admin/screener-bootstrap-grants"
+_CONTROLLER_EPOCH = "prod:controller-test-1"
+_IMAGE_REFERENCE = (
+    "us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-runtime/"
+    "screener@sha256:" + "a" * 64
+)
 
 
 def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> None:
@@ -63,6 +75,86 @@ def _payload(
         "actor": "operator@example.com",
         "confirmation": confirmation if confirmation is not None else phrase,
     }
+
+
+async def test_bootstrap_grant_is_fenced_single_use_and_audited(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerCapacitySnapshot(
+                environment="prod",
+                controller_epoch=_CONTROLLER_EPOCH,
+                controller_source_sha="b" * 40,
+                provider_ready=True,
+                controller_heartbeat_at=now,
+                controller_lease_expires_at=now + timedelta(minutes=3),
+                runnable_backlog=0,
+                active_leases=0,
+                desired_slots=0,
+                global_cap=6,
+                targon_capability="nogo",
+                targon_available=0,
+                targon_healthy=0,
+                targon_pending=0,
+                targon_draining=0,
+                gce_target=0,
+                gce_healthy=0,
+                gce_pending=0,
+                gce_draining=0,
+            )
+        )
+
+    payload = {
+        "environment": "prod",
+        "node_id": "subnet-screener-1",
+        "provider": "hetzner",
+        "provider_resource_id": "3062657",
+        "image_reference": _IMAGE_REFERENCE,
+        "expected_controller_epoch": _CONTROLLER_EPOCH,
+        "reason": "Enroll the prepared primary Hetzner screener at zero capacity",
+        "actor": "operator@example.com",
+        "confirmation": (
+            "CREATE SCREENER BOOTSTRAP GRANT NODE=subnet-screener-1 "
+            f"PROVIDER=hetzner RESOURCE=3062657 IMAGE={_IMAGE_REFERENCE}"
+        ),
+    }
+    stale = await client.post(
+        _BOOTSTRAP_PATH,
+        headers=_HEADERS,
+        json={**payload, "expected_controller_epoch": "prod:stale"},
+    )
+    assert stale.status_code == 409
+
+    created = await client.post(_BOOTSTRAP_PATH, headers=_HEADERS, json=payload)
+    assert created.status_code == 201, created.text
+    token = created.json()["registration_token"]
+    assert len(token) >= 43
+
+    async with session_maker() as session:
+        grant = await session.scalar(
+            select(ScreenerNodeBootstrapGrant).where(
+                ScreenerNodeBootstrapGrant.node_id == "subnet-screener-1"
+            )
+        )
+        event = await session.scalar(
+            select(ScreenerCapacityEvent).where(
+                ScreenerCapacityEvent.event_type == "node_bootstrap_grant_created"
+            )
+        )
+    assert grant is not None
+    assert grant.token_hash == hashlib.sha256(token.encode()).hexdigest()
+    assert grant.image_reference == _IMAGE_REFERENCE
+    assert event is not None
+    assert "operator@example.com" in event.detail
+    assert token not in event.detail
+
+    duplicate = await client.post(_BOOTSTRAP_PATH, headers=_HEADERS, json=payload)
+    assert duplicate.status_code == 409
 
 
 async def test_provider_settings_are_atomic_audited_and_cas_guarded(

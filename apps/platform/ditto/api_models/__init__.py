@@ -194,6 +194,7 @@ from ditto.api_models.screener_node_settings import (
     ScreenerNodeChannelUsage,
 )
 from ditto.api_models.screener_nodes import (
+    ScreenerBootstrapGrantAdminRequest,
     ScreenerBootstrapGrantRequest,
     ScreenerBootstrapGrantResponse,
     ScreenerCapacitySnapshotRequest,
@@ -209,6 +210,7 @@ from ditto.api_models.screener_nodes import (
     ScreenerNodeRegistrationRequest,
     ScreenerNodeRuntimeResultRequest,
     ScreenerNodeStatusRequest,
+    screener_bootstrap_grant_confirmation,
 )
 from ditto.api_models.screener_provider_settings import (
     EffectiveScreenerProviderSettings,
@@ -407,6 +409,7 @@ __all__ = [
     "ScreenerHeartbeatResponse",
     "ScreenerQueueItem",
     "ScreenerQueueResponse",
+    "ScreenerBootstrapGrantAdminRequest",
     "ScreenerBootstrapGrantRequest",
     "ScreenerBootstrapGrantResponse",
     "ScreenerCapacitySnapshotRequest",
@@ -422,6 +425,7 @@ __all__ = [
     "ScreenerNodeJobUpdateRequest",
     "ScreenerNodeRuntimeResultRequest",
     "ScreenerNodeStatusRequest",
+    "screener_bootstrap_grant_confirmation",
     "ScreenerNodeChannelSettings",
     "ScreenerNodeChannelSettingsControl",
     "ScreenerNodeChannelSettingsRevision",

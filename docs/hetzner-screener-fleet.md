@@ -88,11 +88,19 @@ Robot server ID, the exact 40-character public release commit, and a
 digest-pinned submission-builder image in the private inventory;
 mutable branches and image tags are rejected.
 
-In Backroom, create a single-use prod bootstrap grant for:
+Read the current controller epoch with Backroom's `get_screener_capacity`, then
+use `create_screener_bootstrap_grant` with its exact confirmation phrase to
+create a single-use prod bootstrap grant for:
 
 - node ID `subnet-screener-1`;
 - provider `hetzner`;
 - provider resource ID equal to the Robot server ID.
+
+Bind the grant to the immutable, digest-pinned submission-builder image from
+the private inventory. The operation fails closed if the controller epoch has
+changed, its lease has expired, the node is already enrolled, or an unexpired
+grant already exists. It returns the only plaintext copy of the short-lived
+registration token; store it immediately in the encrypted variables file.
 
 Create an encrypted variables file outside git containing the returned grant
 and the source-review API key:

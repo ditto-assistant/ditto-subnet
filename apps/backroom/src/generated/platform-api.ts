@@ -1165,6 +1165,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screener-bootstrap-grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Screener Bootstrap Grant
+         * @description Mint one audited, node-bound grant against the live controller fence.
+         */
+        post: operations["create_screener_bootstrap_grant_api_v1_admin_screener_bootstrap_grants_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-capacity": {
         parameters: {
             query?: never;
@@ -18486,6 +18506,33 @@ export interface components {
             /** Storage Upload Id */
             storage_upload_id: string;
         };
+        /**
+         * ScreenerBootstrapGrantAdminRequest
+         * @description Audited operator request for one controller-fenced enrollment grant.
+         */
+        ScreenerBootstrapGrantAdminRequest: {
+            /** Actor */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Environment */
+            environment: string;
+            /** Expected Controller Epoch */
+            expected_controller_epoch: string;
+            /** Image Reference */
+            image_reference: string;
+            /** Node Id */
+            node_id: string;
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "gcp" | "targon" | "hetzner" | "home" | "test";
+            /** Provider Resource Id */
+            provider_resource_id: string;
+            /** Reason */
+            reason: string;
+        };
         /** ScreenerBootstrapGrantRequest */
         ScreenerBootstrapGrantRequest: {
             /** Controller Epoch */
@@ -24210,6 +24257,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminScoreOutlierList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_screener_bootstrap_grant_api_v1_admin_screener_bootstrap_grants_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreenerBootstrapGrantAdminRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreenerBootstrapGrantResponse"];
                 };
             };
             /** @description Validation Error */
