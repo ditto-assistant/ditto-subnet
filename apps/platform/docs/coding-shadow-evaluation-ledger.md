@@ -26,10 +26,10 @@ artifact certification that remains valid through the two-hour maximum lease.
 All validators under a run therefore share one task-set manifest while retaining
 separate ticket IDs, deadlines, certifications, signatures, and result rows.
 
-This PR intentionally provides no production run or ticket issuer. Until the
-private catalog, selector, and scheduler are reviewed, the validator submission
-route has no live lease to accept. Internal insertion functions and real
-PostgreSQL tests freeze the authority contract for that later work.
+This package provides no production run or ticket issuer. Until the private
+catalog, selector, and scheduler are reviewed, the validator submission route
+has no live lease to accept. Internal insertion functions and real PostgreSQL
+tests freeze the authority contract for that later work.
 
 Persisting a selection block number/hash is not chain verification. The future
 selector must independently fetch the canonical block hash at the committed
