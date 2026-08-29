@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.124.3 (2026-08-29)
+
+### Bug Fixes
+
+- **screener**: Keep GCE workers for Targon-first routing
+  ([#1267](https://github.com/ditto-assistant/ditto-subnet/pull/1267),
+  [`67e4080`](https://github.com/ditto-assistant/ditto-subnet/commit/67e40806f01e0b0bd3d8689763e4a4e32dd1b41d))
+
+### Chores
+
+- **screener**: Format fallback regression test
+  ([#1268](https://github.com/ditto-assistant/ditto-subnet/pull/1268),
+  [`03fa2e9`](https://github.com/ditto-assistant/ditto-subnet/commit/03fa2e91ec88bd9dd4f6acee22274113e05e8406))
+
+
 ## v0.124.2 (2026-08-29)
 
 ### Bug Fixes
