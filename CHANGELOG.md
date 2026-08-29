@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.131.0 (2026-08-29)
+
+### Features
+
+- **coding**: Add shadow capability certification
+  ([`a658f7a`](https://github.com/ditto-assistant/ditto-subnet/commit/a658f7afc99f680704e406a08fe8224265facee5))
+
+
 ## v0.130.0 (2026-08-29)
 
 ### Features
