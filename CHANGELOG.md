@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.147.0 (2026-08-29)
+
+### Features
+
+- **coding**: Add verified artifact fetcher
+  ([#1060](https://github.com/ditto-assistant/ditto-subnet/pull/1060),
+  [`f7d55ab`](https://github.com/ditto-assistant/ditto-subnet/commit/f7d55ab7597eb43de9a21ad8ec0d6717aff2c6cd))
+
+
 ## v0.146.0 (2026-08-29)
 
 ### Features
