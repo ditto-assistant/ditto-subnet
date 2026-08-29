@@ -1632,6 +1632,7 @@ class IsolatedCodingHarness:
         *,
         docker_bin: str,
         image: str,
+        rootless_docker_host: str | None = None,
         timeout_seconds: float = 30.0,
         cpu_limit: float = 0.5,
     ) -> None:
@@ -1639,6 +1640,7 @@ class IsolatedCodingHarness:
             raise ValueError("L2 analyzer CPU limit must be between 0.25 and 2.0")
         self._docker_bin = docker_bin
         self._image = image
+        self._rootless_docker_host = rootless_docker_host
         self._timeout_seconds = timeout_seconds
         self._cpu_limit = cpu_limit
 
@@ -1672,6 +1674,15 @@ class IsolatedCodingHarness:
                 raise ValueError("L2 analyzer exceeded lease budget")
             timeout = min(timeout, remaining)
         source = str(workspace.resolve())
+        container_user = f"{os.getuid()}:{os.getgid()}"
+        if self._rootless_docker_host is not None:
+            _share_workspace_with_rootless_daemon(
+                workspace, docker_host=self._rootless_docker_host
+            )
+            # Root inside a rootless container maps to the unprivileged host
+            # daemon user. The worker's host uid instead maps to a subordinate
+            # uid which cannot traverse the private extracted workspace.
+            container_user = "0:0"
         args = [
             self._docker_bin,
             "run",
@@ -1685,7 +1696,7 @@ class IsolatedCodingHarness:
             "--security-opt",
             "no-new-privileges",
             "--user",
-            f"{os.getuid()}:{os.getgid()}",
+            container_user,
             "--pids-limit",
             "64",
             "--memory",
@@ -1734,6 +1745,18 @@ class IsolatedCodingHarness:
         if proc.returncode != 0:
             raise ValueError(f"L2 analyzer exited with code {proc.returncode}")
         return stdout.decode("utf-8")
+
+
+def _share_workspace_with_rootless_daemon(workspace: Path, *, docker_host: str) -> None:
+    """Grant only the rootless daemon group read access to private source."""
+    prefix = "unix://"
+    if not docker_host.startswith(prefix):
+        raise OSError("rootless L2 analyzer requires a unix Docker socket")
+    socket_path = Path(docker_host.removeprefix(prefix))
+    daemon_gid = socket_path.stat().st_gid
+    for path in (workspace, *workspace.rglob("*")):
+        os.chown(path, -1, daemon_gid, follow_symlinks=False)
+        os.chmod(path, 0o550 if path.is_dir() else 0o440, follow_symlinks=False)
 
 
 def _analyzer_script() -> Path:

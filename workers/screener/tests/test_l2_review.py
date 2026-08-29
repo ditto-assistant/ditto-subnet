@@ -1491,6 +1491,39 @@ async def test_harness_command_has_no_egress_secrets_or_host_mounts(
     assert set(env) == {"PATH"}  # type: ignore[arg-type]
 
 
+async def test_rootless_harness_shares_private_workspace_with_daemon_group(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+    proc = _FakeProcess()
+    socket_path = tmp_path / "docker.sock"
+    socket_path.touch()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(mode=0o700)
+    source = workspace / "main.py"
+    source.write_text("print('safe')\n")
+    source.chmod(0o400)
+
+    async def create(*args: str, **_kwargs: object) -> _FakeProcess:
+        captured["args"] = args
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
+    harness = IsolatedCodingHarness(
+        docker_bin="docker",
+        image="ditto-screener-l2-analyzer:active",
+        rootless_docker_host=f"unix://{socket_path}",
+    )
+    await harness.run(workspace, "workspace_index", {})
+
+    args = list(captured["args"])
+    assert args[args.index("--user") + 1] == "0:0"
+    assert workspace.stat().st_gid == socket_path.stat().st_gid
+    assert source.stat().st_gid == socket_path.stat().st_gid
+    assert workspace.stat().st_mode & 0o777 == 0o550
+    assert source.stat().st_mode & 0o777 == 0o440
+
+
 def test_harness_rejects_unbounded_calibration_cpu_override() -> None:
     with pytest.raises(ValueError, match="CPU limit"):
         IsolatedCodingHarness(
