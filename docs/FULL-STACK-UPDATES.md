@@ -4,6 +4,13 @@ Reference for the managed stack updater. The commands live in
 [VALIDATOR.md](VALIDATOR.md#automatic-full-stack-updates-recommended); this
 explains what the updater guarantees and where its boundaries are.
 
+> **Operator boundary:** Install and operate the validator from a dedicated
+> non-root account with passwordless access to Docker. The checkout, wallet
+> directory, and updater state must be owned by that account and must not live
+> below `/root`. Do not clone, migrate, adopt, bootstrap, recover, or run the
+> Compose stack from a root login shell. `sudo` is reserved for the explicitly
+> documented systemd-unit installation step.
+
 ## Trust model
 
 A promoted stack descriptor binds all four services (`ditto-subnet`,
