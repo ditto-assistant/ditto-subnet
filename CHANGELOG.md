@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.146.0 (2026-08-29)
+
+### Features
+
+- **screener**: Add exact full-review canary retry
+  ([#1315](https://github.com/ditto-assistant/ditto-subnet/pull/1315),
+  [`9f24282`](https://github.com/ditto-assistant/ditto-subnet/commit/9f2428225e9faf26cb3f36ee46d4b315cafe0b7e))
+
+
 ## v0.145.0 (2026-08-29)
 
 ### Bug Fixes
