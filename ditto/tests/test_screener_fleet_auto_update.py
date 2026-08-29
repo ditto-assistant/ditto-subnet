@@ -107,6 +107,12 @@ def test_updater_has_no_inbound_deploy_or_long_lived_cloud_credential() -> None:
     assert "readwritepaths=" in service
 
 
+def test_updater_reports_the_debian_13_docker_cli_package() -> None:
+    updater = UPDATER.read_text()
+
+    assert "install the Docker CLI; Debian 13 package: docker-cli" in updater
+
+
 def test_release_workflow_signs_before_advancing_discovery_channel() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text())
     job = workflow["jobs"]["assemble-screener-fleet-release"]

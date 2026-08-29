@@ -54,6 +54,12 @@
     state: present
     update_cache: true
 
+- name: Install the Docker CLI split from docker.io on Debian 13
+  ansible.builtin.apt:
+    name: docker-cli
+    state: present
+  when: ansible_facts['distribution_major_version'] == '13'
+
 - name: Ensure the dedicated screener service group
   ansible.builtin.group:
     name: "{{ screener_fleet_group }}"

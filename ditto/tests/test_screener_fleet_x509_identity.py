@@ -61,6 +61,14 @@ def test_x509_credential_renderer_is_idempotent() -> None:
     assert 'creates: "{{ screener_fleet_x509_credential_file }}"' in tasks
 
 
+def test_signed_updater_installs_the_split_debian_docker_cli() -> None:
+    tasks = (ROLE / "tasks/main.yml").read_text()
+
+    assert "Install the Docker CLI split from docker.io on Debian 13" in tasks
+    assert "    name: docker-cli" in tasks
+    assert "when: ansible_facts['distribution_major_version'] == '13'" in tasks
+
+
 def test_materializer_reads_only_named_secret_without_printing_it() -> None:
     script = (ROLE / "templates/materialize-source-review-secret.sh.j2").read_text()
     service = (
