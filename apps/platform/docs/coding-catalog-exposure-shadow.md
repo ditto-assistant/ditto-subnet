@@ -83,7 +83,7 @@ digest projection while the release is active.
 
 ## Activation boundary
 
-This PR adds no catalog bytes, chain selector, Merkle-proof verifier, automatic
-scheduler, validator task transport, model route, score fold, or emissions
-reader. Coding contract v1 remains shadow-only. Any weighted activation still
-requires contract v2, calibration, and separate owner approval.
+This package adds no catalog bytes, chain selector, Merkle-proof verifier,
+automatic scheduler, validator task transport, model route, score fold, or
+emissions reader. Coding contract v1 remains shadow-only. Any weighted
+activation still requires contract v2, calibration, and separate owner approval.
