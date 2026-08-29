@@ -10,8 +10,10 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from pydantic import (
     AfterValidator,
@@ -33,6 +35,9 @@ UINT64_MAX = (1 << 64) - 1
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _OCI_DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
 _BLOCK_HASH_PATTERN = r"^0x[0-9a-f]{64}$"
+_CONTENT_KEY_PATTERN = r"^sha256/[0-9a-f]{64}$"
+_SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
+_SIGNATURE_HEX_PATTERN = r"^[0-9a-fA-F]{128}$"
 _REQUIRED_TEST_GROUPS = frozenset(
     {"adversarial", "fail_to_pass", "hidden", "integrity", "pass_to_pass"}
 )
@@ -156,6 +161,24 @@ class CodingModelUsageStatus(StrEnum):
     COMPLETE = "complete"
     NOT_INVOKED = "not_invoked"
     PROVIDER_FAILURE = "provider_failure"
+
+
+class CodingCertificationStatus(StrEnum):
+    """Shadow capability result; it is never a reward score."""
+
+    UNSUPPORTED = "unsupported"
+    FAILED = "failed"
+    CERTIFIED = "certified"
+
+
+class CodingCertificationStage(StrEnum):
+    """Last candidate-attributable certification transition."""
+
+    HEALTH = "health"
+    SEED = "seed"
+    RUN = "run"
+    FREEZE = "freeze"
+    GRADE = "grade"
 
 
 class CodingManifestTask(CodingContractModel):
@@ -730,6 +753,187 @@ class CodingRunEvidence(CodingContractModel):
         return self
 
 
+ContentAddressedKey = Annotated[str, Field(pattern=_CONTENT_KEY_PATTERN)]
+
+
+class CodingCapabilityCertificationReceipt(CodingContractModel):
+    """Content-addressed shadow certification emitted by the trusted scorer.
+
+    The digest is integrity-only. A validator submission separately signs the
+    agent, screened image, exact ticket lease, and this receipt digest.
+    """
+
+    schema_name: Literal["dittobench-coding-capability-certification-v1"] = Field(
+        alias="schema"
+    )
+    coding_contract_version: Literal[1]
+    weight_eligible: Literal[False]
+    certification_id: OpaqueId
+    agent_artifact_sha256: Sha256
+    harness_instance_id: OpaqueId
+    canary_manifest_sha256: Sha256
+    issued_at_unix: Annotated[int, Field(ge=1)]
+    expires_at_unix: Annotated[int, Field(ge=1)]
+    status: CodingCertificationStatus
+    failure_stage: CodingCertificationStage | None
+    failure_code: ShortName | None
+    supported_coding_contract_versions: Annotated[list[int], Field(max_length=16)]
+    capabilities: Annotated[list[ShortName], Field(max_length=64)]
+    memory_bundle_sha256: Sha256
+    visible_bundle_sha256: Sha256
+    base_tree_sha256: Sha256
+    inference_grant_sha256: Sha256
+    model_evidence: CodingModelEvidence | None
+    frozen_patch_sha256: Sha256 | None
+    frozen_submission_object_key: ContentAddressedKey | None
+    changed_path_root: Sha256 | None
+    final_tree_sha256: Sha256 | None
+    authoring_event_root: Sha256 | None
+    authoring_transcript_sha256: Sha256 | None
+    authoring_transcript_object_key: ContentAddressedKey | None
+    authoring_transcript_bytes: Annotated[int, Field(ge=0)]
+    authoring_event_count: Annotated[int, Field(ge=0, le=UINT64_MAX)]
+    protected_paths_intact: bool
+    canary_terminal_domain: CodingTerminalDomain | None
+    grader_plan_sha256: Sha256
+    grader_execution_receipt_root_sha256: Sha256 | None
+    certification_sha256: Sha256
+
+    @model_validator(mode="after")
+    def receipt_is_coherent(self) -> CodingCapabilityCertificationReceipt:
+        if (
+            self.expires_at_unix <= self.issued_at_unix
+            or self.expires_at_unix - self.issued_at_unix > 24 * 60 * 60
+        ):
+            raise ValueError("certification lifetime must be in (0, 24h]")
+        if self.supported_coding_contract_versions != sorted(
+            self.supported_coding_contract_versions
+        ) or len(set(self.supported_coding_contract_versions)) != len(
+            self.supported_coding_contract_versions
+        ):
+            raise ValueError("supported coding versions must be unique and sorted")
+        if any(
+            version <= 0 or version > 1_000_000
+            for version in self.supported_coding_contract_versions
+        ):
+            raise ValueError("supported coding version is outside bounds")
+        if self.capabilities != sorted(self.capabilities) or len(
+            set(self.capabilities)
+        ) != len(self.capabilities):
+            raise ValueError("coding capabilities must be unique and sorted")
+        if (self.authoring_transcript_bytes == 0) != (self.authoring_event_count == 0):
+            raise ValueError("transcript byte and event counts disagree")
+        if self.authoring_transcript_object_key is not None:
+            if (
+                self.authoring_transcript_sha256 is None
+                or self.authoring_transcript_object_key
+                != f"sha256/{self.authoring_transcript_sha256}"
+            ):
+                raise ValueError("transcript object key does not match its digest")
+        elif self.authoring_transcript_sha256 is not None:
+            raise ValueError("transcript digest requires a durable object key")
+        if self.frozen_submission_object_key is not None:
+            if (
+                self.frozen_patch_sha256 is None
+                or self.frozen_submission_object_key
+                != f"sha256/{self.frozen_patch_sha256}"
+            ):
+                raise ValueError("frozen object key does not match its patch digest")
+        elif self.frozen_patch_sha256 is not None:
+            raise ValueError("frozen patch digest requires a durable object key")
+        if self.model_evidence is not None and (
+            self.model_evidence.inference_grant_sha256 != self.inference_grant_sha256
+        ):
+            raise ValueError("model evidence does not match the inference grant")
+        if self.canary_terminal_domain not in {
+            None,
+            CodingTerminalDomain.RESOLVED,
+            CodingTerminalDomain.REPAIR_FAILURE,
+            CodingTerminalDomain.CANDIDATE_INTEGRITY,
+        }:
+            raise ValueError("certification carries a non-candidate terminal domain")
+
+        execution_fields = (
+            self.model_evidence,
+            self.frozen_patch_sha256,
+            self.frozen_submission_object_key,
+            self.changed_path_root,
+            self.final_tree_sha256,
+            self.authoring_event_root,
+            self.authoring_transcript_sha256,
+            self.authoring_transcript_object_key,
+            self.canary_terminal_domain,
+            self.grader_execution_receipt_root_sha256,
+        )
+        if self.status is CodingCertificationStatus.CERTIFIED:
+            if (
+                self.failure_stage is not None
+                or self.failure_code is not None
+                or any(value is None for value in execution_fields)
+                or self.model_evidence is None
+                or self.model_evidence.usage_status
+                is not CodingModelUsageStatus.COMPLETE
+                or self.canary_terminal_domain is not CodingTerminalDomain.RESOLVED
+                or self.authoring_transcript_bytes <= 0
+                or self.authoring_event_count <= 0
+                or not self.protected_paths_intact
+                or 1 not in self.supported_coding_contract_versions
+                or not {
+                    "case_scoped_inference_v1",
+                    "coding_runner_tools_v1",
+                    "scoped_memory_seed_v1",
+                }.issubset(self.capabilities)
+            ):
+                raise ValueError("certified receipt lacks complete capability evidence")
+        elif self.failure_stage is None or self.failure_code is None:
+            raise ValueError("non-certified receipt requires a failure stage and code")
+        if self.status is CodingCertificationStatus.UNSUPPORTED and (
+            self.failure_stage is not CodingCertificationStage.HEALTH
+            or any(value is not None for value in execution_fields)
+            or self.authoring_transcript_bytes != 0
+            or self.authoring_event_count != 0
+            or self.protected_paths_intact
+        ):
+            raise ValueError("unsupported receipt carries execution evidence")
+
+        if coding_certification_receipt_digest(self) != self.certification_sha256:
+            raise ValueError("certification_sha256 does not match known fields")
+        return self
+
+
+class SubmitCodingCertificationRequest(BaseModel):
+    """Validator-signed envelope for one append-only shadow receipt."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    bench_version: Annotated[int, Field(ge=1)]
+    ticket_deadline: datetime
+    screened_image_sha256: Sha256
+    receipt: CodingCapabilityCertificationReceipt
+    signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
+
+    @field_validator("ticket_deadline")
+    @classmethod
+    def ticket_deadline_is_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(
+                "coding certification ticket deadline must be timezone-aware"
+            )
+        return value
+
+
+class SubmitCodingCertificationResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    agent_id: UUID
+    certification_id: OpaqueId
+    status: CodingCertificationStatus
+    accepted: Literal[True]
+    idempotent: bool
+    active: bool
+
+
 def _canonical_json_bytes(value: BaseModel | dict[str, Any] | list[Any]) -> bytes:
     """Serialize one validated known-field projection into deterministic JSON."""
 
@@ -773,6 +977,42 @@ def canonical_json_bytes(
 
 def sha256_hex(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
+
+
+def coding_certification_receipt_digest(
+    receipt: CodingCapabilityCertificationReceipt,
+) -> str:
+    """Hash every known receipt field except the digest itself."""
+
+    projection = receipt.model_dump(mode="json", by_alias=True)
+    projection.pop("certification_sha256")
+    return sha256_hex(_canonical_json_bytes(projection))
+
+
+def coding_certification_signing_message(
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    bench_version: int,
+    ticket_deadline: datetime,
+    screened_image_sha256: str,
+    certification_sha256: str,
+) -> bytes:
+    """Bind one receipt to the exact validator lease and screened image."""
+
+    if ticket_deadline.tzinfo is None:
+        raise ValueError("coding certification ticket deadline must be timezone-aware")
+    lease = ticket_deadline.astimezone(UTC).isoformat(timespec="microseconds")
+    fields = (
+        "dittobench-coding-certification:v1",
+        validator_hotkey,
+        str(agent_id),
+        str(bench_version),
+        lease,
+        screened_image_sha256,
+        certification_sha256,
+    )
+    return "\x00".join(fields).encode()
 
 
 def canonical_digest(
@@ -1040,6 +1280,9 @@ __all__ = [
     "CodingAuthoringEvidence",
     "CodingBudgets",
     "CodingBuildEvidence",
+    "CodingCapabilityCertificationReceipt",
+    "CodingCertificationStage",
+    "CodingCertificationStatus",
     "CodingContractModel",
     "CodingGraderEvidence",
     "CodingGraderCommand",
@@ -1062,8 +1305,12 @@ __all__ = [
     "CodingTerminalDomain",
     "CodingTestGroupEvidence",
     "CodingVisibleMemory",
+    "SubmitCodingCertificationRequest",
+    "SubmitCodingCertificationResponse",
     "canonical_digest",
     "canonical_json_bytes",
+    "coding_certification_receipt_digest",
+    "coding_certification_signing_message",
     "grader_execution_receipt_root",
     "grader_plan_digest",
     "grader_resource_profile_digest",

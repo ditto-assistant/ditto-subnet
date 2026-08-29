@@ -31,6 +31,10 @@ from ditto.api_models.benchmark_progress import (
     BenchmarkProgress,
     benchmark_progress_signing_token,
 )
+from ditto.api_models.coding import (
+    CodingCapabilityCertificationReceipt,
+    coding_certification_signing_message,
+)
 from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
     confirmation_progress_signing_token,
@@ -173,6 +177,30 @@ def sign_score(
         bench_version=bench_version,
         transcript_sha256=transcript_sha256,
         base_evidence_sha256=base_evidence_sha256,
+    )
+    signature: bytes = keypair.sign(message)
+    return signature.hex()
+
+
+def sign_coding_certification(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    bench_version: int,
+    ticket_deadline: datetime,
+    screened_image_sha256: str,
+    receipt: CodingCapabilityCertificationReceipt,
+) -> str:
+    """Sign one shadow coding receipt against the exact Platform lease."""
+
+    message = coding_certification_signing_message(
+        validator_hotkey=validator_hotkey,
+        agent_id=agent_id,
+        bench_version=bench_version,
+        ticket_deadline=ticket_deadline,
+        screened_image_sha256=screened_image_sha256,
+        certification_sha256=receipt.certification_sha256,
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()

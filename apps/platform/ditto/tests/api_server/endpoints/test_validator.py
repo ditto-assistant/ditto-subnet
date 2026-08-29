@@ -42,6 +42,10 @@ from ditto.api_models.benchmark_progress import (
     BenchmarkProgress,
     benchmark_progress_signing_token,
 )
+from ditto.api_models.coding_certification import (
+    CodingCapabilityCertificationReceipt,
+    coding_certification_signing_message,
+)
 from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
     confirmation_progress_signing_token,
@@ -108,6 +112,7 @@ from ditto.db.models import (
     BenchmarkDataset,
     BenchmarkRollout,
     BenchmarkRolloutMember,
+    CodingCapabilityCertification,
     ConfirmationBundle,
     ConfirmationBundleSettingsRevision,
     ConfirmationBundleSubject,
@@ -13052,3 +13057,219 @@ class TestTop5CatchUpConvergence:
                 )
             )
         assert issued == 2, "ordinary quorum scoring must be untouched"
+
+
+def _coding_certification_receipt(
+    *,
+    certification_id: str = "cert-endpoint-001",
+    harness_instance_id: str = "harness-endpoint-001",
+    failed: bool = False,
+    issued_at_unix: int | None = None,
+) -> CodingCapabilityCertificationReceipt:
+    vector = json.loads(
+        (
+            Path(__file__).parents[6]
+            / "packages"
+            / "dittobench-coding-contract"
+            / "testdata"
+            / "coding_certification_v1.json"
+        ).read_text(encoding="utf-8")
+    )["receipt"]
+    now = datetime.now(UTC)
+    vector["certification_id"] = certification_id
+    vector["harness_instance_id"] = harness_instance_id
+    vector["agent_artifact_sha256"] = _SHA256
+    if issued_at_unix is None:
+        issued_at_unix = int(now.timestamp())
+    vector["issued_at_unix"] = issued_at_unix
+    vector["expires_at_unix"] = issued_at_unix + 3600
+    if failed:
+        vector["status"] = "failed"
+        vector["failure_stage"] = "grade"
+        vector["failure_code"] = "public_canary_failed"
+    vector.pop("certification_sha256")
+    body = (
+        (
+            json.dumps(
+                vector,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            + "\n"
+        )
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+        .encode()
+    )
+    vector["certification_sha256"] = hashlib.sha256(body).hexdigest()
+    return CodingCapabilityCertificationReceipt.model_validate_json(json.dumps(vector))
+
+
+def _coding_certification_payload(
+    agent_id: UUID,
+    *,
+    receipt: CodingCapabilityCertificationReceipt | None = None,
+    screened_image_sha256: str = "12" * 32,
+) -> dict[str, object]:
+    receipt = receipt or _coding_certification_receipt()
+    message = coding_certification_signing_message(
+        validator_hotkey=_VALIDATOR_HOTKEY,
+        agent_id=agent_id,
+        bench_version=_BENCH_VERSION,
+        ticket_deadline=_TICKET_DEADLINE,
+        screened_image_sha256=screened_image_sha256,
+        certification_sha256=receipt.certification_sha256,
+    )
+    return {
+        "validator_hotkey": _VALIDATOR_HOTKEY,
+        "bench_version": _BENCH_VERSION,
+        "ticket_deadline": _TICKET_DEADLINE.isoformat(),
+        "screened_image_sha256": screened_image_sha256,
+        "receipt": receipt.model_dump(mode="json", by_alias=True),
+        "signature": _KEYPAIR.sign(message).hex(),
+    }
+
+
+async def test_shadow_coding_certification_is_append_only_idempotent_and_visible(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    await _seed_ticket(session_maker, agent_id)
+    _install_db(app, session_maker)
+    _install_chain(app)
+    app.state.config = replace(
+        app.state.config, admin_api_token="test-admin-token-at-least-32-characters"
+    )
+    payload = _coding_certification_payload(agent_id)
+    endpoint = f"/api/v1/validator/agent/{agent_id}/coding-certification"
+
+    first = await client.post(endpoint, json=payload)
+    assert first.status_code == 200, first.text
+    assert first.json()["idempotent"] is False
+    assert first.json()["active"] is True
+
+    replay = await client.post(endpoint, json=payload)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["idempotent"] is True
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(CodingCapabilityCertification)
+            )
+            == 1
+        )
+        ticket = await session.get(
+            ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+        )
+        assert ticket is not None and ticket.status is TicketStatus.ISSUED
+        assert await session.scalar(select(func.count()).select_from(Score)) == 0
+
+    admin = await client.get(
+        f"/api/v1/admin/agents/{agent_id}/coding-certifications",
+        headers={"Authorization": "Bearer test-admin-token-at-least-32-characters"},
+    )
+    assert admin.status_code == 200, admin.text
+    assert admin.headers["cache-control"] == "no-store"
+    assert admin.json()["coding_certified"] is True
+    assert admin.json()["active_certification_count"] == 1
+
+    failed = _coding_certification_payload(
+        agent_id,
+        receipt=_coding_certification_receipt(
+            certification_id="cert-endpoint-002",
+            harness_instance_id="harness-endpoint-002",
+            failed=True,
+        ),
+    )
+    failed_response = await client.post(endpoint, json=failed)
+    assert failed_response.status_code == 200, failed_response.text
+    limited = await client.get(
+        f"/api/v1/admin/agents/{agent_id}/coding-certifications?limit=1",
+        headers={"Authorization": "Bearer test-admin-token-at-least-32-characters"},
+    )
+    assert limited.status_code == 200, limited.text
+    assert limited.json()["certifications"][0]["status"] == "failed"
+    assert limited.json()["coding_supported"] is True
+    assert limited.json()["coding_certified"] is True
+    assert limited.json()["active_certification_count"] == 1
+    assert limited.json()["total"] == 2
+
+    async with session_maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id, with_for_update=True)
+        assert agent is not None
+        agent.screened_image_sha256 = "13" * 32
+    stale = await client.get(
+        f"/api/v1/admin/agents/{agent_id}/coding-certifications",
+        headers={"Authorization": "Bearer test-admin-token-at-least-32-characters"},
+    )
+    assert stale.status_code == 200
+    assert stale.json()["coding_certified"] is False
+    assert stale.json()["certifications"][0]["stale_reason"] == (
+        "screened_image_changed"
+    )
+
+
+async def test_shadow_coding_certification_rejects_conflict_image_and_signature(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    await _seed_ticket(session_maker, agent_id)
+    _install_db(app, session_maker)
+    _install_chain(app)
+    endpoint = f"/api/v1/validator/agent/{agent_id}/coding-certification"
+    original = _coding_certification_payload(agent_id)
+
+    naive_deadline = dict(original)
+    naive_deadline["ticket_deadline"] = "2030-01-01T00:00:00"
+    naive = await client.post(endpoint, json=naive_deadline)
+    assert naive.status_code == 422
+
+    assert (await client.post(endpoint, json=original)).status_code == 200
+
+    changed = _coding_certification_payload(
+        agent_id,
+        receipt=_coding_certification_receipt(harness_instance_id="harness-changed"),
+    )
+    conflict = await client.post(endpoint, json=changed)
+    assert conflict.status_code == 409
+
+    stale_image = _coding_certification_payload(
+        agent_id, screened_image_sha256="13" * 32
+    )
+    stale = await client.post(endpoint, json=stale_image)
+    assert stale.status_code == 409
+
+    bad_signature = dict(original)
+    bad_signature["signature"] = "00" * 64
+    rejected = await client.post(endpoint, json=bad_signature)
+    assert rejected.status_code == 401
+
+    backdated = _coding_certification_payload(
+        agent_id,
+        receipt=_coding_certification_receipt(
+            certification_id="cert-backdated-001",
+            harness_instance_id="harness-backdated-001",
+            issued_at_unix=int((datetime.now(UTC) - timedelta(minutes=10)).timestamp()),
+        ),
+    )
+    rejected = await client.post(endpoint, json=backdated)
+    assert rejected.status_code == 409
+    assert "predates or postdates" in rejected.text
+
+    out_of_range = _coding_certification_payload(
+        agent_id,
+        receipt=_coding_certification_receipt(
+            certification_id="cert-out-of-range-001",
+            harness_instance_id="harness-out-of-range-001",
+            issued_at_unix=10**20,
+        ),
+    )
+    rejected = await client.post(endpoint, json=out_of_range)
+    assert rejected.status_code == 409
+    assert "outside supported bounds" in rejected.text

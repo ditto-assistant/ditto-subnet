@@ -96,6 +96,8 @@ import {
   batchRetryValidationResponseSchema,
   agentScoringReadinessInputSchema,
   agentScoringReadinessSchema,
+  agentCodingCertificationInputSchema,
+  agentCodingCertificationStatusSchema,
   benchmarkContractRefreshLookupInputSchema,
   benchmarkContractRefreshDetailSchema,
   refreshBenchmarkContractInputSchema,
@@ -1894,6 +1896,14 @@ export async function fetchAgentScoringReadiness(rawInput: unknown) {
     `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/scoring-readiness`,
   )
   return agentScoringReadinessSchema.parse(payload)
+}
+
+export async function fetchAgentCodingCertifications(rawInput: unknown) {
+  const input = agentCodingCertificationInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/coding-certifications?limit=${input.limit}`,
+  )
+  return agentCodingCertificationStatusSchema.parse(payload)
 }
 
 export async function fetchValidatorScoreReplacement(rawInput: unknown) {
