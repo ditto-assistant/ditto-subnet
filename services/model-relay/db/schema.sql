@@ -5357,6 +5357,9 @@ CREATE INDEX validator_tickets_open_idx ON public.validator_tickets USING btree 
 --
 
 CREATE INDEX validator_tickets_provider_outage_idx ON public.validator_tickets USING btree (provider_outage_epoch) WHERE (provider_outage_epoch IS NOT NULL);
+
+
+--
 -- Name: coding_catalog_exposures coding_catalog_exposures_append_only_guard; Type: TRIGGER; Schema: public; Owner: -
 --
 

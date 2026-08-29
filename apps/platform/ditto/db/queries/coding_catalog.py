@@ -38,7 +38,13 @@ class CodingCatalogInactiveError(Exception):
 
 @dataclass(frozen=True)
 class CodingCatalogInsertResult:
-    row: CodingCatalogRelease | CodingCatalogRetirement
+    row: CodingCatalogRelease
+    idempotent: bool
+
+
+@dataclass(frozen=True)
+class CodingCatalogRetireResult:
+    row: CodingCatalogRetirement
     idempotent: bool
 
 
@@ -178,7 +184,7 @@ async def retire_coding_catalog_release(
     expected_commitment_sha256: str,
     reason: str,
     actor: str,
-) -> CodingCatalogInsertResult:
+) -> CodingCatalogRetireResult:
     release = await get_coding_catalog_release(
         session,
         corpus_release_id=corpus_release_id,
@@ -192,7 +198,7 @@ async def retire_coding_catalog_release(
         )
     existing = await session.get(CodingCatalogRetirement, release.release_row_id)
     if existing is not None:
-        return CodingCatalogInsertResult(row=existing, idempotent=True)
+        return CodingCatalogRetireResult(row=existing, idempotent=True)
     row = CodingCatalogRetirement(
         release_row_id=release.release_row_id,
         expected_commitment_sha256=expected_commitment_sha256,
@@ -201,7 +207,7 @@ async def retire_coding_catalog_release(
     )
     session.add(row)
     await session.flush()
-    return CodingCatalogInsertResult(row=row, idempotent=False)
+    return CodingCatalogRetireResult(row=row, idempotent=False)
 
 
 def catalog_release_matches_run_authority(
