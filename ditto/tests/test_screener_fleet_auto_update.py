@@ -105,6 +105,7 @@ def test_updater_has_no_inbound_deploy_or_long_lived_cloud_credential() -> None:
     assert "nonewprivileges=true" in service
     assert "protectsystem=strict" in service
     assert "readwritepaths=" in service
+    assert "environment=home={{ screener_fleet_update_state_dir }}" in service
 
 
 def test_updater_reports_the_debian_13_docker_cli_package() -> None:
