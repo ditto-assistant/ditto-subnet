@@ -1,6 +1,6 @@
 ---
 name: gcloud-ditto-readonly
-description: Safely read SN118 production Platform Postgres, Platform API pm2 logs, Cloud Run screening-job logs, Targon rental logs/state, and Platform app-VM disk inventory via gcloud. Use for prod DB lookups, counts, audits, EXPLAIN ANALYZE, API 500 tracebacks, Cloud Run build/smoke/source-review job failures, Targon rental logs, Kaniko/builder logs, wrk- workloads, Targon API state, live screening-build diagnosis, or a host disk-full during platform-deploy. Never prints credentials.
+description: Safely read SN118 production Platform Postgres, Platform API pm2 logs, GCE screener-worker journals, Cloud Run screening-job logs, Targon rental logs/state, and Platform app-VM disk inventory via gcloud. Use for prod DB lookups, counts, audits, EXPLAIN ANALYZE, API 500 tracebacks, screener fleet bootstrap or stuck-worker diagnosis, Cloud Run build/smoke/source-review job failures, Targon rental logs, Kaniko/builder logs, wrk- workloads, Targon API state, live screening-build diagnosis, or a host disk-full during platform-deploy. Never prints credentials.
 ---
 
 # Read-only SN118 production debug
@@ -53,6 +53,27 @@ unrotated — never cat it; use the bounded script.
 A request line ending `-> ERR in Nms` is immediately followed by the
 traceback. VM app logs do NOT ship to Cloud Logging; `gcloud logging read`
 on `resource.type="gce_instance"` finds nothing.
+
+## GCE screener workers
+
+Production screening workers are ephemeral instances labeled
+`env=prod,role=screener-fleet`. Discover the current names and zones first;
+never assume a previous instance still exists. The bounded helper opens no
+free-form shell and reads only the bounded worker logfile or
+`ditto-screener` systemd journal through IAP SSH.
+
+```bash
+.agents/skills/gcloud-ditto-readonly/scripts/read_screener_worker_logs.sh list
+.agents/skills/gcloud-ditto-readonly/scripts/read_screener_worker_logs.sh logs ditto-screener-fleet-ab12 500
+.agents/skills/gcloud-ditto-readonly/scripts/read_screener_worker_logs.sh journal ditto-screener-fleet-ab12 15 500
+```
+
+Correlate worker journal evidence with Backroom `get_screener_capacity` and the
+exact screening attempt. A RUNNING VM or successful startup script is not a
+healthy worker: require a current Platform heartbeat, a stable GCE target, and
+an actual lease claim or polling loop. Keep reads bounded to 1-1440 minutes and
+1-2000 lines. Do not run arbitrary SSH commands, restart services, edit the VM,
+or read environment/credential files from this skill.
 
 ## Cloud Run screening job logs
 
