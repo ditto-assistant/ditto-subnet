@@ -229,7 +229,7 @@ class TestWriteGuards:
         assert response.status_code == 422
         assert "future" in response.json()["message"]
 
-    async def test_target_at_or_below_the_floor_is_rejected(
+    async def test_target_at_the_floor_is_accepted_for_incident_rollback(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -238,7 +238,27 @@ class TestWriteGuards:
         _install(app, activation_maker)
         response = await client.post(
             _URL,
-            json=_payload(target_policy_version=SCREENING_FLOOR_POLICY_VERSION),
+            json=_payload(
+                target_policy_version=SCREENING_FLOOR_POLICY_VERSION,
+                rescreen_scored=False,
+            ),
+            headers=_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["latest"]["target_policy_version"] == SCREENING_FLOOR_POLICY_VERSION
+        assert body["latest"]["rescreen_scored"] is False
+
+    async def test_target_below_the_floor_is_rejected(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        activation_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, activation_maker)
+        response = await client.post(
+            _URL,
+            json=_payload(target_policy_version=SCREENING_FLOOR_POLICY_VERSION - 1),
             headers=_HEADERS,
         )
         assert response.status_code == 422
