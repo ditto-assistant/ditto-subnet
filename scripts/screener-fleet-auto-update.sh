@@ -21,6 +21,7 @@ EXPECTED_UPDATE_PROTOCOL=1
 MANAGED_FILE="$STATE_DIR/managed-release.env"
 FAILED_CANDIDATE_FILE="$STATE_DIR/failed-candidate"
 LOCK_FILE="$STATE_DIR/lock"
+SELF_PATH="${SCREENER_FLEET_SELF_PATH:-$STATE_DIR/ditto-screener-fleet-auto-update}"
 
 log() { printf 'screener-fleet-auto-update: %s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }
@@ -166,7 +167,7 @@ activate_release() {
   [ ! -f "$RELEASE_ENV" ] || old_builder="$(manifest_value "$RELEASE_ENV" SCREENER_FLEET_BUILDER_IMAGE)"
   install -o root -g root -m 0755 \
     "$release_dir/src/scripts/screener-fleet-auto-update.sh" \
-    /usr/local/sbin/ditto-screener-fleet-auto-update
+    "$SELF_PATH"
   ln -s "releases/$revision" "$new_link"
   stop_fleet
   mv -Tf "$new_link" "$CURRENT_LINK"
@@ -192,6 +193,8 @@ activate_release() {
 }
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
+[[ "$SELF_PATH" = "$STATE_DIR/"* ]] || \
+  die "self-update path must stay inside the updater state directory"
 [[ "$WORKER_PROCESSES" =~ ^[1-9][0-9]*$ ]] || die "worker process count is invalid"
 id "$SERVICE_USER" >/dev/null 2>&1 || die "service user does not exist"
 for command in cosign docker git setpriv "$UV_BIN" "$SYSTEMCTL"; do
