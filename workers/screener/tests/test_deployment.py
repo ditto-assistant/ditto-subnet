@@ -453,13 +453,26 @@ def test_updater_installs_and_rolls_back_the_repository_owned_unit() -> None:
     assert 'unit_source="$source_dir/deploy/ditto-screener.service"' in updater
     assert 'install -o root -g root -m 0644 "$unit_source" "$unit_file"' in updater
     assert 'install -o root -g root -m 0644 "$unit_backup" "$unit_file"' in updater
+    rollback = updater.split("new screener failed health checks", 1)[1].split(
+        "actual_sha=", 1
+    )[0]
+    assert 'rm -f "$unit_file"' not in rollback
     assert "consecutive_healthy" in updater
     assert "validator-openrouter-key" in updater
     assert "ditto-app-dev" in updater
     assert 'install -o "$SCREENER_USER" -g ditto -m 0400' in updater
     assert "SCREENER_SOURCE_REVIEW_API_KEY_FILE" in updater
     assert "required_policy_version" in updater
+    assert "SCREENING_FLOOR_POLICY_VERSION" in updater
     assert "SCREENING_POLICY_VERSION" in updater
+
+
+def test_updater_accepts_every_policy_in_the_worker_supported_range() -> None:
+    updater = (ROOT / "scripts" / "update-screener.sh").read_text()
+    probe = updater.split("probe_platform() {", 1)[1].split("\n}\n", 1)[0]
+
+    assert "required < floor || required > supported" in probe
+    assert '[[ "$required" != "$supported" ]]' not in probe
 
 
 def test_updater_keeps_the_trusted_l2_analyzer_ready_for_dynamic_settings() -> None:
