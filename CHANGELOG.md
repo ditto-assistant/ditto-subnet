@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.142.0 (2026-08-29)
+
+### Features
+
+- **platform**: Issue shadow coding ticket sets
+  ([#1050](https://github.com/ditto-assistant/ditto-subnet/pull/1050),
+  [`81729aa`](https://github.com/ditto-assistant/ditto-subnet/commit/81729aa1fd439263c48e7138e652fff5af392156))
+
+
 ## v0.141.1 (2026-08-29)
 
 ### Bug Fixes
