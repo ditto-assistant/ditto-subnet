@@ -4087,15 +4087,29 @@ def _needs_final_adjudication(observation: SourceReviewObservation) -> bool:
 def _carry_l1_notes(
     observation: SourceReviewObservation, l1: SourceReviewObservation
 ) -> SourceReviewObservation:
-    """Ship the L1 ledger with an L2/L3 outcome that recorded none itself.
+    """Ship L1 evidence with an L2/L3 outcome that recorded none itself.
 
     A budget- or fault-terminated deep review otherwise discards everything
-    the broad L1 pass already determined; the notes are the operator's
-    material either way.
+    the broad L1 pass already determined.  A deterministic preflight finding
+    is evidence even when it predates the notes ledger, so a later provider
+    fault must become an adjudicable hold instead of an infrastructure retry.
     """
-    if observation.notes or not l1.notes:
-        return observation
-    return replace(observation, notes=l1.notes)
+    carried = observation
+    if not observation.notes and l1.notes:
+        carried = replace(carried, notes=l1.notes)
+    if observation.finding is None and l1.finding is not None:
+        carried = replace(
+            carried,
+            finding=l1.finding,
+            finding_digest=l1.finding_digest,
+            categories=l1.categories,
+            failure_disposition=(
+                "inconclusive"
+                if observation.failure_disposition == "retryable_infra"
+                else observation.failure_disposition
+            ),
+        )
+    return carried
 
 
 def _enforce_causal_authority(
