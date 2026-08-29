@@ -2005,6 +2005,7 @@ class KimiSolSourceReviewAgent:
         l1_observation: SourceReviewObservation,
         deadline: float | None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        on_l3_start: Callable[[], None] | None = None,
     ) -> L2RunResult:
         started = time.monotonic()
         local_deadline = asyncio.get_running_loop().time() + self._timeout_seconds
@@ -2054,6 +2055,7 @@ class KimiSolSourceReviewAgent:
                     l1_observation=l1_observation,
                     deadline=effective_deadline,
                     policy_version=policy_version,
+                    on_l3_start=on_l3_start,
                 )
             if asyncio.get_running_loop().time() >= effective_deadline:
                 result = L2RunResult(
@@ -2103,6 +2105,7 @@ class KimiSolSourceReviewAgent:
         l1_observation: SourceReviewObservation,
         deadline: float | None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        on_l3_start: Callable[[], None] | None = None,
     ) -> L2RunResult:
         workspace = Path(tempfile.mkdtemp(prefix="ditto-l2-source-"))
         try:
@@ -2116,6 +2119,7 @@ class KimiSolSourceReviewAgent:
                 l1_observation=l1_observation,
                 deadline=deadline,
                 policy_version=policy_version,
+                on_l3_start=on_l3_start,
             )
         except L2TrajectoryError as error:
             logger.warning("L2 model trajectory failed safely: %s", error.code)
@@ -2211,6 +2215,7 @@ class KimiSolSourceReviewAgent:
         l1_observation: SourceReviewObservation,
         deadline: float | None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        on_l3_start: Callable[[], None] | None = None,
     ) -> L2RunResult:
         api_key = _read_key(self._api_key_file)
         (
@@ -2297,6 +2302,11 @@ class KimiSolSourceReviewAgent:
                     dossier_tools=dossier_tools,
                     analyst_cache_hit=analyst_cache_hit,
                 )
+            # The L2 analyst has settled; every path below is L3. This is the
+            # only public progress boundary inside the deep review, and it is
+            # reported so a card in L3 does not read as a stalled L2.
+            if on_l3_start is not None:
+                on_l3_start()
             if not (analyst.observation.ok and analyst.observation.risk_level == "low"):
                 if _needs_violation_adjudication(analyst, l1_observation):
                     provisional_violation = {
@@ -3996,14 +4006,32 @@ class LayeredSourceReviewAgent:
             or l1.risk_level in {"medium", "high"}
             or (l1.risk_level == "low" and not l1.clearance_certified)
         )
-        if self._mode == "off" or not l1.ok or not should_escalate:
+
+        # Public progress is reported in tenths so the four review stages the
+        # pipeline actually runs (L1 broad review, L2 cause analysis, L3
+        # safety review, L4 final adjudication) are each observable. L1 owns
+        # 0-50 (`review` halves its own denominator); everything below is the
+        # escalation. Reporting only "L2/L3 started" left a card sitting at
+        # the L1-complete bucket for the whole deep review, which reads as a
+        # stall rather than as the stage it is in.
+        def report(tenths: int) -> None:
             if progress is not None:
-                progress(2, 2)
-            return await self._adjudicate(
-                l1, archive_path=archive_path, deadline=deadline
+                progress(tenths, 10)
+
+        async def settle(
+            observation: SourceReviewObservation,
+        ) -> SourceReviewObservation:
+            """Run L4 on an evidence-bearing review, then close the band."""
+            adjudicated = await self._adjudicate(
+                observation, archive_path=archive_path, deadline=deadline
             )
-        if progress is not None:
-            progress(1, 2)
+            report(10)
+            return adjudicated
+
+        if self._mode == "off" or not l1.ok or not should_escalate:
+            report(9)
+            return await settle(l1)
+        report(6)
         result = await self._l2.review(
             archive_path,
             artifact_sha256=artifact_sha256,
@@ -4011,11 +4039,12 @@ class LayeredSourceReviewAgent:
             l1_observation=l1,
             deadline=deadline,
             policy_version=policy_version,
+            on_l3_start=lambda: report(8),
         )
-        if progress is not None:
-            progress(2, 2)
+        report(9)
         if self._mode == "shadow":
             self._shadow_results[attempt_id] = result
+            report(10)
             return l1
         if result.observation.failure_disposition == "pass_inconclusive":
             # Preserve the original bounded L1 lead as partial evidence; the
@@ -4027,15 +4056,9 @@ class LayeredSourceReviewAgent:
                 finding=l1.finding,
                 notes=l1.notes,
             )
-            return await self._adjudicate(
-                self._settle_gradient(carried),
-                archive_path=archive_path,
-                deadline=deadline,
-            )
-        return await self._adjudicate(
-            _carry_l1_notes(_enforce_causal_authority(result.observation), l1),
-            archive_path=archive_path,
-            deadline=deadline,
+            return await settle(self._settle_gradient(carried))
+        return await settle(
+            _carry_l1_notes(_enforce_causal_authority(result.observation), l1)
         )
 
 

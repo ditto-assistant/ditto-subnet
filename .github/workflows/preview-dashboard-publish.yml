@@ -36,6 +36,42 @@ on:
 permissions: {}
 
 jobs:
+  preflight:
+    # Publishing a dashboard preview is optional infrastructure: the Pages
+    # project, its account id and its token all live in the `preview`
+    # environment. A repository that has not configured them must not paint a
+    # red X on every PR that touches the dashboard -- the publish job used to
+    # reach `wrangler pages deploy` and die on `:?` with an empty credential,
+    # which reads as a broken PR rather than as an unconfigured integration.
+    # This job enters the environment only to report whether the pair exists;
+    # it never prints, logs, or forwards either value.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: preview
+    permissions: {}
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: Check for Cloudflare Pages credentials
+        id: check
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CLOUDFLARE_ACCOUNT_ID" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo 'configured=false' >> "$GITHUB_OUTPUT"
+          title='Dashboard preview not published'
+          body='The preview environment has no CLOUDFLARE_ACCOUNT_ID and'
+          body="$body CLOUDFLARE_API_TOKEN, so no Cloudflare Pages deployment"
+          body="$body was created for this PR. Set both on the preview"
+          body="$body environment to turn previews back on; no workflow change"
+          body="$body is needed."
+          echo "::notice title=${title}::${body}"
+
   inspect:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -159,8 +195,10 @@ jobs:
           retention-days: 1
 
   publish:
-    needs: inspect
-    if: needs.inspect.outputs.mode == 'publish'
+    needs: [inspect, preflight]
+    if: >-
+      needs.inspect.outputs.mode == 'publish' &&
+      needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: preview
@@ -331,8 +369,10 @@ jobs:
           fi
 
   retire:
-    needs: inspect
-    if: needs.inspect.outputs.mode == 'retire'
+    needs: [inspect, preflight]
+    if: >-
+      needs.inspect.outputs.mode == 'retire' &&
+      needs.preflight.outputs.configured == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: preview

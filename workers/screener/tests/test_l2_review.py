@@ -21,6 +21,7 @@ from uuid import UUID
 import httpx
 import pytest
 
+from ditto_screener.heartbeat import source_review_progress_stage
 from ditto_screener.l2_review import (
     _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK,
     _SAFETY_ADJUDICATOR_TASK,
@@ -622,8 +623,13 @@ class _FakeL2:
         self.result = result
         self.calls = 0
 
-    async def review(self, *_args: Any, **_kwargs: Any) -> L2RunResult:
+    async def review(self, *_args: Any, **kwargs: Any) -> L2RunResult:
         self.calls += 1
+        # The real reviewer announces the analyst→L3 boundary; the fake keeps
+        # that contract so the public progress ladder stays under test.
+        on_l3_start = kwargs.get("on_l3_start")
+        if on_l3_start is not None:
+            on_l3_start()
         return self.result
 
 
@@ -725,7 +731,8 @@ async def test_ambiguous_or_high_l1_invokes_sol(risk: str) -> None:
     assert l2.calls == 1
 
 
-async def test_l2_progress_occupies_the_second_half_of_source_review() -> None:
+async def test_escalated_review_reports_each_stage_of_the_second_half() -> None:
+    """L2, L3 and adjudication each own a public bucket, not one 'started'."""
     l1 = _FakeL1(_l1("high"))
     l2 = _FakeL2(_model_result(_safe()))
     layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
@@ -738,7 +745,33 @@ async def test_l2_progress_occupies_the_second_half_of_source_review() -> None:
         progress=lambda completed, total: progress.append((completed, total)),
     )
 
-    assert progress == [(1, 2), (2, 2)]
+    assert progress == [(6, 10), (8, 10), (9, 10), (10, 10)]
+    assert [
+        source_review_progress_stage(completed, total) for completed, total in progress
+    ] == [
+        "source_review_60",
+        "source_review_80",
+        "source_review_90",
+        "source_review_100",
+    ]
+
+
+async def test_unescalated_review_skips_the_deep_review_buckets() -> None:
+    """A cleared L1 never enters L2/L3, so it must not claim those stages."""
+    l1 = _FakeL1(_l1("low", clearance_certified=True))
+    l2 = _FakeL2(_model_result(_safe()))
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+    progress: list[tuple[int, int]] = []
+
+    await layered.review(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        progress=lambda completed, total: progress.append((completed, total)),
+    )
+
+    assert l2.calls == 0
+    assert progress == [(9, 10), (10, 10)]
 
 
 async def test_shadow_records_l2_but_preserves_l1_quarantine() -> None:

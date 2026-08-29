@@ -90,16 +90,71 @@ export function benchmarkProgressText(progress: BenchmarkProgress | null | undef
   return text;
 }
 
-/** Screener stage → label; the source-review percentage is split into the
- * L1 (0–50) and L2/L3 (50–100) bands (8221–8240). */
+// ── Source review: four stages, one public progress band ────────────────────
+
+/** One stage of the screener's source review. The pipeline runs four (L1
+ * broad review → L2 cause analysis → L3 safety review → L4 final
+ * adjudication) and the heartbeat carries them in a single 0–100 band, so
+ * the mapping between bucket and stage lives here rather than being
+ * inferred per call site. */
+export interface ReviewStage {
+  key: string;
+  /** Ladder tick label; the card is ~280px wide. */
+  short: string;
+  /** The sentence form used in the state line and accessible names. */
+  label: string;
+}
+
+/** L1 owns 0–50 and reports its own percentage inside that half; each
+ * escalation stage owns one bucket above it (`LayeredSourceReviewAgent`
+ * reports 6/8/9/10 tenths). A screener build that predates per-stage
+ * reporting only ever emits 50 and 100, which still lands on a real stage. */
+const REVIEW_STAGES: readonly ReviewStage[] = [
+  { key: "l1", short: "L1", label: "L1 source review" },
+  { key: "l2", short: "L2", label: "L2 cause analysis" },
+  { key: "l3", short: "L3", label: "L3 safety review" },
+  { key: "l4", short: "L4", label: "L4 final adjudication" },
+];
+
+/** The four source-review stages in order (the ladder's own domain). */
+export function reviewStages(): ReviewStage[] {
+  return REVIEW_STAGES.slice();
+}
+
+/** The heartbeat's 0–100 review bucket, or null for a non-review stage. */
+export function sourceReviewBucket(stage?: string | null): number | null {
+  const match = /^source_review_(\d+)$/.exec(stage || "");
+  if (!match) return null;
+  return Math.max(0, Math.min(100, Number(match[1]) || 0));
+}
+
+/**
+ * Which of the four review stages a bucket is in: 0–3 for a stage that is
+ * running, 4 once every stage has finished, null when the screener is not
+ * in source review at all. Never a guess — an unrecognized stage is absence.
+ */
+export function reviewStageIndex(stage?: string | null): number | null {
+  const bucket = sourceReviewBucket(stage);
+  if (bucket == null) return null;
+  if (bucket <= 50) return 0;
+  if (bucket < 80) return 1;
+  if (bucket < 90) return 2;
+  if (bucket < 100) return 3;
+  return REVIEW_STAGES.length;
+}
+
+/** Screener stage → label. Source review names the stage it is actually in;
+ * reporting the whole escalation as one band left a card reading "L1 · 100%"
+ * for the minutes L2 and L3 were running, which looks like a stall. */
 export function screenerStageLabel(stage?: string | null): string {
-  const sourceReview = /^source_review_(\d+)$/.exec(stage || "");
-  if (sourceReview) {
-    const reviewProgress = Math.max(0, Math.min(100, Number(sourceReview[1]) || 0));
-    if (reviewProgress <= 50) {
-      return "L1 source review · " + Math.min(100, reviewProgress * 2) + "%";
-    }
-    return "L2/L3 deep review · " + Math.min(100, (reviewProgress - 50) * 2) + "%";
+  const bucket = sourceReviewBucket(stage);
+  if (bucket != null) {
+    // L1 is long enough to deserve a percentage; the escalation stages are
+    // one bucket each, so a percentage there would be a fabricated 100%.
+    if (bucket <= 50) return "L1 source review · " + bucket * 2 + "%";
+    const index = reviewStageIndex(stage);
+    if (index == null || index >= REVIEW_STAGES.length) return "Source review complete";
+    return REVIEW_STAGES[index]!.label;
   }
   const labels: Record<string, string> = {
     preparing: "Preparing",
@@ -207,6 +262,52 @@ export function AdmissionStepTrack(props: {
     >
       <For each={props.steps}>{(_, index) => <i class={segmentClass(index())} />}</For>
     </span>
+  );
+}
+
+/**
+ * The four-stage source-review ladder, nested under the admission track.
+ * The track above folds all of source review into one segment — true to the
+ * admission pipeline, but it leaves the longest and most opaque part of
+ * screening as a single pulsing tick. This renders the stages inside it, so
+ * "L2 for six minutes" is legible as progress rather than as a stall.
+ *
+ * It renders only while the screener is in source review; a build-only
+ * screening never enters it and never shows one.
+ */
+export function ReviewStageLadder(props: { stage: string | null }): JSX.Element {
+  const stages = reviewStages();
+  const current = (): number | null => reviewStageIndex(props.stage);
+  const label = (): string => {
+    const index = current();
+    if (index == null) return "";
+    if (index >= stages.length) {
+      return "Source review complete · all " + stages.length + " stages done";
+    }
+    return (
+      "Source review stage " + (index + 1) + " of " + stages.length + ": " + stages[index]!.label
+    );
+  };
+  const rungClass = (index: number): string => {
+    const active = current();
+    if (active == null) return "review-rung";
+    if (index < active) return "review-rung done";
+    if (index === active) return "review-rung current";
+    return "review-rung";
+  };
+  return (
+    <Show when={current() != null}>
+      <span class="review-ladder" role="img" aria-label={label()} title={label()}>
+        <For each={stages}>
+          {(stage, index) => (
+            <span class={rungClass(index())}>
+              <i />
+              <b>{stage.short}</b>
+            </span>
+          )}
+        </For>
+      </span>
+    </Show>
   );
 }
 

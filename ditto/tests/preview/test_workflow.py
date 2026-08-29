@@ -90,10 +90,24 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
         "repo",
         "sha",
     }
-    assert set(workflow["jobs"]) == {"inspect", "publish", "retire"}
+    assert set(workflow["jobs"]) == {"preflight", "inspect", "publish", "retire"}
+    preflight = workflow["jobs"]["preflight"]
     inspect = workflow["jobs"]["inspect"]
     publish = workflow["jobs"]["publish"]
     retire = workflow["jobs"]["retire"]
+    # Preflight enters the preview environment only to answer "are the Pages
+    # credentials configured", so an unconfigured repository skips publication
+    # instead of failing every dashboard PR. It is the most restricted job in
+    # the file and must stay that way: no write permission, no third-party
+    # action, and no checkout of pull-request code to run beside the token.
+    assert preflight["environment"] == "preview"
+    assert preflight["permissions"] == {}
+    assert "needs" not in preflight
+    assert len(preflight["steps"]) == 1
+    assert "uses" not in preflight["steps"][0]
+    assert preflight["outputs"] == {
+        "configured": "${{ steps.check.outputs.configured }}"
+    }
     assert "environment" not in inspect
     assert inspect["permissions"] == {
         "actions": "read",
@@ -104,8 +118,16 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     assert retire["environment"] == "preview"
     assert publish["concurrency"]["queue"] == "max"
     assert retire["concurrency"]["queue"] == "max"
-    assert publish["if"] == "needs.inspect.outputs.mode == 'publish'"
-    assert retire["if"] == "needs.inspect.outputs.mode == 'retire'"
+    # Publication still requires inspect's verdict; the credential gate is an
+    # additional AND, never a replacement for it.
+    assert publish["needs"] == ["inspect", "preflight"]
+    assert retire["needs"] == ["inspect", "preflight"]
+    for job, mode in ((publish, "publish"), (retire, "retire")):
+        condition = " ".join(job["if"].split())
+        assert condition == (
+            f"needs.inspect.outputs.mode == '{mode}' && "
+            "needs.preflight.outputs.configured == 'true'"
+        )
     assert "workflow_run:" not in text
     assert "pull_request_target:" not in text
     assert SETUP_NODE in text
