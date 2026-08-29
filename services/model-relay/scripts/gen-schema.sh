@@ -89,7 +89,31 @@ cleanup() {
 }
 trap cleanup EXIT
 log "creating scratch database ${SCRATCH_DB}"
-psql_admin "CREATE DATABASE ${SCRATCH_DB}" >/dev/null
+# The official Postgres image briefly accepts connections from its temporary
+# initdb postmaster before stopping it and starting the final postmaster.  A
+# cold CI runner can therefore pass the readiness probe above and lose the
+# server between that probe and CREATE DATABASE.  Provision idempotently and
+# retry across that handoff instead of treating the transient socket failure
+# as schema drift.
+scratch_ready=0
+for i in $(seq 1 120); do
+  if psql_admin \
+    "SELECT 1 FROM pg_database WHERE datname = '${SCRATCH_DB}'" \
+    2>/dev/null | grep -qx 1; then
+    scratch_ready=1
+    break
+  fi
+  if psql_admin "CREATE DATABASE ${SCRATCH_DB}" >/dev/null 2>&1; then
+    scratch_ready=1
+    break
+  fi
+  [[ $((i % 15)) -eq 0 ]] && log "still waiting to create scratch database (${i}s)"
+  sleep 1
+done
+if [[ "${scratch_ready}" != 1 ]]; then
+  log "could not create scratch database after 120s"
+  exit 1
+fi
 
 # ── 3. Real Alembic chain ───────────────────────────────────────────────────
 log "running alembic upgrade head against ${SCRATCH_DB}"
