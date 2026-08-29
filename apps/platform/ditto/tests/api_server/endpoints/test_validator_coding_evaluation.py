@@ -67,11 +67,12 @@ _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
 
 class _FinalizedBlocks:
     async def get_finalized_block_hash(self, block_number: int) -> str:
-        assert block_number == 0
-        return "0x" + "22" * 32
+        if block_number == 0:
+            return "0x" + "22" * 32
+        return "0x" + "33" * 32
 
     async def get_finalized_block(self) -> BlockInfo:
-        return BlockInfo(number=1_000, hash="0x" + "33" * 32)
+        return BlockInfo(number=1_000, hash="0x" + "ff" * 32)
 
 
 def _catalog_commitment() -> CodingCatalogCommitment:

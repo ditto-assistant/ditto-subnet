@@ -80,13 +80,15 @@ class _FinalizedBlocks:
 
     async def get_finalized_block_hash(self, block_number: int) -> str:
         self.calls.append(("hash", block_number))
-        return "0x" + "22" * 32
+        if block_number == 0:
+            return "0x" + "22" * 32
+        return "0x" + "33" * 32
 
     async def get_finalized_block(self) -> BlockInfo:
         self.calls.append(("head", None))
         if self.barrier is not None:
             await self.barrier.wait()
-        return BlockInfo(number=self.anchor_number, hash="0x" + "33" * 32)
+        return BlockInfo(number=self.anchor_number, hash="0x" + "ff" * 32)
 
 
 def _catalog_commitment(
@@ -272,15 +274,16 @@ async def _seed_certification(session: AsyncSession, agent_id: UUID) -> None:
     async with session.begin():
         agent = await session.get(Agent, agent_id)
         assert agent is not None
+        now = datetime.now(UTC)
         session.add(
             CodingCapabilityCertification(
                 certification_row_id=uuid4(),
                 agent_id=agent.agent_id,
                 artifact_sha256=agent.sha256,
-                screened_image_sha256="cd" * 32,
+                screened_image_sha256=agent.screened_image_sha256,
                 validator_hotkey=_VALIDATOR,
                 bench_version=_BENCH,
-                ticket_deadline=_NOW + timedelta(hours=1),
+                ticket_deadline=now + timedelta(hours=1),
                 coding_contract_version=1,
                 certification_id="cert-coding-shadow-001",
                 status="certified",
@@ -290,12 +293,12 @@ async def _seed_certification(session: AsyncSession, agent_id: UUID) -> None:
                 canary_manifest_sha256="55" * 32,
                 transcript_object_key="sha256/" + "66" * 32,
                 frozen_submission_object_key="sha256/" + "77" * 32,
-                issued_at=_NOW - timedelta(minutes=5),
-                expires_at=_NOW + timedelta(hours=2),
+                issued_at=now - timedelta(minutes=5),
+                expires_at=now + timedelta(hours=2),
                 weight_eligible=False,
                 receipt={},
                 signature="88" * 64,
-                created_at=_NOW,
+                created_at=now,
             )
         )
 
@@ -333,7 +336,7 @@ async def test_selection_assignment_is_future_bound_idempotent_and_append_only(
     assert first.assignment.selection_block_number == 1_020
     assert first.assignment.assigned_at == first.row.created_at
     assert first.row.created_at > transaction_started_at
-    assert source.calls == [("hash", 0), ("head", None)]
+    assert source.calls == [("hash", 0), ("head", None), ("hash", 1_000)]
     assignment_row_id = first.row.assignment_row_id
 
     source.calls.clear()

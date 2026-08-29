@@ -246,11 +246,14 @@ async def create_coding_selection_assignment(
         await finalized_source.get_finalized_block_hash(0)
     )
     anchor = await finalized_source.get_finalized_block()
-    anchor_hash = normalize_coding_block_hash(anchor.hash)
     if anchor.number < 1:
         raise CodingAssignmentNotQualifiedError(
             "finalized coding assignment anchor is invalid"
         )
+    # Height-scoped hash is the authority; get_finalized_block() is two RPCs.
+    anchor_hash = normalize_coding_block_hash(
+        await finalized_source.get_finalized_block_hash(anchor.number)
+    )
 
     agent = await session.get(Agent, agent_id, with_for_update=True)
     if agent is None or agent.screened_image_sha256 is None:
