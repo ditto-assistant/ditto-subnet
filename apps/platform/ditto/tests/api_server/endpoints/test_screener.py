@@ -965,6 +965,7 @@ class TestFederatedScreenerNodes:
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        await _seed_targon_first(session_maker)
         _install_db(app, session_maker)
         _install_chain(app)
         storage = _install_storage(app)
@@ -1175,6 +1176,7 @@ class TestFederatedScreenerNodes:
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        await _seed_targon_first(session_maker)
         _install_db(app, session_maker)
         _install_chain(app)
         _install_storage(app)
@@ -1312,6 +1314,7 @@ class TestFederatedScreenerNodes:
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        await _seed_targon_first(session_maker)
         _install_db(app, session_maker)
         _install_chain(app)
         storage = _install_storage(app)
@@ -1431,6 +1434,7 @@ class TestFederatedScreenerNodes:
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        await _seed_targon_first(session_maker)
         _install_db(app, session_maker)
         _install_chain(app)
         storage = _install_storage(app)
@@ -1490,6 +1494,7 @@ class TestFederatedScreenerNodes:
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        await _seed_targon_first(session_maker)
         _install_db(app, session_maker)
         _install_chain(app)
         storage = _install_storage(app)
