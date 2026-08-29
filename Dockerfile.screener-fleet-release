@@ -1,0 +1,15 @@
+FROM scratch
+
+ARG DITTO_VERSION
+ARG DITTO_REVISION
+ARG SCREENER_FLEET_UPDATE_PROTOCOL=1
+
+LABEL org.opencontainers.image.source="https://github.com/ditto-assistant/ditto-subnet" \
+      org.opencontainers.image.version="$DITTO_VERSION" \
+      org.opencontainers.image.revision="$DITTO_REVISION" \
+      io.heyditto.screener.fleet-release="true" \
+      io.heyditto.screener.fleet-update-protocol="$SCREENER_FLEET_UPDATE_PROTOCOL"
+
+COPY build/screener-fleet-release/ /release/
+
+CMD ["/release/manifest.env"]

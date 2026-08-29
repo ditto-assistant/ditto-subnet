@@ -133,3 +133,11 @@ def test_scheduler_finishes_runtime_before_admitting_build(tmp_path: Path) -> No
         node.executor.shutdown(wait=True)
 
     assert control.claimed.index("runtime") < control.claimed.index("build")
+
+
+def test_stop_request_prevents_new_claims(tmp_path: Path) -> None:
+    node = FleetNode(_settings(tmp_path))
+    node.control = pytest.fail  # type: ignore[assignment]
+    node.request_stop()
+
+    assert node.run() == 0
