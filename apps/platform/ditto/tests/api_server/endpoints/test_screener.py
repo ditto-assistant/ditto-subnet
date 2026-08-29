@@ -779,6 +779,21 @@ class TestFederatedScreenerNodes:
             )
         claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
         attempt_id = claim.json()["items"][0]["attempt_id"]
+        build_queued = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
+            headers=_AUTH_HEADER,
+            json={"attempt_id": attempt_id},
+        )
+        assert build_queued.status_code == 200, build_queued.text
+        async with session_maker() as session, session.begin():
+            build = await session.get(
+                SubmissionImageBuild, UUID(build_queued.json()["build_id"])
+            )
+            assert build is not None
+            build.status = "succeeded"
+            build.runtime_status = "succeeded"
+            build.completed_at = datetime.now(UTC)
+            build.runtime_completed_at = datetime.now(UTC)
         queued = await client.post(
             f"/api/v1/screener/agent/{agent_id}/submission-source-reviews",
             headers=_AUTH_HEADER,

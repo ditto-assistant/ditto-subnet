@@ -23,6 +23,7 @@ dependencies = [
 
 [project.scripts]
 ditto-screener = "ditto_screener.__main__:main"
+ditto-screener-enroll = "ditto_screener.enrollment:main"
 
 [tool.uv.sources]
 ditto-screening-protocol = { path = "../../packages/ditto-screening-protocol" }

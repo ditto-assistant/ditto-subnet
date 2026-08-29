@@ -2337,6 +2337,14 @@ async def claim_submission_source_review(
                 ScreeningAttempt.status == "running",
                 ScreeningAttempt.deadline > now,
                 SubmissionSourceReview.status == "queued",
+                exists().where(
+                    (
+                        SubmissionImageBuild.attempt_id
+                        == SubmissionSourceReview.attempt_id
+                    )
+                    & (SubmissionImageBuild.status.in_(("succeeded", "consumed")))
+                    & (SubmissionImageBuild.runtime_status == "succeeded")
+                ),
             )
             .order_by(SubmissionSourceReview.created_at)
             .limit(1)
@@ -2907,6 +2915,14 @@ async def claim_node_submission_source_review(
                 ScreeningAttempt.status == "running",
                 ScreeningAttempt.deadline > now,
                 SubmissionSourceReview.status == "queued",
+                exists().where(
+                    (
+                        SubmissionImageBuild.attempt_id
+                        == SubmissionSourceReview.attempt_id
+                    )
+                    & (SubmissionImageBuild.status.in_(("succeeded", "consumed")))
+                    & (SubmissionImageBuild.runtime_status == "succeeded")
+                ),
             )
             .order_by(SubmissionSourceReview.created_at)
             .with_for_update(skip_locked=True)
@@ -3228,7 +3244,11 @@ async def list_controller_nodes(
         )
     )
     response: list[ScreenerControllerNodeState] = []
+    enrolled_instance_ids = {node.node_id for node in nodes}
     for node in nodes:
+        _, channel_settings = await resolve_screener_node_channel_settings(
+            session, node_id=node.node_id
+        )
         heartbeat = heartbeats.get((node.screener_hotkey, node.node_id))
         seen_at = heartbeat.seen_at if heartbeat is not None else None
         if seen_at is not None and seen_at.tzinfo is None:
@@ -3249,9 +3269,35 @@ async def list_controller_nodes(
                     "status": node.status,
                     "ready": ready,
                     "active_lease": node.screener_hotkey in active_hotkeys,
+                    "screening_concurrency": (channel_settings.screening_concurrency),
                     "image_reference": node.image_reference,
                     "heartbeat_seen_at": seen_at,
                 }
+            )
+        )
+    for heartbeat in heartbeats.values():
+        if (
+            not heartbeat.instance_id.startswith("ditto-screener-fleet-")
+            or heartbeat.instance_id in enrolled_instance_ids
+        ):
+            continue
+        seen_at = heartbeat.seen_at
+        if seen_at.tzinfo is None:
+            seen_at = seen_at.replace(tzinfo=UTC)
+        ready = bool(
+            now - seen_at <= timedelta(seconds=_CONTROLLER_HEARTBEAT_READY_SECONDS)
+            and heartbeat.policy_version == required_policy
+        )
+        response.append(
+            ScreenerControllerNodeState(
+                node_id=heartbeat.instance_id,
+                provider_resource_id=heartbeat.instance_id,
+                provider="gcp",
+                status="active",
+                ready=ready,
+                active_lease=heartbeat.screener_hotkey in active_hotkeys,
+                screening_concurrency=1,
+                heartbeat_seen_at=seen_at,
             )
         )
     return ScreenerControllerNodesResponse(nodes=tuple(response))
@@ -3725,6 +3771,37 @@ async def claim(
     )
     if session.get_bind().dialect.name == "postgresql":
         async with session.begin():
+            node_id = getattr(request.state, "screener_node_id", None)
+            if node_id is not None:
+                node = await session.scalar(
+                    select(ScreenerNode)
+                    .where(ScreenerNode.node_id == node_id)
+                    .with_for_update()
+                )
+                if node is None:
+                    raise ScreenerAuthError("screener node is not authorized")
+                _, limits = await resolve_screener_node_channel_settings(
+                    session, node_id=node_id
+                )
+                active = int(
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(ScreeningAttempt)
+                        .where(
+                            ScreeningAttempt.screener_hotkey == screener_hotkey,
+                            ScreeningAttempt.status == "running",
+                            ScreeningAttempt.deadline > now,
+                        )
+                    )
+                    or 0
+                )
+                limit = min(limit, max(0, limits.screening_concurrency - active))
+                if limit == 0:
+                    return ScreenerQueueResponse(
+                        items=[],
+                        count=0,
+                        required_policy_version=required_policy,
+                    )
             queue_settings = await resolve_queue_policy_settings(session)
             claimed = await claim_screening_attempts(
                 session,
@@ -3740,6 +3817,33 @@ async def claim(
         # Hold a process-local lock through commit so its behavior matches the
         # Postgres transaction-scoped lock used in production.
         async with _CLAIM_FALLBACK_LOCK, session.begin():
+            node_id = getattr(request.state, "screener_node_id", None)
+            if node_id is not None:
+                node = await session.get(ScreenerNode, node_id)
+                if node is None:
+                    raise ScreenerAuthError("screener node is not authorized")
+                _, limits = await resolve_screener_node_channel_settings(
+                    session, node_id=node_id
+                )
+                active = int(
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(ScreeningAttempt)
+                        .where(
+                            ScreeningAttempt.screener_hotkey == screener_hotkey,
+                            ScreeningAttempt.status == "running",
+                            ScreeningAttempt.deadline > now,
+                        )
+                    )
+                    or 0
+                )
+                limit = min(limit, max(0, limits.screening_concurrency - active))
+                if limit == 0:
+                    return ScreenerQueueResponse(
+                        items=[],
+                        count=0,
+                        required_policy_version=required_policy,
+                    )
             queue_settings = await resolve_queue_policy_settings(session)
             claimed = await claim_screening_attempts(
                 session,

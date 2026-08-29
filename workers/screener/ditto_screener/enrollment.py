@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import fcntl
 import os
 import time
 from base64 import b64decode
@@ -141,6 +143,17 @@ async def ensure_node_credentials_from_env() -> None:
     if not credential_path:
         return
     target = Path(credential_path)
+    lock_path = target.with_name(f".{target.name}.enrollment.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with lock_path.open("a+") as lock:
+        await asyncio.to_thread(fcntl.flock, lock, fcntl.LOCK_EX)
+        try:
+            await _ensure_node_credentials(target)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+async def _ensure_node_credentials(target: Path) -> None:
     if target.exists():
         apply_node_credential(load_node_credential(target))
         return
@@ -261,6 +274,12 @@ async def ensure_node_credentials_from_env() -> None:
                 "could not erase the consumed registration token"
             ) from error
     apply_node_credential(credential)
+
+
+def main() -> int:
+    """Enroll once for systemd without starting a screening worker."""
+    asyncio.run(ensure_node_credentials_from_env())
+    return 0
 
 
 async def _materialize_source_review_secret() -> None:

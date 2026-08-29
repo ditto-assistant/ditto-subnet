@@ -12,12 +12,14 @@ from screener_capacity.controller import (
     Demand,
     GCEFleet,
     GCPBootstrapTokenMinter,
+    OverflowPolicy,
     ProviderCounts,
     ProviderRouting,
     Settings,
     build_parser,
     desired_slots,
     gce_capacity_target,
+    gce_overflow_target,
     reconcile,
 )
 
@@ -117,6 +119,74 @@ class _GCE:
 
 
 class CapacityDecisionTests(unittest.TestCase):
+    def test_healthy_hetzner_handles_normal_backlog_without_gce(self) -> None:
+        routing = ProviderRouting(
+            revision=1,
+            runtime_provider_priority=("hetzner", "gcp"),
+            source_review_provider_priority=("hetzner", "gcp"),
+            build_provider_priority=("hetzner", "gcp"),
+            overflow=OverflowPolicy(True, "subnet-screener-1", 3, 12, 6),
+        )
+
+        target, reason = gce_overflow_target(
+            demand=Demand(runnable=24, active=8, desired=6),
+            routing=routing,
+            primary_node={
+                "status": "active",
+                "ready": True,
+                "screening_concurrency": 8,
+            },
+            jobs_per_slot=6,
+            global_cap=6,
+        )
+
+        self.assertEqual(target, 0)
+        self.assertEqual(reason, "HETZNER_PRIMARY_HANDLING_BASE_LOAD")
+
+    def test_hetzner_backlog_multiple_starts_only_residual_gce(self) -> None:
+        routing = ProviderRouting(
+            revision=1,
+            runtime_provider_priority=("hetzner", "gcp"),
+            source_review_provider_priority=("hetzner", "gcp"),
+            build_provider_priority=("hetzner", "gcp"),
+            overflow=OverflowPolicy(True, "subnet-screener-1", 3, 12, 6),
+        )
+
+        target, reason = gce_overflow_target(
+            demand=Demand(runnable=37, active=8, desired=6),
+            routing=routing,
+            primary_node={
+                "status": "active",
+                "ready": True,
+                "screening_concurrency": 8,
+            },
+            jobs_per_slot=6,
+            global_cap=6,
+        )
+
+        self.assertEqual(target, 3)
+        self.assertEqual(reason, "HETZNER_BACKLOG_OVERFLOW")
+
+    def test_hetzner_outage_activates_gce_for_waiting_work(self) -> None:
+        routing = ProviderRouting(
+            revision=1,
+            runtime_provider_priority=("hetzner", "gcp"),
+            source_review_provider_priority=("hetzner", "gcp"),
+            build_provider_priority=("hetzner", "gcp"),
+            overflow=OverflowPolicy(True, "subnet-screener-1", 3, 12, 6),
+        )
+
+        target, reason = gce_overflow_target(
+            demand=Demand(runnable=7, active=0, desired=2),
+            routing=routing,
+            primary_node={"status": "active", "ready": False},
+            jobs_per_slot=6,
+            global_cap=6,
+        )
+
+        self.assertEqual(target, 2)
+        self.assertEqual(reason, "HETZNER_PRIMARY_UNAVAILABLE")
+
     @patch("screener_capacity.controller.subprocess.run")
     def test_gce_resize_pauses_and_restores_scale_out_watchdog(
         self, run: object
@@ -293,6 +363,34 @@ class CapacityDecisionTests(unittest.TestCase):
                 snapshot = reconcile(settings)
             self.assertEqual(snapshot["gce_target"], 0)
             self.assertEqual(resized, [3, 0])
+
+    def test_missing_node_inventory_blocks_gce_scale_in_with_live_work(self) -> None:
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            platform = SimpleNamespace(
+                demand=lambda **_kwargs: Demand(runnable=0, active=1, desired=1),
+                provider_routing=lambda: ProviderRouting(
+                    revision=0,
+                    runtime_provider_priority=("targon", "gcp"),
+                    source_review_provider_priority=("targon", "gcp"),
+                    build_provider_priority=("targon", "gcp"),
+                ),
+                renew=lambda snapshot: snapshot,
+                fence=lambda **_kwargs: None,
+            )
+            gce = _GCE(target=2)
+
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+            ):
+                snapshot = reconcile(settings)
+
+            self.assertEqual(snapshot["gce_target"], 2)
+            self.assertEqual(gce.resized, [])
 
     def test_gcp_first_policy_scales_gce_workers(self) -> None:
         with TemporaryDirectory() as directory:

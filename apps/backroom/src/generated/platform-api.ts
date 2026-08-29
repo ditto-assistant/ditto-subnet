@@ -18179,6 +18179,11 @@ export interface components {
             /** Ready */
             ready: boolean;
             /**
+             * Screening Concurrency
+             * @default 0
+             */
+            screening_concurrency: number;
+            /**
              * Status
              * @enum {string}
              */
@@ -18287,6 +18292,11 @@ export interface components {
              */
             sandbox_slots: number;
             /**
+             * Screening Concurrency
+             * @default 0
+             */
+            screening_concurrency: number;
+            /**
              * Source Review Concurrency
              * @default 0
              */
@@ -18354,6 +18364,11 @@ export interface components {
              * @default 0
              */
             sandbox_active: number;
+            /**
+             * Screening Active
+             * @default 0
+             */
+            screening_active: number;
             /**
              * Source Review Active
              * @default 0
@@ -18655,6 +18670,28 @@ export interface components {
              *     ]
              */
             build_provider_priority: ("hetzner" | "targon" | "gcp")[];
+            /**
+             * Gce Overflow Backlog Multiplier
+             * @default 3
+             */
+            gce_overflow_backlog_multiplier: number;
+            /**
+             * Gce Overflow Enabled
+             * @default false
+             */
+            gce_overflow_enabled: boolean;
+            /**
+             * Gce Overflow Max Instances
+             * @default 6
+             */
+            gce_overflow_max_instances: number;
+            /**
+             * Gce Overflow Min Backlog
+             * @default 12
+             */
+            gce_overflow_min_backlog: number;
+            /** Primary Node Id */
+            primary_node_id?: string | null;
             /**
              * Runtime Provider Priority
              * @default [

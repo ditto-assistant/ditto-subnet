@@ -309,19 +309,19 @@ SCREENER_QUEUE_LIMIT=20
 # Per-stage caps — kept in lockstep with the pet VM role
 # (infra ansible/roles/screener_worker/defaults) so pet and fleet return the
 # SAME verdict for the same submission. build_timeout matches the platform
-# screening lease (45m); the worker clamps every stage to the remaining lease
-# and re-queues as retryable if it runs out, and source review runs
-# concurrently with build/serve (ditto-screener#20), so these are upper bounds,
-# never a floor that rejects a legitimately-slow build the pet would accept.
+# first 45 minutes of the screening lease; every stage is clamped to the
+# remaining lease. General source review starts only after build and smoke pass,
+# so these values are upper bounds rather than independent time reservations.
 SCREENER_BUILD_TIMEOUT_SECONDS=2700
 SCREENER_RUN_TIMEOUT_SECONDS=120
 SCREENER_BUILD_MEMORY=2g
 # Language-neutral image builds get a larger but still bounded compiler/linker
 # envelope. The built harness keeps the validator-compatible runtime limits.
 SCREENER_IMAGE_BUILD_MEMORY=8g
-SCREENER_REMOTE_BUILD_MODE=prefer
-# A normal 70-minute screening lease budgets 25 minutes for Targon Kaniko and
-# leaves up to 45 minutes for the independent local Docker fallback.
+SCREENER_REMOTE_BUILD_MODE=off
+# GCE MIG instances are whole-screen overflow capacity. They build and smoke
+# locally immediately; they do not enqueue work back onto the Hetzner node and
+# wait before doing the same build themselves.
 SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS=1500
 SCREENER_PIDS_LIMIT=512
 SCREENER_DOCKER_HOST=$rootless_host

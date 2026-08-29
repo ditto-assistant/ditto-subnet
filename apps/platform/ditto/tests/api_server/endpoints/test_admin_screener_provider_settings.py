@@ -44,10 +44,16 @@ def _payload(
         "runtime_provider_priority": screening,
         "source_review_provider_priority": screening,
         "build_provider_priority": builds,
+        "gce_overflow_enabled": False,
+        "primary_node_id": None,
+        "gce_overflow_backlog_multiplier": 3,
+        "gce_overflow_min_backlog": 12,
+        "gce_overflow_max_instances": 6,
     }
     phrase = (
         f"APPLY SCREENER PROVIDERS BUILDS={'>'.join(builds)} "
-        f"RUNTIME={'>'.join(screening)} SOURCE_REVIEW={'>'.join(screening)}"
+        f"RUNTIME={'>'.join(screening)} SOURCE_REVIEW={'>'.join(screening)} "
+        "GCE_OVERFLOW=DISABLED"
     )
     return {
         "environment": "prod",
@@ -72,6 +78,11 @@ async def test_provider_settings_are_atomic_audited_and_cas_guarded(
         "runtime_provider_priority": ["gcp", "targon"],
         "source_review_provider_priority": ["gcp", "targon"],
         "build_provider_priority": ["gcp", "targon"],
+        "gce_overflow_enabled": False,
+        "primary_node_id": None,
+        "gce_overflow_backlog_multiplier": 3,
+        "gce_overflow_min_backlog": 12,
+        "gce_overflow_max_instances": 6,
     }
 
     applied = await client.post(
@@ -161,6 +172,7 @@ async def test_node_channel_settings_default_disabled_and_cas_guarded(
     assert initial.status_code == 200, initial.text
     assert initial.json()["current"]["revision"] == 0
     assert initial.json()["current"]["settings"] == {
+        "screening_concurrency": 0,
         "sandbox_slots": 0,
         "build_concurrency": 0,
         "runtime_concurrency": 0,
@@ -168,6 +180,7 @@ async def test_node_channel_settings_default_disabled_and_cas_guarded(
     }
 
     settings = {
+        "screening_concurrency": 8,
         "sandbox_slots": 3,
         "build_concurrency": 3,
         "runtime_concurrency": 3,
@@ -183,7 +196,8 @@ async def test_node_channel_settings_default_disabled_and_cas_guarded(
             "reason": "Activate the first dedicated 64 GB screener host",
             "actor": "operator@example.com",
             "confirmation": (
-                "APPLY SCREENER NODE subnet-screener-1 SANDBOX=3 BUILD=3 "
+                "APPLY SCREENER NODE subnet-screener-1 SCREENING=8 "
+                "SANDBOX=3 BUILD=3 "
                 "RUNTIME=3 SOURCE_REVIEW=6"
             ),
         },
@@ -201,7 +215,8 @@ async def test_node_channel_settings_default_disabled_and_cas_guarded(
             "reason": "Repeat a stale capacity mutation request",
             "actor": "operator@example.com",
             "confirmation": (
-                "APPLY SCREENER NODE subnet-screener-1 SANDBOX=3 BUILD=3 "
+                "APPLY SCREENER NODE subnet-screener-1 SCREENING=8 "
+                "SANDBOX=3 BUILD=3 "
                 "RUNTIME=3 SOURCE_REVIEW=6"
             ),
         },
@@ -291,6 +306,7 @@ async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(
             "environment": "prod",
             "expected_revision": 0,
             "settings": {
+                "screening_concurrency": 2,
                 "sandbox_slots": 1,
                 "build_concurrency": 1,
                 "runtime_concurrency": 1,
@@ -299,7 +315,8 @@ async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(
             "reason": "Enable one isolated VM slot for the node claim test",
             "actor": "operator@example.com",
             "confirmation": (
-                "APPLY SCREENER NODE subnet-screener-1 SANDBOX=1 BUILD=1 "
+                "APPLY SCREENER NODE subnet-screener-1 SCREENING=2 "
+                "SANDBOX=1 BUILD=1 "
                 "RUNTIME=1 SOURCE_REVIEW=2"
             ),
         },
@@ -318,6 +335,21 @@ async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(
         assert row is not None
         assert row.node_id == "subnet-screener-1"
         assert row.provider == "hetzner"
+
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    second = await client.post(
+        _CLAIM_URL,
+        headers=node_headers,
+    )
+    assert second.status_code == 200, second.text
+    assert len(second.json()["items"]) == 1
+    capped = await client.post(
+        _CLAIM_URL,
+        headers=node_headers,
+    )
+    assert capped.status_code == 200, capped.text
+    assert capped.json()["items"] == []
 
 
 async def test_failed_trusted_build_requires_exact_manual_retry(
@@ -413,7 +445,7 @@ async def test_unknown_fields_ignored_and_gcp_first_keeps_targon_fallback() -> N
             "reason": "Cut over every lane to the old GCE path",
             "confirmation": (
                 "APPLY SCREENER PROVIDERS BUILDS=gcp>targon RUNTIME=gcp>targon "
-                "SOURCE_REVIEW=gcp"
+                "SOURCE_REVIEW=gcp GCE_OVERFLOW=DISABLED"
             ),
             "unknown_operator_hint": "ignored",
         }

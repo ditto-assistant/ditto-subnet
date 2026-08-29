@@ -161,6 +161,8 @@ import {
   screenerCapacityViewSchema,
   screenerProviderSettingsControlSchema,
   setScreenerProviderSettingsInputSchema,
+  setScreenerNodeChannelSettingsInputSchema,
+  screenerNodeChannelSettingsControlSchema,
   retryTrustedImageBuildInputSchema,
   trustedImageBuildSchema,
   inferenceRouteCalibrationInputSchema,
@@ -488,6 +490,25 @@ export async function updateScreenerProviderSettings(actor: string, rawInput: un
   })
   const payload = await platformAdminRequest('/api/v1/admin/screener-provider-settings')
   return screenerProviderSettingsControlSchema.parse(payload)
+}
+
+export async function updateScreenerNodeChannelSettings(actor: string, rawInput: unknown) {
+  const input = setScreenerNodeChannelSettingsInputSchema.parse(rawInput)
+  const path = `/api/v1/admin/screener-nodes/${encodeURIComponent(input.nodeId)}/channel-settings`
+  await platformAdminRequest(path, {
+    method: 'POST',
+    actor,
+    body: {
+      environment: 'prod',
+      expected_revision: input.expectedRevision,
+      settings: input.settings,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  const payload = await platformAdminRequest(path)
+  return screenerNodeChannelSettingsControlSchema.parse(payload)
 }
 
 export async function fetchArtifactReleaseControl() {

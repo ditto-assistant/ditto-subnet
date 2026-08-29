@@ -1,0 +1,50 @@
+---
+screener_fleet_node_id: subnet-screener-1
+screener_fleet_runtime_enabled: true
+screener_fleet_environment: prod
+screener_fleet_provider_resource_id: ""
+screener_fleet_platform_url: https://platform-api.heyditto.ai
+screener_fleet_netuid: 118
+
+screener_fleet_user: ditto-screener
+screener_fleet_group: ditto-screener
+screener_fleet_root: /opt/ditto/screener-fleet
+screener_fleet_checkout: "{{ screener_fleet_root }}/src"
+screener_fleet_worker_dir: "{{ screener_fleet_checkout }}/workers/screener"
+screener_fleet_orchestrator_dir: "{{ screener_fleet_checkout }}/services/screener-orchestrator"
+screener_fleet_worker_venv: "{{ screener_fleet_root }}/worker-venv"
+screener_fleet_orchestrator_venv: "{{ screener_fleet_root }}/orchestrator-venv"
+screener_fleet_state_dir: /var/lib/ditto-screener-fleet
+screener_fleet_config_dir: /etc/ditto-screener-fleet
+screener_fleet_jobs_dir: "{{ screener_fleet_state_dir }}/jobs"
+screener_fleet_images_dir: "{{ screener_fleet_state_dir }}/images"
+screener_fleet_logs_dir: /var/log/ditto-screener-fleet
+screener_fleet_credential_file: "{{ screener_fleet_config_dir }}/node.json"
+screener_fleet_registration_token_file: "{{ screener_fleet_config_dir }}/registration-token"
+screener_fleet_source_review_key_file: "{{ screener_fleet_config_dir }}/source-review-api-key"
+screener_fleet_env_file: "{{ screener_fleet_config_dir }}/fleet.env"
+
+screener_fleet_repo_url: https://github.com/ditto-assistant/ditto-subnet.git
+# Exact public release commit to run. Mutable branches are deliberately rejected.
+screener_fleet_release_sha: ""
+screener_fleet_worker_processes: 8
+screener_fleet_agent_workers: 12
+screener_fleet_poll_seconds: 2
+screener_fleet_build_timeout_seconds: 3000
+screener_fleet_runtime_timeout_seconds: 300
+screener_fleet_source_review_timeout_seconds: 1800
+screener_fleet_vm_memory_mib: 10240
+screener_fleet_vm_vcpus: 8
+
+# Both images execute trusted Ditto code and must be immutable release digests.
+screener_fleet_builder_image: ""
+
+# Pin an official Debian genericcloud image by digest in private inventory.
+screener_fleet_debian_cloud_image_url: ""
+screener_fleet_debian_cloud_image_sha256: ""
+screener_fleet_base_image: "{{ screener_fleet_images_dir }}/debian-12-docker.qcow2"
+
+# Supply these only for first converge, preferably through Ansible Vault.
+# The registration token is consumed and deleted by ditto-screener-enroll.
+screener_fleet_registration_token: ""
+screener_fleet_source_review_api_key: ""

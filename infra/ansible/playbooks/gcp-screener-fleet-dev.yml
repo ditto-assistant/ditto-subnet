@@ -1,0 +1,91 @@
+---
+- name: Rehearse dedicated screener host preparation without production authority
+  hosts: role_screener_fleet_dev
+  become: true
+  gather_facts: true
+  roles:
+    - hetzner_screener_fleet
+
+  post_tasks:
+    - name: Verify hardware virtualization is exposed
+      ansible.builtin.command: test -c /dev/kvm
+      changed_when: false
+
+    - name: Verify the isolated libvirt network is active
+      ansible.builtin.command: virsh net-info ditto-screener-nat
+      register: screener_dev_libvirt_network
+      changed_when: false
+      failed_when: screener_dev_libvirt_network.stdout is not search('(?m)^Active:\\s+yes$')
+
+    - name: Verify rehearsal mode installed no screener systemd units
+      ansible.builtin.stat:
+        path: /etc/systemd/system/ditto-screener-fleet-agent.service
+      register: screener_dev_runtime_unit
+      failed_when: screener_dev_runtime_unit.stat.exists
+
+    - name: Boot one disposable KVM guest from the prepared base
+      block:
+        - name: Remove an interrupted rehearsal guest
+          ansible.builtin.command: virsh destroy ditto-screener-rehearsal
+          changed_when: false
+          failed_when: false
+
+        - name: Remove an interrupted rehearsal overlay
+          ansible.builtin.file:
+            path: "{{ screener_fleet_jobs_dir }}/rehearsal.qcow2"
+            state: absent
+
+        - name: Create a disposable rehearsal overlay
+          ansible.builtin.command:
+            argv:
+              - qemu-img
+              - create
+              - -f
+              - qcow2
+              - -F
+              - qcow2
+              - -b
+              - "{{ screener_fleet_base_image }}"
+              - "{{ screener_fleet_jobs_dir }}/rehearsal.qcow2"
+          changed_when: true
+
+        - name: Start the transient rehearsal guest
+          ansible.builtin.command:
+            argv:
+              - virt-install
+              - --name
+              - ditto-screener-rehearsal
+              - --memory
+              - "2048"
+              - --vcpus
+              - "2"
+              - --cpu
+              - host-passthrough
+              - --import
+              - --disk
+              - "path={{ screener_fleet_jobs_dir }}/rehearsal.qcow2,format=qcow2,bus=virtio"
+              - --network
+              - network=ditto-screener-nat,model=virtio
+              - --os-variant
+              - generic
+              - --noautoconsole
+              - --transient
+          changed_when: true
+
+        - name: Wait for the rehearsal guest to enter running state
+          ansible.builtin.command: virsh domstate ditto-screener-rehearsal
+          register: screener_dev_guest_state
+          retries: 10
+          delay: 2
+          until: screener_dev_guest_state.stdout | trim == 'running'
+          changed_when: false
+      always:
+        - name: Stop the transient rehearsal guest
+          ansible.builtin.command: virsh destroy ditto-screener-rehearsal
+          changed_when: false
+          failed_when: false
+
+        - name: Remove the disposable rehearsal overlay
+          ansible.builtin.file:
+            path: "{{ screener_fleet_jobs_dir }}/rehearsal.qcow2"
+            state: absent

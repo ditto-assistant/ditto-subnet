@@ -927,22 +927,17 @@ def _review_engine() -> PolicyEngine:
     )
 
 
-async def test_source_review_overlaps_the_build(
+async def test_source_review_starts_only_after_build_and_health(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    """The review must start before the build finishes, not after health."""
+    """Broken build/runtime work must not consume general review capacity."""
     events: list[str] = []
-    review_may_finish = asyncio.Event()
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
         if args[0] == "build":
             if stdin is not None:
                 stdin.read()
-            # Yield so the eagerly-created review task gets scheduled while
-            # the "build" is still in flight, then let the review finish.
-            await asyncio.sleep(0)
             events.append("build_finished")
-            review_may_finish.set()
             _write_iidfile(args)
         if args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
             return 0, "sha256:" + "34" * 32
@@ -951,27 +946,24 @@ async def test_source_review_overlaps_the_build(
     tarball = _valid_tar()
     gate = _gate_with(make_config(), run, tarball=tarball)
     gate._policy = _review_engine()
-    gate._source_reviewer = _StubReviewer(events, gate_event=review_may_finish)  # type: ignore[assignment]
+    gate._source_reviewer = _StubReviewer(events)  # type: ignore[assignment]
     async with gate._client:
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
     assert result.outcome == ScreeningOutcome.PASS
-    assert events.index("review_started") < events.index("build_finished")
+    assert events.index("build_finished") < events.index("review_started")
     assert events[-1] == "review_finished"
 
 
-async def test_review_task_is_cancelled_when_the_build_fails(
+async def test_source_review_is_not_started_when_the_build_fails(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
     events: list[str] = []
-    reviewer = _StubReviewer(events, gate_event=asyncio.Event())  # never set
+    reviewer = _StubReviewer(events)
 
     async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
         if args[0] == "build":
             if stdin is not None:
                 stdin.read()
-            # Yield once so the eager review task has actually started
-            # before the build fails and the run is decided.
-            await asyncio.sleep(0)
             return 1, "error[E0308]: mismatched types"
         return 0, ""
 
@@ -982,7 +974,8 @@ async def test_review_task_is_cancelled_when_the_build_fails(
     async with gate._client:
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
-    assert reviewer.cancelled, "review must stop once the run is decided"
+    assert events == []
+    assert reviewer.cancelled is False
 
 
 async def test_progress_callback_failure_does_not_change_screening(

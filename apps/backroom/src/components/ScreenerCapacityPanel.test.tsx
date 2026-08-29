@@ -8,6 +8,14 @@ import { ScreenerCapacityPanel } from './ScreenerCapacityPanel'
 const getScreenerCapacity = vi.fn()
 const retryTrustedImageBuild = vi.fn()
 const updateScreenerProviderSettings = vi.fn()
+const updateScreenerNodeChannelSettings = vi.fn()
+const overflowDefaults = {
+  gce_overflow_enabled: false,
+  primary_node_id: null,
+  gce_overflow_backlog_multiplier: 3,
+  gce_overflow_min_backlog: 12,
+  gce_overflow_max_instances: 6,
+} as const
 
 vi.mock('@tanstack/react-start', () => ({
   useServerFn: (serverFn: unknown) => serverFn,
@@ -17,6 +25,7 @@ vi.mock('../server/admin.functions', () => ({
   getScreenerCapacity: (...args: unknown[]) => getScreenerCapacity(...args),
   retryTrustedImageBuild: (...args: unknown[]) => retryTrustedImageBuild(...args),
   updateScreenerProviderSettings: (...args: unknown[]) => updateScreenerProviderSettings(...args),
+  updateScreenerNodeChannelSettings: (...args: unknown[]) => updateScreenerNodeChannelSettings(...args),
 }))
 
 afterEach(() => {
@@ -24,6 +33,7 @@ afterEach(() => {
   getScreenerCapacity.mockReset()
   retryTrustedImageBuild.mockReset()
   updateScreenerProviderSettings.mockReset()
+  updateScreenerNodeChannelSettings.mockReset()
 })
 
 function capacity(overrides: Partial<ScreenerCapacityView> = {}): ScreenerCapacityView {
@@ -64,6 +74,7 @@ function capacity(overrides: Partial<ScreenerCapacityView> = {}): ScreenerCapaci
         revision: 0,
         parent_revision: 0,
         settings: {
+          ...overflowDefaults,
           runtime_provider_priority: ['targon', 'gcp'],
           source_review_provider_priority: ['targon', 'gcp'],
           build_provider_priority: ['targon', 'gcp'],
@@ -74,6 +85,7 @@ function capacity(overrides: Partial<ScreenerCapacityView> = {}): ScreenerCapaci
       },
       history: [],
     },
+    node_controls: [],
     ...overrides,
   }
 }
@@ -87,8 +99,8 @@ describe('ScreenerCapacityPanel', () => {
     expect(screen.queryByText('Restore Targon-first')).toBeNull()
     expect(screen.queryByText('Normal writer lease is healthy')).toBeNull()
     expect(screen.queryByText(/5 CPU rentals advertised/)).toBeNull()
-    expect(screen.getByText(/Release and miner-image builds follow the independent builder priority/)).toBeTruthy()
-    expect(screen.getByText(/Nested-Docker Targon screener workers are retired/)).toBeTruthy()
+    expect(screen.getByText(/Trusted screener release-image builds remain separate/)).toBeTruthy()
+    expect(screen.getByText(/Hetzner handles normal work/)).toBeTruthy()
   })
 
   it('renders one-shot cleanup timestamps in an explicit server-safe timezone', () => {
@@ -142,6 +154,7 @@ describe('ScreenerCapacityPanel', () => {
       lane: 'source_review' as const,
       status: 'succeeded',
       provider: 'targon' as const,
+      node_id: null,
       provider_resource_id: 'wrk-source-review',
       image_reference: 'sha256:source-review',
       error_code: null,
@@ -176,6 +189,7 @@ describe('ScreenerCapacityPanel', () => {
       lane: 'source_review' as const,
       status: 'succeeded',
       provider: 'targon' as const,
+      node_id: null,
       provider_resource_id: 'wrk-source-review',
       image_reference: 'sha256:source-review',
       error_code: null,
@@ -209,14 +223,15 @@ describe('ScreenerCapacityPanel', () => {
     expect(screen.queryByText('runtime')).toBeNull()
   })
 
-  it('offers single-shot Targon and GCE controls without a hybrid', () => {
+  it('offers Hetzner base load, GCE only, and legacy Targon controls', () => {
     render(<ScreenerCapacityPanel initialState={capacity()} readOnly={false} />)
 
-    expect(screen.getAllByRole('button', { name: 'Targon only' })).toHaveLength(3)
-    expect(screen.getAllByRole('button', { name: 'Targon off (GCE only)' })).toHaveLength(3)
+    expect(screen.getAllByRole('button', { name: 'Targon-first + GCE' })).toHaveLength(3)
+    expect(screen.getAllByRole('button', { name: 'GCE only' })).toHaveLength(3)
+    expect(screen.getAllByRole('button', { name: 'Hetzner + GCE overflow' })).toHaveLength(3)
     expect(screen.queryByRole('button', { name: 'Cut over to GCE only' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Restore Targon-first' })).toBeNull()
-    expect(screen.getByText('All lanes Targon only')).toBeTruthy()
+    expect(screen.getByText('All lanes Targon-first')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'GCP first' })).toBeNull()
     expect(screen.queryByText('GCP first')).toBeNull()
   })
@@ -231,6 +246,7 @@ describe('ScreenerCapacityPanel', () => {
               revision: 3,
               parent_revision: 2,
               settings: {
+                ...overflowDefaults,
                 runtime_provider_priority: ['gcp', 'targon'],
                 source_review_provider_priority: ['gcp', 'targon'],
                 build_provider_priority: ['gcp', 'targon'],
@@ -247,7 +263,7 @@ describe('ScreenerCapacityPanel', () => {
     )
 
     expect(screen.getByText('All lanes GCE only')).toBeTruthy()
-    expect(screen.getAllByRole('button', { name: 'Targon off (GCE only)' }).every((button) => button.getAttribute('aria-pressed') === 'true')).toBe(true)
+    expect(screen.getAllByRole('button', { name: 'GCE only' }).every((button) => button.getAttribute('aria-pressed') === 'true')).toBe(true)
   })
 
   it('applies a per-lane GCE-only draft through the existing confirmation flow', async () => {
@@ -257,6 +273,7 @@ describe('ScreenerCapacityPanel', () => {
         revision: 1,
         parent_revision: 0,
         settings: {
+          ...overflowDefaults,
           runtime_provider_priority: ['gcp'],
           source_review_provider_priority: ['targon', 'gcp'],
           build_provider_priority: ['targon', 'gcp'],
@@ -270,12 +287,12 @@ describe('ScreenerCapacityPanel', () => {
 
     render(<ScreenerCapacityPanel initialState={capacity()} readOnly={false} />)
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Targon off (GCE only)' })[1])
+    fireEvent.click(screen.getAllByRole('button', { name: 'GCE only' })[1])
     fireEvent.change(screen.getByLabelText(/Audit reason/), {
       target: { value: 'disable Targon runtime smoke only' },
     })
     fireEvent.change(screen.getByLabelText(/Type to confirm/), {
-      target: { value: 'APPLY SCREENER PROVIDERS BUILDS=targon>gcp RUNTIME=gcp SOURCE_REVIEW=targon>gcp' },
+      target: { value: 'APPLY SCREENER PROVIDERS BUILDS=targon>gcp RUNTIME=gcp SOURCE_REVIEW=targon>gcp GCE_OVERFLOW=DISABLED' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Append provider revision' }))
 
@@ -284,12 +301,13 @@ describe('ScreenerCapacityPanel', () => {
         data: {
           expectedRevision: 0,
           settings: {
+            ...overflowDefaults,
             runtime_provider_priority: ['gcp'],
             source_review_provider_priority: ['targon', 'gcp'],
             build_provider_priority: ['targon', 'gcp'],
           },
           reason: 'disable Targon runtime smoke only',
-          confirmation: 'APPLY SCREENER PROVIDERS BUILDS=targon>gcp RUNTIME=gcp SOURCE_REVIEW=targon>gcp',
+          confirmation: 'APPLY SCREENER PROVIDERS BUILDS=targon>gcp RUNTIME=gcp SOURCE_REVIEW=targon>gcp GCE_OVERFLOW=DISABLED',
         },
       })
     })

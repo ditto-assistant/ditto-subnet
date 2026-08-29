@@ -51,6 +51,7 @@ import {
   inferenceRoutingPolicyInputSchema,
   setConfirmationBundleSettingsInputSchema,
   setScreenerProviderSettingsInputSchema,
+  setScreenerNodeChannelSettingsInputSchema,
   retryTrustedImageBuildInputSchema,
   confirmationBundleListInputSchema,
   confirmationBundleDetailInputSchema,
@@ -106,6 +107,7 @@ import {
   fetchScreenerCapacity,
   retryTrustedImageBuild as retryTrustedImageBuildService,
   updateScreenerProviderSettings as updateScreenerProviderSettingsService,
+  updateScreenerNodeChannelSettings as updateScreenerNodeChannelSettingsService,
   applyScreenerReviewSettings as applyScreenerReviewSettingsService,
   fetchArtifactReleaseControl,
   fetchInferenceRoutes,
@@ -318,6 +320,15 @@ export const updateScreenerProviderSettings = createServerFn({ method: 'POST' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return updateScreenerProviderSettingsService(context.session.email, data)
+  })
+
+export const updateScreenerNodeChannelSettings = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(setScreenerNodeChannelSettingsInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return updateScreenerNodeChannelSettingsService(context.session.email, data)
   })
 
 export const getArtifactReleaseControl = createServerFn({ method: 'GET' })

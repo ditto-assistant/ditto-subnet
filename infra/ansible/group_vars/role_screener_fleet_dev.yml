@@ -1,0 +1,21 @@
+---
+# Disposable GCE rehearsal host. It prepares KVM/libvirt and the verified guest
+# base but cannot enroll or start a production screener identity.
+gcp_project: ditto-app-dev
+gcp_zone: us-central1-a
+
+ansible_user: "{{ lookup('env', 'GCP_OSLOGIN_USER') | default('', true) }}"
+ansible_ssh_common_args: >-
+  -o StrictHostKeyChecking=accept-new
+  -o ProxyCommand="gcloud compute start-iap-tunnel {{ inventory_hostname }} 22
+  --listen-on-stdin --zone={{ gcp_zone }} --project={{ gcp_project }}
+  --verbosity=warning"
+
+screener_fleet_runtime_enabled: false
+screener_fleet_node_id: subnet-screener-dev-1
+screener_fleet_worker_processes: 1
+# Immutable image pair exercised by the live nested-KVM rehearsal. Update both
+# together only after checking Debian's official SHA512SUMS and recomputing the
+# SHA-256 consumed by Ansible get_url.
+screener_fleet_debian_cloud_image_url: https://cloud.debian.org/images/cloud/bookworm/20260821-2577/debian-12-genericcloud-amd64-20260821-2577.qcow2
+screener_fleet_debian_cloud_image_sha256: 3ac58d009df21d570bb10811ae1e07afd1125e9669c87897bfb58e52b8f5c937

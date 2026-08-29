@@ -1,47 +1,54 @@
 # Federated screener capacity
 
-The subnet control plane can run with zero idle GCE screeners. Platform owns
-demand, admits Targon screening attempts, creates the Kaniko / runtime / L1
-rentals, and attests verdicts. The separate `ditto-screener-capacity-prod` VM
-and screener fleet MIG are retired on this path.
+The normal production path is one fixed-cost 64 GB Hetzner node named
+`subnet-screener-1`, with the existing GCE MIG retained at zero as outage and
+backlog-overflow capacity. Platform owns admission and leases; Backroom owns
+the revisioned provider and per-node concurrency settings. See
+[`docs/hetzner-screener-fleet.md`](../../docs/hetzner-screener-fleet.md) for the
+default-Debian install and Ansible runbook.
 
 ## Provider order and safety gate
 
-Nested-Docker Targon screener slots are retired. There is no GO/NOGO
-hostile-runtime attestation and no persistent `ditto-screener-prod-*` worker
-lane. For each reconciliation the controller:
+Nested-Docker Targon screener slots remain retired. For each reconciliation the
+controller:
 
 1. reads the current Platform demand and renews its fenced lease;
 2. reads the audited Backroom provider revision;
-3. keeps the GCE MIG at zero when all three decomposed lanes are Targon-first,
-   or resizes it to residual demand for a GCE-only / mixed revision;
-4. drains leftover nested-Docker Targon slots before deletion and scales GCE
-   to zero only when Platform reports no active screening leases.
+3. treats the configured Hetzner node heartbeat as the primary availability
+   signal;
+4. keeps GCE at zero while the primary is ready and unclaimed backlog is at or
+   below `max(min_backlog, screening_concurrency * backlog_multiplier)`;
+5. adds only residual GCE capacity above that threshold, or full bounded GCE
+   capacity when the primary is not ready;
+6. scales GCE down only after GCE-owned leases finish.
 
-Backroom controls build, direct-image runtime smoke, and source review as three
-independent provider lists. Each list always retains GCP as the safety fallback.
-Production has two postures, not a working hybrid:
+Production uses `['hetzner', 'gcp']` for build, runtime smoke, and source review.
+The second entry means that separate GCE workers may claim still-unclaimed
+submissions when the capacity policy activates them. It does not mean a failed
+Hetzner lane is retried on GCE.
 
-- **Targon-first** (`['targon', 'gcp']`): Platform claims new one-shot Targon
-  work for that lane, then falls back to Cloud Run when Targon has no
-  capacity, already has `max_inflight` (default 10) live rentals, or a
-  rental never leaves provisioning within `provision_timeout_seconds`.
-  Kaniko and L1 are Cloud Run Jobs. Runtime smoke is a short-lived internal
-  Cloud Run Service so Platform can GET `/health`. The untrusted runtime SA
-  receives no cloud, GitHub, Platform, or provider credentials — only the
-  attempt-bound job token.
-- **GCE-only** (`['gcp']`): Targon is disabled for that lane. Queued Targon
-  work is immediately terminalized as `fallback_required` / runtime `skipped`.
-  This is the old GCE screening path and does not require a deploy.
+- **Hetzner primary** (`['hetzner', 'gcp']`): eight full worker processes share
+  one enrolled node identity. Platform initially admits four build/smoke KVM
+  slots and four review slots on the 64 GB host.
+- **GCE-only** (`['gcp']`): an audited emergency posture in which GCE workers
+  run the whole build, smoke, and review pipeline locally.
+- **Targon-only** (`['targon']`): retained for rollback compatibility, not the
+  normal fleet posture.
 
-The first provider wins. A stored `['gcp', 'targon']` list is accepted because
-GCP is present, but it is not a working "GCP first then Targon fallback"; it
-behaves exactly like `['gcp']`. Backroom exposes per-lane Targon-first and
-Targon-off controls.
+Within one submission, static execution-safety preflight runs first, followed
+by build, runtime smoke, general source review, and verdict. General review is
+never leased before the exact attempt has both a successful build and smoke.
+Different submissions move through those stages concurrently.
 
 A revisioned write requires compare-and-swap, an audit reason, and an exact
-confirmation string covering all three lists. In-progress one-shot jobs finish;
-new and queued jobs follow the new revision.
+confirmation string covering all three lists and the overflow policy. Node
+screening, shared sandbox, build, runtime, and review ceilings have a separate
+append-only control. New nodes default to zero capacity.
+
+## Retired Targon one-shot notes
+
+The following describes the retained Targon implementation and its rollback
+contracts; it is not the normal Hetzner-primary posture.
 
 Screening on Targon is Kaniko compile, direct-image `/health` smoke of that
 exact archive, and L1 then L2/L3 review of the extracted source tarball in one
@@ -132,8 +139,11 @@ floor is zero; normal scale-in is controller-owned and lease-aware.
   under `no_log` and renders `DITTO_TARGON_API_KEY` into the platform `.env`
   like every other platform secret. The value is never logged or placed in
   rental env except the attempt-bound job tokens already required for Kaniko/L1.
-- GCE screener workers, `ditto-image-builder`, and the capacity-controller VM
-  are leftover from the nested-Docker path and are not required.
+- GCE screener workers and the capacity-controller VM are retained for bounded
+  outage/backlog overflow and return to zero after GCE-owned leases drain.
+- `subnet-screener-1` keeps its rotating enrolled-node credential only on the
+  trusted host. Disposable build guests receive one build capability; smoke
+  guests receive no Platform secret. Neither guest receives the review key.
 - Federated nested-Docker Targon workers are retired. Source-review one-shots
   still receive a 30-minute token for `ditto-screener-bootstrap`, which can
   read only the source-review secret. No service-account key crosses the
@@ -177,56 +187,47 @@ worker contract tests.
 
 ## Stand-up order
 
-No repository merge deploys or mutates production. After the destination and
-infra stacks merge, use this order:
+No repository merge deploys or mutates production. Keep the existing GCE MIG
+available at zero, merge and deploy Platform/Backroom/controller support, then
+follow the dedicated-host runbook. Enrollment alone grants zero capacity.
 
-1. Apply with `enable_screener_fleet_secrets=true`, the existing pet/fleet flags
-   preserved, and `enable_screener_capacity_controller=false`. Populate the
-   `screener-repo-deploy-key-prod` and `screener-controller-api-token-prod`
-   secret versions out of band. Register only the public deploy-key half on
-   `ditto-assistant/ditto-subnet`.
-   Record `subnet_build_sa_email`, `dittobench_deploy_sa_email`,
-   `platform_deploy_sa_email`, and `wif_provider` as the matching protected
-   `prod` GitHub environment secrets. Copy the existing Cloudflare deploy
-   credentials into that environment for the subnet-only Backroom release.
-2. Converge the prod Platform host so it reads the separate controller bearer.
-   Source every documented `PLATFORM_*` value before this play; its fail-closed
-   preflight prevents placeholder configuration.
-3. Apply `enable_screener_fleet=true` with
-   `screener_fleet_min_replicas=0`. Verify the MIG can resize 0 -> 1 -> 0 using
-   a disposable queue/test environment before cutting over real demand.
-4. Publish the pinned maintained Kaniko executor with the monorepo's
-   `Publish Maintained Kaniko Executor` workflow. Then apply
-   `enable_screener_capacity_controller=true` and converge:
+First rehearse the public host role on Terraform's optional
+`subnet-screener-dev-1` (`n2-standard-16`, nested KVM, no runtime secrets), then
+return `enable_screener_fleet_dev_host` to false and prove the disposable VM is
+absent. The dedicated-host runbook contains the exact protected workflow and
+Ansible commands.
 
-   ```bash
-   GCP_OSLOGIN_USER=... ansible-playbook -i infra/ansible/inventory/gcp.yml \
-     infra/ansible/playbooks/gcp-screener-capacity.yml
-   ```
+After `subnet-screener-1` is converged, use Backroom to:
 
-5. Verify Platform Backroom reports the applied provider revision, one-shot
-   provider jobs, capacity events, and trusted build state. Exercise each
-   Backroom lane control in a disposable environment before using it in
-   production. Queue one release image and prove Targon output by immutable
-   digest; if Rental inventory is empty, prove the audited GCP fallback instead.
-   With Targon-first decomposed lanes, an empty queue must return the MIG to
-   zero. Then enqueue one audited miner rebuild. Prove the submission-builder
-   image is digest pinned, Platform verifies the complete tar SHA-256, the
-   Targon rental is deleted (or leaves a cleanup-required event).
-   The artifact bucket's `remote-builds/` lifecycle is the final one-day bound
-   for a canceled presigned upload that races normal cleanup.
-6. Do not re-enable nested-Docker Targon screener workers. Drain leftover
-   `ditto-screener-prod-*` slots through the capacity controller.
+1. verify its node ID, Hetzner resource ID, exact release SHA, image digest,
+   heartbeat, and zero effective limits;
+2. keep existing provider routes and every node limit at zero while host-local
+   cold build, smoke, failed-build/no-review, and failed-smoke/no-review probes
+   pass (shadow mode);
+3. append the one-lane canary setting
+   `SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1`;
+4. set all three provider lists to `['hetzner', 'gcp']` and enable overflow for
+   `subnet-screener-1` at multiplier 3, minimum backlog 12, maximum 6;
+5. prove one production build -> smoke -> source-review sequence and one
+   build failure that never obtains a review lease;
+6. raise the 64 GB node to
+   `SCREENING=8 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4`, then prove four
+   simultaneous cold build/smoke lanes without memory or disk pressure;
+7. exercise one controlled stale-heartbeat event and one above-threshold queue,
+   proving GCE claims new work, preserves active leases, and returns to zero;
+8. drain retired nested-Docker Targon worker nodes. Do not re-enable them.
+
+The exact Debian, inventory, vault, Ansible, activation, verification, and drain
+commands live in [`docs/hetzner-screener-fleet.md`](../../docs/hetzner-screener-fleet.md).
 
 ## Rollback
 
-Draft all three lanes to GCE-only to restore the GCE screening path after the
-audited apply. Stop the controller unit only after explicitly setting the GCE
-MIG to a safe nonzero target or confirming the queue is empty. The
+Apply all three lanes as GCE-only to restore the GCE screening path after an
+audited Backroom revision. Stop the controller unit only after explicitly
+setting the GCE MIG to a safe nonzero target or confirming the queue is empty. The
 `ONLY_SCALE_OUT` watchdog is intentionally incapable of deleting workers during
 a controller outage.
 
-Do not retire the pet VM until the zero-idle GCE fallback has handled a real
-burst and the exact-sha monorepo deploy has been verified. Retirement remains a
-separate, reviewed Terraform and operator action because the pet resource has
-deletion protection.
+Drain `subnet-screener-1` before host maintenance. Removing the node, GCE
+resources, or any deletion protection remains a separate reviewed operator
+action.

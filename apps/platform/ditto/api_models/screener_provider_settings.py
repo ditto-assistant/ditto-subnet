@@ -27,6 +27,13 @@ class ScreenerProviderSettings(BaseModel):
         "gcp",
         "targon",
     )
+    gce_overflow_enabled: bool = False
+    primary_node_id: Annotated[
+        str | None, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+    ] = None
+    gce_overflow_backlog_multiplier: Annotated[int, Field(ge=2, le=20)] = 3
+    gce_overflow_min_backlog: Annotated[int, Field(ge=1, le=1000)] = 12
+    gce_overflow_max_instances: Annotated[int, Field(ge=0, le=32)] = 6
 
     @model_validator(mode="after")
     def validate_provider_lists(self) -> ScreenerProviderSettings:
@@ -44,6 +51,22 @@ class ScreenerProviderSettings(BaseModel):
                 raise ValueError(f"{field} must not contain duplicates")
             if "gcp" not in providers:
                 raise ValueError(f"{field} must retain the GCP safety fallback")
+        if self.gce_overflow_enabled:
+            if self.primary_node_id is None:
+                raise ValueError("GCE overflow requires a primary node")
+            for field, providers in (
+                ("runtime_provider_priority", self.runtime_provider_priority),
+                (
+                    "source_review_provider_priority",
+                    self.source_review_provider_priority,
+                ),
+                ("build_provider_priority", self.build_provider_priority),
+            ):
+                if providers[0] != "hetzner" or "gcp" not in providers:
+                    raise ValueError(
+                        f"{field} must be Hetzner-first with GCP available "
+                        "when overflow is enabled"
+                    )
         return self
 
     def targon_runtime_enabled(self) -> bool:
@@ -119,7 +142,15 @@ def provider_settings_confirmation(settings: ScreenerProviderSettings) -> str:
     runtime = ">".join(settings.runtime_provider_priority)
     source_review = ">".join(settings.source_review_provider_priority)
     builds = ">".join(settings.build_provider_priority)
+    overflow = (
+        f"ENABLED:{settings.primary_node_id}:"
+        f"{settings.gce_overflow_backlog_multiplier}X:"
+        f"MIN={settings.gce_overflow_min_backlog}:"
+        f"MAX={settings.gce_overflow_max_instances}"
+        if settings.gce_overflow_enabled
+        else "DISABLED"
+    )
     return (
         f"APPLY SCREENER PROVIDERS BUILDS={builds} RUNTIME={runtime} "
-        f"SOURCE_REVIEW={source_review}"
+        f"SOURCE_REVIEW={source_review} GCE_OVERFLOW={overflow}"
     )

@@ -25,6 +25,11 @@ on:
         description: Optional comma-separated Terraform -target addresses
         required: false
         type: string
+      screener_fleet_dev_host_enabled:
+        description: Create the disposable 64 GB nested-KVM screener rehearsal host
+        required: true
+        default: false
+        type: boolean
       validator_hotkey_admin_phase:
         description: Disposable GCP hotkey generator phase (gcp-platform plans only)
         required: true
@@ -144,8 +149,17 @@ jobs:
           TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_zone_id: ${{ inputs.root == 'gcp-platform' && vars.CLOUDFLARE_HEYDITTO_ZONE_ID || vars.CLOUDFLARE_DITTOBENCH_ZONE_ID }}
           TF_TARGETS: ${{ inputs.targets }}
+          TF_ROOT: ${{ inputs.root }}
+          SCREENER_DEV_HOST_ENABLED: ${{ inputs.screener_fleet_dev_host_enabled }}
         run: |
           extra=()
+          if [ "$TF_ROOT" = gcp-platform ]; then
+            extra+=(
+              -var="validator_hotkey_admin_phase=${TF_VAR_validator_hotkey_admin_phase}"
+              -var="validator_hotkey_admin_revision=${TF_VAR_validator_hotkey_admin_revision}"
+              -var="enable_screener_fleet_dev_host=${SCREENER_DEV_HOST_ENABLED}"
+            )
+          fi
           if [ -n "${TF_TARGETS}" ]; then
             IFS=',' read -ra addrs <<< "${TF_TARGETS}"
             for addr in "${addrs[@]}"; do
@@ -155,8 +169,6 @@ jobs:
           # CLI variables intentionally outrank prod.auto.tfvars, whose checked-in
           # absent value is the safe default outside this protected ceremony.
           terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan \
-            -var="validator_hotkey_admin_phase=${TF_VAR_validator_hotkey_admin_phase}" \
-            -var="validator_hotkey_admin_revision=${TF_VAR_validator_hotkey_admin_revision}" \
             "${extra[@]}"
 
       - name: Reject replacement of an armed hotkey admin
