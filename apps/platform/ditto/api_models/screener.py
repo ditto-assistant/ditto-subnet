@@ -175,8 +175,11 @@ class ScreenerHeartbeatRequest(BaseModel):
 class ScreenerHeartbeatResponse(BaseModel):
     """Acknowledgement that a signed screener heartbeat was persisted."""
 
+    model_config = ConfigDict(extra="ignore")
+
     accepted: bool
     seen_at: datetime
+    lease_deadline: datetime | None = None
 
 
 class ShadowReviewUsage(BaseModel):

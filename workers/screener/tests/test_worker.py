@@ -10,8 +10,8 @@ from uuid import UUID, uuid4
 
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.errors import PlatformError
-from ditto_screener.gate import BuiltImageArtifact
-from ditto_screener.heartbeat import ReviewSettingsStatus
+from ditto_screener.gate import BuiltImageArtifact, LeaseDeadline
+from ditto_screener.heartbeat import ReviewSettingsStatus, ScreenerHeartbeatResponse
 from ditto_screener.l2_review import L2RunResult, L2Usage
 from ditto_screener.policy import (
     PolicyEvidence,
@@ -123,6 +123,7 @@ class _FakePlatform:
         self.claim_calls = 0
         self.heartbeats: list[Any] = []
         self.heartbeat_error: Exception | None = None
+        self.heartbeat_lease_deadline: datetime | None = None
         self.artifact_calls: list[tuple[UUID, UUID | None]] = []
         self.image_uploads: list[dict[str, Any]] = []
         self.review_settings_source = "bootstrap"
@@ -137,7 +138,11 @@ class _FakePlatform:
         if self.heartbeat_error is not None:
             raise self.heartbeat_error
         self.heartbeats.append(request)
-        return object()
+        return ScreenerHeartbeatResponse(
+            accepted=True,
+            seen_at=datetime.now(UTC),
+            lease_deadline=self.heartbeat_lease_deadline,
+        )
 
     async def submit_shadow_review(self, agent_id: UUID, request: Any) -> Any:
         self.shadow_reviews.append(
@@ -531,7 +536,28 @@ async def test_screen_passes_lease_deadline_budget_to_gate(
     assert gate.calls == [item.agent_id]
     # The gate receives a monotonic budget bound (not None) derived from the lease.
     assert gate.deadlines[0] is not None
-    assert gate.deadlines[0] > asyncio.get_running_loop().time()
+    assert isinstance(gate.deadlines[0], LeaseDeadline)
+    assert gate.deadlines[0].expires_at > asyncio.get_running_loop().time()
+
+
+async def test_accepted_progress_heartbeat_renews_active_local_deadline(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    platform.heartbeat_lease_deadline = datetime.now(UTC) + timedelta(minutes=10)
+    worker = _worker(
+        make_config(), platform, _FakeGate(_decision(ScreeningOutcome.PASS))
+    )
+    worker._active_agent_id = uuid4()
+    worker._active_progress_stage = "building"
+    worker._job_started_at = int(datetime.now(UTC).timestamp())
+    worker._active_lease_deadline = LeaseDeadline(asyncio.get_running_loop().time() + 1)
+
+    await worker._report_heartbeat("screening", force=True)
+
+    assert worker._active_lease_deadline.expires_at > (
+        asyncio.get_running_loop().time() + 9 * 60
+    )
 
 
 async def test_near_expired_lease_skips_build_and_reports_retryable(

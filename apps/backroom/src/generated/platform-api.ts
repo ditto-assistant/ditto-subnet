@@ -17729,6 +17729,8 @@ export interface components {
         ScreenerHeartbeatResponse: {
             /** Accepted */
             accepted: boolean;
+            /** Lease Deadline */
+            lease_deadline?: string | null;
             /**
              * Seen At
              * Format: date-time
@@ -17938,31 +17940,30 @@ export interface components {
         };
         /**
          * ScreenerProviderSettings
-         * @description Provider selections for build, runtime, and source-review lanes.
-         *
-         *     The tuple shape is retained for rolling wire compatibility. Only the first
-         *     provider is authoritative; Platform never advances to another provider
-         *     after a failed launch.
+         * @description Ordered provider lists for build, runtime, and source-review lanes.
          */
         ScreenerProviderSettings: {
             /**
              * Build Provider Priority
              * @default [
-             *       "targon"
+             *       "targon",
+             *       "gcp"
              *     ]
              */
             build_provider_priority: ("targon" | "gcp")[];
             /**
              * Runtime Provider Priority
              * @default [
-             *       "targon"
+             *       "targon",
+             *       "gcp"
              *     ]
              */
             runtime_provider_priority: ("targon" | "gcp")[];
             /**
              * Source Review Provider Priority
              * @default [
-             *       "targon"
+             *       "targon",
+             *       "gcp"
              *     ]
              */
             source_review_provider_priority: ("targon" | "gcp")[];
@@ -27011,6 +27012,7 @@ export interface operations {
             query: {
                 policy_version: number;
                 limit?: number;
+                renewable_lease?: boolean;
             };
             header?: {
                 "x-screener-hotkey"?: string | null;

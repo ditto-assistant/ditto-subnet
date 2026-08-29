@@ -190,8 +190,11 @@ def review_settings_signing_token(
 
 
 class ScreenerHeartbeatResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     accepted: bool
     seen_at: datetime
+    lease_deadline: datetime | None = None
 
 
 def source_review_progress_stage(

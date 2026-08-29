@@ -195,6 +195,48 @@ class _StageResult:
             raise ValueError("a passing stage result cannot be retryable")
 
 
+class LeaseDeadline(float):
+    """Mutable monotonic deadline shared with the heartbeat renewal task."""
+
+    expires_at: float
+
+    def __new__(cls, expires_at: float) -> LeaseDeadline:
+        instance = super().__new__(cls, expires_at)
+        instance.expires_at = expires_at
+        return instance
+
+    def renew(self, expires_at: float) -> None:
+        self.expires_at = max(self.expires_at, expires_at)
+
+    def __sub__(self, other: object) -> float:
+        if not isinstance(other, int | float):
+            return NotImplemented
+        return self.expires_at - other
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, int | float):
+            return NotImplemented
+        return self.expires_at < other
+
+    def __le__(self, other: object) -> bool:
+        if not isinstance(other, int | float):
+            return NotImplemented
+        return self.expires_at <= other
+
+    def __gt__(self, other: object) -> bool:
+        if not isinstance(other, int | float):
+            return NotImplemented
+        return self.expires_at > other
+
+    def __ge__(self, other: object) -> bool:
+        if not isinstance(other, int | float):
+            return NotImplemented
+        return self.expires_at >= other
+
+
+Deadline = float | None
+
+
 @dataclass(frozen=True)
 class BuiltImageArtifact:
     """A locally exported, content-addressed Docker image archive."""
@@ -621,7 +663,7 @@ class BuildGate:
         sha256: str,
         download_url: str,
         progress: Callable[[ScreenerProgressStage], None] | None = None,
-        deadline: float | None = None,
+        deadline: Deadline = None,
         publish_image: Callable[[BuiltImageArtifact], Awaitable[None]] | None = None,
         remote_build: Callable[[], Awaitable[RemoteImageArchive | None]] | None = None,
         remote_build_consumed: Callable[[UUID], Awaitable[None]] | None = None,
@@ -1246,14 +1288,17 @@ class BuildGate:
     # --- lease budget -----------------------------------------------------
 
     @staticmethod
-    def _lease_remaining(deadline: float | None) -> float | None:
+    def _lease_remaining(deadline: Deadline) -> float | None:
         """Seconds of lease budget left, or ``None`` when no deadline is set."""
         if deadline is None:
             return None
-        return deadline - asyncio.get_running_loop().time()
+        expires_at = (
+            deadline.expires_at if isinstance(deadline, LeaseDeadline) else deadline
+        )
+        return expires_at - asyncio.get_running_loop().time()
 
     def _lease_exhausted(
-        self, deadline: float | None, stage: str
+        self, deadline: Deadline, stage: str
     ) -> ScreeningDecision | None:
         """A parked infrastructure decision when the lease cannot fit ``stage``."""
         remaining = self._lease_remaining(deadline)
@@ -1279,7 +1324,7 @@ class BuildGate:
         source_path: str,
         destination_path: str,
         *,
-        deadline: float | None,
+        deadline: Deadline,
     ) -> _PortableImageArchive:
         """Normalize Docker 29 output to the portable pre-OCI save contract.
 
@@ -1292,7 +1337,10 @@ class BuildGate:
         """
 
         def check_deadline() -> None:
-            if deadline is not None and time.monotonic() >= deadline:
+            expires_at = (
+                deadline.expires_at if isinstance(deadline, LeaseDeadline) else deadline
+            )
+            if expires_at is not None and time.monotonic() >= expires_at:
                 raise _LeaseDeadlineError(
                     "lease expired during portable image normalization"
                 )
@@ -1524,7 +1572,7 @@ class BuildGate:
         archive: RemoteImageArchive,
         *,
         image_ref: str,
-        deadline: float | None,
+        deadline: Deadline,
     ) -> BuiltImageArtifact:
         """Publish the Platform-verified Kaniko tar without a local docker save."""
         if archive.size_bytes > _MAX_SCREENED_IMAGE_BYTES:
@@ -1569,7 +1617,7 @@ class BuildGate:
         image_id: str,
         *,
         image_ref: str,
-        deadline: float | None,
+        deadline: Deadline,
     ) -> BuiltImageArtifact:
         """Export the exact screened image before teardown and hash its bytes."""
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
@@ -1651,7 +1699,7 @@ class BuildGate:
                     os.unlink(portable_path)
             raise
 
-    def _lease_timeout(self, deadline: float | None, cap: float, stage: str) -> float:
+    def _lease_timeout(self, deadline: Deadline, cap: float, stage: str) -> float:
         """Clamp one operation to remaining lease time without post-expiry grace."""
         remaining = self._lease_remaining(deadline)
         if remaining is None:
@@ -1660,7 +1708,7 @@ class BuildGate:
             raise _LeaseDeadlineError(f"lease expired before {stage}")
         return min(cap, remaining)
 
-    async def _hash_image_archive(self, path: str, *, deadline: float | None) -> str:
+    async def _hash_image_archive(self, path: str, *, deadline: Deadline) -> str:
         """Hash the archive incrementally while enforcing the lease deadline."""
         digest = hashlib.sha256()
         with open(path, "rb") as handle:

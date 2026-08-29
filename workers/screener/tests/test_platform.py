@@ -48,6 +48,7 @@ async def test_claim_next_parses_leased_item(
         assert request.method == "POST"
         assert request.url.path == "/api/v1/screener/claim"
         assert request.url.params["policy_version"] == str(SCREENING_POLICY_VERSION)
+        assert request.url.params["renewable_lease"] == "true"
         _assert_auth(request)
         return httpx.Response(
             200,

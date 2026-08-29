@@ -66,9 +66,9 @@ async def test_provider_settings_are_atomic_audited_and_cas_guarded(
     assert initial.status_code == 200, initial.text
     assert initial.json()["current"]["revision"] == 0
     assert initial.json()["current"]["settings"] == {
-        "runtime_provider_priority": ["targon"],
-        "source_review_provider_priority": ["targon"],
-        "build_provider_priority": ["targon"],
+        "runtime_provider_priority": ["targon", "gcp"],
+        "source_review_provider_priority": ["targon", "gcp"],
+        "build_provider_priority": ["targon", "gcp"],
     }
 
     applied = await client.post(
@@ -101,7 +101,7 @@ async def test_provider_settings_are_atomic_audited_and_cas_guarded(
     assert stale.status_code == 409
 
 
-async def test_provider_settings_allow_single_provider_and_require_exact_confirmation(
+async def test_provider_settings_require_gcp_and_exact_confirmation(
     app: FastAPI,
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
@@ -116,13 +116,13 @@ async def test_provider_settings_allow_single_provider_and_require_exact_confirm
             builds=["targon"],
         ),
     )
-    assert single_provider.status_code == 200
+    assert single_provider.status_code == 422
 
     wrong_confirmation = await client.post(
         _PATH,
         headers=_HEADERS,
         json=_payload(
-            expected_revision=single_provider.json()["revision"],
+            expected_revision=0,
             screening=["gcp"],
             builds=["gcp"],
             confirmation="APPLY",

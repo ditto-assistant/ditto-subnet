@@ -2450,6 +2450,30 @@ class TestHeartbeat:
             ),
         )
         assert response.status_code == 200
+        renewed_deadline = datetime.fromisoformat(response.json()["lease_deadline"])
+        assert renewed_deadline > datetime.now(UTC) + timedelta(minutes=9)
+        async with session_maker() as session:
+            attempt = await session.scalar(
+                select(ScreeningAttempt).where(ScreeningAttempt.agent_id == agent_id)
+            )
+            assert attempt is not None
+            assert attempt.deadline == renewed_deadline
+        replay = await client.post(
+            "/api/v1/screener/heartbeat",
+            json=_heartbeat_payload(
+                timestamp=timestamp,
+                state="screening",
+                active_agent_id=agent_id,
+                protocol_version=2,
+                progress={
+                    "stage": "health_check",
+                    "started_at": int(started.timestamp()),
+                },
+            ),
+        )
+        assert replay.status_code == 200
+        assert replay.json()["accepted"] is False
+        assert replay.json()["lease_deadline"] is None
         async with session_maker() as session, session.begin():
             heartbeat = await session.get(
                 ScreenerHeartbeat, (_SCREENER_HOTKEY, "legacy")
@@ -3116,6 +3140,23 @@ class TestClaim:
 
         assert response.status_code == 200
         assert response.json()["items"][0]["agent_id"] == str(unscored)
+
+    async def test_renewable_claim_uses_short_initial_lease(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        before = datetime.now(UTC)
+
+        response = await client.post(f"{_CLAIM_URL}&renewable_lease=true")
+
+        assert response.status_code == 200, response.text
+        deadline = datetime.fromisoformat(response.json()["items"][0]["lease_deadline"])
+        assert before + timedelta(minutes=9) < deadline
+        assert deadline < before + timedelta(minutes=11)
 
     async def test_claim_prioritizes_highest_two_score_contender(
         self,
