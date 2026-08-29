@@ -3102,7 +3102,7 @@ async def test_operator_can_roll_back_one_version_when_current_board_is_empty(
     now = datetime.now(UTC).replace(microsecond=0)
     async with _seeded_session(
         session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
-    ) as (session, (_agent_ids, current_rollout)):
+    ) as (session, (agent_ids, current_rollout)):
         previous_version = CANARY_BENCH_VERSION - 1
         await session.execute(
             update(Score)
@@ -3121,6 +3121,18 @@ async def test_operator_can_roll_back_one_version_when_current_board_is_empty(
             activated_at=now - timedelta(days=1),
         )
         session.add(previous_rollout)
+        for position, agent_id in enumerate(agent_ids[:5], start=1):
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            session.add(
+                BenchmarkRolloutMember(
+                    rollout_id=previous_rollout.rollout_id,
+                    agent_id=agent_id,
+                    position=position,
+                    frozen_miner_hotkey=agent.miner_hotkey,
+                    frozen_composite=1.0 - position / 100,
+                )
+            )
         current_rollout.from_version = previous_version
         current_rollout.status = "activated"
         current_rollout.activated_at = now
