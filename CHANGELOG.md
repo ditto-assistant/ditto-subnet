@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.139.1 (2026-08-29)
+
+### Bug Fixes
+
+- **platform**: Allow incident policy rollback to floor
+  ([#1296](https://github.com/ditto-assistant/ditto-subnet/pull/1296),
+  [`a8d3cfc`](https://github.com/ditto-assistant/ditto-subnet/commit/a8d3cfc3470a6b0a7c8a54422a565db2aa70286a))
+
+
 ## v0.139.0 (2026-08-29)
 
 ### Bug Fixes
