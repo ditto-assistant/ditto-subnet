@@ -588,7 +588,11 @@ class SourceReviewAdjudicator:
             "messages": messages,
             "tools": _TOOLS,
             "tool_choice": "auto",
-            "max_completion_tokens": self._max_completion_tokens,
+            # OpenRouter advertises GLM 5.3 Flash's completion ceiling as
+            # ``max_tokens``. With require_parameters enabled, sending the
+            # OpenAI-specific alias filters every eligible endpoint and the
+            # router returns a misleading 404.
+            "max_tokens": self._max_completion_tokens,
             "provider": {
                 "zdr": True,
                 "data_collection": "deny",
