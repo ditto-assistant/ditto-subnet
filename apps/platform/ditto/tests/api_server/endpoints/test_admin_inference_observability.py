@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.inference_observability import RuntimeProfileArtifact
 from ditto.api_server.dependencies import get_session
+from ditto.db.models import ProviderOutageCircuit
 
 pytestmark = pytest.mark.asyncio
 _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
@@ -148,6 +149,26 @@ async def test_runtime_metrics_reads_the_ledger_and_keeps_its_shape(
     """
     _install(app)
     _install_session(app, session_maker)
+    now = datetime.now(UTC)
+    epoch = uuid4()
+    async with session_maker() as session, session.begin():
+        session.add(
+            ProviderOutageCircuit(
+                provider="openrouter",
+                state="open",
+                epoch=epoch,
+                opened_at=now,
+                retry_at=now + timedelta(minutes=2),
+                last_failure_at=now,
+                failure_count=3,
+                last_status=429,
+                last_error_code="upstream_http_429",
+                probe_kind="screening",
+                probe_key="review-1",
+                probe_expires_at=now + timedelta(minutes=10),
+                updated_at=now,
+            )
+        )
     response = await client.get(
         "/api/v1/admin/inference-runtime-metrics", headers=_HEADERS
     )
@@ -160,6 +181,24 @@ async def test_runtime_metrics_reads_the_ledger_and_keeps_its_shape(
         "lanes",
         "windows",
         "relays",
+        "provider_circuit",
+    }
+    assert body["provider_circuit"] == {
+        "provider": "openrouter",
+        "state": "open",
+        "epoch": str(epoch),
+        "opened_at": now.isoformat().replace("+00:00", "Z"),
+        "retry_at": (now + timedelta(minutes=2)).isoformat().replace("+00:00", "Z"),
+        "last_failure_at": now.isoformat().replace("+00:00", "Z"),
+        "closed_at": None,
+        "failure_count": 3,
+        "last_status": 429,
+        "last_error_code": "upstream_http_429",
+        "probe_kind": "screening",
+        "probe_key": "review-1",
+        "probe_expires_at": (now + timedelta(minutes=10))
+        .isoformat()
+        .replace("+00:00", "Z"),
     }
     assert [lane["request_kind"] for lane in body["lanes"]] == ["chat", "embedding"]
     for lane in body["lanes"]:

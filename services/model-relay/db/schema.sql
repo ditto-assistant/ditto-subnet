@@ -1676,6 +1676,32 @@ CREATE TABLE public.owner_attestations (
 
 
 --
+-- Name: provider_outage_circuits; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.provider_outage_circuits (
+    provider text NOT NULL,
+    state text NOT NULL,
+    epoch uuid NOT NULL,
+    opened_at timestamp with time zone NOT NULL,
+    retry_at timestamp with time zone NOT NULL,
+    last_failure_at timestamp with time zone NOT NULL,
+    closed_at timestamp with time zone,
+    failure_count bigint DEFAULT 1 NOT NULL,
+    last_status integer,
+    last_error_code text NOT NULL,
+    probe_kind text,
+    probe_key text,
+    probe_expires_at timestamp with time zone,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT provider_outage_circuits_failure_count_check CHECK ((failure_count > 0)),
+    CONSTRAINT provider_outage_circuits_probe_check CHECK ((((probe_kind IS NULL) AND (probe_key IS NULL) AND (probe_expires_at IS NULL)) OR ((probe_kind = ANY (ARRAY['scoring'::text, 'screening'::text])) AND (probe_key IS NOT NULL) AND (probe_expires_at IS NOT NULL)))),
+    CONSTRAINT provider_outage_circuits_state_check CHECK ((state = ANY (ARRAY['open'::text, 'closed'::text]))),
+    CONSTRAINT provider_outage_circuits_status_check CHECK (((last_status IS NULL) OR ((last_status >= 400) AND (last_status <= 599))))
+);
+
+
+--
 -- Name: queue_policy_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2354,6 +2380,8 @@ CREATE TABLE public.submission_source_reviews (
     completed_at timestamp with time zone,
     consumed_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    provider_outage_epoch uuid,
+    provider_outage_attempted_epoch uuid,
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__14fa CHECK (((job_token_hash IS NULL) OR (job_token_hash ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__43cb CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'running'::text, 'succeeded'::text, 'fallback_required'::text, 'canceled'::text, 'consumed'::text]))),
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__4bdc CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text)),
@@ -2641,6 +2669,8 @@ CREATE TABLE public.validator_tickets (
     failure_detail text,
     container_log_tail text,
     container_log_tail_attempt integer,
+    provider_outage_epoch uuid,
+    provider_outage_attempted_epoch uuid,
     CONSTRAINT ck_validator_tickets_validator_tickets_failure_reason CHECK (((failure_reason IS NULL) OR (failure_reason = ANY (ARRAY['infrastructure'::text, 'scoring_error'::text, 'sandbox_oom'::text])))),
     CONSTRAINT ck_validator_tickets_validator_tickets_infra_retry_gran_aa85 CHECK ((infra_retry_grants >= 0)),
     CONSTRAINT ck_validator_tickets_validator_tickets_purpose_revision_df08 CHECK ((purpose_revision >= 0)),
@@ -3583,6 +3613,14 @@ ALTER TABLE ONLY public.validator_slot_settings_revisions
 
 
 --
+-- Name: provider_outage_circuits provider_outage_circuits_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.provider_outage_circuits
+    ADD CONSTRAINT provider_outage_circuits_pkey PRIMARY KEY (provider);
+
+
+--
 -- Name: queue_policy_settings_revisions queue_policy_settings_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4424,6 +4462,13 @@ CREATE INDEX submission_retirements_created_idx ON public.submission_retirements
 
 
 --
+-- Name: submission_source_reviews_provider_outage_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX submission_source_reviews_provider_outage_idx ON public.submission_source_reviews USING btree (provider_outage_epoch) WHERE (provider_outage_epoch IS NOT NULL);
+
+
+--
 -- Name: submission_source_reviews_queue_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4533,6 +4578,13 @@ CREATE UNIQUE INDEX validator_tickets_one_issued_per_validator_slot_idx ON publi
 --
 
 CREATE INDEX validator_tickets_open_idx ON public.validator_tickets USING btree (deadline) WHERE (status = 'issued'::public.ticketstatus);
+
+
+--
+-- Name: validator_tickets_provider_outage_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX validator_tickets_provider_outage_idx ON public.validator_tickets USING btree (provider_outage_epoch) WHERE (provider_outage_epoch IS NOT NULL);
 
 
 --

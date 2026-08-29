@@ -59,6 +59,24 @@ class RelayRuntimeSnapshot(BaseModel):
     error: str | None = None
 
 
+class ProviderCircuitSnapshot(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, from_attributes=True)
+
+    provider: str
+    state: Literal["open", "closed"]
+    epoch: UUID
+    opened_at: datetime
+    retry_at: datetime
+    last_failure_at: datetime
+    closed_at: datetime | None
+    failure_count: int
+    last_status: int | None
+    last_error_code: str
+    probe_kind: Literal["scoring", "screening"] | None
+    probe_key: str | None
+    probe_expires_at: datetime | None
+
+
 class InferenceRuntimeMetrics(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -68,6 +86,7 @@ class InferenceRuntimeMetrics(BaseModel):
     lanes: list[InferenceLaneCurrent]
     windows: list[InferenceLaneWindow]
     relays: list[RelayRuntimeSnapshot]
+    provider_circuit: ProviderCircuitSnapshot | None = None
 
 
 RuntimeProfileTarget = Literal["platform-relay-1", "platform-relay-2"]

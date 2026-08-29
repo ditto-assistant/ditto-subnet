@@ -7,6 +7,8 @@ sql:
       - "inference_grants_queries.sql"
       - "inference_requests_queries.sql"
       - "inference_routes_queries.sql"
+      - "provider_outage_queries.sql"
+      - "source_review_queries.sql"
       - "concurrency_settings_queries.sql"
       - "confirmation_inference_queries.sql"
       - "upload_queries.sql"

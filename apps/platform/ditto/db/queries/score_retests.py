@@ -534,7 +534,12 @@ async def activate_next_score_retest(
         ticket.slot_id = slot_id
         ticket.issued_at = now
         ticket.deadline = deadline
-        ticket.attempt_count += 1
+        parked_epoch = ticket.provider_outage_epoch
+        if parked_epoch is None:
+            ticket.attempt_count += 1
+        else:
+            ticket.provider_outage_attempted_epoch = parked_epoch
+        ticket.provider_outage_epoch = None
         ticket.retry_after = None
         ticket.first_reported_at = None
         payload = dict(entry.payload)

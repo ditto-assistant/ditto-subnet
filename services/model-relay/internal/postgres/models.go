@@ -241,31 +241,50 @@ type InferenceRoutingPolicy struct {
 	UpdatedAt               pgtype.Timestamptz `json:"updatedAt"`
 }
 
+type ProviderOutageCircuit struct {
+	Provider       string             `json:"provider"`
+	State          string             `json:"state"`
+	Epoch          pgtype.UUID        `json:"epoch"`
+	OpenedAt       pgtype.Timestamptz `json:"openedAt"`
+	RetryAt        pgtype.Timestamptz `json:"retryAt"`
+	LastFailureAt  pgtype.Timestamptz `json:"lastFailureAt"`
+	ClosedAt       pgtype.Timestamptz `json:"closedAt"`
+	FailureCount   int64              `json:"failureCount"`
+	LastStatus     pgtype.Int4        `json:"lastStatus"`
+	LastErrorCode  string             `json:"lastErrorCode"`
+	ProbeKind      pgtype.Text        `json:"probeKind"`
+	ProbeKey       pgtype.Text        `json:"probeKey"`
+	ProbeExpiresAt pgtype.Timestamptz `json:"probeExpiresAt"`
+	UpdatedAt      pgtype.Timestamptz `json:"updatedAt"`
+}
+
 type ValidatorTicket struct {
-	AgentID                 pgtype.UUID        `json:"agentId"`
-	ValidatorHotkey         string             `json:"validatorHotkey"`
-	Status                  Ticketstatus       `json:"status"`
-	IssuedAt                pgtype.Timestamptz `json:"issuedAt"`
-	Deadline                pgtype.Timestamptz `json:"deadline"`
-	CreatedAt               pgtype.Timestamptz `json:"createdAt"`
-	UpdatedAt               pgtype.Timestamptz `json:"updatedAt"`
-	BenchVersion            int32              `json:"benchVersion"`
-	AttemptCount            int32              `json:"attemptCount"`
-	RetryAfter              pgtype.Timestamptz `json:"retryAfter"`
-	ManualRetryGrants       int32              `json:"manualRetryGrants"`
-	InfraRetryGrants        int32              `json:"infraRetryGrants"`
-	SlotID                  string             `json:"slotId"`
-	Purpose                 string             `json:"purpose"`
-	LegacyCompletionAllowed bool               `json:"legacyCompletionAllowed"`
-	PurposeRevision         int32              `json:"purposeRevision"`
-	Seed                    pgtype.Int8        `json:"seed"`
-	DatasetSha256           pgtype.Text        `json:"datasetSha256"`
-	SeedBlock               pgtype.Int8        `json:"seedBlock"`
-	SeedBlockHash           pgtype.Text        `json:"seedBlockHash"`
-	FailureReason           pgtype.Text        `json:"failureReason"`
-	FailedAt                pgtype.Timestamptz `json:"failedAt"`
-	FirstReportedAt         pgtype.Timestamptz `json:"firstReportedAt"`
-	FailureDetail           pgtype.Text        `json:"failureDetail"`
-	ContainerLogTail        pgtype.Text        `json:"containerLogTail"`
-	ContainerLogTailAttempt pgtype.Int4        `json:"containerLogTailAttempt"`
+	AgentID                      pgtype.UUID        `json:"agentId"`
+	ValidatorHotkey              string             `json:"validatorHotkey"`
+	Status                       Ticketstatus       `json:"status"`
+	IssuedAt                     pgtype.Timestamptz `json:"issuedAt"`
+	Deadline                     pgtype.Timestamptz `json:"deadline"`
+	CreatedAt                    pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt                    pgtype.Timestamptz `json:"updatedAt"`
+	BenchVersion                 int32              `json:"benchVersion"`
+	AttemptCount                 int32              `json:"attemptCount"`
+	RetryAfter                   pgtype.Timestamptz `json:"retryAfter"`
+	ManualRetryGrants            int32              `json:"manualRetryGrants"`
+	InfraRetryGrants             int32              `json:"infraRetryGrants"`
+	SlotID                       string             `json:"slotId"`
+	Purpose                      string             `json:"purpose"`
+	LegacyCompletionAllowed      bool               `json:"legacyCompletionAllowed"`
+	PurposeRevision              int32              `json:"purposeRevision"`
+	Seed                         pgtype.Int8        `json:"seed"`
+	DatasetSha256                pgtype.Text        `json:"datasetSha256"`
+	SeedBlock                    pgtype.Int8        `json:"seedBlock"`
+	SeedBlockHash                pgtype.Text        `json:"seedBlockHash"`
+	FailureReason                pgtype.Text        `json:"failureReason"`
+	FailedAt                     pgtype.Timestamptz `json:"failedAt"`
+	FirstReportedAt              pgtype.Timestamptz `json:"firstReportedAt"`
+	FailureDetail                pgtype.Text        `json:"failureDetail"`
+	ContainerLogTail             pgtype.Text        `json:"containerLogTail"`
+	ContainerLogTailAttempt      pgtype.Int4        `json:"containerLogTailAttempt"`
+	ProviderOutageEpoch          pgtype.UUID        `json:"providerOutageEpoch"`
+	ProviderOutageAttemptedEpoch pgtype.UUID        `json:"providerOutageAttemptedEpoch"`
 }

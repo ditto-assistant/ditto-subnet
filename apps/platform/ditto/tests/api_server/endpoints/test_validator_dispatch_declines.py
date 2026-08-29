@@ -68,6 +68,7 @@ class TestReasonVocabulary:
             "not_accepting",
             "slot_not_healthy",
             "inference_slot_cap",
+            "provider_outage",
             "no_candidate",
         } <= set(get_args(DispatchDeclineReason))
 

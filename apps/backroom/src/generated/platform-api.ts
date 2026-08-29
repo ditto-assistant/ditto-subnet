@@ -11283,6 +11283,7 @@ export interface components {
              * Format: date-time
              */
             observed_at: string;
+            provider_circuit?: components["schemas"]["ProviderCircuitSnapshot"] | null;
             /** Relays */
             relays: components["schemas"]["RelayRuntimeSnapshot"][];
             /** Settings Checksum */
@@ -12490,6 +12491,50 @@ export interface components {
              * @default true
              */
             require_desired_era_drained: boolean;
+        };
+        /** ProviderCircuitSnapshot */
+        ProviderCircuitSnapshot: {
+            /** Closed At */
+            closed_at: string | null;
+            /**
+             * Epoch
+             * Format: uuid
+             */
+            epoch: string;
+            /** Failure Count */
+            failure_count: number;
+            /** Last Error Code */
+            last_error_code: string;
+            /**
+             * Last Failure At
+             * Format: date-time
+             */
+            last_failure_at: string;
+            /** Last Status */
+            last_status: number | null;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Probe Expires At */
+            probe_expires_at: string | null;
+            /** Probe Key */
+            probe_key: string | null;
+            /** Probe Kind */
+            probe_kind: ("scoring" | "screening") | null;
+            /** Provider */
+            provider: string;
+            /**
+             * Retry At
+             * Format: date-time
+             */
+            retry_at: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "open" | "closed";
         };
         /**
          * ProviderTelemetryView

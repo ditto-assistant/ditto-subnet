@@ -215,6 +215,20 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	var raw []byte
 	var requestFailure *httpError
 	providerResult, callErr := postEmbeddingProvider(ctx, d.Upstream, cfg, inputs, d.sleep())
+	if providerResult != nil && !providerResult.direct {
+		if receiptFreeResultOverload(
+			providerResult.result, cfg.EmbeddingModel, cfg.EmbeddingProvider,
+		) {
+			_ = d.openProviderCircuit(
+				ctx,
+				now,
+				providerResult.result.status,
+				"embedding_provider_backpressure_"+strconv.Itoa(providerResult.result.status),
+			)
+		} else if providerResult.result.status < 400 {
+			_ = d.closeProviderCircuit(ctx, now)
+		}
+	}
 	if callErr != nil {
 		outcome.upstreamAttempts = callErr.attempts
 		outcome.timedOut = callErr.timedOut

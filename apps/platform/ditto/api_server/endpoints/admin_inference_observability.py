@@ -18,6 +18,7 @@ from ditto.api_models.inference_observability import (
     InferenceLaneCurrent,
     InferenceLaneWindow,
     InferenceRuntimeMetrics,
+    ProviderCircuitSnapshot,
     RelayRuntimeSnapshot,
     RuntimeProfileArtifact,
     RuntimeProfileCaptureRequest,
@@ -32,6 +33,7 @@ from ditto.api_server.runtime_profiles import (
     RuntimeProfileNotFoundError,
     RuntimeProfileStore,
 )
+from ditto.db.models import ProviderOutageCircuit
 from ditto.db.queries.inference_concurrency_settings import (
     latest_inference_concurrency_settings_revision,
 )
@@ -197,6 +199,7 @@ async def get_inference_runtime_metrics(
                 peak_global_concurrency_60m=global_peaks.get(kind, 0),
             )
         )
+    provider_circuit = await session.get(ProviderOutageCircuit, "openrouter")
     return InferenceRuntimeMetrics(
         observed_at=datetime.now(UTC),
         settings_revision=latest.revision if latest is not None else 0,
@@ -204,6 +207,11 @@ async def get_inference_runtime_metrics(
         lanes=lanes,
         windows=windows,
         relays=list(relays),
+        provider_circuit=(
+            ProviderCircuitSnapshot.model_validate(provider_circuit)
+            if provider_circuit is not None
+            else None
+        ),
     )
 
 

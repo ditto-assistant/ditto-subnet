@@ -365,6 +365,15 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	recovered, exhausted := completeChatWithRecovery(ctx, d.Upstream, cfg, upstreamPayload, model,
 		reservedGrant.RouteProvider.String, quantization, promptPrice, completionPrice, d.sleep())
+	if exhausted != nil {
+		if status, overloaded := receiptFreeOverload(
+			exhausted.phases, model, reservedGrant.RouteProvider.String,
+		); overloaded {
+			_ = d.openProviderCircuit(ctx, now, status, exhausted.terminalErrorCode)
+		}
+	} else {
+		_ = d.closeProviderCircuit(ctx, now)
+	}
 	var raw []byte
 	var providerFailure *httpError
 	if exhausted != nil {

@@ -33,7 +33,7 @@ from ditto.db.models import (
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
 from ditto.db.queries.queue_removal import is_in_force, removal_in_force
 from ditto.db.queries.scores import SCORING_QUORUM
-from ditto.db.queries.tickets import ticket_attempt_cap
+from ditto.db.queries.tickets import ticket_retry_budget_spent
 
 VALIDATOR_RETRY_ONLINE_WINDOW = timedelta(minutes=5)
 _UNRESOLVED_ROLLOUT = object()
@@ -124,10 +124,7 @@ def resolve_bench_version(
 
 def is_exhausted(ticket: ValidatorTicket) -> bool:
     """An expired ticket whose validator has spent its whole attempt budget."""
-    return (
-        ticket.status == TicketStatus.EXPIRED
-        and ticket.attempt_count >= ticket_attempt_cap(ticket)
-    )
+    return ticket.status == TicketStatus.EXPIRED and ticket_retry_budget_spent(ticket)
 
 
 def current_failure_detail(ticket: ValidatorTicket) -> str | None:
@@ -249,7 +246,7 @@ def recovery_gate(
         ticket
         for ticket in non_scored
         if ticket.status == TicketStatus.EXPIRED
-        and ticket.attempt_count < ticket_attempt_cap(ticket)
+        and not ticket_retry_budget_spent(ticket)
         and (
             work_available_hotkeys is None
             or ticket.validator_hotkey in work_available_hotkeys

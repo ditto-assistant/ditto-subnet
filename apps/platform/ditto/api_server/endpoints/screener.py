@@ -156,6 +156,7 @@ from ditto.db.models import (
     BenchmarkDataset,
     BenchmarkRollout,
     BenchmarkRolloutMember,
+    ProviderOutageCircuit,
     ScreenedImageUpload,
     ScreenerCapacityEvent,
     ScreenerCapacitySnapshot,
@@ -179,6 +180,10 @@ from ditto.db.queries.benchmark_rollout import arrival_bench_version
 from ditto.db.queries.heartbeats import (
     prune_stale_screener_heartbeats,
     upsert_screener_heartbeat,
+)
+from ditto.db.queries.provider_outages import (
+    lock_provider_work_gate,
+    register_provider_probe,
 )
 from ditto.db.queries.screener_provider_settings import (
     resolve_screener_provider_settings,
@@ -2253,6 +2258,22 @@ async def claim_submission_source_review(
             .where(
                 SubmissionSourceReview.environment == payload.environment,
                 SubmissionSourceReview.status == "queued",
+                SubmissionSourceReview.attempt_count >= 3,
+                SubmissionSourceReview.provider_outage_epoch.is_(None),
+            )
+            .values(
+                status="fallback_required",
+                provider="targon",
+                error_code="TARGON_SOURCE_REVIEW_LEASE_EXHAUSTED",
+                completed_at=now,
+                updated_at=now,
+            )
+        )
+        await session.execute(
+            update(SubmissionSourceReview)
+            .where(
+                SubmissionSourceReview.environment == payload.environment,
+                SubmissionSourceReview.status == "queued",
                 ~exists().where(
                     (ScreeningAttempt.attempt_id == SubmissionSourceReview.attempt_id)
                     & (ScreeningAttempt.status == "running")
@@ -2261,8 +2282,8 @@ async def claim_submission_source_review(
             )
             .values(status="canceled", completed_at=now, updated_at=now)
         )
-        row = await session.scalar(
-            select(SubmissionSourceReview)
+        candidate_id = await session.scalar(
+            select(SubmissionSourceReview.review_id)
             .join(
                 ScreeningAttempt,
                 ScreeningAttempt.attempt_id == SubmissionSourceReview.attempt_id,
@@ -2281,8 +2302,39 @@ async def claim_submission_source_review(
                 ),
             )
             .order_by(SubmissionSourceReview.created_at)
-            .with_for_update(skip_locked=True)
             .limit(1)
+        )
+        if candidate_id is None:
+            return SubmissionSourceReviewClaimResponse(review=None)
+        provider_gate = await lock_provider_work_gate(
+            session,
+            now=now,
+            kind="screening",
+            key=str(candidate_id),
+        )
+        if not provider_gate.admitted:
+            return SubmissionSourceReviewClaimResponse(review=None)
+        row = await session.scalar(
+            select(SubmissionSourceReview)
+            .join(
+                ScreeningAttempt,
+                ScreeningAttempt.attempt_id == SubmissionSourceReview.attempt_id,
+            )
+            .where(
+                SubmissionSourceReview.review_id == candidate_id,
+                SubmissionSourceReview.environment == payload.environment,
+                ScreeningAttempt.status == "running",
+                ScreeningAttempt.deadline > now,
+                or_(
+                    SubmissionSourceReview.status == "queued",
+                    (
+                        SubmissionSourceReview.status.in_(("leased", "running"))
+                        & (SubmissionSourceReview.lease_expires_at < now)
+                        & (SubmissionSourceReview.attempt_count < 3)
+                    ),
+                ),
+            )
+            .with_for_update(skip_locked=True)
         )
         if row is None:
             return SubmissionSourceReviewClaimResponse(review=None)
@@ -2312,10 +2364,21 @@ async def claim_submission_source_review(
         row.provider = "targon"
         row.controller_epoch = payload.controller_epoch
         row.lease_expires_at = now + _SOURCE_REVIEW_LEASE_TTL
-        row.attempt_count += 1
+        parked_epoch = row.provider_outage_epoch
+        if parked_epoch is None:
+            row.attempt_count += 1
+        else:
+            row.provider_outage_attempted_epoch = parked_epoch
+        row.provider_outage_epoch = None
         row.job_token_hash = hashlib.sha256(token.encode()).hexdigest()
         row.job_token_expires_at = token_expires_at
         row.updated_at = now
+        register_provider_probe(
+            provider_gate,
+            now=now,
+            kind="screening",
+            key=str(row.review_id),
+        )
     return SubmissionSourceReviewClaimResponse(
         review=SubmissionSourceReviewClaimView(
             review_id=row.review_id,
@@ -2488,7 +2551,13 @@ async def complete_submission_source_review(
     authorization: Annotated[str | None, Header()] = None,
 ) -> SubmissionSourceReviewCompleteResponse:
     now = datetime.now(UTC)
+    parked = False
     async with session.begin():
+        circuit = await session.scalar(
+            select(ProviderOutageCircuit)
+            .where(ProviderOutageCircuit.provider == "openrouter")
+            .with_for_update()
+        )
         row = await _locked_source_review_for_job(
             session, review_id=review_id, authorization=authorization
         )
@@ -2498,12 +2567,28 @@ async def complete_submission_source_review(
                 status_code=409, detail="source-review artifact mismatch"
             )
         row.observation = payload.observation.model_dump(mode="json")
-        row.status = "succeeded"
-        row.completed_at = now
+        parked = bool(
+            circuit is not None
+            and circuit.state == "open"
+            and payload.observation.error_code == "source-review-http-429"
+        )
+        row.status = "queued" if parked else "succeeded"
+        if parked:
+            assert circuit is not None
+            row.provider_outage_epoch = (
+                circuit.epoch
+                if row.provider_outage_attempted_epoch != circuit.epoch
+                else None
+            )
+        else:
+            row.provider_outage_epoch = None
+        row.completed_at = None if parked else now
         row.updated_at = now
         row.lease_expires_at = None
         row.job_token_hash = None
         row.job_token_expires_at = None
+        if parked:
+            row.controller_epoch = None
         attempt_id = row.attempt_id
         rental_uid = row.provider_resource_id
     if await _release_targon_rental(request, rental_uid):
@@ -2518,7 +2603,7 @@ async def complete_submission_source_review(
                 stored_review.provider_resource_id = None
                 stored_review.updated_at = datetime.now(UTC)
     attester = request.app.state.config.screener_auth.hotkey
-    if attester is not None:
+    if attester is not None and not parked:
         await finalize_targon_screen_and_pin_dataset(
             session,
             storage=storage,

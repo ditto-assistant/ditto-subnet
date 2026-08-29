@@ -2376,6 +2376,14 @@ class SubmissionSourceReview(Base):
     job_token_expires_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True)
     )
+    provider_outage_epoch: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """Relay circuit epoch that parked this review without spending an attempt."""
+    provider_outage_attempted_epoch: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """Last outage epoch whose one refunded resume this review already used."""
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -2896,6 +2904,16 @@ class ValidatorTicket(Base):
     )
     """Earliest time this validator may retry an expired ticket."""
 
+    provider_outage_epoch: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """Relay circuit epoch that parked this lease without minting a retry grant."""
+
+    provider_outage_attempted_epoch: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """Last outage epoch whose one refunded resume this ticket already used."""
+
     first_reported_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -3224,6 +3242,61 @@ class InferenceGrant(Base):
             "active_requests >= 0", name="inference_grants_active_requests"
         ),
         Index("inference_grants_expiry_idx", "expires_at"),
+    )
+
+
+class ProviderOutageCircuit(Base):
+    """Relay-owned provider-wide backpressure state consumed by Platform."""
+
+    __tablename__ = "provider_outage_circuits"
+
+    provider: Mapped[str] = mapped_column(Text, primary_key=True)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    epoch: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    retry_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    last_failure_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    failure_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("1")
+    )
+    last_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_error_code: Mapped[str] = mapped_column(Text, nullable=False)
+    probe_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    probe_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    probe_expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('open', 'closed')",
+            name="provider_outage_circuits_state_check",
+        ),
+        CheckConstraint(
+            "failure_count > 0",
+            name="provider_outage_circuits_failure_count_check",
+        ),
+        CheckConstraint(
+            "last_status IS NULL OR last_status BETWEEN 400 AND 599",
+            name="provider_outage_circuits_status_check",
+        ),
+        CheckConstraint(
+            "(probe_kind IS NULL AND probe_key IS NULL "
+            "AND probe_expires_at IS NULL) OR "
+            "(probe_kind IN ('scoring', 'screening') "
+            "AND probe_key IS NOT NULL AND probe_expires_at IS NOT NULL)",
+            name="provider_outage_circuits_probe_check",
+        ),
     )
 
 

@@ -1957,7 +1957,10 @@ async def issue_rollout_ticket(
         if (
             ticket.status != TicketStatus.EXPIRED
             or (retry_after is not None and retry_after > now)
-            or ticket.attempt_count >= ticket_attempt_cap(ticket)
+            or (
+                ticket.provider_outage_epoch is None
+                and ticket.attempt_count >= ticket_attempt_cap(ticket)
+            )
         ):
             return None
         ticket.status = TicketStatus.ISSUED
@@ -1967,7 +1970,12 @@ async def issue_rollout_ticket(
         ticket.slot_id = slot_id
         ticket.issued_at = now
         ticket.deadline = now + ttl
-        ticket.attempt_count += 1
+        parked_epoch = ticket.provider_outage_epoch
+        if parked_epoch is None:
+            ticket.attempt_count += 1
+        else:
+            ticket.provider_outage_attempted_epoch = parked_epoch
+        ticket.provider_outage_epoch = None
         ticket.retry_after = None
         ticket.first_reported_at = None
     await session.flush()
@@ -2024,6 +2032,7 @@ async def _terminal_exhausted_rollout_tail(
             ticket.purpose != TicketPurpose.CANONICAL_QUORUM
             or ticket.purpose_revision <= 0
             or ticket.status != TicketStatus.EXPIRED
+            or ticket.provider_outage_epoch is not None
             or ticket.attempt_count < ticket_attempt_cap(ticket)
             for ticket in agent_tickets
         ):
