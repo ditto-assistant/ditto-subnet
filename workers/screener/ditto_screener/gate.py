@@ -596,6 +596,9 @@ class BuildGate:
             harness=IsolatedCodingHarness(
                 docker_bin=config.docker_bin,
                 image=config.l2_analyzer_image,
+                rootless_docker_host=(
+                    config.docker_host if config.require_rootless_docker else None
+                ),
             ),
             cache_dir=config.l2_cache_dir,
             audit_journal=L2AuditJournal(
