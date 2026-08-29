@@ -23,13 +23,18 @@ if TYPE_CHECKING:
 
 async def latest_screener_policy_activation(
     session: AsyncSession,
+    *,
+    for_update: bool = False,
 ) -> ScreenerPolicyActivation | None:
     """The newest schedule revision, or ``None`` when none was ever written."""
-    return await session.scalar(
+    stmt = (
         select(ScreenerPolicyActivation)
         .order_by(ScreenerPolicyActivation.revision.desc())
         .limit(1)
     )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return await session.scalar(stmt)
 
 
 async def governing_screener_policy_activation(

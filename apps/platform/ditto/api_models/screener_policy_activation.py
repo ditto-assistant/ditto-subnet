@@ -27,6 +27,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 CONFIRMATION = "SCHEDULE SCREENER POLICY ACTIVATION"
+RESTORE_SCORED_CONFIRMATION = "RESTORE SCORED SCREENING SNAPSHOT"
 
 ActivationState = Literal["pending", "due"]
 
@@ -78,3 +79,50 @@ class ScreenerPolicyActivationView(BaseModel):
     builtin_policy_version: int
     latest: ScreenerPolicyActivationRevision | None
     revisions: list[ScreenerPolicyActivationRevision]
+
+
+class RestoreScoredScreeningSnapshotRequest(BaseModel):
+    """Restore the last pre-activation pass for an exact scored cohort.
+
+    This is an incident-recovery operation, not a retry: it never creates a
+    screening attempt, build, dataset, score, or validator lease.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    expected_current_activation_revision: int = Field(ge=1)
+    source_activation_revision: int = Field(ge=1)
+    source_policy_version: int = Field(ge=1)
+    target_policy_version: int = Field(ge=1)
+    bench_version: int = Field(ge=1)
+    expected_count: int = Field(ge=1, le=500)
+    reason: str = Field(min_length=8)
+    confirmation: str
+    actor: str | None = Field(default=None, max_length=120)
+
+
+class RestoredScoredSubmission(BaseModel):
+    """One immutable restoration audit result."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: str
+    displaced_attempt_id: str
+    restored_attempt_id: str
+    restored_policy_version: int
+    score_count: int
+
+
+class RestoreScoredScreeningSnapshotResponse(BaseModel):
+    """Result of one atomic scored-snapshot restoration batch."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    batch_id: str
+    restored_count: int
+    source_activation_revision: int
+    current_activation_revision: int
+    source_policy_version: int
+    target_policy_version: int
+    bench_version: int
+    submissions: list[RestoredScoredSubmission]

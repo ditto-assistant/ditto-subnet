@@ -152,6 +152,8 @@ import {
   runtimeProfileLookupInputSchema,
   setQueuePolicySettingsInputSchema,
   screenerPolicyActivationViewSchema,
+  restoreScoredScreeningSnapshotInputSchema,
+  restoreScoredScreeningSnapshotResponseSchema,
   scheduleScreenerPolicyActivationInputSchema,
   VALIDATOR_SLOT_SETTINGS_SCOPE,
   validatorSlotSettingsControlSchema,
@@ -1008,6 +1010,29 @@ export async function scheduleScreenerPolicyActivation(rawInput: unknown, actor:
     },
   })
   return fetchScreenerPolicyActivation()
+}
+
+export async function restoreScoredScreeningSnapshot(rawInput: unknown, actor: string) {
+  const input = restoreScoredScreeningSnapshotInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `${SCREENER_POLICY_ACTIVATION_PATH}/restore-scored-snapshot`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        expected_current_activation_revision: input.expectedCurrentActivationRevision,
+        source_activation_revision: input.sourceActivationRevision,
+        source_policy_version: input.sourcePolicyVersion,
+        target_policy_version: input.targetPolicyVersion,
+        bench_version: input.benchVersion,
+        expected_count: input.expectedCount,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    },
+  )
+  return restoreScoredScreeningSnapshotResponseSchema.parse(payload)
 }
 
 const INFERENCE_CONCURRENCY_SETTINGS_PATH = '/api/v1/admin/inference-concurrency-settings'

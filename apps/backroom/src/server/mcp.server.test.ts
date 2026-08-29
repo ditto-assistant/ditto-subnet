@@ -100,6 +100,7 @@ describe('Backroom MCP tools', () => {
         'rotate_screener_policy_manifest',
         'get_screener_policy_activation',
         'schedule_screener_policy_activation',
+        'restore_scored_screening_snapshot',
         'get_validator_fleet',
         'get_validator_slot_settings',
         'list_validator_assignments',
@@ -3025,6 +3026,97 @@ describe('Backroom MCP tools', () => {
       actor: 'peyton@omniaura.ai',
       confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
     })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('restores one exact scored screening snapshot cohort', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const restoreResponse = {
+      batch_id: '11111111-1111-4111-8111-111111111111',
+      restored_count: 1,
+      source_activation_revision: 1,
+      current_activation_revision: 2,
+      source_policy_version: 11,
+      target_policy_version: 10,
+      bench_version: 12,
+      submissions: [
+        {
+          agent_id: '22222222-2222-4222-8222-222222222222',
+          displaced_attempt_id: '33333333-3333-4333-8333-333333333333',
+          restored_attempt_id: '44444444-4444-4444-8444-444444444444',
+          restored_policy_version: 10,
+          score_count: 3,
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(restoreResponse))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'restore_scored_screening_snapshot',
+      arguments: {
+        expectedCurrentActivationRevision: 2,
+        sourceActivationRevision: 1,
+        sourcePolicyVersion: 11,
+        targetPolicyVersion: 10,
+        benchVersion: 12,
+        expectedCount: 1,
+        reason: 'restore the pre-v11 scored screening snapshot',
+        confirmation: 'RESTORE SCORED SCREENING SNAPSHOT',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toEqual(restoreResponse)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation/restore-scored-snapshot',
+    )
+    expect(init.method).toBe('POST')
+    expect(init.headers).toMatchObject({
+      Authorization: 'Bearer platform-admin-token',
+      'X-Admin-Actor': 'peyton@omniaura.ai',
+    })
+    expect(JSON.parse(String(init.body))).toEqual({
+      expected_current_activation_revision: 2,
+      source_activation_revision: 1,
+      source_policy_version: 11,
+      target_policy_version: 10,
+      bench_version: 12,
+      expected_count: 1,
+      reason: 'restore the pre-v11 scored screening snapshot',
+      actor: 'peyton@omniaura.ai',
+      confirmation: 'RESTORE SCORED SCREENING SNAPSHOT',
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('rejects scored snapshot restoration with the wrong confirmation locally', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'restore_scored_screening_snapshot',
+      arguments: {
+        expectedCurrentActivationRevision: 2,
+        sourceActivationRevision: 1,
+        sourcePolicyVersion: 11,
+        targetPolicyVersion: 10,
+        benchVersion: 12,
+        expectedCount: 35,
+        reason: 'restore the pre-v11 scored screening snapshot',
+        confirmation: 'RESTORE SCREENING SNAPSHOT',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
 
     await client.close()
     await server.close()
