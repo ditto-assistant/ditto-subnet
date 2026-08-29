@@ -167,6 +167,32 @@ _BENIGN_REVIEW: dict[str, object] = {
 }
 
 
+def test_pass_invariant_evidence_is_dropped_before_strict_validation() -> None:
+    review = _with_policy_v10_invariants(_BENIGN_REVIEW)
+    decisions = review["invariants"]
+    assert isinstance(decisions, list)
+    for decision in decisions[:5]:
+        assert isinstance(decision, dict)
+        decision["evidence_indices"] = [0]
+
+    assessment = source_review_module._validated_invariant_assessment(
+        decisions,
+        submitted_evidence=[
+            {"path": "src/main.rs", "line": 1, "category": "benchmark_emulation"}
+        ],
+        finding_evidence=[
+            {"path": "src/main.rs", "line": 1, "category": "benchmark_emulation"}
+        ],
+        demoted_to_low=False,
+    )
+
+    assert all(
+        decision.evidence_indices == []
+        for decision in assessment.decisions
+        if decision.disposition == SourceReviewInvariantDisposition.PASS
+    )
+
+
 def _archive(tmp_path: Path, source: str) -> Path:
     path = tmp_path / "agent.tar.gz"
     with tarfile.open(path, "w:gz") as archive:
