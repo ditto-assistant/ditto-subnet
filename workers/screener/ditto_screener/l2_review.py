@@ -370,8 +370,23 @@ def _require_complete_analysis(output: str, *, allow_tool_error: bool = False) -
             raise L2InconclusiveError("analyzer output was truncated")
         if not allow_tool_error:
             raise ValueError("L2 analyzer rejected its request")
+    # During an agentic trajectory, bounded analyzer errors and partial results
+    # are observations for the model, not infrastructure failures. Returning
+    # the JSON lets it narrow a broad search or page a large file on the next
+    # step. Callers that consume analyzer output as authoritative evidence keep
+    # the default strict behavior below.
+    if allow_tool_error:
+        return
     if _contains_truncation(value):
         raise L2InconclusiveError("analyzer result was incomplete")
+
+
+def _analysis_requires_correction(output: str) -> bool:
+    """Whether a bounded tool response must be retried before submission."""
+    value = json.loads(output)
+    return bool(
+        (isinstance(value, dict) and value.get("error")) or _contains_truncation(value)
+    )
 
 
 def _contains_truncation(value: object) -> bool:
@@ -3276,6 +3291,7 @@ class KimiSolSourceReviewAgent:
         steps_used = 0
         read_bytes_used = 0
         read_files: set[str] = set()
+        pending_tool_corrections: set[str] = set()
 
         def failure(code: str) -> L2TrajectoryError:
             return L2TrajectoryError(
@@ -3337,6 +3353,8 @@ class KimiSolSourceReviewAgent:
             if submitted:
                 if len(calls) != 1 or len(submitted) != 1:
                     raise failure("model-tool-contract")
+                if pending_tool_corrections:
+                    raise failure("analyzer-contract")
                 try:
                     call_id, _name, arguments = _tool_call(submitted[0])
                 except json.JSONDecodeError as error:
@@ -3410,6 +3428,10 @@ class KimiSolSourceReviewAgent:
                     _require_complete_analysis(tool_output, allow_tool_error=True)
                 except L2InconclusiveError as error:
                     raise failure("analyzer-contract") from error
+                if _analysis_requires_correction(tool_output):
+                    pending_tool_corrections.add(name)
+                else:
+                    pending_tool_corrections.discard(name)
                 items.append(
                     {
                         "type": "function_call_output",
