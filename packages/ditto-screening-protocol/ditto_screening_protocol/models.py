@@ -308,6 +308,17 @@ class ScreenerQueueItem(BaseModel):
             ),
         ),
     ] = False
+    policy_only: Annotated[
+        bool,
+        Field(
+            description=(
+                "Selects a policy-only rescreen of an artifact whose verified "
+                "screened image and runtime smoke are already retained. The "
+                "screener must reuse those mechanical results and rerun only "
+                "the source/policy review."
+            ),
+        ),
+    ] = False
     deferred_source_review: Annotated[
         bool,
         Field(
@@ -1271,6 +1282,16 @@ class ScreenResultRequest(BaseModel):
             ),
         ),
     ] = False
+    policy_only: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Signed echo of a platform-issued policy-only rescreen. A "
+                "passing result reuses the agent's retained verified image."
+            ),
+        ),
+    ] = False
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -1332,8 +1353,10 @@ class ScreenResultRequest(BaseModel):
             ScreenResultOutcome.PASS,
             ScreenResultOutcome.PASS_INCONCLUSIVE,
         }:
-            if any(value is None for value in image_fields):
+            if not self.policy_only and any(value is None for value in image_fields):
                 raise ValueError("passing policy-v9 result requires screened image")
+            if self.policy_only and any(value is not None for value in image_fields):
+                raise ValueError("policy-only result must reuse the retained image")
         elif any(value is not None for value in image_fields):
             raise ValueError("screened image metadata requires passing outcome")
         return self

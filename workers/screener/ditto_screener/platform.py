@@ -626,6 +626,7 @@ class PlatformClient:
         image_upload_id: UUID | None = None,
         build_only: bool = False,
         deferred_source_review: bool = False,
+        policy_only: bool = False,
     ) -> ScreenResultResponse:
         """Report a signed pass/fail verdict for ``agent_id``."""
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/result"
@@ -655,6 +656,7 @@ class PlatformClient:
             image_upload_id=image_upload_id,
             build_only=build_only,
             deferred_source_review=deferred_source_review,
+            policy_only=policy_only,
         )
         body = payload.model_dump(mode="json")
         try:

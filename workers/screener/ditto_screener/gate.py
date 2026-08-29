@@ -671,6 +671,7 @@ class BuildGate:
         remote_source_review: Callable[[], Awaitable[SourceReviewObservation | None]]
         | None = None,
         build_only: bool = False,
+        policy_only: bool = False,
         deferred_source_review: bool = False,
         policy_version: int = SCREENING_POLICY_VERSION,
     ) -> ScreeningDecision:
@@ -693,7 +694,14 @@ class BuildGate:
         ``deferred_source_review`` distinguishes a fresh score-first admission
         from an already-adjudicated rebuild for the signed platform contract.
         Both mechanical paths skip private-policy work here.
+
+        ``policy_only`` selects a stale-policy rescreen whose previously
+        verified image and runtime smoke are retained by Platform. It reruns
+        archive/source policy checks without rebuilding, serving, or exporting.
         """
+
+        if build_only and policy_only:
+            raise ValueError("build-only and policy-only modes are mutually exclusive")
 
         loop = asyncio.get_running_loop()
         screen_started = loop.time()
@@ -929,6 +937,57 @@ class BuildGate:
                         return preflight_clearance
 
                     review_factory = cleared_preflight
+
+            if policy_only:
+
+                async def unavailable_challenge(
+                    _challenge_id: str,
+                    _request: Mapping[str, object],
+                    _timeout: float,
+                ) -> ChallengeObservation:
+                    raise RuntimeError("policy-only rescreen does not start a runtime")
+
+                async def review_source():  # type: ignore[no-untyped-def]
+                    nonlocal in_policy_phase
+                    in_policy_phase = True
+                    assert review_task is not None
+                    return await review_task
+
+                context = PolicyContext(
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    miner_hotkey=miner_hotkey,
+                    artifact_sha256=sha256.lower(),
+                    source_digest=source_digest,
+                    source_paths=source_paths,
+                    build_elapsed_ms=0,
+                    health_elapsed_ms=0,
+                    run_challenge=unavailable_challenge,
+                    review_source=review_source,
+                )
+                report("validating")
+                decision = await self._policy.evaluate(context, skip_challenges=True)
+                if (
+                    decision.outcome == ScreeningOutcome.PASS
+                    and preflight_clearance is not None
+                    and preflight_clearance.failure_disposition == "pass_inconclusive"
+                ):
+                    deferred = self._policy.preexecution_source_decision(
+                        preflight_clearance
+                    )
+                    decision = ScreeningDecision(
+                        outcome=ScreeningOutcome.PASS_INCONCLUSIVE,
+                        detail=deferred.detail,
+                        manifest_digest=decision.manifest_digest,
+                        evidence=(*deferred.evidence, *decision.evidence),
+                        finding=deferred.finding,
+                        review_audit=deferred.review_audit,
+                    )
+                decision = _with_image_binding_advisory(
+                    decision, self._image_binding_advisory(tmp_path)
+                )
+                self._journal.record(context=context, decision=decision)
+                return decision
 
             report("building")
             if (exhausted := self._lease_exhausted(deadline, "build")) is not None:

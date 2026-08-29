@@ -17699,6 +17699,12 @@ export interface components {
              */
             passed: boolean;
             /**
+             * Policy Only
+             * @description Signed echo of a platform-issued policy-only rescreen. A passing result reuses the agent's retained verified image.
+             * @default false
+             */
+            policy_only: boolean;
+            /**
              * Policy Version
              * @description Screening policy version bound into the signature.
              * @default 1
@@ -18805,6 +18811,12 @@ export interface components {
              * @description Miner-chosen agent name.
              */
             name: string;
+            /**
+             * Policy Only
+             * @description Selects a policy-only rescreen of an artifact whose verified screened image and runtime smoke are already retained. The screener must reuse those mechanical results and rerun only the source/policy review.
+             * @default false
+             */
+            policy_only: boolean;
             /**
              * Precheck Reason Code
              * @description Platform-owned deterministic rejection discovered atomically while leasing. The worker must not download the artifact when set.

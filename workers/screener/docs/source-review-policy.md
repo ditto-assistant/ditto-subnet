@@ -105,6 +105,11 @@ Synthetic source fixtures must encode the adjudicated top-five patterns:
   rescreen; scored and live rows rescreen only when the activation row sets
   `rescreen_scored`, so a version bump cannot silently pull champions off the
   ledger without an operator decision recorded on the schedule.
+- A stale-policy row with a complete verified screened image uses a signed
+  policy-only claim. Its immutable source is reviewed under the new policy,
+  while the previously accepted image build, runtime smoke, and image identity
+  are retained. An incomplete image proof falls back to the full mechanical
+  build/smoke path.
 - Agents are held to the policy version that screened them: a v10-screened
   agent is not retroactively judged by the v11 I7 letter. The scheduled
   re-screen is the fair mechanism, not retroactive enforcement.

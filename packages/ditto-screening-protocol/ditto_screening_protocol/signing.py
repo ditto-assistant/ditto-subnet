@@ -24,6 +24,7 @@ def verdict_signing_message(
     finding_digest: str | None = None,
     review_audit_digest: str | None = None,
     deferred_source_review: bool = False,
+    policy_only: bool = False,
     review_settings_revision: int | None = None,
     review_settings_instance_id: str | None = None,
     review_settings_scope: str | None = None,
@@ -71,6 +72,8 @@ def verdict_signing_message(
         # compatible. A true deferred claim is explicitly bound against replay.
         if deferred_source_review:
             fields["deferred_source_review"] = True
+        if policy_only:
+            fields["policy_only"] = True
         payload = json.dumps(
             fields,
             sort_keys=True,
