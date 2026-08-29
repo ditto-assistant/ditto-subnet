@@ -6,7 +6,8 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-User=root
+# Keep systemd's default root identity. An explicit User=root combined with
+# NoNewPrivileges strips CAP_SETUID before the updater can drop privileges.
 Environment=SCREENER_FLEET_ROOT={{ screener_fleet_root }}
 Environment=SCREENER_FLEET_RELEASES_DIR={{ screener_fleet_releases_dir }}
 Environment=SCREENER_FLEET_CURRENT_LINK={{ screener_fleet_current }}
@@ -29,8 +30,6 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
 ProtectControlGroups=true
-# The updater must drop to the service user for unprivileged checkout/build work.
-# NoNewPrivileges still prevents gaining privileges through exec.
-RestrictSUIDSGID=false
+RestrictSUIDSGID=true
 LockPersonality=true
 UMask=0077
