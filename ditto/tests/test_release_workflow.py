@@ -14,6 +14,7 @@ ROOT_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
 RELEASE_OWNED_COMPONENT_WORKFLOWS = (
     "ci.yml",
     "backroom-ci.yml",
+    "coding-datagen-ci.yml",
     "datagen-ci.yml",
     "dittobench.yml",
     "model-relay.yml",
@@ -60,6 +61,7 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert {
         "miner_starter_kit",
         "dittobench_api",
+        "dittobench_coding_datagen",
         "dittobench_datagen",
         "platform",
         "backroom",
@@ -84,11 +86,21 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert "needs.admit-current.outputs.current == 'true'" in jobs["release"]["if"]
     assert "needs.verify-source.result == 'success'" in jobs["release"]["if"]
     assert "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["release"]["if"]
+    assert (
+        "needs.plan.outputs.dittobench_coding_datagen == 'true'"
+        in jobs["release"]["if"]
+    )
     assert jobs["admit-current"]["needs"] == "plan"
     assert (
         "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["admit-current"]["if"]
     )
     assert jobs["verify-source"]["if"] == "always()"
+    assert "verify-dittobench-coding-datagen" in jobs["verify-source"]["needs"]
+    coding_gate = jobs["verify-dittobench-coding-datagen"]
+    assert "needs.plan.outputs.dittobench_coding_datagen == 'true'" in coding_gate["if"]
+    assert coding_gate["defaults"]["run"]["working-directory"] == (
+        "research/dittobench-coding-datagen"
+    )
 
     image_jobs = (
         "build-validator-amd64",

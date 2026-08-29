@@ -54,6 +54,7 @@ jobs:
       validator_stack: ${{ steps.components.outputs.validator_stack }}
       dittobench_api: ${{ steps.components.outputs.dittobench_api }}
       dittobench_datagen: ${{ steps.components.outputs.dittobench_datagen }}
+      dittobench_coding_datagen: ${{ steps.components.outputs.dittobench_coding_datagen }}
       platform_api: ${{ steps.components.outputs.platform_api }}
       platform_dashboard: ${{ steps.components.outputs.platform_dashboard }}
       platform: ${{ steps.components.outputs.platform }}
@@ -123,6 +124,7 @@ jobs:
       needs.plan.outputs.validator_stack == 'true' ||
       needs.plan.outputs.dittobench_api == 'true' ||
       needs.plan.outputs.dittobench_datagen == 'true' ||
+      needs.plan.outputs.dittobench_coding_datagen == 'true' ||
       needs.plan.outputs.platform == 'true' ||
       needs.plan.outputs.backroom == 'true' ||
       needs.plan.outputs.screener == 'true' ||
@@ -177,6 +179,7 @@ jobs:
         needs.plan.outputs.validator_stack == 'true' ||
         needs.plan.outputs.dittobench_api == 'true' ||
         needs.plan.outputs.dittobench_datagen == 'true' ||
+        needs.plan.outputs.dittobench_coding_datagen == 'true' ||
         needs.plan.outputs.platform == 'true' ||
         needs.plan.outputs.backroom == 'true' ||
         needs.plan.outputs.screener == 'true' ||
@@ -633,6 +636,42 @@ jobs:
       - name: Gate DittoBench datagen release on exact merge source
         run: go test ./...
 
+  verify-dittobench-coding-datagen:
+    needs: [plan, admit-current]
+    if: >-
+      needs.admit-current.outputs.current == 'true' &&
+      needs.plan.outputs.dittobench_coding_datagen == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: research/dittobench-coding-datagen
+    steps:
+      - name: Check out the exact merge commit before release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Gate coding datagen release on exact merge source
+        run: |
+          uv sync --locked --group dev --python 3.12
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy src
+          uv run pytest -q
+          uv run dittobench-coding-datagen validate-pack practice/v1
+
   verify-screener:
     needs: [plan, admit-current]
     if: >-
@@ -714,6 +753,7 @@ jobs:
       - verify-backroom
       - verify-dittobench-api
       - verify-dittobench-datagen
+      - verify-dittobench-coding-datagen
       - verify-screener
       - verify-screener-orchestrator
     if: always()
@@ -737,6 +777,8 @@ jobs:
           DITTOBENCH_API_RESULT: ${{ needs.verify-dittobench-api.result }}
           DITTOBENCH_DATAGEN_REQUIRED: ${{ needs.plan.outputs.dittobench_datagen }}
           DITTOBENCH_DATAGEN_RESULT: ${{ needs.verify-dittobench-datagen.result }}
+          DITTOBENCH_CODING_DATAGEN_REQUIRED: ${{ needs.plan.outputs.dittobench_coding_datagen }}
+          DITTOBENCH_CODING_DATAGEN_RESULT: ${{ needs.verify-dittobench-coding-datagen.result }}
           SCREENER_REQUIRED: ${{ needs.plan.outputs.screener }}
           SCREENER_RESULT: ${{ needs.verify-screener.result }}
           ORCHESTRATOR_REQUIRED: ${{ needs.plan.outputs.screener_orchestrator }}
@@ -766,6 +808,7 @@ jobs:
           require_selected "$BACKROOM_REQUIRED" "$BACKROOM_RESULT" backroom
           require_selected "$DITTOBENCH_API_REQUIRED" "$DITTOBENCH_API_RESULT" dittobench-api
           require_selected "$DITTOBENCH_DATAGEN_REQUIRED" "$DITTOBENCH_DATAGEN_RESULT" dittobench-datagen
+          require_selected "$DITTOBENCH_CODING_DATAGEN_REQUIRED" "$DITTOBENCH_CODING_DATAGEN_RESULT" dittobench-coding-datagen
           require_selected "$SCREENER_REQUIRED" "$SCREENER_RESULT" screener
           require_selected "$ORCHESTRATOR_REQUIRED" "$ORCHESTRATOR_RESULT" screener-orchestrator
 

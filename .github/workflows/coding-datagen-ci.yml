@@ -1,0 +1,46 @@
+name: DittoBench coding datagen CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - research/dittobench-coding-datagen/**
+      - .github/workflows/coding-datagen-ci.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coding-datagen-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: research/dittobench-coding-datagen
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Install locked dependencies
+        run: uv sync --locked --group dev --python 3.12
+
+      - name: Verify source, types, tests, and committed public pack
+        run: |
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy src
+          uv run pytest -q
+          uv run dittobench-coding-datagen validate-pack practice/v1

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dittobench.ai/schemas/coding/practice-manifest-v1.json",
+  "title": "DittoBench coding public practice pack manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "coding_contract_version",
+    "practice_pack_id",
+    "corpus_scope",
+    "generation_mode",
+    "weight_eligible",
+    "source_sha256",
+    "user_count",
+    "memory_count",
+    "task_count",
+    "task_entropy_bits",
+    "files"
+  ],
+  "properties": {
+    "schema": {"const": "dittobench-coding-practice-v1"},
+    "coding_contract_version": {"const": 1},
+    "practice_pack_id": {
+      "type": "string",
+      "pattern": "^coding-practice-3x3-v[1-9][0-9]*$"
+    },
+    "corpus_scope": {"const": "public_practice"},
+    "generation_mode": {"const": "static_public_protocol_demo"},
+    "weight_eligible": {"const": false},
+    "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "user_count": {"const": 3},
+    "memory_count": {"const": 18},
+    "task_count": {"const": 9},
+    "task_entropy_bits": {"const": 0},
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "size_bytes"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "size_bytes": {"type": "integer", "minimum": 0}
+        }
+      }
+    }
+  }
+}
