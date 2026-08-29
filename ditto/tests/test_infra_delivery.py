@@ -151,14 +151,12 @@ def test_capacity_controller_activation_uses_org_scoped_targon_v3() -> None:
     )
     role = ROOT / "infra" / "ansible" / "roles" / "screener_capacity_controller"
     defaults = (role / "defaults" / "main.yml").read_text()
-    controller_unit = (
-        role / "templates" / "ditto-screener-capacity.service.j2"
-    ).read_text()
     builder_unit = (role / "templates" / "ditto-image-builder.service.j2").read_text()
     assert "screener_capacity_targon_org_slug: ditto" in defaults
-    assert (
-        "--targon-org-slug {{ screener_capacity_targon_org_slug }}" in controller_unit
-    )
+    # The capacity controller no longer drives Targon (#1267): its unit stopped
+    # passing the org-scoped flags and the CLI accepts them only as retired
+    # no-ops. The image builder still calls Targon v3, so the org scoping that
+    # this test guards now lives on the builder unit alone.
     assert "--targon-org-slug {{ screener_capacity_targon_org_slug }}" in builder_unit
 
     targon_client = (
