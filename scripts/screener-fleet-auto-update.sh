@@ -33,7 +33,10 @@ is_descriptor_digest() {
 is_builder_digest() {
   [[ "$1" =~ ^us-central1-docker\.pkg\.dev/ditto-app-dev/ditto-public-builders/submission-builder@sha256:[0-9a-f]{64}$ ]]
 }
-run_as_service() { runuser -u "$SERVICE_USER" -- "$@"; }
+run_as_service() {
+  setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_GROUP" --init-groups -- \
+    env HOME="$FLEET_ROOT" "$@"
+}
 
 validate_manifest() {
   local file="$1" line key count=0 seen='|' allowed
@@ -97,9 +100,10 @@ prepare_release() {
     return 0
   fi
   local staging="${release_dir}.staging.$$"
+  cleanup_staging() { rm -rf -- "$staging"; }
+  trap cleanup_staging RETURN
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0750 "$staging"
   if ! run_as_service git clone --filter=blob:none --no-checkout "$REPOSITORY_URL" "$staging/src"; then
-    rm -rf -- "$staging"
     return 1
   fi
   run_as_service git -C "$staging/src" fetch --force origin \
@@ -109,13 +113,17 @@ prepare_release() {
     "$revision" refs/remotes/origin/main
   run_as_service git -C "$staging/src" checkout --detach "$revision"
   [ "$(run_as_service git -C "$staging/src" rev-parse HEAD)" = "$revision" ]
+  run_as_service "$UV_BIN" venv --relocatable "$staging/worker-venv"
   run_as_service env UV_PROJECT_ENVIRONMENT="$staging/worker-venv" \
-    "$UV_BIN" sync --frozen --project "$staging/src/workers/screener"
+    "$UV_BIN" sync --frozen --no-editable --project "$staging/src/workers/screener"
+  run_as_service "$UV_BIN" venv --relocatable "$staging/orchestrator-venv"
   run_as_service env UV_PROJECT_ENVIRONMENT="$staging/orchestrator-venv" \
-    "$UV_BIN" sync --frozen --project "$staging/src/services/screener-orchestrator"
+    "$UV_BIN" sync --frozen --no-editable \
+      --project "$staging/src/services/screener-orchestrator"
   run_as_service "$staging/worker-venv/bin/python" \
     "$staging/src/workers/screener/scripts/verify-installed-signing-contract.py"
   mv "$staging" "$release_dir"
+  trap - RETURN
 }
 
 write_release_env() {
@@ -156,6 +164,9 @@ activate_release() {
   local old_target='' old_builder='' new_link="$FLEET_ROOT/.current.$$"
   [ ! -L "$CURRENT_LINK" ] || old_target="$(readlink "$CURRENT_LINK")"
   [ ! -f "$RELEASE_ENV" ] || old_builder="$(manifest_value "$RELEASE_ENV" SCREENER_FLEET_BUILDER_IMAGE)"
+  install -o root -g root -m 0755 \
+    "$release_dir/src/scripts/screener-fleet-auto-update.sh" \
+    /usr/local/sbin/ditto-screener-fleet-auto-update
   ln -s "releases/$revision" "$new_link"
   stop_fleet
   mv -Tf "$new_link" "$CURRENT_LINK"
@@ -177,16 +188,13 @@ activate_release() {
     "$exact" "$revision" "$(manifest_value "$STATE_DIR/candidate.env" FLEET_VERSION)" \
     "$builder" "$(date +%s)" >"$MANAGED_FILE"
   rm -f "$FAILED_CANDIDATE_FILE"
-  install -o root -g root -m 0755 \
-    "$release_dir/src/scripts/screener-fleet-auto-update.sh" \
-    /usr/local/sbin/ditto-screener-fleet-auto-update
   log "activated $revision from authenticated descriptor $exact"
 }
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
 [[ "$WORKER_PROCESSES" =~ ^[1-9][0-9]*$ ]] || die "worker process count is invalid"
 id "$SERVICE_USER" >/dev/null 2>&1 || die "service user does not exist"
-for command in cosign docker git runuser "$UV_BIN" "$SYSTEMCTL"; do
+for command in cosign docker git setpriv "$UV_BIN" "$SYSTEMCTL"; do
   if ! command -v "$command" >/dev/null 2>&1; then
     if [ "$command" = docker ]; then
       die "required command is unavailable: docker (install the Docker CLI; Debian 13 package: docker-cli)"

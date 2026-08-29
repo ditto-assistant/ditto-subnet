@@ -50,6 +50,7 @@
       - curl
       - ca-certificates
       - openssl
+      - util-linux
       - python3-debian
     state: present
     update_cache: true
