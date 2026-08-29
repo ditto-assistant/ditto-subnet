@@ -796,6 +796,14 @@ class ValidatorHeartbeatRequest(BaseModel):
             raise ValueError("heartbeat protocol v23 requires updater status")
         if self.updater_status is not None and self.protocol_version < 23:
             raise ValueError("updater status requires heartbeat protocol v23")
+        if (
+            self.protocol_version >= 26
+            and self.updater_status is not None
+            and self.updater_status.self_refresh_installed is None
+        ):
+            raise ValueError(
+                "heartbeat protocol v26 requires updater self-refresh status"
+            )
         return self
 
 

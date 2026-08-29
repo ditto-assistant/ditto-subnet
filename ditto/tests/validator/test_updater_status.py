@@ -57,8 +57,42 @@ def test_source_mode_reports_not_managed_without_reading_host_state(
         "state": "not_managed",
         "failed_candidate_count": 0,
         "suppressed": False,
+        "self_refresh_installed": False,
         "observed_at": 100,
     }
+
+
+def test_managed_reports_missing_self_refresh_bootstrap(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _managed(monkeypatch)
+
+    status = collect_updater_status(observed_at=100, state_dir=tmp_path)
+
+    assert status.self_refresh_installed is False
+    assert status.self_refresh_revision is None
+    assert status.self_refresh_last_success_at is None
+
+
+def test_managed_reports_installed_and_successful_self_refresh(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _managed(monkeypatch)
+    previous = "a" * 40
+    current = "b" * 40
+    (tmp_path / "updater-refresh-installed.env").write_text(
+        f"INSTALLED_REVISION={previous}\nINSTALLED_AT=80\n"
+    )
+    (tmp_path / "last-updater-refresh.env").write_text(
+        f"UPDATER_PREVIOUS_REVISION={previous}\n"
+        f"UPDATER_CURRENT_REVISION={current}\nUPDATER_REFRESHED_AT=90\n"
+    )
+
+    status = collect_updater_status(observed_at=100, state_dir=tmp_path)
+
+    assert status.self_refresh_installed is True
+    assert status.self_refresh_revision == current
+    assert status.self_refresh_last_success_at == 90
 
 
 def test_managed_backoff_is_bounded_and_structured(tmp_path: Path, monkeypatch) -> None:

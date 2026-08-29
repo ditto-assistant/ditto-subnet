@@ -227,4 +227,12 @@ systemctl enable --now \
   ditto-validator-stack-auto-update.timer \
   ditto-validator-stack-prefetch.timer \
   ditto-validator-stack-updater-refresh.timer
+refresh_install_revision="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+[[ "$refresh_install_revision" =~ ^[0-9a-f]{40}$ ]] || die "installed updater revision is invalid"
+refresh_install_tmp="$state_dir/updater-refresh-installed.env.tmp"
+printf 'INSTALLED_REVISION=%s\nINSTALLED_AT=%s\n' \
+  "$refresh_install_revision" "$(date +%s)" >"$refresh_install_tmp"
+chown "$service_user:$service_group" "$refresh_install_tmp"
+chmod 0600 "$refresh_install_tmp"
+mv "$refresh_install_tmp" "$state_dir/updater-refresh-installed.env"
 printf 'installed complete-stack updater for %s\n' "$service_user"

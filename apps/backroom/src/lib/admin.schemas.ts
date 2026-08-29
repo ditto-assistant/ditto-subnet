@@ -3390,6 +3390,9 @@ export const validatorUpdaterStatusSchema = z
       .nullable()
       .optional(),
     last_success_at: z.number().int().nonnegative().nullable().optional(),
+    self_refresh_installed: z.boolean().nullable().optional(),
+    self_refresh_revision: z.string().nullable().optional(),
+    self_refresh_last_success_at: z.number().int().nonnegative().nullable().optional(),
     observed_at: z.number().int().nonnegative(),
     retry_after: z.number().int().nonnegative().nullable().optional(),
     state: z.enum([

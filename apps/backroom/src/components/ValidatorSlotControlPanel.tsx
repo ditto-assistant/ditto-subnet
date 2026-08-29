@@ -45,6 +45,7 @@ function updaterLabel(updater: ValidatorFleet['validators'][number]['updater_sta
   if (updater.state === 'not_managed') return 'self-managed'
   if (updater.state === 'disabled') return 'disabled'
   if (updater.state === 'unavailable') return 'unavailable'
+  if (updater.self_refresh_installed === false) return 'updater refresh missing'
   const version = updater.candidate_version ?? updater.current_version
   return `${updater.state}${version ? ` · v${version}` : ''}`
 }
@@ -64,6 +65,15 @@ function updaterDetail(updater: ValidatorFleet['validators'][number]['updater_st
     updater.last_failure_reason ? `last failure: ${updater.last_failure_reason}` : null,
     updater.retry_after ? `retry after: ${formatEpoch(updater.retry_after)}` : null,
     updater.last_success_at ? `last success: ${formatEpoch(updater.last_success_at)}` : null,
+    updater.self_refresh_installed == null
+      ? 'updater self-refresh: unreported (heartbeat protocol before v26)'
+      : `updater self-refresh: ${updater.self_refresh_installed ? 'installed' : 'missing'}`,
+    updater.self_refresh_revision
+      ? `updater revision: ${updater.self_refresh_revision}`
+      : null,
+    updater.self_refresh_last_success_at
+      ? `updater last refreshed: ${formatEpoch(updater.self_refresh_last_success_at)}`
+      : null,
   ]
   return details.filter(Boolean).join('\n')
 }

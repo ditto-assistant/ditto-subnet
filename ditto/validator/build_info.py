@@ -92,7 +92,13 @@ from ditto import __version__
 # v25+, because a v21-v24 validator still parses the field as ``[0.85, 1.10]``
 # and applies the linear v3 projection -- a different rank order, and so a
 # different weight vector. Frozen v3 snapshots stay on the v21 gate.
-HEARTBEAT_PROTOCOL_VERSION = 25
+#
+# v26 requires updater telemetry to say whether the separately installed
+# checkout self-refresh timer is present, and reports the last successfully
+# refreshed canonical revision when available. Older updater-status payloads
+# remain valid and signature-compatible because the additive fields are
+# nullable and omitted from their canonical JSON.
+HEARTBEAT_PROTOCOL_VERSION = 26
 
 
 @dataclass(frozen=True)

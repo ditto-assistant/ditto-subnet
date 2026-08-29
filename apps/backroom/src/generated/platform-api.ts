@@ -22090,6 +22090,12 @@ export interface components {
             observed_at: number;
             /** Retry After */
             retry_after?: number | null;
+            /** Self Refresh Installed */
+            self_refresh_installed?: boolean | null;
+            /** Self Refresh Last Success At */
+            self_refresh_last_success_at?: number | null;
+            /** Self Refresh Revision */
+            self_refresh_revision?: string | null;
             /**
              * State
              * @enum {string}
