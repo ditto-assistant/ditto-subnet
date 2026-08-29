@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.132.0 (2026-08-29)
+
+### Bug Fixes
+
+- **screener**: Autoheal unavailable executors
+  ([#1282](https://github.com/ditto-assistant/ditto-subnet/pull/1282),
+  [`626615b`](https://github.com/ditto-assistant/ditto-subnet/commit/626615b957ee4db95ad936979450ccc8875cbffd))
+
+### Features
+
+- **platform**: Persist shadow coding certifications
+  ([`b4101e7`](https://github.com/ditto-assistant/ditto-subnet/commit/b4101e748fb701741da69a1d6604b304472944c1))
+
+
 ## v0.131.1 (2026-08-29)
 
 ### Bug Fixes
