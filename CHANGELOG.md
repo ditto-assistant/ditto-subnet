@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.140.0 (2026-08-29)
+
+### Features
+
+- **platform**: Load private coding catalog records
+  ([`d19ffb8`](https://github.com/ditto-assistant/ditto-subnet/commit/d19ffb81888ad5d43648e80f1f5cd7341ea30cf4))
+
+
 ## v0.139.1 (2026-08-29)
 
 ### Bug Fixes
