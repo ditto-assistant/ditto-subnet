@@ -1248,7 +1248,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Inspect agent coding certifications',
       description:
-        'Newest-first shadow coding-capability receipts for one SN118 agent UUID: exact artifact and screened-image SHA-256, validator hotkey, bench version, ticket deadline, certification id/status, failure stage/code, and whether the row is still the active receipt or why it is stale. Requires backroom:read. Weight_eligible is always false; this history never feeds ranking, emissions, or the Tool+Memory score ledger.',
+        'Shadow coding-capability receipts for one agent UUID. weight_eligible is always false; never feeds ranking or Tool+Memory scores. Requires backroom:read.',
       inputSchema: agentCodingCertificationInputSchema,
       annotations: toolAnnotations('read'),
     },

@@ -194,10 +194,11 @@ describe('Backroom MCP tools', () => {
     // read schemas, the three inference-trace archive tools, the operator
     // screening-reject tool, the gradient-hold and adjudicator controls, and
     // the screener policy-activation write schema (revision guard, versioned
-    // target, timezone-aware instant, rescreen flag). Keep modest headroom for
+    // target, timezone-aware instant, rescreen flag), and the coding
+    // certification read tool (agent UUID + limit). Keep modest headroom for
     // schema evolution; tighten the description budgets, not this
     // whole-payload backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(98_400)
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(99_400)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. 22_000 admits the screener
