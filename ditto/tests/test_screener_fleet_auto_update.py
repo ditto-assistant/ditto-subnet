@@ -88,6 +88,8 @@ def test_updater_authenticates_before_fetch_or_drain() -> None:
     assert "ditto-subnet/.github/workflows/release.yml@refs/heads/main" in updater
     assert "refs/heads/main:refs/remotes/origin/main" in updater
     assert "merge-base --is-ancestor" in updater
+    assert 'setpriv --reuid="$SERVICE_USER"' in updater
+    assert "runuser" not in updater
 
 
 def test_updater_has_no_inbound_deploy_or_long_lived_cloud_credential() -> None:
@@ -112,6 +114,12 @@ def test_updater_reports_the_debian_13_docker_cli_package() -> None:
     updater = UPDATER.read_text()
 
     assert "install the Docker CLI; Debian 13 package: docker-cli" in updater
+
+
+def test_role_installs_setpriv_provider() -> None:
+    tasks = (ROLE / "tasks/main.yml").read_text()
+
+    assert "- util-linux" in tasks
 
 
 def test_release_workflow_signs_before_advancing_discovery_channel() -> None:

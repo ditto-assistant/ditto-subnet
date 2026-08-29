@@ -33,7 +33,9 @@ is_descriptor_digest() {
 is_builder_digest() {
   [[ "$1" =~ ^us-central1-docker\.pkg\.dev/ditto-app-dev/ditto-public-builders/submission-builder@sha256:[0-9a-f]{64}$ ]]
 }
-run_as_service() { runuser -u "$SERVICE_USER" -- "$@"; }
+run_as_service() {
+  setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_GROUP" --init-groups -- "$@"
+}
 
 validate_manifest() {
   local file="$1" line key count=0 seen='|' allowed
@@ -186,7 +188,7 @@ activate_release() {
 [ "$(id -u)" -eq 0 ] || die "run as root"
 [[ "$WORKER_PROCESSES" =~ ^[1-9][0-9]*$ ]] || die "worker process count is invalid"
 id "$SERVICE_USER" >/dev/null 2>&1 || die "service user does not exist"
-for command in cosign docker git runuser "$UV_BIN" "$SYSTEMCTL"; do
+for command in cosign docker git setpriv "$UV_BIN" "$SYSTEMCTL"; do
   if ! command -v "$command" >/dev/null 2>&1; then
     if [ "$command" = docker ]; then
       die "required command is unavailable: docker (install the Docker CLI; Debian 13 package: docker-cli)"
