@@ -113,8 +113,8 @@ async def test_default_v7_runs_luna_review_and_behavioral_oracle_and_passes() ->
             response_digest="ab" * 32,
             elapsed_ms=800,
             gateway_calls=2,
-            oracle_answer_correct=True,
             gateway_token_observed=True,
+            oracle_answer_correct=True,
         )
 
     async def review() -> SourceReviewObservation:
@@ -919,6 +919,53 @@ async def test_source_review_finding_travels_to_quarantine_decision() -> None:
     decision = await engine.evaluate(_context(challenge, review))
     assert decision.outcome == ScreeningOutcome.QUARANTINE
     assert decision.finding == finding
+
+
+@pytest.mark.parametrize(
+    ("court_decision", "outcome"),
+    [
+        ("clear", ScreeningOutcome.PASS),
+        ("reject", ScreeningOutcome.QUARANTINE),
+        ("escalate", ScreeningOutcome.QUARANTINE),
+    ],
+)
+async def test_final_adjudication_crosses_the_local_policy_boundary(
+    court_decision: str, outcome: ScreeningOutcome
+) -> None:
+    async def challenge(challenge_id, _request, _timeout):  # type: ignore[no-untyped-def]
+        return ChallengeObservation(
+            challenge_id=challenge_id,
+            ok=True,
+            response_digest="ab" * 32,
+            elapsed_ms=800,
+            gateway_calls=2,
+            gateway_token_observed=True,
+            oracle_answer_correct=True,
+        )
+
+    adjudication = {
+        "decision": court_decision,
+        "reason": "final court decision",
+        "model": "z-ai/glm-5.3-flash",
+        "prompt_revision": "adjudicator-v1-policy-v10",
+        "notes_considered": 1,
+    }
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l3-adjudicator-incomplete",
+            failure_disposition="retryable_infra",
+            adjudication=adjudication,
+        )
+
+    decision = await load_policy_engine(None).evaluate(_context(challenge, review))
+
+    assert decision.outcome == outcome
+    assert decision.adjudication == adjudication
 
 
 async def test_clean_review_finding_is_kept_when_oracle_is_inconclusive() -> None:

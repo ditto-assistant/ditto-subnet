@@ -140,6 +140,24 @@ def test_deferred_source_review_is_signed_only_when_true() -> None:
     assert deferred != legacy
 
 
+def test_final_adjudication_digest_is_bound_into_typed_verdict() -> None:
+    base = {
+        "screener_hotkey": _HOTKEY,
+        "agent_id": _AGENT,
+        "attempt_id": _ATTEMPT,
+        "passed": False,
+        "outcome": ScreenResultOutcome.QUARANTINE,
+        "manifest_digest": "12" * 32,
+        "reason_code": "source-review-adjudicated",
+    }
+    without_court = verdict_signing_message(**base)
+    with_court = verdict_signing_message(**base, adjudication_digest="ab" * 32)
+
+    payload = json.loads(with_court.removeprefix(b"ditto-screen-result:v5:").decode())
+    assert payload["adjudication_digest"] == "ab" * 32
+    assert with_court != without_court
+
+
 @pytest.mark.parametrize("policy_version", [9, SCREENING_POLICY_VERSION])
 def test_policy_v9_and_later_signature_requires_typed_outcome(
     policy_version: int,

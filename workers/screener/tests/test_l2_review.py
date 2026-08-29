@@ -4341,6 +4341,44 @@ async def test_an_infrastructure_failure_is_never_adjudicated() -> None:
     assert result.adjudication is None
 
 
+async def test_an_evidence_bearing_failure_is_finally_adjudicated() -> None:
+    """A later fault cannot discard typed notes and restart the submission."""
+    notes = (
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/main.rs",
+            "line": 10,
+            "summary": "looked like a family table",
+        },
+    )
+    interrupted = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="l3-adjudicator-incomplete",
+        failure_disposition="retryable_infra",
+        notes=notes,
+    )
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(interrupted),
+        l2=_FakeL2(_model_result(_safe())),
+        mode="enforce",
+        adjudicator=court,  # type: ignore[arg-type]
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT, deadline=123.0
+    )
+
+    assert court.calls == 1
+    assert court.seen_notes == notes
+    assert result.adjudication is not None
+    assert result.adjudication["decision"] == "clear"
+
+
 async def test_an_elevated_finding_is_adjudicated_not_queued() -> None:
     """A medium/high L1 finding quarantines, so it is a hold the court owns.
 

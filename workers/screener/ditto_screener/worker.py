@@ -53,6 +53,7 @@ from ditto_screening_protocol import (
     ScreenEvidenceItem,
     ScreenResultOutcome,
     ScreenReviewAudit,
+    SourceReviewAdjudication,
     SourceReviewFinding,
 )
 
@@ -570,6 +571,14 @@ class ScreenerWorker:
             review_audit_digest = (
                 review_audit.canonical_digest() if review_audit is not None else None
             )
+            adjudication = (
+                SourceReviewAdjudication.model_validate(result.adjudication)
+                if result.adjudication is not None
+                else None
+            )
+            adjudication_digest = (
+                adjudication.canonical_digest() if adjudication is not None else None
+            )
             finding_digest = (
                 finding.canonical_digest()
                 if finding is not None
@@ -591,6 +600,7 @@ class ScreenerWorker:
                 manifest_digest=result.manifest_digest if is_audited_result else None,
                 finding_digest=finding_digest,
                 review_audit_digest=review_audit_digest,
+                adjudication_digest=adjudication_digest,
                 deferred_source_review=item.deferred_source_review,
                 policy_only=item.policy_only,
                 review_settings_revision=(
@@ -631,6 +641,7 @@ class ScreenerWorker:
                 manifest_digest=result.manifest_digest if is_audited_result else None,
                 finding_digest=finding_digest,
                 review_audit_digest=review_audit_digest,
+                adjudication_digest=adjudication_digest,
                 review_settings_revision=(
                     self._review_settings_status.revision
                     if self._review_settings_status.revision >= 1
@@ -655,6 +666,7 @@ class ScreenerWorker:
                 evidence=evidence,
                 finding=finding,
                 review_audit=review_audit,
+                adjudication=adjudication,
                 image_sha256=screened_image.sha256 if screened_image else None,
                 image_size_bytes=screened_image.size_bytes if screened_image else None,
                 image_id=screened_image.image_id if screened_image else None,

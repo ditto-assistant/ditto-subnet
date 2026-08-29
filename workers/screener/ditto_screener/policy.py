@@ -126,6 +126,7 @@ class ScreeningDecision:
     policy_version: int = SCREENING_POLICY_VERSION
     finding: Mapping[str, object] | None = None
     review_audit: Mapping[str, object] | None = None
+    adjudication: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if self.policy_version != SCREENING_POLICY_VERSION:
@@ -150,6 +151,14 @@ class ScreeningDecision:
             > _MAX_FINDING_BYTES
         ):
             raise ValueError("review audit exceeds bounded size")
+        if (
+            self.adjudication is not None
+            and len(
+                json.dumps(self.adjudication, sort_keys=True, separators=(",", ":"))
+            )
+            > _MAX_FINDING_BYTES
+        ):
+            raise ValueError("adjudication exceeds bounded size")
         if (
             self.outcome == ScreeningOutcome.PASS_INCONCLUSIVE
             and self.review_audit is None
@@ -250,6 +259,7 @@ class ModuleResult:
     evidence: tuple[PolicyEvidence, ...] = ()
     finding: Mapping[str, object] | None = None
     review_audit: Mapping[str, object] | None = None
+    adjudication: Mapping[str, object] | None = None
 
 
 class PolicyModule(Protocol):
@@ -535,6 +545,41 @@ class AgenticSourceReviewModule(_BaseModule):
                 ),
             )
         observation = await context.review_source()
+        adjudication = observation.adjudication
+        if adjudication is not None:
+            decision = adjudication.get("decision")
+            evidence = (
+                PolicyEvidence(
+                    self.module_id,
+                    "source-review-adjudicated",
+                    "final source-review adjudication completed",
+                ),
+            )
+            if decision == "clear":
+                return ModuleResult(
+                    ModuleDisposition.CLEAR,
+                    evidence,
+                    finding=observation.finding,
+                    adjudication=adjudication,
+                )
+            if decision == "reject":
+                # Policy modules do not have authority to reject. Carry the
+                # signed court result as a hold; Platform re-checks the live
+                # operator posture before executing it.
+                return ModuleResult(
+                    ModuleDisposition.QUARANTINE,
+                    evidence,
+                    finding=observation.finding,
+                    adjudication=adjudication,
+                )
+            # A host-refused verdict remains an operator hold, never a retry
+            # loop and never an admission.
+            return ModuleResult(
+                ModuleDisposition.QUARANTINE,
+                evidence,
+                finding=observation.finding,
+                adjudication=adjudication,
+            )
         if not observation.ok:
             if observation.failure_disposition == "pass_inconclusive":
                 return ModuleResult(
@@ -969,6 +1014,7 @@ class PolicyEngine:
         evidence: list[PolicyEvidence] = []
         finding: Mapping[str, object] | None = None
         review_audit: Mapping[str, object] | None = None
+        adjudication: Mapping[str, object] | None = None
         selected = False
         pass_inconclusive = False
         # The mechanical lane does not collect source-review evidence. The
@@ -981,13 +1027,18 @@ class PolicyEngine:
                 evidence.extend(result.evidence)
                 finding = result.finding or finding
                 review_audit = result.review_audit or review_audit
+                adjudication = result.adjudication or adjudication
                 terminal = _module_terminal(result.disposition)
                 if terminal is not None:
                     if terminal == ScreeningOutcome.PASS_INCONCLUSIVE:
                         pass_inconclusive = True
                         continue
                     return self._decision(
-                        terminal, evidence, finding, review_audit=review_audit
+                        terminal,
+                        evidence,
+                        finding,
+                        review_audit=review_audit,
+                        adjudication=adjudication,
                     )
                 selected = selected or result.disposition == ModuleDisposition.TRIPWIRE
 
@@ -1019,10 +1070,15 @@ class PolicyEngine:
             evidence.extend(result.evidence)
             finding = result.finding or finding
             review_audit = result.review_audit or review_audit
+            adjudication = result.adjudication or adjudication
             terminal = _module_terminal(result.disposition)
             if terminal is not None:
                 return self._decision(
-                    terminal, evidence, finding, review_audit=review_audit
+                    terminal,
+                    evidence,
+                    finding,
+                    review_audit=review_audit,
+                    adjudication=adjudication,
                 )
             cleared = cleared or (
                 module.clears_selection
@@ -1050,6 +1106,7 @@ class PolicyEngine:
                 evidence,
                 finding,
                 review_audit=review_audit,
+                adjudication=adjudication,
             )
 
         if pass_inconclusive:
@@ -1058,6 +1115,7 @@ class PolicyEngine:
                 evidence,
                 finding,
                 review_audit=review_audit,
+                adjudication=adjudication,
             )
 
         return self._decision(
@@ -1065,6 +1123,7 @@ class PolicyEngine:
             evidence,
             finding,
             review_audit=review_audit,
+            adjudication=adjudication,
         )
 
     def _decision(
@@ -1074,6 +1133,7 @@ class PolicyEngine:
         finding: Mapping[str, object] | None = None,
         *,
         review_audit: Mapping[str, object] | None = None,
+        adjudication: Mapping[str, object] | None = None,
     ) -> ScreeningDecision:
         bounded = tuple(evidence[:_MAX_EVIDENCE])
         detail = ""
@@ -1092,6 +1152,7 @@ class PolicyEngine:
             evidence=bounded,
             finding=finding,
             review_audit=review_audit,
+            adjudication=adjudication,
         )
 
     def malicious_preflight_decision(

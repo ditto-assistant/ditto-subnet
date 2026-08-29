@@ -4556,6 +4556,18 @@ def _quarantine_payload_json(
         if payload.evidence
         else None
     )
+    if payload.adjudication is not None:
+        adjudication = payload.adjudication
+        adjudication_evidence = {
+            "module_id": "adjudication",
+            "code": (
+                "adjudicated-source-review-"
+                + (adjudication.decision if adjudication.decision else "unknown")
+            ),
+            "summary": adjudication.reason[:240],
+            "digest": payload.adjudication_digest,
+        }
+        evidence_json = [*(evidence_json or [])[:15], adjudication_evidence]
     finding_json = (
         payload.finding.model_dump(mode="json") if payload.finding is not None else None
     )
@@ -4668,6 +4680,7 @@ async def submit_result(
             manifest_digest=payload.manifest_digest,
             finding_digest=payload.finding_digest,
             review_audit_digest=payload.review_audit_digest,
+            adjudication_digest=payload.adjudication_digest,
             deferred_source_review=payload.deferred_source_review,
             policy_only=payload.policy_only,
             review_settings_revision=payload.review_settings_revision,
@@ -4755,11 +4768,20 @@ async def submit_result(
             )
 
     outcome_value = payload.outcome.value if payload.outcome is not None else None
-    records_review_evidence = outcome_value in {
-        "pass_inconclusive",
-        "inconclusive",
-        "quarantine",
-    }
+    stored_reason_code = (
+        f"adjudicated-source-review-{payload.adjudication.decision}"
+        if payload.adjudication is not None
+        else payload.reason_code
+    )
+    records_review_evidence = (
+        outcome_value
+        in {
+            "pass_inconclusive",
+            "inconclusive",
+            "quarantine",
+        }
+        or payload.adjudication is not None
+    )
     deferred_review: AthReview | None = None
     reported_attempt: ScreeningAttempt | None = None
     current_agent: Agent | None = None
@@ -5050,6 +5072,7 @@ async def submit_result(
                     .order_by(ScreenerReviewSettingsRevision.revision.desc())
                 )
             ).all()
+            effective_settings = ScreenerReviewSettings()
             effective = next(
                 (
                     row
@@ -5085,6 +5108,19 @@ async def submit_result(
                             "enforced reviewer verdict is missing the effective "
                             "settings binding"
                         )
+            if (
+                payload.adjudication is not None
+                and payload.adjudication.decision == "reject"
+                and effective_settings.adjudicator_mode == "enforce"
+            ):
+                # The worker transports a reject as a quarantine because a
+                # policy module cannot ban a miner. Platform owns the final
+                # authority boundary: execute only after re-reading the live,
+                # effective operator posture and verifying the exact settings
+                # revision bound into the signed verdict above.
+                target = AgentStatus.REJECTED
+                public_reason = payload.adjudication.reason
+                attempt_status = "rejected"
             if attempt.reason_code == "exact-cross-miner-duplicate" and (
                 payload.reason_code != attempt.reason_code
             ):
@@ -5196,11 +5232,11 @@ async def submit_result(
         if not late_deferred_result:
             agent.screening_reason = public_reason
             agent.screening_reason_code = (
-                payload.reason_code
+                stored_reason_code
                 if outcome_value in {"pass_inconclusive", "inconclusive", "quarantine"}
                 else None
                 if payload.passed
-                else payload.reason_code
+                else stored_reason_code
             )
         if late_deferred_result:
             pass
@@ -5284,7 +5320,7 @@ async def submit_result(
                 DEFERRED_MECHANICAL_REASON,
                 POLICY_ONLY_RESCREEN_REASON,
             }:
-                attempt.reason_code = payload.reason_code
+                attempt.reason_code = stored_reason_code
             attempt.review_settings_revision = payload.review_settings_revision
             attempt.review_settings_instance_id = payload.review_settings_instance_id
             attempt.review_settings_scope = payload.review_settings_scope
@@ -5331,7 +5367,7 @@ async def submit_result(
                             if payload.review_audit is not None
                             else None
                         ),
-                        reason_code=payload.reason_code or INCONCLUSIVE_REASON_CODE,
+                        reason_code=stored_reason_code or INCONCLUSIVE_REASON_CODE,
                         evidence=evidence_json,
                         finding=finding_json,
                         status="resolved" if evidence_deferred else "active",
@@ -5343,7 +5379,12 @@ async def submit_result(
                         ),
                         resolution="rescreen" if evidence_deferred else None,
                         resolution_reason=(
-                            "Late deep-review evidence retained after operator action"
+                            payload.adjudication.reason
+                            if payload.adjudication is not None
+                            else (
+                                "Late deep-review evidence retained after operator "
+                                "action"
+                            )
                             if late_deferred_result
                             else "Evidence retained on the score-qualified ATH review"
                             if deferred_attempt_lifecycle
@@ -5375,7 +5416,7 @@ async def submit_result(
                             if isinstance(deferred_snapshot, dict)
                             else {}
                         ),
-                        "screening_reason_code": payload.reason_code,
+                        "screening_reason_code": stored_reason_code,
                         "review_audit_digest": payload.review_audit_digest,
                         "review_audit": (
                             payload.review_audit.model_dump(mode="json")
@@ -5386,7 +5427,7 @@ async def submit_result(
                     "deep_review_result": {
                         "attempt_id": str(attempt.attempt_id),
                         "outcome": outcome_value,
-                        "reason_code": payload.reason_code,
+                        "reason_code": stored_reason_code,
                         "manifest_digest": payload.manifest_digest,
                         "finding_digest": payload.finding_digest,
                         "review_audit_digest": payload.review_audit_digest,
