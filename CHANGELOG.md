@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.136.1 (2026-08-29)
+
+### Bug Fixes
+
+- **screener**: Let models correct bounded analyzer results
+  ([#1289](https://github.com/ditto-assistant/ditto-subnet/pull/1289),
+  [`f81ac72`](https://github.com/ditto-assistant/ditto-subnet/commit/f81ac727b83a04047ca874ff358a2ba0652ee27e))
+
+
 ## v0.136.0 (2026-08-29)
 
 ### Bug Fixes
