@@ -108,7 +108,11 @@ async def _add_expired_attempts(
 
 
 async def _authorize_latest_retry(
-    session: AsyncSession, agent: Agent, *, reason: str = "operator retry"
+    session: AsyncSession,
+    agent: Agent,
+    *,
+    reason: str = "operator retry",
+    force_full_review: bool = False,
 ) -> ScreeningRetryOverride:
     async with session.begin():
         attempt = await session.scalar(
@@ -126,6 +130,7 @@ async def _authorize_latest_retry(
             attempt_id=attempt.attempt_id,
             artifact_sha256=agent.sha256,
             expected_score_count=0,
+            force_full_review=force_full_review,
             reason=reason,
             actor="operator@example.com",
             created_at=datetime.now(UTC),
@@ -694,6 +699,28 @@ async def test_bypass_admits_on_the_cheap_screen_like_enforce(
 
     assert attempt.build_only is True
     assert attempt.reason_code == "deferred-mechanical-admission"
+
+
+@pytest.mark.parametrize(
+    ("force_full_review", "expected_build_only"),
+    [(False, True), (True, False)],
+)
+async def test_manual_retry_can_force_one_full_review_while_queue_bypasses(
+    session: AsyncSession,
+    force_full_review: bool,
+    expected_build_only: bool,
+) -> None:
+    agent = await _seed_failed_agent(session)
+    await _add_expired_attempts(session, agent, 1)
+    await _authorize_latest_retry(session, agent, force_full_review=force_full_review)
+
+    claimed = await _claim(session, deferred_review_mode="bypass")
+    attempt, _duplicate = _claimed_duplicate(claimed, agent)
+
+    assert attempt.build_only is expected_build_only
+    assert attempt.reason_code == (
+        "deferred-mechanical-admission" if expected_build_only else None
+    )
 
 
 @pytest.mark.parametrize("mode", ["off", "observe", "bypass"])

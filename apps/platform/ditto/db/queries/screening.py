@@ -1050,16 +1050,34 @@ async def claim_screening_attempts(
         # (UPLOADED), failed, or stale-policy submission still gets the full
         # review.
         deferred_deep_review = agent.status == AgentStatus.ATH_PENDING_REVIEW
+        latest_agent_attempt_id = await session.scalar(
+            select(ScreeningAttempt.attempt_id)
+            .where(ScreeningAttempt.agent_id == agent.agent_id)
+            .order_by(
+                ScreeningAttempt.started_at.desc(),
+                ScreeningAttempt.attempt_id.desc(),
+            )
+            .limit(1)
+        )
+        force_full_review = bool(
+            await session.scalar(
+                select(ScreeningRetryOverride.force_full_review).where(
+                    ScreeningRetryOverride.attempt_id == latest_agent_attempt_id
+                )
+            )
+        )
         # ``enforce`` defers the deep review to the submissions that qualify;
         # ``bypass`` never runs it at all. Both admit on the same cheap
         # build-only pass, so the pre-score depth is one predicate over the two.
-        mechanical_first = deferred_review_mode in {
-            "enforce",
-            "bypass",
-        } and agent.status in {
-            AgentStatus.UPLOADED,
-            AgentStatus.SCREENING_FAILED,
-        }
+        mechanical_first = (
+            not force_full_review
+            and deferred_review_mode in {"enforce", "bypass"}
+            and agent.status
+            in {
+                AgentStatus.UPLOADED,
+                AgentStatus.SCREENING_FAILED,
+            }
+        )
         build_only = not deferred_deep_review and (
             mechanical_first
             or (

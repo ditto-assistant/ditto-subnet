@@ -4035,13 +4035,32 @@ export const rescreenRejectedSubmissionResponseSchema = z.object({
   agent_status: z.string(),
 })
 
-export const retryFailedScreeningNowInputSchema = z.object({
-  agentId: z.string().uuid(),
-  reason: auditReasonSchema(8),
-  expectedSha256: z.string().regex(/^[0-9a-f]{64}$/),
-  expectedScoreCount: z.number().int().nonnegative(),
-  expectedAttemptId: z.string().uuid(),
-})
+export const retryFailedScreeningNowInputSchema = z
+  .object({
+    agentId: z.string().uuid(),
+    reason: auditReasonSchema(8),
+    expectedSha256: z.string().regex(/^[0-9a-f]{64}$/),
+    expectedScoreCount: z.number().int().nonnegative(),
+    expectedAttemptId: z.string().uuid(),
+    forceFullReview: z.boolean().optional().default(false),
+    confirmation: z.literal('FORCE ONE FULL SCREENING REVIEW').optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.forceFullReview && value.confirmation === undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['confirmation'],
+        message: 'full review retry requires FORCE ONE FULL SCREENING REVIEW',
+      })
+    }
+    if (!value.forceFullReview && value.confirmation !== undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['confirmation'],
+        message: 'confirmation is only valid when forceFullReview is true',
+      })
+    }
+  })
 
 export const retryFailedScreeningNowResponseSchema = z.object({
   override_id: z.string().uuid(),
@@ -4050,6 +4069,7 @@ export const retryFailedScreeningNowResponseSchema = z.object({
   agent_status: z.literal('screening_failed'),
   backoff_deadline: z.string(),
   created_at: z.string(),
+  force_full_review: z.boolean().optional().default(false),
   idempotent: z.boolean(),
 })
 

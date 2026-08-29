@@ -1868,6 +1868,7 @@ async def _authorize_screening_retry(
     agent: Agent,
     attempt_id: UUID,
     expected_score_count: int,
+    force_full_review: bool = False,
     reason: str,
     actor: str,
     now: datetime,
@@ -1886,6 +1887,7 @@ async def _authorize_screening_retry(
         attempt_id=attempt_id,
         artifact_sha256=agent.sha256,
         expected_score_count=expected_score_count,
+        force_full_review=force_full_review,
         reason=reason,
         actor=actor,
         created_at=now,
@@ -1956,6 +1958,10 @@ async def retry_failed_screening_now(
             )
         )
         if override is not None:
+            if override.force_full_review != payload.force_full_review:
+                raise HTTPException(
+                    status_code=409, detail="screening retry mode changed"
+                )
             idempotent = True
         else:
             running_attempt = await session.scalar(
@@ -1986,6 +1992,7 @@ async def retry_failed_screening_now(
                 agent=agent,
                 attempt_id=attempt.attempt_id,
                 expected_score_count=score_count,
+                force_full_review=payload.force_full_review,
                 reason=payload.reason,
                 actor=x_admin_actor,
                 now=now,
@@ -2007,6 +2014,7 @@ async def retry_failed_screening_now(
         agent_status=agent.status,
         backoff_deadline=attempt.deadline,
         created_at=override.created_at,
+        force_full_review=override.force_full_review,
         idempotent=idempotent,
     )
 

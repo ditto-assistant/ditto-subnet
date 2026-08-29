@@ -14,7 +14,7 @@ classification remains evidence; it is not retry authority.
 
 | Process | Automatic behavior after failure | Manual Backroom control |
 | --- | --- | --- |
-| Screening attempt, including image build, runtime smoke, source review, L2/critic/adjudication, verdict delivery, and deferred ATH deep review | The exact attempt becomes terminal and is not claimable again | `retry_failed_screening_now` authorizes the exact latest terminal attempt; `expire_running_screening` first parks a stuck live attempt |
+| Screening attempt, including image build, runtime smoke, source review, L2/critic/adjudication, verdict delivery, and deferred ATH deep review | The exact attempt becomes terminal and is not claimable again | `retry_failed_screening_now` authorizes the exact latest terminal attempt; its confirmed `forceFullReview` option forces only that retry through the full review lane without changing global admission policy; `expire_running_screening` first parks a stuck live attempt |
 | Rejected or quarantined screening | Remains terminal | `rescreen_rejected_submission`, `resolve_screening_quarantine`, and the guarded batch quarantine tools authorize a new attempt |
 | Trusted screener image build | `failed`, `fallback_required`, and `canceled` rows remain parked | `get_screener_capacity` supplies the build/status/attempt guards; `retry_trusted_image_build` requeues that exact build and appends an audit event |
 | Screening compute provider | Only the first configured provider is authoritative; no Targon/GCP or model failover occurs | `get_screener_capacity` and the screener-provider settings controls select the one provider before a manual retry |

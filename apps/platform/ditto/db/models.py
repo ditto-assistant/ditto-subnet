@@ -597,6 +597,9 @@ class ScreeningRetryOverride(Base):
     attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
     artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     expected_score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    force_full_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

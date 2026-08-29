@@ -2346,7 +2346,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Retry failed screening now',
       description:
-        'Retry the exact latest terminal screening attempt; failures never retry automatically. Preserves history and does not release quarantine or accept rejection. Supply artifact SHA-256, score count, and attempt ID guards. Requires backroom:write.',
+        'Retry the exact latest terminal screening attempt; failures never retry automatically. Preserves history and does not release quarantine or accept rejection. Supply artifact SHA-256, score count, and attempt ID guards. Set forceFullReview=true with confirmation "FORCE ONE FULL SCREENING REVIEW" only for a single policy canary: it bypasses the global deferred/bypass admission depth for this retry without changing any other submission. Requires backroom:write.',
       inputSchema: retryFailedScreeningNowInputSchema,
       annotations: toolAnnotations('write', true),
     },

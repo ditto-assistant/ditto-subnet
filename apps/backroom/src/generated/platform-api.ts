@@ -8020,6 +8020,8 @@ export interface components {
          * @description Compare-and-swap guards for waiving one failed attempt's backoff.
          */
         AdminScreeningRetryNowRequest: {
+            /** Confirmation */
+            confirmation?: string | null;
             /**
              * Expected Attempt Id
              * Format: uuid
@@ -8029,6 +8031,11 @@ export interface components {
             expected_score_count: number;
             /** Expected Sha256 */
             expected_sha256: string;
+            /**
+             * Force Full Review
+             * @default false
+             */
+            force_full_review: boolean;
             /** Reason */
             reason: string;
         };
@@ -8056,6 +8063,11 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Force Full Review
+             * @default false
+             */
+            force_full_review: boolean;
             /**
              * Idempotent
              * @default false
