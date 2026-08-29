@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.130.0 (2026-08-29)
+
+### Features
+
+- **coding**: Add shadow sandbox executor
+  ([`c51b6fe`](https://github.com/ditto-assistant/ditto-subnet/commit/c51b6fee10c0aef9faafd4e0775ec78518e55ff6))
+
+
 ## v0.129.0 (2026-08-29)
 
 ### Features
