@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.135.0 (2026-08-29)
+
+### Features
+
+- **platform**: Add separate shadow coding evaluation ledger
+  ([`893dcd5`](https://github.com/ditto-assistant/ditto-subnet/commit/893dcd5d4b70eac4ffb9f8971345b4775271ea55))
+
+
 ## v0.134.0 (2026-08-29)
 
 ### Bug Fixes
