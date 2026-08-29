@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.126.1 (2026-08-29)
+
+### Bug Fixes
+
+- **screener**: Allow private Cloud Run failure logs
+  ([#1272](https://github.com/ditto-assistant/ditto-subnet/pull/1272),
+  [`2ec6528`](https://github.com/ditto-assistant/ditto-subnet/commit/2ec6528fa42b468508fd30bb08a3a68659155ed5))
+
+- **screener**: Prefer nonblocking GCP screening lanes
+  ([#1275](https://github.com/ditto-assistant/ditto-subnet/pull/1275),
+  [`e7ad2a5`](https://github.com/ditto-assistant/ditto-subnet/commit/e7ad2a5b06c81441bc7e0835c07ad57a3abeb420))
+
+
 ## v0.126.0 (2026-08-29)
 
 ### Features
