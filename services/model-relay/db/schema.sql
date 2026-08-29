@@ -2711,6 +2711,7 @@ CREATE TABLE public.screening_retry_overrides (
     reason text NOT NULL,
     actor text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    force_full_review boolean DEFAULT false NOT NULL,
     CONSTRAINT screening_retry_overrides_actor_check CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
     CONSTRAINT screening_retry_overrides_reason_check CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
     CONSTRAINT screening_retry_overrides_score_count_check CHECK ((expected_score_count >= 0)),

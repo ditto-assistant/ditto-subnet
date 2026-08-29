@@ -4706,7 +4706,7 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('waives one exact failed screening backoff with explicit guards', async () => {
+  it('waives one exact failed screening for a confirmed full review', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const agentId = '270acbcc-268d-4380-9db7-c5fb90726941'
     const attemptId = 'af86d39d-51c6-46d7-83d4-36b61cab6aef'
@@ -4720,6 +4720,7 @@ describe('Backroom MCP tools', () => {
         agent_status: 'screening_failed',
         backoff_deadline: '2026-08-02T16:54:16.324536Z',
         created_at: '2026-08-02T16:25:00Z',
+        force_full_review: true,
         idempotent: false,
       }),
     )
@@ -4736,6 +4737,8 @@ describe('Backroom MCP tools', () => {
         expectedSha256,
         expectedScoreCount: 0,
         expectedAttemptId: attemptId,
+        forceFullReview: true,
+        confirmation: 'FORCE ONE FULL SCREENING REVIEW',
       },
     })
 
@@ -4744,6 +4747,7 @@ describe('Backroom MCP tools', () => {
       override_id: overrideId,
       agent_id: agentId,
       attempt_id: attemptId,
+      force_full_review: true,
       idempotent: false,
     })
     expect(fetchMock).toHaveBeenCalledWith(
@@ -4759,6 +4763,8 @@ describe('Backroom MCP tools', () => {
           expected_sha256: expectedSha256,
           expected_score_count: 0,
           expected_attempt_id: attemptId,
+          force_full_review: true,
+          confirmation: 'FORCE ONE FULL SCREENING REVIEW',
         }),
       }),
     )

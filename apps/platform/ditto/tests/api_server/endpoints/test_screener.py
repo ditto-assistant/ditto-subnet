@@ -5638,6 +5638,14 @@ class TestQuarantineAdmin:
             "expected_score_count": 0,
             "expected_attempt_id": str(attempt_id),
         }
+        force_full_review = reason_code == "cloudrun-build-unavailable"
+        if force_full_review:
+            request.update(
+                {
+                    "force_full_review": True,
+                    "confirmation": "FORCE ONE FULL SCREENING REVIEW",
+                }
+            )
         response = await client.post(
             f"/api/v1/admin/screening-submissions/{agent_id}/retry-now",
             headers={
@@ -5648,6 +5656,7 @@ class TestQuarantineAdmin:
         )
         assert response.status_code == 200, response.text
         assert response.json()["attempt_id"] == str(attempt_id)
+        assert response.json()["force_full_review"] is force_full_review
         assert response.json()["idempotent"] is False
 
         repeated = await client.post(
@@ -5676,6 +5685,7 @@ class TestQuarantineAdmin:
         assert attempt.deadline == original_deadline
         assert len(overrides) == 1
         assert overrides[0].actor == "backroom:test-user"
+        assert overrides[0].force_full_review is force_full_review
 
         claimed = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
         assert claimed.status_code == 200, claimed.text

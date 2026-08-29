@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from ditto.api_models.screener import (
     ScreenEvidenceItem,
@@ -242,6 +242,17 @@ class AdminScreeningRetryNowRequest(BaseModel):
     expected_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     expected_score_count: Annotated[int, Field(ge=0)]
     expected_attempt_id: UUID
+    force_full_review: bool = False
+    confirmation: str | None = None
+
+    @model_validator(mode="after")
+    def validate_full_review_confirmation(self) -> AdminScreeningRetryNowRequest:
+        expected = "FORCE ONE FULL SCREENING REVIEW"
+        if self.force_full_review and self.confirmation != expected:
+            raise ValueError(f'full review retry requires confirmation "{expected}"')
+        if not self.force_full_review and self.confirmation is not None:
+            raise ValueError("confirmation is only valid for a full review retry")
+        return self
 
 
 class AdminScreeningRetryNowResponse(BaseModel):
@@ -251,6 +262,7 @@ class AdminScreeningRetryNowResponse(BaseModel):
     agent_status: str
     backoff_deadline: datetime
     created_at: datetime
+    force_full_review: bool = False
     idempotent: bool = False
 
 
