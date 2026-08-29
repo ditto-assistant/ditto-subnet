@@ -480,6 +480,12 @@ def test_disposable_admin_arms_only_after_egress_is_restricted() -> None:
     assert "ls-files --others --exclude-standard" in startup
     assert "--require-hashes" in startup
     assert "--result-file" in startup
+    restricted_hosts = [
+        line for line in startup.splitlines() if line.startswith("199.36.153.")
+    ]
+    assert len(restricted_hosts) == 4
+    assert all("secretmanager.googleapis.com" in line for line in restricted_hosts)
+    assert all("iamcredentials.googleapis.com" in line for line in restricted_hosts)
 
 
 def test_disposable_admin_verifies_checkout_as_its_temporary_owner() -> None:
