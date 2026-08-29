@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.144.1 (2026-08-29)
+
+### Bug Fixes
+
+- **infra**: Harden screener updater bootstrap
+  ([#1310](https://github.com/ditto-assistant/ditto-subnet/pull/1310),
+  [`5342b85`](https://github.com/ditto-assistant/ditto-subnet/commit/5342b854a1093b68409a9ff7f5e4929c0d97fd0f))
+
+
 ## v0.144.0 (2026-08-29)
 
 ### Bug Fixes
