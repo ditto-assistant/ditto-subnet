@@ -73,8 +73,9 @@ COPY --from=builder /app/target/release/dittobench-miner /usr/local/bin/dittoben
 COPY --chown=65532:65532 fixtures ./fixtures
 RUN chown 65532:65532 /app
 
-# Default DB lives in the working dir; mount a volume to persist it.
-ENV DITTOBENCH_DB=/app/dittobench.db
+# Admission runs the image with a read-only root and a writable /tmp tmpfs.
+# Override this path with a mounted volume when persistence is required.
+ENV DITTOBENCH_DB=/tmp/dittobench.db
 EXPOSE 8080
 USER dittobench:dittobench
 

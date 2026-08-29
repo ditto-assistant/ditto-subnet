@@ -28,6 +28,7 @@ def test_starter_runtime_is_reproducible_and_non_root() -> None:
     assert "FROM debian:trixie-slim@sha256:" in dockerfile
     assert "dittobench:x:65532:65532:" in dockerfile
     assert "USER dittobench:dittobench" in dockerfile
+    assert "ENV DITTOBENCH_DB=/tmp/dittobench.db" in dockerfile
 
 
 def test_starter_default_crate_target_uses_the_monorepo_subdirectory() -> None:
