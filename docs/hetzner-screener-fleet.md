@@ -102,17 +102,93 @@ changed, its lease has expired, the node is already enrolled, or an unexpired
 grant already exists. It returns the only plaintext copy of the short-lived
 registration token; store it immediately in the encrypted variables file.
 
-Create an encrypted variables file outside git containing the returned grant
-and the source-review API key:
+The source-review process does require OpenRouter. It reuses the existing
+`validator-openrouter-key` Secret Manager secret, but the host does not receive
+that value through GitHub, Terraform, or Ansible. Terraform creates a dedicated
+`subnet-screener-1` service account with no project roles, gives it accessor on
+only that one secret, and allows only this X.509 subject to impersonate it:
+
+```text
+spiffe://dittobench.ai/screener/subnet-screener-1
+```
+
+Create an offline CA on an encrypted operator device. Keep `ca.key` out of Git,
+GitHub, Terraform, Ansible, and the server; only its public certificate becomes
+Terraform input:
+
+```bash
+umask 077
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out ca.key
+openssl req -x509 -new -sha256 -days 3650 \
+  -key ca.key -out ca.crt -subj '/CN=Ditto screener fleet offline CA' \
+  -addext 'basicConstraints=critical,CA:TRUE,pathlen:0' \
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -addext 'extendedKeyUsage=clientAuth'
+```
+
+Put the public `ca.crt` PEM in the protected Actions variable
+`SCREENER_FLEET_X509_CA_CERTIFICATE_PEM`. Run the protected infrastructure plan
+with `root=gcp-platform` and
+`screener_fleet_x509_identity_enabled=true`, review it, then apply that exact
+sealed plan. Record these non-secret outputs in the ignored inventory:
+
+- `screener_fleet_x509_provider`;
+- `screener_fleet_x509_service_account_email`; and
+- `screener_fleet_x509_subject` (it must equal the literal above).
+
+Before enabling runtime, set `screener_fleet_runtime_enabled: false` and
+`screener_fleet_x509_enabled: true`, then converge once. Ansible creates the
+client private key on the Hetzner host as the isolated
+`ditto-screener-secrets` user and emits only a CSR. Fetch the public CSR:
+
+```bash
+ansible -b -i infra/ansible/inventory/hetzner-screener.yml \
+  subnet-screener-1 -m fetch \
+  -a 'src=/etc/ditto-screener-fleet/google-identity/client.csr dest=./subnet-screener-1.csr flat=true'
+```
+
+On the offline CA device, sign a short-lived client certificate. The extension
+file is public; the CA private key remains offline:
+
+```ini
+[client]
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=clientAuth
+subjectAltName=URI:spiffe://dittobench.ai/screener/subnet-screener-1
+```
+
+```bash
+openssl x509 -req -sha256 -days 90 \
+  -in subnet-screener-1.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -extfile subnet-screener-1-client.cnf -extensions client \
+  -out subnet-screener-1.crt
+```
+
+Create an encrypted variables file outside git containing the returned
+single-use enrollment grant and the two public certificates. It deliberately
+contains neither the OpenRouter value nor either private key:
 
 ```yaml
 screener_fleet_registration_token: replace-with-single-use-grant
-screener_fleet_source_review_api_key: replace-with-review-only-key
+screener_fleet_x509_ca_certificate_pem: |
+  -----BEGIN CERTIFICATE-----
+  ...
+  -----END CERTIFICATE-----
+screener_fleet_x509_certificate_pem: |
+  -----BEGIN CERTIFICATE-----
+  ...
+  -----END CERTIFICATE-----
 ```
 
 Encrypt it with `ansible-vault encrypt`. The grant is placed in a mode-0600
-file, consumed once, and deleted after enrollment. Neither secret enters a KVM
-build or smoke guest.
+file, consumed once, and deleted after enrollment. Set
+`screener_fleet_runtime_enabled: true` only after the signed certificate is
+available. Ansible verifies its CA chain, client purpose, exact URI SAN,
+remaining lifetime, and match to the host-generated private key before it asks
+Google for a 15-minute token. A dedicated hourly service atomically refreshes
+the review-only key; neither that key nor Google credentials enter a KVM build
+or smoke guest.
 
 ## 3. Converge from the default Debian install
 
@@ -129,10 +205,18 @@ ansible-playbook \
 ```
 
 The play installs KVM/libvirt and Docker, builds a verified disposable guest
-base, enrolls one node identity, starts the trusted lane agent, and starts eight
-full screener processes. The bootstrap operator receives a validated
-passwordless sudo rule for future Ansible converges; root SSH is disabled.
-Re-run with `ansible_user` set to that operator after the first converge.
+base, validates X.509 federation without printing the secret, enrolls one node
+identity, starts the trusted lane agent, and starts eight full screener
+processes. The bootstrap operator receives a validated passwordless sudo rule
+for future Ansible converges; root SSH is disabled. Re-run with `ansible_user`
+set to that operator after the first converge.
+
+The leaf certificate expires after 90 days. Rotate it before 14 days remain by
+signing the existing public CSR again and replacing only
+`screener_fleet_x509_certificate_pem` in the encrypted variables file. Ansible
+keeps the host private key in place. Revocation is immediate at the Google
+boundary by disabling the provider or removing the exact impersonation binding;
+the service account still has no authority beyond the one secret.
 
 ## 4. Shadow in production
 

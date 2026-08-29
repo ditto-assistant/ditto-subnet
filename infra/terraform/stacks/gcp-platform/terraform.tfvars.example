@@ -45,6 +45,14 @@ cloudflare_zone_id = "TODO_HEYDITTO_ZONE_ID"
 # enable_screener_fleet_secrets = true
 # enable_screener_fleet         = true
 # enable_screener_capacity_controller = true
+# X.509 identity for the external Hetzner fleet. The CA certificate is public;
+# its private key must remain offline and outside Terraform/GitHub/Ansible.
+# enable_screener_fleet_x509_identity = true
+# screener_fleet_x509_ca_certificate_pem = <<-EOT
+# -----BEGIN CERTIFICATE-----
+# ...
+# -----END CERTIFICATE-----
+# EOT
 # Fast-relief burst tuning (see docs/screener-scaling.md):
 # screener_fleet_min_replicas         = 0
 # screener_fleet_backlog_per_instance = 3

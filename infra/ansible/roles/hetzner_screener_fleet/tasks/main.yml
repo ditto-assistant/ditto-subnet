@@ -49,6 +49,8 @@
       - git
       - curl
       - ca-certificates
+      - openssl
+      - python3-debian
     state: present
     update_cache: true
 
@@ -69,6 +71,16 @@
     home: "{{ screener_fleet_root }}"
     shell: /usr/sbin/nologin
 
+- name: Ensure the dedicated Google secret materializer user
+  ansible.builtin.user:
+    name: "{{ screener_fleet_secret_agent_user }}"
+    group: "{{ screener_fleet_group }}"
+    system: true
+    create_home: false
+    home: "{{ screener_fleet_x509_identity_dir }}"
+    shell: /usr/sbin/nologin
+  when: screener_fleet_x509_enabled
+
 - name: Allow libvirt QEMU to read disposable screener disks
   ansible.builtin.user:
     name: libvirt-qemu
@@ -86,12 +98,80 @@
     - { path: "{{ screener_fleet_root }}", mode: "0755" }
     - { path: "{{ screener_fleet_releases_dir }}", mode: "0750" }
     - { path: "{{ screener_fleet_release_dir }}", mode: "0750" }
-    - { path: "{{ screener_fleet_config_dir }}", mode: "0700" }
+    - { path: "{{ screener_fleet_config_dir }}", mode: "0750" }
     - { path: "{{ screener_fleet_state_dir }}", mode: "0750" }
     - { path: "{{ screener_fleet_jobs_dir }}", mode: "0770" }
     - { path: "{{ screener_fleet_images_dir }}", mode: "0750" }
     - { path: "{{ screener_fleet_logs_dir }}", mode: "0750" }
     - { path: "{{ screener_fleet_update_state_dir }}", mode: "0700", owner: root, group: root }
+
+- name: Ensure private X.509 identity and shared secret directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ screener_fleet_secret_agent_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ screener_fleet_x509_identity_dir }}", mode: "0700" }
+    - { path: "{{ screener_fleet_x509_cloudsdk_config }}", mode: "0700" }
+    - { path: "{{ screener_fleet_secrets_dir }}", mode: "0750" }
+  when: screener_fleet_x509_enabled
+
+- name: Generate the non-exported X.509 client private key
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - genpkey
+      - -algorithm
+      - RSA
+      - -pkeyopt
+      - rsa_keygen_bits:3072
+      - -out
+      - "{{ screener_fleet_x509_private_key_file }}"
+    creates: "{{ screener_fleet_x509_private_key_file }}"
+  become_user: "{{ screener_fleet_secret_agent_user }}"
+  no_log: true
+  when: screener_fleet_x509_enabled
+
+- name: Restrict the X.509 private key
+  ansible.builtin.file:
+    path: "{{ screener_fleet_x509_private_key_file }}"
+    owner: "{{ screener_fleet_secret_agent_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "0400"
+  when: screener_fleet_x509_enabled
+
+- name: Generate the exact-subject X.509 signing request
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -new
+      - -sha256
+      - -key
+      - "{{ screener_fleet_x509_private_key_file }}"
+      - -out
+      - "{{ screener_fleet_x509_csr_file }}"
+      - -subj
+      - /CN=subnet-screener-1
+      - -addext
+      - "subjectAltName=URI:{{ screener_fleet_x509_subject }}"
+      - -addext
+      - extendedKeyUsage=clientAuth
+      - -addext
+      - keyUsage=critical,digitalSignature,keyEncipherment
+    creates: "{{ screener_fleet_x509_csr_file }}"
+  become_user: "{{ screener_fleet_secret_agent_user }}"
+  when: screener_fleet_x509_enabled
+
+- name: Restrict the X.509 signing request
+  ansible.builtin.file:
+    path: "{{ screener_fleet_x509_csr_file }}"
+    owner: "{{ screener_fleet_secret_agent_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "0440"
+  when: screener_fleet_x509_enabled
 
 - name: Ensure per-worker private state directories
   ansible.builtin.file:
@@ -279,6 +359,262 @@
     - not screener_fleet_credential.stat.exists
   no_log: true
 
+- name: Require the exact X.509 federation contract
+  ansible.builtin.assert:
+    that:
+      - screener_fleet_x509_subject == 'spiffe://dittobench.ai/screener/subnet-screener-1'
+      - screener_fleet_x509_provider is regex('^projects/[0-9]+/locations/global/workloadIdentityPools/screener-fleet-x509/providers/subnet-screener-1$')
+      - screener_fleet_x509_service_account_email is regex('^subnet-screener-1@[a-z][a-z0-9-]+\\.iam\\.gserviceaccount\\.com$')
+      - "'BEGIN CERTIFICATE' in screener_fleet_x509_ca_certificate_pem"
+      - "'PRIVATE KEY' not in screener_fleet_x509_ca_certificate_pem"
+      - "'BEGIN CERTIFICATE' in screener_fleet_x509_certificate_pem"
+      - "'PRIVATE KEY' not in screener_fleet_x509_certificate_pem"
+    fail_msg: >-
+      Runtime X.509 federation requires the exact Terraform provider output,
+      dedicated service account output, public offline-CA certificate, and a
+      signed leaf certificate for subnet-screener-1. No private key belongs in
+      inventory, Vault, Terraform, or Git.
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Install the X.509 public trust anchor
+  ansible.builtin.copy:
+    content: "{{ screener_fleet_x509_ca_certificate_pem }}"
+    dest: "{{ screener_fleet_x509_ca_certificate_file }}"
+    owner: "{{ screener_fleet_secret_agent_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "0440"
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Install the signed X.509 client certificate
+  ansible.builtin.copy:
+    content: "{{ screener_fleet_x509_certificate_pem }}"
+    dest: "{{ screener_fleet_x509_certificate_file }}"
+    owner: "{{ screener_fleet_secret_agent_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "0440"
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Verify the client certificate chain and purpose
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - verify
+      - -purpose
+      - sslclient
+      - -CAfile
+      - "{{ screener_fleet_x509_ca_certificate_file }}"
+      - "{{ screener_fleet_x509_certificate_file }}"
+  changed_when: false
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Require at least fourteen days of client certificate validity
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -checkend
+      - "1209600"
+      - -noout
+      - -in
+      - "{{ screener_fleet_x509_certificate_file }}"
+  changed_when: false
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Read the client certificate URI SAN
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -in
+      - "{{ screener_fleet_x509_certificate_file }}"
+      - -noout
+      - -ext
+      - subjectAltName
+  register: screener_fleet_x509_san
+  changed_when: false
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Require the exact subnet-screener-1 URI SAN
+  ansible.builtin.assert:
+    that:
+      - "('URI:' + screener_fleet_x509_subject) in screener_fleet_x509_san.stdout"
+    fail_msg: The client certificate does not contain the exact permitted URI SAN
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Read the private-key public modulus
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - rsa
+      - -in
+      - "{{ screener_fleet_x509_private_key_file }}"
+      - -noout
+      - -modulus
+  register: screener_fleet_x509_key_modulus
+  changed_when: false
+  no_log: true
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Read the certificate public modulus
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -in
+      - "{{ screener_fleet_x509_certificate_file }}"
+      - -noout
+      - -modulus
+  register: screener_fleet_x509_certificate_modulus
+  changed_when: false
+  no_log: true
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Require the host-generated key to match the signed certificate
+  ansible.builtin.assert:
+    that:
+      - screener_fleet_x509_key_modulus.stdout == screener_fleet_x509_certificate_modulus.stdout
+    fail_msg: The signed client certificate does not match this host's private key
+  no_log: true
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Ensure gcloud is available for X.509 federation
+  ansible.builtin.command: gcloud --version
+  register: screener_fleet_gcloud_check
+  changed_when: false
+  failed_when: false
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Install Google Cloud CLI for X.509 federation
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+    - screener_fleet_gcloud_check.rc != 0
+  block:
+    - name: Add Google Cloud apt key for the secret materializer
+      ansible.builtin.get_url:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        dest: /usr/share/keyrings/google-cloud.gpg
+        mode: "0644"
+
+    - name: Add Google Cloud apt repository for the secret materializer
+      ansible.builtin.deb822_repository:
+        name: google-cloud-sdk
+        types: [deb]
+        uris: https://packages.cloud.google.com/apt
+        suites: [cloud-sdk]
+        components: [main]
+        signed_by: /usr/share/keyrings/google-cloud.gpg
+        state: present
+
+    - name: Install Google Cloud CLI for the secret materializer
+      ansible.builtin.apt:
+        name: google-cloud-cli
+        state: present
+        update_cache: true
+
+- name: Render the non-secret X.509 external-account configuration
+  ansible.builtin.command:
+    argv:
+      - gcloud
+      - iam
+      - workload-identity-pools
+      - create-cred-config
+      - "{{ screener_fleet_x509_provider }}"
+      - "--service-account={{ screener_fleet_x509_service_account_email }}"
+      - --service-account-token-lifetime-seconds=900
+      - "--credential-cert-path={{ screener_fleet_x509_certificate_file }}"
+      - "--credential-cert-private-key-path={{ screener_fleet_x509_private_key_file }}"
+      - "--output-file={{ screener_fleet_x509_credential_file }}"
+  become_user: "{{ screener_fleet_secret_agent_user }}"
+  environment:
+    HOME: "{{ screener_fleet_x509_identity_dir }}"
+    CLOUDSDK_CONFIG: "{{ screener_fleet_x509_cloudsdk_config }}"
+  changed_when: true
+  no_log: true
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Restrict the external-account and certificate configurations
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: "{{ screener_fleet_secret_agent_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "0400"
+  loop:
+    - "{{ screener_fleet_x509_credential_file }}"
+    - "{{ screener_fleet_x509_cloudsdk_config }}/certificate_config.json"
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Install the source-review secret materializer
+  ansible.builtin.template:
+    src: materialize-source-review-secret.sh.j2
+    dest: /usr/local/sbin/ditto-screener-source-review-secret
+    owner: root
+    group: root
+    mode: "0755"
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Install source-review secret materializer units
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/systemd/system/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - { src: ditto-screener-source-review-secret.service.j2, dest: ditto-screener-source-review-secret.service }
+    - { src: ditto-screener-source-review-secret.timer.j2, dest: ditto-screener-source-review-secret.timer }
+  notify: Reload systemd for screener fleet
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Materialize the source-review secret without exposing its value
+  ansible.builtin.systemd:
+    name: ditto-screener-source-review-secret
+    state: started
+    daemon_reload: true
+  no_log: true
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
+- name: Enable periodic source-review secret refresh
+  ansible.builtin.systemd:
+    name: ditto-screener-source-review-secret.timer
+    enabled: true
+    state: started
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
 - name: Inspect source-review API key file
   ansible.builtin.stat:
     path: "{{ screener_fleet_source_review_key_file }}"
@@ -293,6 +629,7 @@
       stored mode 0600 and never forwarded to a build or smoke guest.
   when:
     - screener_fleet_runtime_enabled
+    - not screener_fleet_x509_enabled
     - not screener_fleet_source_review_key.stat.exists
   no_log: true
 
@@ -305,6 +642,7 @@
     mode: "0600"
   when:
     - screener_fleet_runtime_enabled
+    - not screener_fleet_x509_enabled
     - not screener_fleet_source_review_key.stat.exists
   no_log: true
 
