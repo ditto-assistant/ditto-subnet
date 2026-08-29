@@ -596,7 +596,11 @@ This ADR enables, but does not combine, the following PRs:
 1. task/memory/run/evidence schemas and public vectors;
 2. DittoBench-owned coding-runner workspace tools and freezer;
 3. DittoBench-owned pristine deterministic grader;
-4. coding-specific default-deny harness sandbox and egress allowlist;
+4. coding-specific default-deny sandbox executor and egress allowlist
+   (`services/dittobench-api/internal/codingexecutor` owns the public adapter;
+   the public supervisor/certification image proves the wire, while each
+   repository-specific trusted test driver remains a separately certified
+   digest-pinned artifact);
 5. Luna Platform route and ticket-scoped broker capability;
 6. scoped miner-memory seed and deterministic policy diagnostics;
 7. private catalog, per-artifact selector, and exposure ledger;
