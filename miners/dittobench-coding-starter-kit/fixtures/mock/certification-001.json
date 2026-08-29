@@ -1,0 +1,42 @@
+[
+  {
+    "toolCall": {
+      "id": "cert-read",
+      "name": "repo_read_file",
+      "args": {"path": "app.py"}
+    }
+  },
+  {
+    "toolCall": {
+      "id": "cert-edit",
+      "name": "repo_apply_patch",
+      "args": {
+        "path": "app.py",
+        "expected_sha256": "9dddc7b60600c6f6e45190da9fe055d16883d9d13c3ec00479245255c2978459",
+        "replacements": [
+          {
+            "old_text": "return value.strip()",
+            "new_text": "return value.rstrip()"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "toolCall": {
+      "id": "cert-test",
+      "name": "tests_run",
+      "args": {"command_id": "visible-unit"}
+    }
+  },
+  {
+    "toolCall": {
+      "id": "cert-diff",
+      "name": "git_diff",
+      "args": {}
+    }
+  },
+  {
+    "text": "Applied the certification repair, ran the visible test, and reviewed the final diff."
+  }
+]
