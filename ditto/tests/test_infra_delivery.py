@@ -156,9 +156,7 @@ def test_capacity_controller_activation_uses_org_scoped_targon_v3() -> None:
     ).read_text()
     builder_unit = (role / "templates" / "ditto-image-builder.service.j2").read_text()
     assert "screener_capacity_targon_org_slug: ditto" in defaults
-    assert (
-        "--targon-org-slug {{ screener_capacity_targon_org_slug }}" in controller_unit
-    )
+    assert "--targon-org-slug" not in controller_unit
     assert "--targon-org-slug {{ screener_capacity_targon_org_slug }}" in builder_unit
 
     targon_client = (
