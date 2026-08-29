@@ -632,6 +632,25 @@ async def _seed_agent(
     return aid
 
 
+async def _seed_targon_first(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    async with maker() as session, session.begin():
+        session.add(
+            ScreenerProviderSettingsRevision(
+                environment="prod",
+                parent_revision=0,
+                settings={
+                    "runtime_provider_priority": ["targon", "gcp"],
+                    "source_review_provider_priority": ["targon", "gcp"],
+                    "build_provider_priority": ["targon", "gcp"],
+                },
+                reason="Exercise explicitly selected decomposed screening lanes",
+                actor="test",
+            )
+        )
+
+
 async def _seed_score(
     maker: async_sessionmaker[AsyncSession],
     *,
@@ -723,6 +742,7 @@ class TestFederatedScreenerNodes:
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        await _seed_targon_first(session_maker)
         _install_db(app, session_maker)
         _install_chain(app)
         _install_storage(app)
@@ -866,6 +886,7 @@ class TestFederatedScreenerNodes:
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        await _seed_targon_first(session_maker)
         _install_db(app, session_maker)
         _install_chain(app)
         _install_storage(app)
@@ -1214,6 +1235,7 @@ class TestFederatedScreenerNodes:
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        await _seed_targon_first(session_maker)
         _install_db(app, session_maker)
         app.state.config = replace(
             app.state.config,
