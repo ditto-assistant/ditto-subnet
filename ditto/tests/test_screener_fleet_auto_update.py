@@ -94,6 +94,10 @@ def test_updater_authenticates_before_fetch_or_drain() -> None:
     assert "trap cleanup_staging RETURN" in updater
     assert updater.count("venv --relocatable") == 2
     assert updater.count("sync --frozen --no-editable") == 2
+    activation = updater[updater.index("activate_release()") :]
+    assert activation.index('"$release_dir/src/scripts/screener-fleet-auto-update.sh"') < (
+        activation.index("stop_fleet\n")
+    )
 
 
 def test_updater_has_no_inbound_deploy_or_long_lived_cloud_credential() -> None:
@@ -111,6 +115,7 @@ def test_updater_has_no_inbound_deploy_or_long_lived_cloud_credential() -> None:
     assert "nonewprivileges=true" in service
     assert "protectsystem=strict" in service
     assert "readwritepaths=" in service
+    assert "/usr/local/sbin/ditto-screener-fleet-auto-update" in service
     assert "environment=home={{ screener_fleet_update_state_dir }}" in service
     assert "restrictsuidsgid=true" in service
 

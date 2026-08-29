@@ -164,6 +164,9 @@ activate_release() {
   local old_target='' old_builder='' new_link="$FLEET_ROOT/.current.$$"
   [ ! -L "$CURRENT_LINK" ] || old_target="$(readlink "$CURRENT_LINK")"
   [ ! -f "$RELEASE_ENV" ] || old_builder="$(manifest_value "$RELEASE_ENV" SCREENER_FLEET_BUILDER_IMAGE)"
+  install -o root -g root -m 0755 \
+    "$release_dir/src/scripts/screener-fleet-auto-update.sh" \
+    /usr/local/sbin/ditto-screener-fleet-auto-update
   ln -s "releases/$revision" "$new_link"
   stop_fleet
   mv -Tf "$new_link" "$CURRENT_LINK"
@@ -185,9 +188,6 @@ activate_release() {
     "$exact" "$revision" "$(manifest_value "$STATE_DIR/candidate.env" FLEET_VERSION)" \
     "$builder" "$(date +%s)" >"$MANAGED_FILE"
   rm -f "$FAILED_CANDIDATE_FILE"
-  install -o root -g root -m 0755 \
-    "$release_dir/src/scripts/screener-fleet-auto-update.sh" \
-    /usr/local/sbin/ditto-screener-fleet-auto-update
   log "activated $revision from authenticated descriptor $exact"
 }
 
