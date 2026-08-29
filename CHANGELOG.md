@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.143.2 (2026-08-29)
+
+### Bug Fixes
+
+- **screener**: Keep fleet builds local
+  ([#1309](https://github.com/ditto-assistant/ditto-subnet/pull/1309),
+  [`9bda54e`](https://github.com/ditto-assistant/ditto-subnet/commit/9bda54edd1a75e00e4e24cc2d95334b666618cd1))
+
+
 ## v0.143.1 (2026-08-29)
 
 ### Bug Fixes
