@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.133.0 (2026-08-29)
+
+### Features
+
+- **screener**: Add node-scoped channel leases
+  ([#1270](https://github.com/ditto-assistant/ditto-subnet/pull/1270),
+  [`b61450e`](https://github.com/ditto-assistant/ditto-subnet/commit/b61450e55ba4eed34468d641b8a7be89d5ffaf81))
+
+- **screener**: Restore dedicated fleet with GCE overflow
+  ([#1271](https://github.com/ditto-assistant/ditto-subnet/pull/1271),
+  [`3400174`](https://github.com/ditto-assistant/ditto-subnet/commit/34001748a6cbcb1e9e0a3da15d5cc9dba2697bda))
+
+
 ## v0.132.0 (2026-08-29)
 
 ### Bug Fixes
