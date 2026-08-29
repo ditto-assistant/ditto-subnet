@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.131.1 (2026-08-29)
+
+### Bug Fixes
+
+- **screener**: Keep GCE-first work on fleet
+  ([#1277](https://github.com/ditto-assistant/ditto-subnet/pull/1277),
+  [`bc7e324`](https://github.com/ditto-assistant/ditto-subnet/commit/bc7e324e5aa6e1f0c3de5b9896c39af257eb6613))
+
+
 ## v0.131.0 (2026-08-29)
 
 ### Features
