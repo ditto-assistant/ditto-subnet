@@ -1024,6 +1024,9 @@ def test_release_builds_pylon_from_the_reviewed_turbobt_fix() -> None:
     verify = _step(build["steps"], "Verify the patched Pylon artifact")
     assert verify["env"]["PYLON_DIGEST"] == "${{ steps.pylon.outputs.digest }}"
     assert "isinstance(subscription_id_raw, str)" in verify["run"]
+    assert 'version("bittensor-wallet")=="4.1.1"' in verify["run"]
+    assert '{"cryptoType":1,"ss58Address":address}' in verify["run"]
+    assert "deserialize_keypair_from_keyfile_data(payload)" in verify["run"]
     assembly = workflow["jobs"]["assemble-stack"]
     assert all(
         step.get("name") != "Verify the patched Pylon artifact"

@@ -141,7 +141,18 @@ class ScreenerConfig:
     source_review_timeout_seconds: float
     source_review_max_steps: int
     source_review_max_read_bytes: int
+    source_review_max_completion_tokens: int
+    """Per-turn L1 completion budget; must fit a whole policy-v10 sweep."""
     source_review_reasoning_effort: str
+    adjudicator_mode: str
+    """``off``/``shadow``/``enforce`` for the automated clear/reject court."""
+    adjudicator_model: str
+    adjudicator_max_steps: int
+    adjudicator_timeout_seconds: float
+    review_concern_hold_count: int
+    """Substantiated concerns that hold a budget-terminated review."""
+    review_clear_min_notes: int
+    """Cleared notes required to admit one on positive coverage."""
     static_preflight_v2_mode: str
     """V2 detector rollout: legacy authority in off/shadow, v2 in enforce."""
     static_preflight_audit_file: str | None
@@ -332,9 +343,22 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         source_review_max_read_bytes=_parse_int(
             "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES", "8000000"
         ),
+        source_review_max_completion_tokens=_parse_int(
+            "SCREENER_SOURCE_REVIEW_MAX_COMPLETION_TOKENS", "8000"
+        ),
         source_review_reasoning_effort=os.environ.get(
             "SCREENER_SOURCE_REVIEW_REASONING_EFFORT", "high"
         ),
+        adjudicator_mode=os.environ.get("SCREENER_ADJUDICATOR_MODE", "off"),
+        adjudicator_model=os.environ.get(
+            "SCREENER_ADJUDICATOR_MODEL", "z-ai/glm-5.3-flash"
+        ),
+        adjudicator_max_steps=_parse_int("SCREENER_ADJUDICATOR_MAX_STEPS", "24"),
+        adjudicator_timeout_seconds=_parse_float(
+            "SCREENER_ADJUDICATOR_TIMEOUT_SECONDS", "600"
+        ),
+        review_concern_hold_count=_parse_int("SCREENER_REVIEW_CONCERN_HOLD_COUNT", "3"),
+        review_clear_min_notes=_parse_int("SCREENER_REVIEW_CLEAR_MIN_NOTES", "3"),
         static_preflight_v2_mode=os.environ.get(
             "SCREENER_STATIC_PREFLIGHT_V2_MODE", "off"
         ),
@@ -413,6 +437,11 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES must be between 32000 and 16000000"
         )
+    if not 2_000 <= config.source_review_max_completion_tokens <= 32_000:
+        raise ScreenerConfigError(
+            "SCREENER_SOURCE_REVIEW_MAX_COMPLETION_TOKENS must be between "
+            "2000 and 32000"
+        )
     if config.source_review_reasoning_effort not in {"low", "medium", "high"}:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_REASONING_EFFORT must be low, medium, or high"
@@ -424,6 +453,30 @@ def parse_screener_config_from_env() -> ScreenerConfig:
     if not 60 <= config.source_review_timeout_seconds <= 3_600:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS must be between 60 and 3600"
+        )
+    if config.adjudicator_mode not in {"off", "shadow", "enforce"}:
+        raise ScreenerConfigError(
+            "SCREENER_ADJUDICATOR_MODE must be off, shadow, or enforce"
+        )
+    if config.adjudicator_model != "z-ai/glm-5.3-flash":
+        raise ScreenerConfigError(
+            "SCREENER_ADJUDICATOR_MODEL must be z-ai/glm-5.3-flash"
+        )
+    if not 1 <= config.adjudicator_max_steps <= 64:
+        raise ScreenerConfigError(
+            "SCREENER_ADJUDICATOR_MAX_STEPS must be between 1 and 64"
+        )
+    if not 60 <= config.adjudicator_timeout_seconds <= 3_600:
+        raise ScreenerConfigError(
+            "SCREENER_ADJUDICATOR_TIMEOUT_SECONDS must be between 60 and 3600"
+        )
+    if not 1 <= config.review_concern_hold_count <= 16:
+        raise ScreenerConfigError(
+            "SCREENER_REVIEW_CONCERN_HOLD_COUNT must be between 1 and 16"
+        )
+    if not 1 <= config.review_clear_min_notes <= 32:
+        raise ScreenerConfigError(
+            "SCREENER_REVIEW_CLEAR_MIN_NOTES must be between 1 and 32"
         )
     if config.static_preflight_v2_mode not in {"off", "shadow", "enforce"}:
         raise ScreenerConfigError(

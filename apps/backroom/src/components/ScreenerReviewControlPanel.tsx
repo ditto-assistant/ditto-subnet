@@ -24,6 +24,13 @@ const defaults: ScreenerReviewSettings = {
   max_steps: 18,
   source_review_max_steps: 200,
   source_review_max_read_bytes: 8_000_000,
+  source_review_max_completion_tokens: 8_000,
+  concern_hold_count: 3,
+  clear_min_notes: 3,
+  adjudicator_mode: 'off' as const,
+  adjudicator_model: 'z-ai/glm-5.3-flash' as const,
+  adjudicator_max_steps: 24,
+  adjudicator_timeout_seconds: 600,
   source_review_reasoning_effort: 'high',
   source_review_model: 'openai/gpt-5.6-luna',
   source_review_timeout_seconds: 1_800,
@@ -593,6 +600,28 @@ export function ScreenerReviewControlPanel({
               <NumericField label="L1 timeout seconds" value={settings.source_review_timeout_seconds} onChange={(value) => setSettings((current) => ({ ...current, source_review_timeout_seconds: value }))} />
               <NumericField label="L1 Luna max steps" value={settings.source_review_max_steps} onChange={(value) => setSettings((current) => ({ ...current, source_review_max_steps: value }))} />
               <NumericField label="L1 Luna read bytes" value={settings.source_review_max_read_bytes} onChange={(value) => setSettings((current) => ({ ...current, source_review_max_read_bytes: value }))} />
+              <NumericField label="L1 verdict completion tokens" value={settings.source_review_max_completion_tokens} onChange={(value) => setSettings((current) => ({ ...current, source_review_max_completion_tokens: value }))} />
+              <NumericField label="Substantiated concerns that hold" value={settings.concern_hold_count} onChange={(value) => setSettings((current) => ({ ...current, concern_hold_count: value }))} />
+              <NumericField label="Cleared notes that admit" value={settings.clear_min_notes} onChange={(value) => setSettings((current) => ({ ...current, clear_min_notes: value }))} />
+              <label className="block text-xs text-[var(--muted)]">
+                Adjudicator (clears and rejects holds)
+                <select
+                  value={settings.adjudicator_mode}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      adjudicator_mode: event.target.value as ScreenerReviewSettings['adjudicator_mode'],
+                    }))
+                  }
+                  className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
+                >
+                  <option value="off">off</option>
+                  <option value="shadow">shadow (record only)</option>
+                  <option value="enforce">enforce</option>
+                </select>
+              </label>
+              <NumericField label="Adjudicator steps" value={settings.adjudicator_max_steps} onChange={(value) => setSettings((current) => ({ ...current, adjudicator_max_steps: value }))} />
+              <NumericField label="Adjudicator timeout (s)" value={settings.adjudicator_timeout_seconds} onChange={(value) => setSettings((current) => ({ ...current, adjudicator_timeout_seconds: value }))} />
               <label className="block text-xs text-[var(--muted)]">
                 L1 Luna reasoning
                 <select

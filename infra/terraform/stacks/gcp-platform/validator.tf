@@ -40,7 +40,8 @@ variable "validator_boot_disk_gb" {
 }
 
 locals {
-  validator_count = var.enable_validator ? 1 : 0
+  validator_count              = var.enable_validator ? 1 : 0
+  validator_wandb_secret_count = var.enable_validator || var.enable_validator_prod ? 1 : 0
 
   # Secret containers the validator VM's runtime SA reads at converge time
   # (rendered into env files by the Ansible roles). VALUES are added out of band
@@ -140,11 +141,11 @@ resource "google_secret_manager_secret" "validator_gh_token" {
   }
 }
 
-# W&B API key for the validator's opt-in public telemetry sink (aggregate scoring
-# stats to wandb `heyditto/ditto-sn118`). Off unless the validator_worker role's
-# validator_wandb_enabled is set. Rotatable; value added out-of-band like the rest.
+# Shared W&B API key for validator telemetry. Both the reference validator and
+# the private production validator consume this existing, rotatable secret;
+# Terraform owns only metadata and IAM, never a secret version or value.
 resource "google_secret_manager_secret" "validator_wandb_key" {
-  count     = local.validator_count
+  count     = local.validator_wandb_secret_count
   project   = var.project
   secret_id = "validator-wandb-key"
   replication {

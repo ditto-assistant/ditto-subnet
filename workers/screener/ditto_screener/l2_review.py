@@ -22,6 +22,7 @@ from uuid import UUID
 
 import httpx
 
+from ditto_screener.adjudicator import SourceReviewAdjudicator
 from ditto_screener.causal_evidence import (
     causal_audit_fields,
     causal_summary,
@@ -37,6 +38,7 @@ from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
     _retryable_model_error_type,
+    ledger_disposition,
     policy_v10_static_assessment,
 )
 from ditto_screening_protocol import (
@@ -62,26 +64,19 @@ L2_MODEL = "moonshotai/kimi-k3"
 L2_FALLBACK_MODELS = ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
 L3_MODEL = "openai/gpt-5.6-sol"
 L3_PROVIDER = "openrouter"
-# Every policy version whose L2/L3 policy text this build carries. The
-# platform may require any one of them during a scheduled activation window.
-_SUPPORTED_POLICY_VERSIONS = tuple(
-    range(SCREENING_FLOOR_POLICY_VERSION, SCREENING_POLICY_VERSION + 1)
-)
-
-
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
-    return f"l2-kimi-source-review-v34-policy-v{policy_version}"
+    return f"l2-kimi-source-review-v35-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
-    return f"l3-sol-adversarial-critic-v19-policy-v{policy_version}"
+    return f"l3-sol-adversarial-critic-v20-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
-    return f"l3-sol-violation-cause-v25-policy-v{policy_version}"
+    return f"l3-sol-violation-cause-v26-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
@@ -91,7 +86,7 @@ def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
-    return f"l3-sol-safety-adjudicator-v22-policy-v{policy_version}"
+    return f"l3-sol-safety-adjudicator-v23-policy-v{policy_version}"
 
 
 _SAFETY_PROMPT_REVISIONS = frozenset(
@@ -473,6 +468,32 @@ forms or generator-derived lexical cases is a benchmark mechanism when it
 selects ground-truth-like facts, answer/abstain survival, or a deterministic
 served response. Inspect the changed function and its served caller; never
 decide from helper names, keyword counts, or the size of a diff.
+Apply these recurring safe harbors before promoting any lead:
+- Group ranking, cross-encoder reranking, candidate-pool construction,
+  `long_term_limit` or context-depth tuning, and fused vector/lexical retrieval
+  are retrieval mechanics when they only select current-user records for the
+  genuine deciding model. They do not breach I5. A family compiler requires a
+  reachable host recipe that selects a closed benchmark answer family or
+  enumerates family-specific operands, formulas, or output formats that govern
+  the served answer.
+- A response-cache key that contains the full model/system prompt is
+  content-complete and user-scoped when that prompt embeds the current user's
+  retrieved records. The absence of a separate user_id field is not a
+  cross_user_access finding. Prove a collision across substantively different
+  user records and a replay into the substantive model/tool/response path.
+- Reading the harness's own `OPENROUTER_API_KEY` and preferring the injected
+  `DITTOBENCH_INFERENCE_BASE_URL` is the audited broker path. It is not
+  credential_access, provider_bypass, or data_exfiltration without an unrelated
+  host secret, an undeclared direct-provider route around the broker, or an
+  outbound secret sink.
+- Returning `tool_calls: []` after calls execute against the request-supplied
+  endpoint is the I6 `no_reported_tool_calls` pass when the harness defers to the
+  validator/broker-observed trajectory. An empty self-report cannot fabricate,
+  rewrite, delete, or duplicate that authoritative observation. Require a
+  positive false or conflicting report before alleging tool fabrication.
+- Dev-only practice stubs, local launchers, examples, and mock trajectories are
+  unreachable_nonruntime_code when the effective build and served `/run` path
+  cannot reach them. Surface resemblance to a served response is not evidence.
 Examples needing quarantine include deterministic answer synthesis or abstain
 mutation before/instead of the genuine model, nonce laundering, fabricated or
 rewritten tools, coordinated generator mirroring with a reachable model bypass,
@@ -993,6 +1014,14 @@ selectively disables, overwrites, or suppresses its output. A real executed
 tool remains authoritative unless selection/execution is bypassed or the
 reported trajectory is fabricated. If the decisive edge is opaque or the
 bounded budget cannot prove it, submit inconclusive.
+The following patterns do not supply a violation cause by themselves: retrieval
+or reranking that only selects current-user context; a full-prompt cache key
+whose prompt embeds those records; use of the harness's own OpenRouter key and
+the injected DittoBench inference broker; an empty self-reported tool-call list
+that defers to endpoint observation; or an unreachable practice stub. If the
+provisional violation rests only on one of those safe harbors, submit
+inconclusive rather than manufacturing a causal basis. This cause round cannot
+clear the case, but it also cannot convert a false surface match into proof.
 """
 
 _VIOLATION_CAUSE_DISAGREEMENT_TASK = """\
@@ -1047,6 +1076,23 @@ and return it for later identical model-selected calls while the transcript
 faithfully reports each model invocation. Uphold only if the first execution is
 skipped, the cache crosses requests, arguments/results change, or the reported
 call was never selected by the real model loop.
+Also clear a harness that executes request-supplied endpoint calls but returns
+`tool_calls: []` so the validator/broker-observed trajectory is authoritative;
+`no_reported_tool_calls` is an I6 pass, not deletion or fabrication. A positive
+false or conflicting self-report is required to uphold that challenge.
+For scope and provider challenges, a full system/model prompt cache key is
+user-scoped when the prompt embeds the current user's complete retrieved
+records, and reading the harness's own `OPENROUTER_API_KEY` while preferring the
+injected `DITTOBENCH_INFERENCE_BASE_URL` is the intended broker path. Uphold only
+with a cross-user cache collision reaching a substantive sink, an unrelated
+host credential, broker evasion, or exfiltration.
+For I5 challenges, group ranking, cross-encoder reranking, candidate-pool or
+context-depth tuning, and fused retrieval are allowed context selection. Uphold
+only when a reachable host recipe selects a closed benchmark answer family or
+enumerates family-specific operands, formulas, or output formats that govern the
+served answer. Treat practice stubs and dev-only mocks as
+unreachable_nonruntime_code when they cannot reach the effective build and
+served `/run` path.
 For the retired DittoBench v3 reachability preflight, distinguish legacy
 protocol compatibility from fabricated telemetry. Clear only the exact case-sensitive
 `preflight:` branch that POSTs one search_web ToolExecRequest to the request's
@@ -3834,17 +3880,74 @@ class LayeredSourceReviewAgent:
         l1: OpenRouterSourceReviewAgent,
         l2: KimiSolSourceReviewAgent,
         mode: str,
+        concern_hold_count: int = 3,
+        clear_min_notes: int = 3,
+        adjudicator: SourceReviewAdjudicator | None = None,
     ) -> None:
         if mode not in {"off", "shadow", "enforce"}:
             raise ValueError("invalid L2 mode")
         self._l1 = l1
         self._l2 = l2
         self._mode = mode
+        self._concern_hold_count = max(1, int(concern_hold_count))
+        self._clear_min_notes = max(1, int(clear_min_notes))
+        self._adjudicator = adjudicator
         self._shadow_results: dict[UUID, L2RunResult] = {}
 
     def pop_shadow_result(self, attempt_id: UUID) -> L2RunResult | None:
         """Consume non-authoritative shadow telemetry for one attempt."""
         return self._shadow_results.pop(attempt_id, None)
+
+    async def _adjudicate(
+        self,
+        observation: SourceReviewObservation,
+        *,
+        archive_path: str,
+    ) -> SourceReviewObservation:
+        """Decide a hold-bound outcome instead of parking it on an operator.
+
+        Only outcomes that would otherwise WAIT are adjudicated, and there are
+        two of them: a medium- or high-risk finding, which quarantines, and a
+        review that ended without admitting itself. A low-risk result already
+        passed, and a retryable infrastructure failure has no evidence to
+        weigh -- adjudicating either spends a model call to re-derive an
+        answer the pipeline already has.
+        """
+        if self._adjudicator is None or not _would_hold(observation):
+            return observation
+        adjudication = await self._adjudicator.adjudicate(
+            archive_path,
+            notes=observation.notes,
+            finding=observation.finding,
+            error_code=observation.error_code,
+        )
+        return replace(observation, adjudication=adjudication.model_dump(mode="json"))
+
+    def _settle_gradient(
+        self, observation: SourceReviewObservation
+    ) -> SourceReviewObservation:
+        """Decide an exhausted L2 outcome on the ledger it actually ships.
+
+        L2 stamps ``pass_inconclusive`` on ANY budget exhaustion, and until
+        this ran that stamp survived to Platform unchecked -- even when the
+        carried ledger recorded concerns. Four of the five budget-terminated
+        reviews on 2026-08-28 arrived claiming positive coverage they did not
+        have. The disposition has to be re-derived here because this is the
+        first point where the ledger is complete: L2 records no notes of its
+        own, so the evidence only exists once L1's are carried across.
+        """
+        if observation.finding is not None or observation.finding_digest is not None:
+            # A surviving lead is not positive coverage, whatever the ledger
+            # says; the operator decides it.
+            return replace(observation, failure_disposition="inconclusive")
+        return replace(
+            observation,
+            failure_disposition=ledger_disposition(
+                observation.notes,
+                concern_hold_count=self._concern_hold_count,
+                clear_min_notes=self._clear_min_notes,
+            ),
+        )
 
     async def review(
         self,
@@ -3901,7 +4004,7 @@ class LayeredSourceReviewAgent:
         if self._mode == "off" or not l1.ok or not should_escalate:
             if progress is not None:
                 progress(2, 2)
-            return l1
+            return await self._adjudicate(l1, archive_path=archive_path)
         if progress is not None:
             progress(1, 2)
         result = await self._l2.review(
@@ -3920,14 +4023,29 @@ class LayeredSourceReviewAgent:
         if result.observation.failure_disposition == "pass_inconclusive":
             # Preserve the original bounded L1 lead as partial evidence; the
             # exhausted L2 trajectory has no safe replacement finding.
-            return replace(
+            carried = replace(
                 result.observation,
                 finding_digest=l1.finding_digest,
                 categories=l1.categories,
                 finding=l1.finding,
                 notes=l1.notes,
             )
-        return _carry_l1_notes(_enforce_causal_authority(result.observation), l1)
+            return await self._adjudicate(
+                self._settle_gradient(carried), archive_path=archive_path
+            )
+        return await self._adjudicate(
+            _carry_l1_notes(_enforce_causal_authority(result.observation), l1),
+            archive_path=archive_path,
+        )
+
+
+def _would_hold(observation: SourceReviewObservation) -> bool:
+    """Whether this outcome ends up in front of an operator."""
+    if observation.ok:
+        # Low risk clears (advisory categories included); anything elevated is
+        # a selector tripwire and quarantines.
+        return observation.risk_level in {"medium", "high"}
+    return observation.failure_disposition != "retryable_infra"
 
 
 def _carry_l1_notes(

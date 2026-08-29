@@ -93,9 +93,18 @@ class ReviewSettings(BaseModel):
     source_review_max_read_bytes: Annotated[int, Field(ge=32_000, le=16_000_000)] = (
         8_000_000
     )
+    source_review_max_completion_tokens: Annotated[int, Field(ge=2_000, le=32_000)] = (
+        8_000
+    )
     source_review_reasoning_effort: Literal["low", "medium", "high"] = "high"
     source_review_model: SourceReviewModel = "openai/gpt-5.6-luna"
     source_review_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 1_800
+    concern_hold_count: Annotated[int, Field(ge=1, le=16)] = 3
+    clear_min_notes: Annotated[int, Field(ge=1, le=32)] = 3
+    adjudicator_mode: Literal["off", "shadow", "enforce"] = "off"
+    adjudicator_model: Literal["z-ai/glm-5.3-flash"] = "z-ai/glm-5.3-flash"
+    adjudicator_max_steps: Annotated[int, Field(ge=1, le=64)] = 24
+    adjudicator_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 600
     max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
     max_output_tokens: Annotated[int, Field(ge=1, le=128_000)]
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)]
@@ -151,6 +160,13 @@ _POST_CHECKSUM_FIELDS: tuple[str, ...] = (
     "source_review_reasoning_effort",
     "source_review_model",
     "source_review_timeout_seconds",
+    "source_review_max_completion_tokens",
+    "concern_hold_count",
+    "clear_min_notes",
+    "adjudicator_mode",
+    "adjudicator_model",
+    "adjudicator_max_steps",
+    "adjudicator_timeout_seconds",
 )
 _DEFAULTS = {
     name: ReviewSettings.model_fields[name].default for name in _POST_CHECKSUM_FIELDS
@@ -217,9 +233,18 @@ class EffectiveReviewSettings(BaseModel):
             l2_max_steps=value.max_steps,
             source_review_max_steps=value.source_review_max_steps,
             source_review_max_read_bytes=value.source_review_max_read_bytes,
+            source_review_max_completion_tokens=(
+                value.source_review_max_completion_tokens
+            ),
             source_review_reasoning_effort=value.source_review_reasoning_effort,
             source_review_model=value.source_review_model,
             source_review_timeout_seconds=float(value.source_review_timeout_seconds),
+            review_concern_hold_count=value.concern_hold_count,
+            review_clear_min_notes=value.clear_min_notes,
+            adjudicator_mode=value.adjudicator_mode,
+            adjudicator_model=value.adjudicator_model,
+            adjudicator_max_steps=value.adjudicator_max_steps,
+            adjudicator_timeout_seconds=float(value.adjudicator_timeout_seconds),
             l2_max_input_tokens=value.max_input_tokens,
             l2_max_output_tokens=value.max_output_tokens,
             l2_max_completion_tokens=value.max_completion_tokens,
@@ -282,9 +307,18 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
             "max_steps": config.l2_max_steps,
             "source_review_max_steps": config.source_review_max_steps,
             "source_review_max_read_bytes": config.source_review_max_read_bytes,
+            "source_review_max_completion_tokens": (
+                config.source_review_max_completion_tokens
+            ),
             "source_review_reasoning_effort": config.source_review_reasoning_effort,
             "source_review_model": config.source_review_model,
             "source_review_timeout_seconds": int(config.source_review_timeout_seconds),
+            "concern_hold_count": config.review_concern_hold_count,
+            "clear_min_notes": config.review_clear_min_notes,
+            "adjudicator_mode": config.adjudicator_mode,
+            "adjudicator_model": config.adjudicator_model,
+            "adjudicator_max_steps": config.adjudicator_max_steps,
+            "adjudicator_timeout_seconds": int(config.adjudicator_timeout_seconds),
             "max_input_tokens": config.l2_max_input_tokens,
             "max_output_tokens": config.l2_max_output_tokens,
             "max_completion_tokens": config.l2_max_completion_tokens,

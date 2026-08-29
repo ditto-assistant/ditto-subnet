@@ -128,7 +128,7 @@ jobs:
               exit 2
             fi
             state="$(terraform -chdir=${{ steps.root.outputs.path }} state list)"
-            if grep -Eq '^((google_compute_instance_from_template|google_compute_instance_template|google_service_account|google_compute_instance_iam_member|google_iap_tunnel_instance_iam_member|google_service_account_iam_member)\.validator_hotkey_admin|google_secret_manager_secret_iam_member\.validator_hotkey_generator)' <<<"$state"; then
+            if grep -Eq '^((google_compute_instance_from_template|google_compute_instance_template|google_service_account|google_compute_instance_iam_member|google_project_iam_member|google_service_account_iam_member)\.validator_hotkey_admin|google_secret_manager_secret_iam_member\.validator_hotkey_generator)' <<<"$state"; then
               echo "targeted plans are forbidden while the hotkey admin exists" >&2
               exit 2
             fi
@@ -152,7 +152,12 @@ jobs:
               extra+=(-target="${addr}")
             done
           fi
-          terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan "${extra[@]}"
+          # CLI variables intentionally outrank prod.auto.tfvars, whose checked-in
+          # absent value is the safe default outside this protected ceremony.
+          terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan \
+            -var="validator_hotkey_admin_phase=${TF_VAR_validator_hotkey_admin_phase}" \
+            -var="validator_hotkey_admin_revision=${TF_VAR_validator_hotkey_admin_revision}" \
+            "${extra[@]}"
 
       - name: Reject replacement of an armed hotkey admin
         if: inputs.root == 'gcp-platform' && inputs.validator_hotkey_admin_phase == 'armed'

@@ -102,6 +102,10 @@ def _source_review_layer_env(
             str(int(settings.source_review_max_read_bytes)),
         ),
         (
+            "SCREENER_SOURCE_REVIEW_MAX_COMPLETION_TOKENS",
+            str(int(settings.source_review_max_completion_tokens)),
+        ),
+        (
             "SCREENER_SOURCE_REVIEW_REASONING_EFFORT",
             settings.source_review_reasoning_effort,
         ),
@@ -121,6 +125,16 @@ def _source_review_layer_env(
             str(int(settings.concern_hold_count)),
         ),
         ("SCREENER_REVIEW_CLEAR_MIN_NOTES", str(int(settings.clear_min_notes))),
+        ("SCREENER_ADJUDICATOR_MODE", settings.adjudicator_mode),
+        ("SCREENER_ADJUDICATOR_MODEL", settings.adjudicator_model),
+        (
+            "SCREENER_ADJUDICATOR_MAX_STEPS",
+            str(int(settings.adjudicator_max_steps)),
+        ),
+        (
+            "SCREENER_ADJUDICATOR_TIMEOUT_SECONDS",
+            str(int(settings.adjudicator_timeout_seconds)),
+        ),
     )
 
 
@@ -1021,6 +1035,54 @@ class TargonRentalLoop:
                 handled = True
         return handled
 
+    async def _cancel_orphaned_source_reviews(self) -> bool:
+        """Cancel L1 work whose parent screening attempt is already terminal.
+
+        Source review starts in parallel with build and runtime smoke. Either
+        sibling lane can therefore fail the attempt while L1 is still queued
+        or running. Leaving that row active keeps a disposable rental billing,
+        consumes the shared Targon inflight cap, and lets a late completion
+        race a decision that can no longer use it.
+        """
+        pending: list[tuple[UUID, str, str | None]] = []
+        now = datetime.now(UTC)
+        handled = False
+        async with self._session_maker() as session, session.begin():
+            rows = (
+                await session.scalars(
+                    select(SubmissionSourceReview)
+                    .join(
+                        ScreeningAttempt,
+                        ScreeningAttempt.attempt_id
+                        == SubmissionSourceReview.attempt_id,
+                    )
+                    .where(
+                        SubmissionSourceReview.environment == self._config.environment,
+                        SubmissionSourceReview.status.in_(("queued", *_INFLIGHT_JOB)),
+                        ScreeningAttempt.status != "running",
+                    )
+                    .order_by(SubmissionSourceReview.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in rows:
+                uid = row.provider_resource_id
+                row.status = "canceled"
+                row.error_code = row.error_code or "SCREENING_ATTEMPT_TERMINAL"
+                row.completed_at = now
+                row.updated_at = now
+                row.lease_expires_at = None
+                row.job_token_hash = None
+                row.job_token_expires_at = None
+                if uid:
+                    pending.append((row.review_id, uid, row.provider))
+                handled = True
+        for review_id, uid, stored_provider in pending:
+            if await self._delete_resource(stored_provider, uid):
+                await self._clear_resource_id("review", review_id)
+        return handled
+
     async def _reap_unprovisioned_rentals(self) -> bool:
         """Fail inflight rentals that died or never became running.
 
@@ -1148,7 +1210,8 @@ class TargonRentalLoop:
         are failed with ``TARGON_PROVISION_TIMEOUT`` without waiting for the
         50-minute build lease.
         """
-        handled = await self._reap_unprovisioned_rentals()
+        handled = await self._cancel_orphaned_source_reviews()
+        handled = await self._reap_unprovisioned_rentals() or handled
         pending: list[tuple[str, UUID, str, str | None]] = []
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():

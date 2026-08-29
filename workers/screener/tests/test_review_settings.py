@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from ditto_screener.errors import PlatformError
 from ditto_screener.platform import PlatformClient
 from ditto_screener.review_settings import (
+    _POST_CHECKSUM_FIELDS,
     CachedReviewSettings,
     EffectiveReviewSettings,
     ReviewSettingsCache,
@@ -107,6 +108,18 @@ async def test_platform_settings_are_cached_and_apply_every_budget(
     assert ReviewSettingsCache(config.review_settings_cache_file).load() is not None
 
 
+def _introduced_from(name: str) -> tuple[str, ...]:
+    """Every control introduced at or after ``name``, newest included.
+
+    A checksum minted when ``name`` was the newest control cannot carry that
+    control or any later one. Deriving the tail from the real ordering keeps
+    these back-compat tests honest as controls are added: spelling the list
+    out by hand meant every new setting silently narrowed what they proved,
+    and had to be maintained in four places to stay passing at all.
+    """
+    return _POST_CHECKSUM_FIELDS[_POST_CHECKSUM_FIELDS.index(name) :]
+
+
 def _legacy_payload(config, dropped: tuple[str, ...]) -> dict:
     baseline = bootstrap_review_settings(config)
     payload = baseline.model_dump()
@@ -124,33 +137,14 @@ def test_pre_l3_toggle_checksum_remains_valid(make_config, tmp_path) -> None:
         review_settings_cache_file=str(tmp_path / "settings.json"),
         source_review_timeout_seconds=1_800,
     )
-    payload = _legacy_payload(
-        config,
-        (
-            "l3_enabled",
-            "source_review_max_steps",
-            "source_review_max_read_bytes",
-            "source_review_reasoning_effort",
-            "source_review_model",
-            "source_review_timeout_seconds",
-        ),
-    )
+    payload = _legacy_payload(config, _introduced_from("l3_enabled"))
     compatible = EffectiveReviewSettings.model_validate(payload)
     assert compatible.settings.l3_enabled is True
 
 
 def test_pre_source_review_budget_checksum_remains_valid(make_config) -> None:
     config = make_config(source_review_timeout_seconds=1_800)
-    payload = _legacy_payload(
-        config,
-        (
-            "source_review_max_steps",
-            "source_review_max_read_bytes",
-            "source_review_reasoning_effort",
-            "source_review_model",
-            "source_review_timeout_seconds",
-        ),
-    )
+    payload = _legacy_payload(config, _introduced_from("source_review_max_steps"))
     compatible = EffectiveReviewSettings.model_validate(payload)
     assert compatible.settings.source_review_max_steps == 200
     assert compatible.settings.source_review_max_read_bytes == 8_000_000
@@ -159,9 +153,7 @@ def test_pre_source_review_budget_checksum_remains_valid(make_config) -> None:
 
 def test_pre_l1_model_checksum_remains_valid(make_config) -> None:
     config = make_config(source_review_timeout_seconds=1_800)
-    payload = _legacy_payload(
-        config, ("source_review_model", "source_review_timeout_seconds")
-    )
+    payload = _legacy_payload(config, _introduced_from("source_review_model"))
     compatible = EffectiveReviewSettings.model_validate(payload)
     assert compatible.settings.source_review_model == "openai/gpt-5.6-luna"
     assert compatible.settings.source_review_timeout_seconds == 1_800
@@ -181,16 +173,7 @@ def test_pre_manifest_checksum_infers_legacy_profile(
 
 def test_explicit_budget_is_never_dropped_from_the_checksum(make_config) -> None:
     config = make_config(source_review_timeout_seconds=1_800)
-    payload = _legacy_payload(
-        config,
-        (
-            "source_review_max_steps",
-            "source_review_max_read_bytes",
-            "source_review_reasoning_effort",
-            "source_review_model",
-            "source_review_timeout_seconds",
-        ),
-    )
+    payload = _legacy_payload(config, _introduced_from("source_review_max_steps"))
     payload["settings"]["source_review_max_read_bytes"] = 2_000_000
     with pytest.raises(ValidationError, match="checksum"):
         EffectiveReviewSettings.model_validate(payload)

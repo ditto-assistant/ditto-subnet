@@ -30,6 +30,7 @@ from ditto_screener.l2_review import (
 )
 from ditto_screener.source_review import OpenRouterSourceReviewAgent
 from ditto_screening_protocol import (
+    SourceReviewAdjudication,
     SourceReviewNote,
     SourceReviewObservationPayload,
 )
@@ -104,6 +105,9 @@ def _build_reviewer(
         max_read_bytes=int(
             os.environ.get("SCREENER_SOURCE_REVIEW_MAX_READ_BYTES", "8000000")
         ),
+        max_completion_tokens=int(
+            os.environ.get("SCREENER_SOURCE_REVIEW_MAX_COMPLETION_TOKENS", "8000")
+        ),
         reasoning_effort=os.environ.get(
             "SCREENER_SOURCE_REVIEW_REASONING_EFFORT", "high"
         ),
@@ -111,7 +115,7 @@ def _build_reviewer(
             "SCREENER_STATIC_PREFLIGHT_V2_MODE", "off"
         ),
         concern_hold_count=int(
-            os.environ.get("SCREENER_REVIEW_CONCERN_HOLD_COUNT", "1")
+            os.environ.get("SCREENER_REVIEW_CONCERN_HOLD_COUNT", "3")
         ),
         clear_min_notes=int(os.environ.get("SCREENER_REVIEW_CLEAR_MIN_NOTES", "3")),
     )
@@ -158,6 +162,10 @@ def _build_reviewer(
         l1=l1,
         l2=l2,
         mode=os.environ.get("SCREENER_L2_REVIEW_MODE", "off"),
+        concern_hold_count=int(
+            os.environ.get("SCREENER_REVIEW_CONCERN_HOLD_COUNT", "3")
+        ),
+        clear_min_notes=int(os.environ.get("SCREENER_REVIEW_CLEAR_MIN_NOTES", "3")),
     )
 
 
@@ -219,6 +227,11 @@ async def _amain() -> int:
                     SourceReviewNote.model_validate(note)
                     for note in observation.notes[:48]
                 ],
+                adjudication=(
+                    SourceReviewAdjudication.model_validate(observation.adjudication)
+                    if observation.adjudication is not None
+                    else None
+                ),
             )
             complete = await client.post(
                 f"{base}/complete",

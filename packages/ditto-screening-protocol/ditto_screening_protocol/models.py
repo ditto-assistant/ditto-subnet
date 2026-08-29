@@ -1000,6 +1000,92 @@ class SourceReviewNote(BaseModel):
     stage: Literal["l1", "l2", "l3"] = "l1"
 
 
+class AdjudicationClearClause(StrEnum):
+    """Published court false positives an automated clear may cite.
+
+    These are the release-with-a-refutation classes the operator review rules
+    already recognise. Making the vocabulary closed is the point: an
+    adjudicator that has to name one of these cannot free-associate its way to
+    a clear, and an operator reading the audit trail can check the claim
+    against the same published list.
+    """
+
+    RETRIEVAL_RANKING = "retrieval_ranking_not_family_engine"
+    MEMOIZATION_CACHE = "content_complete_memoization_cache"
+    STANDARD_BROKER_CLIENT = "standard_broker_inference_client"
+    UNREPORTED_EXECUTED_CALLS = "unreported_tool_calls_executed"
+    PRACTICE_HARNESS_STUB = "local_practice_harness_stub"
+    INTENT_ROUTING = "intent_routing_or_precursor_pass"
+    BENCH_VERSION_BRANCHING = "bench_version_branching_alone"
+    DUPLICATE_SUPPRESSION = "single_success_duplicate_suppression"
+    ANSWER_NORMALIZATION = "plain_answer_normalization"
+    PRIOR_PATTERN_REMOVED = "prior_pattern_removed"
+    MODEL_AUTHORS_GRADED_SLOT = "model_authors_graded_slot"
+
+
+class SourceReviewCitation(BaseModel):
+    """One ``path:line`` the adjudicator read and is relying on."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    path: Annotated[str, Field(min_length=1, max_length=240)]
+    line: Annotated[int, Field(ge=1, le=10_000_000)]
+
+
+class SourceReviewAdjudication(BaseModel):
+    """Terminal clear/reject decision on a review that would otherwise hold.
+
+    ``escalate`` is never a model choice. The adjudicator is asked for clear
+    or reject; the host substitutes ``escalate`` when the returned decision
+    fails its contract (an uncited verdict, a citation the adjudicator never
+    read, a hallucinated path, a missing published basis). The hold then
+    stands and an operator sees it, so a malformed adjudication can only cost
+    latency -- never a wrong release or a wrong ban.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    decision: Literal["clear", "reject", "escalate"]
+    reason: Annotated[str, Field(min_length=1)]
+    """Miner-visible. Deliberately unbounded at the wire: operator reason
+    fields carry audit evidence and a schema cap silently truncates it, which
+    ``test_operator_reason_fields_have_no_upper_bound`` enforces repo-wide.
+    The adjudicator bounds its own reason where the untrusted model output is
+    first parsed instead."""
+    reject_invariant: SourceReviewInvariant | None = None
+    clear_clause: AdjudicationClearClause | None = None
+    citations: Annotated[
+        list[SourceReviewCitation], Field(default_factory=list, max_length=8)
+    ]
+    notes_considered: Annotated[int, Field(ge=0, le=48)] = 0
+    model: Annotated[str, Field(min_length=1, max_length=120)]
+    prompt_revision: Annotated[str, Field(min_length=1, max_length=80)]
+    policy_version: Annotated[int, Field(ge=1, le=1_000)] = SCREENING_POLICY_VERSION
+    escalation_code: (
+        Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")] | None
+    ) = None
+
+    @model_validator(mode="after")
+    def validate_decision_basis(self) -> SourceReviewAdjudication:
+        if self.decision == "reject":
+            if self.reject_invariant is None:
+                raise ValueError("a reject must name the policy invariant it breached")
+            if self.clear_clause is not None:
+                raise ValueError("a reject cannot cite a false-positive clause")
+            if not self.citations:
+                raise ValueError("a reject requires at least one cited location")
+        elif self.decision == "clear":
+            if self.clear_clause is None:
+                raise ValueError("a clear must name the published clause it relies on")
+            if self.reject_invariant is not None:
+                raise ValueError("a clear cannot name a breached invariant")
+            if not self.citations:
+                raise ValueError("a clear requires at least one cited location")
+        elif self.escalation_code is None:
+            raise ValueError("an escalation must name why the decision was refused")
+        return self
+
+
 class SourceReviewObservationPayload(BaseModel):
     """Bounded source-review observation safe to cross provider boundaries."""
 
@@ -1022,6 +1108,10 @@ class SourceReviewObservationPayload(BaseModel):
     clearance_certified: bool = False
     review_audit: ScreenReviewAudit | None = None
     notes: Annotated[list[SourceReviewNote], Field(default_factory=list, max_length=48)]
+    adjudication: SourceReviewAdjudication | None = None
+    """Automated clear/reject on a review that would otherwise hold. Absent
+    when the adjudicator is off, when the review needed no adjudication, or
+    when the adjudicator itself failed."""
 
     @model_validator(mode="after")
     def validate_finding_binding(self) -> SourceReviewObservationPayload:

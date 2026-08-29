@@ -15,6 +15,8 @@ MATERIALIZER = (
 )
 ENV_TEMPLATE = ROOT / "infra/ansible/roles/validator_stack/templates/validator.env.j2"
 PROD_TASKS = ROOT / "infra/ansible/roles/validator_stack/tasks/main.yml"
+PROD_TERRAFORM = ROOT / "infra/terraform/stacks/gcp-platform/validator-prod.tf"
+VALIDATOR_TERRAFORM = ROOT / "infra/terraform/stacks/gcp-platform/validator.tf"
 ADMIN_TERRAFORM = ROOT / "infra/terraform/stacks/gcp-platform/validator-hotkey-admin.tf"
 ADMIN_STARTUP = (
     ROOT
@@ -359,6 +361,36 @@ def test_production_environment_never_contains_signing_seed_or_coldkey() -> None
     assert "VALIDATOR_MNEMONIC" not in template
 
 
+def test_production_wandb_key_uses_secret_manager_without_terraform_value() -> None:
+    template = ENV_TEMPLATE.read_text()
+    tasks = PROD_TASKS.read_text()
+    production_terraform = PROD_TERRAFORM.read_text()
+    shared_terraform = VALIDATOR_TERRAFORM.read_text()
+
+    assert "WANDB_MODE=online" in template
+    assert "WANDB_API_KEY={{ validator_stack_wandb_api_key }}" in template
+    assert "WANDB_PROJECT=" not in template
+    assert "WANDB_ENTITY=" not in template
+
+    read = tasks.split("- name: Read the W&B API key from Secret Manager", 1)[1]
+    read = read.split("- name: Require a non-empty single-line W&B API key", 1)[0]
+    assert "validator_stack_wandb_secret" in read
+    assert "latest" in read
+    assert "no_log: true" in read
+
+    access = production_terraform.split(
+        'resource "google_secret_manager_secret_iam_member" '
+        '"validator_prod_wandb_access"',
+        1,
+    )[1].split("resource ", 1)[0]
+    assert "google_secret_manager_secret.validator_wandb_key[0].secret_id" in access
+    assert 'role      = "roles/secretmanager.secretAccessor"' in access
+    assert "google_service_account.validator_prod[0].email" in access
+    assert "google_secret_manager_secret_version" not in access
+    assert "validator_wandb_secret_count" in shared_terraform
+    assert "var.enable_validator || var.enable_validator_prod" in shared_terraform
+
+
 def test_production_materializer_pins_the_recorded_numeric_secret_version() -> None:
     tasks = PROD_TASKS.read_text()
 
@@ -393,6 +425,30 @@ def test_disposable_admin_is_absent_by_default_and_has_no_dormant_principal() ->
     assert 'role               = "roles/iam.serviceAccountUser"' in actas
 
 
+def test_validator_iap_uses_exact_instance_project_conditions() -> None:
+    production = PROD_TERRAFORM.read_text()
+    admin = ADMIN_TERRAFORM.read_text()
+
+    assert 'resource "google_iap_tunnel_instance_iam_member"' not in production
+    assert 'resource "google_iap_tunnel_instance_iam_member"' not in admin
+
+    prod_iap = production.split(
+        'resource "google_project_iam_member" "validator_prod_operator_iap"',
+        1,
+    )[1].split("resource ", 1)[0]
+    assert 'role     = "roles/iap.tunnelResourceAccessor"' in prod_iap
+    assert "resource.name.extract('/instances/{name}') ==" in prod_iap
+    assert "module.validator_prod_vm[0].hostname" in prod_iap
+
+    admin_iap = admin.split(
+        'resource "google_project_iam_member" "validator_hotkey_admin_operator_iap"',
+        1,
+    )[1].split("resource ", 1)[0]
+    assert 'role     = "roles/iap.tunnelResourceAccessor"' in admin_iap
+    assert "resource.name.extract('/instances/{name}') ==" in admin_iap
+    assert "google_compute_instance_from_template.validator_hotkey_admin" in admin_iap
+
+
 def test_disposable_admin_arms_only_after_egress_is_restricted() -> None:
     terraform = ADMIN_TERRAFORM.read_text()
     startup = ADMIN_STARTUP.read_text()
@@ -424,6 +480,43 @@ def test_disposable_admin_arms_only_after_egress_is_restricted() -> None:
     assert "ls-files --others --exclude-standard" in startup
     assert "--require-hashes" in startup
     assert "--result-file" in startup
+    restricted_hosts = [
+        line for line in startup.splitlines() if line.startswith("199.36.153.")
+    ]
+    assert len(restricted_hosts) == 4
+    assert all("secretmanager.googleapis.com" in line for line in restricted_hosts)
+    assert all("iamcredentials.googleapis.com" in line for line in restricted_hosts)
+
+
+def test_disposable_admin_verifies_checkout_as_its_temporary_owner() -> None:
+    startup = ADMIN_STARTUP.read_text()
+
+    checkout = startup.split(
+        'git -C "$${SOURCE}" checkout --detach "$${GIT_REVISION}"', 1
+    )[1].split('chown -R root:root "$${ROOT}"', 1)[0]
+    assert checkout.count('runuser -u "$${BOOTSTRAP_USER}" --') >= 5
+    assert (
+        'runuser -u "$${BOOTSTRAP_USER}" -- \\\n'
+        '  git -C "$${SOURCE}" remote get-url origin'
+    ) in checkout
+    assert (
+        'runuser -u "$${BOOTSTRAP_USER}" -- \\\n  git -C "$${SOURCE}" rev-parse HEAD'
+    ) in checkout
+
+
+def test_disposable_admin_uses_a_user_readable_requirements_file() -> None:
+    startup = ADMIN_STARTUP.read_text()
+
+    install = startup.split("readonly UV_REQUIREMENTS=", 1)[1].split(
+        'runuser -u "$${BOOTSTRAP_USER}" -- env', 1
+    )[0]
+    assert (
+        'chown "$${BOOTSTRAP_USER}:$${BOOTSTRAP_USER}" "$${UV_REQUIREMENTS}"' in install
+    )
+    assert 'chmod 0400 "$${UV_REQUIREMENTS}"' in install
+    assert '--require-hashes -r "$${UV_REQUIREMENTS}"' in install
+    assert 'rm -f "$${UV_REQUIREMENTS}"' in install
+    assert "/dev/stdin" not in install
 
 
 def test_protected_workflow_requires_bootstrap_revision_for_arming() -> None:
@@ -436,3 +529,15 @@ def test_protected_workflow_requires_bootstrap_revision_for_arming() -> None:
     assert "Reject replacement of an armed hotkey admin" in workflow
     assert "TF_VAR_validator_hotkey_admin_phase" in workflow
     assert "TF_VAR_validator_hotkey_admin_revision" in workflow
+    plan = workflow.split("- name: Create exact private plan", 1)[1].split(
+        "- name: Reject replacement of an armed hotkey admin", 1
+    )[0]
+    assert (
+        '-var="validator_hotkey_admin_phase=${TF_VAR_validator_hotkey_admin_phase}"'
+        in plan
+    )
+    assert (
+        '-var="validator_hotkey_admin_revision=${TF_VAR_validator_hotkey_admin_revision}"'
+        in plan
+    )
+    assert "google_project_iam_member" in workflow

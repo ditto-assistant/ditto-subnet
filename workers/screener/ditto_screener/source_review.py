@@ -11,7 +11,7 @@ import posixpath
 import re
 import tarfile
 import tomllib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
@@ -60,7 +60,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
-    return f"source-review-v22-policy-v{policy_version}"
+    return f"source-review-v23-policy-v{policy_version}"
 
 
 # ── Structured review notes (the in-progress determination ledger) ─────────
@@ -142,6 +142,89 @@ def _append_note(notes: list[dict[str, object]], note: dict[str, object]) -> Non
             notes.append(note)
             return
 
+
+def substantiated_concern_count(
+    notes: Sequence[Mapping[str, object]],
+) -> int:
+    """Count concerns that could actually survive as a finding.
+
+    A ``concern`` note is a lead the reviewer recorded mid-inspection, not a
+    verdict. The reviewer records them liberally by design -- the prompt asks
+    for one "the moment you see one" -- so counting them raw makes any
+    budget-cut review look guilty. Production, 2026-08-28: every one of 273
+    concern notes cited a path, so "did it cite" separates nothing; distinct
+    locations do. Reviews that RAN TO COMPLETION and then concluded low risk
+    carried at most 2 substantiated concerns (mean 0.8), while budget- or
+    fault-terminated reviews carried 6 to 19.
+
+    The multi-location rule is the finding contract itself: a
+    ``benchmark_emulation`` or ``scorer_contract_manipulation`` claim needs two
+    distinct source locations to be admissible as a finding, so a single-site
+    note in those categories could never have become one either.
+    """
+    locations: dict[str, set[tuple[str, object]]] = {}
+    for note in notes:
+        if note.get("kind") != "concern":
+            continue
+        path = note.get("path")
+        if not isinstance(path, str) or not path:
+            continue
+        category = str(note.get("category") or "none")
+        locations.setdefault(category, set()).add((path, note.get("line")))
+    total = 0
+    for category, sites in locations.items():
+        if category in _MULTI_LOCATION_CATEGORIES and len(sites) < 2:
+            continue
+        total += len(sites)
+    return total
+
+
+def ledger_disposition(
+    notes: Sequence[Mapping[str, object]],
+    *,
+    concern_hold_count: int,
+    clear_min_notes: int,
+) -> str:
+    """Decide a budget-terminated review from the evidence it did record.
+
+    ``concern_hold_count`` used to be inert above 1. The old form held on
+    ``concerns >= hold_count``, admitted only on ``concerns == 0``, and held
+    everything else -- so with a hold count of 3 a review with one or two
+    concerns matched neither branch and held anyway, exactly as it would have
+    at 1. Raising the operator's threshold changed nothing. A threshold has to
+    mean "fewer than this many does not hold", so that is what this does.
+    """
+    concerns = substantiated_concern_count(notes)
+    if concerns >= max(1, concern_hold_count):
+        return "inconclusive"
+    cleared = sum(1 for note in notes if note.get("kind") == "cleared")
+    if cleared >= max(1, clear_min_notes):
+        return "pass_inconclusive"
+    # Too little positive coverage to admit on: hold, with the ledger showing
+    # the operator exactly how far inspection got.
+    return "inconclusive"
+
+
+# Per-turn completion budget for the L1 reviewer.
+#
+# This is shared with reasoning tokens, and the deciding turn has to emit a
+# COMPLETE policy-v10 sweep: seven invariant decisions, each with its own
+# summary and pass clause, plus the finding evidence. At the historical 2200
+# it did not fit. The tool-call arguments were cut mid-string and the review
+# died on ``JSONDecodeError: Unterminated string`` -> ``retryable_infra``,
+# which burns the whole attempt and rescreens from scratch (28 such deaths in
+# the three days to 2026-08-28, truncating at char 127/306/1045/1411/2074/
+# 2530 -- i.e. wherever the budget happened to run out, not at a real bound).
+# Partial sweeps that survived the JSON parse failed
+# ``SourceReviewInvariantAssessment`` validation instead, for the same reason.
+#
+# This budget is not an inspection-depth knob like ``max_steps``: it only has
+# to be wide enough for the verdict the reviewer already decided, so it is
+# sized for the worst-case sweep rather than tuned.
+_DEFAULT_MAX_COMPLETION_TOKENS = 8_000
+# A sweep cannot be expressed below this, so a misconfigured floor would
+# guarantee the truncation this budget exists to prevent.
+_MIN_MAX_COMPLETION_TOKENS = 2_000
 
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
@@ -649,6 +732,33 @@ generic answer-slot serialization of a genuine model/tool result, and defensive
 handling of untrusted content. Optimized, forked, or replacement harnesses are
 also allowed. Parameter tuning, benchmark terminology, comments, documentation,
 or use of a documented protocol field are not evidence by themselves.
+
+Apply these safe-harbor boundaries before assigning a source-safety or integrity
+category:
+- Retrieval mechanics are not an answer engine. Group rankers, cross-encoder
+  reranking, candidate pools, `long_term_limit` or context-depth tuning, and
+  fused vector/lexical retrieval are allowed when they only choose current-user
+  records for a genuine deciding model turn. I5 requires a reachable host recipe
+  that selects a closed benchmark answer family or enumerates family-specific
+  operands, formulas, or output formats for the served answer.
+- A memoization or response-cache key is user-scoped when it includes the full
+  model/system prompt and that prompt contains the current user's complete
+  retrieved records. Do not require a redundant top-level user_id field. Report
+  cross_user_access only when two substantively different users can share a key
+  and one user's content can replay into the other's substantive path.
+- Reading the harness's own `OPENROUTER_API_KEY` and preferring the injected
+  `DITTOBENCH_INFERENCE_BASE_URL` broker is the intended inference path, not
+  credential_access, provider_bypass, or data_exfiltration. Require access to an
+  unrelated host credential, an undeclared direct-provider route that evades the
+  supplied broker, or a real outbound secret sink.
+- Returning `tool_calls: []` after executing against the supplied tool endpoint
+  is the I6 `no_reported_tool_calls` pass when the harness deliberately defers to
+  the validator/broker-observed trajectory. An empty self-report cannot invent,
+  rewrite, delete, or duplicate an observed call; require a positive false or
+  conflicting report for fabricated_tool_trajectory.
+- Practice stubs, local launchers, examples, and dev-only mock trajectories are
+  non-runtime code when the effective build and served `/run` path cannot reach
+  them. Their surface resemblance to a fabricated response is not evidence.
 
 Public availability is not a safe harbor for benchmark emulation. Report
 benchmark_emulation only when the effective served path uses benchmark-, audit-,
@@ -2984,6 +3094,7 @@ class OpenRouterSourceReviewAgent:
         timeout_seconds: float,
         max_steps: int,
         max_read_bytes: int = _MAX_TOTAL_TOOL_CHARS,
+        max_completion_tokens: int = _DEFAULT_MAX_COMPLETION_TOKENS,
         reasoning_effort: str = "high",
         static_preflight_v2_mode: str = "off",
         provenance_manifest_file: str | None = None,
@@ -3002,6 +3113,9 @@ class OpenRouterSourceReviewAgent:
         self._timeout_seconds = timeout_seconds
         self._max_steps = max_steps
         self._max_read_bytes = max_read_bytes
+        self._max_completion_tokens = max(
+            _MIN_MAX_COMPLETION_TOKENS, int(max_completion_tokens)
+        )
         self._reasoning_effort = reasoning_effort
         self._static_preflight_v2_mode = static_preflight_v2_mode
         self._provenance_manifest_files = (
@@ -3085,16 +3199,15 @@ class OpenRouterSourceReviewAgent:
             # positive coverage admits it; a clean-but-thin ledger holds and
             # shows exactly how far inspection got. The budgets therefore
             # tune inspection depth, not fate.
-            concern_count = sum(1 for note in notes if note.get("kind") == "concern")
-            cleared_count = sum(1 for note in notes if note.get("kind") == "cleared")
-            if not budget_exhausted:
-                disposition = "retryable_infra"
-            elif concern_count >= self._concern_hold_count:
-                disposition = "inconclusive"
-            elif concern_count == 0 and cleared_count >= self._clear_min_notes:
-                disposition = "pass_inconclusive"
-            else:
-                disposition = "inconclusive"
+            disposition = (
+                ledger_disposition(
+                    notes,
+                    concern_hold_count=self._concern_hold_count,
+                    clear_min_notes=self._clear_min_notes,
+                )
+                if budget_exhausted
+                else "retryable_infra"
+            )
             return SourceReviewObservation(
                 ok=False,
                 risk_level=None,
@@ -3345,7 +3458,7 @@ class OpenRouterSourceReviewAgent:
             "messages": messages,
             "tools": _TOOLS,
             "tool_choice": "auto",
-            "max_completion_tokens": 2200,
+            "max_completion_tokens": self._max_completion_tokens,
             "reasoning": {"effort": reasoning_effort},
             "prompt_cache_key": _l1_prompt_cache_key(messages),
             "provider": {

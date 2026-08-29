@@ -57,16 +57,23 @@ runuser -u "$${BOOTSTRAP_USER}" -- \
   "$${GIT_REVISION}" refs/remotes/origin/main
 runuser -u "$${BOOTSTRAP_USER}" -- \
   git -C "$${SOURCE}" checkout --detach "$${GIT_REVISION}"
-test "$(git -C "$${SOURCE}" remote get-url origin)" = "$${REPOSITORY}"
-test "$(git -C "$${SOURCE}" rev-parse HEAD)" = "$${GIT_REVISION}"
+test "$(runuser -u "$${BOOTSTRAP_USER}" -- \
+  git -C "$${SOURCE}" remote get-url origin)" = "$${REPOSITORY}"
+test "$(runuser -u "$${BOOTSTRAP_USER}" -- \
+  git -C "$${SOURCE}" rev-parse HEAD)" = "$${GIT_REVISION}"
 
 runuser -u "$${BOOTSTRAP_USER}" -- \
   python3 -m venv "$${ROOT}/bootstrap-venv"
-printf 'uv==%s --hash=sha256:%s\n' "$${UV_VERSION}" "$${UV_SHA256}" | \
-  runuser -u "$${BOOTSTRAP_USER}" -- \
+readonly UV_REQUIREMENTS="$${ROOT}/uv-requirements.txt"
+printf 'uv==%s --hash=sha256:%s\n' "$${UV_VERSION}" "$${UV_SHA256}" > \
+  "$${UV_REQUIREMENTS}"
+chown "$${BOOTSTRAP_USER}:$${BOOTSTRAP_USER}" "$${UV_REQUIREMENTS}"
+chmod 0400 "$${UV_REQUIREMENTS}"
+runuser -u "$${BOOTSTRAP_USER}" -- \
   "$${ROOT}/bootstrap-venv/bin/pip" install \
-    --disable-pip-version-check --no-deps --only-binary=:all: \
-    --require-hashes -r /dev/stdin
+  --disable-pip-version-check --no-deps --only-binary=:all: \
+  --require-hashes -r "$${UV_REQUIREMENTS}"
+rm -f "$${UV_REQUIREMENTS}"
 runuser -u "$${BOOTSTRAP_USER}" -- env \
   UV_PROJECT_ENVIRONMENT="$${ROOT}/project-venv" \
   "$${ROOT}/bootstrap-venv/bin/uv" sync \
@@ -77,13 +84,14 @@ rm -rf "$${ROOT}/.cache"
 chown -R root:root "$${ROOT}"
 userdel "$${BOOTSTRAP_USER}"
 
-# Resolve only Secret Manager through Google's VPC-SC-compatible restricted
-# VIP once the Terraform arm phase removes general internet egress.
+# Resolve Secret Manager and the IAM Credentials allowed-locations preflight
+# used by current gcloud through Google's VPC-SC-compatible restricted VIP once
+# the Terraform arm phase removes general internet egress.
 cat >>/etc/hosts <<'HOSTS'
-199.36.153.4 secretmanager.googleapis.com
-199.36.153.5 secretmanager.googleapis.com
-199.36.153.6 secretmanager.googleapis.com
-199.36.153.7 secretmanager.googleapis.com
+199.36.153.4 secretmanager.googleapis.com iamcredentials.googleapis.com
+199.36.153.5 secretmanager.googleapis.com iamcredentials.googleapis.com
+199.36.153.6 secretmanager.googleapis.com iamcredentials.googleapis.com
+199.36.153.7 secretmanager.googleapis.com iamcredentials.googleapis.com
 HOSTS
 
 install -d -m 0755 /usr/local/libexec

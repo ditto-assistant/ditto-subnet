@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -64,7 +65,11 @@ from ditto_screener.l2_review import (
 )
 from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.source_review import TarSourceRepository
-from ditto_screening_protocol import SCREENING_POLICY_VERSION
+from ditto_screening_protocol import (
+    SCREENING_POLICY_VERSION,
+    SourceReviewAdjudication,
+    SourceReviewCitation,
+)
 from scripts.generate_starter_provenance import _tracked_files
 
 SYSTEM_PROMPT = _l2_review_system_prompt(SCREENING_POLICY_VERSION)
@@ -195,10 +200,10 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 
 
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
-    assert l2_prompt_revision(11) == "l2-kimi-source-review-v34-policy-v11"
-    assert l2_prompt_revision(10) == "l2-kimi-source-review-v34-policy-v10"
+    assert l2_prompt_revision(11) == "l2-kimi-source-review-v35-policy-v11"
+    assert l2_prompt_revision(10) == "l2-kimi-source-review-v35-policy-v10"
     assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v10"
-    assert l2_cause_prompt_revision(11) == "l3-sol-violation-cause-v25-policy-v11"
+    assert l2_cause_prompt_revision(11) == "l3-sol-violation-cause-v26-policy-v11"
     assert l2_cause_tiebreaker_prompt_revision(11) == (
         "l3-sol-cause-disagreement-v6-policy-v11"
     )
@@ -321,8 +326,8 @@ def test_l1_mechanism_narrowed_away_by_kimi_still_requires_sol() -> None:
 
 
 def test_request_local_identical_tool_memoization_is_not_fabrication() -> None:
-    assert l2_critic_prompt_revision(11) == "l3-sol-adversarial-critic-v19-policy-v11"
-    assert l2_safety_prompt_revision(11) == "l3-sol-safety-adjudicator-v22-policy-v11"
+    assert l2_critic_prompt_revision(11) == "l3-sol-adversarial-critic-v20-policy-v11"
+    assert l2_safety_prompt_revision(11) == "l3-sol-safety-adjudicator-v23-policy-v11"
     assert "Request-local memoization of an identical invocation" in SYSTEM_PROMPT
     assert "deduplication is not fabricated telemetry" in SYSTEM_PROMPT
     assert "distinguish execution from transport" in _SAFETY_ADJUDICATOR_TASK
@@ -370,6 +375,35 @@ def test_l2_prompt_rejects_unimplemented_policy_version() -> None:
         _l2_review_system_prompt(SCREENING_POLICY_VERSION + 1)
     with pytest.raises(ValueError, match="not implemented by this build"):
         _l2_review_system_prompt(9)
+
+
+def test_session_safe_harbors_are_shared_by_l2_and_l3() -> None:
+    analyst_fragments = {
+        "Group ranking, cross-encoder reranking",
+        "`long_term_limit` or context-depth tuning",
+        "full model/system prompt",
+        "substantively different",
+        "harness's own `OPENROUTER_API_KEY`",
+        "`DITTOBENCH_INFERENCE_BASE_URL`",
+        "`tool_calls: []`",
+        "`no_reported_tool_calls` pass",
+        "Dev-only practice stubs",
+    }
+    safety_fragments = {
+        "`tool_calls: []`",
+        "validator/broker-observed trajectory",
+        "full system/model prompt cache key",
+        "harness's own `OPENROUTER_API_KEY`",
+        "`DITTOBENCH_INFERENCE_BASE_URL`",
+        "group ranking, cross-encoder reranking",
+        "closed benchmark answer family",
+        "practice stubs and dev-only mocks",
+    }
+
+    assert all(fragment in SYSTEM_PROMPT for fragment in analyst_fragments)
+    assert all(fragment in _SAFETY_ADJUDICATOR_TASK for fragment in safety_fragments)
+    assert "do not supply a violation cause by themselves" in _VIOLATION_CAUSE_TASK
+    assert "inconclusive rather than manufacturing" in _VIOLATION_CAUSE_TASK
 
 
 def test_dittobench_preflight_clearance_is_exact_and_shared() -> None:
@@ -3936,3 +3970,269 @@ async def test_relayed_rate_limit_retries_are_bounded(
     assert result.observation.failure_disposition == "retryable_infra"
     assert result.observation.error_code == "l2-model-response-contract"
     assert len(requests) == 4
+
+
+async def test_exhausted_l2_does_not_claim_coverage_it_lacks() -> None:
+    """L2 stamps pass_inconclusive on ANY budget exhaustion.
+
+    Until the layered agent re-derived it, that stamp reached Platform even
+    when the ledger it shipped recorded substantiated concerns -- four of the
+    five budget-terminated reviews on 2026-08-28 claimed positive coverage
+    they did not have. L2 records no notes itself, so this is the first point
+    where the ledger is complete enough to decide.
+    """
+    notes = (
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/main.rs",
+            "line": 10,
+            "summary": "family table",
+        },
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/table.rs",
+            "line": 44,
+            "summary": "family table",
+        },
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/table.rs",
+            "line": 51,
+            "summary": "family table",
+        },
+        {"kind": "cleared", "category": "none", "path": "b.rs", "summary": "clean"},
+    )
+    l1 = replace(
+        _l1("low", clearance_certified=False),
+        finding=None,
+        finding_digest=None,
+        categories=(),
+        notes=notes,
+    )
+    exhausted = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="l2-model-step-budget",
+        failure_disposition="pass_inconclusive",
+    )
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(l1), l2=_FakeL2(_model_result(exhausted)), mode="enforce"
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert result.failure_disposition == "inconclusive"
+    assert result.notes == notes
+
+
+async def test_exhausted_l2_admits_on_a_clean_carried_ledger() -> None:
+    notes = (
+        {"kind": "cleared", "category": "none", "path": "a.rs", "summary": "clean"},
+        {"kind": "cleared", "category": "none", "path": "b.rs", "summary": "clean"},
+        {"kind": "cleared", "category": "none", "path": "c.rs", "summary": "clean"},
+    )
+    l1 = replace(
+        _l1("low", clearance_certified=False),
+        finding=None,
+        finding_digest=None,
+        categories=(),
+        notes=notes,
+    )
+    exhausted = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="l2-model-step-budget",
+        failure_disposition="pass_inconclusive",
+    )
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(l1), l2=_FakeL2(_model_result(exhausted)), mode="enforce"
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert result.failure_disposition == "pass_inconclusive"
+
+
+async def test_exhausted_l2_holds_when_an_l1_lead_survives() -> None:
+    """A surviving finding is not positive coverage, whatever the ledger says."""
+    l1 = replace(
+        _l1("medium"),
+        notes=(
+            {"kind": "cleared", "category": "none", "path": "a.rs", "summary": "ok"},
+            {"kind": "cleared", "category": "none", "path": "b.rs", "summary": "ok"},
+            {"kind": "cleared", "category": "none", "path": "c.rs", "summary": "ok"},
+        ),
+    )
+    exhausted = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="l2-model-tool-budget",
+        failure_disposition="pass_inconclusive",
+    )
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(l1), l2=_FakeL2(_model_result(exhausted)), mode="enforce"
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert result.failure_disposition == "inconclusive"
+
+
+class _FakeAdjudicator:
+    def __init__(self, decision: str = "clear") -> None:
+        self.calls = 0
+        self.seen_notes: tuple[Any, ...] = ()
+        self._decision = decision
+
+    async def adjudicate(self, _archive: str, **kwargs: Any) -> Any:
+        self.calls += 1
+        self.seen_notes = tuple(kwargs.get("notes") or ())
+        return SourceReviewAdjudication(
+            decision=self._decision,
+            reason="the model authors the served reply at src/main.rs:6",
+            clear_clause="model_authors_graded_slot",
+            citations=[SourceReviewCitation(path="src/main.rs", line=6)],
+            model="z-ai/glm-5.3-flash",
+            prompt_revision="adjudicator-v1-policy-v10",
+        )
+
+
+async def test_a_held_review_reaches_the_adjudicator_with_its_ledger() -> None:
+    notes = (
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/main.rs",
+            "line": 10,
+            "summary": "looked like a family table",
+        },
+    )
+    l1 = replace(
+        _l1("low", clearance_certified=False),
+        finding=None,
+        finding_digest=None,
+        categories=(),
+        notes=notes,
+    )
+    exhausted = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="l2-model-step-budget",
+        failure_disposition="pass_inconclusive",
+    )
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(l1),
+        l2=_FakeL2(_model_result(exhausted)),
+        mode="enforce",
+        adjudicator=court,  # type: ignore[arg-type]
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert court.calls == 1
+    assert court.seen_notes == notes
+    assert result.adjudication is not None
+    assert result.adjudication["decision"] == "clear"
+
+
+async def test_a_clean_review_is_never_adjudicated() -> None:
+    """Adjudication is for outcomes that would WAIT, not for answers we have."""
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(_l1("low", clearance_certified=True)),
+        l2=_FakeL2(_model_result(_safe())),
+        mode="enforce",
+        adjudicator=court,  # type: ignore[arg-type]
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert court.calls == 0
+    assert result.adjudication is None
+
+
+async def test_an_infrastructure_failure_is_never_adjudicated() -> None:
+    """A retryable fault has no evidence to weigh; it gets retried instead."""
+    infra = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="source-review-model-response-invalid",
+        failure_disposition="retryable_infra",
+    )
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(infra),
+        l2=_FakeL2(_model_result(_safe())),
+        mode="enforce",
+        adjudicator=court,  # type: ignore[arg-type]
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert court.calls == 0
+    assert result.adjudication is None
+
+
+async def test_an_elevated_finding_is_adjudicated_not_queued() -> None:
+    """A medium/high L1 finding quarantines, so it is a hold the court owns.
+
+    Gating adjudication on `not observation.ok` missed exactly this case: the
+    review succeeded, and its success IS the operator hold.
+    """
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(_l1("medium")),
+        l2=_FakeL2(_model_result(_safe())),
+        mode="off",
+        adjudicator=court,  # type: ignore[arg-type]
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert court.calls == 1
+    assert result.adjudication is not None
+
+
+async def test_a_low_risk_pass_is_not_adjudicated() -> None:
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(_l1("low", clearance_certified=True)),
+        l2=_FakeL2(_model_result(_safe())),
+        mode="off",
+        adjudicator=court,  # type: ignore[arg-type]
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert court.calls == 0
+    assert result.adjudication is None

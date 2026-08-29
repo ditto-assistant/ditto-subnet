@@ -2,6 +2,72 @@
 
 <!-- version list -->
 
+## v0.122.0 (2026-08-28)
+
+### Bug Fixes
+
+- **screener**: Make the gradient hold threshold mean something
+  ([#1250](https://github.com/ditto-assistant/ditto-subnet/pull/1250),
+  [`ab87291`](https://github.com/ditto-assistant/ditto-subnet/commit/ab8729122df17e69490b91c01123c3b62e22b08a))
+
+### Features
+
+- **infra**: Grant Brian local OpenRouter key access
+  ([#1256](https://github.com/ditto-assistant/ditto-subnet/pull/1256),
+  [`d8a6d6e`](https://github.com/ditto-assistant/ditto-subnet/commit/d8a6d6e6efa0e5429202102c2742894184723e83))
+
+- **platform**: Terminalize adjudicated source reviews
+  ([#1252](https://github.com/ditto-assistant/ditto-subnet/pull/1252),
+  [`617634f`](https://github.com/ditto-assistant/ditto-subnet/commit/617634f597ef6f98f0c7c02f7c3c69d29ddb8f5b))
+
+- **screener**: Adjudicate held source reviews instead of queuing them
+  ([#1251](https://github.com/ditto-assistant/ditto-subnet/pull/1251),
+  [`927c2d7`](https://github.com/ditto-assistant/ditto-subnet/commit/927c2d712b5043988c82f7ffd1b38accde42b4e1))
+
+
+## v0.121.4 (2026-08-28)
+
+### Bug Fixes
+
+- **validator**: Accept legacy Bittensor hotkeys in Pylon
+  ([#1255](https://github.com/ditto-assistant/ditto-subnet/pull/1255),
+  [`b7de21a`](https://github.com/ditto-assistant/ditto-subnet/commit/b7de21ac0d237e8e817fb979ada552eed701a1c6))
+
+- **validator**: Verify hotkey checkout as repository owner
+  ([#1254](https://github.com/ditto-assistant/ditto-subnet/pull/1254),
+  [`320a014`](https://github.com/ditto-assistant/ditto-subnet/commit/320a0141a4f305de41ddcd323592bac586d7c14d))
+
+
+## v0.121.3 (2026-08-28)
+
+### Bug Fixes
+
+- **screener**: Prevent truncated and orphaned source reviews
+  ([#1248](https://github.com/ditto-assistant/ditto-subnet/pull/1248),
+  [`4f1113f`](https://github.com/ditto-assistant/ditto-subnet/commit/4f1113f6679dc3aab512dcfe7c024fb098c77007))
+
+
+## v0.121.2 (2026-08-28)
+
+### Bug Fixes
+
+- **screener**: Calibrate source-review court safe harbors
+  ([#1225](https://github.com/ditto-assistant/ditto-subnet/pull/1225),
+  [`815324c`](https://github.com/ditto-assistant/ditto-subnet/commit/815324c892be24841082a601d7fb33b2a47b538a))
+
+- **validator**: Avoid IAP bootstrap policy deadlock
+  ([#1246](https://github.com/ditto-assistant/ditto-subnet/pull/1246),
+  [`6d212ff`](https://github.com/ditto-assistant/ditto-subnet/commit/6d212fff32f4e2a29ef8556470791ec1a9fd22b7))
+
+- **validator**: Honor protected hotkey admin phases
+  ([#1247](https://github.com/ditto-assistant/ditto-subnet/pull/1247),
+  [`83a3d83`](https://github.com/ditto-assistant/ditto-subnet/commit/83a3d8317305c3c710dfa618def46420c7ae30f2))
+
+- **validator**: Wire production W&B secret
+  ([#1244](https://github.com/ditto-assistant/ditto-subnet/pull/1244),
+  [`7fa15cc`](https://github.com/ditto-assistant/ditto-subnet/commit/7fa15ccec3130b50d6b6c239763e5389fc37905e))
+
+
 ## v0.121.1 (2026-08-28)
 
 ### Performance Improvements

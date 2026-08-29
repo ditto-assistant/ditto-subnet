@@ -147,6 +147,17 @@ resource "google_secret_manager_secret_iam_member" "validator_prod_hotkey_access
   member    = "serviceAccount:${google_service_account.validator_prod[0].email}"
 }
 
+# The production validator publishes aggregate telemetry to W&B. Grant only
+# payload access on the existing validator-wandb-key secret; its value and
+# versions remain outside Terraform state.
+resource "google_secret_manager_secret_iam_member" "validator_prod_wandb_access" {
+  count     = local.validator_prod_count
+  project   = var.project
+  secret_id = google_secret_manager_secret.validator_wandb_key[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.validator_prod[0].email}"
+}
+
 # Custodians can lifecycle-manage the one recovery version without reading its
 # payload, adding a replacement, or destroying it. Only the armed disposable
 # generator can add the first version. Payload access remains exclusive to the
@@ -185,13 +196,21 @@ resource "google_compute_instance_iam_member" "validator_prod_operator_osadmin" 
   member        = each.value
 }
 
-resource "google_iap_tunnel_instance_iam_member" "validator_prod_operator_iap" {
-  for_each   = var.enable_validator_prod ? var.validator_prod_operators : toset([])
-  project    = var.project
-  zone       = var.zone
-  instance   = module.validator_prod_vm[0].hostname
-  role       = "roles/iap.tunnelResourceAccessor"
-  member     = each.value
+# The protected apply identity cannot administer per-instance IAP policies.
+# Keep the same exact-instance boundary with a conditional project binding,
+# which also avoids a bootstrap deadlock when the VM is first created.
+resource "google_project_iam_member" "validator_prod_operator_iap" {
+  for_each = var.enable_validator_prod ? var.validator_prod_operators : toset([])
+  project  = var.project
+  role     = "roles/iap.tunnelResourceAccessor"
+  member   = each.value
+
+  condition {
+    title       = "validator_prod_exact_instance"
+    description = "IAP access only to the production validator VM."
+    expression  = "resource.name.extract('/instances/{name}') == '${module.validator_prod_vm[0].hostname}'"
+  }
+
   depends_on = [google_project_service.iap]
 }
 

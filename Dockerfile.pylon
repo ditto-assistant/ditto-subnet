@@ -3,12 +3,25 @@
 ARG PYLON_BASE_IMAGE=docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
 FROM ${PYLON_BASE_IMAGE}
 
+# Pylon 2.3.0 pins bittensor-wallet 4.0.1, whose Rust keyfile parser rejects
+# legacy-valid hotkeys where cryptoType is a JSON integer. Install the reviewed
+# upstream release whose value-based parser accepts that numeric field.
+ADD --checksum=sha256:443b1fd0f497331719f23d854362ad7573314aae9fc955f1371bdafc66286875 \
+  https://files.pythonhosted.org/packages/38/94/06fad3225a24c4c3aff3e059353f17928c384fb5802612ddbfef108fd886/bittensor_wallet-4.1.1-cp313-cp313-manylinux_2_28_x86_64.whl \
+  /tmp/bittensor_wallet-4.1.1-cp313-cp313-manylinux_2_28_x86_64.whl
+
 # TurboBT is supplied as an immutable named Git context by the release
 # workflow. Installing it into Pylon's existing virtualenv preserves the
 # reviewed Pylon service image while replacing only the faulty RPC adapter.
 COPY --from=turbobt . /tmp/turbobt
-RUN PDM_BUILD_SCM_VERSION=1.3.0 uv pip install \
+RUN uv pip install \
+      --python /app/pylon_service/.venv/bin/python \
+      --no-deps \
+      /tmp/bittensor_wallet-4.1.1-cp313-cp313-manylinux_2_28_x86_64.whl \
+    && PDM_BUILD_SCM_VERSION=1.3.0 uv pip install \
       --python /app/pylon_service/.venv/bin/python \
       --no-deps \
       /tmp/turbobt \
-    && rm -rf /tmp/turbobt
+    && rm -rf \
+      /tmp/bittensor_wallet-4.1.1-cp313-cp313-manylinux_2_28_x86_64.whl \
+      /tmp/turbobt

@@ -138,6 +138,7 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
                 "clearance_certified": True,
                 "review_audit": None,
                 "notes": [],
+                "adjudication": None,
             }
         }
     ]

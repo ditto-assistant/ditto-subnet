@@ -22,6 +22,8 @@ from ditto_screener.binary_analysis import BinarySample
 from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
+    ledger_disposition,
+    substantiated_concern_count,
 )
 from ditto_screener.source_signals import (
     find_decisive_malicious_source,
@@ -154,6 +156,15 @@ def _with_policy_v10_invariants(
             }
         )
     return {**review, "invariants": decisions}
+
+
+_BENIGN_REVIEW: dict[str, object] = {
+    "risk_level": "low",
+    "confidence": 0.9,
+    "categories": ["none"],
+    "evidence": [],
+    "summary": "General model-backed request path.",
+}
 
 
 def _archive(tmp_path: Path, source: str) -> Path:
@@ -757,7 +768,7 @@ fn run() -> String {
     assert observation.risk_level == "high"
     assert observation.categories == ("benchmark_emulation",)
     assert observation.finding is not None
-    assert observation.finding["prompt_revision"] == "source-review-v22-policy-v11"
+    assert observation.finding["prompt_revision"] == "source-review-v23-policy-v11"
     assert observation.finding["evidence"] == [
         {
             "path": "src/memory_solver.rs",
@@ -2016,7 +2027,7 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     assert observation.finding is not None
     assert "use\nanalyze_binary only when" in prompt
     assert 'compact, precomputed\n"binary_analysis"' in prompt
-    assert observation.finding["prompt_revision"] == "source-review-v22-policy-v11"
+    assert observation.finding["prompt_revision"] == "source-review-v23-policy-v11"
     assert len(observation.finding["invariant_assessment"]["decisions"]) == 7
     initial_inventory = json.loads(
         seen[0]["messages"][1]["content"]
@@ -2795,7 +2806,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
         _source_review_system_prompt as _prompt,
     )
 
-    assert _prompt_revision(11) == "source-review-v22-policy-v11"
+    assert _prompt_revision(11) == "source-review-v23-policy-v11"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -2837,6 +2848,15 @@ def test_policy_v10_prompt_keeps_false_positive_valves() -> None:
         "not an automatic reject",
         "Ban is per agent UUID",
         "Honest-and-bad or post-remediation low score is not a cheat signal",
+        "Retrieval mechanics are not an answer engine",
+        "`long_term_limit` or context-depth tuning",
+        "model/system prompt",
+        "substantively different users can share a key",
+        "harness's own `OPENROUTER_API_KEY`",
+        "`DITTOBENCH_INFERENCE_BASE_URL` broker",
+        "`tool_calls: []`",
+        "`no_reported_tool_calls` pass",
+        "Practice stubs, local launchers",
     }
 
     prompt = _prompt(SCREENING_POLICY_VERSION)
@@ -4895,3 +4915,191 @@ async def test_budget_exhaustion_with_thin_ledger_still_holds(
     assert not observation.ok
     assert observation.failure_disposition == "inconclusive"
     assert observation.notes == ()
+
+
+async def test_completion_budget_fits_a_whole_policy_v10_sweep(
+    tmp_path: Path,
+) -> None:
+    """The verdict turn is not truncated at the historical 2200-token cap.
+
+    A cut-off ``submit_review`` argument string used to die on
+    ``JSONDecodeError`` and burn the whole attempt as infrastructure, so the
+    budget the request carries is a correctness property, not a tuning knob.
+    """
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    transport = _transport(_BENIGN_REVIEW, seen)
+
+    observation = await _agent(key, transport).review(
+        str(_archive(tmp_path, "fn main() {}")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok
+    assert seen
+    assert all(request["max_completion_tokens"] == 8_000 for request in seen)
+
+
+async def test_completion_budget_is_operator_settable(tmp_path: Path) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=10,
+        max_steps=4,
+        max_completion_tokens=12_000,
+        transport=_transport(_BENIGN_REVIEW, seen),
+    )
+
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn main() {}")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok
+    assert all(request["max_completion_tokens"] == 12_000 for request in seen)
+
+
+async def test_completion_budget_cannot_be_set_below_one_sweep(
+    tmp_path: Path,
+) -> None:
+    """A floor keeps a misconfiguration from re-creating the truncation bug."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=10,
+        max_steps=4,
+        max_completion_tokens=64,
+        transport=_transport(_BENIGN_REVIEW, seen),
+    )
+
+    await agent.review(
+        str(_archive(tmp_path, "fn main() {}")),
+        artifact_sha256=_SHA,
+    )
+
+    assert all(request["max_completion_tokens"] == 2_000 for request in seen)
+
+
+def test_a_hold_threshold_above_one_is_not_inert() -> None:
+    """The old form held on 1..N-1 concerns, so raising N changed nothing."""
+    notes = [
+        {"kind": "concern", "category": "credential_access", "path": "a.rs", "line": 3},
+        {"kind": "cleared", "category": "none", "path": "b.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "c.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "d.rs", "line": 1},
+    ]
+
+    assert (
+        ledger_disposition(notes, concern_hold_count=1, clear_min_notes=3)
+        == "inconclusive"
+    )
+    assert (
+        ledger_disposition(notes, concern_hold_count=3, clear_min_notes=3)
+        == "pass_inconclusive"
+    )
+
+
+def test_single_site_multi_location_concerns_cannot_hold() -> None:
+    """A one-site benchmark_emulation note could never become a finding.
+
+    The finding contract needs two distinct locations for that category, so
+    counting a single-site note toward a hold holds on evidence that would
+    have been rejected as a verdict.
+    """
+    notes = [
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/main.rs",
+            "line": 10,
+        },
+        {
+            "kind": "concern",
+            "category": "scorer_contract_manipulation",
+            "path": "src/score.rs",
+            "line": 20,
+        },
+        {"kind": "cleared", "category": "none", "path": "b.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "c.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "d.rs", "line": 1},
+    ]
+
+    assert substantiated_concern_count(notes) == 0
+    assert (
+        ledger_disposition(notes, concern_hold_count=3, clear_min_notes=3)
+        == "pass_inconclusive"
+    )
+
+
+def test_two_sites_substantiate_a_multi_location_concern() -> None:
+    notes = [
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/main.rs",
+            "line": 10,
+        },
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/table.rs",
+            "line": 44,
+        },
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/table.rs",
+            "line": 51,
+        },
+        {"kind": "cleared", "category": "none", "path": "b.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "c.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "d.rs", "line": 1},
+    ]
+
+    assert substantiated_concern_count(notes) == 3
+    assert (
+        ledger_disposition(notes, concern_hold_count=3, clear_min_notes=3)
+        == "inconclusive"
+    )
+
+
+def test_repeated_citation_of_one_line_is_one_concern() -> None:
+    notes = [
+        {"kind": "concern", "category": "provider_bypass", "path": "a.rs", "line": 7},
+        {"kind": "concern", "category": "provider_bypass", "path": "a.rs", "line": 7},
+        {"kind": "concern", "category": "provider_bypass", "path": "a.rs", "line": 7},
+        {"kind": "cleared", "category": "none", "path": "b.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "c.rs", "line": 1},
+        {"kind": "cleared", "category": "none", "path": "d.rs", "line": 1},
+    ]
+
+    assert substantiated_concern_count(notes) == 1
+    assert (
+        ledger_disposition(notes, concern_hold_count=3, clear_min_notes=3)
+        == "pass_inconclusive"
+    )
+
+
+def test_thin_clean_ledger_still_holds() -> None:
+    """No concerns is not the same as enough positive coverage to admit."""
+    notes = [{"kind": "cleared", "category": "none", "path": "b.rs", "line": 1}]
+
+    assert (
+        ledger_disposition(notes, concern_hold_count=3, clear_min_notes=3)
+        == "inconclusive"
+    )
+    assert ledger_disposition([], concern_hold_count=3, clear_min_notes=3) == (
+        "inconclusive"
+    )

@@ -320,6 +320,29 @@
     validator_stack_broker_token: "{{ validator_stack_runtime_tokens.results[1].content | b64decode | trim }}"
   no_log: true
 
+- name: Read the W&B API key from Secret Manager
+  ansible.builtin.command:
+    argv:
+      - gcloud
+      - secrets
+      - versions
+      - access
+      - latest
+      - "--secret={{ validator_stack_wandb_secret }}"
+      - "--project={{ validator_stack_project }}"
+  register: validator_stack_wandb_key_read
+  changed_when: false
+  no_log: true
+
+- name: Require a non-empty single-line W&B API key
+  ansible.builtin.assert:
+    that:
+      - validator_stack_wandb_key_read.stdout | trim | length > 0
+      - "'\\n' not in validator_stack_wandb_key_read.stdout"
+      - "'\\r' not in validator_stack_wandb_key_read.stdout"
+    fail_msg: The validator-wandb-key Secret Manager version is empty or malformed
+  no_log: true
+
 - name: Render the production validator environment
   ansible.builtin.template:
     src: validator.env.j2
@@ -327,6 +350,8 @@
     owner: "{{ validator_stack_user }}"
     group: "{{ validator_stack_group }}"
     mode: "0600"
+  vars:
+    validator_stack_wandb_api_key: "{{ validator_stack_wandb_key_read.stdout | trim }}"
   no_log: true
 
 - name: Validate the source Compose configuration without starting services
