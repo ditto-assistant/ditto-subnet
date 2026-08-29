@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 
 from ditto.api_server import create_api_server
+from ditto.api_server.coding_private_catalog import CodingPrivateCatalogConfig
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
 from ditto.api_server.middleware import (
     AuthPassThroughMiddleware,
@@ -136,7 +137,12 @@ class TestRouteDiscoveryIsSingleton:
     """
 
     @staticmethod
-    async def _refresher_for_role(role: str | None, monkeypatch) -> MagicMock:
+    async def _refresher_for_role(
+        role: str | None,
+        monkeypatch,
+        *,
+        coding_private_catalog: CodingPrivateCatalogConfig | None = None,
+    ) -> tuple[MagicMock, MagicMock, object | None]:
         if role is None:
             monkeypatch.delenv("DITTO_ROLE", raising=False)
         else:
@@ -155,6 +161,8 @@ class TestRouteDiscoveryIsSingleton:
         storage_ctx.__aexit__ = AsyncMock(return_value=False)
         closeable = MagicMock()
         closeable.aclose = AsyncMock()
+        catalog_source = object()
+        catalog_factory = MagicMock(return_value=catalog_source)
 
         with (
             patch("ditto.api_server.factory.create_db_engine", return_value=engine),
@@ -173,6 +181,10 @@ class TestRouteDiscoveryIsSingleton:
                 "ditto.api_server.factory.create_storage_client",
                 return_value=storage_ctx,
             ),
+            patch(
+                "ditto.api_server.factory.create_coding_private_catalog_source",
+                catalog_factory,
+            ),
             patch("ditto.api_server.factory.create_embedder", return_value=closeable),
             patch("ditto.api_server.factory.create_generator", return_value=closeable),
             patch(
@@ -180,15 +192,21 @@ class TestRouteDiscoveryIsSingleton:
                 return_value=refresher,
             ),
         ):
-            app = create_api_server(make_api_server_config())
+            app = create_api_server(
+                make_api_server_config(
+                    coding_private_catalog=coding_private_catalog,
+                )
+            )
             app.state.validator_names.start = AsyncMock()
             app.state.validator_names.aclose = AsyncMock()
             async with app.router.lifespan_context(app):
-                pass
-        return refresher
+                observed_source = app.state.coding_private_catalog_source
+        return refresher, catalog_factory, observed_source
 
     async def test_relay_does_not_start_route_discovery(self, monkeypatch):
-        refresher = await self._refresher_for_role("relay", monkeypatch)
+        refresher, _catalog_factory, _source = await self._refresher_for_role(
+            "relay", monkeypatch
+        )
         refresher.start.assert_not_awaited()
         # Still constructed and still registered for cleanup, so shutdown is
         # symmetric with the platform role.
@@ -198,8 +216,38 @@ class TestRouteDiscoveryIsSingleton:
     async def test_platform_role_still_starts_route_discovery(
         self, monkeypatch, role: str | None
     ):
-        refresher = await self._refresher_for_role(role, monkeypatch)
+        refresher, _catalog_factory, _source = await self._refresher_for_role(
+            role, monkeypatch
+        )
         refresher.start.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        "role,expected",
+        [("relay", False), ("platform", True)],
+    )
+    async def test_only_platform_role_constructs_private_catalog_source(
+        self,
+        monkeypatch,
+        role: str,
+        expected: bool,
+    ) -> None:
+        config = CodingPrivateCatalogConfig(
+            endpoint_url="https://catalog.example.com",
+            bucket="private-coding",
+            access_key="catalog-access",
+            secret_key="catalog-secret",
+        )
+        _refresher, factory, source = await self._refresher_for_role(
+            role,
+            monkeypatch,
+            coding_private_catalog=config,
+        )
+        if expected:
+            factory.assert_called_once_with(config)
+            assert source is factory.return_value
+        else:
+            factory.assert_not_called()
+            assert source is None
 
 
 class TestProcessRole:

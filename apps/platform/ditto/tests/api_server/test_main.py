@@ -158,6 +158,7 @@ class TestConfigToLogDict:
         assert "api" in echo
         assert "postgres" in echo
         assert "chain" in echo
+        assert echo["coding_private_catalog"] == {"configured": False}
 
     def test_postgres_password_redacted(self):
         from ditto.tests.api_server.conftest import make_api_server_config

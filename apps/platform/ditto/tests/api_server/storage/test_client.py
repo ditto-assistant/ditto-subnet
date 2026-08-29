@@ -19,6 +19,7 @@ from botocore.exceptions import ClientError
 
 from ditto.api_server.storage import (
     ObjectDownloadFailedError,
+    ObjectDownloadTooLargeError,
     ObjectMetadata,
     ObjectNotFoundError,
     ObjectUploadFailedError,
@@ -337,7 +338,7 @@ class TestGetObject:
             client, get_result={"Body": _ChunkedBody(b"x" * 40, chunk=4)}
         )
 
-        with pytest.raises(ObjectDownloadFailedError, match="exceeded bound"):
+        with pytest.raises(ObjectDownloadTooLargeError, match="exceeded bound"):
             await client.get_object(key="k", max_bytes=8)
 
     async def test_client_error_raises_typed(self):

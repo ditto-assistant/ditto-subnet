@@ -23,6 +23,9 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 
 import ditto
 from ditto.api_server.burn_settings import BurnSettingsResolver
+from ditto.api_server.coding_private_catalog import (
+    create_coding_private_catalog_source,
+)
 from ditto.api_server.config import (
     ApiServerConfig,
     parse_api_server_config_from_env,
@@ -239,6 +242,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 create_storage_client(config.storage)
             )
             app.state.storage = storage
+            app.state.coding_private_catalog_source = (
+                create_coding_private_catalog_source(config.coding_private_catalog)
+                if config.coding_private_catalog is not None
+                and _process_role() == PLATFORM_ROLE
+                else None
+            )
 
             from ditto.api_server.hippius import (
                 create_hippius_client,
@@ -450,6 +459,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     )
     app.state.config = config
     app.state.commit_hash = config.commit_hash
+    # This internal source has no HTTP route and is absent unless Platform has
+    # a separate least-privilege private-catalog credential set.
+    app.state.coding_private_catalog_source = None
     # Hot-swappable efficiency-bonus policy: the compute path resolves the
     # latest append-only revision through this resolver (short TTL), falling
     # back to the env seed (config.efficiency_bonus) when none exists. The DB
