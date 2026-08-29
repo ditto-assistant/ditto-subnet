@@ -15,14 +15,6 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.api_models.screener import (
-    SCREENING_POLICY_VERSION as _BUILTIN_POLICY_VERSION,
-)
-from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
-
-# Uses below mean "the version the platform REQUIRES" — the floor in the
-# default no-scheduled-activation state, not the newest text the build ships.
-SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 from ditto.api_server.dependencies import get_session
 from ditto.db.models import (
     Agent,
@@ -32,6 +24,11 @@ from ditto.db.models import (
 )
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 from ditto.tests.legacy_era import retired_era_writes_allowed
+from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
+
+# Uses below mean "the version the platform REQUIRES" — the floor in the
+# default no-scheduled-activation state, not the newest text the build ships.
+SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 
 _TOKEN = "test-admin-token-at-least-32-characters"
 _HEADERS = {"Authorization": f"Bearer {_TOKEN}", "X-Admin-Actor": "operator"}

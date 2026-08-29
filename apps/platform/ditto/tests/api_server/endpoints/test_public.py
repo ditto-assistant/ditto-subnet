@@ -137,6 +137,7 @@ from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
 # the effective snapshot, which defaults to the floor.
 SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 
+
 _MINER_A = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _MINER_B = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
 _VALIDATOR_C = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"

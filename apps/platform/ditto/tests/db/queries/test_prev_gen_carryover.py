@@ -62,6 +62,7 @@ from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 # builders read the effective snapshot, which defaults to the floor.
 SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 
+
 _ROLLOUT_START = datetime(2026, 7, 20, 12, 0, 0, tzinfo=UTC)
 _NOW = _ROLLOUT_START + timedelta(days=2)
 _TTL = timedelta(minutes=90)

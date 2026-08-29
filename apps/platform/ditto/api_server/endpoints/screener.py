@@ -4456,9 +4456,7 @@ async def submit_result(
             pass
         elif deferred_deep_attempt:
             agent.status = target
-        elif rolling_rescreen and payload.passed:
-            pass
-        elif stale_scored_rescreen and payload.passed:
+        elif (rolling_rescreen or stale_scored_rescreen) and payload.passed:
             pass
         elif (
             rolling_rescreen

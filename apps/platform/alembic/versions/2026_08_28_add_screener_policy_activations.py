@@ -11,8 +11,9 @@ under a stale version re-enters the screening queue.
 
 from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision: str = "c3f6a9e2b514"
 down_revision: str | Sequence[str] | None = "f2d9c34a718e"

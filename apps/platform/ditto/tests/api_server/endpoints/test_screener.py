@@ -33,19 +33,10 @@ from sqlalchemy.ext.asyncio import (
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import (
-    SCREENING_POLICY_VERSION as _BUILTIN_POLICY_VERSION,
     ScreenerHeartbeatRequest,
     SourceReviewEvidenceItem,
     SourceReviewFinding,
 )
-from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
-
-# Every use of SCREENING_POLICY_VERSION in this module means "the version the
-# platform REQUIRES," which — with no scheduled activation written — is the
-# floor, not the newest text the deployed build implements. Scheduled
-# activations and their rescreen behavior have their own dedicated tests in
-# test_admin_screener_policy_activation.py.
-SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_models.system_health import (
     SystemMetrics,
@@ -111,10 +102,18 @@ from ditto.db.queries.screening import MAX_SCREENING_EXPIRIES
 from ditto.db.queries.tickets import issue_ticket, ticket_attempt_cap
 from ditto.tests.legacy_era import retired_era_writes_allowed
 from ditto_screening_protocol import (
+    SCREENING_FLOOR_POLICY_VERSION,
     ScreenResultOutcome,
     ScreenReviewAudit,
     verdict_signing_message,
 )
+
+# Every use of SCREENING_POLICY_VERSION in this module means "the version the
+# platform REQUIRES," which — with no scheduled activation written — is the
+# floor, not the newest text the deployed build implements. Scheduled
+# activations and their rescreen behavior have their own dedicated tests in
+# test_admin_screener_policy_activation.py.
+SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
 _SCREENER_HOTKEY = _KEYPAIR.ss58_address

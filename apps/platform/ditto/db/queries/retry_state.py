@@ -32,7 +32,7 @@ from ditto.db.models import (
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
 from ditto.db.queries.queue_removal import is_in_force, removal_in_force
 from ditto.db.queries.scores import SCORING_QUORUM
-from ditto.db.queries.tickets import ticket_attempt_cap, ticket_retry_budget_spent
+from ditto.db.queries.tickets import ticket_retry_budget_spent
 from ditto.screener_policy_state import effective_screening_policy_version
 
 VALIDATOR_RETRY_ONLINE_WINDOW = timedelta(minutes=5)

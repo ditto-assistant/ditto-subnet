@@ -13,10 +13,6 @@ from sqlalchemy.sql.selectable import ScalarSelect
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contracts
-from ditto.screener_policy_state import (
-    effective_rescreen_scored,
-    effective_screening_policy_version,
-)
 from ditto.db.models import (
     Agent,
     AthReview,
@@ -39,6 +35,10 @@ from ditto.db.queries.benchmark_admission import (
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
 from ditto.db.queries.scores import SCORING_QUORUM
+from ditto.screener_policy_state import (
+    effective_rescreen_scored,
+    effective_screening_policy_version,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession

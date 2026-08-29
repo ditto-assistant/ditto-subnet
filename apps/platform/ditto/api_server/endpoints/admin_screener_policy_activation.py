@@ -140,7 +140,10 @@ async def schedule_activation(
     if activate_at <= datetime.now(UTC):
         raise HTTPException(
             status_code=422,
-            detail="activate_at must be in the future; an activation is notice, not a retroactive rule change",
+            detail=(
+                "activate_at must be in the future; an activation is "
+                "notice, not a retroactive rule change"
+            ),
         )
     if payload.target_policy_version <= SCREENING_FLOOR_POLICY_VERSION:
         raise HTTPException(

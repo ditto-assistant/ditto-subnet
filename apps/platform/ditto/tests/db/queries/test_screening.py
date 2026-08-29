@@ -13,15 +13,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ditto.api_models.screener import (
-    SCREENING_POLICY_VERSION as _BUILTIN_POLICY_VERSION,
-)
-from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
-
-# Seeded versions mean "the version the platform REQUIRES" — the floor in the
-# default no-scheduled-activation state, since these tests call the query
-# builders directly and no resolver refreshes the global snapshot.
-SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 from ditto.db.models import (
     Agent,
     AgentStatus,
@@ -40,6 +31,12 @@ from ditto.db.queries.screening import (
     MAX_SCREENING_EXPIRIES,
     claim_screening_attempts,
 )
+from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
+
+# Seeded versions mean "the version the platform REQUIRES" — the floor in the
+# default no-scheduled-activation state, since these tests call the query
+# builders directly and no resolver refreshes the global snapshot.
+SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 
 _SCREENER = "5GScreenerHotkeyForClaimTests000000000000000000000"
 # The era that has activated, and the one a rollout would be collecting toward.
