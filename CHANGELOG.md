@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.143.1 (2026-08-29)
+
+### Bug Fixes
+
+- **platform**: Sanitize private provider traces
+  ([#1307](https://github.com/ditto-assistant/ditto-subnet/pull/1307),
+  [`8f9df33`](https://github.com/ditto-assistant/ditto-subnet/commit/8f9df33cfcddf333e2bdb4e343b4d19d07fe18bf))
+
+### Documentation
+
+- **validator**: Require non-root operator setup
+  ([#1306](https://github.com/ditto-assistant/ditto-subnet/pull/1306),
+  [`25337b2`](https://github.com/ditto-assistant/ditto-subnet/commit/25337b20a2010814575cce0719022b1ad8171991))
+
+
 ## v0.143.0 (2026-08-29)
 
 ### Bug Fixes
