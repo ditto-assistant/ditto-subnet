@@ -113,8 +113,10 @@ prepare_release() {
     "$revision" refs/remotes/origin/main
   run_as_service git -C "$staging/src" checkout --detach "$revision"
   [ "$(run_as_service git -C "$staging/src" rev-parse HEAD)" = "$revision" ]
+  run_as_service "$UV_BIN" venv --relocatable "$staging/worker-venv"
   run_as_service env UV_PROJECT_ENVIRONMENT="$staging/worker-venv" \
     "$UV_BIN" sync --frozen --project "$staging/src/workers/screener"
+  run_as_service "$UV_BIN" venv --relocatable "$staging/orchestrator-venv"
   run_as_service env UV_PROJECT_ENVIRONMENT="$staging/orchestrator-venv" \
     "$UV_BIN" sync --frozen --project "$staging/src/services/screener-orchestrator"
   run_as_service "$staging/worker-venv/bin/python" \
