@@ -1069,8 +1069,7 @@ async def claim_screening_attempts(
         )
         policy_only = (
             not build_only
-            and agent.screening_policy_version
-            < effective_screening_policy_version()
+            and agent.screening_policy_version < effective_screening_policy_version()
             and all(
                 value is not None
                 for value in (
