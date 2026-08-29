@@ -2944,25 +2944,14 @@ async def test_partial_exploratory_tool_requires_correction_before_submission(
         "causal_path": [],
         "summary": "sanitized",
     }
-    violation = {
-        **safe,
-        "disposition": "violation",
-        "risk_level": "high",
-        "confidence": 0.99,
-        "resolution_basis": "hidden_model_bypass",
-        "categories": ["provider_bypass"],
-        "evidence": [
-            {
-                "path": "src/main.rs",
-                "line": 1,
-                "file_sha256": digest,
-                "category": "provider_bypass",
-                "role": "effect",
-            }
-        ],
+    adjudicated_safe = {
+        **_clearance_certificate(safe),
+        "confidence": 1.0,
         "causal_path": [
-            {"path": "src/main.rs", "line": 1, "role": "trigger"},
+            {"path": "src/main.rs", "line": 1, "role": "context"},
+            {"path": "src/main.rs", "line": 1, "role": "decision"},
             {"path": "src/main.rs", "line": 1, "role": "effect"},
+            {"path": "src/main.rs", "line": 1, "role": "sink"},
         ],
     }
     requests = 0
@@ -2972,10 +2961,18 @@ async def test_partial_exploratory_tool_requires_correction_before_submission(
         nonlocal requests
         requests += 1
         request_payloads.append(json.loads(request.content))
-        if requests == 2:
-            output = [_tool_call("2", "search", {"query": "bypass"})]
+        if requests in {2, 4}:
+            output = [_tool_call(str(requests), "search", {"query": "bypass"})]
+        elif requests == 6:
+            output = [_tool_call("6", "read_file", {"path": "src/main.rs"})]
         else:
-            result = violation if requests == 4 else safe
+            result = (
+                adjudicated_safe
+                if requests == 7
+                else _clearance_certificate(safe)
+                if requests == 5
+                else safe
+            )
             output = [_tool_call(str(requests), "submit_l2_review", result)]
         return _response(
             output,
@@ -2994,15 +2991,21 @@ async def test_partial_exploratory_tool_requires_correction_before_submission(
         deadline=None,
     )
 
-    assert requests == 3
-    assert not result.observation.ok
-    assert result.observation.error_code == "l3-critic-analyzer-contract"
+    assert requests == 7
+    assert result.observation.ok
+    assert result.observation.risk_level == "low"
     assert result.dossier_complete
     critic_items = request_payloads[2]["input"]  # type: ignore[index]
     assert any(
         item.get("type") == "function_call_output"
         and '"truncated": true' in item.get("output", "")
         for item in critic_items
+    )
+    corrected_items = request_payloads[3]["input"]  # type: ignore[index]
+    assert any(
+        item.get("type") == "function_call_output"
+        and json.loads(item.get("output", "{}")).get("error") == "submission-contract"
+        for item in corrected_items
     )
 
 
@@ -3429,7 +3432,7 @@ async def test_adjudicator_retry_reuses_analyst_and_critic_stage_caches(
     assert second.usage.input_tokens == 1_000, "only adjudicator usage is new"
 
 
-async def test_invalid_final_tool_result_is_single_shot_contract_failure(
+async def test_invalid_final_tool_result_is_correctable_in_same_trajectory(
     tmp_path: Path,
 ) -> None:
     source = "fn main() {}"
@@ -3491,9 +3494,137 @@ async def test_invalid_final_tool_result_is_single_shot_contract_failure(
         deadline=None,
     )
 
-    assert not result.observation.ok
-    assert result.observation.error_code == "l2-model-tool-contract"
-    assert len(requests) == 1
+    assert result.observation.ok
+    assert len(requests) == 5
+    correction = requests[1]["input"][-1]  # type: ignore[index]
+    assert correction["type"] == "function_call_output"
+    assert json.loads(correction["output"])["error"] == "submission-contract"
+
+
+async def test_malformed_submit_arguments_are_correctable_in_same_trajectory(
+    tmp_path: Path,
+) -> None:
+    source = "fn main() {}"
+    archive, artifact_sha = _tar(tmp_path, source)
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    safe = {
+        "disposition": "safe",
+        "risk_level": "low",
+        "confidence": 0.8,
+        "resolution_basis": "authoritative_model_tool_path",
+        "categories": ["none"],
+        "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
+        "evidence": [],
+        "causal_path": [],
+        "summary": "sanitized",
+    }
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return _response(
+                [
+                    {
+                        "id": "fc_1",
+                        "call_id": "1",
+                        "type": "function_call",
+                        "name": "submit_l2_review",
+                        "arguments": "{",
+                    }
+                ],
+                model="moonshotai/kimi-k3-20260715",
+            )
+        if len(requests) == 4:
+            return _response(
+                [_tool_call("4", "read_file", {"path": "src/main.rs"})],
+                model="openai/gpt-5.6-sol-20260709",
+            )
+        result = _clearance_certificate(safe) if len(requests) == 5 else safe
+        return _response(
+            [_tool_call(str(len(requests)), "submit_l2_review", result)],
+            model=(
+                "moonshotai/kimi-k3-20260715"
+                if len(requests) <= 2
+                else "openai/gpt-5.6-sol-20260709"
+            ),
+        )
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert result.observation.ok
+    assert len(requests) == 5
+    correction = requests[1]["input"][-1]  # type: ignore[index]
+    assert correction["call_id"] == "1"
+    assert json.loads(correction["output"])["error"] == "submission-contract"
+
+
+async def test_submit_mixed_with_analyzer_call_is_correctable(
+    tmp_path: Path,
+) -> None:
+    source = "fn main() {}"
+    archive, artifact_sha = _tar(tmp_path, source)
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    safe = {
+        "disposition": "safe",
+        "risk_level": "low",
+        "confidence": 0.8,
+        "resolution_basis": "authoritative_model_tool_path",
+        "categories": ["none"],
+        "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
+        "evidence": [],
+        "causal_path": [],
+        "summary": "sanitized",
+    }
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return _response(
+                [
+                    _tool_call("submit", "submit_l2_review", safe),
+                    _tool_call("read", "read_file", {"path": "src/main.rs"}),
+                ],
+                model="moonshotai/kimi-k3-20260715",
+            )
+        if len(requests) == 4:
+            return _response(
+                [_tool_call("4", "read_file", {"path": "src/main.rs"})],
+                model="openai/gpt-5.6-sol-20260709",
+            )
+        result = _clearance_certificate(safe) if len(requests) == 5 else safe
+        return _response(
+            [_tool_call(str(len(requests)), "submit_l2_review", result)],
+            model=(
+                "moonshotai/kimi-k3-20260715"
+                if len(requests) <= 2
+                else "openai/gpt-5.6-sol-20260709"
+            ),
+        )
+
+    result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+
+    assert result.observation.ok
+    assert len(requests) == 5
+    outputs = [
+        item
+        for item in requests[1]["input"]  # type: ignore[index]
+        if item.get("type") == "function_call_output"
+    ]
+    assert {item["call_id"] for item in outputs} == {"submit", "read"}
 
 
 async def test_late_l2_result_is_not_accepted(tmp_path: Path) -> None:

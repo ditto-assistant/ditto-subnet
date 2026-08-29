@@ -3293,6 +3293,28 @@ class KimiSolSourceReviewAgent:
         read_files: set[str] = set()
         pending_tool_corrections: set[str] = set()
 
+        def request_submit_correction(call: object) -> None:
+            try:
+                call_id = _call_id_value(call)
+            except ValueError as error:
+                raise failure("model-tool-contract") from error
+            items.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": json.dumps(
+                        {
+                            "error": "submission-contract",
+                            "message": (
+                                "Correct submit_l2_review and retry it as the only "
+                                "call after resolving any analyzer corrections."
+                            ),
+                        },
+                        separators=(",", ":"),
+                    ),
+                }
+            )
+
         def failure(code: str) -> L2TrajectoryError:
             return L2TrajectoryError(
                 code,
@@ -3351,59 +3373,69 @@ class KimiSolSourceReviewAgent:
                 item for item in calls if item.get("name") == "submit_l2_review"
             ]
             if submitted:
-                if len(calls) != 1 or len(submitted) != 1:
-                    raise failure("model-tool-contract")
-                if pending_tool_corrections:
-                    raise failure("analyzer-contract")
-                try:
-                    call_id, _name, arguments = _tool_call(submitted[0])
-                except json.JSONDecodeError as error:
-                    raise failure("model-tool-contract") from error
-                except ValueError as error:
-                    raise failure("model-tool-contract") from error
-                try:
-                    observation, analyzed, causal, resolution_basis = _parse_l2_review(
-                        arguments,
-                        artifact_sha256=artifact_sha256,
-                        repository=repository,
-                        required_paths=tuple(
-                            dict.fromkeys(
-                                [
-                                    *(
-                                        str(item["path"])
-                                        for item in _l1_evidence_from_dossier(dossier)
-                                    ),
-                                    *_provisional_evidence_paths(provisional_result),
-                                ]
-                            )
-                        ),
-                        prompt_revision=(
-                            l2_prompt_revision(policy_version)
-                            if role == "analyst"
-                            else l2_cause_tiebreaker_prompt_revision(policy_version)
-                            if role == "violation_tiebreaker"
-                            else l2_cause_prompt_revision(policy_version)
-                            if role == "violation_adjudicator"
-                            else l2_safety_prompt_revision(policy_version)
-                            if role == "adjudicator"
-                            else l2_critic_prompt_revision(policy_version)
-                        ),
-                    )
-                except ValueError as error:
-                    raise failure("model-tool-contract") from error
-                return L2RunResult(
-                    observation=observation,
-                    analyzed_files=analyzed,
-                    causal_path=causal,
-                    tools=tuple(tool_names),
-                    usage=usage,
-                    cache_hit=False,
-                    response_models=tuple(response_models),
-                    response_providers=tuple(response_providers),
-                    resolution_basis=resolution_basis,
-                    dossier_complete=trajectory_complete,
+                can_accept = (
+                    len(calls) == 1
+                    and len(submitted) == 1
+                    and not pending_tool_corrections
                 )
-            for call in calls:
+                if can_accept:
+                    try:
+                        _call_id, _name, arguments = _tool_call(submitted[0])
+                        observation, analyzed, causal, resolution_basis = (
+                            _parse_l2_review(
+                                arguments,
+                                artifact_sha256=artifact_sha256,
+                                repository=repository,
+                                required_paths=tuple(
+                                    dict.fromkeys(
+                                        [
+                                            *(
+                                                str(item["path"])
+                                                for item in _l1_evidence_from_dossier(
+                                                    dossier
+                                                )
+                                            ),
+                                            *_provisional_evidence_paths(
+                                                provisional_result
+                                            ),
+                                        ]
+                                    )
+                                ),
+                                prompt_revision=(
+                                    l2_prompt_revision(policy_version)
+                                    if role == "analyst"
+                                    else l2_cause_tiebreaker_prompt_revision(
+                                        policy_version
+                                    )
+                                    if role == "violation_tiebreaker"
+                                    else l2_cause_prompt_revision(policy_version)
+                                    if role == "violation_adjudicator"
+                                    else l2_safety_prompt_revision(policy_version)
+                                    if role == "adjudicator"
+                                    else l2_critic_prompt_revision(policy_version)
+                                ),
+                            )
+                        )
+                    except (json.JSONDecodeError, ValueError):
+                        request_submit_correction(submitted[0])
+                        continue
+                    return L2RunResult(
+                        observation=observation,
+                        analyzed_files=analyzed,
+                        causal_path=causal,
+                        tools=tuple(tool_names),
+                        usage=usage,
+                        cache_hit=False,
+                        response_models=tuple(response_models),
+                        response_providers=tuple(response_providers),
+                        resolution_basis=resolution_basis,
+                        dossier_complete=trajectory_complete,
+                    )
+                for call in submitted:
+                    request_submit_correction(call)
+            for call in (
+                call for call in calls if call.get("name") != "submit_l2_review"
+            ):
                 try:
                     call_id, name, arguments = _tool_call(call)
                 except json.JSONDecodeError as error:
