@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.124.2 (2026-08-29)
+
+### Bug Fixes
+
+- **screener**: Restore fallback and renew leases
+  ([#1266](https://github.com/ditto-assistant/ditto-subnet/pull/1266),
+  [`40d338a`](https://github.com/ditto-assistant/ditto-subnet/commit/40d338ab5db983c9fd904338d43b0a6e36cb1fc4))
+
+
 ## v0.124.1 (2026-08-29)
 
 ### Bug Fixes
