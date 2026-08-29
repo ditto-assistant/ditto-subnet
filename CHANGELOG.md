@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.133.1 (2026-08-29)
+
+### Bug Fixes
+
+- **screener**: Share source with rootless analyzer
+  ([#1284](https://github.com/ditto-assistant/ditto-subnet/pull/1284),
+  [`05df229`](https://github.com/ditto-assistant/ditto-subnet/commit/05df229dfb59bcf97a39fa9a630e27b67ecc9a80))
+
+### Performance Improvements
+
+- **screener**: Reuse images for policy rescreens
+  ([#1283](https://github.com/ditto-assistant/ditto-subnet/pull/1283),
+  [`d7e5eb9`](https://github.com/ditto-assistant/ditto-subnet/commit/d7e5eb9e8427845c5bb7d71c72bc5fe0a19c178b))
+
+
 ## v0.133.0 (2026-08-29)
 
 ### Features
