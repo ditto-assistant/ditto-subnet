@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.134.0 (2026-08-29)
+
+### Bug Fixes
+
+- **screener**: Preserve rootless Docker endpoint
+  ([#1285](https://github.com/ditto-assistant/ditto-subnet/pull/1285),
+  [`9ffad16`](https://github.com/ditto-assistant/ditto-subnet/commit/9ffad1631eae4f315211a6e70bd2158b7798d002))
+
+### Features
+
+- **platform**: Add shadow core qualification hysteresis
+  ([`547658f`](https://github.com/ditto-assistant/ditto-subnet/commit/547658fba8d5de785610ce7a44c25937b143b7c1))
+
+
 ## v0.133.1 (2026-08-29)
 
 ### Bug Fixes
