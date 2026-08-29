@@ -2068,6 +2068,89 @@ func TestV7InferenceBrokerParksTransientProviderFaults(t *testing.T) {
 	}
 }
 
+func TestV7InferenceBrokerLeavesStructuredOutputRepairToMiner(t *testing.T) {
+	const profile = "openrouter-route-0123456789abcdef-v1"
+	var calls atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set(minerRecoverableFailureHeader, minerRecoverableStructuredOutput)
+			http.Error(w, "inference provider unavailable", http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":2,"completion_tokens":1},"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "groq", profile, llm.V7HarnessModel)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.31", protocol.BenchVersionV8)
+	start, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	call := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+		request.RemoteAddr = "192.0.2.31:4321"
+		request.SetPathValue("rest", "v1/chat/completions")
+		recorder := httptest.NewRecorder()
+		broker.handle(recorder, request)
+		return recorder
+	}
+	if first := call(); first.Code != http.StatusBadGateway {
+		t.Fatalf("first status=%d want 502: %s", first.Code, first.Body.String())
+	}
+	if second := call(); second.Code != http.StatusOK {
+		t.Fatalf("second status=%d want 200: %s", second.Code, second.Body.String())
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("platform deliveries=%d want exactly two miner-issued calls", calls.Load())
+	}
+
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := relayDegradedSince(start, end); err != nil {
+		t.Fatalf("miner-recoverable response degraded the relay: %v", err)
+	}
+	usage, err := relayUsageSince(start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, err := relayExecutionSince(start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Status != "complete" || usage.Requests != 2 || usage.Successes != 1 || usage.UsageAvailable != 1 {
+		t.Fatalf("usage=%+v", usage)
+	}
+	if execution.Requests != 2 || execution.Successes != 1 || execution.UpstreamAttempts != 2 ||
+		execution.Retries != 0 || execution.InfrastructureFailures != 0 || execution.MinerRecoverableFailures != 1 {
+		t.Fatalf("execution=%+v", execution)
+	}
+	if err := requireCompleteV7Usage(protocol.BenchVersionV8, usage, execution); err != nil {
+		t.Fatalf("successful miner repair was not scoreable: %v", err)
+	}
+}
+
+func TestMinerRecoverableFailureClassRequiresAuthenticatedPlatformRoute(t *testing.T) {
+	if !minerRecoverablePlatformFailure("", nil, http.StatusBadGateway, minerRecoverableStructuredOutput) {
+		t.Fatal("authenticated Platform classification was rejected")
+	}
+	if minerRecoverablePlatformFailure("https://legacy.invalid", nil, http.StatusBadGateway, minerRecoverableStructuredOutput) {
+		t.Fatal("legacy gateway spoofed miner-recoverable classification")
+	}
+	if minerRecoverablePlatformFailure("", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), http.StatusBadGateway, minerRecoverableStructuredOutput) {
+		t.Fatal("in-process reader spoofed miner-recoverable classification")
+	}
+	if minerRecoverablePlatformFailure("", nil, http.StatusServiceUnavailable, minerRecoverableStructuredOutput) {
+		t.Fatal("non-502 provider failure was marked miner-recoverable")
+	}
+}
+
 func TestV7InferenceBrokerDoesNotEnterRecoveryWait(t *testing.T) {
 	var attempts atomic.Int64
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

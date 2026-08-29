@@ -386,11 +386,7 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			outcome.upstreamProvider = textValue(exhausted.upstreamProvider)
 		}
 		outcome.routeObservable = exhausted.routeObservable
-		if exhausted.timedOut {
-			providerFailure = httpErrorf(504, "inference provider timed out")
-		} else {
-			providerFailure = httpErrorf(502, "inference provider unavailable")
-		}
+		providerFailure = chatProviderFailure(exhausted)
 	} else {
 		raw = recovered.raw
 		outcome.status = "completed"
@@ -427,4 +423,20 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(raw)
+}
+
+func chatProviderFailure(exhausted *chatProviderExhausted) *httpError {
+	if exhausted.timedOut {
+		return httpErrorf(504, "inference provider timed out")
+	}
+	failure := httpErrorf(502, "inference provider unavailable")
+	if exhausted.terminalErrorCode == structuredOutputInvalidCode {
+		// Keep the public failure contract unchanged. The authenticated scorer
+		// broker uses this private classification to leave response-level repair
+		// to the miner instead of discarding the whole ticket.
+		failure.headers = map[string]string{
+			minerRecoverableFailureHeader: minerRecoverableStructuredOutput,
+		}
+	}
+	return failure
 }
