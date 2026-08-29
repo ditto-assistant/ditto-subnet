@@ -2,6 +2,35 @@
 
 <!-- version list -->
 
+## v0.137.0 (2026-08-29)
+
+### Bug Fixes
+
+- **screener**: Correct invalid review submissions in trajectory
+  ([#1293](https://github.com/ditto-assistant/ditto-subnet/pull/1293),
+  [`2dfd7b4`](https://github.com/ditto-assistant/ditto-subnet/commit/2dfd7b464ec928074449b634426542118ae61a36))
+
+### Features
+
+- Report validator updater self-refresh status
+  ([#1290](https://github.com/ditto-assistant/ditto-subnet/pull/1290),
+  [`33ec683`](https://github.com/ditto-assistant/ditto-subnet/commit/33ec68357457c50c1be26a46b362ac7616ea740b))
+
+- **coding**: Add shadow private catalog selector
+  ([`41452c4`](https://github.com/ditto-assistant/ditto-subnet/commit/41452c48d947552280d748836ca3f23efae18954))
+
+- **infra**: Add exact-subject screener X.509 identity
+  ([#1291](https://github.com/ditto-assistant/ditto-subnet/pull/1291),
+  [`86f569d`](https://github.com/ditto-assistant/ditto-subnet/commit/86f569dbdf93b8ee54ab5a6995722a474930fedd))
+
+- **platform**: Add signed coding catalog exposure ledger
+  ([`51f6802`](https://github.com/ditto-assistant/ditto-subnet/commit/51f68026ca27bfc1b840ead28d1b80bac849fb36))
+
+- **screener**: Add authenticated pull fleet updates
+  ([#1288](https://github.com/ditto-assistant/ditto-subnet/pull/1288),
+  [`02035a3`](https://github.com/ditto-assistant/ditto-subnet/commit/02035a3730175c54267029ee4698aa4bb586d057))
+
+
 ## v0.136.1 (2026-08-29)
 
 ### Bug Fixes
