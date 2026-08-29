@@ -18,9 +18,11 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -459,6 +461,11 @@ class FleetNode:
             max_workers=settings.max_workers, thread_name_prefix="ditto-fleet"
         )
         self.futures: dict[concurrent.futures.Future[None], str] = {}
+        self.stop_requested = threading.Event()
+
+    def request_stop(self) -> None:
+        """Stop claiming new work; active futures drain before process exit."""
+        self.stop_requested.set()
 
     def _counts(self) -> dict[str, int]:
         counts = {"build": 0, "runtime": 0, "source_review": 0}
@@ -662,14 +669,15 @@ class FleetNode:
 
     def run(self) -> int:
         try:
-            while True:
+            while not self.stop_requested.is_set():
                 handled = self.tick()
                 if self.settings.once:
                     return 0
                 if not handled:
-                    time.sleep(self.settings.interval_seconds)
+                    self.stop_requested.wait(self.settings.interval_seconds)
         finally:
             self.executor.shutdown(wait=True, cancel_futures=False)
+        return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -721,7 +729,10 @@ def main() -> int:
         vm_vcpus=min(16, max(2, args.vm_vcpus)),
         once=args.once,
     )
-    return FleetNode(settings).run()
+    node = FleetNode(settings)
+    for handled_signal in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(handled_signal, lambda _signum, _frame: node.request_stop())
+    return node.run()
 
 
 if __name__ == "__main__":

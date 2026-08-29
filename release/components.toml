@@ -215,7 +215,10 @@ paths = [
 description = "Targon-first screener capacity and build controller"
 depends_on = ["screener"]
 paths = [
+  "Dockerfile.screener-fleet-release",
   "services/screener-orchestrator/**",
+  "scripts/build-screener-fleet-release.py",
+  "scripts/screener-fleet-auto-update.sh",
 ]
 
 [components.validator_stack]

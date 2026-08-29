@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for an authenticated Ditto screener fleet release
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+RandomizedDelaySec=3min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

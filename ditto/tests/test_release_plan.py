@@ -282,6 +282,20 @@ def test_orchestrator_change_is_isolated_from_validator_release(
     ) == {"screener_orchestrator"}
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "Dockerfile.screener-fleet-release",
+        "scripts/build-screener-fleet-release.py",
+        "scripts/screener-fleet-auto-update.sh",
+    ],
+)
+def test_fleet_release_inputs_select_the_orchestrator(
+    components, ignored_paths, path: str
+) -> None:
+    assert selected(components, ignored_paths, path) == {"screener_orchestrator"}
+
+
 def test_screening_contract_change_propagates_to_every_consumer(
     components, ignored_paths
 ) -> None:

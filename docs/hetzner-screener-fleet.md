@@ -177,6 +177,33 @@ job.
 
 ## Drain and update
 
-Set the node to `draining` in Backroom before maintenance. This stops new full
-screens and lane claims while active leases finish. Re-run Ansible, confirm the
-heartbeat and channel usage return healthy, then set the node back to `active`.
+Ordinary code updates are host-pulled and need no inbound deployment path. The
+release workflow publishes an immutable fleet descriptor into the public
+`ditto-subnet-stack` package, signs its exact digest with keyless Cosign, and
+advances the disjoint `screener-fleet-stable-1` discovery tag only after the
+descriptor has been extracted and checked. The host timer then:
+
+1. resolves the mutable tag to an immutable digest;
+2. verifies the exact `release.yml@refs/heads/main` signer and GitHub OIDC
+   issuer;
+3. validates the closed manifest and fleet-specific image labels;
+4. fetches the signed revision from canonical public `main` and prepares both
+   locked Python environments without disturbing the running release;
+5. asks every service to stop claiming and drain active work, atomically moves
+   `current`, and starts the new release; and
+6. restores the previous link and builder digest if any service fails to start.
+
+The host stores no GitHub token or CI SSH private key. Inspect the last accepted
+descriptor and timer state without printing a secret:
+
+```bash
+sudo systemctl status ditto-screener-fleet-auto-update.timer
+sudo systemctl status ditto-screener-fleet-auto-update.service
+sudo sed -n 's/^\(DESCRIPTOR\|REVISION\|VERSION\|UPDATED_AT\)=/\1=/p' \
+  /var/lib/ditto-screener-fleet/updater/managed-release.env
+```
+
+For host, kernel, Ansible, or emergency maintenance, first set the node to
+`draining` in Backroom. This stops new full screens and lane claims while active
+leases finish. Re-run Ansible, confirm the heartbeat and channel usage return
+healthy, then set the node back to `active`.

@@ -271,6 +271,7 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
         "build-submission-builder",
         "deploy-screener-controller",
         "build-screener",
+        "assemble-screener-fleet-release",
         "build-validator-amd64",
         "build-validator-arm64",
         "build-validator",
@@ -1274,6 +1275,7 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
         "build-dittobench-arm64": ["dittobench-api-arm64"],
         "build-model-relay-compat": ["model-relay-compat"],
         "assemble-stack": ["stack-release"],
+        "assemble-screener-fleet-release": ["screener-fleet-release"],
     }
     assert reader_scopes["build-dittobench-amd64"] == [
         ["dittobench-api-amd64", "dittobench-api"]
@@ -1285,5 +1287,5 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
     assert reader_scopes["build-validator-arm64"] == [["validator-arm64", "validator"]]
     assert (
         len({scope for job_scopes in writer_scopes.values() for scope in job_scopes})
-        == 8
+        == 9
     )
