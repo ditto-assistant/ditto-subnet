@@ -322,7 +322,11 @@ class ScreenerWorker:
         # A mixed-fleet platform may require the older policy during a
         # scheduled activation window; screen under exactly what it requires.
         screen_version = min(required_policy, SCREENING_POLICY_VERSION)
-        queue = await self._platform.claim_next(policy_version=screen_version)
+        queue = await self._platform.claim_next(
+            policy_version=screen_version,
+            review_settings=review_settings,
+            instance_id=self._instance_id,
+        )
         if queue.required_policy_version != required_policy:
             raise PlatformError(
                 "platform changed screening policy during claim: expected "

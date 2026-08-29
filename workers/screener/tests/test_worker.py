@@ -170,7 +170,10 @@ class _FakePlatform:
     async def get_review_settings(self, _instance_id: str):
         return self.review_settings
 
-    async def claim_next(self, *, policy_version: int) -> ScreenerQueueResponse:
+    async def claim_next(
+        self, *, policy_version: int, review_settings: Any, instance_id: str
+    ) -> ScreenerQueueResponse:
+        del review_settings, instance_id
         self.claim_calls += 1
         self.claimed_policy_versions.append(policy_version)
         items = self._queues.pop(0) if self._queues else []

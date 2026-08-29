@@ -321,13 +321,23 @@ class PlatformClient:
             )
         return ScreenerQueueResponse.model_validate(resp.json()).required_policy_version
 
-    async def claim_next(self, *, policy_version: int) -> ScreenerQueueResponse:
+    async def claim_next(
+        self,
+        *,
+        policy_version: int,
+        review_settings: EffectiveReviewSettings,
+        instance_id: str,
+    ) -> ScreenerQueueResponse:
         """Lease one agent for screening, oldest eligible first."""
         url = f"{self._base}{_PREFIX}/claim"
         params: dict[str, str | int] = {
             "limit": 1,
             "policy_version": policy_version,
             "renewable_lease": "true",
+            "review_settings_revision": review_settings.revision,
+            "review_settings_instance_id": instance_id,
+            "review_settings_scope": review_settings.scope,
+            "review_settings_checksum": review_settings.checksum,
         }
         try:
             resp = await self._client.post(
@@ -336,6 +346,12 @@ class PlatformClient:
         except httpx.HTTPError as e:
             raise PlatformError(f"screening claim failed: {e}") from e
         if resp.status_code != 200:
+            if resp.status_code == 409:
+                # A settings revision can change between the cached preflight
+                # and the atomic claim. Drop the cache so the next sweep heals
+                # immediately instead of repeating the stale claim for a minute.
+                self._review_settings = None
+                self._review_settings_fetched_at = 0.0
             raise PlatformError(
                 f"screening claim rejected ({resp.status_code}): {resp.text[:200]}"
             )
