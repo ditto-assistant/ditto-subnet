@@ -84,13 +84,14 @@ rm -rf "$${ROOT}/.cache"
 chown -R root:root "$${ROOT}"
 userdel "$${BOOTSTRAP_USER}"
 
-# Resolve only Secret Manager through Google's VPC-SC-compatible restricted
-# VIP once the Terraform arm phase removes general internet egress.
+# Resolve Secret Manager and the IAM Credentials allowed-locations preflight
+# used by current gcloud through Google's VPC-SC-compatible restricted VIP once
+# the Terraform arm phase removes general internet egress.
 cat >>/etc/hosts <<'HOSTS'
-199.36.153.4 secretmanager.googleapis.com
-199.36.153.5 secretmanager.googleapis.com
-199.36.153.6 secretmanager.googleapis.com
-199.36.153.7 secretmanager.googleapis.com
+199.36.153.4 secretmanager.googleapis.com iamcredentials.googleapis.com
+199.36.153.5 secretmanager.googleapis.com iamcredentials.googleapis.com
+199.36.153.6 secretmanager.googleapis.com iamcredentials.googleapis.com
+199.36.153.7 secretmanager.googleapis.com iamcredentials.googleapis.com
 HOSTS
 
 install -d -m 0755 /usr/local/libexec
