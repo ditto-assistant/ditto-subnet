@@ -144,7 +144,7 @@ func parseCanonical[T parsedModel](
 	if len(body) == 0 || len(body) > MaxCanonicalJSONBytes {
 		return zero, errors.New("coding JSON size is outside the canonical bound")
 	}
-	if err := validateRawJSONUnicode(body); err != nil {
+	if err := ValidateRawJSONUnicode(body); err != nil {
 		return zero, err
 	}
 	if err := rejectDuplicateJSONFields(body); err != nil {
@@ -176,7 +176,10 @@ func parseCanonical[T parsedModel](
 	return decoded, nil
 }
 
-func validateRawJSONUnicode(body []byte) error {
+// ValidateRawJSONUnicode rejects byte sequences that encoding/json would
+// otherwise coerce to U+FFFD. It is shared by coding-contract and runner wire
+// decoders so their Unicode acceptance boundary cannot drift.
+func ValidateRawJSONUnicode(body []byte) error {
 	if !utf8.Valid(body) {
 		return errors.New("coding JSON is not valid UTF-8")
 	}
