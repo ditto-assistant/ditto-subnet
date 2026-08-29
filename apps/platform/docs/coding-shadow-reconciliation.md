@@ -22,8 +22,9 @@ operator review. This layer adds no catch-all retry loop.
 
 ## Activation boundary
 
-There is no background task, candidate scan, environment switch, route, ticket,
+There is no background task, candidate scan, environment switch, route,
 validator task delivery, Luna grant, scoring, deployment, or emissions effect.
-No private task is consumed unless an explicit internal caller invokes the
-reconciler after finality. Coding contract v1 remains permanently
+A separate internal issuer may create k=3 tickets and the task-lease builder may
+reconstruct one, but no private task is consumed unless an explicit caller
+invokes reconciliation after finality. Coding contract v1 remains permanently
 `weight_eligible=false`.

@@ -1,0 +1,363 @@
+"""Tests for private shadow coding task-lease reconstruction."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import pytest
+
+from ditto.api_models.coding_catalog import CodingCatalogCommitment
+from ditto.api_models.coding_selection import (
+    CodingCatalogMembershipProof,
+    CodingCatalogTaskVersion,
+    CodingPrivateCatalogRecord,
+    CodingSelectionAssignment,
+)
+from ditto.coding_selection import rebuild_coding_selection_result
+from ditto.db.models import (
+    Agent,
+    CodingCapabilityCertification,
+    CodingSelectionAssignmentRow,
+    CodingShadowRun,
+    CodingShadowTicket,
+)
+from ditto.db.queries import coding_task_leases
+from ditto.db.queries.coding_task_leases import (
+    CodingTaskLeaseIntegrityError,
+    CodingTaskLeaseNotAvailableError,
+    build_coding_shadow_task_lease,
+)
+
+_VECTOR_PATH = (
+    Path(__file__).parents[6]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_selection_v1.json"
+)
+
+
+def _fixture() -> SimpleNamespace:
+    vector = json.loads(_VECTOR_PATH.read_text(encoding="utf-8"))
+    commitment = CodingCatalogCommitment.model_validate(vector["commitment"])
+    assignment = CodingSelectionAssignment.model_validate(vector["assignment"])
+    task = CodingCatalogTaskVersion.model_validate(vector["task_version"])
+    proof = CodingCatalogMembershipProof.model_validate(vector["membership_proof"])
+    material = CodingPrivateCatalogRecord.model_validate(
+        {
+            "schema": "dittobench-coding-private-catalog-record-v1",
+            "catalog_commitment_sha256": commitment.commitment_sha256,
+            "task_version": vector["task_version"],
+            "membership_proof": vector["membership_proof"],
+            "issue": vector["issue"],
+            "runtime_policy": vector["runtime_policy"],
+            "budgets": vector["budgets"],
+        }
+    )
+    rebuilt = rebuild_coding_selection_result(
+        assignment=assignment,
+        commitment=commitment,
+        selection_block_hash=vector["selection_proof"]["selection_block_hash"],
+        candidate_probe=vector["selection_proof"]["candidate_probe"],
+        task_version=task,
+        membership=proof,
+    )
+    run_row_id = uuid4()
+    assignment_row_id = uuid4()
+    certification_row_id = uuid4()
+    ticket_id = uuid4()
+    authority = rebuilt.authority
+    run = SimpleNamespace(
+        run_row_id=run_row_id,
+        **{
+            column: getattr(authority, field)
+            for column, field in (
+                ("agent_id", "agent_id"),
+                ("artifact_sha256", "agent_artifact_sha256"),
+                ("screened_image_sha256", "screened_image_sha256"),
+                ("bench_version", "bench_version"),
+                ("coding_contract_version", "coding_contract_version"),
+                ("coding_run_id", "coding_run_id"),
+                ("corpus_release_id", "corpus_release_id"),
+                ("catalog_merkle_root", "catalog_merkle_root"),
+                ("selection_derivation_id", "selection_derivation_id"),
+                ("selection_chain_genesis_hash", "selection_chain_genesis_hash"),
+                ("selection_block_number", "selection_block_number"),
+                ("selection_block_hash", "selection_block_hash"),
+                ("inference_grant_sha256", "inference_grant_sha256"),
+                ("grader_contract_sha256", "grader_contract_sha256"),
+                ("task_set_id", "task_set_id"),
+                ("task_set_manifest_sha256", "task_set_manifest_sha256"),
+                ("run_manifest_sha256", "run_manifest_sha256"),
+                ("task_count", "task_count"),
+                ("weight_eligible", "weight_eligible"),
+            )
+        },
+    )
+    now = assignment.assigned_at
+    ticket = SimpleNamespace(
+        ticket_id=ticket_id,
+        run_row_id=run_row_id,
+        validator_hotkey="5" + "V" * 47,
+        certification_row_id=certification_row_id,
+        task_count=1,
+        issued_at=now,
+        deadline=now.replace(year=now.year + 1),
+    )
+    certification = SimpleNamespace(
+        validator_hotkey=ticket.validator_hotkey,
+        agent_id=authority.agent_id,
+        bench_version=authority.bench_version,
+        coding_contract_version=1,
+        artifact_sha256=authority.agent_artifact_sha256,
+        screened_image_sha256=authority.screened_image_sha256,
+        status="certified",
+        expires_at=ticket.deadline.replace(year=ticket.deadline.year + 1),
+    )
+    agent = SimpleNamespace(
+        sha256=authority.agent_artifact_sha256,
+        screened_image_sha256=authority.screened_image_sha256,
+    )
+    issuance = SimpleNamespace(
+        assignment_row_id=assignment_row_id,
+        run_row_id=run_row_id,
+        assignment_sha256=assignment.assignment_sha256,
+        agent_id=authority.agent_id,
+        artifact_sha256=authority.agent_artifact_sha256,
+        screened_image_sha256=authority.screened_image_sha256,
+        bench_version=authority.bench_version,
+        coding_contract_version=1,
+        coding_run_id=authority.coding_run_id,
+        corpus_release_id=authority.corpus_release_id,
+        selection_block_number=authority.selection_block_number,
+        selection_catalog_index=task.payload.catalog_index,
+        selection_block_hash=authority.selection_block_hash,
+        selection_candidate_probe=vector["selection_proof"]["candidate_probe"],
+        selection_proof_sha256=rebuilt.selection_proof.selection_proof_sha256,
+        task_count=1,
+        weight_eligible=False,
+    )
+    exposure = SimpleNamespace(
+        run_row_id=run_row_id,
+        corpus_release_id=authority.corpus_release_id,
+        run_task_count=1,
+        weight_eligible=False,
+        **rebuilt.exposure.model_dump(mode="python"),
+    )
+    return SimpleNamespace(
+        commitment=commitment,
+        assignment=assignment,
+        material=material,
+        rebuilt=rebuilt,
+        run=run,
+        ticket=ticket,
+        certification=certification,
+        agent=agent,
+        issuance=issuance,
+        exposure=exposure,
+        assignment_row=object(),
+        now=now,
+        delivery_now=now,
+    )
+
+
+class _Session:
+    def __init__(self, fixture: SimpleNamespace) -> None:
+        self.fixture = fixture
+        self.scalar_index = 0
+
+    async def get(self, model, identity):
+        del identity
+        return {
+            CodingShadowTicket: self.fixture.ticket,
+            CodingShadowRun: self.fixture.run,
+            CodingSelectionAssignmentRow: self.fixture.assignment_row,
+            CodingCapabilityCertification: self.fixture.certification,
+            Agent: self.fixture.agent,
+        }.get(model)
+
+    async def scalar(self, statement):
+        del statement
+        values = (
+            self.fixture.issuance,
+            self.fixture.now,
+            self.fixture.delivery_now,
+        )
+        value = values[self.scalar_index]
+        self.scalar_index += 1
+        return value
+
+    async def scalars(self, statement):
+        del statement
+        return [self.fixture.exposure]
+
+
+async def _build(monkeypatch, fixture: SimpleNamespace):
+    monkeypatch.setattr(
+        coding_task_leases,
+        "assignment_from_row",
+        lambda _row: fixture.assignment,
+    )
+    monkeypatch.setattr(
+        coding_task_leases,
+        "get_coding_catalog_release",
+        AsyncMock(
+            return_value=SimpleNamespace(commitment=fixture.commitment.model_dump())
+        ),
+    )
+    monkeypatch.setattr(
+        coding_task_leases,
+        "catalog_release_matches_commitment",
+        lambda _row, *, commitment: bool(commitment),
+    )
+    source = AsyncMock()
+    source.get_task_material.return_value = fixture.material
+    return await build_coding_shadow_task_lease(
+        _Session(fixture),  # type: ignore[arg-type]
+        ticket_id=fixture.ticket.ticket_id,
+        material_source=source,
+    )
+
+
+async def test_task_lease_reconstructs_exact_shared_authority(monkeypatch) -> None:
+    fixture = _fixture()
+    lease = await _build(monkeypatch, fixture)
+
+    assert lease.run_manifest == fixture.rebuilt.run_manifest
+    assert lease.task_set_manifest == fixture.rebuilt.task_set_manifest
+    assert lease.issue == fixture.material.issue
+    assert lease.runtime_policy == fixture.material.runtime_policy
+    assert lease.budgets == fixture.material.budgets
+    assert lease.weight_eligible is False
+
+
+async def test_different_validator_tickets_share_identical_manifests(
+    monkeypatch,
+) -> None:
+    fixture = _fixture()
+    first = await _build(monkeypatch, fixture)
+    fixture.ticket.ticket_id = uuid4()
+    fixture.ticket.validator_hotkey = "5" + "W" * 47
+    fixture.certification.validator_hotkey = fixture.ticket.validator_hotkey
+    second = await _build(monkeypatch, fixture)
+
+    assert first.ticket_id != second.ticket_id
+    assert first.validator_hotkey != second.validator_hotkey
+    assert first.run_manifest == second.run_manifest
+    assert first.task_set_manifest == second.task_set_manifest
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ["run", "exposure", "selection_proof", "issuance"],
+)
+async def test_task_lease_rejects_persisted_authority_drift(
+    monkeypatch,
+    drift: str,
+) -> None:
+    fixture = _fixture()
+    if drift == "run":
+        fixture.run.run_manifest_sha256 = "ff" * 32
+    elif drift == "exposure":
+        fixture.exposure.visible_bundle_sha256 = "ff" * 32
+    else:
+        if drift == "selection_proof":
+            fixture.issuance.selection_proof_sha256 = "ff" * 32
+        else:
+            fixture.issuance.assignment_sha256 = "ff" * 32
+    with pytest.raises(CodingTaskLeaseIntegrityError, match="disagrees"):
+        await _build(monkeypatch, fixture)
+
+
+async def test_task_lease_rejects_expired_ticket_before_catalog_read() -> None:
+    fixture = _fixture()
+    fixture.now = fixture.ticket.deadline
+    source = AsyncMock()
+    with pytest.raises(CodingTaskLeaseNotAvailableError, match="no longer active"):
+        await build_coding_shadow_task_lease(
+            _Session(fixture),  # type: ignore[arg-type]
+            ticket_id=fixture.ticket.ticket_id,
+            material_source=source,
+        )
+    source.get_task_material.assert_not_awaited()
+
+
+async def test_task_lease_rejects_cross_benchmark_certification() -> None:
+    fixture = _fixture()
+    fixture.certification.bench_version = fixture.run.bench_version - 1
+    source = AsyncMock()
+    with pytest.raises(CodingTaskLeaseNotAvailableError, match="no longer active"):
+        await build_coding_shadow_task_lease(
+            _Session(fixture),  # type: ignore[arg-type]
+            ticket_id=fixture.ticket.ticket_id,
+            material_source=source,
+        )
+    source.get_task_material.assert_not_awaited()
+
+
+async def test_task_lease_rechecks_deadline_after_catalog_read(monkeypatch) -> None:
+    fixture = _fixture()
+    fixture.delivery_now = fixture.ticket.deadline
+    monkeypatch.setattr(
+        coding_task_leases,
+        "assignment_from_row",
+        lambda _row: fixture.assignment,
+    )
+    monkeypatch.setattr(
+        coding_task_leases,
+        "get_coding_catalog_release",
+        AsyncMock(
+            return_value=SimpleNamespace(commitment=fixture.commitment.model_dump())
+        ),
+    )
+    monkeypatch.setattr(
+        coding_task_leases,
+        "catalog_release_matches_commitment",
+        lambda _row, *, commitment: bool(commitment),
+    )
+    source = AsyncMock()
+    source.get_task_material.return_value = fixture.material
+
+    with pytest.raises(CodingTaskLeaseNotAvailableError, match="expired during"):
+        await build_coding_shadow_task_lease(
+            _Session(fixture),  # type: ignore[arg-type]
+            ticket_id=fixture.ticket.ticket_id,
+            material_source=source,
+        )
+    source.get_task_material.assert_awaited_once()
+
+
+async def test_task_lease_revalidates_material_source_boundary(monkeypatch) -> None:
+    fixture = _fixture()
+    monkeypatch.setattr(
+        coding_task_leases,
+        "assignment_from_row",
+        lambda _row: fixture.assignment,
+    )
+    monkeypatch.setattr(
+        coding_task_leases,
+        "get_coding_catalog_release",
+        AsyncMock(
+            return_value=SimpleNamespace(commitment=fixture.commitment.model_dump())
+        ),
+    )
+    monkeypatch.setattr(
+        coding_task_leases,
+        "catalog_release_matches_commitment",
+        lambda _row, *, commitment: bool(commitment),
+    )
+    source = AsyncMock()
+    source.get_task_material.return_value = fixture.material.model_copy(
+        update={"catalog_commitment_sha256": "ff" * 32}
+    )
+
+    with pytest.raises(CodingTaskLeaseIntegrityError, match="another catalog"):
+        await build_coding_shadow_task_lease(
+            _Session(fixture),  # type: ignore[arg-type]
+            ticket_id=fixture.ticket.ticket_id,
+            material_source=source,
+        )
