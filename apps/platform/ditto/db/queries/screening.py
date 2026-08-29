@@ -636,6 +636,7 @@ async def claim_screening_attempts(
     limit: int,
     netuid: int = 118,
     deferred_review_mode: str = "off",
+    review_settings_binding: tuple[int, str, str, str] | None = None,
 ) -> list[tuple[Agent, ScreeningAttempt, UUID | None]]:
     """Claim completion-lane contenders, then least-scored eligible work.
 
@@ -1101,6 +1102,26 @@ async def claim_screening_attempts(
             ),
             duplicate_of=duplicate_of,
             build_only=build_only,
+            review_settings_revision=(
+                review_settings_binding[0]
+                if review_settings_binding is not None
+                else None
+            ),
+            review_settings_instance_id=(
+                review_settings_binding[1]
+                if review_settings_binding is not None
+                else None
+            ),
+            review_settings_scope=(
+                review_settings_binding[2]
+                if review_settings_binding is not None
+                else None
+            ),
+            review_settings_checksum=(
+                review_settings_binding[3]
+                if review_settings_binding is not None
+                else None
+            ),
         )
         session.add(attempt)
         if agent.status not in (

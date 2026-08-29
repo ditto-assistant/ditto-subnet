@@ -22,6 +22,7 @@ from ditto_screener.enrollment import (
 from ditto_screener.errors import PlatformError
 from ditto_screener.heartbeat import ScreenerHeartbeatRequest
 from ditto_screener.platform import PlatformClient
+from ditto_screener.review_settings import bootstrap_review_settings
 from ditto_screening_protocol import SCREENING_POLICY_VERSION, ScreenResultOutcome
 
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
@@ -44,11 +45,18 @@ def _make_client(
 async def test_claim_next_parses_leased_item(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
+    review_settings = bootstrap_review_settings(make_config())
+    checksum = review_settings.checksum
+
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url.path == "/api/v1/screener/claim"
         assert request.url.params["policy_version"] == str(SCREENING_POLICY_VERSION)
         assert request.url.params["renewable_lease"] == "true"
+        assert request.url.params["review_settings_revision"] == "0"
+        assert request.url.params["review_settings_instance_id"] == "worker-1"
+        assert request.url.params["review_settings_scope"] == review_settings.scope
+        assert request.url.params["review_settings_checksum"] == checksum
         _assert_auth(request)
         return httpx.Response(
             200,
@@ -72,7 +80,11 @@ async def test_claim_next_parses_leased_item(
 
     client, http = _make_client(make_config(), handler)
     async with http:
-        resp = await client.claim_next(policy_version=SCREENING_POLICY_VERSION)
+        resp = await client.claim_next(
+            policy_version=SCREENING_POLICY_VERSION,
+            review_settings=review_settings,
+            instance_id="worker-1",
+        )
     assert resp.count == 1
     assert resp.items[0].agent_id == _AGENT
     assert resp.items[0].sha256 == "de" * 32

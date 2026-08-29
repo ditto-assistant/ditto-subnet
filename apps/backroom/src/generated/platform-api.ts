@@ -29354,6 +29354,10 @@ export interface operations {
                 policy_version: number;
                 limit?: number;
                 renewable_lease?: boolean;
+                review_settings_revision?: number | null;
+                review_settings_instance_id?: string | null;
+                review_settings_scope?: string | null;
+                review_settings_checksum?: string | null;
             };
             header?: {
                 "x-screener-hotkey"?: string | null;

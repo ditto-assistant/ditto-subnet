@@ -3778,6 +3778,119 @@ class TestClaim:
             assert retained.evidence is not None
             assert retained.evidence[-1]["code"] == ("adjudicated-source-review-reject")
 
+    async def test_claim_time_review_settings_survive_global_revision_change(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        claimed_settings = ScreenerReviewSettings(mode="off")
+        claimed_checksum = _review_settings_checksum(claimed_settings)
+        async with session_maker() as session, session.begin():
+            claimed_revision = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=claimed_settings.model_dump(mode="json"),
+                checksum=claimed_checksum,
+                reason="claim-time off posture",
+                actor="test",
+            )
+            session.add(claimed_revision)
+            await session.flush()
+            claimed_revision_id = claimed_revision.revision
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claimed = await client.post(
+            "/api/v1/screener/claim",
+            params={
+                "policy_version": SCREENING_POLICY_VERSION,
+                "review_settings_revision": claimed_revision_id,
+                "review_settings_instance_id": "ditto-screener-fleet-test",
+                "review_settings_scope": "*",
+                "review_settings_checksum": claimed_checksum,
+            },
+        )
+        assert claimed.status_code == 200, claimed.text
+        attempt_id = UUID(claimed.json()["items"][0]["attempt_id"])
+
+        enforced_settings = ScreenerReviewSettings(mode="enforce")
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreenerReviewSettingsRevision(
+                    parent_revision=claimed_revision_id,
+                    scope="*",
+                    settings=enforced_settings.model_dump(mode="json"),
+                    checksum=_review_settings_checksum(enforced_settings),
+                    reason="operator changes global posture mid-run",
+                    actor="test",
+                )
+            )
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="retryable_infra",
+                reason_code="source-review-model-response-invalid",
+                review_settings_revision=claimed_revision_id,
+                review_settings_instance_id="ditto-screener-fleet-test",
+                review_settings_scope="*",
+                review_settings_checksum=claimed_checksum,
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            assert attempt is not None
+            assert attempt.review_settings_revision == claimed_revision_id
+            assert attempt.review_settings_checksum == claimed_checksum
+
+    async def test_claim_rejects_stale_review_settings_before_leasing(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        settings = ScreenerReviewSettings(mode="enforce")
+        checksum = _review_settings_checksum(settings)
+        async with session_maker() as session, session.begin():
+            revision = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=settings.model_dump(mode="json"),
+                checksum=checksum,
+                reason="new operator posture",
+                actor="test",
+            )
+            session.add(revision)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        response = await client.post(
+            "/api/v1/screener/claim",
+            params={
+                "policy_version": SCREENING_POLICY_VERSION,
+                "review_settings_revision": 0,
+                "review_settings_instance_id": "ditto-screener-fleet-test",
+                "review_settings_scope": "builtin-default",
+                "review_settings_checksum": "00" * 32,
+            },
+        )
+
+        assert response.status_code == 409
+        async with session_maker() as session:
+            attempt_count = await session.scalar(
+                select(func.count()).select_from(ScreeningAttempt)
+            )
+            agent = await session.get(Agent, agent_id)
+            assert attempt_count == 0
+            assert agent is not None and agent.status == AgentStatus.UPLOADED
+
     async def test_deferred_mechanical_admission_retains_signed_audit_once(
         self,
         app: FastAPI,

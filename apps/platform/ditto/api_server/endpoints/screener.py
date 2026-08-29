@@ -3311,14 +3311,10 @@ def _review_settings_checksum(settings: ScreenerReviewSettings) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-@router.get("/review-settings", response_model=EffectiveScreenerReviewSettings)
-async def effective_review_settings(
-    response: Response,
-    _screener_hotkey: ScreenerDep,
-    session: SessionDep,
-    instance_id: Annotated[str, Query(pattern=_INSTANCE_ID_PATTERN)],
+async def _resolve_effective_review_settings(
+    session: AsyncSession, *, instance_id: str
 ) -> EffectiveScreenerReviewSettings:
-    """Return the exact-instance override or global settings revision."""
+    """Resolve one immutable settings snapshot for fetch and claim binding."""
     rows = list(
         await session.scalars(
             select(ScreenerReviewSettingsRevision)
@@ -3337,21 +3333,29 @@ async def effective_review_settings(
     )
     if row is None:
         settings = ScreenerReviewSettings()
-        result = EffectiveScreenerReviewSettings(
+        return EffectiveScreenerReviewSettings(
             revision=0,
             scope="builtin-default",
             settings=settings,
             checksum=_review_settings_checksum(settings),
         )
-    else:
-        result = EffectiveScreenerReviewSettings(
-            revision=row.revision,
-            scope=row.scope,
-            settings=ScreenerReviewSettings.model_validate_json(
-                json.dumps(row.settings)
-            ),
-            checksum=row.checksum,
-        )
+    return EffectiveScreenerReviewSettings(
+        revision=row.revision,
+        scope=row.scope,
+        settings=ScreenerReviewSettings.model_validate_json(json.dumps(row.settings)),
+        checksum=row.checksum,
+    )
+
+
+@router.get("/review-settings", response_model=EffectiveScreenerReviewSettings)
+async def effective_review_settings(
+    response: Response,
+    _screener_hotkey: ScreenerDep,
+    session: SessionDep,
+    instance_id: Annotated[str, Query(pattern=_INSTANCE_ID_PATTERN)],
+) -> EffectiveScreenerReviewSettings:
+    """Return the exact-instance override or global settings revision."""
+    result = await _resolve_effective_review_settings(session, instance_id=instance_id)
     response.headers["Cache-Control"] = "private, no-cache"
     response.headers["ETag"] = f'"{result.revision}-{result.checksum}"'
     return result
@@ -3750,6 +3754,16 @@ async def claim(
     policy_version: Annotated[int, Query(ge=1)],
     limit: Annotated[int, Query(ge=1, le=20)] = 1,
     renewable_lease: Annotated[bool, Query()] = False,
+    review_settings_revision: Annotated[int | None, Query(ge=0)] = None,
+    review_settings_instance_id: Annotated[
+        str | None, Query(pattern=_INSTANCE_ID_PATTERN)
+    ] = None,
+    review_settings_scope: Annotated[
+        str | None, Query(min_length=1, max_length=63)
+    ] = None,
+    review_settings_checksum: Annotated[
+        str | None, Query(pattern=r"^[0-9a-f]{64}$")
+    ] = None,
 ) -> ScreenerQueueResponse:
     """Lease pending work and make its active screening state public."""
     response.headers["Cache-Control"] = "no-store"
@@ -3770,6 +3784,37 @@ async def claim(
         if renewable_lease
         else _LEGACY_SCREENING_LEASE_TTL
     )
+    supplied_binding = (
+        review_settings_revision,
+        review_settings_instance_id,
+        review_settings_scope,
+        review_settings_checksum,
+    )
+    if any(value is not None for value in supplied_binding) and any(
+        value is None for value in supplied_binding
+    ):
+        raise AgentNotScreenableError("review settings claim binding must be complete")
+
+    async def resolve_claim_binding() -> tuple[int, str, str, str] | None:
+        if not all(value is not None for value in supplied_binding):
+            return None
+        assert review_settings_instance_id is not None
+        effective = await _resolve_effective_review_settings(
+            session, instance_id=review_settings_instance_id
+        )
+        expected = (
+            effective.revision,
+            review_settings_instance_id,
+            effective.scope,
+            effective.checksum,
+        )
+        if supplied_binding != expected:
+            raise AgentNotScreenableError(
+                "review settings changed before claim; refresh and retry"
+            )
+        # Revision zero is computed from built-in defaults and has no immutable row.
+        return expected if effective.revision >= 1 else None
+
     if session.get_bind().dialect.name == "postgresql":
         async with session.begin():
             node_id = getattr(request.state, "screener_node_id", None)
@@ -3804,6 +3849,7 @@ async def claim(
                         required_policy_version=required_policy,
                     )
             queue_settings = await resolve_queue_policy_settings(session)
+            binding = await resolve_claim_binding()
             claimed = await claim_screening_attempts(
                 session,
                 screener_hotkey=screener_hotkey,
@@ -3812,6 +3858,7 @@ async def claim(
                 limit=limit,
                 netuid=expected_netuid(),
                 deferred_review_mode=queue_settings.deferred_source_review.mode,
+                review_settings_binding=binding,
             )
     else:
         # SQLite is used by local/test deployments and has no advisory locks.
@@ -3846,6 +3893,7 @@ async def claim(
                         required_policy_version=required_policy,
                     )
             queue_settings = await resolve_queue_policy_settings(session)
+            binding = await resolve_claim_binding()
             claimed = await claim_screening_attempts(
                 session,
                 screener_hotkey=screener_hotkey,
@@ -3854,6 +3902,7 @@ async def claim(
                 limit=limit,
                 netuid=expected_netuid(),
                 deferred_review_mode=queue_settings.deferred_source_review.mode,
+                review_settings_binding=binding,
             )
     items = [
         ScreenerQueueItem(
@@ -5061,48 +5110,63 @@ async def submit_result(
                     )
             else:
                 settings = ScreenerReviewSettings()
-            latest_rows = (
-                await session.scalars(
-                    select(ScreenerReviewSettingsRevision)
-                    .where(
-                        ScreenerReviewSettingsRevision.scope.in_(
-                            ("*", payload.review_settings_instance_id or "")
-                        )
-                    )
-                    .order_by(ScreenerReviewSettingsRevision.revision.desc())
-                )
-            ).all()
-            effective_settings = ScreenerReviewSettings()
-            effective = next(
-                (
-                    row
-                    for row in latest_rows
-                    if row.scope == payload.review_settings_instance_id
-                ),
-                next((row for row in latest_rows if row.scope == "*"), None),
+            claimed_binding = (
+                attempt.review_settings_revision,
+                attempt.review_settings_instance_id,
+                attempt.review_settings_scope,
+                attempt.review_settings_checksum,
             )
-            if effective is not None:
-                effective_settings = ScreenerReviewSettings.model_validate(
-                    effective.settings
+            if all(value is not None for value in claimed_binding):
+                if binding != claimed_binding:
+                    raise AgentNotScreenableError(
+                        "verdict reviewer settings binding does not match the claim"
+                    )
+                effective_settings = settings
+            else:
+                # Compatibility for attempts claimed by a worker that predates
+                # claim-time settings binding. Once a claim is bound, later
+                # global revisions cannot rewrite its execution contract.
+                latest_rows = (
+                    await session.scalars(
+                        select(ScreenerReviewSettingsRevision)
+                        .where(
+                            ScreenerReviewSettingsRevision.scope.in_(
+                                ("*", payload.review_settings_instance_id or "")
+                            )
+                        )
+                        .order_by(ScreenerReviewSettingsRevision.revision.desc())
+                    )
+                ).all()
+                effective_settings = ScreenerReviewSettings()
+                effective = next(
+                    (
+                        row
+                        for row in latest_rows
+                        if row.scope == payload.review_settings_instance_id
+                    ),
+                    next((row for row in latest_rows if row.scope == "*"), None),
                 )
-                if effective_settings.mode == "inherit":
-                    effective = next(
-                        (row for row in latest_rows if row.scope == "*"), None
+                if effective is not None:
+                    effective_settings = ScreenerReviewSettings.model_validate(
+                        effective.settings
                     )
-                    effective_settings = (
-                        ScreenerReviewSettings.model_validate(effective.settings)
-                        if effective is not None
-                        else ScreenerReviewSettings()
-                    )
-                if effective_settings.mode == "enforce":
-                    if effective is None:
-                        raise AgentNotScreenableError(
-                            "enforced reviewer settings revision is unavailable"
+                    if effective_settings.mode == "inherit":
+                        effective = next(
+                            (row for row in latest_rows if row.scope == "*"), None
+                        )
+                        effective_settings = (
+                            ScreenerReviewSettings.model_validate(effective.settings)
+                            if effective is not None
+                            else ScreenerReviewSettings()
                         )
                     if (
-                        payload.review_settings_revision != effective.revision
-                        or payload.review_settings_checksum != effective.checksum
-                        or settings.mode != "enforce"
+                        effective is not None
+                        and effective_settings.mode == "enforce"
+                        and (
+                            payload.review_settings_revision != effective.revision
+                            or payload.review_settings_checksum != effective.checksum
+                            or settings.mode != "enforce"
+                        )
                     ):
                         raise AgentNotScreenableError(
                             "enforced reviewer verdict is missing the effective "
@@ -5115,9 +5179,8 @@ async def submit_result(
             ):
                 # The worker transports a reject as a quarantine because a
                 # policy module cannot ban a miner. Platform owns the final
-                # authority boundary: execute only after re-reading the live,
-                # effective operator posture and verifying the exact settings
-                # revision bound into the signed verdict above.
+                # authority boundary: execute only after verifying the exact
+                # operator posture bound to the claim and signed verdict above.
                 target = AgentStatus.REJECTED
                 public_reason = payload.adjudication.reason
                 attempt_status = "rejected"
