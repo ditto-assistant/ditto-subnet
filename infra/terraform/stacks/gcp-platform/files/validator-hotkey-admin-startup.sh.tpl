@@ -28,6 +28,7 @@ install -d -m 0700 "$${ROOT}" "$${STATE}"
 if [[ -f "$${STATE}/ready" ]]; then
   command -v gcloud >/dev/null
   test -x /usr/local/sbin/generate-validator-hotkey
+  test -x "$${ROOT}/project-venv/bin/python"
   test "$(git -C "$${SOURCE}" remote get-url origin)" = "$${REPOSITORY}"
   test "$(git -C "$${SOURCE}" rev-parse HEAD)" = "$${GIT_REVISION}"
   echo "ready: existing exact bootstrap verified"
@@ -123,12 +124,9 @@ test -z "$(git -C "$${SOURCE}" ls-files --others --exclude-standard)"
 
 export CLOUDSDK_CORE_DISABLE_PROMPTS=1
 export CLOUDSDK_CONFIG="$${STATE}/gcloud"
-export UV_OFFLINE=1
-export UV_PROJECT_ENVIRONMENT="$${ROOT}/project-venv"
 
-exec "$${ROOT}/bootstrap-venv/bin/uv" run \
-  --directory "$${SOURCE}" --frozen --no-dev \
-  python infra/ansible/scripts/generate_validator_hotkey.py \
+exec "$${ROOT}/project-venv/bin/python" -I \
+  "$${SOURCE}/infra/ansible/scripts/generate_validator_hotkey.py" \
   --project '__PROJECT__' \
   --secret '__SECRET__' \
   --result-file "$${STATE}/result.env" \

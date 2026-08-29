@@ -474,7 +474,6 @@ def test_disposable_admin_arms_only_after_egress_is_restricted() -> None:
     assert 'destination_ranges = ["199.36.153.4/30"]' in terraform
     assert 'destination_ranges = ["0.0.0.0/0"]' in terraform
     assert "validator_hotkey_admin_bootstrap_tag" in terraform
-    assert "UV_OFFLINE=1" in startup
     assert "merge-base --is-ancestor" in startup
     assert "diff-index --quiet HEAD" in startup
     assert "ls-files --others --exclude-standard" in startup
@@ -486,6 +485,18 @@ def test_disposable_admin_arms_only_after_egress_is_restricted() -> None:
     assert len(restricted_hosts) == 4
     assert all("secretmanager.googleapis.com" in line for line in restricted_hosts)
     assert all("iamcredentials.googleapis.com" in line for line in restricted_hosts)
+
+
+def test_disposable_admin_runs_the_synced_venv_without_an_offline_rebuild() -> None:
+    startup = ADMIN_STARTUP.read_text()
+
+    runner = startup.split(
+        "cat >/usr/local/libexec/run-validator-hotkey-generator <<'RUNNER'", 1
+    )[1].split("\nRUNNER", 1)[0]
+    assert 'exec "$${ROOT}/project-venv/bin/python" -I' in runner
+    assert '"$${SOURCE}/infra/ansible/scripts/generate_validator_hotkey.py"' in runner
+    assert 'bootstrap-venv/bin/uv" run' not in runner
+    assert "UV_OFFLINE" not in runner
 
 
 def test_disposable_admin_verifies_checkout_as_its_temporary_owner() -> None:
