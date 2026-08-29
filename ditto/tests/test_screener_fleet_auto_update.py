@@ -95,9 +95,9 @@ def test_updater_authenticates_before_fetch_or_drain() -> None:
     assert updater.count("venv --relocatable") == 2
     assert updater.count("sync --frozen --no-editable") == 2
     activation = updater[updater.index("activate_release()") :]
-    assert activation.index('"$release_dir/src/scripts/screener-fleet-auto-update.sh"') < (
-        activation.index("stop_fleet\n")
-    )
+    assert activation.index(
+        '"$release_dir/src/scripts/screener-fleet-auto-update.sh"'
+    ) < (activation.index("stop_fleet\n"))
 
 
 def test_updater_has_no_inbound_deploy_or_long_lived_cloud_credential() -> None:
