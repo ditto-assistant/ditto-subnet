@@ -46,6 +46,17 @@ func isDisallowedIP(ip net.IP) bool {
 // public addresses. When allowPrivate is true the check is skipped (local dev /
 // sandbox). It is the up-front guard; Client provides the dial-time backstop.
 func ValidateURL(raw string, allowPrivate bool) error {
+	return ValidateURLContext(context.Background(), raw, allowPrivate)
+}
+
+// ValidateURLContext is ValidateURL with caller-bounded DNS resolution.
+func ValidateURLContext(ctx context.Context, raw string, allowPrivate bool) error {
+	if ctx == nil {
+		return fmt.Errorf("harness_url validation context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("harness_url validation interrupted: %w", err)
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("invalid harness_url: %w", err)
@@ -66,15 +77,15 @@ func ValidateURL(raw string, allowPrivate bool) error {
 		}
 		return nil
 	}
-	ips, err := net.LookupIP(host)
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		return fmt.Errorf("resolve harness_url host %s: %w", host, err)
 	}
-	if len(ips) == 0 {
+	if len(addresses) == 0 {
 		return fmt.Errorf("harness_url host %s has no addresses", host)
 	}
-	for _, ip := range ips {
-		if isDisallowedIP(ip) {
+	for _, address := range addresses {
+		if isDisallowedIP(address.IP) {
 			return fmt.Errorf("harness_url host %s resolves to a non-public address", host)
 		}
 	}

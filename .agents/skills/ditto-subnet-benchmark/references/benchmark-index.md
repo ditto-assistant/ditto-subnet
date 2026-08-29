@@ -26,6 +26,7 @@
 | Shadow k=3 ticket-set issuer | `apps/platform/ditto/db/queries/coding_ticket_sets.py` |
 | Shadow task lease core | `apps/platform/ditto/db/queries/coding_task_leases.py` |
 | Shadow artifact capabilities | `apps/platform/ditto/api_server/coding_artifact_capabilities.py` |
+| Shadow verified artifact fetcher | `services/dittobench-api/internal/codingartifacts/` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Screening worker policy/gates | `workers/screener/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |
