@@ -34,7 +34,8 @@ is_builder_digest() {
   [[ "$1" =~ ^us-central1-docker\.pkg\.dev/ditto-app-dev/ditto-public-builders/submission-builder@sha256:[0-9a-f]{64}$ ]]
 }
 run_as_service() {
-  setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_GROUP" --init-groups -- "$@"
+  setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_GROUP" --init-groups -- \
+    env HOME="$FLEET_ROOT" "$@"
 }
 
 validate_manifest() {
@@ -99,9 +100,10 @@ prepare_release() {
     return 0
   fi
   local staging="${release_dir}.staging.$$"
+  cleanup_staging() { rm -rf -- "$staging"; }
+  trap cleanup_staging RETURN
   install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0750 "$staging"
   if ! run_as_service git clone --filter=blob:none --no-checkout "$REPOSITORY_URL" "$staging/src"; then
-    rm -rf -- "$staging"
     return 1
   fi
   run_as_service git -C "$staging/src" fetch --force origin \
@@ -118,6 +120,7 @@ prepare_release() {
   run_as_service "$staging/worker-venv/bin/python" \
     "$staging/src/workers/screener/scripts/verify-installed-signing-contract.py"
   mv "$staging" "$release_dir"
+  trap - RETURN
 }
 
 write_release_env() {

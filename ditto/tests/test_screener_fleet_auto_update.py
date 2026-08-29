@@ -89,7 +89,9 @@ def test_updater_authenticates_before_fetch_or_drain() -> None:
     assert "refs/heads/main:refs/remotes/origin/main" in updater
     assert "merge-base --is-ancestor" in updater
     assert 'setpriv --reuid="$SERVICE_USER"' in updater
+    assert 'env HOME="$FLEET_ROOT"' in updater
     assert "runuser" not in updater
+    assert "trap cleanup_staging RETURN" in updater
 
 
 def test_updater_has_no_inbound_deploy_or_long_lived_cloud_credential() -> None:
