@@ -1,7 +1,7 @@
 """add append-only shadow coding capability certifications
 
 Revision ID: c7d91f4a2e60
-Revises: 6570642aba4a
+Revises: c3f6a9e2b514
 Create Date: 2026-08-22
 
 The table records validator-signed, exact-artifact capability receipts. It is
@@ -16,7 +16,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "c7d91f4a2e60"
-down_revision: str | Sequence[str] | None = "6570642aba4a"
+down_revision: str | Sequence[str] | None = "c3f6a9e2b514"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
