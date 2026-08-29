@@ -1,0 +1,7 @@
+target
+.git
+*.tgz
+*.db
+*.db-*
+.env
+.env.*
