@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.coding_catalog import (
@@ -24,14 +25,22 @@ from ditto.api_models.coding_evaluation import (
     coding_run_evidence_digest,
 )
 from ditto.api_models.core_qualification import CoreQualificationPolicy
+from ditto.chain.models import BlockInfo
 from ditto.db.models import (
     Agent,
     CodingCapabilityCertification,
     CodingCatalogExposure,
     CodingCatalogRelease,
+    CodingSelectionAssignmentRow,
     CodingShadowResult,
     CodingShadowRun,
     CodingShadowTicket,
+)
+from ditto.db.queries.coding_assignments import (
+    CodingAssignmentConflictError,
+    CodingAssignmentNotQualifiedError,
+    CodingAssignmentPolicy,
+    create_coding_selection_assignment,
 )
 from ditto.db.queries.coding_catalog import (
     CodingCatalogConflictError,
@@ -56,6 +65,30 @@ from ditto.db.queries.scores import MIN_ELIGIBLE_CASES, upsert_score
 _NOW = datetime(2026, 8, 21, 12, tzinfo=UTC)
 _BENCH = 12
 _VALIDATOR = "5" + "B" * 47
+
+
+class _FinalizedBlocks:
+    def __init__(
+        self,
+        *,
+        anchor_number: int = 1_000,
+        barrier: asyncio.Barrier | None = None,
+    ) -> None:
+        self.calls: list[tuple[str, int | None]] = []
+        self.anchor_number = anchor_number
+        self.barrier = barrier
+
+    async def get_finalized_block_hash(self, block_number: int) -> str:
+        self.calls.append(("hash", block_number))
+        if block_number == 0:
+            return "0x" + "22" * 32
+        return "0x" + "33" * 32
+
+    async def get_finalized_block(self) -> BlockInfo:
+        self.calls.append(("head", None))
+        if self.barrier is not None:
+            await self.barrier.wait()
+        return BlockInfo(number=self.anchor_number, hash="0x" + "ff" * 32)
 
 
 def _catalog_commitment(
@@ -237,17 +270,20 @@ async def _seed_qualified_agent(
     return agent
 
 
-async def _seed_certification(session: AsyncSession, agent: Agent) -> None:
+async def _seed_certification(session: AsyncSession, agent_id: UUID) -> None:
     async with session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        now = datetime.now(UTC)
         session.add(
             CodingCapabilityCertification(
                 certification_row_id=uuid4(),
                 agent_id=agent.agent_id,
                 artifact_sha256=agent.sha256,
-                screened_image_sha256="cd" * 32,
+                screened_image_sha256=agent.screened_image_sha256,
                 validator_hotkey=_VALIDATOR,
                 bench_version=_BENCH,
-                ticket_deadline=_NOW + timedelta(hours=1),
+                ticket_deadline=now + timedelta(hours=1),
                 coding_contract_version=1,
                 certification_id="cert-coding-shadow-001",
                 status="certified",
@@ -257,14 +293,241 @@ async def _seed_certification(session: AsyncSession, agent: Agent) -> None:
                 canary_manifest_sha256="55" * 32,
                 transcript_object_key="sha256/" + "66" * 32,
                 frozen_submission_object_key="sha256/" + "77" * 32,
-                issued_at=_NOW - timedelta(minutes=5),
-                expires_at=_NOW + timedelta(hours=2),
+                issued_at=now - timedelta(minutes=5),
+                expires_at=now + timedelta(hours=2),
                 weight_eligible=False,
                 receipt={},
                 signature="88" * 64,
-                created_at=_NOW,
+                created_at=now,
             )
         )
+
+
+async def test_selection_assignment_is_future_bound_idempotent_and_append_only(
+    session: AsyncSession,
+) -> None:
+    registered_at = await _seed_catalog(session)
+    agent = await _seed_qualified_agent(
+        session,
+        created_at=registered_at + timedelta(seconds=1),
+    )
+    await _seed_certification(session, agent.agent_id)
+    source = _FinalizedBlocks()
+    policy = CodingAssignmentPolicy(selection_delay_blocks=20)
+
+    async with session.begin():
+        transaction_started_at = await session.scalar(
+            select(func.transaction_timestamp())
+        )
+        assert transaction_started_at is not None
+        await asyncio.sleep(0.01)
+        first = await create_coding_selection_assignment(
+            session,
+            finalized_source=source,
+            agent_id=agent.agent_id,
+            bench_version=_BENCH,
+            coding_run_id="coding-assignment-001",
+            corpus_release_id="private-coding-corpus-v1",
+            policy=policy,
+        )
+    assert first.idempotent is False
+    assert first.assignment.anchor_block_number == 1_000
+    assert first.assignment.anchor_block_hash == "0x" + "33" * 32
+    assert first.assignment.selection_block_number == 1_020
+    assert first.assignment.assigned_at == first.row.created_at
+    assert first.row.created_at > transaction_started_at
+    assert source.calls == [("hash", 0), ("head", None), ("hash", 1_000)]
+    assignment_row_id = first.row.assignment_row_id
+
+    source.calls.clear()
+    async with session.begin():
+        replay = await create_coding_selection_assignment(
+            session,
+            finalized_source=source,
+            agent_id=agent.agent_id,
+            bench_version=_BENCH,
+            coding_run_id="coding-assignment-001",
+            corpus_release_id="private-coding-corpus-v1",
+            policy=policy,
+        )
+    assert replay.idempotent is True
+    assert replay.assignment == first.assignment
+    assert source.calls == []
+
+    with pytest.raises(CodingAssignmentConflictError):
+        async with session.begin():
+            await create_coding_selection_assignment(
+                session,
+                finalized_source=source,
+                agent_id=agent.agent_id,
+                bench_version=_BENCH,
+                coding_run_id="coding-assignment-second-height",
+                corpus_release_id="private-coding-corpus-v1",
+                policy=policy,
+            )
+
+    with pytest.raises(SAIntegrityError):
+        async with session.begin():
+            row = await session.get(
+                CodingSelectionAssignmentRow,
+                assignment_row_id,
+                with_for_update=True,
+            )
+            assert row is not None
+            row.selection_delay_blocks = 21
+            await session.flush()
+    with pytest.raises(SAIntegrityError):
+        async with session.begin():
+            row = await session.get(
+                CodingSelectionAssignmentRow,
+                assignment_row_id,
+                with_for_update=True,
+            )
+            assert row is not None
+            await session.delete(row)
+            await session.flush()
+
+
+async def test_selection_assignment_requires_all_shadow_authority(
+    session: AsyncSession,
+) -> None:
+    registered_at = await _seed_catalog(session)
+    agent = await _seed_qualified_agent(
+        session,
+        created_at=registered_at + timedelta(seconds=1),
+    )
+    agent_id = agent.agent_id
+    source = _FinalizedBlocks()
+    policy = CodingAssignmentPolicy(selection_delay_blocks=20)
+
+    with pytest.raises(CodingAssignmentNotQualifiedError, match="certification"):
+        async with session.begin():
+            await create_coding_selection_assignment(
+                session,
+                finalized_source=source,
+                agent_id=agent_id,
+                bench_version=_BENCH,
+                coding_run_id="coding-assignment-no-cert",
+                corpus_release_id="private-coding-corpus-v1",
+                policy=policy,
+            )
+
+    await _seed_certification(session, agent_id)
+    async with session.begin():
+        created = await create_coding_selection_assignment(
+            session,
+            finalized_source=source,
+            agent_id=agent_id,
+            bench_version=_BENCH,
+            coding_run_id="coding-assignment-conflict",
+            corpus_release_id="private-coding-corpus-v1",
+            policy=policy,
+        )
+    async with session.begin():
+        current = await session.get(Agent, agent_id, with_for_update=True)
+        assert current is not None
+        current.sha256 = "ef" * 32
+    with pytest.raises(CodingAssignmentConflictError):
+        async with session.begin():
+            await create_coding_selection_assignment(
+                session,
+                finalized_source=source,
+                agent_id=agent_id,
+                bench_version=_BENCH,
+                coding_run_id=created.assignment.coding_run_id,
+                corpus_release_id="private-coding-corpus-v1",
+                policy=policy,
+            )
+
+
+async def test_concurrent_assignment_attempts_cannot_grind_multiple_heights(
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    registered_at = await _seed_catalog(session)
+    agent = await _seed_qualified_agent(
+        session,
+        created_at=registered_at + timedelta(seconds=1),
+    )
+    await _seed_certification(session, agent.agent_id)
+    barrier = asyncio.Barrier(2)
+
+    async def attempt(*, coding_run_id: str, anchor_number: int) -> str:
+        source = _FinalizedBlocks(anchor_number=anchor_number, barrier=barrier)
+        try:
+            async with session_maker() as attempt_session, attempt_session.begin():
+                result = await create_coding_selection_assignment(
+                    attempt_session,
+                    finalized_source=source,
+                    agent_id=agent.agent_id,
+                    bench_version=_BENCH,
+                    coding_run_id=coding_run_id,
+                    corpus_release_id="private-coding-corpus-v1",
+                    policy=CodingAssignmentPolicy(selection_delay_blocks=20),
+                )
+        except CodingAssignmentConflictError:
+            return "conflict"
+        return f"created:{result.assignment.selection_block_number}"
+
+    outcomes = await asyncio.gather(
+        attempt(coding_run_id="coding-race-a", anchor_number=1_000),
+        attempt(coding_run_id="coding-race-b", anchor_number=2_000),
+    )
+    assert sorted(outcome.split(":", 1)[0] for outcome in outcomes) == [
+        "conflict",
+        "created",
+    ]
+    async with session_maker() as probe:
+        assert (
+            await probe.scalar(
+                select(func.count())
+                .select_from(CodingSelectionAssignmentRow)
+                .where(CodingSelectionAssignmentRow.agent_id == agent.agent_id)
+            )
+            == 1
+        )
+
+
+async def test_selection_assignment_rejects_stale_core_policy(
+    session: AsyncSession,
+) -> None:
+    registered_at = await _seed_catalog(session)
+    agent = await _seed_qualified_agent(
+        session,
+        created_at=registered_at + timedelta(seconds=1),
+    )
+    await _seed_certification(session, agent.agent_id)
+    async with session.begin():
+        await insert_core_qualification_policy(
+            session,
+            parent_revision=1,
+            policy=CoreQualificationPolicy(
+                schema="ditto-core-qualification-policy-v1",
+                weight_eligible=False,
+                bench_version=_BENCH,
+                enter_composite=0.85,
+                enter_tool_mean=0.85,
+                enter_memory_mean=0.85,
+                exit_composite=0.75,
+                exit_tool_mean=0.75,
+                exit_memory_mean=0.75,
+                enter_observations=1,
+                exit_observations=2,
+            ),
+            reason="revise shadow coding qualification floors",
+            actor="test-admin",
+        )
+    with pytest.raises(CodingAssignmentNotQualifiedError, match="core qualification"):
+        async with session.begin():
+            await create_coding_selection_assignment(
+                session,
+                finalized_source=_FinalizedBlocks(),
+                agent_id=agent.agent_id,
+                bench_version=_BENCH,
+                coding_run_id="coding-assignment-stale-core",
+                corpus_release_id="private-coding-corpus-v1",
+                policy=CodingAssignmentPolicy(selection_delay_blocks=20),
+            )
 
 
 async def test_run_requires_core_qualification(session: AsyncSession) -> None:
@@ -335,7 +598,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
         session,
         created_at=registered_at + timedelta(seconds=1),
     )
-    await _seed_certification(session, agent)
+    await _seed_certification(session, agent.agent_id)
     authority = _authority(agent.agent_id)
     async with session.begin():
         created = await insert_coding_shadow_run(session, authority=authority)

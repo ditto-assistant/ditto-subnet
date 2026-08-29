@@ -29,11 +29,11 @@ separate ticket IDs, deadlines, certifications, signatures, and result rows.
 This layer provides no production run or ticket issuer. The signed
 catalog/exposure layer requires a registered active commitment and full
 irreversible exposure before any new ticket. The separate selector core can
-verify one assigned block and private task proof, but it neither persists the
-future-height assignment nor schedules or inserts a run. The validator
-submission route therefore has no live lease to accept. Internal insertion
-functions and real PostgreSQL tests freeze the authority contract for that
-later work.
+verify one assigned block and private task proof, while the assignment ledger
+persists the predetermined future height. Neither schedules nor inserts a run.
+The validator submission route therefore has no live lease to accept. Internal
+insertion functions and real PostgreSQL tests freeze the authority contract for
+that later work.
 
 Persisting a selection block number/hash is not chain verification. The selector
 core independently fetches the canonical block hash and validates the selected
@@ -70,13 +70,13 @@ or patches. Backroom serves the same read through
 `get_agent_coding_shadow_evaluations`.
 
 The view reports a repair median only after three validator results. A source
-artifact, screened image, or core-policy change marks historical runs stale
-without deleting or relabeling them.
+artifact, screened image, core-policy change, or loss of the latest complete
+qualification marks historical runs stale without deleting or relabeling them.
 
 ## Activation boundary
 
 This ledger is calibration infrastructure, not a second emissions authority.
-Production still requires the persisted assignment/issuer, private catalog
-transport, shadow scheduler, validator/scorer adapter, and measured calibration.
+Production still requires the issuer, private catalog transport, shadow
+scheduler, validator/scorer adapter, and measured calibration.
 Any coding emissions allocation requires coding contract v2 and a separate
 owner-approved PR.

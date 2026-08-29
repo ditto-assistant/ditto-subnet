@@ -6322,6 +6322,32 @@ describe('Backroom MCP tools', () => {
       miner_hotkey: '5Miner',
       artifact_sha256: 'a'.repeat(64),
       screened_image_sha256: 'b'.repeat(64),
+      total_assignments: 1,
+      assignments: [
+        {
+          assignment_row_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          assignment_sha256: '1'.repeat(64),
+          coding_run_id: 'coding-run-001',
+          bench_version: 12,
+          coding_contract_version: 1,
+          artifact_sha256: 'a'.repeat(64),
+          screened_image_sha256: 'b'.repeat(64),
+          corpus_release_id: 'private-coding-corpus-v1',
+          catalog_commitment_sha256: '2'.repeat(64),
+          anchor_block_number: 1_000,
+          anchor_block_hash: `0x${'3'.repeat(64)}`,
+          selection_delay_blocks: 20,
+          selection_block_number: 1_020,
+          assigned_at: '2026-08-21T00:00:00Z',
+          task_count: 1,
+          core_qualification_observation_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          certification_row_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          current: true,
+          stale_reason: 'current',
+          created_at: '2026-08-21T00:00:00Z',
+          weight_eligible: false,
+        },
+      ],
       total_runs: 1,
       runs: [
         {
@@ -6386,6 +6412,7 @@ describe('Backroom MCP tools', () => {
     expect(response.isError).not.toBe(true)
     expect(readJsonResult(response)).toMatchObject({
       agent_id: agentId,
+      total_assignments: 1,
       total_runs: 1,
       shadow_only: true,
     })

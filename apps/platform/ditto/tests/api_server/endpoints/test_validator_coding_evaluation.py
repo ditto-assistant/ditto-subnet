@@ -9,7 +9,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import bittensor
 import httpx
@@ -31,12 +31,17 @@ from ditto.api_models.coding_evaluation import (
 from ditto.api_models.core_qualification import CoreQualificationPolicy
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.endpoints import validator_coding_evaluation as endpoint_module
+from ditto.chain.models import BlockInfo
 from ditto.db.models import (
     Agent,
     CodingCapabilityCertification,
     CodingShadowResult,
     CodingShadowTicket,
     Score,
+)
+from ditto.db.queries.coding_assignments import (
+    CodingAssignmentPolicy,
+    create_coding_selection_assignment,
 )
 from ditto.db.queries.coding_catalog import (
     expose_coding_shadow_run_tasks,
@@ -58,6 +63,16 @@ _BENCH = 12
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
 _VALIDATOR = _KEYPAIR.ss58_address
 _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
+
+
+class _FinalizedBlocks:
+    async def get_finalized_block_hash(self, block_number: int) -> str:
+        if block_number == 0:
+            return "0x" + "22" * 32
+        return "0x" + "33" * 32
+
+    async def get_finalized_block(self) -> BlockInfo:
+        return BlockInfo(number=1_000, hash="0x" + "ff" * 32)
 
 
 def _catalog_commitment() -> CodingCatalogCommitment:
@@ -285,6 +300,15 @@ async def _seed(
             )
         )
     async with maker() as session, session.begin():
+        await create_coding_selection_assignment(
+            session,
+            finalized_source=_FinalizedBlocks(),
+            agent_id=agent_id,
+            bench_version=_BENCH,
+            coding_run_id="coding-assignment-endpoint-001",
+            corpus_release_id="private-coding-corpus-v1",
+            policy=CodingAssignmentPolicy(selection_delay_blocks=20),
+        )
         run = await insert_coding_shadow_run(
             session,
             authority=_authority(agent_id),
@@ -303,6 +327,39 @@ async def _seed(
             deadline=deadline,
         )
     return agent_id, run.row, ticket.row, deadline
+
+
+async def _record_core_qualification_exit(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    agent_id: UUID,
+) -> None:
+    for wave in (1, 2):
+        async with maker() as session, session.begin():
+            for index in range(3):
+                await upsert_score(
+                    session,
+                    agent_id=agent_id,
+                    validator_hotkey=f"core-validator-{index}",
+                    bench_version=_BENCH,
+                    run_id=f"core-exit-{wave}-{index}",
+                    seed=wave * 10 + index,
+                    composite=0.5,
+                    tool_mean=0.5,
+                    memory_mean=0.5,
+                    median_ms=100,
+                    n=MIN_ELIGIBLE_CASES,
+                    generated_at=_NOW + timedelta(minutes=wave),
+                    signature=(f"{wave * 3 + index + 1:02x}" * 64),
+                )
+            observed = await observe_core_qualification(
+                session,
+                agent_id=agent_id,
+                bench_version=_BENCH,
+                now=_NOW + timedelta(minutes=wave),
+            )
+            assert observed is not None and observed.row.complete_wave
+            assert observed.row.qualified is (wave == 1)
 
 
 async def test_signed_shadow_result_is_idempotent_visible_and_score_separate(
@@ -360,6 +417,9 @@ async def test_signed_shadow_result_is_idempotent_visible_and_score_separate(
     assert admin.status_code == 200, admin.text
     body = admin.json()
     assert body["shadow_only"] is True
+    assert body["total_assignments"] == 1
+    assert body["assignments"][0]["current"] is True
+    assert body["assignments"][0]["selection_block_number"] == 1_020
     assert body["runs"][0]["result_count"] == 1
     assert body["runs"][0]["quorum_complete"] is False
     assert body["runs"][0]["median_repair_mean_micros"] is None
@@ -431,3 +491,26 @@ async def test_signed_shadow_result_is_idempotent_visible_and_score_separate(
     assert run_view["result_count"] == 3
     assert run_view["quorum_complete"] is True
     assert run_view["median_repair_mean_micros"] == 1_000_000
+
+    await _record_core_qualification_exit(session_maker, agent_id=agent_id)
+    qualification_stale = await client.get(
+        f"/api/v1/admin/agents/{agent_id}/coding-shadow-evaluations",
+        headers={"Authorization": f"Bearer {_ADMIN_TOKEN}"},
+    )
+    assert qualification_stale.status_code == 200
+    stale_body = qualification_stale.json()
+    assert stale_body["assignments"][0]["stale_reason"] == "qualification_stale"
+    assert stale_body["runs"][0]["stale_reason"] == "qualification_stale"
+
+    async with session_maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id, with_for_update=True)
+        assert agent is not None
+        agent.sha256 = "fa" * 32
+    stale = await client.get(
+        f"/api/v1/admin/agents/{agent_id}/coding-shadow-evaluations",
+        headers={"Authorization": f"Bearer {_ADMIN_TOKEN}"},
+    )
+    assert stale.status_code == 200
+    assignment_view = stale.json()["assignments"][0]
+    assert assignment_view["current"] is False
+    assert assignment_view["stale_reason"] == "artifact_changed"

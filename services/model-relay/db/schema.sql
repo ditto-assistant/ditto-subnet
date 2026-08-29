@@ -859,6 +859,41 @@ CREATE TABLE public.coding_catalog_retirements (
 
 
 --
+-- Name: coding_selection_assignments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_selection_assignments (
+    assignment_row_id uuid NOT NULL,
+    assignment_sha256 text NOT NULL,
+    release_row_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    screened_image_sha256 text NOT NULL,
+    bench_version integer NOT NULL,
+    coding_contract_version integer NOT NULL,
+    coding_run_id text NOT NULL,
+    corpus_release_id text NOT NULL,
+    catalog_commitment_sha256 text NOT NULL,
+    anchor_block_number bigint NOT NULL,
+    anchor_block_hash text NOT NULL,
+    selection_delay_blocks integer NOT NULL,
+    selection_block_number bigint NOT NULL,
+    assigned_at timestamp with time zone NOT NULL,
+    task_count integer NOT NULL,
+    core_qualification_observation_id uuid NOT NULL,
+    certification_row_id uuid NOT NULL,
+    weight_eligible boolean NOT NULL,
+    assignment jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_selection_assignments_coding_selection_assign_3577 CHECK ((((octet_length(coding_run_id) >= 1) AND (octet_length(coding_run_id) <= 256)) AND ((octet_length(corpus_release_id) >= 1) AND (octet_length(corpus_release_id) <= 256)) AND (coding_run_id !~ '[[:space:][:cntrl:]]'::text) AND (corpus_release_id !~ '[[:space:][:cntrl:]]'::text))),
+    CONSTRAINT ck_coding_selection_assignments_coding_selection_assign_41e0 CHECK (((bench_version >= 7) AND (coding_contract_version = 1) AND (anchor_block_number > 0) AND ((selection_delay_blocks >= 1) AND (selection_delay_blocks <= 10000)) AND (selection_block_number = (anchor_block_number + selection_delay_blocks)) AND (task_count = 1) AND (weight_eligible = false))),
+    CONSTRAINT ck_coding_selection_assignments_coding_selection_assign_521a CHECK ((anchor_block_hash ~ '^0x[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_coding_selection_assignments_coding_selection_assign_a2b5 CHECK ((assigned_at = created_at)),
+    CONSTRAINT ck_coding_selection_assignments_coding_selection_assign_f74e CHECK (((assignment_sha256 ~ '^[0-9a-f]{64}$'::text) AND (artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND (catalog_commitment_sha256 ~ '^[0-9a-f]{64}$'::text)))
+);
+
+
+--
 -- Name: coding_shadow_results; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3414,6 +3449,38 @@ ALTER TABLE ONLY public.coding_capability_certifications
 
 
 --
+-- Name: coding_selection_assignments coding_selection_assignments_artifact_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_selection_assignments
+    ADD CONSTRAINT coding_selection_assignments_artifact_key UNIQUE (agent_id, artifact_sha256, screened_image_sha256, coding_contract_version);
+
+
+--
+-- Name: coding_selection_assignments coding_selection_assignments_assignment_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_selection_assignments
+    ADD CONSTRAINT coding_selection_assignments_assignment_sha256_key UNIQUE (assignment_sha256);
+
+
+--
+-- Name: coding_selection_assignments coding_selection_assignments_identity_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_selection_assignments
+    ADD CONSTRAINT coding_selection_assignments_identity_key UNIQUE (agent_id, coding_contract_version, coding_run_id);
+
+
+--
+-- Name: coding_selection_assignments coding_selection_assignments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_selection_assignments
+    ADD CONSTRAINT coding_selection_assignments_pkey PRIMARY KEY (assignment_row_id);
+
+
+--
 -- Name: coding_shadow_results coding_shadow_results_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4730,6 +4797,20 @@ CREATE INDEX coding_certifications_agent_created_idx ON public.coding_capability
 
 
 --
+-- Name: coding_selection_assignments_agent_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_selection_assignments_agent_created_idx ON public.coding_selection_assignments USING btree (agent_id, created_at);
+
+
+--
+-- Name: coding_selection_assignments_height_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_selection_assignments_height_idx ON public.coding_selection_assignments USING btree (selection_block_number, created_at);
+
+
+--
 -- Name: coding_shadow_results_run_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5381,6 +5462,13 @@ CREATE TRIGGER coding_catalog_retirements_append_only_guard BEFORE DELETE OR UPD
 
 
 --
+-- Name: coding_selection_assignments coding_selection_assignments_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_selection_assignments_append_only BEFORE DELETE OR UPDATE ON public.coding_selection_assignments FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
 -- Name: confirmation_bundles confirmation_bundles_immutability_guard; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -5491,6 +5579,46 @@ ALTER TABLE ONLY public.coding_catalog_retirements
 
 ALTER TABLE ONLY public.coding_capability_certifications
     ADD CONSTRAINT coding_certifications_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_selection_assignments coding_selection_assignments_agent_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_selection_assignments
+    ADD CONSTRAINT coding_selection_assignments_agent_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_selection_assignments coding_selection_assignments_certification_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_selection_assignments
+    ADD CONSTRAINT coding_selection_assignments_certification_fkey FOREIGN KEY (certification_row_id) REFERENCES public.coding_capability_certifications(certification_row_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_selection_assignments coding_selection_assignments_commitment_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_selection_assignments
+    ADD CONSTRAINT coding_selection_assignments_commitment_fkey FOREIGN KEY (release_row_id, catalog_commitment_sha256) REFERENCES public.coding_catalog_releases(release_row_id, commitment_sha256) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_selection_assignments coding_selection_assignments_core_observation_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_selection_assignments
+    ADD CONSTRAINT coding_selection_assignments_core_observation_fkey FOREIGN KEY (core_qualification_observation_id) REFERENCES public.core_qualification_observations(observation_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_selection_assignments coding_selection_assignments_release_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_selection_assignments
+    ADD CONSTRAINT coding_selection_assignments_release_fkey FOREIGN KEY (release_row_id, corpus_release_id) REFERENCES public.coding_catalog_releases(release_row_id, corpus_release_id) ON DELETE RESTRICT;
 
 
 --
