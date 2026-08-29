@@ -396,13 +396,11 @@ export interface AdmissionRetryState {
 }
 
 /**
- * One honest sentence for a submission still in build & admission. During the
- * 2026-08-28 incident the drawer showed only the stage name, so a submission
- * between infrastructure retries read as a stuck queue.
+ * One honest sentence for a submission still in build & admission.
  */
 export function admissionRetryLine(
   retry: AdmissionRetryState | null | undefined,
-  now: Date = new Date(),
+  _now: Date = new Date(),
 ): string {
   if (!retry) return "";
   const attempts = Number(retry.attempt_count) || 0;
@@ -412,15 +410,27 @@ export function admissionRetryLine(
   if (retry.state === "queued") {
     return "Waiting for a screener slot; no attempt has started yet.";
   }
-  if (retry.state !== "waiting_retry") return "";
-  const infra = retry.last_failure_infrastructure
-    ? "The previous attempt hit screening infrastructure, not this submission. "
-    : "";
-  const at = retry.next_retry_at ? new Date(retry.next_retry_at) : null;
-  const next = attempts + 1;
-  if (!at || Number.isNaN(at.getTime()) || at.getTime() <= now.getTime()) {
-    return infra + "Retry is eligible now and waiting for a screener slot (attempt " + next + ").";
+  if (retry.state === "retry_queued") {
+    return (
+      "A guarded retry was authorized and is waiting for a screener slot (attempt " +
+      (attempts + 1) +
+      ")."
+    );
   }
-  const minutes = Math.max(1, Math.round((at.getTime() - now.getTime()) / 60000));
-  return infra + "Retry scheduled in about " + minutes + " min (attempt " + next + ").";
+  if (retry.state === "parked") {
+    return "Parked after one provider or source-review failure. It will not retry automatically; an operator must authorize the next attempt.";
+  }
+  if (retry.state === "stuck") {
+    return "Stuck after a Ditto infrastructure failure, not a miner failure. It will not retry automatically; an operator must authorize the next attempt.";
+  }
+  return "";
+}
+
+export function admissionRetryChip(
+  retry: AdmissionRetryState | null | undefined,
+): readonly [string, string] | null {
+  if (retry?.state === "parked") return ["Parked", "paused"];
+  if (retry?.state === "stuck") return ["Stuck", "warn"];
+  if (retry?.state === "retry_queued") return ["Retry queued", "progress"];
+  return null;
 }

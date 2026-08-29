@@ -346,7 +346,6 @@ from ditto.db.queries.scores import (
     v9_confirmation_public_projections,
 )
 from ditto.db.queries.screening import (
-    FAILED_ATTEMPT_RETRY_BACKOFF,
     PROVIDER_BACKOFF_REASON_CODES,
     get_running_screening_attempts,
     list_screening_attempts,
@@ -6087,27 +6086,25 @@ async def agent_pipeline(
         )
         next_retry_at: datetime | None = None
         if agent.status == AgentStatus.SCREENING:
-            retry_state: Literal["queued", "running", "waiting_retry"] = "running"
+            retry_state: Literal[
+                "queued", "running", "parked", "stuck", "retry_queued"
+            ] = "running"
         elif agent.status == AgentStatus.UPLOADED or latest_attempt is None:
             retry_state = "queued"
         else:
-            retry_state = "waiting_retry"
-            deadline = cast(datetime, _aware(latest_attempt.deadline))
-            finished_at = _aware(latest_attempt.finished_at)
-            backoff_until = (
-                min(deadline, finished_at + FAILED_ATTEMPT_RETRY_BACKOFF)
-                if finished_at is not None
-                else deadline
-            )
             overridden = await session.scalar(
                 select(ScreeningRetryOverride.override_id)
                 .where(ScreeningRetryOverride.attempt_id == latest_attempt.attempt_id)
                 .limit(1)
             )
-            # An already-eligible submission is waiting for a screener slot,
-            # not for a timer; report the generation time so the dashboard
-            # never renders a countdown into the past.
-            next_retry_at = now if overridden is not None else max(backoff_until, now)
+            if overridden is not None:
+                retry_state = "retry_queued"
+            elif latest_attempt.reason_code == "source-review-retryable-infra":
+                retry_state = "parked"
+            elif last_failure_infrastructure:
+                retry_state = "stuck"
+            else:
+                retry_state = "parked"
         admission_retry = PublicAdmissionRetry(
             state=retry_state,
             attempt_count=len(attempts),

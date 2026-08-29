@@ -2880,17 +2880,17 @@ class PublicScreeningAttempt(BaseModel):
 class PublicAdmissionRetry(BaseModel):
     """Live admission state for a submission still in build & admission.
 
-    ``waiting_retry`` is an infrastructure retry the platform scheduled, not
-    a verdict against the artifact. ``next_retry_at`` is when the submission
-    becomes claimable again; an already-eligible submission reports the
-    payload's generation time (it is waiting for a screener slot, not for a
-    timer). Without this block the public pipeline showed only the stage
-    name, so a between-attempts submission was indistinguishable from a
-    stuck queue.
+    Failed cost-bearing attempts never retry automatically. ``parked`` names a
+    source-review/provider failure (including OpenRouter throttling), while
+    ``stuck`` names another Ditto-owned infrastructure failure. Both require a
+    guarded Backroom retry. ``retry_queued`` means that exact retry has already
+    been authorized and is waiting for a screener slot.
     """
 
-    state: Literal["queued", "running", "waiting_retry"]
+    state: Literal["queued", "running", "parked", "stuck", "retry_queued"]
     attempt_count: Annotated[int, Field(ge=0)]
+    # Kept nullable for rolling compatibility with the pre-fail-once contract.
+    # Manual retries do not have a scheduled retry time.
     next_retry_at: datetime | None = None
     last_failure_infrastructure: bool = False
 

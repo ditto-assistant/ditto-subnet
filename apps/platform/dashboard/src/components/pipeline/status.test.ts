@@ -285,10 +285,10 @@ describe("admissionRetryLine (#1215)", () => {
     );
   });
 
-  it("counts down to a scheduled infrastructure retry", () => {
+  it("parks source-review and provider failures without promising a retry", () => {
     const line = admissionRetryLine(
       {
-        state: "waiting_retry",
+        state: "parked",
         attempt_count: 2,
         next_retry_at: "2026-08-28T10:07:30Z",
         last_failure_infrastructure: true,
@@ -296,22 +296,29 @@ describe("admissionRetryLine (#1215)", () => {
       now,
     );
     expect(line).toBe(
-      "The previous attempt hit screening infrastructure, not this submission. " +
-        "Retry scheduled in about 8 min (attempt 3).",
+      "Parked after one provider or source-review failure. It will not retry automatically; an operator must authorize the next attempt.",
     );
   });
 
-  it("reports immediate eligibility when the backoff has passed", () => {
+  it("identifies a stuck Ditto infrastructure failure", () => {
     const line = admissionRetryLine(
       {
-        state: "waiting_retry",
+        state: "stuck",
         attempt_count: 1,
         next_retry_at: "2026-08-28T09:59:00Z",
         last_failure_infrastructure: false,
       },
       now,
     );
-    expect(line).toBe("Retry is eligible now and waiting for a screener slot (attempt 2).");
+    expect(line).toBe(
+      "Stuck after a Ditto infrastructure failure, not a miner failure. It will not retry automatically; an operator must authorize the next attempt.",
+    );
+  });
+
+  it("names an operator-authorized retry", () => {
+    expect(admissionRetryLine({ state: "retry_queued", attempt_count: 1 }, now)).toBe(
+      "A guarded retry was authorized and is waiting for a screener slot (attempt 2).",
+    );
   });
 
   it("renders nothing without the block or for unknown states", () => {
