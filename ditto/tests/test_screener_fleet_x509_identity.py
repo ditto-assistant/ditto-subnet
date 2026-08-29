@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -23,7 +24,21 @@ def test_terraform_binds_one_exact_x509_subject_to_one_secret() -> None:
     assert 'secret_id = "validator-openrouter-key"' in terraform
     assert 'role               = "roles/iam.workloadIdentityUser"' in terraform
     assert "principalSet://" not in terraform
-    assert 'resource "google_project_iam_member"' not in terraform
+    project_grants = re.findall(
+        r'resource "google_project_iam_member" "([^"]+)" \{(.*?)\n\}',
+        terraform,
+        flags=re.DOTALL,
+    )
+    assert project_grants == [
+        (
+            "screener_fleet_x509_pool_admin",
+            "\n  count   = local.screener_fleet_x509_count\n"
+            "  project = var.project\n"
+            '  role    = "roles/iam.workloadIdentityPoolAdmin"\n'
+            '  member  = "serviceAccount:github-actions-terraform-apply@'
+            '${var.project}.iam.gserviceaccount.com"',
+        )
+    ]
     assert 'resource "google_service_account_key"' not in terraform
     assert "PRIVATE KEY" not in terraform
 
