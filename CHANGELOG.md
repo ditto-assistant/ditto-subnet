@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v0.124.0 (2026-08-29)
+
+### Bug Fixes
+
+- Require manual retries for cost-bearing work
+  ([#1201](https://github.com/ditto-assistant/ditto-subnet/pull/1201),
+  [`6fec2ba`](https://github.com/ditto-assistant/ditto-subnet/commit/6fec2badb810108150bdd922e9303ed909fda0cb))
+
+- **platform**: Harden screening failure handling
+  ([#1260](https://github.com/ditto-assistant/ditto-subnet/pull/1260),
+  [`e096e09`](https://github.com/ditto-assistant/ditto-subnet/commit/e096e09453c000bcd8c628f81a3d6b2c6e9411a4))
+
+- **platform**: Park work during provider outages
+  ([#1226](https://github.com/ditto-assistant/ditto-subnet/pull/1226),
+  [`bc07ac1`](https://github.com/ditto-assistant/ditto-subnet/commit/bc07ac17a2de1fa377d2429198d6af11fd1e776b))
+
+### Documentation
+
+- **coding**: Define private execution protocol
+  ([`3f86008`](https://github.com/ditto-assistant/ditto-subnet/commit/3f8600893e5d7ff5e2eacefc3afe9b3ff7c3b39e))
+
+### Features
+
+- **coding**: Add typed public practice runtime
+  ([`b942ddc`](https://github.com/ditto-assistant/ditto-subnet/commit/b942ddc3ecec2aaf60f915671230fef4515b2853))
+
+
 ## v0.123.0 (2026-08-29)
 
 ### Bug Fixes
