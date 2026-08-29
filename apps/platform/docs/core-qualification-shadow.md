@@ -67,6 +67,7 @@ Backroom exposes:
 - an idempotent one-agent refresh for existing scores or recovery after a
   transient shadow-write failure.
 
-This package does not issue a coding task. A separate reviewed change must add a
-shadow coding job/score ledger, and coding contract v2 plus calibration and
-owner approval remain prerequisites for any emissions allocation.
+Core qualification does not issue a coding task. The separate shadow coding
+ledger binds future runs to one exact current observation but intentionally has
+no production issuer. Coding contract v2 plus calibration and owner approval
+remain prerequisites for any emissions allocation.

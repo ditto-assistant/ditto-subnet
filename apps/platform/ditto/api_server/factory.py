@@ -57,6 +57,7 @@ from ditto.api_server.endpoints import (
     admin_benchmark_rollout_router,
     admin_burn_settings_router,
     admin_coding_certifications_router,
+    admin_coding_evaluations_router,
     admin_confirmation_bundles_router,
     admin_continual_retest_settings_router,
     admin_copy_review_router,
@@ -97,6 +98,7 @@ from ditto.api_server.endpoints import (
     screener_router,
     upload_router,
     validator_coding_certification_router,
+    validator_coding_evaluation_router,
     validator_confirmation_router,
     validator_router,
 )
@@ -522,6 +524,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")
     app.include_router(validator_coding_certification_router, prefix="/api/v1")
+    app.include_router(validator_coding_evaluation_router, prefix="/api/v1")
     app.include_router(validator_confirmation_router, prefix="/api/v1")
     app.include_router(inference_router, prefix="/api/v1")
     app.include_router(screener_router, prefix="/api/v1")
@@ -552,6 +555,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_submission_deposit_address_router, prefix="/api/v1")
     app.include_router(admin_copy_review_router, prefix="/api/v1")
     app.include_router(admin_coding_certifications_router, prefix="/api/v1")
+    app.include_router(admin_coding_evaluations_router, prefix="/api/v1")
     app.include_router(admin_confirmation_bundles_router, prefix="/api/v1")
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
     app.include_router(admin_core_qualification_router, prefix="/api/v1")

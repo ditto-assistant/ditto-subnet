@@ -221,6 +221,36 @@ async def summarize_agent_coding_certifications(
     )
 
 
+async def active_validator_coding_certification(
+    session: AsyncSession,
+    *,
+    agent: Agent,
+    validator_hotkey: str,
+    coding_contract_version: int,
+    active_through: datetime,
+) -> CodingCapabilityCertification | None:
+    """Return exact-artifact certification valid through a proposed lease."""
+
+    if agent.screened_image_sha256 is None:
+        return None
+    return await session.scalar(
+        select(CodingCapabilityCertification)
+        .where(
+            CodingCapabilityCertification.agent_id == agent.agent_id,
+            CodingCapabilityCertification.artifact_sha256 == agent.sha256,
+            CodingCapabilityCertification.screened_image_sha256
+            == agent.screened_image_sha256,
+            CodingCapabilityCertification.validator_hotkey == validator_hotkey,
+            CodingCapabilityCertification.coding_contract_version
+            == coding_contract_version,
+            CodingCapabilityCertification.status == "certified",
+            CodingCapabilityCertification.expires_at > _aware(active_through),
+        )
+        .order_by(CodingCapabilityCertification.created_at.desc())
+        .limit(1)
+    )
+
+
 def coding_certification_stale_reason(
     row: CodingCapabilityCertification,
     agent: Agent,

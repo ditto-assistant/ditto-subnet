@@ -109,6 +109,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/{agent_id}/coding-shadow-evaluations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Coding Shadow Evaluations
+         * @description Return bounded run/ticket/result summaries without private task data.
+         */
+        get: operations["agent_coding_shadow_evaluations_api_v1_admin_agents__agent_id__coding_shadow_evaluations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents/{agent_id}/core-qualification": {
         parameters: {
             query?: never;
@@ -4650,6 +4670,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/agent/{agent_id}/coding-shadow-result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Coding Shadow Result
+         * @description Persist one signed repair result without touching ordinary scores.
+         */
+        post: operations["submit_coding_shadow_result_api_v1_validator_agent__agent_id__coding_shadow_result_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/agent/{agent_id}/score": {
         parameters: {
             query?: never;
@@ -9150,6 +9190,32 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** AgentCodingShadowEvaluationStatus */
+        AgentCodingShadowEvaluationStatus: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Runs */
+            runs: components["schemas"]["CodingShadowRunRecord"][];
+            /** Screened Image Sha256 */
+            screened_image_sha256: string | null;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /** Total Runs */
+            total_runs: number;
+        };
         /** AgentCoreQualificationStatus */
         AgentCoreQualificationStatus: {
             /**
@@ -10062,6 +10128,204 @@ export interface components {
          * @enum {string}
          */
         CodingCertificationTerminalDomain: "resolved" | "repair_failure" | "candidate_integrity";
+        /**
+         * CodingRunEvidence
+         * @description Known-field mirror of the shared coding run-evidence v1 contract.
+         */
+        CodingRunEvidence: {
+            /** Candidate Integrity Count */
+            candidate_integrity_count: number;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Coding Run Id */
+            coding_run_id: string;
+            /** Control Plane Integrity Count */
+            control_plane_integrity_count: number;
+            /** Infrastructure Count */
+            infrastructure_count: number;
+            /** Invalid Count */
+            invalid_count: number;
+            /** Repair Failure Count */
+            repair_failure_count: number;
+            /** Repair Mean Micros */
+            repair_mean_micros: number;
+            /** Resolved Count */
+            resolved_count: number;
+            /** Run Manifest Sha256 */
+            run_manifest_sha256: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-run-evidence-v1";
+            /** Scoreable Task Count */
+            scoreable_task_count: number;
+            /** Task Set Manifest Sha256 */
+            task_set_manifest_sha256: string;
+            /** Tasks */
+            tasks: components["schemas"]["CodingTaskResult"][];
+            /** Validator Ticket Id */
+            validator_ticket_id: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** CodingShadowResultRecord */
+        CodingShadowResultRecord: {
+            /** Candidate Integrity Count */
+            candidate_integrity_count: number;
+            /** Control Plane Integrity Count */
+            control_plane_integrity_count: number;
+            /** Infrastructure Count */
+            infrastructure_count: number;
+            /** Invalid Count */
+            invalid_count: number;
+            /** Repair Failure Count */
+            repair_failure_count: number;
+            /** Repair Mean Micros */
+            repair_mean_micros: number;
+            /** Resolved Count */
+            resolved_count: number;
+            /**
+             * Result Id
+             * Format: uuid
+             */
+            result_id: string;
+            /** Run Evidence Sha256 */
+            run_evidence_sha256: string;
+            /** Scoreable Task Count */
+            scoreable_task_count: number;
+            /**
+             * Submitted At
+             * Format: date-time
+             */
+            submitted_at: string;
+            /** Task Count */
+            task_count: number;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** CodingShadowRunRecord */
+        CodingShadowRunRecord: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Coding Run Id */
+            coding_run_id: string;
+            /**
+             * Core Qualification Observation Id
+             * Format: uuid
+             */
+            core_qualification_observation_id: string;
+            /** Corpus Release Id */
+            corpus_release_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Current */
+            current: boolean;
+            /** Median Repair Mean Micros */
+            median_repair_mean_micros: number | null;
+            /** Quorum Complete */
+            quorum_complete: boolean;
+            /** Result Count */
+            result_count: number;
+            /** Run Manifest Sha256 */
+            run_manifest_sha256: string;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /**
+             * Stale Reason
+             * @enum {string}
+             */
+            stale_reason: "current" | "artifact_changed" | "screened_image_changed" | "policy_changed";
+            /** Task Count */
+            task_count: number;
+            /** Task Set Manifest Sha256 */
+            task_set_manifest_sha256: string;
+            /** Ticket Count */
+            ticket_count: number;
+            /** Tickets */
+            tickets: components["schemas"]["CodingShadowTicketRecord"][];
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** CodingShadowTicketRecord */
+        CodingShadowTicketRecord: {
+            /**
+             * Certification Row Id
+             * Format: uuid
+             */
+            certification_row_id: string;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            result: components["schemas"]["CodingShadowResultRecord"] | null;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** CodingTaskResult */
+        CodingTaskResult: {
+            /** Case Id */
+            case_id: string;
+            /** Repair Score Micros */
+            repair_score_micros: number;
+            /** Task Evidence Sha256 */
+            task_evidence_sha256: string;
+            terminal_domain: components["schemas"]["CodingTerminalDomain"];
+            /** Variant Id */
+            variant_id: string;
+        };
+        /**
+         * CodingTerminalDomain
+         * @enum {string}
+         */
+        CodingTerminalDomain: "resolved" | "repair_failure" | "validator_infrastructure" | "task_invalid" | "candidate_integrity" | "control_plane_integrity";
         /** ConfirmationAblationCoordinatorProfile */
         ConfirmationAblationCoordinatorProfile: {
             /**
@@ -20169,6 +20433,70 @@ export interface components {
             idempotent: boolean;
             status: components["schemas"]["CodingCertificationStatus"];
         };
+        /** SubmitCodingShadowResultRequest */
+        SubmitCodingShadowResultRequest: {
+            /** Agent Artifact Sha256 */
+            agent_artifact_sha256: string;
+            /** Bench Version */
+            bench_version: number;
+            evidence: components["schemas"]["CodingRunEvidence"];
+            /** Run Evidence Sha256 */
+            run_evidence_sha256: string;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** SubmitCodingShadowResultResponse */
+        SubmitCodingShadowResultResponse: {
+            /**
+             * Accepted
+             * @constant
+             */
+            accepted: true;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Coding Run Id */
+            coding_run_id: string;
+            /** Idempotent */
+            idempotent: boolean;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
         /**
          * SubmitScoreRequest
          * @description Body of ``POST /validator/agent/{agent_id}/score``.
@@ -21859,6 +22187,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentCodingCertificationStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_coding_shadow_evaluations_api_v1_admin_agents__agent_id__coding_shadow_evaluations_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentCodingShadowEvaluationStatus"];
                 };
             };
             /** @description Validation Error */
@@ -30177,6 +30540,62 @@ export interface operations {
                 content?: never;
             };
             /** @description Artifact, ticket, receipt, or replay conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_coding_shadow_result_api_v1_validator_agent__agent_id__coding_shadow_result_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitCodingShadowResultRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmitCodingShadowResultResponse"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Agent or coding shadow lease not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authority, deadline, or immutable result conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;

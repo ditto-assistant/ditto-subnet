@@ -764,6 +764,90 @@ CREATE TABLE public.coding_capability_certifications (
 
 
 --
+-- Name: coding_shadow_results; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_shadow_results (
+    result_id uuid NOT NULL,
+    ticket_id uuid NOT NULL,
+    run_row_id uuid NOT NULL,
+    run_evidence_sha256 text NOT NULL,
+    task_count integer NOT NULL,
+    resolved_count integer NOT NULL,
+    repair_failure_count integer NOT NULL,
+    infrastructure_count integer NOT NULL,
+    invalid_count integer NOT NULL,
+    candidate_integrity_count integer NOT NULL,
+    control_plane_integrity_count integer NOT NULL,
+    scoreable_task_count integer NOT NULL,
+    repair_mean_micros integer NOT NULL,
+    weight_eligible boolean NOT NULL,
+    evidence jsonb NOT NULL,
+    signature text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_coding_shadow_results_coding_shadow_results_bounds_check CHECK ((((task_count >= 1) AND (task_count <= 100)) AND (resolved_count >= 0) AND (repair_failure_count >= 0) AND (infrastructure_count >= 0) AND (invalid_count >= 0) AND (candidate_integrity_count >= 0) AND (control_plane_integrity_count >= 0) AND (scoreable_task_count >= 0) AND ((repair_mean_micros >= 0) AND (repair_mean_micros <= 1000000)))),
+    CONSTRAINT ck_coding_shadow_results_coding_shadow_results_counts_check CHECK ((((((((resolved_count + repair_failure_count) + infrastructure_count) + invalid_count) + candidate_integrity_count) + control_plane_integrity_count) = task_count) AND (scoreable_task_count = ((resolved_count + repair_failure_count) + candidate_integrity_count)))),
+    CONSTRAINT ck_coding_shadow_results_coding_shadow_results_integrity_check CHECK (((run_evidence_sha256 ~ '^[0-9a-f]{64}$'::text) AND (signature ~ '^[0-9a-f]{128}$'::text))),
+    CONSTRAINT ck_coding_shadow_results_coding_shadow_results_mean_check CHECK ((((scoreable_task_count = 0) AND (repair_mean_micros = 0)) OR ((scoreable_task_count > 0) AND (repair_mean_micros = ((resolved_count * 1000000) / scoreable_task_count))))),
+    CONSTRAINT ck_coding_shadow_results_coding_shadow_results_weight_i_83b5 CHECK ((weight_eligible = false))
+);
+
+
+--
+-- Name: coding_shadow_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_shadow_runs (
+    run_row_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    screened_image_sha256 text NOT NULL,
+    bench_version integer NOT NULL,
+    coding_contract_version integer NOT NULL,
+    coding_run_id text NOT NULL,
+    corpus_release_id text NOT NULL,
+    catalog_merkle_root text NOT NULL,
+    selection_derivation_id text NOT NULL,
+    selection_chain_genesis_hash text NOT NULL,
+    selection_block_number bigint NOT NULL,
+    selection_block_hash text NOT NULL,
+    inference_grant_sha256 text NOT NULL,
+    grader_contract_sha256 text NOT NULL,
+    task_set_id text NOT NULL,
+    task_set_manifest_sha256 text NOT NULL,
+    run_manifest_sha256 text NOT NULL,
+    task_count integer NOT NULL,
+    core_qualification_observation_id uuid NOT NULL,
+    weight_eligible boolean NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_coding_shadow_runs_coding_shadow_runs_block_hashes_check CHECK (((selection_chain_genesis_hash ~ '^0x[0-9a-f]{64}$'::text) AND (selection_block_hash ~ '^0x[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_coding_shadow_runs_coding_shadow_runs_bounds_check CHECK (((bench_version >= 7) AND (coding_contract_version = 1) AND (selection_block_number > 0) AND ((task_count >= 1) AND (task_count <= 100)))),
+    CONSTRAINT ck_coding_shadow_runs_coding_shadow_runs_hashes_check CHECK (((artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND (catalog_merkle_root ~ '^[0-9a-f]{64}$'::text) AND (inference_grant_sha256 ~ '^[0-9a-f]{64}$'::text) AND (grader_contract_sha256 ~ '^[0-9a-f]{64}$'::text) AND (task_set_manifest_sha256 ~ '^[0-9a-f]{64}$'::text) AND (run_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_coding_shadow_runs_coding_shadow_runs_identifiers_check CHECK ((((octet_length(coding_run_id) >= 1) AND (octet_length(coding_run_id) <= 256)) AND ((octet_length(corpus_release_id) >= 1) AND (octet_length(corpus_release_id) <= 256)) AND ((octet_length(selection_derivation_id) >= 1) AND (octet_length(selection_derivation_id) <= 128)) AND ((octet_length(task_set_id) >= 1) AND (octet_length(task_set_id) <= 256)) AND (coding_run_id !~ '[[:space:][:cntrl:]]'::text) AND (corpus_release_id !~ '[[:space:][:cntrl:]]'::text) AND (selection_derivation_id !~ '[[:space:][:cntrl:]]'::text) AND (task_set_id !~ '[[:space:][:cntrl:]]'::text))),
+    CONSTRAINT ck_coding_shadow_runs_coding_shadow_runs_weight_ineligible CHECK ((weight_eligible = false))
+);
+
+
+--
+-- Name: coding_shadow_tickets; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_shadow_tickets (
+    ticket_id uuid NOT NULL,
+    run_row_id uuid NOT NULL,
+    task_count integer NOT NULL,
+    validator_hotkey text NOT NULL,
+    certification_row_id uuid NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    deadline timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_coding_shadow_tickets_coding_shadow_tickets_deadline_check CHECK (((deadline > issued_at) AND (deadline <= (issued_at + '02:00:00'::interval)))),
+    CONSTRAINT ck_coding_shadow_tickets_coding_shadow_tickets_task_count_check CHECK (((task_count >= 1) AND (task_count <= 100))),
+    CONSTRAINT ck_coding_shadow_tickets_coding_shadow_tickets_validator_check CHECK ((validator_hotkey ~ '^[1-9A-HJ-NP-Za-km-z]{47,48}$'::text))
+);
+
+
+--
 -- Name: confirmation_budget_days; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3163,6 +3247,70 @@ ALTER TABLE ONLY public.coding_capability_certifications
 
 
 --
+-- Name: coding_shadow_results coding_shadow_results_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_results
+    ADD CONSTRAINT coding_shadow_results_pkey PRIMARY KEY (result_id);
+
+
+--
+-- Name: coding_shadow_results coding_shadow_results_ticket_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_results
+    ADD CONSTRAINT coding_shadow_results_ticket_key UNIQUE (ticket_id);
+
+
+--
+-- Name: coding_shadow_runs coding_shadow_runs_identity_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_runs
+    ADD CONSTRAINT coding_shadow_runs_identity_key UNIQUE (agent_id, coding_contract_version, coding_run_id);
+
+
+--
+-- Name: coding_shadow_runs coding_shadow_runs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_runs
+    ADD CONSTRAINT coding_shadow_runs_pkey PRIMARY KEY (run_row_id);
+
+
+--
+-- Name: coding_shadow_runs coding_shadow_runs_run_task_count_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_runs
+    ADD CONSTRAINT coding_shadow_runs_run_task_count_key UNIQUE (run_row_id, task_count);
+
+
+--
+-- Name: coding_shadow_tickets coding_shadow_tickets_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_tickets
+    ADD CONSTRAINT coding_shadow_tickets_pkey PRIMARY KEY (ticket_id);
+
+
+--
+-- Name: coding_shadow_tickets coding_shadow_tickets_run_validator_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_tickets
+    ADD CONSTRAINT coding_shadow_tickets_run_validator_key UNIQUE (run_row_id, validator_hotkey);
+
+
+--
+-- Name: coding_shadow_tickets coding_shadow_tickets_ticket_run_task_count_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_tickets
+    ADD CONSTRAINT coding_shadow_tickets_ticket_run_task_count_key UNIQUE (ticket_id, run_row_id, task_count);
+
+
+--
 -- Name: confirmation_bundle_subjects confirmation_bundle_subjects_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4393,6 +4541,27 @@ CREATE INDEX coding_certifications_agent_created_idx ON public.coding_capability
 
 
 --
+-- Name: coding_shadow_results_run_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_shadow_results_run_created_idx ON public.coding_shadow_results USING btree (run_row_id, created_at);
+
+
+--
+-- Name: coding_shadow_runs_agent_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_shadow_runs_agent_created_idx ON public.coding_shadow_runs USING btree (agent_id, created_at);
+
+
+--
+-- Name: coding_shadow_tickets_validator_deadline_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_shadow_tickets_validator_deadline_idx ON public.coding_shadow_tickets USING btree (validator_hotkey, deadline);
+
+
+--
 -- Name: confirmation_bundles_state_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5088,6 +5257,46 @@ ALTER TABLE ONLY public.ath_reviews
 
 ALTER TABLE ONLY public.coding_capability_certifications
     ADD CONSTRAINT coding_certifications_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_shadow_results coding_shadow_results_ticket_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_results
+    ADD CONSTRAINT coding_shadow_results_ticket_fkey FOREIGN KEY (ticket_id, run_row_id, task_count) REFERENCES public.coding_shadow_tickets(ticket_id, run_row_id, task_count) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_shadow_runs coding_shadow_runs_agent_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_runs
+    ADD CONSTRAINT coding_shadow_runs_agent_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_shadow_runs coding_shadow_runs_core_observation_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_runs
+    ADD CONSTRAINT coding_shadow_runs_core_observation_fkey FOREIGN KEY (core_qualification_observation_id) REFERENCES public.core_qualification_observations(observation_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_shadow_tickets coding_shadow_tickets_certification_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_tickets
+    ADD CONSTRAINT coding_shadow_tickets_certification_fkey FOREIGN KEY (certification_row_id) REFERENCES public.coding_capability_certifications(certification_row_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_shadow_tickets coding_shadow_tickets_run_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_tickets
+    ADD CONSTRAINT coding_shadow_tickets_run_fkey FOREIGN KEY (run_row_id, task_count) REFERENCES public.coding_shadow_runs(run_row_id, task_count) ON DELETE CASCADE;
 
 
 --

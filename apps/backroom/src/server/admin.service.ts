@@ -98,6 +98,8 @@ import {
   agentScoringReadinessSchema,
   agentCodingCertificationInputSchema,
   agentCodingCertificationStatusSchema,
+  agentCodingShadowEvaluationInputSchema,
+  agentCodingShadowEvaluationStatusSchema,
   agentCoreQualificationInputSchema,
   agentCoreQualificationStatusSchema,
   coreQualificationPolicyControlSchema,
@@ -1931,6 +1933,14 @@ export async function fetchAgentCodingCertifications(rawInput: unknown) {
     `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/coding-certifications?limit=${input.limit}`,
   )
   return agentCodingCertificationStatusSchema.parse(payload)
+}
+
+export async function fetchAgentCodingShadowEvaluations(rawInput: unknown) {
+  const input = agentCodingShadowEvaluationInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/coding-shadow-evaluations?limit=${input.limit}`,
+  )
+  return agentCodingShadowEvaluationStatusSchema.parse(payload)
 }
 
 export async function fetchCoreQualificationPolicy(rawInput: unknown) {

@@ -1266,6 +1266,252 @@ class CoreQualificationObservation(Base):
     )
 
 
+class CodingShadowRun(Base):
+    """One immutable shared run authority for the shadow coding pipeline."""
+
+    __tablename__ = "coding_shadow_runs"
+
+    run_row_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    screened_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    coding_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    coding_run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    corpus_release_id: Mapped[str] = mapped_column(Text, nullable=False)
+    catalog_merkle_root: Mapped[str] = mapped_column(Text, nullable=False)
+    selection_derivation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    selection_chain_genesis_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    selection_block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    selection_block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    inference_grant_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    grader_contract_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    task_set_id: Mapped[str] = mapped_column(Text, nullable=False)
+    task_set_manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    run_manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    task_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    core_qualification_observation_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="coding_shadow_runs_agent_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["core_qualification_observation_id"],
+            ["core_qualification_observations.observation_id"],
+            ondelete="CASCADE",
+            name="coding_shadow_runs_core_observation_fkey",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "coding_contract_version",
+            "coding_run_id",
+            name="coding_shadow_runs_identity_key",
+        ),
+        UniqueConstraint(
+            "run_row_id",
+            "task_count",
+            name="coding_shadow_runs_run_task_count_key",
+        ),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND screened_image_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND catalog_merkle_root ~ '^[0-9a-f]{64}$' "
+            "AND inference_grant_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND grader_contract_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND task_set_manifest_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND run_manifest_sha256 ~ '^[0-9a-f]{64}$'",
+            name="coding_shadow_runs_hashes_check",
+        ),
+        CheckConstraint(
+            "selection_chain_genesis_hash ~ '^0x[0-9a-f]{64}$' "
+            "AND selection_block_hash ~ '^0x[0-9a-f]{64}$'",
+            name="coding_shadow_runs_block_hashes_check",
+        ),
+        CheckConstraint(
+            "bench_version >= 7 AND coding_contract_version = 1 "
+            "AND selection_block_number > 0 AND task_count BETWEEN 1 AND 100",
+            name="coding_shadow_runs_bounds_check",
+        ),
+        CheckConstraint(
+            "octet_length(coding_run_id) BETWEEN 1 AND 256 "
+            "AND octet_length(corpus_release_id) BETWEEN 1 AND 256 "
+            "AND octet_length(selection_derivation_id) BETWEEN 1 AND 128 "
+            "AND octet_length(task_set_id) BETWEEN 1 AND 256 "
+            "AND coding_run_id !~ '[[:space:][:cntrl:]]' "
+            "AND corpus_release_id !~ '[[:space:][:cntrl:]]' "
+            "AND selection_derivation_id !~ '[[:space:][:cntrl:]]' "
+            "AND task_set_id !~ '[[:space:][:cntrl:]]'",
+            name="coding_shadow_runs_identifiers_check",
+        ),
+        CheckConstraint(
+            "weight_eligible = false",
+            name="coding_shadow_runs_weight_ineligible",
+        ),
+        Index(
+            "coding_shadow_runs_agent_created_idx",
+            "agent_id",
+            "created_at",
+        ),
+    )
+
+
+class CodingShadowTicket(Base):
+    """Validator-specific lease over one immutable shared coding run."""
+
+    __tablename__ = "coding_shadow_tickets"
+
+    ticket_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    run_row_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    task_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    certification_row_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    deadline: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["run_row_id", "task_count"],
+            ["coding_shadow_runs.run_row_id", "coding_shadow_runs.task_count"],
+            ondelete="CASCADE",
+            name="coding_shadow_tickets_run_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["certification_row_id"],
+            ["coding_capability_certifications.certification_row_id"],
+            ondelete="CASCADE",
+            name="coding_shadow_tickets_certification_fkey",
+        ),
+        UniqueConstraint(
+            "run_row_id",
+            "validator_hotkey",
+            name="coding_shadow_tickets_run_validator_key",
+        ),
+        UniqueConstraint(
+            "ticket_id",
+            "run_row_id",
+            "task_count",
+            name="coding_shadow_tickets_ticket_run_task_count_key",
+        ),
+        CheckConstraint(
+            "task_count BETWEEN 1 AND 100",
+            name="coding_shadow_tickets_task_count_check",
+        ),
+        CheckConstraint(
+            "validator_hotkey ~ '^[1-9A-HJ-NP-Za-km-z]{47,48}$'",
+            name="coding_shadow_tickets_validator_check",
+        ),
+        CheckConstraint(
+            "deadline > issued_at AND deadline <= issued_at + interval '2 hours'",
+            name="coding_shadow_tickets_deadline_check",
+        ),
+        Index(
+            "coding_shadow_tickets_validator_deadline_idx",
+            "validator_hotkey",
+            "deadline",
+        ),
+    )
+
+
+class CodingShadowResult(Base):
+    """One immutable validator-signed repair result for a shadow ticket."""
+
+    __tablename__ = "coding_shadow_results"
+
+    result_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    ticket_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    run_row_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    run_evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    task_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    resolved_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    repair_failure_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    infrastructure_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    invalid_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    candidate_integrity_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    control_plane_integrity_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    scoreable_task_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    repair_mean_micros: Mapped[int] = mapped_column(Integer, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["ticket_id", "run_row_id", "task_count"],
+            [
+                "coding_shadow_tickets.ticket_id",
+                "coding_shadow_tickets.run_row_id",
+                "coding_shadow_tickets.task_count",
+            ],
+            ondelete="CASCADE",
+            name="coding_shadow_results_ticket_fkey",
+        ),
+        UniqueConstraint("ticket_id", name="coding_shadow_results_ticket_key"),
+        CheckConstraint(
+            "run_evidence_sha256 ~ '^[0-9a-f]{64}$' AND signature ~ '^[0-9a-f]{128}$'",
+            name="coding_shadow_results_integrity_check",
+        ),
+        CheckConstraint(
+            "task_count BETWEEN 1 AND 100 "
+            "AND resolved_count >= 0 AND repair_failure_count >= 0 "
+            "AND infrastructure_count >= 0 AND invalid_count >= 0 "
+            "AND candidate_integrity_count >= 0 "
+            "AND control_plane_integrity_count >= 0 "
+            "AND scoreable_task_count >= 0 "
+            "AND repair_mean_micros BETWEEN 0 AND 1000000",
+            name="coding_shadow_results_bounds_check",
+        ),
+        CheckConstraint(
+            "resolved_count + repair_failure_count + infrastructure_count + "
+            "invalid_count + candidate_integrity_count + "
+            "control_plane_integrity_count = task_count "
+            "AND scoreable_task_count = resolved_count + repair_failure_count + "
+            "candidate_integrity_count",
+            name="coding_shadow_results_counts_check",
+        ),
+        CheckConstraint(
+            "(scoreable_task_count = 0 AND repair_mean_micros = 0) OR "
+            "(scoreable_task_count > 0 AND repair_mean_micros = "
+            "(resolved_count * 1000000) / scoreable_task_count)",
+            name="coding_shadow_results_mean_check",
+        ),
+        CheckConstraint(
+            "weight_eligible = false",
+            name="coding_shadow_results_weight_ineligible",
+        ),
+        Index(
+            "coding_shadow_results_run_created_idx",
+            "run_row_id",
+            "created_at",
+        ),
+    )
+
+
 class Score(Base):
     """One validator's DittoBench score for one agent.
 
