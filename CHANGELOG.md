@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.124.1 (2026-08-29)
+
+### Bug Fixes
+
+- Expose parked and stuck admission queue states
+  ([#1264](https://github.com/ditto-assistant/ditto-subnet/pull/1264),
+  [`184a233`](https://github.com/ditto-assistant/ditto-subnet/commit/184a23335e8168a00ce4e19389621d774282a897))
+
+### Performance Improvements
+
+- **mine**: Cache starter-kit rust dependencies
+  ([#1265](https://github.com/ditto-assistant/ditto-subnet/pull/1265),
+  [`5a31fd1`](https://github.com/ditto-assistant/ditto-subnet/commit/5a31fd18a6b317fef9b38d3601aedb2e040b6d15))
+
+
 ## v0.124.0 (2026-08-29)
 
 ### Bug Fixes
