@@ -1,9 +1,7 @@
-"""Honest admission-retry state on the public pipeline (issue #1215).
+"""Honest fail-once admission state on the public pipeline (issue #1215).
 
-During the 2026-08-28 screening incident the public pipeline showed only the
-stage name, so a submission between infrastructure retries was
-indistinguishable from a stuck queue. ``admission_retry`` names the state and
-the next-retry time.
+``admission_retry`` distinguishes parked provider failures, stuck Ditto
+infrastructure, and guarded retries without promising automatic retry.
 """
 
 from __future__ import annotations
@@ -22,7 +20,6 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_server.dependencies import get_session
 from ditto.db.models import Agent, ScreeningAttempt, ScreeningRetryOverride
-from ditto.db.queries.screening import FAILED_ATTEMPT_RETRY_BACKOFF
 
 _BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
@@ -93,7 +90,7 @@ async def _seed_failed_attempt(
     return attempt_id
 
 
-async def test_waiting_retry_reports_failure_anchored_next_retry(
+async def test_source_review_failure_reports_parked_without_retry_time(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:
     agent_id = await _seed_agent(
@@ -114,12 +111,10 @@ async def test_waiting_retry_reports_failure_anchored_next_retry(
     assert response.status_code == 200, response.text
     retry = response.json()["admission_retry"]
     assert retry is not None
-    assert retry["state"] == "waiting_retry"
+    assert retry["state"] == "parked"
     assert retry["attempt_count"] == 1
     assert retry["last_failure_infrastructure"] is True
-    next_retry_at = datetime.fromisoformat(retry["next_retry_at"])
-    expected = finished_at + FAILED_ATTEMPT_RETRY_BACKOFF
-    assert abs((next_retry_at - expected).total_seconds()) < 5
+    assert retry["next_retry_at"] is None
 
 
 async def test_operator_override_reports_immediate_eligibility(
@@ -154,11 +149,53 @@ async def test_operator_override_reports_immediate_eligibility(
     assert response.status_code == 200, response.text
     retry = response.json()["admission_retry"]
     assert retry is not None
-    assert retry["state"] == "waiting_retry"
-    next_retry_at = datetime.fromisoformat(retry["next_retry_at"])
-    # Waived: eligible now, so the timestamp is the generation time, never a
-    # future countdown.
-    assert next_retry_at <= datetime.now(UTC) + timedelta(seconds=5)
+    assert retry["state"] == "retry_queued"
+    assert retry["next_retry_at"] is None
+
+
+async def test_ditto_infrastructure_failure_reports_stuck(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name="infra-stuck", status=AgentStatus.SCREENING_FAILED
+    )
+    now = datetime.now(UTC)
+    await _seed_failed_attempt(
+        maker,
+        agent_id=agent_id,
+        finished_at=now - timedelta(minutes=1),
+        deadline=now + timedelta(minutes=60),
+        reason_code="cloudrun-build-unavailable",
+    )
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    retry = response.json()["admission_retry"]
+    assert retry["state"] == "stuck"
+    assert retry["last_failure_infrastructure"] is True
+    assert retry["next_retry_at"] is None
+
+
+async def test_miner_docker_build_rejection_is_not_retryable_admission(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name="miner-build-failed", status=AgentStatus.REJECTED
+    )
+    now = datetime.now(UTC)
+    await _seed_failed_attempt(
+        maker,
+        agent_id=agent_id,
+        finished_at=now - timedelta(minutes=1),
+        deadline=now + timedelta(minutes=60),
+        reason_code="docker-build",
+    )
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    assert response.json()["admission_retry"] is None
 
 
 async def test_running_and_terminal_states(
