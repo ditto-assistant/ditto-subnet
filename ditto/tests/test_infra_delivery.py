@@ -144,7 +144,9 @@ def test_capacity_controller_cannot_administer_compute_project_wide() -> None:
     assert "only_ditto_screener_fleet" in terraform
 
 
-def test_capacity_controller_activation_uses_org_scoped_targon_v3() -> None:
+def test_capacity_controller_retires_targon_workers_but_release_builder_is_scoped() -> (
+    None
+):
     intent = (GCP_ROOT / "prod.auto.tfvars").read_text()
     assert re.search(
         r"^enable_screener_capacity_controller\s*=\s*true$", intent, re.MULTILINE
@@ -157,6 +159,7 @@ def test_capacity_controller_activation_uses_org_scoped_targon_v3() -> None:
     builder_unit = (role / "templates" / "ditto-image-builder.service.j2").read_text()
     assert "screener_capacity_targon_org_slug: ditto" in defaults
     assert "--targon-org-slug" not in controller_unit
+    assert "--targon-api-key-file" not in controller_unit
     assert "--targon-org-slug {{ screener_capacity_targon_org_slug }}" in builder_unit
 
     targon_client = (

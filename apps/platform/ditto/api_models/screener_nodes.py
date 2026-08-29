@@ -8,6 +8,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ditto.api_models.screener_node_settings import (
+    ScreenerNodeChannelSettingsControl,
+)
 from ditto.api_models.screener_provider_settings import ScreenerProviderSettingsControl
 from ditto_screening_protocol import SourceReviewObservationPayload
 
@@ -227,7 +230,7 @@ class TrustedImageBuildView(BaseModel):
     dockerfile_path: str
     destination: str
     status: TrustedImageBuildStatus
-    provider: Literal["targon", "gcp"] | None = None
+    provider: Literal["targon", "gcp", "hetzner"] | None = None
     provider_resource_id: str | None = None
     image_digest: str | None = None
     error_code: str | None = None
@@ -261,7 +264,7 @@ class TrustedImageBuildUpdateRequest(BaseModel):
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
     status: Literal["running", "succeeded", "failed", "fallback_required"]
-    provider: Literal["targon", "gcp"]
+    provider: Literal["targon", "gcp", "hetzner"]
     provider_resource_id: Annotated[str, Field(min_length=1, max_length=200)] | None = (
         None
     )
@@ -270,7 +273,7 @@ class TrustedImageBuildUpdateRequest(BaseModel):
 
 
 class SubmissionImageBuildClaimView(BaseModel):
-    """One miner build leased to the dedicated Targon builder."""
+    """One miner build leased to an isolated provider executor."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -339,6 +342,51 @@ class SubmissionImageBuildControllerStatusResponse(BaseModel):
     ]
 
 
+class ScreenerNodeJobClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
+
+
+class ScreenerNodeJobUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    status: Literal["running", "fallback_required"]
+    provider_resource_id: Annotated[str, Field(min_length=1, max_length=200)] | None = (
+        None
+    )
+    error_code: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None = None
+
+    @model_validator(mode="after")
+    def validate_error(self) -> ScreenerNodeJobUpdateRequest:
+        if self.status == "fallback_required" and self.error_code is None:
+            raise ValueError("fallback update requires an error code")
+        if self.status == "running" and self.error_code is not None:
+            raise ValueError("running update cannot carry an error code")
+        return self
+
+
+class ScreenerNodeRuntimeResultRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    status: Literal["running", "succeeded", "fallback_required"]
+    provider_resource_id: Annotated[str, Field(min_length=1, max_length=200)] | None = (
+        None
+    )
+    image_reference: Annotated[str, Field(pattern=_IMAGE_REFERENCE)] | None = None
+    error_code: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None = None
+
+    @model_validator(mode="after")
+    def validate_result(self) -> ScreenerNodeRuntimeResultRequest:
+        if self.status == "succeeded" and self.provider_resource_id is None:
+            raise ValueError("successful runtime smoke requires provider provenance")
+        if self.status == "fallback_required" and self.error_code is None:
+            raise ValueError("runtime fallback requires an error code")
+        if self.status == "running" and self.provider_resource_id is None:
+            raise ValueError("running runtime smoke requires a provider resource")
+        return self
+
+
 class SubmissionRuntimeArtifactResponse(BaseModel):
     """Verified build archive made available only to the fenced controller."""
 
@@ -388,7 +436,7 @@ class SubmissionRuntimeResultRequest(BaseModel):
 
 
 class SubmissionSourceReviewClaimView(BaseModel):
-    """One read-only source review leased to a trusted Targon worker."""
+    """One read-only source review leased to a trusted provider worker."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -516,7 +564,8 @@ class ScreenerProviderJobView(BaseModel):
     job_id: UUID
     lane: Literal["build", "runtime", "source_review"]
     status: str
-    provider: Literal["targon", "gcp"] | None = None
+    provider: Literal["targon", "gcp", "hetzner"] | None = None
+    node_id: str | None = None
     provider_resource_id: str | None = None
     image_reference: str | None = None
     error_code: str | None = None
@@ -533,3 +582,6 @@ class ScreenerCapacityView(BaseModel):
     builds: list[TrustedImageBuildView] = Field(default_factory=list)
     provider_jobs: list[ScreenerProviderJobView] = Field(default_factory=list)
     provider_control: ScreenerProviderSettingsControl
+    node_controls: list[ScreenerNodeChannelSettingsControl] = Field(
+        default_factory=list
+    )

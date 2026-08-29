@@ -2289,6 +2289,59 @@ class ScreenerProviderSettingsRevision(Base):
     )
 
 
+class ScreenerNodeChannelSettingsRevision(Base):
+    """Append-only Platform admission limits for one enrolled node."""
+
+    __tablename__ = "screener_node_channel_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    environment: Mapped[str] = mapped_column(Text, nullable=False)
+    node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["node_id"],
+            ["screener_nodes.node_id"],
+            ondelete="CASCADE",
+            name="screener_node_channel_settings_node_id_fkey",
+        ),
+        CheckConstraint(
+            "environment ~ '^[a-z][a-z0-9-]{0,31}$'",
+            name="screener_node_channel_settings_environment_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="screener_node_channel_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="screener_node_channel_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="screener_node_channel_settings_actor_check",
+        ),
+        Index(
+            "screener_node_channel_settings_node_revision_idx",
+            "node_id",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "node_id",
+            "parent_revision",
+            name="screener_node_channel_settings_node_parent_key",
+        ),
+    )
+
+
 class TrustedImageBuild(Base):
     """Audited, controller-leased build of one allowlisted monorepo image."""
 
@@ -2342,7 +2395,7 @@ class TrustedImageBuild(Base):
             name="trusted_image_builds_status_check",
         ),
         CheckConstraint(
-            "provider IS NULL OR provider IN ('targon', 'gcp')",
+            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner')",
             name="trusted_image_builds_provider_check",
         ),
         CheckConstraint(
@@ -2369,7 +2422,7 @@ class TrustedImageBuild(Base):
 
 
 class SubmissionImageBuild(Base):
-    """Attempt-bound remote build whose output is still screened on GCE."""
+    """Attempt-bound provider build whose output is independently screened."""
 
     __tablename__ = "submission_image_builds"
 
@@ -2382,6 +2435,7 @@ class SubmissionImageBuild(Base):
     output_key: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
     provider: Mapped[str | None] = mapped_column(Text)
+    node_id: Mapped[str | None] = mapped_column(Text)
     provider_resource_id: Mapped[str | None] = mapped_column(Text)
     output_sha256: Mapped[str | None] = mapped_column(Text)
     output_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
@@ -2390,6 +2444,7 @@ class SubmissionImageBuild(Base):
     runtime_status: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="skipped"
     )
+    runtime_node_id: Mapped[str | None] = mapped_column(Text)
     runtime_provider_resource_id: Mapped[str | None] = mapped_column(Text)
     runtime_image_reference: Mapped[str | None] = mapped_column(Text)
     runtime_error_code: Mapped[str | None] = mapped_column(Text)
@@ -2429,6 +2484,18 @@ class SubmissionImageBuild(Base):
             ondelete="CASCADE",
             name="submission_image_builds_attempt_id_fkey",
         ),
+        ForeignKeyConstraint(
+            ["node_id"],
+            ["screener_nodes.node_id"],
+            ondelete="SET NULL",
+            name="submission_image_builds_node_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["runtime_node_id"],
+            ["screener_nodes.node_id"],
+            ondelete="SET NULL",
+            name="submission_image_builds_runtime_node_id_fkey",
+        ),
         CheckConstraint(
             "environment ~ '^[a-z][a-z0-9-]{0,31}$'",
             name="submission_image_builds_environment_check",
@@ -2448,7 +2515,7 @@ class SubmissionImageBuild(Base):
             name="submission_image_builds_status_check",
         ),
         CheckConstraint(
-            "provider IS NULL OR provider IN ('targon', 'gcp')",
+            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner')",
             name="submission_image_builds_provider_check",
         ),
         CheckConstraint(
@@ -2488,6 +2555,12 @@ class SubmissionImageBuild(Base):
             "status",
             "created_at",
         ),
+        Index("submission_image_builds_node_status_idx", "node_id", "status"),
+        Index(
+            "submission_image_builds_runtime_node_status_idx",
+            "runtime_node_id",
+            "runtime_status",
+        ),
     )
 
 
@@ -2503,6 +2576,7 @@ class SubmissionSourceReview(Base):
     artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
     provider: Mapped[str | None] = mapped_column(Text)
+    node_id: Mapped[str | None] = mapped_column(Text)
     provider_resource_id: Mapped[str | None] = mapped_column(Text)
     observation: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
     error_code: Mapped[str | None] = mapped_column(Text)
@@ -2546,6 +2620,12 @@ class SubmissionSourceReview(Base):
             ondelete="CASCADE",
             name="submission_source_reviews_attempt_id_fkey",
         ),
+        ForeignKeyConstraint(
+            ["node_id"],
+            ["screener_nodes.node_id"],
+            ondelete="SET NULL",
+            name="submission_source_reviews_node_id_fkey",
+        ),
         CheckConstraint(
             "environment ~ '^[a-z][a-z0-9-]{0,31}$'",
             name="submission_source_reviews_environment_check",
@@ -2560,7 +2640,7 @@ class SubmissionSourceReview(Base):
             name="submission_source_reviews_status_check",
         ),
         CheckConstraint(
-            "provider IS NULL OR provider IN ('targon', 'gcp')",
+            "provider IS NULL OR provider IN ('targon', 'gcp', 'hetzner')",
             name="submission_source_reviews_provider_check",
         ),
         CheckConstraint(
@@ -2578,6 +2658,7 @@ class SubmissionSourceReview(Base):
             "status",
             "created_at",
         ),
+        Index("submission_source_reviews_node_status_idx", "node_id", "status"),
     )
 
 

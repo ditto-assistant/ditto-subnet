@@ -39,12 +39,13 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import (
     ArtifactResponse,
+    EffectiveScreenerNodeChannelSettings,
     EffectiveScreenerProviderSettings,
     ScreenedImageAbortRequest,
     ScreenedImageAbortResponse,
@@ -64,8 +65,11 @@ from ditto.api_models import (
     ScreenerHeartbeatRequest,
     ScreenerHeartbeatResponse,
     ScreenerNodeCredentialResponse,
+    ScreenerNodeJobClaimRequest,
+    ScreenerNodeJobUpdateRequest,
     ScreenerNodeRefreshRequest,
     ScreenerNodeRegistrationRequest,
+    ScreenerNodeRuntimeResultRequest,
     ScreenerNodeStatusRequest,
     ScreenerQueueItem,
     ScreenerQueueResponse,
@@ -189,6 +193,9 @@ from ditto.db.queries.provider_outages import (
     lock_provider_work_gate,
     register_provider_probe,
 )
+from ditto.db.queries.screener_node_settings import (
+    resolve_screener_node_channel_settings,
+)
 from ditto.db.queries.screener_provider_settings import (
     resolve_screener_provider_settings,
 )
@@ -256,6 +263,12 @@ def _targon_trusted_builder_enabled(providers: tuple[str, ...]) -> bool:
     # miner submission work. GCP-first applies to the decomposed miner lanes;
     # keeping Targon second must not strand new screener release images.
     return "targon" in providers
+
+
+def _remote_provider(providers: tuple[str, ...]) -> Literal["targon", "hetzner"] | None:
+    if providers and providers[0] in {"targon", "hetzner"}:
+        return cast(Literal["targon", "hetzner"], providers[0])
+    return None
 
 
 def _platform_owns_miner_rentals(request: Request) -> bool:
@@ -1024,12 +1037,6 @@ async def queue_release_image_build(
 ) -> TrustedImageBuildView:
     """Idempotently queue the fixed release image contract for an exact SHA."""
     async with session.begin():
-        provider_revision, provider_settings = await resolve_screener_provider_settings(
-            session, environment="prod"
-        )
-        targon_enabled = _targon_trusted_builder_enabled(
-            provider_settings.build_provider_priority
-        )
         values = {
             "build_id": uuid4(),
             "environment": "prod",
@@ -1041,15 +1048,11 @@ async def queue_release_image_build(
             "destination": (
                 f"{_TRUSTED_RUNTIME_REGISTRY}/screener:sha-{payload.source_sha}"
             ),
-            "status": "queued" if targon_enabled else "fallback_required",
-            "provider": None if targon_enabled else "targon",
-            "controller_epoch": (
-                None if targon_enabled else f"provider-policy:{provider_revision}"
-            ),
-            "error_code": (
-                None if targon_enabled else "TARGON_BUILD_DISABLED_BY_POLICY"
-            ),
-            "completed_at": None if targon_enabled else datetime.now(UTC),
+            "status": "queued",
+            "provider": None,
+            "controller_epoch": None,
+            "error_code": None,
+            "completed_at": None,
             "created_by": f"github-release:{payload.source_sha}",
             "reason": payload.reason,
         }
@@ -1303,16 +1306,14 @@ async def queue_submission_image_build(
     screener_hotkey: ScreenerDep,
     session: SessionDep,
 ) -> SubmissionImageBuildResponse:
-    """Queue a Targon build only after the owning screener validated source."""
+    """Queue a provider build only after the owning screener validated source."""
     now = datetime.now(UTC)
     async with session.begin():
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment="prod"
         )
-        targon_enabled = remote_lane_selected(provider_settings.build_provider_priority)
-        runtime_targon_enabled = remote_lane_selected(
-            provider_settings.runtime_provider_priority
-        )
+        build_provider = _remote_provider(provider_settings.build_provider_priority)
+        runtime_provider = _remote_provider(provider_settings.runtime_provider_priority)
         agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
         if agent is None:
             raise AgentNotFoundError(f"no agent with id={agent_id}")
@@ -1341,21 +1342,25 @@ async def queue_submission_image_build(
             "artifact_sha256": agent.sha256.lower(),
             "image_ref": f"ditto-screen/{agent_id}-{payload.attempt_id}:latest",
             "output_key": f"remote-builds/{build_id}/image.tar",
-            "status": "queued" if targon_enabled else "fallback_required",
-            "provider": None if targon_enabled else "targon",
+            "status": "queued" if build_provider is not None else "fallback_required",
+            "provider": None if build_provider is not None else "gcp",
             "error_code": (
-                None if targon_enabled else "TARGON_SUBMISSION_BUILD_DISABLED_BY_POLICY"
+                None
+                if build_provider is not None
+                else "TARGON_SUBMISSION_BUILD_DISABLED_BY_POLICY"
             ),
-            "completed_at": None if targon_enabled else now,
+            "completed_at": None if build_provider is not None else now,
             "runtime_status": (
-                "pending" if targon_enabled and runtime_targon_enabled else "skipped"
+                "pending"
+                if build_provider is not None and runtime_provider is not None
+                else "skipped"
             ),
             "runtime_error_code": (
                 None
-                if targon_enabled and runtime_targon_enabled
+                if build_provider is not None and runtime_provider is not None
                 else (
                     "TARGON_RUNTIME_DISABLED_BY_POLICY"
-                    if not runtime_targon_enabled
+                    if runtime_provider is None
                     else "TARGON_RUNTIME_SKIPPED_BUILD_UNAVAILABLE"
                 )
             ),
@@ -1496,6 +1501,8 @@ async def claim_submission_image_build(
                 archive_exists=storage.object_exists,
             )
         if not remote_lane_selected(provider_settings.build_provider_priority):
+            if _remote_provider(provider_settings.build_provider_priority) == "hetzner":
+                return SubmissionImageBuildClaimResponse(build=None)
             await session.execute(
                 update(SubmissionImageBuild)
                 .where(
@@ -1683,6 +1690,11 @@ async def claim_submission_runtime_smoke(
             session, environment=payload.environment
         )
         if not remote_lane_selected(provider_settings.runtime_provider_priority):
+            if (
+                _remote_provider(provider_settings.runtime_provider_priority)
+                == "hetzner"
+            ):
+                return SubmissionRuntimeArtifactClaimResponse(artifact=None)
             await session.execute(
                 update(SubmissionImageBuild)
                 .where(
@@ -1800,7 +1812,8 @@ async def complete_submission_runtime_smoke(
             if deadline.tzinfo is None:
                 deadline = deadline.replace(tzinfo=UTC)
             if (
-                remote_lane_selected(provider_settings.source_review_provider_priority)
+                _remote_provider(provider_settings.source_review_provider_priority)
+                is not None
                 and attempt is not None
                 and not attempt.build_only
                 and attempt.status == "running"
@@ -2082,7 +2095,8 @@ async def complete_submission_build_upload(
         stored.job_token_hash = None
         stored.job_token_expires_at = None
         rental_uid = stored.provider_resource_id
-    if await _release_targon_rental(request, rental_uid):
+        provider = stored.provider
+    if provider == "targon" and await _release_targon_rental(request, rental_uid):
         async with session.begin():
             stored = await session.get(
                 SubmissionImageBuild, build_id, with_for_update=True
@@ -2109,7 +2123,7 @@ async def queue_submission_source_review(
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment="prod"
         )
-        targon_enabled = remote_lane_selected(
+        review_provider = _remote_provider(
             provider_settings.source_review_provider_priority
         )
         agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
@@ -2136,12 +2150,14 @@ async def queue_submission_source_review(
             "attempt_id": payload.attempt_id,
             "environment": "prod",
             "artifact_sha256": agent.sha256.lower(),
-            "status": "queued" if targon_enabled else "fallback_required",
-            "provider": None if targon_enabled else "targon",
+            "status": "queued" if review_provider is not None else "fallback_required",
+            "provider": None if review_provider is not None else "gcp",
             "error_code": (
-                None if targon_enabled else "TARGON_SOURCE_REVIEW_DISABLED_BY_POLICY"
+                None
+                if review_provider is not None
+                else "TARGON_SOURCE_REVIEW_DISABLED_BY_POLICY"
             ),
-            "completed_at": None if targon_enabled else now,
+            "completed_at": None if review_provider is not None else now,
         }
         await session.execute(
             pg_insert(SubmissionSourceReview)
@@ -2243,6 +2259,11 @@ async def claim_submission_source_review(
             session, environment=payload.environment
         )
         if not remote_lane_selected(provider_settings.source_review_provider_priority):
+            if (
+                _remote_provider(provider_settings.source_review_provider_priority)
+                == "hetzner"
+            ):
+                return SubmissionSourceReviewClaimResponse(review=None)
             await session.execute(
                 update(SubmissionSourceReview)
                 .where(
@@ -2476,6 +2497,520 @@ async def get_controller_submission_source_review(
     )
 
 
+async def _locked_active_node(
+    request: Request,
+    session: AsyncSession,
+    *,
+    environment: str,
+    require_active: bool = True,
+) -> ScreenerNode:
+    node_id = getattr(request.state, "screener_node_id", None)
+    if node_id is None:
+        raise ScreenerAuthError("node-scoped job claims require enrolled-node auth")
+    node = await session.scalar(
+        select(ScreenerNode).where(ScreenerNode.node_id == node_id).with_for_update()
+    )
+    if node is None or node.environment != environment:
+        raise ScreenerAuthError("screener node is not authorized for this environment")
+    if require_active and node.status != "active":
+        raise HTTPException(status_code=409, detail="screener node is not active")
+    if not require_active and node.status not in {"active", "draining"}:
+        raise HTTPException(status_code=409, detail="screener node cannot update jobs")
+    return node
+
+
+async def _node_sandbox_usage(session: AsyncSession, *, node_id: str) -> int:
+    builds = await session.scalar(
+        select(func.count())
+        .select_from(SubmissionImageBuild)
+        .where(
+            SubmissionImageBuild.node_id == node_id,
+            SubmissionImageBuild.status.in_(("leased", "running")),
+        )
+    )
+    runtime = await session.scalar(
+        select(func.count())
+        .select_from(SubmissionImageBuild)
+        .where(
+            SubmissionImageBuild.runtime_node_id == node_id,
+            SubmissionImageBuild.runtime_status == "running",
+        )
+    )
+    return int(builds or 0) + int(runtime or 0)
+
+
+@router.get(
+    "/nodes/channel-settings",
+    response_model=EffectiveScreenerNodeChannelSettings,
+)
+async def get_effective_node_channel_settings(
+    request: Request,
+    _screener: ScreenerDep,
+    session: SessionDep,
+) -> EffectiveScreenerNodeChannelSettings:
+    node_id = getattr(request.state, "screener_node_id", None)
+    if node_id is None:
+        raise ScreenerAuthError("node settings require enrolled-node auth")
+    node = await session.get(ScreenerNode, node_id)
+    if node is None:
+        raise ScreenerAuthError("screener node is not authorized")
+    revision, settings = await resolve_screener_node_channel_settings(
+        session, node_id=node.node_id
+    )
+    return EffectiveScreenerNodeChannelSettings(
+        environment=node.environment,
+        node_id=node.node_id,
+        revision=revision,
+        settings=settings,
+    )
+
+
+@router.post(
+    "/nodes/jobs/submission-image-builds/claim",
+    response_model=SubmissionImageBuildClaimResponse,
+)
+async def claim_node_submission_image_build(
+    payload: ScreenerNodeJobClaimRequest,
+    request: Request,
+    _screener: ScreenerDep,
+    session: SessionDep,
+) -> SubmissionImageBuildClaimResponse:
+    """Atomically enforce node and shared-VM limits before minting a job token."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        node = await _locked_active_node(
+            request, session, environment=payload.environment
+        )
+        _, provider_settings = await resolve_screener_provider_settings(
+            session, environment=payload.environment
+        )
+        if not provider_settings.build_provider_priority or (
+            provider_settings.build_provider_priority[0] != node.provider
+        ):
+            return SubmissionImageBuildClaimResponse(build=None)
+        _, limits = await resolve_screener_node_channel_settings(
+            session, node_id=node.node_id
+        )
+        active_builds = await session.scalar(
+            select(func.count())
+            .select_from(SubmissionImageBuild)
+            .where(
+                SubmissionImageBuild.node_id == node.node_id,
+                SubmissionImageBuild.status.in_(("leased", "running")),
+            )
+        )
+        if int(active_builds or 0) >= limits.build_concurrency or (
+            await _node_sandbox_usage(session, node_id=node.node_id)
+            >= limits.sandbox_slots
+        ):
+            return SubmissionImageBuildClaimResponse(build=None)
+        await session.execute(
+            update(SubmissionImageBuild)
+            .where(
+                SubmissionImageBuild.node_id == node.node_id,
+                SubmissionImageBuild.status.in_(("leased", "running")),
+                SubmissionImageBuild.lease_expires_at < now,
+            )
+            .values(
+                status="fallback_required",
+                error_code="FLEET_SUBMISSION_BUILD_LEASE_EXHAUSTED",
+                runtime_status="skipped",
+                runtime_error_code="FLEET_RUNTIME_SKIPPED_BUILD_UNAVAILABLE",
+                runtime_completed_at=now,
+                completed_at=now,
+                lease_expires_at=None,
+                job_token_hash=None,
+                job_token_expires_at=None,
+                updated_at=now,
+            )
+        )
+        row = await session.scalar(
+            select(SubmissionImageBuild)
+            .join(
+                ScreeningAttempt,
+                ScreeningAttempt.attempt_id == SubmissionImageBuild.attempt_id,
+            )
+            .where(
+                SubmissionImageBuild.environment == payload.environment,
+                ScreeningAttempt.status == "running",
+                ScreeningAttempt.deadline > now,
+                SubmissionImageBuild.status == "queued",
+            )
+            .order_by(SubmissionImageBuild.created_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if row is None:
+            return SubmissionImageBuildClaimResponse(build=None)
+        token = _fresh_node_token()
+        token_expires_at = now + _SUBMISSION_BUILD_JOB_TTL
+        row.status = "leased"
+        row.provider = node.provider
+        row.node_id = node.node_id
+        row.controller_epoch = f"node:{node.node_id}:{uuid4().hex[:16]}"
+        row.lease_expires_at = now + _SUBMISSION_BUILD_LEASE_TTL
+        row.attempt_count += 1
+        row.job_token_hash = hashlib.sha256(token.encode()).hexdigest()
+        row.job_token_expires_at = token_expires_at
+        row.updated_at = now
+    return SubmissionImageBuildClaimResponse(
+        build=SubmissionImageBuildClaimView(
+            build_id=row.build_id,
+            agent_id=row.agent_id,
+            attempt_id=row.attempt_id,
+            artifact_sha256=row.artifact_sha256,
+            image_ref=row.image_ref,
+            job_token=token,
+            job_token_expires_at=token_expires_at,
+        )
+    )
+
+
+@router.put(
+    "/nodes/jobs/submission-image-builds/{build_id}",
+    response_model=None,
+    status_code=204,
+)
+async def update_node_submission_image_build(
+    build_id: UUID,
+    payload: ScreenerNodeJobUpdateRequest,
+    request: Request,
+    _screener: ScreenerDep,
+    session: SessionDep,
+) -> None:
+    now = datetime.now(UTC)
+    async with session.begin():
+        node = await _locked_active_node(
+            request, session, environment="prod", require_active=False
+        )
+        row = await session.scalar(
+            select(SubmissionImageBuild)
+            .where(SubmissionImageBuild.build_id == build_id)
+            .with_for_update()
+        )
+        if row is None or row.node_id != node.node_id:
+            raise HTTPException(
+                status_code=404, detail="submission image build not found"
+            )
+        if row.status not in {"leased", "running"}:
+            raise HTTPException(status_code=409, detail="submission build is terminal")
+        row.status = payload.status
+        row.provider = node.provider
+        row.provider_resource_id = payload.provider_resource_id
+        row.error_code = payload.error_code
+        row.started_at = row.started_at or now
+        row.updated_at = now
+        if payload.status == "fallback_required":
+            row.completed_at = now
+            row.lease_expires_at = None
+            row.job_token_hash = None
+            row.job_token_expires_at = None
+
+
+@router.get(
+    "/nodes/jobs/submission-image-builds/{build_id}",
+    response_model=SubmissionImageBuildControllerStatusResponse,
+)
+async def get_node_submission_image_build(
+    build_id: UUID,
+    request: Request,
+    _screener: ScreenerDep,
+    session: SessionDep,
+) -> SubmissionImageBuildControllerStatusResponse:
+    node_id = getattr(request.state, "screener_node_id", None)
+    row = await session.get(SubmissionImageBuild, build_id)
+    if row is None or row.node_id != node_id:
+        raise HTTPException(status_code=404, detail="submission image build not found")
+    return SubmissionImageBuildControllerStatusResponse(
+        build_id=row.build_id, status=cast(Any, row.status)
+    )
+
+
+@router.post(
+    "/nodes/jobs/submission-runtime-smokes/claim",
+    response_model=SubmissionRuntimeArtifactClaimResponse,
+)
+async def claim_node_submission_runtime_smoke(
+    payload: ScreenerNodeJobClaimRequest,
+    request: Request,
+    _screener: ScreenerDep,
+    session: SessionDep,
+    storage: StorageDep,
+) -> SubmissionRuntimeArtifactClaimResponse:
+    now = datetime.now(UTC)
+    async with session.begin():
+        node = await _locked_active_node(
+            request, session, environment=payload.environment
+        )
+        _, provider_settings = await resolve_screener_provider_settings(
+            session, environment=payload.environment
+        )
+        if not provider_settings.runtime_provider_priority or (
+            provider_settings.runtime_provider_priority[0] != node.provider
+        ):
+            return SubmissionRuntimeArtifactClaimResponse(artifact=None)
+        _, limits = await resolve_screener_node_channel_settings(
+            session, node_id=node.node_id
+        )
+        active_runtime = await session.scalar(
+            select(func.count())
+            .select_from(SubmissionImageBuild)
+            .where(
+                SubmissionImageBuild.runtime_node_id == node.node_id,
+                SubmissionImageBuild.runtime_status == "running",
+            )
+        )
+        if int(active_runtime or 0) >= limits.runtime_concurrency or (
+            await _node_sandbox_usage(session, node_id=node.node_id)
+            >= limits.sandbox_slots
+        ):
+            return SubmissionRuntimeArtifactClaimResponse(artifact=None)
+        row = await session.scalar(
+            select(SubmissionImageBuild)
+            .where(
+                SubmissionImageBuild.environment == payload.environment,
+                SubmissionImageBuild.status.in_(("succeeded", "consumed")),
+                SubmissionImageBuild.runtime_status == "pending",
+                SubmissionImageBuild.output_sha256.is_not(None),
+                SubmissionImageBuild.output_size_bytes.is_not(None),
+            )
+            .order_by(SubmissionImageBuild.completed_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if row is None:
+            return SubmissionRuntimeArtifactClaimResponse(artifact=None)
+        row.runtime_status = "running"
+        row.runtime_node_id = node.node_id
+        row.controller_epoch = f"node:{node.node_id}:{uuid4().hex[:16]}"
+        row.updated_at = now
+        output_sha256 = cast(str, row.output_sha256)
+        output_size_bytes = cast(int, row.output_size_bytes)
+        output_key = row.output_key
+        build_id = row.build_id
+    url = await storage.presigned_get_url(
+        key=output_key,
+        expires_in=int(_SUBMISSION_BUILD_URL_TTL.total_seconds()),
+    )
+    return SubmissionRuntimeArtifactClaimResponse(
+        artifact=SubmissionRuntimeArtifactResponse(
+            build_id=build_id,
+            archive_url_b64=base64.b64encode(url.encode()).decode(),
+            output_sha256=output_sha256,
+            output_size_bytes=output_size_bytes,
+            destination=f"{_CANDIDATE_RUNTIME_REGISTRY}:build-{build_id.hex}",
+        )
+    )
+
+
+@router.post(
+    "/nodes/jobs/submission-runtime-smokes/{build_id}/result",
+    response_model=None,
+    status_code=204,
+)
+async def complete_node_submission_runtime_smoke(
+    build_id: UUID,
+    payload: ScreenerNodeRuntimeResultRequest,
+    request: Request,
+    _screener: ScreenerDep,
+    session: SessionDep,
+    storage: StorageDep,
+    generator: GeneratorDep,
+    chain: ChainDep,
+) -> None:
+    async with session.begin():
+        node = await _locked_active_node(
+            request, session, environment="prod", require_active=False
+        )
+        row = await session.scalar(
+            select(SubmissionImageBuild)
+            .where(SubmissionImageBuild.build_id == build_id)
+            .with_for_update()
+        )
+        if row is None or row.runtime_node_id != node.node_id:
+            raise HTTPException(status_code=404, detail="runtime smoke not found")
+        epoch = row.controller_epoch
+        environment = row.environment
+        image_reference = payload.image_reference
+        if (
+            payload.status == "succeeded"
+            and image_reference is None
+            and row.output_image_id is not None
+        ):
+            image_reference = (
+                f"fleet.local/{node.node_id}/candidate@{row.output_image_id}"
+            )
+    if epoch is None:
+        raise HTTPException(status_code=409, detail="runtime smoke fence is stale")
+    await complete_submission_runtime_smoke(
+        build_id=build_id,
+        payload=SubmissionRuntimeResultRequest(
+            environment=environment,
+            controller_epoch=epoch,
+            status=payload.status,
+            provider_resource_id=payload.provider_resource_id,
+            image_reference=image_reference,
+            error_code=payload.error_code,
+        ),
+        request=request,
+        _controller=None,
+        session=session,
+        storage=storage,
+        generator=generator,
+        chain=chain,
+    )
+
+
+@router.post(
+    "/nodes/jobs/submission-source-reviews/claim",
+    response_model=SubmissionSourceReviewClaimResponse,
+)
+async def claim_node_submission_source_review(
+    payload: ScreenerNodeJobClaimRequest,
+    request: Request,
+    _screener: ScreenerDep,
+    session: SessionDep,
+) -> SubmissionSourceReviewClaimResponse:
+    now = datetime.now(UTC)
+    async with session.begin():
+        node = await _locked_active_node(
+            request, session, environment=payload.environment
+        )
+        _, provider_settings = await resolve_screener_provider_settings(
+            session, environment=payload.environment
+        )
+        if not provider_settings.source_review_provider_priority or (
+            provider_settings.source_review_provider_priority[0] != node.provider
+        ):
+            return SubmissionSourceReviewClaimResponse(review=None)
+        _, limits = await resolve_screener_node_channel_settings(
+            session, node_id=node.node_id
+        )
+        active_reviews = await session.scalar(
+            select(func.count())
+            .select_from(SubmissionSourceReview)
+            .where(
+                SubmissionSourceReview.node_id == node.node_id,
+                SubmissionSourceReview.status.in_(("leased", "running")),
+            )
+        )
+        if int(active_reviews or 0) >= limits.source_review_concurrency:
+            return SubmissionSourceReviewClaimResponse(review=None)
+        row = await session.scalar(
+            select(SubmissionSourceReview)
+            .join(
+                ScreeningAttempt,
+                ScreeningAttempt.attempt_id == SubmissionSourceReview.attempt_id,
+            )
+            .where(
+                SubmissionSourceReview.environment == payload.environment,
+                ScreeningAttempt.status == "running",
+                ScreeningAttempt.deadline > now,
+                SubmissionSourceReview.status == "queued",
+            )
+            .order_by(SubmissionSourceReview.created_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if row is None:
+            return SubmissionSourceReviewClaimResponse(review=None)
+        image_build = await session.scalar(
+            select(TrustedImageBuild)
+            .where(
+                TrustedImageBuild.environment == payload.environment,
+                TrustedImageBuild.component == "screener",
+                TrustedImageBuild.status == "succeeded",
+                TrustedImageBuild.image_digest.is_not(None),
+            )
+            .order_by(TrustedImageBuild.completed_at.desc())
+            .limit(1)
+        )
+        if image_build is None or image_build.image_digest is None:
+            return SubmissionSourceReviewClaimResponse(review=None)
+        token = _fresh_node_token()
+        token_expires_at = now + _SOURCE_REVIEW_JOB_TTL
+        row.status = "leased"
+        row.provider = node.provider
+        row.node_id = node.node_id
+        row.controller_epoch = f"node:{node.node_id}:{uuid4().hex[:16]}"
+        row.lease_expires_at = now + _SOURCE_REVIEW_LEASE_TTL
+        row.attempt_count += 1
+        row.job_token_hash = hashlib.sha256(token.encode()).hexdigest()
+        row.job_token_expires_at = token_expires_at
+        row.updated_at = now
+        image_repository = image_build.destination.rsplit(":", 1)[0]
+        image_reference = f"{image_repository}@{image_build.image_digest}"
+    return SubmissionSourceReviewClaimResponse(
+        review=SubmissionSourceReviewClaimView(
+            review_id=row.review_id,
+            agent_id=row.agent_id,
+            attempt_id=row.attempt_id,
+            artifact_sha256=row.artifact_sha256,
+            image_reference=image_reference,
+            job_token=token,
+            job_token_expires_at=token_expires_at,
+        )
+    )
+
+
+@router.put(
+    "/nodes/jobs/submission-source-reviews/{review_id}",
+    response_model=None,
+    status_code=204,
+)
+async def update_node_submission_source_review(
+    review_id: UUID,
+    payload: ScreenerNodeJobUpdateRequest,
+    request: Request,
+    _screener: ScreenerDep,
+    session: SessionDep,
+) -> None:
+    now = datetime.now(UTC)
+    async with session.begin():
+        node = await _locked_active_node(
+            request, session, environment="prod", require_active=False
+        )
+        row = await session.scalar(
+            select(SubmissionSourceReview)
+            .where(SubmissionSourceReview.review_id == review_id)
+            .with_for_update()
+        )
+        if row is None or row.node_id != node.node_id:
+            raise HTTPException(status_code=404, detail="source review not found")
+        if row.status not in {"leased", "running"}:
+            raise HTTPException(status_code=409, detail="source review is terminal")
+        row.status = payload.status
+        row.provider = node.provider
+        row.provider_resource_id = payload.provider_resource_id
+        row.error_code = payload.error_code
+        row.started_at = row.started_at or now
+        row.updated_at = now
+        if payload.status == "fallback_required":
+            row.completed_at = now
+            row.lease_expires_at = None
+            row.job_token_hash = None
+            row.job_token_expires_at = None
+
+
+@router.get(
+    "/nodes/jobs/submission-source-reviews/{review_id}",
+    response_model=SubmissionSourceReviewControllerStatusResponse,
+)
+async def get_node_submission_source_review(
+    review_id: UUID,
+    request: Request,
+    _screener: ScreenerDep,
+    session: SessionDep,
+) -> SubmissionSourceReviewControllerStatusResponse:
+    node_id = getattr(request.state, "screener_node_id", None)
+    row = await session.get(SubmissionSourceReview, review_id)
+    if row is None or row.node_id != node_id:
+        raise HTTPException(status_code=404, detail="source review not found")
+    return SubmissionSourceReviewControllerStatusResponse(
+        review_id=row.review_id, status=cast(Any, row.status)
+    )
+
+
 @router.post(
     "/controller/submission-source-reviews/{review_id}/cleanup-required",
     response_model=None,
@@ -2607,7 +3142,8 @@ async def complete_submission_source_review(
             row.controller_epoch = None
         attempt_id = row.attempt_id
         rental_uid = row.provider_resource_id
-    if await _release_targon_rental(request, rental_uid):
+        provider = row.provider
+    if provider == "targon" and await _release_targon_rental(request, rental_uid):
         async with session.begin():
             stored_review = await session.get(
                 SubmissionSourceReview, review_id, with_for_update=True

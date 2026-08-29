@@ -7,10 +7,20 @@ from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.screener_node_settings import (
+    ScreenerNodeAdminStatusWriteRequest,
+    ScreenerNodeChannelSettings,
+    ScreenerNodeChannelSettingsControl,
+    ScreenerNodeChannelSettingsRevision,
+    ScreenerNodeChannelSettingsWriteRequest,
+    ScreenerNodeChannelUsage,
+    node_channel_settings_confirmation,
+    node_status_confirmation,
+)
 from ditto.api_models.screener_nodes import (
     ScreenerCapacityEventView,
     ScreenerCapacitySnapshotResponse,
@@ -45,6 +55,13 @@ from ditto.db.models import (
     SubmissionSourceReview,
     TrustedImageBuild,
 )
+from ditto.db.models import (
+    ScreenerNodeChannelSettingsRevision as ScreenerNodeChannelSettingsRevisionRow,
+)
+from ditto.db.queries.screener_node_settings import (
+    DEFAULT_SCREENER_NODE_CHANNEL_SETTINGS,
+    latest_screener_node_channel_settings,
+)
 from ditto.db.queries.screener_provider_settings import (
     DEFAULT_SCREENER_PROVIDER_SETTINGS,
     latest_screener_provider_settings,
@@ -78,7 +95,7 @@ def _build_view(row: TrustedImageBuild) -> TrustedImageBuildView:
         dockerfile_path=row.dockerfile_path,
         destination=row.destination,
         status=cast(TrustedImageBuildStatus, row.status),
-        provider=cast(Literal["targon", "gcp"] | None, row.provider),
+        provider=cast(Literal["targon", "gcp", "hetzner"] | None, row.provider),
         provider_resource_id=row.provider_resource_id,
         image_digest=row.image_digest,
         error_code=row.error_code,
@@ -105,6 +122,101 @@ def _provider_revision(
         reason=row.reason,
         actor=row.actor,
         created_at=_required_aware(row.created_at),
+    )
+
+
+def _node_channel_revision(
+    row: ScreenerNodeChannelSettingsRevisionRow,
+) -> ScreenerNodeChannelSettingsRevision:
+    return ScreenerNodeChannelSettingsRevision(
+        environment=row.environment,
+        node_id=row.node_id,
+        revision=row.revision,
+        parent_revision=row.parent_revision,
+        settings=ScreenerNodeChannelSettings.model_validate(row.settings),
+        reason=row.reason,
+        actor=row.actor,
+        created_at=_required_aware(row.created_at),
+    )
+
+
+def _default_node_channel_revision(
+    *, environment: str, node_id: str
+) -> ScreenerNodeChannelSettingsRevision:
+    return ScreenerNodeChannelSettingsRevision(
+        environment=environment,
+        node_id=node_id,
+        revision=0,
+        parent_revision=0,
+        settings=DEFAULT_SCREENER_NODE_CHANNEL_SETTINGS,
+        reason="New nodes are disabled until an operator assigns capacity",
+        actor="platform",
+        created_at=None,
+    )
+
+
+async def _node_channel_control(
+    session: AsyncSession, *, environment: str, node_id: str
+) -> ScreenerNodeChannelSettingsControl:
+    rows = list(
+        await session.scalars(
+            select(ScreenerNodeChannelSettingsRevisionRow)
+            .where(
+                ScreenerNodeChannelSettingsRevisionRow.environment == environment,
+                ScreenerNodeChannelSettingsRevisionRow.node_id == node_id,
+            )
+            .order_by(desc(ScreenerNodeChannelSettingsRevisionRow.revision))
+            .limit(100)
+        )
+    )
+    build_active = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(SubmissionImageBuild)
+            .where(
+                SubmissionImageBuild.node_id == node_id,
+                SubmissionImageBuild.status.in_(("leased", "running")),
+            )
+        )
+        or 0
+    )
+    runtime_active = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(SubmissionImageBuild)
+            .where(
+                SubmissionImageBuild.runtime_node_id == node_id,
+                SubmissionImageBuild.runtime_status == "running",
+            )
+        )
+        or 0
+    )
+    source_review_active = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(SubmissionSourceReview)
+            .where(
+                SubmissionSourceReview.node_id == node_id,
+                SubmissionSourceReview.status.in_(("leased", "running")),
+            )
+        )
+        or 0
+    )
+    return ScreenerNodeChannelSettingsControl(
+        current=(
+            _node_channel_revision(rows[0])
+            if rows
+            else _default_node_channel_revision(
+                environment=environment, node_id=node_id
+            )
+        ),
+        history=[_node_channel_revision(row) for row in rows],
+        usage=ScreenerNodeChannelUsage(
+            sandbox_active=build_active + runtime_active,
+            build_active=build_active,
+            runtime_active=runtime_active,
+            source_review_active=source_review_active,
+        ),
     )
 
 
@@ -199,6 +311,132 @@ async def set_screener_provider_settings(
         ) from error
     await session.refresh(row)
     return _provider_revision(row)
+
+
+@router.get(
+    "/screener-nodes/{node_id}/channel-settings",
+    response_model=ScreenerNodeChannelSettingsControl,
+)
+async def get_screener_node_channel_settings(
+    node_id: str,
+    _admin: AdminDep,
+    session: SessionDep,
+    environment: Annotated[str, Query(pattern=r"^[a-z][a-z0-9-]{0,31}$")] = "prod",
+) -> ScreenerNodeChannelSettingsControl:
+    node = await session.get(ScreenerNode, node_id)
+    if node is None or node.environment != environment:
+        raise HTTPException(status_code=404, detail="screener node not found")
+    return await _node_channel_control(
+        session, environment=environment, node_id=node_id
+    )
+
+
+@router.post(
+    "/screener-nodes/{node_id}/channel-settings",
+    response_model=ScreenerNodeChannelSettingsRevision,
+)
+async def set_screener_node_channel_settings(
+    node_id: str,
+    payload: ScreenerNodeChannelSettingsWriteRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> ScreenerNodeChannelSettingsRevision:
+    expected_confirmation = node_channel_settings_confirmation(
+        node_id, payload.settings
+    )
+    if payload.confirmation != expected_confirmation:
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirmation must be exactly {expected_confirmation}",
+        )
+    node = await session.get(ScreenerNode, node_id)
+    if node is None or node.environment != payload.environment:
+        raise HTTPException(status_code=404, detail="screener node not found")
+    latest = await latest_screener_node_channel_settings(session, node_id=node_id)
+    actual_revision = latest.revision if latest is not None else 0
+    if payload.expected_revision != actual_revision:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "screener node channel settings changed; refresh before applying "
+                f"(expected {payload.expected_revision}, current {actual_revision})"
+            ),
+        )
+    row = ScreenerNodeChannelSettingsRevisionRow(
+        environment=payload.environment,
+        node_id=node_id,
+        parent_revision=actual_revision,
+        settings=payload.settings.model_dump(mode="json"),
+        reason=payload.reason.strip(),
+        actor=payload.actor.strip(),
+    )
+    session.add(row)
+    try:
+        await session.commit()
+    except IntegrityError as error:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "screener node channel settings changed concurrently; "
+                "refresh before applying"
+            ),
+        ) from error
+    await session.refresh(row)
+    return _node_channel_revision(row)
+
+
+@router.post(
+    "/screener-nodes/{node_id}/status",
+    response_model=None,
+    status_code=204,
+)
+async def set_screener_node_status(
+    node_id: str,
+    payload: ScreenerNodeAdminStatusWriteRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> None:
+    expected_confirmation = node_status_confirmation(node_id, payload.status)
+    if payload.confirmation != expected_confirmation:
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirmation must be exactly {expected_confirmation}",
+        )
+    now = datetime.now(UTC)
+    async with session.begin():
+        node = await session.scalar(
+            select(ScreenerNode)
+            .where(ScreenerNode.node_id == node_id)
+            .with_for_update()
+        )
+        if node is None or node.environment != payload.environment:
+            raise HTTPException(status_code=404, detail="screener node not found")
+        if node.status != payload.expected_status:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "screener node status changed; refresh before applying "
+                    f"(expected {payload.expected_status}, current {node.status})"
+                ),
+            )
+        node.status = payload.status
+        node.status_reason = payload.reason.strip()
+        session.add(
+            ScreenerCapacityEvent(
+                event_id=uuid4(),
+                environment=payload.environment,
+                event_type="node_status_changed",
+                provider=cast(ScreenerProvider, node.provider),
+                node_id=node.node_id,
+                detail=(
+                    f"status={payload.status} actor={payload.actor.strip()} "
+                    f"reason={payload.reason.strip()}"
+                )[:500],
+                controller_epoch="backroom-node-control",
+                created_at=now,
+            )
+        )
 
 
 @router.post("/trusted-image-builds", response_model=TrustedImageBuildView)
@@ -453,7 +691,11 @@ async def screener_capacity(
                         job_id=row.build_id,
                         lane="build",
                         status=row.status,
-                        provider=cast(Literal["targon", "gcp"] | None, row.provider),
+                        provider=cast(
+                            Literal["targon", "gcp", "hetzner"] | None,
+                            row.provider,
+                        ),
+                        node_id=row.node_id,
                         provider_resource_id=row.provider_resource_id,
                         error_code=row.error_code,
                         created_at=_required_aware(row.created_at),
@@ -467,8 +709,11 @@ async def screener_capacity(
                         lane="runtime",
                         status=row.runtime_status,
                         provider=(
-                            "targon" if row.runtime_status != "skipped" else None
+                            cast(Literal["targon", "gcp", "hetzner"], row.provider)
+                            if row.runtime_status != "skipped"
+                            else None
                         ),
+                        node_id=row.runtime_node_id,
                         provider_resource_id=row.runtime_provider_resource_id,
                         image_reference=row.runtime_image_reference,
                         error_code=row.runtime_error_code,
@@ -482,7 +727,11 @@ async def screener_capacity(
                         job_id=row.review_id,
                         lane="source_review",
                         status=row.status,
-                        provider=cast(Literal["targon", "gcp"] | None, row.provider),
+                        provider=cast(
+                            Literal["targon", "gcp", "hetzner"] | None,
+                            row.provider,
+                        ),
+                        node_id=row.node_id,
                         provider_resource_id=row.provider_resource_id,
                         error_code=row.error_code,
                         created_at=_required_aware(row.created_at),
@@ -495,4 +744,10 @@ async def screener_capacity(
             reverse=True,
         )[:100],
         provider_control=await _provider_control(session, environment=environment),
+        node_controls=[
+            await _node_channel_control(
+                session, environment=environment, node_id=node.node_id
+            )
+            for node in node_rows
+        ],
     )

@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-ScreenerCapacityProvider = Literal["targon", "gcp"]
+ScreenerCapacityProvider = Literal["hetzner", "targon", "gcp"]
 
 
 class ScreenerProviderSettings(BaseModel):
@@ -67,6 +67,13 @@ class ScreenerProviderSettings(BaseModel):
             self.runtime_provider_priority == ("gcp",)
             and self.source_review_provider_priority == ("gcp",)
             and self.build_provider_priority == ("gcp",)
+        )
+
+    def all_lanes_hetzner_first(self) -> bool:
+        return (
+            self.runtime_provider_priority[0] == "hetzner"
+            and self.source_review_provider_priority[0] == "hetzner"
+            and self.build_provider_priority[0] == "hetzner"
         )
 
 

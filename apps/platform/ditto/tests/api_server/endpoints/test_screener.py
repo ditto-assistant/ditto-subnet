@@ -1626,7 +1626,7 @@ class TestFederatedScreenerNodes:
             )
         assert count == 1
 
-    async def test_gcp_first_builder_policy_authorizes_immediate_fallback(
+    async def test_miner_provider_policy_does_not_park_trusted_release_build(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -1672,8 +1672,8 @@ class TestFederatedScreenerNodes:
             },
         )
         assert queued.status_code == 200, queued.text
-        assert queued.json()["status"] == "fallback_required"
-        assert queued.json()["error_code"] == "TARGON_BUILD_DISABLED_BY_POLICY"
+        assert queued.json()["status"] == "queued"
+        assert queued.json()["error_code"] is None
 
     async def test_third_expired_build_lease_requests_explicit_fallback(
         self,

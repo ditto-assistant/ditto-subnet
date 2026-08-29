@@ -1110,6 +1110,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screener-nodes/{node_id}/channel-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Screener Node Channel Settings */
+        get: operations["get_screener_node_channel_settings_api_v1_admin_screener_nodes__node_id__channel_settings_get"];
+        put?: never;
+        /** Set Screener Node Channel Settings */
+        post: operations["set_screener_node_channel_settings_api_v1_admin_screener_nodes__node_id__channel_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screener-nodes/{node_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Screener Node Status */
+        post: operations["set_screener_node_status_api_v1_admin_screener_nodes__node_id__status_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-policy-activation": {
         parameters: {
             query?: never;
@@ -3626,7 +3661,7 @@ export interface paths {
         put?: never;
         /**
          * Queue Submission Image Build
-         * @description Queue a Targon build only after the owning screener validated source.
+         * @description Queue a provider build only after the owning screener validated source.
          */
         post: operations["queue_submission_image_build_api_v1_screener_agent__agent_id__submission_image_builds_post"];
         delete?: never;
@@ -4130,6 +4165,130 @@ export interface paths {
          * @description Record a fresh report signed by the dedicated screener identity.
          */
         post: operations["heartbeat_api_v1_screener_heartbeat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/nodes/channel-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Effective Node Channel Settings */
+        get: operations["get_effective_node_channel_settings_api_v1_screener_nodes_channel_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/nodes/jobs/submission-image-builds/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim Node Submission Image Build
+         * @description Atomically enforce node and shared-VM limits before minting a job token.
+         */
+        post: operations["claim_node_submission_image_build_api_v1_screener_nodes_jobs_submission_image_builds_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/nodes/jobs/submission-image-builds/{build_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Node Submission Image Build */
+        get: operations["get_node_submission_image_build_api_v1_screener_nodes_jobs_submission_image_builds__build_id__get"];
+        /** Update Node Submission Image Build */
+        put: operations["update_node_submission_image_build_api_v1_screener_nodes_jobs_submission_image_builds__build_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/nodes/jobs/submission-runtime-smokes/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim Node Submission Runtime Smoke */
+        post: operations["claim_node_submission_runtime_smoke_api_v1_screener_nodes_jobs_submission_runtime_smokes_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/nodes/jobs/submission-runtime-smokes/{build_id}/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete Node Submission Runtime Smoke */
+        post: operations["complete_node_submission_runtime_smoke_api_v1_screener_nodes_jobs_submission_runtime_smokes__build_id__result_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/nodes/jobs/submission-source-reviews/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim Node Submission Source Review */
+        post: operations["claim_node_submission_source_review_api_v1_screener_nodes_jobs_submission_source_reviews_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/nodes/jobs/submission-source-reviews/{review_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Node Submission Source Review */
+        get: operations["get_node_submission_source_review_api_v1_screener_nodes_jobs_submission_source_reviews__review_id__get"];
+        /** Update Node Submission Source Review */
+        put: operations["update_node_submission_source_review_api_v1_screener_nodes_jobs_submission_source_reviews__review_id__put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -10897,6 +11056,16 @@ export interface components {
              * @enum {string}
              */
             source: "revision" | "default";
+        };
+        /** EffectiveScreenerNodeChannelSettings */
+        EffectiveScreenerNodeChannelSettings: {
+            /** Environment */
+            environment: string;
+            /** Node Id */
+            node_id: string;
+            /** Revision */
+            revision: number;
+            settings: components["schemas"]["ScreenerNodeChannelSettings"];
         };
         /** EffectiveScreenerProviderSettings */
         EffectiveScreenerProviderSettings: {
@@ -17974,6 +18143,8 @@ export interface components {
             builds?: components["schemas"]["TrustedImageBuildView"][];
             /** Events */
             events: components["schemas"]["ScreenerCapacityEventView"][];
+            /** Node Controls */
+            node_controls?: components["schemas"]["ScreenerNodeChannelSettingsControl"][];
             /** Nodes */
             nodes: components["schemas"]["ScreenerNodeView"][];
             provider_control: components["schemas"]["ScreenerProviderSettingsControl"];
@@ -18063,6 +18234,132 @@ export interface components {
              */
             seen_at: string;
         };
+        /** ScreenerNodeAdminStatusWriteRequest */
+        ScreenerNodeAdminStatusWriteRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Environment
+             * @default prod
+             */
+            environment: string;
+            /**
+             * Expected Status
+             * @enum {string}
+             */
+            expected_status: "active" | "draining" | "quarantined";
+            /** Reason */
+            reason: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "active" | "draining" | "quarantined";
+        };
+        /**
+         * ScreenerNodeChannelSettings
+         * @description Hard Platform admission limits for one enrolled screener node.
+         *
+         *     Build and runtime work share the same disposable-VM pool. Their individual
+         *     limits allow operators to reserve or disable a lane, while ``sandbox_slots``
+         *     prevents both lanes from consuming twice the physical host capacity.
+         *     Source review is CPU-light and has its own independent limit.
+         */
+        ScreenerNodeChannelSettings: {
+            /**
+             * Build Concurrency
+             * @default 0
+             */
+            build_concurrency: number;
+            /**
+             * Runtime Concurrency
+             * @default 0
+             */
+            runtime_concurrency: number;
+            /**
+             * Sandbox Slots
+             * @default 0
+             */
+            sandbox_slots: number;
+            /**
+             * Source Review Concurrency
+             * @default 0
+             */
+            source_review_concurrency: number;
+        };
+        /** ScreenerNodeChannelSettingsControl */
+        ScreenerNodeChannelSettingsControl: {
+            current: components["schemas"]["ScreenerNodeChannelSettingsRevision"];
+            /** History */
+            history: components["schemas"]["ScreenerNodeChannelSettingsRevision"][];
+            usage?: components["schemas"]["ScreenerNodeChannelUsage"] | null;
+        };
+        /** ScreenerNodeChannelSettingsRevision */
+        ScreenerNodeChannelSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Created At */
+            created_at: string | null;
+            /** Environment */
+            environment: string;
+            /** Node Id */
+            node_id: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            settings: components["schemas"]["ScreenerNodeChannelSettings"];
+        };
+        /** ScreenerNodeChannelSettingsWriteRequest */
+        ScreenerNodeChannelSettingsWriteRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Environment
+             * @default prod
+             */
+            environment: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            settings: components["schemas"]["ScreenerNodeChannelSettings"];
+        };
+        /** ScreenerNodeChannelUsage */
+        ScreenerNodeChannelUsage: {
+            /**
+             * Build Active
+             * @default 0
+             */
+            build_active: number;
+            /**
+             * Runtime Active
+             * @default 0
+             */
+            runtime_active: number;
+            /**
+             * Sandbox Active
+             * @default 0
+             */
+            sandbox_active: number;
+            /**
+             * Source Review Active
+             * @default 0
+             */
+            source_review_active: number;
+        };
         /** ScreenerNodeCredentialResponse */
         ScreenerNodeCredentialResponse: {
             /** Api Token */
@@ -18078,6 +18375,23 @@ export interface components {
             node_id: string;
             /** Screener Hotkey */
             screener_hotkey: string;
+        };
+        /** ScreenerNodeJobClaimRequest */
+        ScreenerNodeJobClaimRequest: {
+            /** Environment */
+            environment: string;
+        };
+        /** ScreenerNodeJobUpdateRequest */
+        ScreenerNodeJobUpdateRequest: {
+            /** Error Code */
+            error_code?: string | null;
+            /** Provider Resource Id */
+            provider_resource_id?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "fallback_required";
         };
         /** ScreenerNodeRefreshRequest */
         ScreenerNodeRefreshRequest: {
@@ -18119,6 +18433,20 @@ export interface components {
             signature: string;
             /** Timestamp */
             timestamp: number;
+        };
+        /** ScreenerNodeRuntimeResultRequest */
+        ScreenerNodeRuntimeResultRequest: {
+            /** Error Code */
+            error_code?: string | null;
+            /** Image Reference */
+            image_reference?: string | null;
+            /** Provider Resource Id */
+            provider_resource_id?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "succeeded" | "fallback_required";
         };
         /** ScreenerNodeStatusRequest */
         ScreenerNodeStatusRequest: {
@@ -18300,8 +18628,10 @@ export interface components {
              * @enum {string}
              */
             lane: "build" | "runtime" | "source_review";
+            /** Node Id */
+            node_id?: string | null;
             /** Provider */
-            provider?: ("targon" | "gcp") | null;
+            provider?: ("targon" | "gcp" | "hetzner") | null;
             /** Provider Resource Id */
             provider_resource_id?: string | null;
             /** Status */
@@ -18324,7 +18654,7 @@ export interface components {
              *       "targon"
              *     ]
              */
-            build_provider_priority: ("targon" | "gcp")[];
+            build_provider_priority: ("hetzner" | "targon" | "gcp")[];
             /**
              * Runtime Provider Priority
              * @default [
@@ -18332,7 +18662,7 @@ export interface components {
              *       "targon"
              *     ]
              */
-            runtime_provider_priority: ("targon" | "gcp")[];
+            runtime_provider_priority: ("hetzner" | "targon" | "gcp")[];
             /**
              * Source Review Provider Priority
              * @default [
@@ -18340,7 +18670,7 @@ export interface components {
              *       "targon"
              *     ]
              */
-            source_review_provider_priority: ("targon" | "gcp")[];
+            source_review_provider_priority: ("hetzner" | "targon" | "gcp")[];
         };
         /** ScreenerProviderSettingsControl */
         ScreenerProviderSettingsControl: {
@@ -19148,7 +19478,7 @@ export interface components {
         };
         /**
          * SubmissionImageBuildClaimView
-         * @description One miner build leased to the dedicated Targon builder.
+         * @description One miner build leased to an isolated provider executor.
          */
         SubmissionImageBuildClaimView: {
             /**
@@ -19347,7 +19677,7 @@ export interface components {
         };
         /**
          * SubmissionSourceReviewClaimView
-         * @description One read-only source review leased to a trusted Targon worker.
+         * @description One read-only source review leased to a trusted provider worker.
          */
         SubmissionSourceReviewClaimView: {
             /**
@@ -19860,7 +20190,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "targon" | "gcp";
+            provider: "targon" | "gcp" | "hetzner";
             /** Provider Resource Id */
             provider_resource_id?: string | null;
             /**
@@ -19909,7 +20239,7 @@ export interface components {
             /** Lease Expires At */
             lease_expires_at?: string | null;
             /** Provider */
-            provider?: ("targon" | "gcp") | null;
+            provider?: ("targon" | "gcp" | "hetzner") | null;
             /** Provider Resource Id */
             provider_resource_id?: string | null;
             /** Reason */
@@ -23083,6 +23413,113 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ScreenerCapacityView"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_screener_node_channel_settings_api_v1_admin_screener_nodes__node_id__channel_settings_get: {
+        parameters: {
+            query?: {
+                environment?: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreenerNodeChannelSettingsControl"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_screener_node_channel_settings_api_v1_admin_screener_nodes__node_id__channel_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreenerNodeChannelSettingsWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreenerNodeChannelSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_screener_node_status_api_v1_admin_screener_nodes__node_id__status_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreenerNodeAdminStatusWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -28426,6 +28863,322 @@ export interface operations {
             };
             /** @description Heartbeat payload exceeds the bounded contract. */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_effective_node_channel_settings_api_v1_screener_nodes_channel_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EffectiveScreenerNodeChannelSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_node_submission_image_build_api_v1_screener_nodes_jobs_submission_image_builds_claim_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreenerNodeJobClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionImageBuildClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_node_submission_image_build_api_v1_screener_nodes_jobs_submission_image_builds__build_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionImageBuildControllerStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_node_submission_image_build_api_v1_screener_nodes_jobs_submission_image_builds__build_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreenerNodeJobUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_node_submission_runtime_smoke_api_v1_screener_nodes_jobs_submission_runtime_smokes_claim_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreenerNodeJobClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionRuntimeArtifactClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    complete_node_submission_runtime_smoke_api_v1_screener_nodes_jobs_submission_runtime_smokes__build_id__result_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreenerNodeRuntimeResultRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_node_submission_source_review_api_v1_screener_nodes_jobs_submission_source_reviews_claim_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreenerNodeJobClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionSourceReviewClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_node_submission_source_review_api_v1_screener_nodes_jobs_submission_source_reviews__review_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionSourceReviewControllerStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_node_submission_source_review_api_v1_screener_nodes_jobs_submission_source_reviews__review_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreenerNodeJobUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
