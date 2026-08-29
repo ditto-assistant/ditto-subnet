@@ -19,9 +19,12 @@ from dittobench_coding_datagen.model import (
     CODING_CONTRACT_VERSION,
     MEMORY_CONDITIONS,
     PRACTICE_AGENT_INSTRUCTION,
+    PRACTICE_BUILD_COMMAND_IDS,
+    PRACTICE_EDITABLE_PATHS,
     PRACTICE_GENERATION_MODE,
     PRACTICE_SCHEMA,
     PRACTICE_TASK_ENTROPY_BITS,
+    PRACTICE_TEST_COMMAND_IDS,
     CorpusError,
     PracticeSource,
 )
@@ -76,9 +79,13 @@ _AGENT_TASK_KEYS = frozenset(
         "instruction",
         "problem_statement",
         "repository_id",
+        "runtime_policy",
         "task_id",
         "visible_capsule",
     }
+)
+_RUNTIME_POLICY_KEYS = frozenset(
+    {"build_command_ids", "editable_paths", "test_command_ids"}
 )
 _GRADER_TASK_KEYS = frozenset(
     {
@@ -534,6 +541,21 @@ def validate_pack(root: Path) -> dict[str, Any]:
             )
         if task.get("instruction") != PRACTICE_AGENT_INSTRUCTION:
             raise CorpusError(f"task {task_id} uses a non-canonical instruction")
+        runtime_policy = _object(
+            task.get("runtime_policy"), f"task {task_id}.runtime_policy"
+        )
+        _exact_keys(
+            runtime_policy,
+            _RUNTIME_POLICY_KEYS,
+            f"task {task_id}.runtime_policy",
+        )
+        expected_runtime_policy = {
+            "build_command_ids": list(PRACTICE_BUILD_COMMAND_IDS),
+            "editable_paths": list(PRACTICE_EDITABLE_PATHS),
+            "test_command_ids": list(PRACTICE_TEST_COMMAND_IDS),
+        }
+        if runtime_policy != expected_runtime_policy:
+            raise CorpusError(f"task {task_id} has a non-canonical runtime policy")
         grader_task = grader_by_id[task_id]
         reconstructed_tasks.append(
             {
