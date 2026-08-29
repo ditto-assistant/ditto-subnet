@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.136.0 (2026-08-29)
+
+### Bug Fixes
+
+- **infra**: Use supported IAP IAM for rehearsal host
+  ([#1286](https://github.com/ditto-assistant/ditto-subnet/pull/1286),
+  [`f52a313`](https://github.com/ditto-assistant/ditto-subnet/commit/f52a313b2d1115135e8b3043dfb6e6973bfb2e64))
+
+### Features
+
+- **platform**: Add audited screener bootstrap grants
+  ([#1287](https://github.com/ditto-assistant/ditto-subnet/pull/1287),
+  [`ffe729e`](https://github.com/ditto-assistant/ditto-subnet/commit/ffe729ec1566f10764d6e9031e46d39f4c1dd953))
+
+
 ## v0.135.0 (2026-08-29)
 
 ### Features
