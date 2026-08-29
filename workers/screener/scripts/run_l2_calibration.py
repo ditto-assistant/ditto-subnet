@@ -27,7 +27,6 @@ from ditto_screener.l2_review import (
     IsolatedCodingHarness,
     KimiSolSourceReviewAgent,
     L2AuditJournal,
-    L2Usage,
     l2_cause_prompt_revision,
     l2_cause_tiebreaker_prompt_revision,
     l2_critic_prompt_revision,
