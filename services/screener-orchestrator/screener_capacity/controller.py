@@ -27,8 +27,6 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
-from screener_capacity.targon import TargonAPIError, TargonClient
-
 
 class ControllerError(RuntimeError):
     """A redacted, operator-actionable reconciliation failure."""
@@ -79,15 +77,8 @@ def desired_slots(*, runnable: int, active: int, jobs_per_slot: int, cap: int) -
     return min(cap, active + math.ceil(runnable / jobs_per_slot))
 
 
-def gce_residual(*, demand: int, targon_first: bool) -> int:
-    """Return GCE MIG capacity for screening workers.
-
-    Nested-Docker Targon slots are retired, so there is no Targon worker
-    residual. Targon-first decomposed lanes keep the MIG at zero; any GCE-only
-    or mixed revision still uses the fleet.
-    """
-    if targon_first:
-        return 0
+def gce_capacity_target(*, demand: int) -> int:
+    """Return the GCE worker capacity required by screening demand."""
     return demand
 
 
@@ -458,49 +449,6 @@ class GCPBootstrapTokenMinter:
         return token
 
 
-def _owned_targon_workloads(client: TargonClient, prefix: str) -> list[dict[str, Any]]:
-    return [
-        row
-        for row in client.list_workloads()
-        if str(row.get("name", "")).startswith(prefix)
-        and str((row.get("state") or {}).get("status", "")).casefold() != "deleted"
-    ]
-
-
-def _targon_counts(
-    rows: list[dict[str, Any]],
-    node_states: dict[str, dict[str, Any]],
-) -> ProviderCounts:
-    healthy = pending = draining = 0
-    for row in rows:
-        state = row.get("state")
-        status = (
-            str(state.get("status", "")).casefold() if isinstance(state, dict) else ""
-        )
-        ready = state.get("ready_replicas", 0) if isinstance(state, dict) else 0
-        uid = str(row.get("uid", ""))
-        node = node_states.get(uid, {})
-        if (
-            status == "running"
-            and isinstance(ready, int)
-            and ready > 0
-            and node.get("ready") is True
-            and node.get("status") == "active"
-        ):
-            healthy += 1
-        elif status in {"suspending", "suspended", "deleting"} or node.get(
-            "status"
-        ) in {
-            "draining",
-            "quarantined",
-            "revoked",
-        }:
-            draining += 1
-        else:
-            pending += 1
-    return ProviderCounts(healthy=healthy, pending=pending, draining=draining)
-
-
 def _load_state(path: Path) -> dict[str, Any]:
     try:
         loaded = json.loads(path.read_text()) if path.exists() else {}
@@ -556,9 +504,6 @@ class Settings:
     global_cap: int
     jobs_per_slot: int
     interval_seconds: int
-    targon_api_key_file: Path | None
-    targon_org_slug: str
-    targon_prefix: str
     state_file: Path
     gce_project: str
     gce_region: str
@@ -574,8 +519,6 @@ def _snapshot(
     provider_routing: ProviderRouting,
     demand: Demand,
     reason: str | None,
-    targon: ProviderCounts,
-    targon_available: int,
     gce: ProviderCounts,
     gce_target: int,
     events: list[dict[str, Any]],
@@ -595,10 +538,10 @@ def _snapshot(
         "global_cap": settings.global_cap,
         "provider_ready": provider_ready,
         "targon_capability": "nogo",
-        "targon_available": targon_available,
-        "targon_healthy": targon.healthy,
-        "targon_pending": targon.pending,
-        "targon_draining": targon.draining,
+        "targon_available": 0,
+        "targon_healthy": 0,
+        "targon_pending": 0,
+        "targon_draining": 0,
         "gce_target": gce_target,
         "gce_healthy": gce.healthy,
         "gce_pending": gce.pending,
@@ -609,10 +552,6 @@ def _snapshot(
         "last_provider_error_at": provider_error_at,
         "events": events,
     }
-
-
-def _node_has_active_lease(node: dict[str, Any]) -> bool:
-    return node.get("active_lease") is True
 
 
 def _record_provider_failure(
@@ -663,39 +602,6 @@ def _policy_reason(
     return "GCP_SCREENERS_PRIORITIZED_BY_POLICY"
 
 
-def _delete_targon_workload(
-    *,
-    platform: PlatformControl,
-    client: TargonClient,
-    uid: str,
-    row: dict[str, Any],
-    snapshot: dict[str, Any],
-    settings: Settings,
-) -> None:
-    try:
-        state = row.get("state") or {}
-        if str(state.get("status", "")).casefold() not in {
-            "suspended",
-            "registered",
-            "error",
-        }:
-            platform.fence(epoch=settings.epoch)
-            client.suspend(uid)
-        platform.fence(epoch=settings.epoch)
-        client.delete(uid)
-    except (TargonAPIError, ControllerError) as error:
-        _record_provider_failure(
-            platform,
-            snapshot,
-            state_file=settings.state_file,
-            code="TARGON_TEARDOWN_FAILED",
-            detail="Targon leftover nested-Docker teardown failed",
-        )
-        raise ControllerError(
-            "Targon leftover nested-Docker teardown failed"
-        ) from error
-
-
 def reconcile(settings: Settings) -> dict[str, Any]:
     token = _read_secret_file(settings.platform_token_file)
     platform = PlatformControl(
@@ -727,38 +633,12 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         available=provider_routing_available,
         targon_first=targon_first,
     )
-    targon_counts = ProviderCounts()
-    targon_rows: list[dict[str, Any]] = []
-    targon_client: TargonClient | None = None
-    node_states: dict[str, dict[str, Any]] = {}
     provider_success_at: str | None = None
     provider_error_code: str | None = None
     provider_error_at: str | None = None
     if not provider_routing_available:
         provider_error_code = "PROVIDER_ROUTING_UNAVAILABLE"
         provider_error_at = datetime.now(UTC).isoformat()
-    if settings.targon_api_key_file is not None:
-        key = _read_secret_file(settings.targon_api_key_file)
-        targon_client = TargonClient(api_key=key, org_slug=settings.targon_org_slug)
-        try:
-            targon_rows = _owned_targon_workloads(targon_client, settings.targon_prefix)
-            try:
-                node_states = platform.node_states()
-            except ControllerError:
-                node_states = {}
-                provider_error_code = "TARGON_HEARTBEAT_STATE_UNAVAILABLE"
-                provider_error_at = datetime.now(UTC).isoformat()
-            targon_counts = _targon_counts(targon_rows, node_states)
-            provider_success_at = datetime.now(UTC).isoformat()
-        except TargonAPIError:
-            reason = "TARGON_API_UNAVAILABLE"
-            provider_error_code = reason
-            provider_error_at = datetime.now(UTC).isoformat()
-            try:
-                node_states = platform.node_states()
-            except ControllerError:
-                node_states = {}
-
     gce_fleet = GCEFleet(
         project=settings.gce_project,
         region=settings.gce_region,
@@ -769,7 +649,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     gce_counts = gce_fleet.counts()
     provider_success_at = datetime.now(UTC).isoformat()
 
-    target = gce_residual(demand=demand.desired, targon_first=targon_first)
+    target = gce_capacity_target(demand=demand.desired)
     if target < current_target and demand.active > 0:
         # Never remove GCE capacity while any provider still owns a live lease.
         target = current_target
@@ -782,18 +662,6 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 "detail": f"GCE target {current_target} -> {target}",
             }
         )
-    if targon_rows:
-        events.append(
-            {
-                "event_type": "targon_fail_closed",
-                "provider": "targon",
-                "detail": (
-                    f"Draining {len(targon_rows)} leftover nested-Docker "
-                    "Targon worker(s)"
-                ),
-            }
-        )
-
     prior_provider_ready, prior_error_code, prior_error_at = _provider_state(
         settings.state_file
     )
@@ -808,8 +676,6 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         provider_routing=provider_routing,
         demand=demand,
         reason=reason,
-        targon=targon_counts,
-        targon_available=targon_counts.supplied,
         gce=gce_counts,
         gce_target=target,
         events=events,
@@ -853,47 +719,6 @@ def reconcile(settings: Settings) -> dict[str, Any]:
                 detail="GCE fallback scale-up failed",
             )
             raise
-    if targon_client is not None:
-        drained_node_ids: set[str] = set()
-        for row in targon_rows:
-            name = str(row.get("name", ""))
-            uid = str(row.get("uid", ""))
-            if not name or not uid:
-                continue
-            node = node_states.get(uid, {})
-            node_id = str(node.get("node_id", name))
-            already_retiring = node.get("status") in {
-                "draining",
-                "quarantined",
-                "revoked",
-            }
-            if not already_retiring:
-                platform.drain_node(node_id=node_id, epoch=settings.epoch)
-                # A registered node gets one full reconciliation pass to
-                # observe drain state and finish its own lease.
-                if node:
-                    drained_node_ids.add(node_id)
-                    continue
-            drained_node_ids.add(node_id)
-            if _node_has_active_lease(node):
-                continue
-            _delete_targon_workload(
-                platform=platform,
-                client=targon_client,
-                uid=uid,
-                row=row,
-                snapshot=snapshot,
-                settings=settings,
-            )
-        for node in node_states.values():
-            node_id = str(node.get("node_id", ""))
-            if (
-                node.get("provider") == "targon"
-                and node.get("status") == "active"
-                and node_id
-                and node_id not in drained_node_ids
-            ):
-                platform.drain_node(node_id=node_id, epoch=settings.epoch)
     if target < current_target:
         # Zero is intentional.  Scale-in happens only when active leases have
         # fallen to zero because desired_slots includes every active lease.
@@ -938,11 +763,6 @@ def _settings(args: argparse.Namespace) -> Settings:
         global_cap=args.global_cap,
         jobs_per_slot=args.jobs_per_slot,
         interval_seconds=args.interval_seconds,
-        targon_api_key_file=(
-            Path(args.targon_api_key_file) if args.targon_api_key_file else None
-        ),
-        targon_org_slug=args.targon_org_slug,
-        targon_prefix=args.targon_prefix,
         state_file=Path(args.state_file),
         gce_project=args.gce_project,
         gce_region=args.gce_region,
@@ -961,9 +781,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--global-cap", type=int, default=6)
     parser.add_argument("--jobs-per-slot", type=int, default=6)
     parser.add_argument("--interval-seconds", type=int, default=30)
-    parser.add_argument("--targon-api-key-file")
-    parser.add_argument("--targon-org-slug", required=True)
-    parser.add_argument("--targon-prefix", default="ditto-screener-prod-")
     parser.add_argument(
         "--state-file", default="/var/lib/ditto-screener-capacity/state.json"
     )
@@ -974,16 +791,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lock-file", default="/run/lock/ditto-screener-capacity.lock")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--once", action="store_true")
-    # Nested-Docker Targon slots were retired in #964. Live systemd units may
-    # still pass these flags until Ansible reapplies the unit template.
-    parser.add_argument("--targon-platform-url")
-    parser.add_argument("--targon-capability-file")
-    parser.add_argument("--targon-resource")
-    parser.add_argument("--targon-worker-env-file")
-    parser.add_argument("--gcp-bootstrap-service-account")
-    parser.add_argument("--gcp-bootstrap-delegate-service-account")
-    parser.add_argument("--source-review-secret-resource")
-    parser.add_argument("--targon-provisioning-timeout-seconds", type=int)
+    # Accept retired unit flags until Ansible reapplies the updated template.
+    for retired_flag in (
+        "--targon-api-key-file",
+        "--targon-org-slug",
+        "--targon-prefix",
+        "--targon-platform-url",
+        "--targon-capability-file",
+        "--targon-resource",
+        "--targon-worker-env-file",
+        "--gcp-bootstrap-service-account",
+        "--gcp-bootstrap-delegate-service-account",
+        "--source-review-secret-resource",
+        "--targon-provisioning-timeout-seconds",
+    ):
+        parser.add_argument(retired_flag, help=argparse.SUPPRESS)
     return parser
 
 

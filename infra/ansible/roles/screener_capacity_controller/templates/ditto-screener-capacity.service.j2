@@ -17,9 +17,6 @@ ExecStart={{ screener_capacity_venv }}/bin/python -m screener_capacity.controlle
   --global-cap {{ screener_capacity_global_cap }} \
   --jobs-per-slot {{ screener_capacity_jobs_per_slot }} \
   --interval-seconds {{ screener_capacity_interval_seconds }} \
-  --targon-api-key-file {{ screener_capacity_config_dir }}/targon-api-key \
-  --targon-org-slug {{ screener_capacity_targon_org_slug }} \
-  --targon-prefix {{ screener_capacity_targon_prefix }} \
   --state-file {{ screener_capacity_state_dir }}/state.json \
   --gce-project {{ screener_capacity_gce_project }} \
   --gce-region {{ screener_capacity_gce_region }} \
