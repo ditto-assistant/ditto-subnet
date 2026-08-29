@@ -96,7 +96,12 @@ MintToken = Callable[[str], Awaitable[str]]
 
 
 def _private_failure_text(value: str) -> str:
-    redacted = _PRIVATE_BEARER.sub("Bearer [REDACTED]", value)
+    # PostgreSQL text values cannot contain U+0000. Provider log APIs may
+    # decode binary build output into a Python string that still carries NUL
+    # bytes, so escape them at the private-evidence boundary before either the
+    # database row or the trace artifact sees the value.
+    redacted = value.replace("\x00", r"\0")
+    redacted = _PRIVATE_BEARER.sub("Bearer [REDACTED]", redacted)
     redacted = _PRIVATE_SIGNED_TOKEN.sub("[REDACTED]", redacted)
     redacted = _PRIVATE_SECRET.sub(r"\1\2[REDACTED]", redacted)
     if len(redacted) <= _PRIVATE_FAILURE_LIMIT:

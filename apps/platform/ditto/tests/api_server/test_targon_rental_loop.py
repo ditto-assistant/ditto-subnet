@@ -24,6 +24,7 @@ from ditto.api_server.targon_provider import TargonComputeProvider
 from ditto.api_server.targon_rental_loop import (
     _SOURCE_LEASE,
     TargonRentalLoop,
+    _private_failure_text,
     _source_review_layer_env,
 )
 from ditto.api_server.targon_screening import (
@@ -78,6 +79,10 @@ def test_source_review_layer_env_pins_l2_and_l3() -> None:
     assert env["SCREENER_L2_REVIEW_MODEL"] == "moonshotai/kimi-k3"
 
 
+def test_private_failure_text_escapes_postgres_nul_bytes() -> None:
+    assert _private_failure_text("kaniko\x00output") == r"kaniko\0output"
+
+
 def test_screening_leases_are_bounded_for_provider_fallback() -> None:
     assert timedelta(minutes=45) == _LEASE_TTL
     assert timedelta(minutes=30) == _SOURCE_LEASE
@@ -112,6 +117,7 @@ class _FakeTargon:
         self.message = message
         self.ready_replicas = ready_replicas
         self.total_replicas = total_replicas
+        self.log_tail = "kaniko: rustc oom"
         self.status_by_uid: dict[str, str] = {}
         self.created: list[dict[str, Any]] = []
         self.deployed: list[str] = []
@@ -138,7 +144,7 @@ class _FakeTargon:
 
     async def logs(self, uid: str, *, tail: int = 400) -> str:
         del uid, tail
-        return "kaniko: rustc oom"
+        return self.log_tail
 
     async def delete(self, uid: str) -> None:
         self.deleted.append(uid)
@@ -1207,6 +1213,7 @@ async def test_reaper_hands_dead_targon_kaniko_to_cloudrun(
         assert build.status == "running"
     targon.status = "error"
     targon.message = "Container failed (Error) — exit code 1"
+    targon.log_tail = "kaniko:\x00 rustc oom"
     assert await loop.tick() is True
     assert targon.deleted == ["wrk-1"]
     assert cloudrun.builds
@@ -1225,7 +1232,7 @@ async def test_reaper_hands_dead_targon_kaniko_to_cloudrun(
         assert attempt.failure_provider == "targon"
         assert attempt.failure_lane == "kaniko"
         assert "exit code 1" in (attempt.private_failure_detail or "")
-        assert attempt.private_failure_log_tail == "kaniko: rustc oom"
+        assert attempt.private_failure_log_tail == r"kaniko:\0 rustc oom"
         assert attempt.failure_captured_at is not None
 
 
