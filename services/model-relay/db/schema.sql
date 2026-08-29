@@ -58,6 +58,21 @@ CREATE TYPE public.ticketstatus AS ENUM (
 
 
 --
+-- Name: guard_coding_catalog_append_only(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.guard_coding_catalog_append_only() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+            RAISE EXCEPTION 'coding catalog ledgers are append-only'
+                USING ERRCODE = '23514',
+                      CONSTRAINT = 'coding_catalog_append_only_guard';
+        END;
+        $$;
+
+
+--
 -- Name: guard_confirmation_bundle_immutability(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -760,6 +775,86 @@ CREATE TABLE public.coding_capability_certifications (
     CONSTRAINT ck_coding_capability_certifications_coding_certificatio_ac37 CHECK ((screened_image_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT ck_coding_capability_certifications_coding_certificatio_d7e8 CHECK ((certification_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT ck_coding_capability_certifications_coding_certificatio_f820 CHECK (((status <> 'certified'::text) OR ((transcript_object_key IS NOT NULL) AND (frozen_submission_object_key IS NOT NULL))))
+);
+
+
+--
+-- Name: coding_catalog_exposures; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_catalog_exposures (
+    exposure_id uuid NOT NULL,
+    release_row_id uuid NOT NULL,
+    corpus_release_id text NOT NULL,
+    run_row_id uuid NOT NULL,
+    run_task_count integer NOT NULL,
+    manifest_index integer NOT NULL,
+    task_version_id text NOT NULL,
+    task_commitment_sha256 text NOT NULL,
+    selection_proof_sha256 text NOT NULL,
+    catalog_membership_proof_sha256 text NOT NULL,
+    visible_bundle_sha256 text NOT NULL,
+    base_tree_sha256 text NOT NULL,
+    memory_bundle_sha256 text NOT NULL,
+    environment_image_digest text NOT NULL,
+    resource_profile_sha256 text NOT NULL,
+    grader_bundle_sha256 text NOT NULL,
+    grader_image_digest text NOT NULL,
+    test_manifest_sha256 text NOT NULL,
+    grader_plan_sha256 text NOT NULL,
+    weight_eligible boolean NOT NULL,
+    exposed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_coding_catalog_exposures_coding_catalog_exposures_di_45af CHECK (((task_commitment_sha256 ~ '^[0-9a-f]{64}$'::text) AND (selection_proof_sha256 ~ '^[0-9a-f]{64}$'::text) AND (catalog_membership_proof_sha256 ~ '^[0-9a-f]{64}$'::text) AND (visible_bundle_sha256 ~ '^[0-9a-f]{64}$'::text) AND (base_tree_sha256 ~ '^[0-9a-f]{64}$'::text) AND (memory_bundle_sha256 ~ '^[0-9a-f]{64}$'::text) AND (resource_profile_sha256 ~ '^[0-9a-f]{64}$'::text) AND (grader_bundle_sha256 ~ '^[0-9a-f]{64}$'::text) AND (test_manifest_sha256 ~ '^[0-9a-f]{64}$'::text) AND (grader_plan_sha256 ~ '^[0-9a-f]{64}$'::text) AND (environment_image_digest ~ '^sha256:[0-9a-f]{64}$'::text) AND (grader_image_digest ~ '^sha256:[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_coding_catalog_exposures_coding_catalog_exposures_in_c022 CHECK ((((run_task_count >= 1) AND (run_task_count <= 100)) AND (manifest_index >= 0) AND (manifest_index < run_task_count))),
+    CONSTRAINT ck_coding_catalog_exposures_coding_catalog_exposures_ta_6a42 CHECK ((((octet_length(task_version_id) >= 1) AND (octet_length(task_version_id) <= 256)) AND (task_version_id !~ '[[:space:][:cntrl:]]'::text))),
+    CONSTRAINT ck_coding_catalog_exposures_coding_catalog_exposures_we_3e31 CHECK ((weight_eligible = false))
+);
+
+
+--
+-- Name: coding_catalog_releases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_catalog_releases (
+    release_row_id uuid NOT NULL,
+    corpus_release_id text NOT NULL,
+    coding_contract_version integer NOT NULL,
+    weight_eligible boolean NOT NULL,
+    catalog_merkle_root text NOT NULL,
+    selection_derivation_id text NOT NULL,
+    selection_chain_genesis_hash text NOT NULL,
+    grader_contract_sha256 text NOT NULL,
+    inference_grant_sha256 text NOT NULL,
+    task_version_count integer NOT NULL,
+    curator_hotkey text NOT NULL,
+    committed_at timestamp with time zone NOT NULL,
+    commitment_sha256 text NOT NULL,
+    commitment jsonb NOT NULL,
+    signature text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_coding_catalog_releases_coding_catalog_releases_audit_check CHECK (((length(TRIM(BOTH FROM reason)) >= 8) AND ((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120)))),
+    CONSTRAINT ck_coding_catalog_releases_coding_catalog_releases_cont_9be0 CHECK (((coding_contract_version = 1) AND (weight_eligible = false) AND ((task_version_count >= 1) AND (task_version_count <= 1000000)))),
+    CONSTRAINT ck_coding_catalog_releases_coding_catalog_releases_gene_5439 CHECK ((selection_chain_genesis_hash ~ '^0x[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_coding_catalog_releases_coding_catalog_releases_hashes_check CHECK (((catalog_merkle_root ~ '^[0-9a-f]{64}$'::text) AND (grader_contract_sha256 ~ '^[0-9a-f]{64}$'::text) AND (inference_grant_sha256 ~ '^[0-9a-f]{64}$'::text) AND (commitment_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_coding_catalog_releases_coding_catalog_releases_iden_ffb2 CHECK ((((octet_length(corpus_release_id) >= 1) AND (octet_length(corpus_release_id) <= 256)) AND ((octet_length(selection_derivation_id) >= 1) AND (octet_length(selection_derivation_id) <= 128)) AND (corpus_release_id !~ '[[:space:][:cntrl:]]'::text) AND (selection_derivation_id !~ '[[:space:][:cntrl:]]'::text))),
+    CONSTRAINT ck_coding_catalog_releases_coding_catalog_releases_sign_2efe CHECK (((curator_hotkey ~ '^[1-9A-HJ-NP-Za-km-z]{47,48}$'::text) AND (signature ~ '^[0-9a-f]{128}$'::text)))
+);
+
+
+--
+-- Name: coding_catalog_retirements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_catalog_retirements (
+    release_row_id uuid NOT NULL,
+    expected_commitment_sha256 text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    retired_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_coding_catalog_retirements_coding_catalog_retirement_2c73 CHECK (((length(TRIM(BOTH FROM reason)) >= 8) AND ((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120)))),
+    CONSTRAINT ck_coding_catalog_retirements_coding_catalog_retirement_ae46 CHECK ((expected_commitment_sha256 ~ '^[0-9a-f]{64}$'::text))
 );
 
 
@@ -3239,6 +3334,78 @@ ALTER TABLE ONLY public.coding_capability_certifications
 
 
 --
+-- Name: coding_catalog_exposures coding_catalog_exposures_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_catalog_exposures
+    ADD CONSTRAINT coding_catalog_exposures_pkey PRIMARY KEY (exposure_id);
+
+
+--
+-- Name: coding_catalog_exposures coding_catalog_exposures_run_index_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_catalog_exposures
+    ADD CONSTRAINT coding_catalog_exposures_run_index_key UNIQUE (run_row_id, manifest_index);
+
+
+--
+-- Name: coding_catalog_exposures coding_catalog_exposures_task_version_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_catalog_exposures
+    ADD CONSTRAINT coding_catalog_exposures_task_version_key UNIQUE (task_version_id);
+
+
+--
+-- Name: coding_catalog_releases coding_catalog_releases_commitment_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_catalog_releases
+    ADD CONSTRAINT coding_catalog_releases_commitment_sha256_key UNIQUE (commitment_sha256);
+
+
+--
+-- Name: coding_catalog_releases coding_catalog_releases_corpus_release_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_catalog_releases
+    ADD CONSTRAINT coding_catalog_releases_corpus_release_id_key UNIQUE (corpus_release_id);
+
+
+--
+-- Name: coding_catalog_releases coding_catalog_releases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_catalog_releases
+    ADD CONSTRAINT coding_catalog_releases_pkey PRIMARY KEY (release_row_id);
+
+
+--
+-- Name: coding_catalog_releases coding_catalog_releases_row_commitment_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_catalog_releases
+    ADD CONSTRAINT coding_catalog_releases_row_commitment_key UNIQUE (release_row_id, commitment_sha256);
+
+
+--
+-- Name: coding_catalog_releases coding_catalog_releases_row_corpus_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_catalog_releases
+    ADD CONSTRAINT coding_catalog_releases_row_corpus_key UNIQUE (release_row_id, corpus_release_id);
+
+
+--
+-- Name: coding_catalog_retirements coding_catalog_retirements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_catalog_retirements
+    ADD CONSTRAINT coding_catalog_retirements_pkey PRIMARY KEY (release_row_id);
+
+
+--
 -- Name: coding_capability_certifications coding_certifications_identity_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3276,6 +3443,14 @@ ALTER TABLE ONLY public.coding_shadow_runs
 
 ALTER TABLE ONLY public.coding_shadow_runs
     ADD CONSTRAINT coding_shadow_runs_pkey PRIMARY KEY (run_row_id);
+
+
+--
+-- Name: coding_shadow_runs coding_shadow_runs_run_corpus_task_count_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_runs
+    ADD CONSTRAINT coding_shadow_runs_run_corpus_task_count_key UNIQUE (run_row_id, corpus_release_id, task_count);
 
 
 --
@@ -4527,6 +4702,20 @@ CREATE UNIQUE INDEX burn_settings_scope_revision_idx ON public.burn_settings_rev
 
 
 --
+-- Name: coding_catalog_exposures_run_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_catalog_exposures_run_idx ON public.coding_catalog_exposures USING btree (run_row_id, manifest_index);
+
+
+--
+-- Name: coding_catalog_releases_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_catalog_releases_created_idx ON public.coding_catalog_releases USING btree (created_at);
+
+
+--
 -- Name: coding_certifications_active_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5171,6 +5360,27 @@ CREATE INDEX validator_tickets_provider_outage_idx ON public.validator_tickets U
 
 
 --
+-- Name: coding_catalog_exposures coding_catalog_exposures_append_only_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_catalog_exposures_append_only_guard BEFORE DELETE OR UPDATE ON public.coding_catalog_exposures FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_catalog_releases coding_catalog_releases_append_only_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_catalog_releases_append_only_guard BEFORE DELETE OR UPDATE ON public.coding_catalog_releases FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_catalog_retirements coding_catalog_retirements_append_only_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_catalog_retirements_append_only_guard BEFORE DELETE OR UPDATE ON public.coding_catalog_retirements FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
 -- Name: confirmation_bundles confirmation_bundles_immutability_guard; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -5249,6 +5459,30 @@ ALTER TABLE ONLY public.ath_reviews
 
 ALTER TABLE ONLY public.ath_reviews
     ADD CONSTRAINT ath_reviews_original_duplicate_of_fkey FOREIGN KEY (original_duplicate_of) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_catalog_exposures coding_catalog_exposures_release_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_catalog_exposures
+    ADD CONSTRAINT coding_catalog_exposures_release_fkey FOREIGN KEY (release_row_id, corpus_release_id) REFERENCES public.coding_catalog_releases(release_row_id, corpus_release_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_catalog_exposures coding_catalog_exposures_run_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_catalog_exposures
+    ADD CONSTRAINT coding_catalog_exposures_run_fkey FOREIGN KEY (run_row_id, corpus_release_id, run_task_count) REFERENCES public.coding_shadow_runs(run_row_id, corpus_release_id, task_count) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_catalog_retirements coding_catalog_retirements_release_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_catalog_retirements
+    ADD CONSTRAINT coding_catalog_retirements_release_fkey FOREIGN KEY (release_row_id, expected_commitment_sha256) REFERENCES public.coding_catalog_releases(release_row_id, commitment_sha256) ON DELETE RESTRICT;
 
 
 --

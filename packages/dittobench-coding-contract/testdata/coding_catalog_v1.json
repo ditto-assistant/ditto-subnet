@@ -1,0 +1,34 @@
+{
+  "commitment": {
+    "schema": "dittobench-coding-catalog-commitment-v1",
+    "coding_contract_version": 1,
+    "weight_eligible": false,
+    "corpus_release_id": "private-coding-corpus-v1",
+    "catalog_merkle_root": "1111111111111111111111111111111111111111111111111111111111111111",
+    "selection_derivation_id": "coding-selection-v1",
+    "selection_chain_genesis_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+    "grader_contract_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "inference_grant_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "task_version_count": 100,
+    "curator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "committed_at_unix": 1787310000,
+    "commitment_sha256": "91d814fed9dd71b90c77694d99b57242cb0cb65c606f0c546de785808431bf5f"
+  },
+  "signing_message_sha256": "c95ca6700783ee3dbf3d89dcec4bb940e792bdc9f858c76f75600007999b104c",
+  "exposure": {
+    "manifest_index": 0,
+    "task_version_id": "private-task-v1",
+    "task_commitment_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection_proof_sha256": "abababababababababababababababababababababababababababababababab",
+    "catalog_membership_proof_sha256": "acacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac",
+    "visible_bundle_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "base_tree_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "memory_bundle_sha256": "b943e6586a202b2ede36cee985e1ebb76d2dc0ab2734e30c174763f81bf51f53",
+    "environment_image_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "resource_profile_sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
+    "grader_bundle_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "grader_image_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "test_manifest_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "grader_plan_sha256": "cb517c8d7b85cfbe1277a78cf0124b0440544aae6b692ce78ff647b2b5570c3e"
+  }
+}

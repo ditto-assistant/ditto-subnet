@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -9,9 +10,14 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.coding_catalog import (
+    CodingCatalogCommitment,
+    CodingCatalogTaskExposure,
+)
 from ditto.api_models.coding_evaluation import (
     CodingRunEvidence,
     CodingShadowRunAuthority,
@@ -21,8 +27,18 @@ from ditto.api_models.core_qualification import CoreQualificationPolicy
 from ditto.db.models import (
     Agent,
     CodingCapabilityCertification,
+    CodingCatalogExposure,
+    CodingCatalogRelease,
     CodingShadowResult,
+    CodingShadowRun,
     CodingShadowTicket,
+)
+from ditto.db.queries.coding_catalog import (
+    CodingCatalogConflictError,
+    CodingCatalogInactiveError,
+    expose_coding_shadow_run_tasks,
+    insert_coding_catalog_release,
+    retire_coding_catalog_release,
 )
 from ditto.db.queries.coding_evaluations import (
     CodingShadowConflictError,
@@ -40,6 +56,76 @@ from ditto.db.queries.scores import MIN_ELIGIBLE_CASES, upsert_score
 _NOW = datetime(2026, 8, 21, 12, tzinfo=UTC)
 _BENCH = 12
 _VALIDATOR = "5" + "B" * 47
+
+
+def _catalog_commitment(
+    *,
+    corpus_release_id: str = "private-coding-corpus-v1",
+    committed_at_unix: int | None = None,
+) -> CodingCatalogCommitment:
+    values: dict[str, object] = {
+        "schema": "dittobench-coding-catalog-commitment-v1",
+        "coding_contract_version": 1,
+        "weight_eligible": False,
+        "corpus_release_id": corpus_release_id,
+        "catalog_merkle_root": "11" * 32,
+        "selection_derivation_id": "coding-selection-v1",
+        "selection_chain_genesis_hash": "0x" + "22" * 32,
+        "grader_contract_sha256": "99" * 32,
+        "inference_grant_sha256": "01" * 32,
+        "task_version_count": 100,
+        "curator_hotkey": "5" + "A" * 47,
+        "committed_at_unix": (
+            int(_NOW.timestamp()) if committed_at_unix is None else committed_at_unix
+        ),
+    }
+    body = (
+        json.dumps(values, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        + "\n"
+    ).encode()
+    values["commitment_sha256"] = hashlib.sha256(body).hexdigest()
+    return CodingCatalogCommitment.model_validate(values)
+
+
+def _task_exposure(
+    *,
+    task_version_id: str = "private-task-v1",
+    manifest_index: int = 0,
+) -> CodingCatalogTaskExposure:
+    return CodingCatalogTaskExposure(
+        manifest_index=manifest_index,
+        task_version_id=task_version_id,
+        task_commitment_sha256="aa" * 32,
+        selection_proof_sha256="ab" * 32,
+        catalog_membership_proof_sha256="ac" * 32,
+        visible_bundle_sha256="ee" * 32,
+        base_tree_sha256="ff" * 32,
+        memory_bundle_sha256=(
+            "b943e6586a202b2ede36cee985e1ebb76d2dc0ab2734e30c174763f81bf51f53"
+        ),
+        environment_image_digest="sha256:" + "11" * 32,
+        resource_profile_sha256=(
+            "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6"
+        ),
+        grader_bundle_sha256="33" * 32,
+        grader_image_digest="sha256:" + "44" * 32,
+        test_manifest_sha256="55" * 32,
+        grader_plan_sha256=(
+            "cb517c8d7b85cfbe1277a78cf0124b0440544aae6b692ce78ff647b2b5570c3e"
+        ),
+    )
+
+
+async def _seed_catalog(session: AsyncSession) -> datetime:
+    async with session.begin():
+        inserted = await insert_coding_catalog_release(
+            session,
+            commitment=_catalog_commitment(),
+            signature="88" * 64,
+            reason="register private shadow catalog",
+            actor="test-admin",
+        )
+    return inserted.row.created_at
 
 
 def _evidence(ticket_id) -> CodingRunEvidence:
@@ -84,7 +170,11 @@ def _authority(agent_id) -> CodingShadowRunAuthority:
     )
 
 
-async def _seed_qualified_agent(session: AsyncSession) -> Agent:
+async def _seed_qualified_agent(
+    session: AsyncSession,
+    *,
+    created_at: datetime = _NOW,
+) -> Agent:
     agent = Agent(
         agent_id=uuid4(),
         miner_hotkey="5CodingShadowMiner11111111111111111111111111111111",
@@ -98,7 +188,7 @@ async def _seed_qualified_agent(session: AsyncSession) -> Agent:
         screened_image_ref="ditto-screen/coding-shadow:latest",
         screened_image_upload_id=uuid4(),
         screened_image_verified_at=_NOW,
-        created_at=_NOW,
+        created_at=created_at,
     )
     async with session.begin():
         session.add(agent)
@@ -178,6 +268,7 @@ async def _seed_certification(session: AsyncSession, agent: Agent) -> None:
 
 
 async def test_run_requires_core_qualification(session: AsyncSession) -> None:
+    registered_at = await _seed_catalog(session)
     agent = Agent(
         agent_id=uuid4(),
         miner_hotkey="5UnqualifiedCodingMiner1111111111111111111111111111",
@@ -191,7 +282,7 @@ async def test_run_requires_core_qualification(session: AsyncSession) -> None:
         screened_image_ref="ditto-screen/unqualified-coding:latest",
         screened_image_upload_id=uuid4(),
         screened_image_verified_at=_NOW,
-        created_at=_NOW,
+        created_at=registered_at + timedelta(seconds=1),
     )
     async with session.begin():
         session.add(agent)
@@ -202,24 +293,81 @@ async def test_run_requires_core_qualification(session: AsyncSession) -> None:
             )
 
 
-async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
+async def test_run_requires_registered_active_catalog(session: AsyncSession) -> None:
+    agent = await _seed_qualified_agent(session)
+    with pytest.raises(CodingCatalogInactiveError, match="active catalog"):
+        async with session.begin():
+            await insert_coding_shadow_run(
+                session,
+                authority=_authority(agent.agent_id),
+            )
+
+
+async def test_catalog_commitment_must_predate_candidate_artifact(
     session: AsyncSession,
 ) -> None:
     agent = await _seed_qualified_agent(session)
+    commitment = _catalog_commitment(
+        corpus_release_id="late-private-coding-corpus-v1",
+        committed_at_unix=int(_NOW.timestamp()) + 1,
+    )
+    async with session.begin():
+        await insert_coding_catalog_release(
+            session,
+            commitment=commitment,
+            signature="88" * 64,
+            reason="register deliberately late catalog",
+            actor="test-admin",
+        )
+    authority_values = _authority(agent.agent_id).model_dump(mode="json", by_alias=True)
+    authority_values["corpus_release_id"] = commitment.corpus_release_id
+    late_authority = CodingShadowRunAuthority.model_validate(authority_values)
+    with pytest.raises(CodingCatalogInactiveError, match="predate"):
+        async with session.begin():
+            await insert_coding_shadow_run(session, authority=late_authority)
+
+
+async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
+    session: AsyncSession,
+) -> None:
+    registered_at = await _seed_catalog(session)
+    agent = await _seed_qualified_agent(
+        session,
+        created_at=registered_at + timedelta(seconds=1),
+    )
     await _seed_certification(session, agent)
     authority = _authority(agent.agent_id)
     async with session.begin():
         created = await insert_coding_shadow_run(session, authority=authority)
+        assert isinstance(created.row, CodingShadowRun)
+        run_row_id = created.row.run_row_id
     assert created.idempotent is False
     async with session.begin():
         replay = await insert_coding_shadow_run(session, authority=authority)
     assert replay.idempotent is True
 
     ticket_id = uuid4()
+    with pytest.raises(CodingShadowNotQualifiedError, match="catalog exposure"):
+        async with session.begin():
+            await issue_coding_shadow_ticket(
+                session,
+                run_row_id=run_row_id,
+                ticket_id=ticket_id,
+                validator_hotkey=_VALIDATOR,
+                issued_at=_NOW,
+                deadline=_NOW + timedelta(hours=1),
+            )
+    async with session.begin():
+        exposed = await expose_coding_shadow_run_tasks(
+            session,
+            run_row_id=run_row_id,
+            exposures=[_task_exposure()],
+        )
+    assert exposed.idempotent is False
     async with session.begin():
         issued = await issue_coding_shadow_ticket(
             session,
-            run_row_id=created.row.run_row_id,
+            run_row_id=run_row_id,
             ticket_id=ticket_id,
             validator_hotkey=_VALIDATOR,
             issued_at=_NOW,
@@ -230,7 +378,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
     async with session.begin():
         ticket_replay = await issue_coding_shadow_ticket(
             session,
-            run_row_id=created.row.run_row_id,
+            run_row_id=run_row_id,
             ticket_id=ticket_id,
             validator_hotkey=_VALIDATOR,
             issued_at=_NOW,
@@ -261,7 +409,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
         async with session.begin():
             await issue_coding_shadow_ticket(
                 session,
-                run_row_id=created.row.run_row_id,
+                run_row_id=run_row_id,
                 ticket_id=uuid4(),
                 validator_hotkey=_VALIDATOR,
                 issued_at=_NOW,
@@ -314,12 +462,157 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
                 signature="99" * 64,
             )
 
-    async with session.begin():
-        stored_agent = await session.get(Agent, authority.agent_id)
-        assert stored_agent is not None
-        await session.delete(stored_agent)
+    with pytest.raises(SAIntegrityError):
+        async with session.begin():
+            stored_agent = await session.get(Agent, authority.agent_id)
+            assert stored_agent is not None
+            await session.delete(stored_agent)
     async with session.begin():
         assert (
             await session.scalar(select(func.count()).select_from(CodingShadowResult))
+            == 1
+        )
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(CodingCatalogExposure)
+            )
+            == 1
+        )
+
+
+async def test_catalog_exposure_is_single_use_and_retirement_is_terminal(
+    session: AsyncSession,
+) -> None:
+    await _seed_catalog(session)
+    second_commitment = _catalog_commitment(
+        corpus_release_id="private-coding-corpus-v2",
+    )
+    async with session.begin():
+        second_catalog = await insert_coding_catalog_release(
+            session,
+            commitment=second_commitment,
+            signature="77" * 64,
+            reason="register successor private catalog",
+            actor="test-admin",
+        )
+    agent = await _seed_qualified_agent(
+        session,
+        created_at=second_catalog.row.created_at + timedelta(seconds=1),
+    )
+    authority = _authority(agent.agent_id)
+    async with session.begin():
+        first_run = await insert_coding_shadow_run(session, authority=authority)
+        assert isinstance(first_run.row, CodingShadowRun)
+        first_run_row_id = first_run.row.run_row_id
+        first_exposure = await expose_coding_shadow_run_tasks(
+            session,
+            run_row_id=first_run_row_id,
+            exposures=[_task_exposure()],
+        )
+    assert first_exposure.idempotent is False
+
+    # A catalog retirement eventually permits public corpus disclosure.  The
+    # task-version namespace is therefore global: changing the catalog release
+    # must not make an already exposed identifier eligible again.
+    second_catalog_authority = authority.model_copy(
+        update={
+            "coding_run_id": "coding-run-global-reuse-v2",
+            "corpus_release_id": second_commitment.corpus_release_id,
+            "catalog_merkle_root": second_commitment.catalog_merkle_root,
+            "task_set_id": "task-set-global-reuse-v2",
+            "task_set_manifest_sha256": "14" * 32,
+            "run_manifest_sha256": "15" * 32,
+        }
+    )
+    async with session.begin():
+        second_catalog_run = await insert_coding_shadow_run(
+            session,
+            authority=second_catalog_authority,
+        )
+        assert isinstance(second_catalog_run.row, CodingShadowRun)
+        second_catalog_run_row_id = second_catalog_run.row.run_row_id
+    with pytest.raises(CodingCatalogConflictError, match="already exposed"):
+        async with session.begin():
+            await expose_coding_shadow_run_tasks(
+                session,
+                run_row_id=second_catalog_run_row_id,
+                exposures=[_task_exposure()],
+            )
+
+    second_authority = authority.model_copy(
+        update={
+            "coding_run_id": "coding-run-002",
+            "task_set_id": "task-set-002",
+            "task_set_manifest_sha256": "12" * 32,
+            "run_manifest_sha256": "13" * 32,
+            "task_count": 2,
+        }
+    )
+    async with session.begin():
+        second_run = await insert_coding_shadow_run(
+            session,
+            authority=second_authority,
+        )
+        assert isinstance(second_run.row, CodingShadowRun)
+        second_run_row_id = second_run.row.run_row_id
+    with pytest.raises(CodingCatalogConflictError, match="already exposed"):
+        async with session.begin():
+            await expose_coding_shadow_run_tasks(
+                session,
+                run_row_id=second_run_row_id,
+                exposures=[
+                    _task_exposure(task_version_id="private-task-v2"),
+                    _task_exposure(manifest_index=1),
+                ],
+            )
+    async with session.begin():
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(CodingCatalogExposure)
+                .where(CodingCatalogExposure.run_row_id == second_run_row_id)
+            )
             == 0
         )
+
+    commitment = _catalog_commitment()
+    async with session.begin():
+        retired = await retire_coding_catalog_release(
+            session,
+            corpus_release_id=commitment.corpus_release_id,
+            expected_commitment_sha256=commitment.commitment_sha256,
+            reason="retire after shadow task exposure",
+            actor="test-admin",
+        )
+    assert retired.idempotent is False
+    async with session.begin():
+        replay = await expose_coding_shadow_run_tasks(
+            session,
+            run_row_id=first_run_row_id,
+            exposures=[_task_exposure()],
+        )
+    assert replay.idempotent is True
+    third_authority = second_authority.model_copy(
+        update={
+            "coding_run_id": "coding-run-003",
+            "task_set_id": "task-set-003",
+            "task_set_manifest_sha256": "14" * 32,
+            "run_manifest_sha256": "15" * 32,
+        }
+    )
+    with pytest.raises(CodingCatalogInactiveError, match="active catalog"):
+        async with session.begin():
+            await insert_coding_shadow_run(session, authority=third_authority)
+
+    with pytest.raises(SAIntegrityError, match="append-only"):
+        async with session.begin():
+            release = await session.scalar(select(CodingCatalogRelease))
+            assert release is not None
+            release.reason = "attempt to rewrite immutable registration"
+            await session.flush()
+    with pytest.raises(SAIntegrityError, match="append-only"):
+        async with session.begin():
+            exposure = await session.scalar(select(CodingCatalogExposure))
+            assert exposure is not None
+            await session.delete(exposure)
+            await session.flush()

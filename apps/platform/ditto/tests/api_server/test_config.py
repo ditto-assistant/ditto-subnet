@@ -47,6 +47,7 @@ def _set_minimum_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DITTO_TARGON_PUBLIC_PLATFORM_URL", raising=False)
     monkeypatch.delenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", raising=False)
     monkeypatch.delenv("DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("DITTO_CODING_CATALOG_CURATOR_HOTKEYS", raising=False)
 
 
 class TestParseApiServerConfigFromEnv:
@@ -74,6 +75,28 @@ class TestParseApiServerConfigFromEnv:
         assert config.inference_proxy.per_ticket_concurrency == 16
         assert config.inference_proxy.per_validator_concurrency == 48
         assert config.inference_proxy.global_concurrency == 96
+        assert config.coding_catalog_curator_hotkeys == ()
+
+    def test_coding_catalog_curator_allowlist_is_explicit_and_validated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        alice = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+        bob = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUSeHQwZqE4tHtqWv"
+        monkeypatch.setenv(
+            "DITTO_CODING_CATALOG_CURATOR_HOTKEYS",
+            f" {alice}, {bob} ",
+        )
+
+        config = parse_api_server_config_from_env(commit_hash="abc")
+
+        assert config.coding_catalog_curator_hotkeys == (alice, bob)
+        check_config(config)
+
+        with pytest.raises(ApiServerConfigError, match="duplicates"):
+            check_config(replace(config, coding_catalog_curator_hotkeys=(alice, alice)))
+        with pytest.raises(ApiServerConfigError, match="invalid SS58"):
+            check_config(replace(config, coding_catalog_curator_hotkeys=("invalid",)))
 
     def test_free_taostats_key_config_is_optional(
         self, monkeypatch: pytest.MonkeyPatch

@@ -63,6 +63,9 @@ import {
   batchRetryValidationInputSchema,
   agentScoringReadinessInputSchema,
   agentCodingCertificationInputSchema,
+  getCodingCatalogInputSchema,
+  registerCodingCatalogMcpInputSchema,
+  retireCodingCatalogInputSchema,
   agentCodingShadowEvaluationInputSchema,
   agentCoreQualificationInputSchema,
   getCoreQualificationPolicyInputSchema,
@@ -135,6 +138,9 @@ import {
   batchRetryValidation,
   fetchAgentScoringReadiness,
   fetchAgentCodingCertifications,
+  fetchCodingCatalogReleases,
+  registerCodingCatalogRelease,
+  retireCodingCatalogRelease,
   fetchAgentCodingShadowEvaluations,
   fetchAgentCoreQualification,
   fetchCoreQualificationPolicy,
@@ -225,6 +231,8 @@ export type BackroomEnv = {
 
 export const WRITE_TOOL_NAMES = new Set([
   'create_screener_bootstrap_grant',
+  'register_coding_catalog_release',
+  'retire_coding_catalog_release',
   'resolve_screening_quarantine',
   'resolve_screening_dispute',
   'rescreen_rejected_submission',
@@ -458,6 +466,12 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_screener_capacity:
     'Read screener capacity, provider priorities, and recent build, runtime, and source-review jobs before manual retry.',
+  get_coding_catalog_releases:
+    'Read signed shadow catalog commitments, retirement, and exposure counts.',
+  register_coding_catalog_release:
+    'Register one curator-signed, weight-zero catalog commitment.',
+  retire_coding_catalog_release:
+    'Irreversibly retire a shadow catalog commitment after review.',
   get_agent_coding_shadow_evaluations:
     'Read separate weight-zero coding runs, leases, and repair outcomes.',
   create_screener_bootstrap_grant:
@@ -1280,6 +1294,42 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchAgentCodingCertifications(input)),
+  )
+
+  registerTool(
+    'get_coding_catalog_releases',
+    {
+      title: 'Get shadow coding catalogs',
+      description:
+        'Read signed coding catalog commitments, retirement state, and bounded exposure/run counts. This never returns private task identities, repository bytes, memory mappings, hidden tests, or reference patches.',
+      inputSchema: getCodingCatalogInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchCodingCatalogReleases(input)),
+  )
+
+  registerTool(
+    'register_coding_catalog_release',
+    {
+      title: 'Register shadow coding catalog',
+      description:
+        'Append one curator-signed coding contract v1 catalog commitment after offline review. Requires reason and REGISTER SHADOW CODING CATALOG {corpus_release_id}. The commitment remains weight-ineligible and contains no private task bytes.',
+      inputSchema: registerCodingCatalogMcpInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => registerCodingCatalogRelease(input, props.session.email)),
+  )
+
+  registerTool(
+    'retire_coding_catalog_release',
+    {
+      title: 'Retire shadow coding catalog',
+      description:
+        'Irreversibly stop new runs, exposures, and tickets for one exact catalog commitment. Existing immutable evidence stays readable and issued work may settle. Requires reason and RETIRE SHADOW CODING CATALOG {corpus_release_id}.',
+      inputSchema: retireCodingCatalogInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => retireCodingCatalogRelease(input, props.session.email)),
   )
 
   registerTool(

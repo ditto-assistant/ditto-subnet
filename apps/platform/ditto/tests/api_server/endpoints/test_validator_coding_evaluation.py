@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
@@ -17,6 +18,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.coding_catalog import (
+    CodingCatalogCommitment,
+    CodingCatalogTaskExposure,
+)
 from ditto.api_models.coding_evaluation import (
     CodingRunEvidence,
     CodingShadowRunAuthority,
@@ -32,6 +37,10 @@ from ditto.db.models import (
     CodingShadowResult,
     CodingShadowTicket,
     Score,
+)
+from ditto.db.queries.coding_catalog import (
+    expose_coding_shadow_run_tasks,
+    insert_coding_catalog_release,
 )
 from ditto.db.queries.coding_evaluations import (
     insert_coding_shadow_result,
@@ -49,6 +58,54 @@ _BENCH = 12
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
 _VALIDATOR = _KEYPAIR.ss58_address
 _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
+
+
+def _catalog_commitment() -> CodingCatalogCommitment:
+    values: dict[str, object] = {
+        "schema": "dittobench-coding-catalog-commitment-v1",
+        "coding_contract_version": 1,
+        "weight_eligible": False,
+        "corpus_release_id": "private-coding-corpus-v1",
+        "catalog_merkle_root": "11" * 32,
+        "selection_derivation_id": "coding-selection-v1",
+        "selection_chain_genesis_hash": "0x" + "22" * 32,
+        "grader_contract_sha256": "99" * 32,
+        "inference_grant_sha256": "01" * 32,
+        "task_version_count": 100,
+        "curator_hotkey": _VALIDATOR,
+        "committed_at_unix": int(_NOW.timestamp()),
+    }
+    body = (
+        json.dumps(values, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        + "\n"
+    ).encode()
+    values["commitment_sha256"] = hashlib.sha256(body).hexdigest()
+    return CodingCatalogCommitment.model_validate(values)
+
+
+def _task_exposure() -> CodingCatalogTaskExposure:
+    return CodingCatalogTaskExposure(
+        manifest_index=0,
+        task_version_id="private-task-v1",
+        task_commitment_sha256="aa" * 32,
+        selection_proof_sha256="ab" * 32,
+        catalog_membership_proof_sha256="ac" * 32,
+        visible_bundle_sha256="ee" * 32,
+        base_tree_sha256="ff" * 32,
+        memory_bundle_sha256=(
+            "b943e6586a202b2ede36cee985e1ebb76d2dc0ab2734e30c174763f81bf51f53"
+        ),
+        environment_image_digest="sha256:" + "11" * 32,
+        resource_profile_sha256=(
+            "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6"
+        ),
+        grader_bundle_sha256="33" * 32,
+        grader_image_digest="sha256:" + "44" * 32,
+        test_manifest_sha256="55" * 32,
+        grader_plan_sha256=(
+            "cb517c8d7b85cfbe1277a78cf0124b0440544aae6b692ce78ff647b2b5570c3e"
+        ),
+    )
 
 
 def _evidence(ticket_id) -> CodingRunEvidence:
@@ -133,6 +190,15 @@ async def _seed(
     ticket_id = uuid4()
     deadline = _NOW + timedelta(hours=1)
     async with maker() as session, session.begin():
+        await insert_coding_catalog_release(
+            session,
+            commitment=_catalog_commitment(),
+            signature="88" * 64,
+            reason="register endpoint shadow catalog",
+            actor="test-admin",
+        )
+    agent_created_at = datetime.now(UTC)
+    async with maker() as session, session.begin():
         session.add(
             Agent(
                 agent_id=agent_id,
@@ -147,7 +213,7 @@ async def _seed(
                 screened_image_ref="ditto-screen/coding-endpoint:latest",
                 screened_image_upload_id=uuid4(),
                 screened_image_verified_at=_NOW,
-                created_at=_NOW,
+                created_at=agent_created_at,
             )
         )
         await insert_core_qualification_policy(
@@ -222,6 +288,11 @@ async def _seed(
         run = await insert_coding_shadow_run(
             session,
             authority=_authority(agent_id),
+        )
+        await expose_coding_shadow_run_tasks(
+            session,
+            run_row_id=run.row.run_row_id,
+            exposures=[_task_exposure()],
         )
         ticket = await issue_coding_shadow_ticket(
             session,
