@@ -445,6 +445,7 @@ async def test_remote_build_gets_full_timeout_despite_stale_local_override(
     worker = _worker(
         make_config(
             build_timeout_seconds=1200,
+            remote_build_mode="prefer",
             remote_build_timeout_seconds=1500,
         ),
         platform,

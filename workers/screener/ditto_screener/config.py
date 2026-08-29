@@ -180,13 +180,13 @@ class ScreenerConfig:
     l2_audit_retention_days: int
     review_settings_cache_file: str
     review_settings_max_stale_seconds: int
-    remote_build_mode: str = "prefer"
-    """How the gate uses Targon Kaniko + runtime smoke.
+    remote_build_mode: str = "off"
+    """How the gate uses a prebuilt image archive.
 
-    ``prefer`` tries the attempt-bound remote archive before local Docker.
-    ``require`` never builds or loads on the worker: screening reads the
-    source tarball and reuses the already-smoked Targon rental. ``off``
-    keeps the historical local Docker path.
+    Production workers use ``off`` so the leased screener performs the build
+    and smoke locally. ``prefer`` and ``require`` remain protocol-compatible
+    for explicit decomposed-lane tests, but must never be an implicit worker
+    default.
     """
     remote_build_timeout_seconds: float = 1500.0
     """Maximum time to wait for a Targon Kaniko submission build.
@@ -413,7 +413,7 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         review_settings_max_stale_seconds=_parse_int(
             "SCREENER_REVIEW_SETTINGS_MAX_STALE_SECONDS", "900"
         ),
-        remote_build_mode=os.environ.get("SCREENER_REMOTE_BUILD_MODE", "prefer"),
+        remote_build_mode=os.environ.get("SCREENER_REMOTE_BUILD_MODE", "off"),
         remote_build_timeout_seconds=_parse_float(
             "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS", "1500"
         ),
