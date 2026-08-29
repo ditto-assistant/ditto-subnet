@@ -208,7 +208,7 @@ configure_docker_endpoint() {
 }
 
 probe_platform() {
-  local platform_url api_token hotkey response required supported
+  local platform_url api_token hotkey response required supported floor
   platform_url="$(env_value SCREENER_PLATFORM_API_URL)"
   api_token="$(env_value SCREENER_API_TOKEN)"
   hotkey="$(env_value SCREENER_HOTKEY)"
@@ -224,10 +224,11 @@ CURL_CONFIG
   )"
   required="$(printf '%s' "$response" | "$venv/bin/python" -c \
     'import json,sys; print(json.load(sys.stdin)["required_policy_version"])')"
-  supported="$(runuser -u "$SCREENER_USER" -- "$venv/bin/python" -c \
-    'from ditto_screening_protocol import SCREENING_POLICY_VERSION; print(SCREENING_POLICY_VERSION)')"
-  if [[ "$required" != "$supported" ]]; then
-    echo "screening policy mismatch: platform requires $required, worker supports $supported" >&2
+  read -r floor supported < <(runuser -u "$SCREENER_USER" -- \
+    "$venv/bin/python" -c \
+    'from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION, SCREENING_POLICY_VERSION; print(SCREENING_FLOOR_POLICY_VERSION, SCREENING_POLICY_VERSION)')
+  if (( required < floor || required > supported )); then
+    echo "screening policy mismatch: platform requires $required, worker supports $floor-$supported" >&2
     return 1
   fi
 }
@@ -530,8 +531,6 @@ if ! wait_for_health; then
   ensure_l2_analyzer "$current_sha"
   if [[ "$unit_existed" == true ]]; then
     install -o root -g root -m 0644 "$unit_backup" "$unit_file"
-  else
-    rm -f "$unit_file"
   fi
   systemctl daemon-reload
   systemctl restart "$SCREENER_UNIT"
