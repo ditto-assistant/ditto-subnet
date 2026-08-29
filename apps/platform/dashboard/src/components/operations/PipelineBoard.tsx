@@ -18,6 +18,7 @@ import {
   AdmissionStepTrack,
   BenchmarkProgressView,
   PipelineScreenerProgressView,
+  ReviewStageLadder,
   admissionSteps,
   screenerStageLabel,
 } from "./progress";
@@ -215,6 +216,10 @@ function PipelineCard(props: {
           stage={screener()?.screening_progress?.stage ?? null}
           waiting={entry().status === "waiting_screening"}
         />
+        {/* Source review is one segment of the track above and most of its
+            wall-clock; the ladder opens that segment into the four stages
+            the screener actually runs. */}
+        <ReviewStageLadder stage={screener()?.screening_progress?.stage ?? null} />
       </Show>
       <Show when={isUpNext() || queueGate() || rolloutPosition() || rescore()?.isQualification}>
         <span class="pipeline-item-badges">
@@ -264,7 +269,10 @@ function PipelineCard(props: {
       <Show when={provisionalScore()}>
         <span class="pipeline-item-priority-detail">{provisionalScore()}</span>
       </Show>
-      <Show when={admissionLabel()}>
+      {/* One stage line per card: when a screener is reporting, the progress
+          view below says the same thing plus how long it has been there, so
+          rendering this too printed the stage twice. */}
+      <Show when={admissionLabel() && !screener()?.screening_progress}>
         <span class="pipeline-admission-state">{admissionLabel()}</span>
       </Show>
       <Show when={policyLabel()}>

@@ -347,10 +347,37 @@ describe("screening cross-feed and policy labels", () => {
     expect(card?.querySelector(".screener-progress-stage")?.textContent).toContain(
       "L1 source review · 40%",
     );
-    expect(card?.querySelector(".pipeline-admission-state")?.textContent).toBe(
-      "L1 source review · 40%",
-    );
+    // The progress line already carries the stage plus its elapsed time; the
+    // state line above it must not print the same string a second time.
+    expect(card?.querySelector(".pipeline-admission-state")).toBeNull();
     expect(card?.getAttribute("aria-label")).toContain("L1 source review · 40%");
+    // Source review is one segment of the track, so the card opens it into
+    // the four stages the screener runs.
+    const ladder = card?.querySelector(".review-ladder");
+    expect(ladder).toHaveAttribute("aria-label", "Source review stage 1 of 4: L1 source review");
+    expect(ladder?.querySelectorAll(".review-rung")).toHaveLength(4);
+  });
+
+  it("shows no review ladder for a card that is not in source review", () => {
+    const screeners: FleetReport = {
+      screeners: [
+        {
+          screener_hotkey: "5S",
+          instance_id: "screener-1",
+          active_agent_id: "in-screening",
+          screening_progress: { stage: "building", started_at: "2026-07-31T13:58:00Z" },
+        },
+      ],
+    };
+    const container = board([waiting({ agent_id: "in-screening", status: "screening" })], {
+      statusCounts: { screening: 1 },
+      screeners,
+    });
+    const card = container.querySelector("#pipeline-admission .pipeline-item");
+    expect(card?.querySelector(".review-ladder")).toBeNull();
+    expect(card?.querySelector(".screener-progress-stage")?.textContent).toContain(
+      "Building image",
+    );
   });
 
   it("derives the policy rescreen labels from public activity state", () => {

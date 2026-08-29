@@ -9,10 +9,12 @@ import {
   AdmissionStepTrack,
   BenchmarkProgressView,
   ElapsedTime,
+  ReviewStageLadder,
   admissionStepKey,
   admissionSteps,
   benchmarkProgressText,
   benchmarkStageLabel,
+  reviewStageIndex,
   screenerStageLabel,
 } from "./progress";
 
@@ -143,16 +145,73 @@ describe("BenchmarkProgressView", () => {
 });
 
 describe("screenerStageLabel", () => {
-  it("maps the L1/L2-L3 source review percentage bands", () => {
+  it("gives L1 the 0-50 band with its own percentage", () => {
+    expect(screenerStageLabel("source_review_0")).toBe("L1 source review · 0%");
     expect(screenerStageLabel("source_review_20")).toBe("L1 source review · 40%");
     expect(screenerStageLabel("source_review_50")).toBe("L1 source review · 100%");
-    expect(screenerStageLabel("source_review_80")).toBe("L2/L3 deep review · 60%");
+  });
+
+  it("names each escalation stage instead of one deep-review band", () => {
+    // A card sat at "L1 · 100%" for the whole escalation before this: L2, L3
+    // and adjudication each own a bucket and must say which one is running.
+    expect(screenerStageLabel("source_review_60")).toBe("L2 cause analysis");
+    expect(screenerStageLabel("source_review_70")).toBe("L2 cause analysis");
+    expect(screenerStageLabel("source_review_80")).toBe("L3 safety review");
+    expect(screenerStageLabel("source_review_90")).toBe("L4 final adjudication");
+    expect(screenerStageLabel("source_review_100")).toBe("Source review complete");
   });
 
   it("names the container stages with a generic fallback", () => {
     expect(screenerStageLabel("building")).toBe("Building image");
     expect(screenerStageLabel("health_check")).toBe("Checking health");
     expect(screenerStageLabel("anything-else")).toBe("Screening");
+  });
+});
+
+describe("source review ladder", () => {
+  it("places every review bucket on one of the four stages", () => {
+    expect(reviewStageIndex("source_review_0")).toBe(0);
+    expect(reviewStageIndex("source_review_50")).toBe(0);
+    expect(reviewStageIndex("source_review_60")).toBe(1);
+    expect(reviewStageIndex("source_review_70")).toBe(1);
+    expect(reviewStageIndex("source_review_80")).toBe(2);
+    expect(reviewStageIndex("source_review_90")).toBe(3);
+    // Past the last stage: every rung done, none current.
+    expect(reviewStageIndex("source_review_100")).toBe(4);
+    // Not in source review at all is an absence, never stage 1.
+    expect(reviewStageIndex("building")).toBeNull();
+    expect(reviewStageIndex(null)).toBeNull();
+  });
+
+  it("marks done, current and pending rungs for a live review stage", () => {
+    const { container } = render(() => <ReviewStageLadder stage="source_review_80" />);
+    const ladder = container.querySelector(".review-ladder") as HTMLElement;
+    expect(ladder).toHaveAttribute("aria-label", "Source review stage 3 of 4: L3 safety review");
+    expect(Array.from(ladder.querySelectorAll(".review-rung"), (el) => el.className)).toEqual([
+      "review-rung done",
+      "review-rung done",
+      "review-rung current",
+      "review-rung",
+    ]);
+    expect(Array.from(ladder.querySelectorAll(".review-rung b"), (el) => el.textContent)).toEqual([
+      "L1",
+      "L2",
+      "L3",
+      "L4",
+    ]);
+  });
+
+  it("fills every rung once review completes, with none current", () => {
+    const { container } = render(() => <ReviewStageLadder stage="source_review_100" />);
+    const ladder = container.querySelector(".review-ladder") as HTMLElement;
+    expect(ladder).toHaveAttribute("aria-label", "Source review complete · all 4 stages done");
+    expect(ladder.querySelectorAll(".review-rung.done")).toHaveLength(4);
+    expect(ladder.querySelector(".review-rung.current")).toBeNull();
+  });
+
+  it("renders nothing outside source review", () => {
+    const { container } = render(() => <ReviewStageLadder stage="building" />);
+    expect(container.querySelector(".review-ladder")).toBeNull();
   });
 });
 
