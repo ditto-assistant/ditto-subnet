@@ -18053,24 +18053,24 @@ export interface components {
             /**
              * Build Provider Priority
              * @default [
-             *       "targon",
-             *       "gcp"
+             *       "gcp",
+             *       "targon"
              *     ]
              */
             build_provider_priority: ("targon" | "gcp")[];
             /**
              * Runtime Provider Priority
              * @default [
-             *       "targon",
-             *       "gcp"
+             *       "gcp",
+             *       "targon"
              *     ]
              */
             runtime_provider_priority: ("targon" | "gcp")[];
             /**
              * Source Review Provider Priority
              * @default [
-             *       "targon",
-             *       "gcp"
+             *       "gcp",
+             *       "targon"
              *     ]
              */
             source_review_provider_priority: ("targon" | "gcp")[];

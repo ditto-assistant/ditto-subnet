@@ -53,6 +53,9 @@ from ditto.db.queries.provider_outages import (
     lock_provider_work_gate,
     register_provider_probe,
 )
+from ditto.db.queries.screener_provider_settings import (
+    resolve_screener_provider_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -377,17 +380,24 @@ class TargonRentalLoop:
                 return provider
         return self._providers[0]
 
-    def _build_providers(
-        self, pinned_provider: str | None
+    async def _lane_providers(
+        self, lane: str, pinned_provider: str | None
     ) -> list[ScreeningComputeProvider]:
-        """Try each configured provider once, preserving an explicit reaper pin."""
-        if pinned_provider is None:
-            return list(self._providers)
-        return [
-            provider
-            for provider in self._providers
-            if provider.stored_provider == pinned_provider
-        ]
+        """Resolve the live ordered provider list for one decomposed lane."""
+        by_name = {provider.stored_provider: provider for provider in self._providers}
+        if pinned_provider is not None:
+            provider = by_name.get(pinned_provider)
+            return [provider] if provider is not None else []
+        async with self._session_maker() as session:
+            _, settings = await resolve_screener_provider_settings(
+                session, environment=self._config.environment
+            )
+        priorities = {
+            "build": settings.build_provider_priority,
+            "runtime": settings.runtime_provider_priority,
+            "review": settings.source_review_provider_priority,
+        }[lane]
+        return [by_name[name] for name in priorities if name in by_name]
 
     def _smoke_wait_seconds(self, provider: ScreeningComputeProvider) -> float:
         if provider.name == "targon":
@@ -539,11 +549,12 @@ class TargonRentalLoop:
             if row is None:
                 return False
             token = secrets.token_urlsafe(48)
+            token_hash = hashlib.sha256(token.encode()).hexdigest()
             row.status = "leased"
             row.controller_epoch = self._epoch
             row.lease_expires_at = now + _BUILD_LEASE
             row.attempt_count += 1
-            row.job_token_hash = hashlib.sha256(token.encode()).hexdigest()
+            row.job_token_hash = token_hash
             row.job_token_expires_at = now + _JOB_TTL
             row.updated_at = now
             build_id = row.build_id
@@ -565,7 +576,7 @@ class TargonRentalLoop:
             ),
         )
         error_code = "TARGON_SUBMISSION_PROVIDER_ERROR"
-        for provider in self._build_providers(pinned_provider):
+        for provider in await self._lane_providers("build", pinned_provider):
             if skip_targon and provider.stored_provider == "targon":
                 continue
             if not await self._provider_has_capacity(provider):
@@ -573,20 +584,35 @@ class TargonRentalLoop:
             uid: str | None = None
             try:
                 uid = await provider.create_build(spec)
+                launch_active = False
                 async with self._session_maker() as session, session.begin():
-                    stored = await session.get(SubmissionImageBuild, build_id)
-                    if stored is not None:
+                    stored = await session.get(
+                        SubmissionImageBuild, build_id, with_for_update=True
+                    )
+                    if (
+                        stored is not None
+                        and stored.status == "leased"
+                        and stored.controller_epoch == self._epoch
+                        and stored.job_token_hash == token_hash
+                        and stored.provider_resource_id is None
+                    ):
                         stored.status = "running"
                         stored.provider = provider.stored_provider
                         stored.provider_resource_id = uid
+                        stored.error_code = None
                         stored.updated_at = datetime.now(UTC)
-                await provider.start(uid)
-                provisioned = await provider.wait_until_running(
-                    uid, self._config.provision_timeout_seconds
-                )
-                if provisioned == "running":
+                        launch_active = True
+                if not launch_active:
+                    # The GCE worker can cancel while provider creation is in
+                    # flight. Never resurrect that row or start a job whose
+                    # capability was revoked by the cancellation.
+                    await provider.delete(uid)
                     return True
-                error_code = await self._dead_replica_code(provider, uid, provisioned)
+                await provider.start(uid)
+                # Provisioning is observed by the next rental-loop tick. Waiting
+                # here serializes every build, runtime, review, and reaper lane
+                # behind one slow Targon rental for up to ten minutes.
+                return True
             except ScreeningProviderError:
                 logger.exception(
                     "%s kaniko launch failed build_id=%s", provider.name, build_id
@@ -674,7 +700,7 @@ class TargonRentalLoop:
         last_uid: str | None = None
         last_provider: ScreeningComputeProvider | None = None
         healthy = False
-        for provider in self._providers:
+        for provider in await self._lane_providers("runtime", None):
             if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None
@@ -830,6 +856,7 @@ class TargonRentalLoop:
             if row is None:
                 return False
             token = secrets.token_urlsafe(48)
+            token_hash = hashlib.sha256(token.encode()).hexdigest()
             row.status = "leased"
             row.controller_epoch = self._epoch
             row.lease_expires_at = now + _SOURCE_LEASE
@@ -839,7 +866,7 @@ class TargonRentalLoop:
             else:
                 row.provider_outage_attempted_epoch = parked_epoch
             row.provider_outage_epoch = None
-            row.job_token_hash = hashlib.sha256(token.encode()).hexdigest()
+            row.job_token_hash = token_hash
             row.job_token_expires_at = now + _JOB_TTL
             row.updated_at = now
             review_id = row.review_id
@@ -851,6 +878,7 @@ class TargonRentalLoop:
             )
             attempt_id = row.attempt_id
             artifact_sha256 = row.artifact_sha256
+            pinned_provider = row.provider
             settings_row = await session.scalar(
                 select(ScreenerReviewSettingsRevision)
                 .where(ScreenerReviewSettingsRevision.scope == "*")
@@ -892,26 +920,37 @@ class TargonRentalLoop:
             args=("ditto_screener.source_review_job",),
         )
         error_code = "TARGON_SOURCE_REVIEW_PROVIDER_ERROR"
-        for provider in self._providers:
+        for provider in await self._lane_providers("review", pinned_provider):
             if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None
             try:
                 uid = await provider.create_source_review(spec)
+                launch_active = False
                 async with self._session_maker() as session, session.begin():
-                    stored = await session.get(SubmissionSourceReview, review_id)
-                    if stored is not None:
+                    stored = await session.get(
+                        SubmissionSourceReview, review_id, with_for_update=True
+                    )
+                    if (
+                        stored is not None
+                        and stored.status == "leased"
+                        and stored.controller_epoch == self._epoch
+                        and stored.job_token_hash == token_hash
+                        and stored.provider_resource_id is None
+                    ):
                         stored.status = "running"
                         stored.provider = provider.stored_provider
                         stored.provider_resource_id = uid
+                        stored.error_code = None
                         stored.updated_at = datetime.now(UTC)
-                await provider.start(uid)
-                provisioned = await provider.wait_until_running(
-                    uid, self._config.provision_timeout_seconds
-                )
-                if provisioned == "running":
+                        launch_active = True
+                if not launch_active:
+                    await provider.delete(uid)
                     return True
-                error_code = await self._dead_replica_code(provider, uid, provisioned)
+                await provider.start(uid)
+                # The reaper observes progress and performs any provider
+                # fallback without blocking the other screening lanes.
+                return True
             except ScreeningProviderError:
                 logger.exception(
                     "%s source-review launch failed review_id=%s",
@@ -964,6 +1003,42 @@ class TargonRentalLoop:
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
             stored = await session.get(SubmissionImageBuild, build_id)
+            attempt = (
+                await session.get(ScreeningAttempt, stored.attempt_id)
+                if stored is not None
+                else None
+            )
+            if (
+                stored is None
+                or attempt is None
+                or stored.status not in _INFLIGHT_JOB
+                or stored.provider != "targon"
+                or attempt.status != "running"
+                or attempt.deadline <= now
+            ):
+                return False
+            stored.status = "queued"
+            stored.provider = "gcp"
+            stored.provider_resource_id = None
+            stored.error_code = error_code
+            stored.controller_epoch = None
+            stored.lease_expires_at = None
+            stored.job_token_hash = None
+            stored.job_token_expires_at = None
+            stored.completed_at = None
+            stored.updated_at = now
+        return True
+
+    async def _requeue_review_for_cloudrun(
+        self, review_id: UUID, error_code: str
+    ) -> bool:
+        if error_code not in _TARGON_BUILD_FALLBACK_CODES:
+            return False
+        if not any(provider.stored_provider == "gcp" for provider in self._providers):
+            return False
+        now = datetime.now(UTC)
+        async with self._session_maker() as session, session.begin():
+            stored = await session.get(SubmissionSourceReview, review_id)
             attempt = (
                 await session.get(ScreeningAttempt, stored.attempt_id)
                 if stored is not None
@@ -1354,6 +1429,15 @@ class TargonRentalLoop:
             ):
                 await provider.delete(uid)
                 if await self._requeue_build_for_cloudrun(row_id, error_code):
+                    handled = True
+                    continue
+            if (
+                kind == "review"
+                and provider.stored_provider == "targon"
+                and await self._cloudrun_fallback_available()
+            ):
+                await provider.delete(uid)
+                if await self._requeue_review_for_cloudrun(row_id, error_code):
                     handled = True
                     continue
             if kind == "build":

@@ -68,8 +68,8 @@ _CLOUDRUN_RUNTIME_PROVISION_CODES = frozenset(
 )
 
 
-def _targon_first(providers: tuple[str, ...]) -> bool:
-    return bool(providers) and providers[0] == "targon"
+def _remote_lane_enabled(providers: tuple[str, ...]) -> bool:
+    return bool(providers)
 
 
 def _certified_low_risk(observation: SourceReviewObservationPayload | None) -> bool:
@@ -190,7 +190,7 @@ async def admit_targon_screening_work(
     _, provider_settings = await resolve_screener_provider_settings(
         session, environment=environment
     )
-    if not _targon_first(provider_settings.build_provider_priority):
+    if not _remote_lane_enabled(provider_settings.build_provider_priority):
         return 0
     queue_settings = await resolve_queue_policy_settings(session)
     claimed = await claim_screening_attempts(
@@ -203,7 +203,7 @@ async def admit_targon_screening_work(
         deferred_review_mode=queue_settings.deferred_source_review.mode,
     )
     admitted = 0
-    runtime_enabled = _targon_first(provider_settings.runtime_provider_priority)
+    runtime_enabled = _remote_lane_enabled(provider_settings.runtime_provider_priority)
     for agent, attempt, duplicate_of in claimed:
         if duplicate_of is not None:
             attempt.status = "rejected"
