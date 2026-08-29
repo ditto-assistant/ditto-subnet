@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.143.3 (2026-08-29)
+
+### Bug Fixes
+
+- **scoring**: Leave structured-output recovery to miners
+  ([#1308](https://github.com/ditto-assistant/ditto-subnet/pull/1308),
+  [`a1f5e9c`](https://github.com/ditto-assistant/ditto-subnet/commit/a1f5e9c88e6ed8adf1387058d7ad302edbbb3678))
+
+
 ## v0.143.2 (2026-08-29)
 
 ### Bug Fixes
