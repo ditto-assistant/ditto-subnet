@@ -1675,6 +1675,7 @@ class IsolatedCodingHarness:
             timeout = min(timeout, remaining)
         source = str(workspace.resolve())
         container_user = f"{os.getuid()}:{os.getgid()}"
+        process_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
         if self._rootless_docker_host is not None:
             _share_workspace_with_rootless_daemon(
                 workspace, docker_host=self._rootless_docker_host
@@ -1683,6 +1684,10 @@ class IsolatedCodingHarness:
             # daemon user. The worker's host uid instead maps to a subordinate
             # uid which cannot traverse the private extracted workspace.
             container_user = "0:0"
+            # Keep the subprocess environment scrubbed, but retain the one
+            # validated endpoint required to avoid falling back to the host's
+            # rootful daemon. This URI is not a credential.
+            process_env["DOCKER_HOST"] = self._rootless_docker_host
         args = [
             self._docker_bin,
             "run",
@@ -1715,7 +1720,7 @@ class IsolatedCodingHarness:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+            env=process_env,
         )
         encoded = json.dumps(arguments, sort_keys=True, separators=(",", ":")).encode()
         try:
