@@ -137,6 +137,108 @@ async def test_coding_certification_client_posts_exact_signed_envelope() -> None
     assert response.accepted is True
 
 
+def _coding_certification_submit_args() -> tuple[
+    UUID, int, datetime, str, CodingCapabilityCertificationReceipt, str
+]:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("11111111-1111-4111-8111-111111111111")
+    vector = json.loads(
+        (
+            Path(__file__).parents[3]
+            / "packages"
+            / "dittobench-coding-contract"
+            / "testdata"
+            / "coding_certification_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    receipt = CodingCapabilityCertificationReceipt.model_validate_json(
+        json.dumps(vector["receipt"])
+    )
+    expected = vector["expected"]
+    deadline = datetime.fromisoformat(expected["ticket_deadline"])
+    signature = sign_coding_certification(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        agent_id=agent_id,
+        bench_version=expected["bench_version"],
+        ticket_deadline=deadline,
+        screened_image_sha256=expected["screened_image_sha256"],
+        receipt=receipt,
+    )
+    return (
+        agent_id,
+        expected["bench_version"],
+        deadline,
+        expected["screened_image_sha256"],
+        receipt,
+        signature,
+    )
+
+
+async def test_submit_coding_certification_parks_502_as_infrastructure() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id, bench_version, deadline, image, receipt, signature = (
+        _coding_certification_submit_args()
+    )
+    attempts = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(502, text="")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(
+            PlatformInfrastructureError,
+            match="coding certification rejected \\(502\\)",
+        ):
+            await PlatformClient(
+                cast(Any, config), http, keypair
+            ).submit_coding_certification(
+                agent_id,
+                bench_version=bench_version,
+                ticket_deadline=deadline,
+                screened_image_sha256=image,
+                receipt=receipt,
+                signature=signature,
+            )
+    assert attempts == 1
+
+
+async def test_submit_coding_certification_4xx_stays_a_client_error() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id, bench_version, deadline, image, receipt, signature = (
+        _coding_certification_submit_args()
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json={"detail": "artifact mismatch"})
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(
+            PlatformError, match="coding certification rejected \\(409\\)"
+        ) as caught:
+            await PlatformClient(
+                cast(Any, config), http, keypair
+            ).submit_coding_certification(
+                agent_id,
+                bench_version=bench_version,
+                ticket_deadline=deadline,
+                screened_image_sha256=image,
+                receipt=receipt,
+                signature=signature,
+            )
+    assert type(caught.value) is PlatformError
+
+
 async def test_artifact_request_is_fresh_agent_bound_and_signed() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")

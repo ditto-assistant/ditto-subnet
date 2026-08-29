@@ -6213,6 +6213,13 @@ describe('Backroom MCP tools', () => {
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
 
+    const listed = await client.listTools()
+    const codingCertTool = listed.tools.find(
+      (tool) => tool.name === 'get_agent_coding_certifications',
+    )
+    expect(codingCertTool?.description).toMatch(/weight_eligible is always false/i)
+    expect(codingCertTool?.description).toMatch(/backroom:read/)
+
     const response = await client.callTool({
       name: 'get_agent_coding_certifications',
       arguments: { agentId, limit: 25 },

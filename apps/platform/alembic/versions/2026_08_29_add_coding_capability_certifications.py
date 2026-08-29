@@ -2,7 +2,7 @@
 
 Revision ID: c7d91f4a2e60
 Revises: c3f6a9e2b514
-Create Date: 2026-08-22
+Create Date: 2026-08-29
 
 The table records validator-signed, exact-artifact capability receipts. It is
 deliberately disconnected from scores, ranking, and weights.

@@ -823,15 +823,20 @@ class PlatformClient:
                 url, json=payload.model_dump(mode="json"), headers=self._headers
             )
         except httpx.HTTPError as error:
-            raise PlatformError(
+            raise PlatformInfrastructureError(
                 f"coding certification submit failed: {error}"
             ) from error
-        if response.status_code != 200:
-            raise PlatformError(
-                "coding certification rejected "
-                f"({response.status_code}): {response.text[:200]}"
+        if response.status_code == 200:
+            return SubmitCodingCertificationResponse.model_validate_json(
+                response.content
             )
-        return SubmitCodingCertificationResponse.model_validate_json(response.content)
+        message = (
+            "coding certification rejected "
+            f"({response.status_code}): {response.text[:200]}"
+        )
+        if response.status_code in {408, 429} or response.status_code >= 500:
+            raise PlatformInfrastructureError(message)
+        raise PlatformError(message)
 
     async def submit_top5_confirmation_score(
         self,
