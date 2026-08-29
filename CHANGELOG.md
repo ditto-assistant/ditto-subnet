@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v0.139.0 (2026-08-29)
+
+### Bug Fixes
+
+- **infra**: Bootstrap screener X.509 pool admin
+  ([#1294](https://github.com/ditto-assistant/ditto-subnet/pull/1294),
+  [`574c56b`](https://github.com/ditto-assistant/ditto-subnet/commit/574c56b4fac46f8cfd47376eeafeb0de385dba53))
+
+- **screener**: Route adjudicator completion limit
+  ([#1295](https://github.com/ditto-assistant/ditto-subnet/pull/1295),
+  [`23ea772`](https://github.com/ditto-assistant/ditto-subnet/commit/23ea7722f1a1517e6bec711fce6a719bedcef69f))
+
+### Features
+
+- **platform**: Issue finalized shadow coding runs
+  ([`67f5da5`](https://github.com/ditto-assistant/ditto-subnet/commit/67f5da5bcf9953367a4385fba4233dc6e93f72d3))
+
+
 ## v0.138.0 (2026-08-29)
 
 ### Features
