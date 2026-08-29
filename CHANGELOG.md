@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.125.0 (2026-08-29)
+
+### Documentation
+
+- **skill**: Add bounded screener worker logs
+  ([#1269](https://github.com/ditto-assistant/ditto-subnet/pull/1269),
+  [`96e4ad8`](https://github.com/ditto-assistant/ditto-subnet/commit/96e4ad806dc2ca9f602d3d3d25363574b2beb4ef))
+
+### Features
+
+- **screener**: Policy v11 with scheduled activation
+  ([#1245](https://github.com/ditto-assistant/ditto-subnet/pull/1245),
+  [`9b132f4`](https://github.com/ditto-assistant/ditto-subnet/commit/9b132f4e975207a99c0cb8a8d025179e2b01b10f))
+
+
 ## v0.124.3 (2026-08-29)
 
 ### Bug Fixes
