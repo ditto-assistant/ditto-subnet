@@ -24,7 +24,8 @@ ExecStart={{ screener_fleet_active_orchestrator_venv }}/bin/python -m screener_c
   --source-review-timeout-seconds {{ screener_fleet_source_review_timeout_seconds }} \
   --max-workers {{ screener_fleet_agent_workers }} \
   --vm-memory-mib {{ screener_fleet_vm_memory_mib }} \
-  --vm-vcpus {{ screener_fleet_vm_vcpus }}
+  --vm-vcpus {{ screener_fleet_vm_vcpus }} \
+  --vm-disk-gib {{ screener_fleet_vm_disk_gib }}
 Restart=always
 RestartSec=10
 TimeoutStopSec=55min

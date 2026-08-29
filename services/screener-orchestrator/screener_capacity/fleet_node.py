@@ -19,6 +19,7 @@ import re
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,66 @@ _TERMINAL = {"succeeded", "fallback_required", "canceled", "consumed"}
 _JOB_ID = re.compile(r"^[0-9a-f-]{36}$")
 _IMAGE = re.compile(r"^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 _RUNTIME_MARKER = "DITTO_FLEET_RUNTIME_OK"
+_GUEST_OSINFO = "debian12"
+_LIBVIRT_URI = "qemu:///system"
+_SERIAL_CAPTURE_LIMIT = 64_000
+
+
+class _SerialCapture:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._ready = threading.Event()
+        self._stop = threading.Event()
+        self._done = threading.Event()
+        self._buffer = bytearray()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+        if not self._ready.wait(5):
+            raise OSError("serial capture socket did not start")
+
+    def _run(self) -> None:
+        with contextlib.suppress(FileNotFoundError):
+            self.path.unlink()
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                server.bind(str(self.path))
+                os.chmod(self.path, 0o600)
+                server.listen(1)
+                server.settimeout(0.25)
+                self._ready.set()
+                while not self._stop.is_set():
+                    try:
+                        connection, _ = server.accept()
+                        break
+                    except TimeoutError:
+                        continue
+                else:
+                    return
+                with connection:
+                    connection.settimeout(0.25)
+                    while not self._stop.is_set():
+                        try:
+                            chunk = connection.recv(4096)
+                        except TimeoutError:
+                            continue
+                        if not chunk:
+                            break
+                        self._buffer.extend(chunk)
+                        if len(self._buffer) > _SERIAL_CAPTURE_LIMIT:
+                            del self._buffer[:-_SERIAL_CAPTURE_LIMIT]
+        finally:
+            self._ready.set()
+            self._done.set()
+
+    def finish(self) -> str:
+        self._done.wait(2)
+        self._stop.set()
+        self._thread.join(2)
+        with contextlib.suppress(FileNotFoundError):
+            self.path.unlink()
+        return bytes(self._buffer).decode(errors="replace")
 
 
 @dataclass(frozen=True)
@@ -72,6 +133,7 @@ class Settings:
     max_workers: int
     vm_memory_mib: int
     vm_vcpus: int
+    vm_disk_gib: int
     once: bool
 
 
@@ -314,6 +376,8 @@ container=ditto-runtime-smoke
 docker run --detach --name "$container" --read-only --user 65532:65532 \\
   --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \\
   --memory 4g --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \\
+  --env OPENROUTER_API_KEY=sk-screener-smoke \\
+  --env DITTOBENCH_DB=/tmp/dittobench.db \\
   --publish 127.0.0.1::8080 "$image" >/dev/null
 port=$(docker port "$container" 8080/tcp | sed 's/.*://')
 i=0
@@ -337,11 +401,13 @@ class KVMRunner:
         jobs_root: Path,
         memory_mib: int,
         vcpus: int,
+        disk_gib: int,
     ) -> None:
         self.base_image = base_image
         self.jobs_root = jobs_root
         self.memory_mib = memory_mib
         self.vcpus = vcpus
+        self.disk_gib = disk_gib
 
     def run(self, *, name: str, script: str, timeout_seconds: int) -> tuple[bool, str]:
         job_dir = Path(tempfile.mkdtemp(prefix=f"{name}-", dir=self.jobs_root))
@@ -353,8 +419,9 @@ class KVMRunner:
         user_data = job_dir / "user-data"
         meta_data = job_dir / "meta-data"
         seed = job_dir / "seed.iso"
-        console = job_dir / "console.log"
         domain = re.sub(r"[^a-zA-Z0-9_-]", "-", name)[:63]
+        console_socket = self.jobs_root / f".{domain[:40]}.sock"
+        serial = _SerialCapture(console_socket)
         try:
             subprocess.run(
                 [
@@ -372,6 +439,11 @@ class KVMRunner:
                 check=True,
                 timeout=30,
             )
+            subprocess.run(
+                ["qemu-img", "resize", "-q", str(overlay), f"{self.disk_gib}G"],
+                check=True,
+                timeout=30,
+            )
             os.chmod(overlay, 0o640)
             user_data.write_text(_cloud_config(script))
             meta_data.write_text(f"instance-id: {domain}\nlocal-hostname: {domain}\n")
@@ -383,13 +455,12 @@ class KVMRunner:
                 timeout=30,
             )
             os.chmod(seed, 0o640)
-            console.touch(mode=0o660)
-            os.chmod(console, 0o660)
+            serial.start()
             subprocess.run(
                 [
                     "virt-install",
                     "--connect",
-                    "qemu:///system",
+                    _LIBVIRT_URI,
                     "--name",
                     domain,
                     "--memory",
@@ -398,6 +469,8 @@ class KVMRunner:
                     str(self.vcpus),
                     "--cpu",
                     "host-passthrough",
+                    "--osinfo",
+                    _GUEST_OSINFO,
                     "--import",
                     "--transient",
                     "--noautoconsole",
@@ -406,11 +479,11 @@ class KVMRunner:
                     "--disk",
                     f"path={overlay},format=qcow2,bus=virtio,cache=none",
                     "--disk",
-                    f"path={seed},device=cdrom,readonly=on",
+                    f"path={seed},format=raw,bus=virtio,readonly=on",
                     "--network",
                     "network=ditto-screener-nat,model=virtio",
                     "--serial",
-                    f"file,path={console}",
+                    f"unix,path={console_socket},mode=connect",
                 ],
                 check=True,
                 timeout=60,
@@ -418,7 +491,7 @@ class KVMRunner:
             deadline = time.monotonic() + timeout_seconds
             while time.monotonic() < deadline:
                 state = subprocess.run(
-                    ["virsh", "domstate", domain],
+                    ["virsh", "--connect", _LIBVIRT_URI, "domstate", domain],
                     capture_output=True,
                     text=True,
                     timeout=15,
@@ -428,19 +501,19 @@ class KVMRunner:
                     break
                 time.sleep(2)
             else:
-                return False, "timeout"
-            text = console.read_text(errors="replace") if console.exists() else ""
-            return True, text[-16_000:]
+                return False, serial.finish() or "timeout"
+            return True, serial.finish()
         except (OSError, subprocess.SubprocessError) as error:
-            return False, type(error).__name__
+            return False, serial.finish() or type(error).__name__
         finally:
             with contextlib.suppress(OSError, subprocess.SubprocessError):
                 subprocess.run(
-                    ["virsh", "destroy", domain],
+                    ["virsh", "--connect", _LIBVIRT_URI, "destroy", domain],
                     capture_output=True,
                     timeout=15,
                     check=False,
                 )
+            serial.finish()
             shutil.rmtree(job_dir, ignore_errors=True)
 
 
@@ -456,6 +529,7 @@ class FleetNode:
             jobs_root=settings.jobs_root,
             memory_mib=settings.vm_memory_mib,
             vcpus=settings.vm_vcpus,
+            disk_gib=settings.vm_disk_gib,
         )
         self.executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=settings.max_workers, thread_name_prefix="ditto-fleet"
@@ -696,6 +770,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-workers", type=int, default=16)
     parser.add_argument("--vm-memory-mib", type=int, default=10240)
     parser.add_argument("--vm-vcpus", type=int, default=8)
+    parser.add_argument("--vm-disk-gib", type=int, default=80)
     parser.add_argument("--once", action="store_true")
     return parser
 
@@ -727,6 +802,7 @@ def main() -> int:
         max_workers=max(1, args.max_workers),
         vm_memory_mib=min(12288, max(8192, args.vm_memory_mib)),
         vm_vcpus=min(16, max(2, args.vm_vcpus)),
+        vm_disk_gib=min(160, max(32, args.vm_disk_gib)),
         once=args.once,
     )
     node = FleetNode(settings)

@@ -96,6 +96,7 @@
     mode: "{{ item.mode }}"
   loop:
     - { path: "{{ screener_fleet_root }}", mode: "0755" }
+    - { path: "{{ screener_fleet_bittensor_dir }}", mode: "0700" }
     - { path: "{{ screener_fleet_releases_dir }}", mode: "0750" }
     - { path: "{{ screener_fleet_release_dir }}", mode: "0750" }
     - { path: "{{ screener_fleet_config_dir }}", mode: "0750" }
@@ -275,7 +276,7 @@
     remote_src: true
     owner: "{{ screener_fleet_user }}"
     group: "{{ screener_fleet_group }}"
-    mode: "0640"
+    mode: "0644"
   when:
     - screener_fleet_cloud_image.changed or not screener_fleet_base_image_state.stat.exists
   register: screener_fleet_base_image_copy
@@ -296,6 +297,14 @@
     LIBGUESTFS_BACKEND: direct
   when: screener_fleet_base_image_copy.changed
   changed_when: true
+
+- name: Keep the public guest base readable after libvirt ownership changes
+  ansible.builtin.file:
+    path: "{{ screener_fleet_base_image }}"
+    state: file
+    owner: "{{ screener_fleet_user }}"
+    group: "{{ screener_fleet_group }}"
+    mode: "0644"
 
 - name: Render the isolated libvirt NAT network
   ansible.builtin.template:
@@ -547,11 +556,11 @@
       - "--credential-cert-path={{ screener_fleet_x509_certificate_file }}"
       - "--credential-cert-private-key-path={{ screener_fleet_x509_private_key_file }}"
       - "--output-file={{ screener_fleet_x509_credential_file }}"
+    creates: "{{ screener_fleet_x509_credential_file }}"
   become_user: "{{ screener_fleet_secret_agent_user }}"
   environment:
     HOME: "{{ screener_fleet_x509_identity_dir }}"
     CLOUDSDK_CONFIG: "{{ screener_fleet_x509_cloudsdk_config }}"
-  changed_when: true
   no_log: true
   when:
     - screener_fleet_runtime_enabled

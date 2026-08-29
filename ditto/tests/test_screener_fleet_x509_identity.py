@@ -55,6 +55,12 @@ def test_host_generates_private_key_and_never_accepts_it_as_input() -> None:
     assert "'PRIVATE KEY' not in screener_fleet_x509_certificate_pem" in tasks
 
 
+def test_x509_credential_renderer_is_idempotent() -> None:
+    tasks = (ROLE / "tasks/main.yml").read_text()
+
+    assert 'creates: "{{ screener_fleet_x509_credential_file }}"' in tasks
+
+
 def test_materializer_reads_only_named_secret_without_printing_it() -> None:
     script = (ROLE / "templates/materialize-source-review-secret.sh.j2").read_text()
     service = (
@@ -70,6 +76,37 @@ def test_materializer_reads_only_named_secret_without_printing_it() -> None:
     assert "PrivateDevices=true" in service
     assert "CapabilityBoundingSet=" in service
     assert "ReadWritePaths=" in service
+
+
+def test_signing_services_have_a_private_writable_bittensor_home() -> None:
+    defaults = (ROLE / "defaults/main.yml").read_text()
+    tasks = (ROLE / "tasks/main.yml").read_text()
+    enrollment = (ROLE / "templates/ditto-screener-enroll.service.j2").read_text()
+    worker = (ROLE / "templates/ditto-screener-worker@.service.j2").read_text()
+
+    assert (
+        'screener_fleet_bittensor_dir: "{{ screener_fleet_root }}/.bittensor"'
+        in defaults
+    )
+    assert '- { path: "{{ screener_fleet_bittensor_dir }}", mode: "0700" }' in tasks
+    assert "{{ screener_fleet_bittensor_dir }}" in enrollment
+    assert "{{ screener_fleet_bittensor_dir }}" in worker
+
+
+def test_fleet_build_timeout_satisfies_worker_contract() -> None:
+    defaults = yaml.safe_load((ROLE / "defaults/main.yml").read_text())
+
+    assert 300 <= defaults["screener_fleet_build_timeout_seconds"] <= 2400
+
+
+def test_disposable_guest_base_survives_libvirt_ownership_changes() -> None:
+    tasks = (ROLE / "tasks/main.yml").read_text()
+
+    assert (
+        "Keep the public guest base readable after libvirt ownership changes" in tasks
+    )
+    assert 'path: "{{ screener_fleet_base_image }}"' in tasks
+    assert 'mode: "0644"' in tasks
 
 
 def test_infra_workflow_keeps_x509_identity_opt_in() -> None:
