@@ -20,15 +20,41 @@ ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
+
+# Compile the locked dependency graph before copying application source. This
+# layer remains reusable when a miner changes src/ or fixtures/, which avoids
+# rebuilding the full Rust dependency tree for every submission revision.
+# The placeholder targets force Cargo to compile both package target shapes;
+# clean removes only their artifacts while retaining compiled dependencies.
+#
+# If a gh_token secret is mounted, pass it to Git through process-local config
+# for private harness forks. It never enters ENV, a file, or an image layer.
+RUN --mount=type=secret,id=gh_token \
+    if [ -s /run/secrets/gh_token ]; then \
+      token="$(cat /run/secrets/gh_token)"; \
+      export GIT_CONFIG_COUNT=1; \
+      export GIT_CONFIG_KEY_0="url.https://x-access-token:${token}@github.com/.insteadOf"; \
+      export GIT_CONFIG_VALUE_0="https://github.com/"; \
+    fi; \
+    mkdir -p src/bin; \
+    printf 'pub const CACHE_WARMUP: () = ();\n' > src/lib.rs; \
+    printf 'fn main() { let _ = dittobench_starter_kit::CACHE_WARMUP; }\n' > src/bin/dittobench-miner.rs; \
+    cargo build --locked --release --bin dittobench-miner; \
+    cargo clean --locked --release -p dittobench-starter-kit; \
+    rm -rf src
+
 COPY src ./src
 COPY fixtures ./fixtures
 
-# If a gh_token secret is mounted, use it for github.com over HTTPS; otherwise
-# build assuming the dependency is publicly fetchable. --locked builds exactly
-# the committed Cargo.lock (reproducible; fails fast on a stale lockfile).
+# --locked builds exactly the committed Cargo.lock (reproducible; fails fast on
+# a stale lockfile). Reapply process-local auth only when a private git
+# dependency needs it; the default public harness needs no credential.
 RUN --mount=type=secret,id=gh_token \
     if [ -s /run/secrets/gh_token ]; then \
-      git config --global url."https://x-access-token:$(cat /run/secrets/gh_token)@github.com/".insteadOf "https://github.com/"; \
+      token="$(cat /run/secrets/gh_token)"; \
+      export GIT_CONFIG_COUNT=1; \
+      export GIT_CONFIG_KEY_0="url.https://x-access-token:${token}@github.com/.insteadOf"; \
+      export GIT_CONFIG_VALUE_0="https://github.com/"; \
     fi; \
     cargo build --locked --release --bin dittobench-miner
 
