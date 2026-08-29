@@ -6,7 +6,7 @@
 // interval; here each ElapsedTime node carries its own per-second signal,
 // which preserves the observable contract (a timer that visibly counts) with
 // no document-wide scan.
-import { Show, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { agentName, elapsedDuration } from "../../lib/format";
@@ -111,6 +111,103 @@ export function screenerStageLabel(stage?: string | null): string {
     submitting: "Submitting result",
   };
   return (stage != null && labels[stage]) || "Screening";
+}
+
+// ── Admission step track ────────────────────────────────────────────────────
+
+/** One segment of the admission step track. */
+export interface AdmissionStep {
+  key: string;
+  label: string;
+}
+
+/** The admission pipeline in heartbeat order (ScreenerProgressStage):
+ * preparing/downloading/validating → building → starting/health_check →
+ * source_review_* → submitting, folded into the five segments the track
+ * renders. */
+const ADMISSION_STEP_DEFS: readonly AdmissionStep[] = [
+  { key: "fetch", label: "Fetch & validate" },
+  { key: "build", label: "Build image" },
+  { key: "boot", label: "Start & health check" },
+  { key: "review", label: "Source review" },
+  { key: "submit", label: "Submit result" },
+];
+
+const STAGE_STEP_KEYS: Record<string, string> = {
+  preparing: "fetch",
+  downloading: "fetch",
+  validating: "fetch",
+  building: "build",
+  starting: "boot",
+  health_check: "boot",
+  submitting: "submit",
+};
+
+/** Screener stage → step key; an unrecognized stage is an explicit absence
+ * (the track shows "in progress, stage not reported"), never a guess. */
+export function admissionStepKey(stage?: string | null): string | null {
+  if (/^source_review_\d+$/.test(stage || "")) return "review";
+  return (stage != null && STAGE_STEP_KEYS[stage]) || null;
+}
+
+/** A build-only screening never enters source review, so its track must not
+ * carry a review segment that would render "done" on submit. */
+export function admissionSteps(buildOnly?: boolean | null): AdmissionStep[] {
+  return buildOnly === true
+    ? ADMISSION_STEP_DEFS.filter((step) => step.key !== "review")
+    : ADMISSION_STEP_DEFS.slice();
+}
+
+/**
+ * The segmented admission progress track (GitHub-Actions style): done
+ * segments filled, the current one pulsing, queued ones hollow. A waiting
+ * card renders the all-hollow track — the at-a-glance difference between
+ * "not started" and "building". An active card whose screener has not
+ * reported a stage shimmers the whole track rather than guessing a segment.
+ */
+export function AdmissionStepTrack(props: {
+  steps: AdmissionStep[];
+  /** Live screener stage; null when active work has not reported one. */
+  stage: string | null;
+  /** True for a queued submission no screener has claimed. */
+  waiting: boolean;
+}): JSX.Element {
+  const currentIndex = (): number => {
+    if (props.waiting) return -1;
+    const key = admissionStepKey(props.stage);
+    return key == null ? -1 : props.steps.findIndex((step) => step.key === key);
+  };
+  const label = (): string => {
+    if (props.waiting) return "Admission not started · " + props.steps.length + " steps queued";
+    const index = currentIndex();
+    if (index < 0) return "Admission in progress · stage not reported";
+    return (
+      "Admission step " +
+      (index + 1) +
+      " of " +
+      props.steps.length +
+      ": " +
+      props.steps[index]!.label
+    );
+  };
+  const segmentClass = (index: number): string => {
+    if (props.waiting) return "admission-step";
+    const current = currentIndex();
+    if (current < 0) return "admission-step unknown";
+    if (index < current) return "admission-step done";
+    if (index === current) return "admission-step current";
+    return "admission-step";
+  };
+  return (
+    <span
+      class={"admission-steps" + (props.waiting ? " waiting" : "")}
+      role="img"
+      aria-label={label()}
+      title={label()}
+    >
+      <For each={props.steps}>{(_, index) => <i class={segmentClass(index())} />}</For>
+    </span>
+  );
 }
 
 /** A per-second elapsed counter (`updateElapsedTimes`' visible contract). */

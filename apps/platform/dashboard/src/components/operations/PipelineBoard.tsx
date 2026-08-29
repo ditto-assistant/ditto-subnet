@@ -15,8 +15,10 @@ import { policyScreeningLabel } from "../pipeline/status";
 import type { FleetReport } from "../../types/fleet";
 import type { BenchmarkProgress } from "../../types/pipeline";
 import {
+  AdmissionStepTrack,
   BenchmarkProgressView,
   PipelineScreenerProgressView,
+  admissionSteps,
   screenerStageLabel,
 } from "./progress";
 import {
@@ -178,12 +180,21 @@ function PipelineCard(props: {
     (admissionLabel() ? ", " + admissionLabel() : "");
   const benchmarks = (): BenchmarkProgress[] =>
     props.column === "evaluating" ? entry().active_benchmarks || [] : [];
+  // Waiting vs in-progress is a state the card must wear, not just say: the
+  // attribute drives the muted queued treatment and the active gold rail.
+  const admissionState = () =>
+    props.column === "admission"
+      ? entry().status === "waiting_screening"
+        ? "waiting"
+        : "active"
+      : undefined;
   return (
     <a
       class="pipeline-item"
       href={entityHref("agent", String(entry().agent_id || ""))}
       data-entity-link="agent"
       data-pipeline-i={props.item.index}
+      data-admission={admissionState()}
       aria-label={ariaLabel()}
       onClick={(ev) => cardClick(ev, String(entry().agent_id || ""))}
     >
@@ -198,6 +209,13 @@ function PipelineCard(props: {
         </span>
         <span class="pipeline-item-meta">{meta()}</span>
       </span>
+      <Show when={props.column === "admission"}>
+        <AdmissionStepTrack
+          steps={admissionSteps(entry().screening_build_only)}
+          stage={screener()?.screening_progress?.stage ?? null}
+          waiting={entry().status === "waiting_screening"}
+        />
+      </Show>
       <Show when={isUpNext() || queueGate() || rolloutPosition() || rescore()?.isQualification}>
         <span class="pipeline-item-badges">
           <Show when={isUpNext()}>
@@ -330,6 +348,21 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
           // every card each tick, which clamps the container's scrollTop back
           // to the top even though the container itself now survives.
           const items = reconciledList(() => column().items, "key");
+          // Where the admission lane's queued group starts (the lane is
+          // sorted active-first); a divider only makes sense between groups.
+          const firstWaitingIndex = () =>
+            column().def.status === "admission"
+              ? items().findIndex((item) => item.entry.status === "waiting_screening")
+              : -1;
+          const admissionSplit = () => {
+            if (column().def.status !== "admission" || props.unavailable || props.loading) {
+              return "";
+            }
+            const active = Number(props.statusCounts.screening || 0);
+            const queued = Number(props.statusCounts.waiting_screening || 0);
+            if (active + queued <= 0) return "";
+            return active + " in progress · " + queued + " queued";
+          };
           return (
             <section
               class="pipeline-column"
@@ -367,6 +400,9 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
                     </Show>
                   </Show>
                 </span>
+                <Show when={admissionSplit()}>
+                  <span class="pipeline-count-detail">{admissionSplit()}</span>
+                </Show>
               </div>
               <div class="pipeline-items" id={column().def.bodyId}>
                 <Show
@@ -379,13 +415,23 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
                       fallback={<div class="pipeline-empty">{column().def.empty}</div>}
                     >
                       <For each={items()}>
-                        {(item) => (
-                          <PipelineCard
-                            item={item}
-                            column={column().def.status}
-                            screeners={props.screeners}
-                            activeVersion={props.activeVersion}
-                          />
+                        {(item, index) => (
+                          <>
+                            <Show when={index() === firstWaitingIndex() && index() > 0}>
+                              {/* Cards above are being screened right now;
+                                  everything below is queued. The per-card
+                                  aria-labels already say so. */}
+                              <div class="pipeline-lane-divider" aria-hidden="true">
+                                Waiting for a screener
+                              </div>
+                            </Show>
+                            <PipelineCard
+                              item={item}
+                              column={column().def.status}
+                              screeners={props.screeners}
+                              activeVersion={props.activeVersion}
+                            />
+                          </>
                         )}
                       </For>
                       <Show when={column().hiddenCount > 0}>

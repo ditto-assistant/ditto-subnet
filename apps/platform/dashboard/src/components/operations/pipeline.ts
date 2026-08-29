@@ -9,6 +9,8 @@ import type { BenchmarkProgress, PipelineEntry } from "../../types/pipeline";
  * the queue gate the shared PipelineEntry does not declare). */
 export interface PipelineEntryExt extends PipelineEntry {
   validator_queue_gate?: string | null;
+  /** True for a build-only screening pass (no source review segment). */
+  screening_build_only?: boolean | null;
 }
 
 export interface IndexedEntry {
@@ -281,6 +283,17 @@ export function pipelineColumnViews(
         );
     } else if (def.status === "waiting_validator") {
       indexed = indexed.slice().sort(validatorQueueCompare);
+    } else if (def.status === "admission") {
+      // Active screener work first, queued submissions after — the board's
+      // lane divider marks where the waiting group starts. Stable within
+      // each group, so the snapshot order still holds inside them.
+      indexed = indexed
+        .slice()
+        .sort(
+          (a, b) =>
+            Number(a.entry.status === "waiting_screening") -
+            Number(b.entry.status === "waiting_screening"),
+        );
     }
     const stuckCount = indexed.reduce(
       (n, item) => n + (item.entry.retry_state === "exhausted" ? 1 : 0),

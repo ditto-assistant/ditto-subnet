@@ -629,7 +629,7 @@
 }
 .pipeline-map {
   min-width: 0;
-  padding: 18px 18px 20px;
+  padding: 24px 24px 28px;
 }
 .atlas-label {
   display: flex;
@@ -717,7 +717,7 @@
    specificity; keep it below the base spec (monolith comment 2101). */
 .pipeline-overview {
   display: grid;
-  grid-template-columns: repeat(4, minmax(172px, 1fr));
+  grid-template-columns: repeat(4, minmax(200px, 1fr));
   margin: 0;
   overflow: visible;
   border: 0;
@@ -727,7 +727,7 @@
 .pipeline-column {
   position: relative;
   min-width: 0;
-  padding: 0 14px;
+  padding: 0 18px;
   border: 0 !important;
 }
 .pipeline-column:first-child {
@@ -802,23 +802,23 @@
   font: 400 18px/1 var(--display);
 }
 .pipeline-items {
-  gap: 3px;
-  max-height: 390px;
+  gap: 6px;
+  max-height: 460px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
 .pipeline-item {
-  padding: 6px 7px;
+  padding: 9px 10px;
   border-top: 1px solid color-mix(in oklch, var(--border) 58%, transparent);
   border-radius: 2px;
   background: color-mix(in oklch, var(--bg-elev) 88%, transparent);
 }
 .pipeline-item-name {
-  font-size: 11px;
+  font-size: 12px;
 }
 .pipeline-item-meta {
-  font-size: 10.5px;
+  font-size: 11px;
 }
 .pipeline-item .screener-progress {
   margin-top: 6px;
@@ -829,6 +829,84 @@
   margin-top: var(--ops-space-xs);
   color: var(--accent);
   font: 700 9.5px/1.35 var(--mono);
+}
+/* Waiting vs in-progress must be legible at a glance, not only readable in
+   the state line: an active build wears a gold rail, a queued submission is
+   muted — same yellow chip on both was exactly the ambiguity. */
+.pipeline-item[data-admission="active"] {
+  border-left: 2px solid color-mix(in oklch, var(--gold) 72%, transparent);
+  background: color-mix(in oklch, var(--gold) 4%, var(--bg-elev));
+}
+.pipeline-item[data-admission="waiting"] {
+  border-left: 2px solid transparent;
+}
+.pipeline-item[data-admission="waiting"] .pipeline-item-name {
+  color: var(--text-dim);
+}
+.pipeline-item[data-admission="waiting"] .pipeline-admission-state {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+/* The admission lane's group boundary: cards above are being screened right
+   now, cards below are queued. */
+.pipeline-lane-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 0;
+  color: var(--text-faint);
+  font: 700 8.5px/1.4 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.pipeline-lane-divider::before,
+.pipeline-lane-divider::after {
+  content: "";
+  flex: 1 1 0;
+  height: 1px;
+  background: var(--border-strong);
+}
+/* Segmented admission step track (fetch → build → boot → review → submit):
+   done segments filled, the current one pulsing, queued ones hollow. A
+   waiting card shows the all-hollow track; an active card with no reported
+   stage shimmers the whole track rather than guessing a segment. */
+.admission-steps {
+  display: flex;
+  gap: 3px;
+  margin-top: 6px;
+}
+.admission-step {
+  flex: 1 1 0;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in oklch, var(--border-strong) 60%, transparent);
+}
+.admission-step.done {
+  background: var(--good);
+}
+.admission-step.current {
+  background: var(--gold);
+  animation: admission-step-pulse 1.6s ease-in-out infinite;
+}
+.admission-step.unknown {
+  background: color-mix(in oklch, var(--gold) 45%, var(--border-strong));
+  animation: admission-step-pulse 1.6s ease-in-out infinite;
+}
+@keyframes admission-step-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.pipeline-count-detail {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-faint);
+  font: 650 9px/1.3 var(--mono);
 }
 .pipeline-empty {
   padding: 7px 4px;
@@ -1673,7 +1751,7 @@
     overflow-x: auto;
   }
   .pipeline-overview {
-    min-width: 760px;
+    min-width: 840px;
   }
   .fleet-ledger {
     justify-content: flex-start;
@@ -1742,6 +1820,20 @@
 @media (prefers-reduced-motion: reduce) {
   .operations-tab {
     transition: none;
+  }
+  .admission-step.current,
+  .admission-step.unknown {
+    animation: none;
+  }
+}
+@media (forced-colors: active) {
+  .admission-step {
+    border: 1px solid CanvasText;
+  }
+  .admission-step.done,
+  .admission-step.current,
+  .admission-step.unknown {
+    background: Highlight;
   }
 }
 

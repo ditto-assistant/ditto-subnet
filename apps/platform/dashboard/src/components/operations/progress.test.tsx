@@ -6,8 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BenchmarkProgress } from "../../types/pipeline";
 import {
+  AdmissionStepTrack,
   BenchmarkProgressView,
   ElapsedTime,
+  admissionStepKey,
+  admissionSteps,
   benchmarkProgressText,
   benchmarkStageLabel,
   screenerStageLabel,
@@ -150,6 +153,76 @@ describe("screenerStageLabel", () => {
     expect(screenerStageLabel("building")).toBe("Building image");
     expect(screenerStageLabel("health_check")).toBe("Checking health");
     expect(screenerStageLabel("anything-else")).toBe("Screening");
+  });
+});
+
+describe("admission step track", () => {
+  it("folds every heartbeat stage into its segment, unknown as absence", () => {
+    expect(admissionStepKey("preparing")).toBe("fetch");
+    expect(admissionStepKey("downloading")).toBe("fetch");
+    expect(admissionStepKey("validating")).toBe("fetch");
+    expect(admissionStepKey("building")).toBe("build");
+    expect(admissionStepKey("starting")).toBe("boot");
+    expect(admissionStepKey("health_check")).toBe("boot");
+    expect(admissionStepKey("source_review_0")).toBe("review");
+    expect(admissionStepKey("source_review_100")).toBe("review");
+    expect(admissionStepKey("submitting")).toBe("submit");
+    expect(admissionStepKey("anything-else")).toBeNull();
+    expect(admissionStepKey(null)).toBeNull();
+  });
+
+  it("drops the review segment only for a build-only screening", () => {
+    expect(admissionSteps(true).map((step) => step.key)).toEqual([
+      "fetch",
+      "build",
+      "boot",
+      "submit",
+    ]);
+    expect(admissionSteps(false).map((step) => step.key)).toEqual([
+      "fetch",
+      "build",
+      "boot",
+      "review",
+      "submit",
+    ]);
+    // Unknown build-only state keeps the full track rather than guessing.
+    expect(admissionSteps(null)).toHaveLength(5);
+    expect(admissionSteps(undefined)).toHaveLength(5);
+  });
+
+  it("marks done, current, and queued segments for a live stage", () => {
+    const { container } = render(() => (
+      <AdmissionStepTrack steps={admissionSteps(null)} stage="source_review_20" waiting={false} />
+    ));
+    const track = container.querySelector(".admission-steps") as HTMLElement;
+    expect(track).toHaveAttribute("aria-label", "Admission step 4 of 5: Source review");
+    const segments = Array.from(track.querySelectorAll(".admission-step"), (el) => el.className);
+    expect(segments).toEqual([
+      "admission-step done",
+      "admission-step done",
+      "admission-step done",
+      "admission-step current",
+      "admission-step",
+    ]);
+  });
+
+  it("renders an all-hollow track for a queued submission", () => {
+    const { container } = render(() => (
+      <AdmissionStepTrack steps={admissionSteps(null)} stage={null} waiting={true} />
+    ));
+    const track = container.querySelector(".admission-steps.waiting") as HTMLElement;
+    expect(track).toHaveAttribute("aria-label", "Admission not started · 5 steps queued");
+    expect(track.querySelectorAll(".admission-step")).toHaveLength(5);
+    expect(track.querySelector(".done, .current, .unknown")).toBeNull();
+  });
+
+  it("shimmers the whole track when active work reports no stage", () => {
+    const { container } = render(() => (
+      <AdmissionStepTrack steps={admissionSteps(null)} stage={null} waiting={false} />
+    ));
+    const track = container.querySelector(".admission-steps") as HTMLElement;
+    expect(track).toHaveAttribute("aria-label", "Admission in progress · stage not reported");
+    expect(track.querySelectorAll(".admission-step.unknown")).toHaveLength(5);
   });
 });
 

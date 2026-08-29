@@ -249,12 +249,83 @@ describe("screening cross-feed and policy labels", () => {
       { statusCounts: { waiting_screening: 2, screening: 3 } },
     );
     expect(container.querySelector("#pipeline-admission-count")?.textContent).toBe("5");
+    // Active work leads the lane; the queued group follows the divider.
     const states = Array.from(
       container.querySelectorAll("#pipeline-admission .pipeline-admission-state"),
       (node) => node.textContent,
     );
-    expect(states).toEqual(["Waiting for admission", "Building image & admission"]);
+    expect(states).toEqual(["Building image & admission", "Waiting for admission"]);
     expect(container.querySelectorAll("#pipeline-admission .pipeline-item")).toHaveLength(2);
+    expect(container.querySelector("#pipeline-admission .pipeline-lane-divider")?.textContent).toBe(
+      "Waiting for a screener",
+    );
+    const cardStates = Array.from(
+      container.querySelectorAll("#pipeline-admission .pipeline-item"),
+      (el) => el.getAttribute("data-admission"),
+    );
+    expect(cardStates).toEqual(["active", "waiting"]);
+    // The authoritative head split, from status_counts alone.
+    expect(container.querySelector(".pipeline-count-detail")?.textContent).toBe(
+      "3 in progress · 2 queued",
+    );
+  });
+
+  it("skips the lane divider when nothing is active or nothing waits", () => {
+    const allQueued = board([waiting({ agent_id: "q1", status: "waiting_screening" })], {
+      statusCounts: { waiting_screening: 1 },
+    });
+    expect(allQueued.querySelector(".pipeline-lane-divider")).toBeNull();
+    const allActive = board([waiting({ agent_id: "b1", status: "screening" })], {
+      statusCounts: { screening: 1 },
+    });
+    expect(allActive.querySelector(".pipeline-lane-divider")).toBeNull();
+  });
+
+  it("renders the admission step track per card state", () => {
+    const screeners: FleetReport = {
+      screeners: [
+        {
+          screener_hotkey: "5S",
+          instance_id: "screener-1",
+          active_agent_id: "building",
+          screening_progress: { stage: "building", started_at: "2026-07-31T13:58:00Z" },
+        },
+      ],
+    };
+    const container = board(
+      [
+        waiting({ agent_id: "queued", status: "waiting_screening" }),
+        waiting({ agent_id: "building", status: "screening" }),
+        waiting({ agent_id: "unreported", status: "screening" }),
+      ],
+      { statusCounts: { waiting_screening: 1, screening: 2 }, screeners },
+    );
+    const tracks = container.querySelectorAll("#pipeline-admission .admission-steps");
+    expect(tracks).toHaveLength(3);
+    // Live stage → step 2 of 5 with one done segment.
+    const live = container.querySelector('[data-admission="active"] .admission-steps');
+    expect(live).toHaveAttribute("aria-label", "Admission step 2 of 5: Build image");
+    expect(live?.querySelectorAll(".admission-step.done")).toHaveLength(1);
+    expect(live?.querySelectorAll(".admission-step.current")).toHaveLength(1);
+    // Active but unreported → whole-track shimmer, never a guessed segment.
+    const cards = container.querySelectorAll("#pipeline-admission .pipeline-item");
+    const unreported = cards[1]?.querySelector(".admission-steps");
+    expect(unreported).toHaveAttribute("aria-label", "Admission in progress · stage not reported");
+    expect(unreported?.querySelectorAll(".admission-step.unknown")).toHaveLength(5);
+    // Queued → all-hollow waiting track.
+    const queuedTrack = container.querySelector('[data-admission="waiting"] .admission-steps');
+    expect(queuedTrack).toHaveAttribute("aria-label", "Admission not started · 5 steps queued");
+    expect(queuedTrack?.classList.contains("waiting")).toBe(true);
+  });
+
+  it("drops the review segment for a build-only screening card", () => {
+    const container = board(
+      [waiting({ agent_id: "b1", status: "screening", screening_build_only: true })],
+      { statusCounts: { screening: 1 } },
+    );
+    expect(
+      container.querySelectorAll("#pipeline-admission .admission-steps .admission-step"),
+    ).toHaveLength(4);
   });
 
   it("overlays the live screener stage onto the screening card", () => {
