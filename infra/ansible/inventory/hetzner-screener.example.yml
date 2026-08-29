@@ -16,3 +16,9 @@ all:
           screener_fleet_debian_cloud_image_url: https://cloud.debian.org/images/cloud/bookworm/20260821-2577/debian-12-genericcloud-amd64-20260821-2577.qcow2
           screener_fleet_debian_cloud_image_sha256: 3ac58d009df21d570bb10811ae1e07afd1125e9669c87897bfb58e52b8f5c937
           screener_fleet_builder_image: registry.example/ditto/submission-builder@sha256:REPLACE_WITH_64_HEX_DIGEST
+          # The public values below come from the reviewed Terraform outputs.
+          # The leaf and CA PEMs are supplied in the extra-vars file; no Google
+          # service-account key or host private key is ever copied here.
+          screener_fleet_x509_enabled: true
+          screener_fleet_x509_provider: projects/REPLACE_WITH_PROJECT_NUMBER/locations/global/workloadIdentityPools/screener-fleet-x509/providers/subnet-screener-1
+          screener_fleet_x509_service_account_email: subnet-screener-1@ditto-app-dev.iam.gserviceaccount.com

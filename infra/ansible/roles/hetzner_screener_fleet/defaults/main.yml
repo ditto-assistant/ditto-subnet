@@ -23,12 +23,32 @@ screener_fleet_active_worker_venv: "{{ screener_fleet_current }}/worker-venv"
 screener_fleet_active_orchestrator_venv: "{{ screener_fleet_current }}/orchestrator-venv"
 screener_fleet_state_dir: /var/lib/ditto-screener-fleet
 screener_fleet_config_dir: /etc/ditto-screener-fleet
+screener_fleet_secret_agent_user: ditto-screener-secrets
+screener_fleet_x509_enabled: false
+screener_fleet_x509_subject: spiffe://dittobench.ai/screener/subnet-screener-1
+screener_fleet_x509_provider: ""
+screener_fleet_x509_service_account_email: ""
+screener_fleet_x509_ca_certificate_pem: ""
+screener_fleet_x509_certificate_pem: ""
+screener_fleet_x509_identity_dir: "{{ screener_fleet_config_dir }}/google-identity"
+screener_fleet_x509_private_key_file: "{{ screener_fleet_x509_identity_dir }}/client.key"
+screener_fleet_x509_csr_file: "{{ screener_fleet_x509_identity_dir }}/client.csr"
+screener_fleet_x509_certificate_file: "{{ screener_fleet_x509_identity_dir }}/client.crt"
+screener_fleet_x509_ca_certificate_file: "{{ screener_fleet_x509_identity_dir }}/ca.crt"
+screener_fleet_x509_credential_file: "{{ screener_fleet_x509_identity_dir }}/credentials.json"
+screener_fleet_x509_cloudsdk_config: "{{ screener_fleet_x509_identity_dir }}/gcloud"
+screener_fleet_secrets_dir: "{{ screener_fleet_state_dir }}/secrets"
+screener_fleet_gcp_project: ditto-app-dev
+screener_fleet_source_review_secret_id: validator-openrouter-key
 screener_fleet_jobs_dir: "{{ screener_fleet_state_dir }}/jobs"
 screener_fleet_images_dir: "{{ screener_fleet_state_dir }}/images"
 screener_fleet_logs_dir: /var/log/ditto-screener-fleet
 screener_fleet_credential_file: "{{ screener_fleet_config_dir }}/node.json"
 screener_fleet_registration_token_file: "{{ screener_fleet_config_dir }}/registration-token"
-screener_fleet_source_review_key_file: "{{ screener_fleet_config_dir }}/source-review-api-key"
+screener_fleet_source_review_key_file: >-
+  {{ screener_fleet_secrets_dir + '/source-review-api-key'
+     if screener_fleet_x509_enabled
+     else screener_fleet_config_dir + '/source-review-api-key' }}
 screener_fleet_env_file: "{{ screener_fleet_config_dir }}/fleet.env"
 screener_fleet_release_env_file: "{{ screener_fleet_config_dir }}/release.env"
 screener_fleet_update_state_dir: "{{ screener_fleet_state_dir }}/updater"

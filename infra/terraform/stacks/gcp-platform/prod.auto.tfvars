@@ -22,6 +22,9 @@ enable_screener_fleet               = true
 enable_screener_capacity_controller = true
 # Rehearsal VM is opt-in through the protected workflow and absent otherwise.
 enable_screener_fleet_dev_host = false
+# The bare-metal X.509 identity is enabled only during a protected apply after
+# its public CA trust anchor has been reviewed and supplied.
+enable_screener_fleet_x509_identity = false
 
 screener_fleet_min_replicas         = 0
 screener_fleet_max_replicas         = 6
