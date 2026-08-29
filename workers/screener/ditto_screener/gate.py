@@ -938,6 +938,7 @@ class BuildGate:
                     review_task = asyncio.create_task(cleared_preflight())
 
             if policy_only:
+
                 async def unavailable_challenge(
                     _challenge_id: str,
                     _request: Mapping[str, object],
@@ -968,8 +969,7 @@ class BuildGate:
                 if (
                     decision.outcome == ScreeningOutcome.PASS
                     and preflight_clearance is not None
-                    and preflight_clearance.failure_disposition
-                    == "pass_inconclusive"
+                    and preflight_clearance.failure_disposition == "pass_inconclusive"
                 ):
                     deferred = self._policy.preexecution_source_decision(
                         preflight_clearance
