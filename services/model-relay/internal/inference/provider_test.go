@@ -284,6 +284,7 @@ func TestPublicProviderResponseKeepsEmptyToolCallsArray(t *testing.T) {
 const structuredOutputFailureBody = `{"error":{"message":"Upstream error from Groq: Failed to validate JSON. Please adjust your prompt. See 'failed_generation' for more details.","code":502}}`
 const unexpectedToolFailureBody = `{"error":{"message":"Upstream error from Groq: Tool choice is none, but model called a tool","code":502}}`
 const undeclaredToolFailureBody = `{"error":{"message":"Upstream error from Groq: Tool call validation failed: tool call validation failed: attempted to call tool 'calendar_search_events' which was not in request.tools","code":502}}`
+const invalidToolParametersFailureBody = "{\"error\":{\"message\":\"Upstream error from Groq: Tool call validation failed: tool call validation failed: parameters for tool create_workflow did not match schema: errors: [`/schedule`: expected string, but got null]\",\"code\":502}}"
 
 func aggregateChatConfig(upstreamURL string) config.InferenceProxyConfig {
 	return config.InferenceProxyConfig{
@@ -400,6 +401,74 @@ func TestUndeclaredToolProviderErrorRequiresToolAbsentFromRequest(t *testing.T) 
 	}
 }
 
+func TestInvalidToolParametersProviderErrorRequiresDeclaredTool(t *testing.T) {
+	var response map[string]any
+	decoder := json.NewDecoder(strings.NewReader(invalidToolParametersFailureBody))
+	decoder.UseNumber()
+	if err := decoder.Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	declaredTool := map[string]any{"type": "function", "function": map[string]any{"name": "create_workflow"}}
+	if !minerRecoverableProviderError(map[string]any{"tools": []any{declaredTool}}, response) {
+		t.Fatal("generated arguments for a declared tool were not miner-recoverable")
+	}
+	if minerRecoverableProviderError(map[string]any{"tools": []any{}}, response) {
+		t.Fatal("parameter failure for an undeclared tool was marked miner-recoverable")
+	}
+}
+
+func TestInvalidToolParametersFlowToRecoverableFailureClass(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(invalidToolParametersFailureBody))
+	}))
+	defer upstream.Close()
+
+	declaredTool := map[string]any{"type": "function", "function": map[string]any{"name": "create_workflow"}}
+	payload := map[string]any{
+		"model":    "openai/gpt-oss-20b",
+		"messages": []any{map[string]any{"role": "user", "content": "create it"}},
+		"tools":    []any{declaredTool},
+	}
+	completed, exhausted := completeChatWithRecovery(
+		context.Background(), upstream.Client(), aggregateChatConfig(upstream.URL), payload,
+		"openai/gpt-oss-20b", "openrouter", "", nil, nil,
+		func(context.Context, time.Duration) {},
+	)
+	if completed != nil || exhausted == nil {
+		t.Fatalf("result=%v exhausted=%v", completed, exhausted)
+	}
+	if exhausted.terminalErrorCode != providerGenerationInvalidCode {
+		t.Fatalf("terminal code=%q want %s", exhausted.terminalErrorCode, providerGenerationInvalidCode)
+	}
+	failure := chatProviderFailure(exhausted)
+	if got := failure.headers[minerRecoverableFailureHeader]; got != minerRecoverableGeneration {
+		t.Fatalf("failure class=%q want %q", got, minerRecoverableGeneration)
+	}
+}
+
+func TestInvalidToolParametersProviderErrorKeepsOtherFailuresClosed(t *testing.T) {
+	declaredTool := map[string]any{"type": "function", "function": map[string]any{"name": "create_workflow"}}
+	request := map[string]any{"tools": []any{declaredTool}}
+	for name, body := range map[string]string{
+		"schema definition rejection": `{"error":{"message":"Upstream error from Groq: invalid JSON schema for tool create_workflow: 'required' present but 'properties' is missing","code":502}}`,
+		"generic parameter text":      `{"error":{"message":"parameters for tool create_workflow did not match schema: errors: bad value","code":502}}`,
+		"missing error detail":        `{"error":{"message":"Upstream error from Groq: Tool call validation failed: tool call validation failed: parameters for tool create_workflow did not match schema: errors:","code":502}}`,
+		"non-502 envelope":            `{"error":{"message":"Upstream error from Groq: Tool call validation failed: tool call validation failed: parameters for tool create_workflow did not match schema: errors: bad value","code":400}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var response map[string]any
+			decoder := json.NewDecoder(strings.NewReader(body))
+			decoder.UseNumber()
+			if err := decoder.Decode(&response); err != nil {
+				t.Fatal(err)
+			}
+			if minerRecoverableProviderError(request, response) {
+				t.Fatal("non-generation failure was marked miner-recoverable")
+			}
+		})
+	}
+}
+
 func TestChatProviderFailureMarksOnlyRecoverableGenerationErrors(t *testing.T) {
 	recoverable := chatProviderFailure(&chatProviderExhausted{terminalErrorCode: providerGenerationInvalidCode})
 	if recoverable.status != http.StatusBadGateway || recoverable.message != "inference provider unavailable" {
@@ -412,6 +481,12 @@ func TestChatProviderFailureMarksOnlyRecoverableGenerationErrors(t *testing.T) {
 	ordinary := chatProviderFailure(&chatProviderExhausted{terminalErrorCode: "provider_unavailable"})
 	if len(ordinary.headers) != 0 {
 		t.Fatalf("ordinary provider failure was marked recoverable: %+v", ordinary.headers)
+	}
+	for _, terminalCode := range []string{"upstream_http_401", "upstream_http_429", "provider_transport", "provider_timeout"} {
+		failure := chatProviderFailure(&chatProviderExhausted{terminalErrorCode: terminalCode})
+		if len(failure.headers) != 0 {
+			t.Fatalf("%s exposed private classification: %+v", terminalCode, failure.headers)
+		}
 	}
 }
 
