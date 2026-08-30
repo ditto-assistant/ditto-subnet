@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.155.1 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Make final adjudication terminal
+  ([#1343](https://github.com/ditto-assistant/ditto-subnet/pull/1343),
+  [`a59eedd`](https://github.com/ditto-assistant/ditto-subnet/commit/a59eedd14541f75d8f70e477c5fe6a851b85f9cd))
+
+
 ## v0.155.0 (2026-08-30)
 
 ### Features
