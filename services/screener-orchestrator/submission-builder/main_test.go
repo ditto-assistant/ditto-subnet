@@ -26,6 +26,30 @@ func TestSuccessHoldWaitsForControllerDelete(t *testing.T) {
 	}
 }
 
+func TestSanitizedEnvironmentStripsDisposableExitControl(t *testing.T) {
+	t.Setenv("DITTO_BUILD_EXIT_AFTER_COMPLETE", "1")
+
+	joined := strings.Join(sanitizedEnvironment(), "\n")
+	if strings.Contains(joined, "DITTO_BUILD_EXIT_AFTER_COMPLETE") {
+		t.Fatal("builder lifecycle control reached Kaniko")
+	}
+}
+
+func TestDisposableExitControlIsExactAndConsumed(t *testing.T) {
+	t.Setenv("DITTO_BUILD_EXIT_AFTER_COMPLETE", "1")
+	if !exitAfterCompleteRequested() {
+		t.Fatal("disposable build did not request immediate exit")
+	}
+	if _, ok := os.LookupEnv("DITTO_BUILD_EXIT_AFTER_COMPLETE"); ok {
+		t.Fatal("disposable lifecycle control remained in the environment")
+	}
+
+	t.Setenv("DITTO_BUILD_EXIT_AFTER_COMPLETE", "true")
+	if exitAfterCompleteRequested() {
+		t.Fatal("non-canonical lifecycle control requested immediate exit")
+	}
+}
+
 func TestDecodeURLRequiresTLS(t *testing.T) {
 	encoded := "aHR0cDovL2V4YW1wbGUudGVzdC9hcnRpZmFjdA=="
 	if _, err := decodeURL(encoded); err == nil {

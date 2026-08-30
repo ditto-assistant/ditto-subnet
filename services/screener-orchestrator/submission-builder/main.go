@@ -114,6 +114,7 @@ func run() error {
 	platform := strings.TrimRight(os.Getenv("DITTO_PLATFORM_URL"), "/")
 	buildID := os.Getenv("DITTO_BUILD_ID")
 	token := os.Getenv("DITTO_BUILD_JOB_TOKEN")
+	exitAfterComplete := exitAfterCompleteRequested()
 	os.Unsetenv("DITTO_BUILD_JOB_TOKEN")
 	if platform == "" || !strings.HasPrefix(platform, "https://") {
 		return errors.New("invalid platform URL")
@@ -204,8 +205,16 @@ func run() error {
 		return stageFailure("COMPLETE", errors.New("platform did not verify remote image"))
 	}
 	fmt.Printf("DITTO_SUBMISSION_BUILD_OK=%s:%d\n", outputSHA, outputSize)
-	holdUntilDeleted()
+	if !exitAfterComplete {
+		holdUntilDeleted()
+	}
 	return nil
+}
+
+func exitAfterCompleteRequested() bool {
+	requested := os.Getenv("DITTO_BUILD_EXIT_AFTER_COMPLETE") == "1"
+	os.Unsetenv("DITTO_BUILD_EXIT_AFTER_COMPLETE")
+	return requested
 }
 
 // Rentals are persistent: if PID 1 exits, Targon restarts the container.
@@ -227,7 +236,8 @@ func sanitizedEnvironment() []string {
 	result := make([]string, 0, len(os.Environ()))
 	for _, item := range os.Environ() {
 		name, _, _ := strings.Cut(item, "=")
-		if name == "DITTO_BUILD_JOB_TOKEN" || strings.Contains(name, "TOKEN") ||
+		if name == "DITTO_BUILD_EXIT_AFTER_COMPLETE" ||
+			name == "DITTO_BUILD_JOB_TOKEN" || strings.Contains(name, "TOKEN") ||
 			strings.Contains(name, "SECRET") || strings.Contains(name, "KEY") {
 			continue
 		}

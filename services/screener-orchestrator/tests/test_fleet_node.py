@@ -147,6 +147,7 @@ def test_build_seed_contains_only_the_attempt_token() -> None:
     assert "SCREENER_API_TOKEN" not in script
     assert "SCREENER_MNEMONIC" not in script
     assert base64.b64encode(token.encode()).decode() in script
+    assert "DITTO_BUILD_EXIT_AFTER_COMPLETE=1" in script
 
 
 def test_runtime_script_rejects_non_https_archive() -> None:

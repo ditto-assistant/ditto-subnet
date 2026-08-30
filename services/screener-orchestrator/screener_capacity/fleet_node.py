@@ -347,6 +347,7 @@ docker run --rm --network host \\
   -e DITTO_PLATFORM_URL={shlex.quote(platform_url)} \\
   -e DITTO_BUILD_ID={build_id} \\
   -e DITTO_BUILD_JOB_TOKEN \\
+  -e DITTO_BUILD_EXIT_AFTER_COMPLETE=1 \\
   {image}
 """
 
