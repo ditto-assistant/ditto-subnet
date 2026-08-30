@@ -138,6 +138,12 @@ func openOrCreateDirectory(parentFD int, name string) (*os.File, error) {
 		unix.Close(fd)
 		return nil, errors.New("open outbox directory handle")
 	}
+	if created {
+		if err := unix.Fchmod(fd, 0o700); err != nil {
+			file.Close()
+			return nil, fmt.Errorf("set outbox directory permissions: %w", err)
+		}
+	}
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR ||
 		stat.Mode&0o777 != 0o700 || stat.Uid != uint32(os.Geteuid()) {

@@ -58,7 +58,7 @@ type Config struct {
 	OrphanGrace       time.Duration
 	ReleasedRetention time.Duration
 	ExpiredRetention  time.Duration
-	Now               func() time.Time
+	Now               func() time.Time // must not call Store methods
 }
 
 type Binding struct {

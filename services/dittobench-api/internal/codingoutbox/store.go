@@ -86,9 +86,9 @@ func (store *Store) Reserve(
 	if reservation <= 0 || reservation > store.config.MaxTotalBytes {
 		return nil, ErrCapacity
 	}
+	now := store.config.Now().UTC()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	now := store.config.Now().UTC()
 	if err := store.checkOpenAndClock(now); err != nil {
 		return nil, err
 	}
@@ -433,13 +433,16 @@ func (store *Store) persistRecord(record *Record) error {
 		return fmt.Errorf("install outbox record: %w", err)
 	}
 	keep = true
+	store.records[record.ID] = cloneRecord(record)
 	if err := verifyNamedInode(store.dirs.records, target, dev, ino, 0o600); err != nil {
 		return err
 	}
 	if err := unix.Fsync(int(store.dirs.records.Fd())); err != nil {
+		store.physicalKnown = false
 		return fmt.Errorf("sync outbox records directory: %w", err)
 	}
 	if err := unix.Fsync(int(store.dirs.staging.Fd())); err != nil {
+		store.physicalKnown = false
 		return fmt.Errorf("sync outbox staging directory: %w", err)
 	}
 	return store.validateRootIdentity()
@@ -535,7 +538,13 @@ func validateRecord(record *Record, expectedID string) error {
 		if artifact.ObjectKey != "sha256/"+artifact.FrozenPatchSHA256 || !lowerSHA256(artifact.FrozenPatchSHA256) ||
 			artifact.SizeBytes <= 0 || artifact.SizeBytes > record.Limits.MaxPatchBytes ||
 			artifact.FrozenPatchSHA256 != metadata.FrozenPatchSHA256 || artifact.FinalTreeSHA256 != metadata.FinalTreeSHA256 ||
-			artifact.ChangedPathRoot != metadata.ChangedPathRoot || metadata.CaseID != record.Binding.CaseID {
+			artifact.ChangedPathRoot != metadata.ChangedPathRoot || metadata.CaseID != record.Binding.CaseID ||
+			metadata.CodingContractVersion != 1 ||
+			!lowerSHA256(metadata.BaseTreeSHA256) || !lowerSHA256(metadata.VisibleBundleSHA256) ||
+			!lowerSHA256(metadata.AuthoringEventRoot) || !lowerSHA256(metadata.AuthoringTranscriptSHA256) ||
+			metadata.AuthoringTranscriptBytes < 0 ||
+			(record.Transcript != nil && (metadata.AuthoringTranscriptSHA256 != record.Transcript.SHA256 ||
+				metadata.AuthoringTranscriptBytes != record.Transcript.SizeBytes)) {
 			return fmt.Errorf("%w: frozen reference disagrees", ErrCorrupt)
 		}
 	}

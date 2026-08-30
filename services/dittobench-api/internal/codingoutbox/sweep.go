@@ -17,9 +17,9 @@ func (store *Store) Sweep(ctx context.Context) (SweepReport, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return SweepReport{}, ErrInvalid
 	}
+	now := store.config.Now().UTC()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	now := store.config.Now().UTC()
 	if err := store.checkOpenAndClock(now); err != nil {
 		return SweepReport{}, err
 	}
@@ -53,9 +53,9 @@ func (store *Store) Sweep(ctx context.Context) (SweepReport, error) {
 			report.ExpiredRecords++
 		}
 		deleteRecord := record.State == StateReleased &&
-			now.Sub(time.Unix(record.ReleasedAtUnix, 0)) >= store.config.ReleasedRetention
+			now.Sub(time.Unix(record.ReleasedAtUnix, 0).Add(time.Second)) >= store.config.ReleasedRetention
 		deleteRecord = deleteRecord || record.State == StateExpired &&
-			now.Sub(time.Unix(record.ExpiredAtUnix, 0)) >= store.config.ExpiredRetention
+			now.Sub(time.Unix(record.ExpiredAtUnix, 0).Add(time.Second)) >= store.config.ExpiredRetention
 		if deleteRecord {
 			if err := store.removeRecordFile(id); err != nil {
 				return report, err
@@ -84,7 +84,7 @@ func (store *Store) Sweep(ctx context.Context) (SweepReport, error) {
 		return report, err
 	}
 	report.DeletedStagingFiles = deletedStaging
-	deletedObjects, err := sweepObjects(ctx, store.dirs.sha256Dir, references, now, store.config.OrphanGrace, physicalLimit)
+	deletedObjects, err := sweepObjects(ctx, store.dirs.sha256Dir, store.rootDev, references, now, store.config.OrphanGrace, physicalLimit)
 	if err != nil {
 		return report, err
 	}
@@ -174,6 +174,7 @@ func sweepStaging(
 func sweepObjects(
 	ctx context.Context,
 	shaDirectory *os.File,
+	rootDev uint64,
 	references map[string]struct{},
 	now time.Time,
 	grace time.Duration,
@@ -205,6 +206,10 @@ func sweepObjects(
 		if shard == nil {
 			unix.Close(fd)
 			return deleted, ErrCorrupt
+		}
+		if err := validateDirectoryLink(shaDirectory, prefix, shard, rootDev); err != nil {
+			shard.Close()
+			return deleted, err
 		}
 		shardDeleted := false
 		for {

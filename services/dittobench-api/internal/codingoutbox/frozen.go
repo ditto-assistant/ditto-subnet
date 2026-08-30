@@ -29,9 +29,9 @@ func (attempt *Attempt) StoreFrozen(
 		return FrozenArtifact{}, ErrInvalid
 	}
 	store := attempt.store
+	now := store.config.Now().UTC()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	now := store.config.Now().UTC()
 	if err := store.checkOpenAndClock(now); err != nil {
 		return FrozenArtifact{}, err
 	}
@@ -102,6 +102,7 @@ func (attempt *Attempt) StoreFrozen(
 	updated.State = StateReady
 	updated.SealedAtUnix = now.Unix()
 	if err := store.persistRecord(updated); err != nil {
+		store.physicalKnown = false
 		return FrozenArtifact{}, err
 	}
 	store.records[attempt.id] = updated
@@ -118,9 +119,9 @@ func (attempt *Attempt) Seal(ctx context.Context, result codingrunner.FreezeResu
 		return Record{}, err
 	}
 	store := attempt.store
+	now := store.config.Now().UTC()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	now := store.config.Now().UTC()
 	if err := store.checkOpenAndClock(now); err != nil {
 		return Record{}, err
 	}
@@ -172,9 +173,10 @@ func (store *Store) LoadFrozen(ctx context.Context, id string) (codingrunner.Fro
 	if ctx == nil || ctx.Err() != nil || !lowerSHA256(id) {
 		return codingrunner.FrozenSubmission{}, ErrInvalid
 	}
+	now := store.config.Now().UTC()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if err := store.checkOpenAndClock(store.config.Now().UTC()); err != nil {
+	if err := store.checkOpenAndClock(now); err != nil {
 		return codingrunner.FrozenSubmission{}, err
 	}
 	record := store.records[id]
