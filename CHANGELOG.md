@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.171.0 (2026-08-30)
+
+### Bug Fixes
+
+- **backroom**: Scope operator worklists to active generation
+  ([#1371](https://github.com/ditto-assistant/ditto-subnet/pull/1371),
+  [`85c927f`](https://github.com/ditto-assistant/ditto-subnet/commit/85c927f7a8bff6e26951471ee7171f1e820b2055))
+
+### Features
+
+- **platform**: Persist qualified certification leases
+  ([`d0f8a32`](https://github.com/ditto-assistant/ditto-subnet/commit/d0f8a32fa9d27ec09cade06ccc5fe09924aa2f37))
+
+
 ## v0.170.1 (2026-08-30)
 
 ### Bug Fixes
