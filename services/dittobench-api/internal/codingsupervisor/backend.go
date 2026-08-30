@@ -191,24 +191,32 @@ func (backend *SessionBackend) prepare(request Request) (Response, error) {
 	}
 	key := sessionKey(request)
 	backend.mu.Lock()
-	defer backend.mu.Unlock()
 	if backend.closed {
+		backend.mu.Unlock()
 		return Response{}, ErrClosed
 	}
 	if record := backend.sessions[key]; record != nil {
 		if record.leaseSHA256 != digest || record.deadlineUnix != request.Deadline.UnixNano() {
+			backend.mu.Unlock()
 			return Response{}, ErrConflict
 		}
-		return preparationResponse(request, record.preparation), nil
+		outcome := record.preparation
+		backend.mu.Unlock()
+		return preparationResponse(request, outcome), nil
 	}
 	if len(backend.sessions) >= backend.maximumSessions {
+		backend.mu.Unlock()
 		return Response{}, ErrUnavailable
 	}
-	publicKey, privateKey, err := generateBrokerKey(backend.random)
+	random := backend.random
+	newSessionID := backend.newSessionID
+	backend.mu.Unlock()
+
+	publicKey, privateKey, err := generateBrokerKey(random)
 	if err != nil {
 		return Response{}, ErrUnavailable
 	}
-	sessionID, err := backend.newSessionID()
+	sessionID, err := newSessionID()
 	if err != nil || !canonicalUUID(sessionID) {
 		zero(privateKey)
 		return Response{}, ErrUnavailable
@@ -217,6 +225,24 @@ func (backend *SessionBackend) prepare(request Request) (Response, error) {
 		SessionID: sessionID, BrokerPublicKey: base64.RawURLEncoding.EncodeToString(publicKey),
 	}
 	if validatePreparation(preparation) != nil {
+		zero(privateKey)
+		return Response{}, ErrUnavailable
+	}
+
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if backend.closed {
+		zero(privateKey)
+		return Response{}, ErrClosed
+	}
+	if record := backend.sessions[key]; record != nil {
+		zero(privateKey)
+		if record.leaseSHA256 != digest || record.deadlineUnix != request.Deadline.UnixNano() {
+			return Response{}, ErrConflict
+		}
+		return preparationResponse(request, record.preparation), nil
+	}
+	if len(backend.sessions) >= backend.maximumSessions {
 		zero(privateKey)
 		return Response{}, ErrUnavailable
 	}
