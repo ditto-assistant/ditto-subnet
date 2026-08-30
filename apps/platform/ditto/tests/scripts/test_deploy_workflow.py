@@ -75,7 +75,22 @@ def test_relay_release_prefers_private_gcs_with_accelerated_iap_fallback() -> No
         "${DEPLOY_REVISION}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tgz"
     )
     assert f'artifact_uri="{gcs_uri}"' in roll
-    assert 'gcloud storage cp relay-artifact.tgz "$artifact_uri"' in roll
+    # Staging is a direct objects.insert: gcloud storage cp intermittently
+    # preflights with bucket-level objects.list, which the create-only trust
+    # model must never grant (it would enumerate agent tarballs).
+    assert "gcloud storage cp relay-artifact.tgz" not in roll
+    assert 'token="$(gcloud auth print-access-token)"' in roll
+    assert "--data-binary @relay-artifact.tgz" in roll
+    assert (
+        "https://storage.googleapis.com/upload/storage/v1/b/"
+        "ditto-platform-agents-${TARGET_ENVIRONMENT}/o?uploadType=media&name=$object"
+        in roll
+    )
+    assert (
+        'object="relay-releases%2F${DEPLOY_REVISION}%2F'
+        '${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tgz"' in roll
+    )
+    assert "--retry 3 --retry-all-errors" in roll
     assert (
         "sudo -iu deploy gcloud storage cp '$artifact_uri' "
         "'$remote_artifact/relay-artifact.tgz'" in roll
@@ -89,7 +104,7 @@ def test_relay_release_prefers_private_gcs_with_accelerated_iap_fallback() -> No
     assert "numpy==2.4.4" in roll
     assert "import numpy" in roll
     assert "gcloud compute scp relay-artifact.tgz" in roll
-    assert roll.index("gcloud storage cp relay-artifact.tgz") < roll.index(
+    assert roll.index("--data-binary @relay-artifact.tgz") < roll.index(
         "gcloud compute scp relay-artifact.tgz"
     )
 
