@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.150.1 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Release disposable builder after success
+  ([#1334](https://github.com/ditto-assistant/ditto-subnet/pull/1334),
+  [`e7282f0`](https://github.com/ditto-assistant/ditto-subnet/commit/e7282f090bce206fc871c01f3c76fa24ad216b09))
+
+
 ## v0.150.0 (2026-08-30)
 
 ### Features
