@@ -14,6 +14,9 @@ ROOT_VERIFY_PATH = Path(__file__).parents[2] / ".github/workflows/root-verify.ym
 WORKFLOW_DIR = RELEASE_WORKFLOW_PATH.parent
 PYPROJECT_PATH = Path(__file__).parents[2] / "pyproject.toml"
 ROOT_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
+UNIFIED_STARTER_DOCKERFILE_PATH = (
+    Path(__file__).parents[2] / "miners/dittobench-unified-starter-kit/Dockerfile"
+)
 
 RELEASE_OWNED_COMPONENT_WORKFLOWS = (
     "ci.yml",
@@ -91,6 +94,44 @@ def test_coding_starter_ci_tracks_the_public_contract_and_builds_the_image() -> 
     assert "test-image-health.sh" in unified_probe["run"]
     e2e = _step(verify["steps"], "Run the scripted Rust and Python practice E2E")
     assert "scripts/test-coding-starter-practice-e2e.sh" in e2e["run"]
+
+
+def test_unified_starter_image_caches_dependencies_before_source() -> None:
+    """Source-only edits must not invalidate the unified Rust dependency layer."""
+    dockerfile = UNIFIED_STARTER_DOCKERFILE_PATH.read_text()
+
+    manifest_copies = (
+        (
+            "COPY dittobench-starter-kit/Cargo.toml "
+            "dittobench-starter-kit/Cargo.lock ./dittobench-starter-kit/",
+            "COPY dittobench-starter-kit ./dittobench-starter-kit",
+        ),
+        (
+            "COPY dittobench-coding-starter-kit/Cargo.toml "
+            "dittobench-coding-starter-kit/Cargo.lock "
+            "./dittobench-coding-starter-kit/",
+            "COPY dittobench-coding-starter-kit ./dittobench-coding-starter-kit",
+        ),
+        (
+            "COPY dittobench-unified-starter-kit/Cargo.toml "
+            "dittobench-unified-starter-kit/Cargo.lock "
+            "./dittobench-unified-starter-kit/",
+            "COPY dittobench-unified-starter-kit ./dittobench-unified-starter-kit",
+        ),
+    )
+    warmup_build = "cargo build --locked --release --bin dittobench-unified-miner"
+
+    assert "cargo clean --locked --release" in dockerfile
+    assert "-p dittobench-starter-kit" in dockerfile
+    assert "-p dittobench-coding-starter-kit" in dockerfile
+    assert dockerfile.count(warmup_build) == 2
+    for manifest_copy, source_copy in manifest_copies:
+        assert manifest_copy in dockerfile
+        assert dockerfile.index(manifest_copy) < dockerfile.index(warmup_build)
+        assert dockerfile.index("cargo clean --locked --release") < dockerfile.index(
+            source_copy
+        )
+        assert dockerfile.index(source_copy) < dockerfile.rindex(warmup_build)
 
 
 def test_release_fanout_is_gated_by_the_component_plan() -> None:
