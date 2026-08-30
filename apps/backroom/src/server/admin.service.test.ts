@@ -274,6 +274,8 @@ describe('Bench v9 confirmation bundle administration', () => {
   const listResponse = {
     items: [pendingBundle],
     count: 1,
+    generation: 'active',
+    active_bench_version: 9,
     budget: {
       utc_day: '2026-08-08',
       revision: 1,
@@ -395,6 +397,7 @@ describe('Bench v9 confirmation bundle administration', () => {
     const parsed = await fetchConfirmationBundles({ state: 'pending', limit: 25 })
     const requestUrl = new URL((fetchMock.mock.calls[0] as [string])[0])
     expect(requestUrl.pathname).toBe('/api/v1/admin/confirmation-bundles')
+    expect(requestUrl.searchParams.get('generation')).toBe('active')
     expect(requestUrl.searchParams.get('state')).toBe('pending')
     expect(requestUrl.searchParams.get('limit')).toBe('25')
     expect(requestUrl.searchParams.get('offset')).toBe('0')
@@ -402,6 +405,21 @@ describe('Bench v9 confirmation bundle administration', () => {
     expect(parsed.shadow_calibration.measured_base_cost_microusd).toBe(130_000)
     expect(parsed.shadow_calibration.projected_epoch_spend_microusd).toBeNull()
     expect(parsed.items[0].settings_checksum).toBe(digest)
+  })
+
+  it('forwards the explicit historical confirmation-bundle audit scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ ...listResponse, generation: 'all' }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchConfirmationBundles({ generation: 'all' })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/confirmation-bundles?generation=all&limit=100&offset=0',
+      expect.objectContaining({ method: 'GET' }),
+    )
   })
 
   it('defaults validator assignments to the active generation and forwards the audit opt-in', async () => {
@@ -470,7 +488,7 @@ describe('Bench v9 confirmation bundle administration', () => {
     ).toBe(true)
     expect(
       fetchMock.mock.calls.some(([called]) =>
-        String(called).includes('/admin/confirmation-bundles?'),
+        String(called).includes('/admin/confirmation-bundles?generation=active'),
       ),
     ).toBe(true)
   })

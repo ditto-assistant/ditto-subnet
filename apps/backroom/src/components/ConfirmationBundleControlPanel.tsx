@@ -104,8 +104,17 @@ export function ConfirmationBundleControlPanel({
         readBundles({
           data:
             nextFilter === 'all'
-              ? { limit: CONFIRMATION_BUNDLE_PAGE_SIZE, offset: nextOffset }
-              : { state: nextFilter, limit: CONFIRMATION_BUNDLE_PAGE_SIZE, offset: nextOffset },
+              ? {
+                  generation: 'active',
+                  limit: CONFIRMATION_BUNDLE_PAGE_SIZE,
+                  offset: nextOffset,
+                }
+              : {
+                  generation: 'active',
+                  state: nextFilter,
+                  limit: CONFIRMATION_BUNDLE_PAGE_SIZE,
+                  offset: nextOffset,
+                },
         }),
       ])
       setControl(nextControl)

@@ -29,6 +29,7 @@ from ditto.api_server.endpoints import admin_confirmation_bundles
 from ditto.db.models import (
     Agent,
     BenchmarkRollout,
+    ConfirmationBudgetDay,
     ConfirmationBudgetReservation,
     ConfirmationBundle,
     ConfirmationBundleSettingsRevision,
@@ -124,20 +125,28 @@ async def seed_completed_bundle(
     maker: async_sessionmaker[AsyncSession],
     *,
     artifact_sha256: str = "b" * 64,
+    bench_version: int = 9,
 ) -> tuple[UUID, UUID]:
     agent_id = uuid4()
     settings = active_settings(mode=ConfirmationBundleMode.ENFORCE)
     async with maker() as session, session.begin():
-        revision = ConfirmationBundleSettingsRevision(
-            parent_revision=0,
-            scope="*",
-            settings=settings.model_dump(mode="json"),
-            checksum=canonical_checksum(settings.model_dump(mode="json")),
-            reason="operator approved bounded confirmation policy",
-            actor="operator@example.com",
+        revision = await session.scalar(
+            select(ConfirmationBundleSettingsRevision)
+            .where(ConfirmationBundleSettingsRevision.scope == "*")
+            .order_by(ConfirmationBundleSettingsRevision.revision.desc())
+            .limit(1)
         )
-        session.add(revision)
-        await session.flush()
+        if revision is None:
+            revision = ConfirmationBundleSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=settings.model_dump(mode="json"),
+                checksum=canonical_checksum(settings.model_dump(mode="json")),
+                reason="operator approved bounded confirmation policy",
+                actor="operator@example.com",
+            )
+            session.add(revision)
+            await session.flush()
         session.add(
             Agent(
                 agent_id=agent_id,
@@ -152,7 +161,7 @@ async def seed_completed_bundle(
         resolution = await get_or_create_confirmation_bundle(
             session,
             agent_id=agent_id,
-            bench_version=9,
+            bench_version=bench_version,
             **base_proof_kwargs(quality_micros=750_000, stderr_micros=20_000),
             settings_revision=revision.revision,
             settings=settings,
@@ -160,12 +169,14 @@ async def seed_completed_bundle(
         )
         assert resolution.bundle is not None
         bundle = resolution.bundle
+        budget = await session.get(ConfirmationBudgetDay, _NOW.date())
+        budget_revision = budget.revision if budget is not None else 0
         decision = await reserve_confirmation_bundle_budget(
             session,
             bundle_id=bundle.bundle_id,
             reservation_id=uuid4(),
             now=_NOW,
-            expected_revision=0,
+            expected_revision=budget_revision,
             settings_revision=revision.revision,
             settings=settings,
             reserve_microusd=50_000,
@@ -182,7 +193,7 @@ async def seed_completed_bundle(
         await settle_confirmation_bundle_budget(
             session,
             reservation_id=decision.reservation.reservation_id,
-            expected_revision=1,
+            expected_revision=budget_revision + 1,
             actual_microusd=15_000,
             failed_attempt=False,
             settled_at=_NOW + timedelta(minutes=4),
@@ -634,6 +645,45 @@ class TestBundleReadAndRetest:
         detail = await client.get(f"{_BUNDLES_URL}/{bundle_id}", headers=_HEADERS)
         assert detail.status_code == 200
         assert detail.json()["bundle_id"] == str(bundle_id)
+
+    async def test_list_defaults_to_active_generation_but_can_audit_history(
+        self, app, client, settings_maker
+    ) -> None:
+        install(app, settings_maker)
+        _, historical_bundle_id = await seed_completed_bundle(
+            settings_maker,
+            artifact_sha256="c" * 64,
+            bench_version=9,
+        )
+        _, active_bundle_id = await seed_completed_bundle(
+            settings_maker,
+            artifact_sha256="d" * 64,
+            bench_version=10,
+        )
+        await activate_bench_version(settings_maker, 10)
+
+        active = await client.get(_BUNDLES_URL, headers=_HEADERS)
+        historical = await client.get(
+            _BUNDLES_URL,
+            headers=_HEADERS,
+            params={"generation": "all"},
+        )
+
+        assert active.status_code == 200, active.text
+        assert active.json()["generation"] == "active"
+        assert active.json()["active_bench_version"] == 10
+        assert active.json()["count"] == 1
+        assert [item["bundle_id"] for item in active.json()["items"]] == [
+            str(active_bundle_id)
+        ]
+        assert historical.status_code == 200, historical.text
+        assert historical.json()["generation"] == "all"
+        assert historical.json()["active_bench_version"] == 10
+        assert historical.json()["count"] == 2
+        assert {item["bundle_id"] for item in historical.json()["items"]} == {
+            str(historical_bundle_id),
+            str(active_bundle_id),
+        }
 
     async def test_missing_bundle_is_404(self, app, client, settings_maker) -> None:
         install(app, settings_maker)

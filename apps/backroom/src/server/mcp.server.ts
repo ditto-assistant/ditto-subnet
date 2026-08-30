@@ -591,7 +591,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   set_confirmation_bundle_settings:
     'Apply a complete bounded confirmation policy with revision guard, reason, and exact mode phrase. Does not activate rewards.',
   list_confirmation_bundles:
-    'Page LongMem evidence, spend, ablations, subjects, and failure diagnostics.',
+    'Page active-era LongMem evidence; generation=all audits historical bundles.',
   get_confirmation_lane_diagnosis:
     'Diagnose LongMem issuance vs execution: counts, failure histograms, lease age, and likely_cause. Read-only.',
   get_confirmation_bundle:
@@ -1868,8 +1868,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List LongMem confirmation bundles',
       description:
-        'List newest-first LongMem bundles for the live benchmark with lifecycle, signed evidence, profile provenance, spend, and shadow-cost measurements. Filter by state and page bounds. Requires backroom:read. Each ticket carries failure_reason -- the coarse protocol class for diagnosis and manual retest -- plus failure_class and failure_stage, the allowlisted diagnostic and last published stage, all reporter-signed. Failed bundles never reissue automatically. Null fields identify an old reporter; repeated nulls mean the fleet has not adopted the contract. prepare_rejection is the allowlisted Go-to-Python prepare-report 409, distinct from the later fail-job class. Null means prepare never ran or succeeded. shadow_calibration counts completed_bundle_count (bundles that actually produced verified evidence) separately from superseded_bundle_count and failed_bundle_count: a lane with zero completions is an execution outage, not a cohort that completed and never promoted, and promotion_rate_bps is null rather than zero in that case.',
+        'List newest-first LongMem bundles for the live benchmark with lifecycle, signed evidence, profile provenance, spend, and shadow-cost measurements. generation=active (default) returns the active era plus newer in-progress rollout work; generation=all is the explicit historical evidence audit. Exact get_confirmation_bundle and authorize_confirmation_bundle_retest retain historical lookup/retest access. Filter by state and page bounds. Requires backroom:read. Each ticket carries failure_reason -- the coarse protocol class for diagnosis and manual retest -- plus failure_class and failure_stage, the allowlisted diagnostic and last published stage, all reporter-signed. Failed bundles never reissue automatically. Null fields identify an old reporter; repeated nulls mean the fleet has not adopted the contract. prepare_rejection is the allowlisted Go-to-Python prepare-report 409, distinct from the later fail-job class. Null means prepare never ran or succeeded. shadow_calibration counts completed_bundle_count (bundles that actually produced verified evidence) separately from superseded_bundle_count and failed_bundle_count: a lane with zero completions is an execution outage, not a cohort that completed and never promoted, and promotion_rate_bps is null rather than zero in that case.',
       inputSchema: {
+        generation: z.enum(['active', 'all']).default('active'),
         state: confirmationBundleStateSchema.optional(),
         limit: z.number().int().min(1).max(200).default(20),
         offset: z.number().int().min(0).default(0),
@@ -1884,10 +1885,11 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Diagnose LongMem confirmation lane',
       description:
-        'Aggregate LongMem confirmation settings, every lifecycle count, sampled failure_class/failure_stage/prepare_rejection histograms, leased-ticket age, and validator fleet versions into one read-only diagnosis. likely_cause is derived only from those allowlisted fields: leftover_validator_v9_identity_pin is the issuing-but-immediate-platform-unknown signature, prepare_report_rejected means execute finished and prepare-report stored a convert/rebuild code, execution_after_preparing means the validator accepted the lease, and unknown_execution_outage means issuance is on with zero completions but no known histogram. This does not change settings, authorize a retest, or activate rewards. Requires backroom:read.',
+        'Aggregate LongMem confirmation settings, current-era lifecycle counts, sampled failure_class/failure_stage/prepare_rejection histograms, leased-ticket age, and validator fleet versions into one read-only diagnosis. generation=active (default) excludes old benchmark bundles; pass generation=all for the historical lane audit. likely_cause is derived only from those allowlisted fields: leftover_validator_v9_identity_pin is the issuing-but-immediate-platform-unknown signature, prepare_report_rejected means execute finished and prepare-report stored a convert/rebuild code, execution_after_preparing means the validator accepted the lease, and unknown_execution_outage means issuance is on with zero completions but no known histogram. This does not change settings, authorize a retest, or activate rewards. Requires backroom:read.',
+      inputSchema: { generation: z.enum(['active', 'all']).default('active') },
       annotations: toolAnnotations('read'),
     },
-    async () => result(await fetchConfirmationLaneDiagnosis()),
+    async (input) => result(await fetchConfirmationLaneDiagnosis(input)),
   )
 
   registerTool(

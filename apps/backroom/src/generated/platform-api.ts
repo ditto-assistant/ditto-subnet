@@ -418,7 +418,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Confirmation Bundles */
+        /**
+         * Get Confirmation Bundles
+         * @description List current-era confirmation evidence unless history is requested.
+         *
+         *     Bundles are immutable evidence records, so a historical bundle remains
+         *     available by exact id for audit and manual retest.  The generic worklist
+         *     instead follows the benchmark currently in force (plus any newer rollout
+         *     work); ``generation=all`` is the explicit way to inspect the full lineage.
+         */
         get: operations["get_confirmation_bundles_api_v1_admin_confirmation_bundles_get"];
         put?: never;
         post?: never;
@@ -6065,9 +6073,16 @@ export interface components {
         };
         /** AdminConfirmationBundleListResponse */
         AdminConfirmationBundleListResponse: {
+            /** Active Bench Version */
+            active_bench_version: number;
             budget: components["schemas"]["ConfirmationDailyBudgetView"];
             /** Count */
             count: number;
+            /**
+             * Generation
+             * @enum {string}
+             */
+            generation: "active" | "all";
             /** Items */
             items: components["schemas"]["ConfirmationBundleView"][];
             shadow_calibration: components["schemas"]["ConfirmationShadowCalibrationView"];
@@ -24853,6 +24868,7 @@ export interface operations {
         parameters: {
             query?: {
                 state?: components["schemas"]["ConfirmationBundleState"] | null;
+                generation?: "active" | "all";
                 limit?: number;
                 offset?: number;
             };

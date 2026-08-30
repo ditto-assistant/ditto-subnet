@@ -3069,6 +3069,8 @@ export const confirmationBundleListSchema = z
   .strictObject({
     items: z.array(confirmationBundleViewSchema),
     count: z.number().int().nonnegative(),
+    generation: z.enum(['active', 'all']),
+    active_bench_version: z.number().int().positive(),
     budget: z.strictObject({
       utc_day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       revision: z.number().int().nonnegative(),
@@ -3085,6 +3087,9 @@ export const confirmationBundleListSchema = z
   })
 
 export const confirmationBundleListInputSchema = z.strictObject({
+  // Bundles are an expensive evidence lineage. Keep the normal worklist on
+  // current-era evidence; historical rows require an explicit audit request.
+  generation: z.enum(['active', 'all']).default('active'),
   state: confirmationBundleStateSchema.optional(),
   limit: z.number().int().min(1).max(200).default(100),
   offset: z.number().int().min(0).default(0),
