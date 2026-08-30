@@ -2,6 +2,66 @@
 
 <!-- version list -->
 
+## v0.170.0 (2026-08-30)
+
+### Bug Fixes
+
+- **infra**: Retire static production screener
+  ([#1361](https://github.com/ditto-assistant/ditto-subnet/pull/1361),
+  [`8db62f8`](https://github.com/ditto-assistant/ditto-subnet/commit/8db62f8b6872a674b59d62c598c056f97cd15656))
+
+- **infra**: Uncouple screener identity from retired pet
+  ([#1359](https://github.com/ditto-assistant/ditto-subnet/pull/1359),
+  [`8591e74`](https://github.com/ditto-assistant/ditto-subnet/commit/8591e74e371ee1b0ad751178f85f3db08d2903ca))
+
+- **model-relay**: Retry receipt-free provider failures
+  ([#1360](https://github.com/ditto-assistant/ditto-subnet/pull/1360),
+  [`977a1ec`](https://github.com/ditto-assistant/ditto-subnet/commit/977a1ecf6ce8720c61d95cc10c2c13c0a5acfc80))
+
+- **screener**: Include oracle bench version
+  ([#1362](https://github.com/ditto-assistant/ditto-subnet/pull/1362),
+  [`655dce1`](https://github.com/ditto-assistant/ditto-subnet/commit/655dce1b195e5a9e85f934d16e31029559cfdeaa))
+
+- **screener**: Preserve remote review settlement grace
+  ([#1358](https://github.com/ditto-assistant/ditto-subnet/pull/1358),
+  [`2fa32e3`](https://github.com/ditto-assistant/ditto-subnet/commit/2fa32e30ffc110b6beccb0e481a4b3dd62cc85fb))
+
+- **screener**: Use BuildKit in fleet guests
+  ([#1363](https://github.com/ditto-assistant/ditto-subnet/pull/1363),
+  [`ca96bbf`](https://github.com/ditto-assistant/ditto-subnet/commit/ca96bbf1e57f8bbc63ce6ef2aaefd90ea7acbb20))
+
+### Chores
+
+- Remove stale comments across the monorepo
+  ([#1342](https://github.com/ditto-assistant/ditto-subnet/pull/1342),
+  [`72369a8`](https://github.com/ditto-assistant/ditto-subnet/commit/72369a8e9dbcc2b0c8cd3ae098b7bff050f5f175))
+
+### Documentation
+
+- **coding**: Define certification trace context
+  ([`1dbc5f4`](https://github.com/ditto-assistant/ditto-subnet/commit/1dbc5f49fd56381656303d31008dec9d017dfcbd))
+
+- **coding**: Define private screening policy
+  ([`b356886`](https://github.com/ditto-assistant/ditto-subnet/commit/b3568860d192b5e6fb9bf0ab07f8cbe2e01fd52d))
+
+- **coding**: Define qualified certification lease
+  ([`a9f9fda`](https://github.com/ditto-assistant/ditto-subnet/commit/a9f9fda637cece0d0943f5b1ac63011e72573979))
+
+### Features
+
+- **coding**: Publish certification canary authority
+  ([`19b267f`](https://github.com/ditto-assistant/ditto-subnet/commit/19b267f7570043b518d8341082f6ed3b06e1fb71))
+
+- **miners**: Add unified normal and coding starter
+  ([`6841e54`](https://github.com/ditto-assistant/ditto-subnet/commit/6841e54a3849aad6135a4527f9416d790bf3df95))
+
+- **platform**: Define qualified certification lease wire
+  ([`8cbaf73`](https://github.com/ditto-assistant/ditto-subnet/commit/8cbaf735838c441d0148a53b56ce0c9924330c48))
+
+- **screening**: Define coding source-screen evidence
+  ([`a4e0cb7`](https://github.com/ditto-assistant/ditto-subnet/commit/a4e0cb7334e73a07e3c9cdc08694f6806d9724b7))
+
+
 ## v0.169.0 (2026-08-30)
 
 ### Bug Fixes
