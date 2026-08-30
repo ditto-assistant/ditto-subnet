@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - miners/dittobench-coding-starter-kit/**
+      - miners/dittobench-unified-starter-kit/**
+      - miners/dittobench-starter-kit/**
       - research/dittobench-coding-datagen/**
       - packages/dittobench-coding-contract/**
       - services/dittobench-api/internal/codingcertifier/**
@@ -55,7 +57,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-coding-starter-kit-${{ hashFiles('miners/dittobench-coding-starter-kit/Cargo.lock') }}
+          key: ${{ runner.os }}-coding-starter-kit-${{ hashFiles('miners/dittobench-coding-starter-kit/Cargo.lock', 'miners/dittobench-starter-kit/Cargo.lock', 'miners/dittobench-unified-starter-kit/Cargo.lock') }}
 
       - name: Verify format, lint, and tests
         run: |
@@ -69,3 +71,28 @@ jobs:
 
       - name: Build the shadow harness image
         run: docker build --tag dittobench-coding-starter-kit:ci .
+
+      - name: Verify the unified normal and coding starter
+        working-directory: miners/dittobench-unified-starter-kit
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features --verbose
+          cargo run --locked -- submit
+          cd ../..
+          uv run ditto verify \
+            --path miners/dittobench-unified-starter-kit/dittobench-submission.tgz
+
+      - name: Build the unified starter image
+        working-directory: miners
+        run: >-
+          docker build
+          --file dittobench-unified-starter-kit/Dockerfile
+          --tag dittobench-unified-miner:ci
+          .
+
+      - name: Probe unified starter image routes
+        working-directory: .
+        run: >-
+          bash miners/dittobench-unified-starter-kit/scripts/test-image-health.sh
+          dittobench-unified-miner:ci
