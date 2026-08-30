@@ -2077,10 +2077,12 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	endEmbeddingPhase()
 
 	// The relay owns authoritative provider-delivery evidence. Check it before
-	// scoring or persistence: any upstream infrastructure failure during this
-	// run invalidates the whole attempt and lets the validator retry later. This
-	// intentionally does not inspect response content or score magnitude, so a
-	// legitimately weak harness still receives its legitimate low score.
+	// scoring or persistence. A route that never delivered successfully remains
+	// validator infrastructure; a completed sweep with an authenticated success
+	// is scoreable even if other calls failed, because the miner received those
+	// errors and owned the opportunity to recover. The exact failures remain in
+	// relayExecution, and affected cases grade normally instead of buying the
+	// same artifact another lease.
 	var tokenUsage protocol.TokenUsage
 	var relayExecution relayExecutionSummary
 	if scope == scorer.ScopeScored {
@@ -2934,7 +2936,7 @@ func (s *server) probeHarnessModelRoute(
 	if err != nil {
 		return relayHealthSnapshot{}, false, fmt.Errorf("model-route broker snapshot unavailable: %w", err)
 	}
-	if err := relayDegradedSince(start, end); err != nil {
+	if err := relayCompletedSince(start, end); err != nil {
 		return relayHealthSnapshot{}, false, err
 	}
 	return end, end.Requests > start.Requests, nil

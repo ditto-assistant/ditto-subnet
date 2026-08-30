@@ -330,6 +330,48 @@ func TestRelayDegradedSince(t *testing.T) {
 	}
 }
 
+func TestRelayCompletedSinceAcceptsMinerRecovery(t *testing.T) {
+	start := relayHealthSnapshot{
+		AccountingVersion: 2, Requests: 10, Successes: 9, InfrastructureFailures: 1,
+		UsageAvailable: 9, PromptTokens: 90, CompletionTokens: 9, UpstreamAttempts: 11,
+		Provider: "openrouter", ProfileRevision: "route-v1", Model: llm.V7HarnessModel,
+	}
+	recovered := relayHealthSnapshot{
+		AccountingVersion: 2, Requests: 12, Successes: 10, InfrastructureFailures: 2,
+		UsageAvailable: 10, PromptTokens: 100, CompletionTokens: 10, UpstreamAttempts: 13,
+		Provider: "openrouter", ProfileRevision: "route-v1", Model: llm.V7HarnessModel,
+	}
+	if err := relayCompletedSince(start, recovered); err != nil {
+		t.Fatalf("completed run with a later successful delivery was rejected: %v", err)
+	}
+	usage, usageErr := relayUsageSince(start, recovered)
+	execution, executionErr := relayExecutionSince(start, recovered)
+	if usageErr != nil || executionErr != nil {
+		t.Fatalf("recovered accounting failed: usage=%v execution=%v", usageErr, executionErr)
+	}
+	if err := requireCompleteV7Usage(protocol.BenchVersionV12, usage, execution); err != nil {
+		t.Fatalf("recovered run was not scoreable: %v", err)
+	}
+	if execution.InfrastructureFailures != 1 || execution.Successes != 1 {
+		t.Fatalf("signed execution lost recovery evidence: %+v", execution)
+	}
+
+	unavailable := start
+	unavailable.Requests++
+	unavailable.InfrastructureFailures++
+	unavailable.UpstreamAttempts++
+	if err := relayCompletedSince(start, unavailable); err == nil {
+		t.Fatal("wholly unavailable route must remain infrastructure")
+	}
+
+	denied := recovered
+	denied.GrantDenials = 1
+	denied.GrantAgentDeclines = 1
+	if err := relayCompletedSince(start, denied); !errors.Is(err, errAgentInferenceDeclined) {
+		t.Fatalf("grant denial lost its terminal attribution: %v", err)
+	}
+}
+
 func TestRelayExecutionSinceProducesTrustedRunDelta(t *testing.T) {
 	start := relayHealthSnapshot{Requests: 10, Successes: 9, InfrastructureFailures: 1, CallerCancellations: 2, UpstreamAttempts: 12}
 	end := relayHealthSnapshot{Requests: 14, Successes: 12, InfrastructureFailures: 1, CallerCancellations: 3, UpstreamAttempts: 18}
@@ -782,6 +824,8 @@ type postRunRouteFixture struct {
 	start           relayHealthSnapshot
 	cooperate       *atomic.Bool
 	upstreamHealthy *atomic.Bool
+	recoverUpstream *atomic.Bool
+	harnessAttempts *atomic.Int64
 	harnessRuns     *atomic.Int64
 }
 
@@ -789,8 +833,12 @@ func newPostRunRouteFixture(t *testing.T) postRunRouteFixture {
 	t.Helper()
 	upstreamHealthy := &atomic.Bool{}
 	upstreamHealthy.Store(true)
+	recoverUpstream := &atomic.Bool{}
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if !upstreamHealthy.Load() {
+			if recoverUpstream.Load() {
+				upstreamHealthy.Store(true)
+			}
 			http.Error(w, "provider unavailable", http.StatusBadGateway)
 			return
 		}
@@ -827,6 +875,8 @@ func newPostRunRouteFixture(t *testing.T) postRunRouteFixture {
 
 	cooperate := &atomic.Bool{}
 	cooperate.Store(true)
+	harnessAttempts := &atomic.Int64{}
+	harnessAttempts.Store(1)
 	harnessRuns := &atomic.Int64{}
 	harness := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/run" {
@@ -835,17 +885,19 @@ func newPostRunRouteFixture(t *testing.T) postRunRouteFixture {
 		}
 		harnessRuns.Add(1)
 		if cooperate.Load() {
-			response, err := http.Post(
-				brokerServer.URL+"/v1/inference/v1/chat/completions",
-				"application/json",
-				strings.NewReader(`{"model":"ignored","messages":[{"role":"user","content":"probe"}],"max_tokens":1}`),
-			)
-			if err != nil {
-				t.Errorf("route probe could not call broker: %v", err)
-			} else {
+			for attempt := int64(0); attempt < harnessAttempts.Load(); attempt++ {
+				response, err := http.Post(
+					brokerServer.URL+"/v1/inference/v1/chat/completions",
+					"application/json",
+					strings.NewReader(`{"model":"ignored","messages":[{"role":"user","content":"probe"}],"max_tokens":1}`),
+				)
+				if err != nil {
+					t.Errorf("route probe could not call broker: %v", err)
+					break
+				}
 				_ = response.Body.Close()
-				if response.StatusCode != http.StatusOK && upstreamHealthy.Load() {
-					t.Errorf("route probe broker status = %d", response.StatusCode)
+				if response.StatusCode == http.StatusOK {
+					break
 				}
 			}
 		}
@@ -861,7 +913,31 @@ func newPostRunRouteFixture(t *testing.T) postRunRouteFixture {
 		server: &server{broker: broker}, harnessURL: harness.URL,
 		sessionID: prepared["session_id"], start: start,
 		cooperate: cooperate, upstreamHealthy: upstreamHealthy,
+		recoverUpstream: recoverUpstream, harnessAttempts: harnessAttempts,
 		harnessRuns: harnessRuns,
+	}
+}
+
+func TestModelRouteProbeAcceptsMinerRecoveryAfterProviderFailure(t *testing.T) {
+	fixture := newPostRunRouteFixture(t)
+	fixture.upstreamHealthy.Store(false)
+	fixture.recoverUpstream.Store(true)
+	fixture.harnessAttempts.Store(2)
+
+	end, routed, err := fixture.server.probeHarnessModelRoute(
+		runner.TrustSandbox(context.Background()),
+		fixture.harnessURL,
+		fixture.sessionID,
+		fixture.start,
+		catalog.CatalogForVersion(protocol.BenchVersionV8),
+		protocol.BenchVersionV8,
+	)
+	if err != nil || !routed {
+		t.Fatalf("self-healed route = routed %t, error %v", routed, err)
+	}
+	if end.InfrastructureFailures != fixture.start.InfrastructureFailures+1 ||
+		end.Successes != fixture.start.Successes+1 {
+		t.Fatalf("route recovery was not preserved in broker evidence: start=%+v end=%+v", fixture.start, end)
 	}
 }
 
