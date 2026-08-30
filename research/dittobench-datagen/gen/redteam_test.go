@@ -13,7 +13,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/toolexec"
 )
 
-// This file is the grep-baseline red-team GATE (audit recommendation #4). It runs
+// This file is the grep-baseline red-team gate. It runs
 // a non-reasoning "parser" harness against freshly generated suites and asserts
 // it cannot score, so a regression that re-opens a lexical shortcut fails CI. The
 // canonical baseline is the OMNISCIENT DUMPER: a harness that returns the entire
