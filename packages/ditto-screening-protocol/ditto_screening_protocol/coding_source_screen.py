@@ -84,13 +84,14 @@ class CodingSourceScreenEvidence(BaseModel):
             raise ValueError("coding source deny requires deterministic deny evidence")
         if (
             self.outcome is CodingSourceScreenOutcome.QUARANTINE
-            and not {
-                CodingSourceScreenSeverity.QUARANTINE,
-                CodingSourceScreenSeverity.DENY,
-            }
-            & severities
+            and CodingSourceScreenSeverity.QUARANTINE not in severities
         ):
             raise ValueError("coding source quarantine requires quarantine evidence")
+        if (
+            self.outcome is CodingSourceScreenOutcome.QUARANTINE
+            and CodingSourceScreenSeverity.DENY in severities
+        ):
+            raise ValueError("coding source quarantine cannot carry deny evidence")
         if self.outcome is CodingSourceScreenOutcome.PASS and severities:
             raise ValueError("coding source pass cannot carry findings")
         if self.outcome is CodingSourceScreenOutcome.ADVISORY and (

@@ -57,3 +57,5 @@ def test_outcome_rules_fail_closed() -> None:
     )
     with pytest.raises(ValueError, match="advisory"):
         _evidence(CodingSourceScreenOutcome.ADVISORY, [deny])
+    with pytest.raises(ValueError, match="quarantine"):
+        _evidence(CodingSourceScreenOutcome.QUARANTINE, [deny])
