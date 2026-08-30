@@ -65,7 +65,7 @@ class CodingSourceScreenEvidence(BaseModel):
     analyzer_version: Annotated[str, Field(pattern=_RULE)]
     policy_version: Annotated[int, Field(ge=1, le=1_000_000)]
     outcome: CodingSourceScreenOutcome
-    findings: Annotated[list[CodingSourceScreenFinding], Field(max_length=64)]
+    findings: Annotated[tuple[CodingSourceScreenFinding, ...], Field(max_length=64)]
     evidence_sha256: Annotated[str, Field(pattern=_SHA256)]
 
     @model_validator(mode="after")
