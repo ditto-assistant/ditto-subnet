@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v0.158.0 (2026-08-30)
+
+### Bug Fixes
+
+- **backroom**: Accept adjudicator budget
+  ([#1348](https://github.com/ditto-assistant/ditto-subnet/pull/1348),
+  [`2dfb8e2`](https://github.com/ditto-assistant/ditto-subnet/commit/2dfb8e2b9da573488f6a767abc983c83e38917e9))
+
+### Features
+
+- **coding**: Add shadow inference capability gateway
+  ([`e155113`](https://github.com/ditto-assistant/ditto-subnet/commit/e1551139d3602f1beeb035592f3b7de6e3aa0bda))
+
+- **model-relay**: Serve shadow coding Luna dispatches
+  ([`f5e541a`](https://github.com/ditto-assistant/ditto-subnet/commit/f5e541abb6d476151abf946700f5b46759e644be))
+
+
 ## v0.157.1 (2026-08-30)
 
 ### Bug Fixes
