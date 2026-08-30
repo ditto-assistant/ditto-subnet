@@ -1,6 +1,3 @@
-// Unit half of assert-inventory row 22 (accessible benchmark progress):
-// stage labels, progress text, determinate/indeterminate/stalled bars,
-// screener stage vocabulary, and the per-second elapsed ticker.
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

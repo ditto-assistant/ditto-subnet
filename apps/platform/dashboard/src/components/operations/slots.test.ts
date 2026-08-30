@@ -1,17 +1,3 @@
-// Slot fan-out behaviors, ported from ditto/tests/api_server/test_dashboard_slots.py
-// (#540, written 2026-07-29 and deleted with this file's arrival — it was the
-// second Python source suite, missed by the parity inventory).
-//
-// Why that suite existed, in its own words: the pre-SPA dashboard had no test
-// runner, "and a substring cannot tell 'renders two jobs' from 'renders one
-// job twice'", so it lifted these five functions out of `index.html` with
-// regexes and executed them under node against fixture heartbeats. Under the
-// SPA they are ordinary imports from ./fleet, and the four rendering-level
-// guards run against the real components instead of grepping source text.
-//
-// This file is plain .ts, so the two component tests invoke the page/panel as
-// functions (Solid components are functions; `render` supplies the root) —
-// same contract as the JSX in src/pages/Operations.test.tsx, no JSX syntax.
 import { cleanup, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";

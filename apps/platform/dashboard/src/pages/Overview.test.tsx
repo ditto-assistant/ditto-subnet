@@ -1,8 +1,3 @@
-// Parity tests for the overview page port. Each block cites the inventory
-// row (dashboard-refactor-notes/assert-inventory.md) it carries forward and
-// keeps the old test's rationale as comments. Endpoint-path asserts moved to
-// src/lib/api.test.ts; source-negative greps live in
-// src/build-invariants.test.ts.
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

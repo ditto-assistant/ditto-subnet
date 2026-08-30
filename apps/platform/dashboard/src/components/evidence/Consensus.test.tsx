@@ -1,6 +1,3 @@
-// Parity tests for the miner drawer's Consensus block (monolith renderConsensus
-// 6159–6212, compositeEquation 5861–5866, casesSection 6369–6398).
-//
 // The block escaped BOTH gates of the SPA port: #d-consensus is only filled
 // while the modal is open, so the per-page DOM goldens never contained it, and
 // the old Python suites did not assert it. What it is FOR is the plural — three
@@ -9,7 +6,6 @@
 // produced each composite, the per-version grouping that keeps incomparable
 // numbers apart, and every absence path.
 //
-// Frozen clock 2026-07-31T14:00:00Z, the golden renderer's instant.
 import { cleanup, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 

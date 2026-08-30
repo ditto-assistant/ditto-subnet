@@ -1,10 +1,3 @@
-// Parity tests for the theme switcher (assert-inventory row 27,
-// test_includes_system_and_time_aware_theme_switcher): four modes
-// (system | light | dark | time) persisted under "ditto:dashboard-theme",
-// prefers-color-scheme tracking via data-system-theme, and the time-of-day
-// phase logic (5–8 dawn, 8–12 morning, 12–17 afternoon, 17–20 dusk, else
-// night). The original's sidebar-grid CSS literals are the CSS port's
-// parity surface, not this component's.
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

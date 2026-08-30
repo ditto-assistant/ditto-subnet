@@ -1,10 +1,8 @@
-// Parity tests for entity link construction (assert-inventory row 30,
-// test_dashboard_entities_use_query_popovers_and_pages). From the original's
-// inline comments: entity params live in the hash query (the real query
+// Entity params live in the hash query (the real query
 // carries config knobs only); drilldowns are overlays over the current page;
 // ENTITY_PAGES is only the cold-link fallback; legacy real-query and
 // path-style entity links are recognized and normalized (the recognition
-// itself lives in router.readEntityRoute — these tests close the loop by
+// itself lives in router.readEntityRoute; these tests close the loop by
 // asserting the links minted here resolve back to the same entity).
 
 import { beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,7 +1,3 @@
-// Parity tests for the dedicated leaderboard page port. Each block cites the
-// inventory row (dashboard-refactor-notes/assert-inventory.md) it carries
-// forward and keeps the old test's rationale as comments. The negative greps
-// (board-rail/details, tie chips) live in src/build-invariants.test.ts.
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -99,10 +95,9 @@ async function waitForBoard(): Promise<void> {
   });
 }
 
-// ── Row 3 (leaderboard slice): the dedicated page restores every column ──
 // "Compactness through a second surface, not through disclosure": the full
 // column set lives here, un-hidden at every width by the page-scoped
-// tri-state CSS. That exact rule was a pinned assert in the old suite.
+// tri-state CSS.
 describe("dedicated leaderboard page (row 3 slice)", () => {
   it("hosts the single leaderboard block in #leaderboard-page-host", async () => {
     renderPage();
