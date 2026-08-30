@@ -23,6 +23,7 @@ from screener_capacity.fleet_node import (
     _load_credential,
     _runtime_script,
     _SerialCapture,
+    _source_review_settings_environment,
 )
 
 
@@ -111,6 +112,50 @@ def _settings(root: Path) -> Settings:
         vm_disk_gib=80,
         once=True,
     )
+
+
+def test_source_review_job_receives_attempt_bound_policy() -> None:
+    environment = _source_review_settings_environment(
+        {
+            "review_settings_revision": 36,
+            "review_settings_checksum": "a" * 64,
+            "review_settings": {
+                "mode": "enforce",
+                "l2_model": "moonshotai/kimi-k3",
+                "l2_fallback_models": ["z-ai/glm-5.2", "openai/gpt-5.6-sol"],
+                "l3_enabled": True,
+                "l3_model": "openai/gpt-5.6-sol",
+                "timeout_seconds": 900,
+                "max_steps": 20,
+                "source_review_max_steps": 200,
+                "source_review_max_read_bytes": 8_000_000,
+                "source_review_max_completion_tokens": 8_000,
+                "source_review_reasoning_effort": "high",
+                "source_review_model": "openai/gpt-5.6-luna",
+                "source_review_timeout_seconds": 1_800,
+                "concern_hold_count": 3,
+                "clear_min_notes": 3,
+                "adjudicator_mode": "enforce",
+                "adjudicator_model": "z-ai/glm-5.3-flash",
+                "adjudicator_max_steps": 24,
+                "adjudicator_timeout_seconds": 600,
+                "max_input_tokens": 1_000_000,
+                "max_output_tokens": 128_000,
+                "max_completion_tokens": 16_384,
+                "max_cost_usd": 5,
+                "critic_reasoning_effort": "medium",
+                "cache_ttl_seconds": 604_800,
+                "audit_retention_days": 30,
+            },
+        }
+    )
+
+    assert environment["SCREENER_L2_REVIEW_MODE"] == "enforce"
+    assert environment["SCREENER_L3_REVIEW_ENABLED"] == "true"
+    assert environment["SCREENER_ADJUDICATOR_MODE"] == "enforce"
+    assert environment["SCREENER_SOURCE_REVIEW_MAX_STEPS"] == "200"
+    assert environment["SCREENER_REVIEW_SETTINGS_REVISION"] == "36"
+    assert environment["SCREENER_REVIEW_SETTINGS_CHECKSUM"] == "a" * 64
 
 
 def test_node_credential_parser_ignores_signing_secret(tmp_path: Path) -> None:

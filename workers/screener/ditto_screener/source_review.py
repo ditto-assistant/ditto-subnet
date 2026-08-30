@@ -3276,6 +3276,7 @@ class OpenRouterSourceReviewAgent:
         inspection_calls = 0
         noteless_calls = 0
         coverage_nudged = False
+        tool_correction_used = False
         read_files: set[str] = set()
         runtime_source_read = False
         if progress is not None:
@@ -3311,9 +3312,56 @@ class OpenRouterSourceReviewAgent:
                 messages.append(message)
                 tool_calls = message.get("tool_calls")
                 if not isinstance(tool_calls, list) or not tool_calls:
-                    raise ValueError("source reviewer returned no tool call")
+                    if tool_correction_used:
+                        raise ValueError("source reviewer returned no tool call")
+                    tool_correction_used = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your previous turn did not call a declared tool. "
+                                "Continue the same review now by calling exactly one "
+                                "available inspection, record_note, or "
+                                "submit_review tool."
+                            ),
+                        }
+                    )
+                    if progress is not None:
+                        progress(_step + 1, self._max_steps)
+                    continue
                 for call in tool_calls:
-                    call_id, name, arguments = _tool_call(call)
+                    try:
+                        call_id, name, arguments = _tool_call(call)
+                    except ValueError as error:
+                        malformed_call_id = (
+                            call.get("id") if isinstance(call, dict) else None
+                        )
+                        if isinstance(malformed_call_id, str):
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": malformed_call_id,
+                                    "content": json.dumps(
+                                        {
+                                            "error": "tool-call-contract",
+                                            "detail": str(error),
+                                            "correctable": True,
+                                        }
+                                    ),
+                                }
+                            )
+                        else:
+                            messages.append(
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        "The previous tool call was malformed. "
+                                        "Continue the same review with a valid "
+                                        "declared tool call."
+                                    ),
+                                }
+                            )
+                        continue
                     if name == "submit_review":
                         if progress is not None:
                             progress(_step + 1, self._max_steps)

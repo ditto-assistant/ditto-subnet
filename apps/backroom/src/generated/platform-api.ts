@@ -21300,6 +21300,11 @@ export interface components {
              * Format: uuid
              */
             review_id: string;
+            review_settings?: components["schemas"]["ScreenerReviewSettings"] | null;
+            /** Review Settings Checksum */
+            review_settings_checksum?: string | null;
+            /** Review Settings Revision */
+            review_settings_revision?: number | null;
         };
         /**
          * SubmissionSourceReviewCleanupRequest

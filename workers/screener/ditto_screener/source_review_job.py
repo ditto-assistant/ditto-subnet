@@ -23,6 +23,7 @@ from uuid import UUID
 
 import httpx
 
+from ditto_screener.adjudicator import SourceReviewAdjudicator
 from ditto_screener.enrollment import _materialize_source_review_secret
 from ditto_screener.l2_review import (
     InProcessAnalyzerHarness,
@@ -226,6 +227,23 @@ def _build_reviewer(
         critic_model=os.environ.get("SCREENER_L3_REVIEW_MODEL", "openai/gpt-5.6-sol"),
         critic_provider=os.environ.get("SCREENER_L3_REVIEW_PROVIDER", "openrouter"),
     )
+    adjudicator_mode = os.environ.get("SCREENER_ADJUDICATOR_MODE", "off")
+    adjudicator = (
+        None
+        if adjudicator_mode == "off"
+        else SourceReviewAdjudicator(
+            api_key_file=key_file,
+            base_url=os.environ.get(
+                "SCREENER_SOURCE_REVIEW_BASE_URL",
+                "https://openrouter.ai/api/v1",
+            ),
+            model=os.environ.get("SCREENER_ADJUDICATOR_MODEL", "z-ai/glm-5.3-flash"),
+            timeout_seconds=float(
+                os.environ.get("SCREENER_ADJUDICATOR_TIMEOUT_SECONDS", "600")
+            ),
+            max_steps=int(os.environ.get("SCREENER_ADJUDICATOR_MAX_STEPS", "24")),
+        )
+    )
     return LayeredSourceReviewAgent(
         l1=l1,
         l2=l2,
@@ -234,6 +252,7 @@ def _build_reviewer(
             os.environ.get("SCREENER_REVIEW_CONCERN_HOLD_COUNT", "3")
         ),
         clear_min_notes=int(os.environ.get("SCREENER_REVIEW_CLEAR_MIN_NOTES", "3")),
+        adjudicator=adjudicator,
     )
 
 

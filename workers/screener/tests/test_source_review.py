@@ -3153,6 +3153,66 @@ async def test_sanitized_shortcut_fixture_produces_bounded_risk_digest(
     }
 
 
+async def test_no_tool_turn_is_corrected_inside_the_same_review(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    requests: list[dict[str, object]] = []
+    final = {
+        "risk_level": "high",
+        "confidence": 0.98,
+        "categories": ["benchmark_emulation"],
+        "evidence": [
+            {"path": "src/main.rs", "line": 1, "category": "benchmark_emulation"},
+            {"path": "src/main.rs", "line": 2, "category": "benchmark_emulation"},
+        ],
+        "summary": "Deterministic shortcut bypasses the general provider path.",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            tool_calls: list[dict[str, object]] = []
+        elif len(requests) == 2:
+            tool_calls = [
+                _tool(
+                    "read-1",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 400},
+                ),
+                _tool("search-1", "search", {"query": "fast_path"}),
+            ]
+        else:
+            tool_calls = [_tool("submit-1", "submit_review", final)]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": tool_calls,
+                        }
+                    }
+                ]
+            },
+        )
+
+    source = "fn serve() { run(); }\nfn run() { fast_path(); }"
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, source)), artifact_sha256=_SHA
+    )
+
+    assert observation.ok
+    assert len(requests) == 3
+    correction = requests[1]["messages"][-1]  # type: ignore[index]
+    assert correction["role"] == "user"
+    assert "did not call a declared tool" in correction["content"]
+
+
 async def test_malformed_or_unavailable_reviewer_is_retryable_not_reject(
     tmp_path: Path,
 ) -> None:
@@ -4232,7 +4292,7 @@ async def test_provider_error_body_is_terminal_after_one_turn(
     assert calls == 1
 
 
-async def test_toolless_prose_turn_is_terminal(
+async def test_toolless_prose_turn_gets_one_correction_then_is_terminal(
     tmp_path: Path,
 ) -> None:
     key = tmp_path / "key"
@@ -4264,13 +4324,13 @@ async def test_toolless_prose_turn_is_terminal(
 
     assert not observation.ok
     assert observation.error_code == "source-review-model-response-invalid"
-    assert calls == 1
+    assert calls == 2
 
 
-async def test_persistent_toolless_model_is_parked_after_one_call(
+async def test_persistent_toolless_model_is_parked_after_one_correction(
     tmp_path: Path,
 ) -> None:
-    """A stuck model yields one infrastructure record and no second paid turn."""
+    """A stuck model gets one repair turn, not an unbounded paid retry loop."""
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     os.chmod(key, 0o600)
@@ -4302,7 +4362,7 @@ async def test_persistent_toolless_model_is_parked_after_one_call(
     assert not observation.ok
     assert observation.error_code == "source-review-model-response-invalid"
     assert observation.failure_disposition == "retryable_infra"
-    assert calls == 1
+    assert calls == 2
 
 
 async def test_relayed_rate_limit_error_body_parks_after_one_post(
