@@ -22,6 +22,8 @@ MANAGED_FILE="$STATE_DIR/managed-release.env"
 FAILED_CANDIDATE_FILE="$STATE_DIR/failed-candidate"
 LOCK_FILE="$STATE_DIR/lock"
 SELF_PATH="${SCREENER_FLEET_SELF_PATH:-$STATE_DIR/ditto-screener-fleet-auto-update}"
+ROOTLESS_DOCKER_HOST="${SCREENER_FLEET_ROOTLESS_DOCKER_HOST:-unix:///run/ditto-screener-docker/docker.sock}"
+L2_ANALYZER_ACTIVE="ditto-screener-l2-analyzer:active"
 
 log() { printf 'screener-fleet-auto-update: %s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }
@@ -37,6 +39,9 @@ is_builder_digest() {
 run_as_service() {
   setpriv --reuid="$SERVICE_USER" --regid="$SERVICE_GROUP" --init-groups -- \
     env HOME="$FLEET_ROOT" "$@"
+}
+run_rootless_as_service() {
+  run_as_service env DOCKER_HOST="$ROOTLESS_DOCKER_HOST" "$@"
 }
 
 validate_manifest() {
@@ -127,6 +132,24 @@ prepare_release() {
   trap - RETURN
 }
 
+prepare_l2_analyzer() {
+  local revision="$1" release_dir="$2"
+  local candidate="ditto-screener-l2-analyzer:candidate-$revision" label
+  run_rootless_as_service docker info --format '{{json .SecurityOptions}}' \
+    | grep -q 'rootless' || die "rootless analyzer executor is unavailable"
+  label="$(run_rootless_as_service docker image inspect --format \
+    '{{ index .Config.Labels "ai.heyditto.screener.sha" }}' \
+    "$candidate" 2>/dev/null || true)"
+  if [ "$label" != "$revision" ]; then
+    run_rootless_as_service docker build \
+      --file "$release_dir/src/workers/screener/deploy/l2-analyzer.Dockerfile" \
+      --label "ai.heyditto.screener.sha=$revision" \
+      --tag "$candidate" \
+      "$release_dir/src/workers/screener"
+  fi
+  printf '%s' "$candidate"
+}
+
 write_release_env() {
   local output="$1" builder="$2" temporary
   temporary="${output}.tmp.$$"
@@ -160,16 +183,19 @@ start_fleet() {
 }
 
 activate_release() {
-  local revision="$1" builder="$2" exact="$3" release_dir
+  local revision="$1" builder="$2" exact="$3" l2_candidate="$4" release_dir
   release_dir="$RELEASES_DIR/$revision"
-  local old_target='' old_builder='' new_link="$FLEET_ROOT/.current.$$"
+  local old_target='' old_builder='' old_l2_image='' new_link="$FLEET_ROOT/.current.$$"
   [ ! -L "$CURRENT_LINK" ] || old_target="$(readlink "$CURRENT_LINK")"
   [ ! -f "$RELEASE_ENV" ] || old_builder="$(manifest_value "$RELEASE_ENV" SCREENER_FLEET_BUILDER_IMAGE)"
+  old_l2_image="$(run_rootless_as_service docker image inspect --format '{{.Id}}' \
+    "$L2_ANALYZER_ACTIVE" 2>/dev/null || true)"
   install -o root -g root -m 0755 \
     "$release_dir/src/scripts/screener-fleet-auto-update.sh" \
     "$SELF_PATH"
   ln -s "releases/$revision" "$new_link"
   stop_fleet
+  run_rootless_as_service docker tag "$l2_candidate" "$L2_ANALYZER_ACTIVE"
   mv -Tf "$new_link" "$CURRENT_LINK"
   write_release_env "$RELEASE_ENV" "$builder"
   if ! start_fleet; then
@@ -178,6 +204,12 @@ activate_release() {
     if [ -n "$old_target" ]; then
       ln -s "$old_target" "$new_link"
       mv -Tf "$new_link" "$CURRENT_LINK"
+    fi
+    if [ -n "$old_l2_image" ]; then
+      run_rootless_as_service docker tag "$old_l2_image" "$L2_ANALYZER_ACTIVE"
+    else
+      run_rootless_as_service docker image rm --force "$L2_ANALYZER_ACTIVE" \
+        >/dev/null 2>&1 || true
     fi
     [ -z "$old_builder" ] || write_release_env "$RELEASE_ENV" "$old_builder"
     start_fleet || die "candidate and rollback release both failed to start"
@@ -189,6 +221,7 @@ activate_release() {
     "$exact" "$revision" "$(manifest_value "$STATE_DIR/candidate.env" FLEET_VERSION)" \
     "$builder" "$(date +%s)" >"$MANAGED_FILE"
   rm -f "$FAILED_CANDIDATE_FILE"
+  run_rootless_as_service docker image rm "$l2_candidate" >/dev/null 2>&1 || true
   log "activated $revision from authenticated descriptor $exact"
 }
 
@@ -231,4 +264,5 @@ verify_descriptor_labels "$exact" "$candidate" || die "descriptor labels do not 
 revision="$(manifest_value "$candidate" FLEET_REVISION)"
 builder="$(manifest_value "$candidate" SUBMISSION_BUILDER_IMAGE)"
 prepare_release "$revision" "$RELEASES_DIR/$revision"
-activate_release "$revision" "$builder" "$exact"
+l2_candidate="$(prepare_l2_analyzer "$revision" "$RELEASES_DIR/$revision")"
+activate_release "$revision" "$builder" "$exact" "$l2_candidate"
