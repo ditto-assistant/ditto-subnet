@@ -92,28 +92,42 @@ export function benchmarkProgressText(progress: BenchmarkProgress | null | undef
 
 // ── Source review: four stages, one public progress band ────────────────────
 
-/** One stage of the screener's source review. The pipeline runs four (L1
- * broad review → L2 cause analysis → L3 safety review → L4 final
- * adjudication) and the heartbeat carries them in a single 0–100 band, so
- * the mapping between bucket and stage lives here rather than being
- * inferred per call site. */
+/** One stage of the screener's source review. The heartbeat carries all
+ * four in a single 0–100 band, so the mapping between bucket and stage
+ * lives here rather than being inferred per call site. */
 export interface ReviewStage {
   key: string;
-  /** Ladder tick label; the card is ~280px wide. */
+  /** Ladder tick label; the card is ~280px wide, so ≤7 characters. */
   short: string;
   /** The sentence form used in the state line and accessible names. */
   label: string;
+  /** The screener's own layer number, kept for cross-referencing operator
+   * material (Backroom review rules, quarantine context) that speaks in
+   * L1/L2/L3/L4. It appears in the ladder tooltip, never on the card. */
+  level: string;
 }
 
-/** L1 owns 0–50 and reports its own percentage inside that half; each
+/**
+ * The four stages named for what each one does, not for its layer number.
+ * "L2" tells a reader nothing; "Trace" says a lead is being resolved to a
+ * cause, which is why the card has been sitting there for six minutes. The
+ * layer numbers survive in `level` because operator material uses them.
+ *
+ * L1 owns 0–50 and reports its own percentage inside that half; each
  * escalation stage owns one bucket above it (`LayeredSourceReviewAgent`
  * reports 6/8/9/10 tenths). A screener build that predates per-stage
- * reporting only ever emits 50 and 100, which still lands on a real stage. */
+ * reporting only ever emits 50 and 100, which still lands on a real stage.
+ */
 const REVIEW_STAGES: readonly ReviewStage[] = [
-  { key: "l1", short: "L1", label: "L1 source review" },
-  { key: "l2", short: "L2", label: "L2 cause analysis" },
-  { key: "l3", short: "L3", label: "L3 safety review" },
-  { key: "l4", short: "L4", label: "L4 final adjudication" },
+  // The broad first pass: reads the archive and records anything notable.
+  { key: "l1", short: "Scan", label: "Broad source scan", level: "L1" },
+  // Resolves an L1 lead to a causal mechanism, or clears it.
+  { key: "l2", short: "Trace", label: "Causal analysis", level: "L2" },
+  // The independent critic that can overturn the analyst in either direction.
+  { key: "l3", short: "Safety", label: "Independent safety review", level: "L3" },
+  // The adjudicator: applies the published standard to the cited locations
+  // and returns clear or reject.
+  { key: "l4", short: "Verdict", label: "Final adjudication", level: "L4" },
 ];
 
 /** The four source-review stages in order (the ladder's own domain). */
@@ -149,11 +163,11 @@ export function reviewStageIndex(stage?: string | null): number | null {
 export function screenerStageLabel(stage?: string | null): string {
   const bucket = sourceReviewBucket(stage);
   if (bucket != null) {
-    // L1 is long enough to deserve a percentage; the escalation stages are
-    // one bucket each, so a percentage there would be a fabricated 100%.
-    if (bucket <= 50) return "L1 source review · " + bucket * 2 + "%";
     const index = reviewStageIndex(stage);
     if (index == null || index >= REVIEW_STAGES.length) return "Source review complete";
+    // The scan is long enough to deserve a percentage; the escalation stages
+    // are one bucket each, so a percentage there would be a fabricated 100%.
+    if (bucket <= 50) return REVIEW_STAGES[0]!.label + " · " + bucket * 2 + "%";
     return REVIEW_STAGES[index]!.label;
   }
   const labels: Record<string, string> = {
@@ -285,7 +299,15 @@ export function ReviewStageLadder(props: { stage: string | null }): JSX.Element 
       return "Source review complete · all " + stages.length + " stages done";
     }
     return (
-      "Source review stage " + (index + 1) + " of " + stages.length + ": " + stages[index]!.label
+      "Source review stage " +
+      (index + 1) +
+      " of " +
+      stages.length +
+      ": " +
+      stages[index]!.label +
+      " (" +
+      stages[index]!.level +
+      ")"
     );
   };
   const rungClass = (index: number): string => {

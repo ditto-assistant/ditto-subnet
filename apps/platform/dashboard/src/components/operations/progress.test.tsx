@@ -15,6 +15,7 @@ import {
   benchmarkProgressText,
   benchmarkStageLabel,
   reviewStageIndex,
+  reviewStages,
   screenerStageLabel,
 } from "./progress";
 
@@ -145,19 +146,19 @@ describe("BenchmarkProgressView", () => {
 });
 
 describe("screenerStageLabel", () => {
-  it("gives L1 the 0-50 band with its own percentage", () => {
-    expect(screenerStageLabel("source_review_0")).toBe("L1 source review · 0%");
-    expect(screenerStageLabel("source_review_20")).toBe("L1 source review · 40%");
-    expect(screenerStageLabel("source_review_50")).toBe("L1 source review · 100%");
+  it("gives the scan the 0-50 band with its own percentage", () => {
+    expect(screenerStageLabel("source_review_0")).toBe("Broad source scan · 0%");
+    expect(screenerStageLabel("source_review_20")).toBe("Broad source scan · 40%");
+    expect(screenerStageLabel("source_review_50")).toBe("Broad source scan · 100%");
   });
 
-  it("names each escalation stage instead of one deep-review band", () => {
-    // A card sat at "L1 · 100%" for the whole escalation before this: L2, L3
-    // and adjudication each own a bucket and must say which one is running.
-    expect(screenerStageLabel("source_review_60")).toBe("L2 cause analysis");
-    expect(screenerStageLabel("source_review_70")).toBe("L2 cause analysis");
-    expect(screenerStageLabel("source_review_80")).toBe("L3 safety review");
-    expect(screenerStageLabel("source_review_90")).toBe("L4 final adjudication");
+  it("names each stage for what it does, never for its layer number", () => {
+    // A card sat at "L1 · 100%" for the whole escalation before this, and
+    // "L2" told a reader nothing about why it had been there six minutes.
+    expect(screenerStageLabel("source_review_60")).toBe("Causal analysis");
+    expect(screenerStageLabel("source_review_70")).toBe("Causal analysis");
+    expect(screenerStageLabel("source_review_80")).toBe("Independent safety review");
+    expect(screenerStageLabel("source_review_90")).toBe("Final adjudication");
     expect(screenerStageLabel("source_review_100")).toBe("Source review complete");
   });
 
@@ -186,7 +187,12 @@ describe("source review ladder", () => {
   it("marks done, current and pending rungs for a live review stage", () => {
     const { container } = render(() => <ReviewStageLadder stage="source_review_80" />);
     const ladder = container.querySelector(".review-ladder") as HTMLElement;
-    expect(ladder).toHaveAttribute("aria-label", "Source review stage 3 of 4: L3 safety review");
+    // The layer number survives in the tooltip so an operator can still match
+    // a card against Backroom review material, which speaks in L1/L2/L3/L4.
+    expect(ladder).toHaveAttribute(
+      "aria-label",
+      "Source review stage 3 of 4: Independent safety review (L3)",
+    );
     expect(Array.from(ladder.querySelectorAll(".review-rung"), (el) => el.className)).toEqual([
       "review-rung done",
       "review-rung done",
@@ -194,11 +200,17 @@ describe("source review ladder", () => {
       "review-rung",
     ]);
     expect(Array.from(ladder.querySelectorAll(".review-rung b"), (el) => el.textContent)).toEqual([
-      "L1",
-      "L2",
-      "L3",
-      "L4",
+      "Scan",
+      "Trace",
+      "Safety",
+      "Verdict",
     ]);
+  });
+
+  it("keeps every rung label short enough for a ~62px column", () => {
+    for (const stage of reviewStages()) {
+      expect(stage.short.length).toBeLessThanOrEqual(7);
+    }
   });
 
   it("fills every rung once review completes, with none current", () => {
