@@ -212,6 +212,25 @@ async def test_signed_authoring_lease_returns_only_three_no_store_capabilities(
     assert "grader-bundle" not in response.text
 
 
+async def test_authoring_lease_retains_future_nonce_for_full_freshness_window(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    lease = _lease()
+    mocks = _install(app, session_maker, monkeypatch, lease)
+    requested_at = datetime.now(UTC) + timedelta(minutes=4, seconds=30)
+    response = await client.post(
+        "/api/v1/validator/coding-shadow/authoring-lease",
+        json=_payload(lease, requested_at=requested_at),
+    )
+    assert response.status_code == 200, response.text
+    consumed = mocks.consume_nonce.await_args.kwargs
+    assert consumed["expires_at"] == requested_at + timedelta(minutes=5)
+    assert consumed["expires_at"] - consumed["now"] > timedelta(minutes=5)
+
+
 async def test_authoring_lease_rejects_forgery_replay_and_wrong_validator(
     app: FastAPI,
     client: httpx.AsyncClient,

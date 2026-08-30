@@ -9,8 +9,10 @@ POST /api/v1/validator/coding-shadow/authoring-lease
 The request signs a domain-separated message over validator hotkey, ticket
 UUID, one-use nonce, and UTC request timestamp. Platform verifies the signature,
 freshness, current chain permit, nonce, and ticket ownership before reading the
-private catalog. A wrong-validator or expired ticket therefore cannot trigger a
-private object read.
+private catalog. The nonce row is retained until that signed timestamp leaves
+the five-minute freshness window, so a future-dated request cannot be replayed
+after janitorial deletion while it would still be accepted. A wrong-validator
+or expired ticket therefore cannot trigger a private object read.
 
 Platform then reconstructs the complete task lease, rechecks the current exact
 artifact certification, and invokes an authoring-only minter. That minter
