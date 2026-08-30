@@ -545,8 +545,16 @@ class CodingModelEvidence(CodingContractModel):
         return self
 
 
+class CodingAuthoringModelEvidence(CodingModelEvidence):
+    """The immutable v1 authoring route, distinct from capability evidence."""
+
+    model: Literal["openai/gpt-5.6-luna"]
+    provider: Literal["azure/eu"]
+    provider_route_profile: Literal["luna-azure-eu-zdr-v1"]
+
+
 class CodingAuthoringEvidence(CodingContractModel):
-    model: CodingModelEvidence
+    model: CodingAuthoringModelEvidence
     authoring_event_root: Sha256
     authoring_transcript_sha256: Sha256
     frozen_patch_sha256: Sha256
@@ -1114,6 +1122,83 @@ class CodingAuthoringLeaseResponse(CodingContractModel):
         return self
 
 
+class SubmitCodingAuthoringFreezeRequest(BaseModel):
+    """One validator-signed immutable transition out of authoring."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    agent_id: UUID
+    bench_version: Annotated[int, Field(ge=7)]
+    run_row_id: UUID
+    ticket_id: UUID
+    ticket_deadline: datetime
+    coding_run_id: OpaqueId
+    agent_artifact_sha256: Sha256
+    screened_image_sha256: Sha256
+    run_manifest_sha256: Sha256
+    task_set_manifest_sha256: Sha256
+    authoring_evidence_sha256: Sha256
+    evidence: CodingAuthoringEvidence
+    authoring_transcript_object_key: ContentAddressedKey
+    authoring_transcript_bytes: Annotated[int, Field(ge=0, le=512 << 20)]
+    authoring_event_count: Annotated[int, Field(ge=0, le=1_000)]
+    frozen_submission_object_key: ContentAddressedKey
+    signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
+
+    @model_validator(mode="after")
+    def freeze_authority_is_coherent(self) -> SubmitCodingAuthoringFreezeRequest:
+        if (
+            self.agent_id.int == 0
+            or self.run_row_id.int == 0
+            or self.ticket_id.int == 0
+            or self.ticket_deadline.tzinfo is None
+            or self.ticket_deadline.utcoffset() is None
+        ):
+            raise ValueError("coding authoring freeze authority is invalid")
+        if coding_authoring_evidence_digest(self.evidence) != (
+            self.authoring_evidence_sha256
+        ):
+            raise ValueError("authoring_evidence_sha256 does not match known fields")
+        if self.authoring_transcript_object_key != (
+            f"sha256/{self.evidence.authoring_transcript_sha256}"
+        ):
+            raise ValueError("authoring transcript key does not match its digest")
+        if self.frozen_submission_object_key != (
+            f"sha256/{self.evidence.frozen_patch_sha256}"
+        ):
+            raise ValueError("frozen submission key does not match its patch digest")
+        if (self.authoring_transcript_bytes == 0) != (self.authoring_event_count == 0):
+            raise ValueError("authoring transcript bytes and event count disagree")
+        return self
+
+
+class SubmitCodingAuthoringFreezeResponse(CodingContractModel):
+    freeze_id: UUID
+    agent_id: UUID
+    run_row_id: UUID
+    ticket_id: UUID
+    coding_run_id: OpaqueId
+    authoring_evidence_sha256: Sha256
+    frozen_at: datetime
+    accepted: Literal[True]
+    idempotent: bool
+    weight_eligible: Literal[False] = False
+
+    @model_validator(mode="after")
+    def response_is_coherent(self) -> SubmitCodingAuthoringFreezeResponse:
+        if (
+            self.freeze_id.int == 0
+            or self.agent_id.int == 0
+            or self.run_row_id.int == 0
+            or self.ticket_id.int == 0
+            or self.frozen_at.tzinfo is None
+            or self.frozen_at.utcoffset() is None
+        ):
+            raise ValueError("coding authoring freeze response authority is invalid")
+        return self
+
+
 def coding_authoring_lease_signing_message(
     *,
     validator_hotkey: str,
@@ -1131,6 +1216,55 @@ def coding_authoring_lease_signing_message(
             str(ticket_id),
             str(nonce),
             timestamp,
+        )
+    ).encode()
+
+
+def coding_authoring_evidence_digest(evidence: CodingAuthoringEvidence) -> str:
+    return sha256_hex(_canonical_json_bytes(evidence))
+
+
+def coding_authoring_freeze_signing_message(
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    bench_version: int,
+    run_row_id: UUID,
+    ticket_id: UUID,
+    ticket_deadline: datetime,
+    coding_run_id: str,
+    agent_artifact_sha256: str,
+    screened_image_sha256: str,
+    run_manifest_sha256: str,
+    task_set_manifest_sha256: str,
+    authoring_evidence_sha256: str,
+    authoring_transcript_object_key: str,
+    authoring_transcript_bytes: int,
+    authoring_event_count: int,
+    frozen_submission_object_key: str,
+) -> bytes:
+    if ticket_deadline.tzinfo is None or ticket_deadline.utcoffset() is None:
+        raise ValueError("coding authoring freeze deadline must be timezone-aware")
+    deadline = ticket_deadline.astimezone(UTC).isoformat(timespec="microseconds")
+    return "\x00".join(
+        (
+            "dittobench-coding-authoring-freeze:v1",
+            validator_hotkey,
+            str(agent_id),
+            str(bench_version),
+            str(run_row_id),
+            str(ticket_id),
+            deadline,
+            coding_run_id,
+            agent_artifact_sha256,
+            screened_image_sha256,
+            run_manifest_sha256,
+            task_set_manifest_sha256,
+            authoring_evidence_sha256,
+            authoring_transcript_object_key,
+            str(authoring_transcript_bytes),
+            str(authoring_event_count),
+            frozen_submission_object_key,
         )
     ).encode()
 
@@ -1600,6 +1734,7 @@ __all__ = [
     "CodingAuthoringLeaseRequest",
     "CodingAuthoringLeaseResponse",
     "CodingAuthoringEvidence",
+    "CodingAuthoringModelEvidence",
     "CodingBudgets",
     "CodingBuildEvidence",
     "CodingCapabilityCertificationReceipt",
@@ -1629,11 +1764,15 @@ __all__ = [
     "CodingVisibleMemory",
     "SubmitCodingCertificationRequest",
     "SubmitCodingCertificationResponse",
+    "SubmitCodingAuthoringFreezeRequest",
+    "SubmitCodingAuthoringFreezeResponse",
     "canonical_digest",
     "canonical_json_bytes",
     "coding_certification_receipt_digest",
     "coding_certification_signing_message",
     "coding_authoring_lease_signing_message",
+    "coding_authoring_evidence_digest",
+    "coding_authoring_freeze_signing_message",
     "coding_budgets_digest",
     "coding_issue_digest",
     "coding_runtime_policy_digest",

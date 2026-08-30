@@ -54,3 +54,7 @@ authoring-only minter never checks or signs the grader object. No scheduler or
 validator worker invokes the route, and there is no workspace capability, Luna
 grant, execution, scoring, deployment, or emissions effect. Coding contract v1
 remains permanently `weight_eligible=false`.
+
+The separate authoring-freeze ledger records the immutable phase transition but
+returns no capability. Grading delivery remains a later review and must require
+that stored freeze before projecting any grader URL.

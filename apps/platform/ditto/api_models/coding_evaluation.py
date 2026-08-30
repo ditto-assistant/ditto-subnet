@@ -18,6 +18,10 @@ from pydantic import (
 )
 
 from ditto.api_models.coding_canonical import coding_canonical_sha256
+from ditto.api_models.coding_certification import (
+    CodingCertificationModelUsageStatus,
+    ContentAddressedKey,
+)
 
 REPAIR_SCORE_RESOLVED_MICROS = 1_000_000
 _MAX_CANONICAL_JSON_BYTES = 4 << 20
@@ -25,6 +29,7 @@ _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _BLOCK_HASH_PATTERN = r"^0x[0-9a-f]{64}$"
 _SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 _SIGNATURE_PATTERN = r"^[0-9a-fA-F]{128}$"
+_UINT64_MAX = (1 << 64) - 1
 
 
 def _bounded_identifier(value: str, maximum: int) -> str:
@@ -176,6 +181,197 @@ class CodingRunEvidence(CodingEvaluationModel):
         return self
 
 
+class CodingAuthoringModelEvidence(CodingEvaluationModel):
+    # A validator signature is not authority to substitute the locked v1
+    # solver route.  Route changes require a new immutable coding contract.
+    model: Literal["openai/gpt-5.6-luna"]
+    provider: Literal["azure/eu"]
+    provider_route_profile: Literal["luna-azure-eu-zdr-v1"]
+    reasoning_effort: Literal["medium"]
+    inference_grant_sha256: Sha256
+    prompt_sha256: Sha256
+    tool_schema_sha256: Sha256
+    usage_status: CodingCertificationModelUsageStatus
+    fallback_used: Literal[False]
+    cost_source: Literal["provider_receipt_v1"]
+    currency: Literal["USD"]
+    provider_receipt_set_sha256: Sha256 | None
+    requests: Annotated[int, Field(strict=True, ge=0, le=10_000)]
+    prompt_tokens: Annotated[int, Field(strict=True, ge=0, le=_UINT64_MAX)]
+    completion_tokens: Annotated[int, Field(strict=True, ge=0, le=_UINT64_MAX)]
+    total_tokens: Annotated[int, Field(strict=True, ge=0, le=_UINT64_MAX)]
+    cost_usd_micros: Annotated[int, Field(strict=True, ge=0, le=_UINT64_MAX)]
+    retry_count: Annotated[int, Field(strict=True, ge=0, le=100)]
+
+    @field_validator("fallback_used", mode="before")
+    @classmethod
+    def fallback_flag_is_strict(cls, value: object) -> object:
+        if type(value) is not bool:
+            raise ValueError("fallback_used must be a boolean")
+        return value
+
+    @model_validator(mode="after")
+    def accounting_is_coherent(self) -> CodingAuthoringModelEvidence:
+        if self.total_tokens != self.prompt_tokens + self.completion_tokens:
+            raise ValueError("model token totals disagree")
+        counters = (
+            self.requests,
+            self.prompt_tokens,
+            self.completion_tokens,
+            self.total_tokens,
+            self.cost_usd_micros,
+            self.retry_count,
+        )
+        if self.usage_status is CodingCertificationModelUsageStatus.NOT_INVOKED:
+            if any(counters) or self.provider_receipt_set_sha256 is not None:
+                raise ValueError("not-invoked model evidence has nonzero accounting")
+        elif self.requests == 0 or self.provider_receipt_set_sha256 is None:
+            raise ValueError("invoked model evidence lacks a provider receipt root")
+        return self
+
+
+class CodingAuthoringEvidence(CodingEvaluationModel):
+    """Canonical authoring evidence fixed before any grader release."""
+
+    model: CodingAuthoringModelEvidence
+    authoring_event_root: Sha256
+    authoring_transcript_sha256: Sha256
+    frozen_patch_sha256: Sha256
+    changed_path_root: Sha256
+    final_tree_sha256: Sha256
+    changed_path_count: Annotated[int, Field(strict=True, ge=0, le=10_000)]
+    changed_bytes: Annotated[int, Field(strict=True, ge=0, le=1 << 30)]
+    protected_paths_intact: bool
+
+    @field_validator("protected_paths_intact", mode="before")
+    @classmethod
+    def protected_paths_flag_is_strict(cls, value: object) -> object:
+        if type(value) is not bool:
+            raise ValueError("protected_paths_intact must be a boolean")
+        return value
+
+
+class SubmitCodingAuthoringFreezeRequest(BaseModel):
+    """One validator-signed immutable transition out of authoring."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    agent_id: UUID
+    bench_version: Annotated[int, Field(strict=True, ge=7)]
+    run_row_id: UUID
+    ticket_id: UUID
+    ticket_deadline: datetime
+    coding_run_id: OpaqueId
+    agent_artifact_sha256: Sha256
+    screened_image_sha256: Sha256
+    run_manifest_sha256: Sha256
+    task_set_manifest_sha256: Sha256
+    authoring_evidence_sha256: Sha256
+    evidence: CodingAuthoringEvidence
+    authoring_transcript_object_key: ContentAddressedKey
+    authoring_transcript_bytes: Annotated[int, Field(strict=True, ge=0, le=512 << 20)]
+    authoring_event_count: Annotated[int, Field(strict=True, ge=0, le=1_000)]
+    frozen_submission_object_key: ContentAddressedKey
+    signature: Annotated[str, Field(pattern=_SIGNATURE_PATTERN)]
+
+    @field_validator("ticket_deadline")
+    @classmethod
+    def deadline_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("coding authoring freeze deadline must be timezone-aware")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def freeze_authority_is_coherent(self) -> SubmitCodingAuthoringFreezeRequest:
+        if (
+            self.agent_id.int == 0
+            or self.run_row_id.int == 0
+            or self.ticket_id.int == 0
+        ):
+            raise ValueError("coding authoring freeze UUIDs must be nonzero")
+        if coding_authoring_evidence_digest(self.evidence) != (
+            self.authoring_evidence_sha256
+        ):
+            raise ValueError("authoring_evidence_sha256 does not match known fields")
+        if self.authoring_transcript_object_key != (
+            f"sha256/{self.evidence.authoring_transcript_sha256}"
+        ):
+            raise ValueError("authoring transcript key does not match its digest")
+        if self.frozen_submission_object_key != (
+            f"sha256/{self.evidence.frozen_patch_sha256}"
+        ):
+            raise ValueError("frozen submission key does not match its patch digest")
+        if (self.authoring_transcript_bytes == 0) != (self.authoring_event_count == 0):
+            raise ValueError("authoring transcript bytes and event count disagree")
+        return self
+
+
+class SubmitCodingAuthoringFreezeResponse(CodingEvaluationModel):
+    freeze_id: UUID
+    agent_id: UUID
+    run_row_id: UUID
+    ticket_id: UUID
+    coding_run_id: OpaqueId
+    authoring_evidence_sha256: Sha256
+    frozen_at: datetime
+    accepted: Literal[True]
+    idempotent: bool
+    weight_eligible: Literal[False] = False
+
+    @field_validator("idempotent", mode="before")
+    @classmethod
+    def idempotency_flag_is_strict(cls, value: object) -> object:
+        if type(value) is not bool:
+            raise ValueError("idempotent must be a boolean")
+        return value
+
+    @model_validator(mode="after")
+    def response_is_coherent(self) -> SubmitCodingAuthoringFreezeResponse:
+        if (
+            self.freeze_id.int == 0
+            or self.agent_id.int == 0
+            or self.run_row_id.int == 0
+            or self.ticket_id.int == 0
+            or self.frozen_at.tzinfo is None
+            or self.frozen_at.utcoffset() is None
+        ):
+            raise ValueError("coding authoring freeze response authority is invalid")
+        return self
+
+
+class CodingAuthoringFreezeRecord(CodingEvaluationModel):
+    freeze_id: UUID
+    ticket_id: UUID
+    validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    authoring_evidence_sha256: Sha256
+    authoring_event_root: Sha256
+    authoring_transcript_sha256: Sha256
+    authoring_transcript_bytes: Annotated[int, Field(ge=0, le=512 << 20)]
+    authoring_event_count: Annotated[int, Field(ge=0, le=1_000)]
+    frozen_patch_sha256: Sha256
+    changed_path_root: Sha256
+    final_tree_sha256: Sha256
+    changed_path_count: Annotated[int, Field(ge=0, le=10_000)]
+    changed_bytes: Annotated[int, Field(ge=0, le=1 << 30)]
+    protected_paths_intact: bool
+    frozen_at: datetime
+    weight_eligible: Literal[False] = False
+
+    @model_validator(mode="after")
+    def record_is_coherent(self) -> CodingAuthoringFreezeRecord:
+        if (
+            self.freeze_id.int == 0
+            or self.ticket_id.int == 0
+            or self.frozen_at.tzinfo is None
+            or self.frozen_at.utcoffset() is None
+            or (self.authoring_transcript_bytes == 0)
+            != (self.authoring_event_count == 0)
+        ):
+            raise ValueError("coding authoring freeze record is incoherent")
+        return self
+
+
 class SubmitCodingShadowResultRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -238,7 +434,22 @@ class CodingShadowTicketRecord(CodingEvaluationModel):
     certification_row_id: UUID
     issued_at: datetime
     deadline: datetime
+    authoring_freeze: CodingAuthoringFreezeRecord | None
     result: CodingShadowResultRecord | None
+
+    @model_validator(mode="after")
+    def nested_records_match_ticket(self) -> CodingShadowTicketRecord:
+        if self.authoring_freeze is not None and (
+            self.authoring_freeze.ticket_id != self.ticket_id
+            or self.authoring_freeze.validator_hotkey != self.validator_hotkey
+        ):
+            raise ValueError("coding authoring freeze record disagrees with ticket")
+        if self.result is not None and (
+            self.result.ticket_id != self.ticket_id
+            or self.result.validator_hotkey != self.validator_hotkey
+        ):
+            raise ValueError("coding result record disagrees with ticket")
+        return self
 
 
 class CodingShadowRunRecord(CodingEvaluationModel):
@@ -332,6 +543,60 @@ def coding_run_evidence_digest(evidence: CodingRunEvidence) -> str:
         maximum_bytes=_MAX_CANONICAL_JSON_BYTES,
         label="coding run evidence",
     )
+
+
+def coding_authoring_evidence_digest(evidence: CodingAuthoringEvidence) -> str:
+    projection = evidence.model_dump(mode="json", by_alias=True)
+    return coding_canonical_sha256(
+        projection,
+        maximum_bytes=_MAX_CANONICAL_JSON_BYTES,
+        label="coding authoring evidence",
+    )
+
+
+def coding_authoring_freeze_signing_message(
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    bench_version: int,
+    run_row_id: UUID,
+    ticket_id: UUID,
+    ticket_deadline: datetime,
+    coding_run_id: str,
+    agent_artifact_sha256: str,
+    screened_image_sha256: str,
+    run_manifest_sha256: str,
+    task_set_manifest_sha256: str,
+    authoring_evidence_sha256: str,
+    authoring_transcript_object_key: str,
+    authoring_transcript_bytes: int,
+    authoring_event_count: int,
+    frozen_submission_object_key: str,
+) -> bytes:
+    if ticket_deadline.tzinfo is None or ticket_deadline.utcoffset() is None:
+        raise ValueError("coding authoring freeze deadline must be timezone-aware")
+    deadline = ticket_deadline.astimezone(UTC).isoformat(timespec="microseconds")
+    return "\x00".join(
+        (
+            "dittobench-coding-authoring-freeze:v1",
+            validator_hotkey,
+            str(agent_id),
+            str(bench_version),
+            str(run_row_id),
+            str(ticket_id),
+            deadline,
+            coding_run_id,
+            agent_artifact_sha256,
+            screened_image_sha256,
+            run_manifest_sha256,
+            task_set_manifest_sha256,
+            authoring_evidence_sha256,
+            authoring_transcript_object_key,
+            str(authoring_transcript_bytes),
+            str(authoring_event_count),
+            frozen_submission_object_key,
+        )
+    ).encode()
 
 
 def coding_shadow_result_signing_message(

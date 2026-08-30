@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,9 +13,21 @@ from pydantic import ValidationError
 
 from ditto.api_models.coding_evaluation import (
     CodingRunEvidence,
+    SubmitCodingAuthoringFreezeRequest,
+    SubmitCodingAuthoringFreezeResponse,
     SubmitCodingShadowResultRequest,
+    coding_authoring_evidence_digest,
+    coding_authoring_freeze_signing_message,
     coding_run_evidence_digest,
     coding_shadow_result_signing_message,
+)
+
+_FREEZE_VECTOR_PATH = (
+    Path(__file__).parents[5]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_authoring_freeze_v1.json"
 )
 
 
@@ -28,6 +41,93 @@ def _vectors() -> dict:
             / "coding_contract_v1.json"
         ).read_text(encoding="utf-8")
     )
+
+
+def _freeze_vector() -> dict:
+    return json.loads(_FREEZE_VECTOR_PATH.read_text(encoding="utf-8"))
+
+
+def test_authoring_freeze_vector_binds_evidence_keys_and_signature() -> None:
+    vector = _freeze_vector()
+    request = SubmitCodingAuthoringFreezeRequest.model_validate_json(
+        json.dumps(vector["request"])
+    )
+    response = SubmitCodingAuthoringFreezeResponse.model_validate_json(
+        json.dumps(vector["response"])
+    )
+    assert (
+        coding_authoring_evidence_digest(request.evidence)
+        == (vector["expected"]["authoring_evidence_sha256"])
+    )
+    message = coding_authoring_freeze_signing_message(
+        validator_hotkey=request.validator_hotkey,
+        agent_id=UUID(vector["agent_id"]),
+        bench_version=request.bench_version,
+        run_row_id=request.run_row_id,
+        ticket_id=request.ticket_id,
+        ticket_deadline=request.ticket_deadline,
+        coding_run_id=request.coding_run_id,
+        agent_artifact_sha256=request.agent_artifact_sha256,
+        screened_image_sha256=request.screened_image_sha256,
+        run_manifest_sha256=request.run_manifest_sha256,
+        task_set_manifest_sha256=request.task_set_manifest_sha256,
+        authoring_evidence_sha256=request.authoring_evidence_sha256,
+        authoring_transcript_object_key=request.authoring_transcript_object_key,
+        authoring_transcript_bytes=request.authoring_transcript_bytes,
+        authoring_event_count=request.authoring_event_count,
+        frozen_submission_object_key=request.frozen_submission_object_key,
+    )
+    assert (
+        hashlib.sha256(message).hexdigest()
+        == (vector["expected"]["signing_message_sha256"])
+    )
+    assert response.ticket_id == request.ticket_id
+    assert response.authoring_evidence_sha256 == request.authoring_evidence_sha256
+
+
+def test_authoring_freeze_rejects_digest_key_and_known_field_drift() -> None:
+    raw = _freeze_vector()["request"]
+    extended = {**raw, "future_phase_hint": {"ignored": True}}
+    parsed = SubmitCodingAuthoringFreezeRequest.model_validate_json(
+        json.dumps(extended)
+    )
+    assert "future_phase_hint" not in parsed.model_fields_set
+
+    for field, value in (
+        ("authoring_evidence_sha256", "ff" * 32),
+        ("authoring_transcript_object_key", "sha256/" + "ff" * 32),
+    ):
+        changed = {**raw, field: value}
+        with pytest.raises(ValidationError, match="does not match"):
+            SubmitCodingAuthoringFreezeRequest.model_validate_json(json.dumps(changed))
+    changed_evidence = json.loads(json.dumps(raw))
+    changed_evidence["evidence"]["protected_paths_intact"] = 1
+    with pytest.raises(ValidationError, match="boolean"):
+        SubmitCodingAuthoringFreezeRequest.model_validate_json(
+            json.dumps(changed_evidence)
+        )
+    changed_counter = json.loads(json.dumps(raw))
+    changed_counter["evidence"]["model"]["requests"] = True
+    with pytest.raises(ValidationError, match="integer"):
+        SubmitCodingAuthoringFreezeRequest.model_validate_json(
+            json.dumps(changed_counter)
+        )
+    for field, value in (
+        ("model", "openai/another-model"),
+        ("provider", "other-route"),
+        ("provider_route_profile", "other-profile-v1"),
+    ):
+        changed_route = json.loads(json.dumps(raw))
+        changed_route["evidence"]["model"][field] = value
+        with pytest.raises(ValidationError):
+            SubmitCodingAuthoringFreezeRequest.model_validate_json(
+                json.dumps(changed_route)
+            )
+    changed_counts = {**raw, "authoring_event_count": 0}
+    with pytest.raises(ValidationError, match="disagree"):
+        SubmitCodingAuthoringFreezeRequest.model_validate_json(
+            json.dumps(changed_counts)
+        )
 
 
 def test_platform_run_evidence_matches_shared_contract_vector() -> None:

@@ -122,6 +122,9 @@ from ditto.api_server.endpoints.validator_coding_delivery import (
 from ditto.api_server.endpoints.validator_coding_evaluation import (
     router as validator_coding_evaluation_router,
 )
+from ditto.api_server.endpoints.validator_coding_freezes import (
+    router as validator_coding_freezes_router,
+)
 from ditto.api_server.endpoints.validator_confirmation import (
     router as validator_confirmation_router,
 )
@@ -176,6 +179,7 @@ __all__ = [
     "validator_router",
     "validator_coding_certification_router",
     "validator_coding_delivery_router",
+    "validator_coding_freezes_router",
     "validator_coding_evaluation_router",
     "validator_confirmation_router",
 ]
