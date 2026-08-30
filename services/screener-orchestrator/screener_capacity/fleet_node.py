@@ -417,9 +417,12 @@ if ! docker pull {image} >/run/ditto-job/pull.log 2>&1; then
   exit 1
 fi
 if docker run --rm --pull never --network host \\
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=128m \\
+  --volume /var/run/docker.sock:/var/run/docker.sock \\
   -e DITTO_PLATFORM_URL={shlex.quote(platform_url)} \\
   -e DITTO_BUILD_ID={build_id} \\
   -e DITTO_BUILD_JOB_TOKEN \\
+  -e DITTO_BUILD_ENGINE=docker \\
   -e DITTO_BUILD_EXIT_AFTER_COMPLETE=1 \\
   {image} >"$output" 2>&1; then
   exit 0

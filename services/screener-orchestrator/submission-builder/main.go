@@ -1,4 +1,4 @@
-// ditto-submission-builder performs one credential-minimal Kaniko build.
+// ditto-submission-builder performs one credential-minimal image build.
 //
 // The only authority it receives is an expiring token bound by Platform to one
 // screening attempt and one object key. It never receives provider, cloud,
@@ -114,8 +114,10 @@ func run() error {
 	platform := strings.TrimRight(os.Getenv("DITTO_PLATFORM_URL"), "/")
 	buildID := os.Getenv("DITTO_BUILD_ID")
 	token := os.Getenv("DITTO_BUILD_JOB_TOKEN")
+	engine := os.Getenv("DITTO_BUILD_ENGINE")
 	exitAfterComplete := exitAfterCompleteRequested()
 	os.Unsetenv("DITTO_BUILD_JOB_TOKEN")
+	os.Unsetenv("DITTO_BUILD_ENGINE")
 	if platform == "" || !strings.HasPrefix(platform, "https://") {
 		return errors.New("invalid platform URL")
 	}
@@ -143,39 +145,38 @@ func run() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(
-		ctx,
-		"/kaniko/executor",
-		"--context=tar:///workspace/source.tar.gz",
-		"--dockerfile=Dockerfile",
-		"--destination="+source.ImageRef,
-		// Cloud Run egress shares Google IPs, so unauthenticated Docker Hub
-		// base-image pulls exhaust the anonymous rate limit and fail the
-		// KANIKO stage. mirror.gcr.io serves the cached copy and Kaniko
-		// falls back to the original registry on a miss.
-		"--registry-mirror=mirror.gcr.io",
-		"--no-push",
-		"--no-push-cache",
-		"--cache=false",
-		"--ignore-path=/workspace",
-		"--ignore-path=/etc/resolv.conf",
-		"--ignore-path=/etc/hosts",
-		"--tar-path=/kaniko/image.tar",
-		"--digest-file=/kaniko/manifest-digest",
-		"--verbosity=info",
+	cmd, imageArchive, closeInput, err := imageBuildCommand(
+		ctx, engine, source.ImageRef, "/workspace/source.tar.gz",
 	)
+	if err != nil {
+		return stageFailure("KANIKO", err)
+	}
+	if closeInput != nil {
+		defer closeInput()
+	}
 	cmd.Env = sanitizedEnvironment()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return stageFailure("KANIKO", fmt.Errorf("kaniko build failed: %w", err))
+		return stageFailure("KANIKO", fmt.Errorf("image build failed: %w", err))
+	}
+	if engine == "docker" {
+		save := exec.CommandContext(
+			ctx, "docker", "image", "save", "--output="+imageArchive, source.ImageRef,
+		)
+		save.Env = sanitizedEnvironment()
+		save.Stdout = os.Stdout
+		save.Stderr = os.Stderr
+		if err := save.Run(); err != nil {
+			return stageFailure("ARCHIVE", fmt.Errorf("docker image save failed: %w", err))
+		}
 	}
 
-	imageID, err := configDigestFromDockerSave("/kaniko/image.tar")
+	imageID, err := configDigestFromDockerSave(imageArchive)
 	if err != nil {
 		return stageFailure("ARCHIVE", err)
 	}
-	outputSHA, outputSize, err := hashBounded("/kaniko/image.tar", maxOutputBytes)
+	outputSHA, outputSize, err := hashBounded(imageArchive, maxOutputBytes)
 	if err != nil {
 		return stageFailure("ARCHIVE", err)
 	}
@@ -192,7 +193,7 @@ func run() error {
 	if err != nil {
 		return stageFailure("UPLOAD", err)
 	}
-	if err := uploadFile(client, uploadURL, "/kaniko/image.tar", upload.RequiredHeaders); err != nil {
+	if err := uploadFile(client, uploadURL, imageArchive, upload.RequiredHeaders); err != nil {
 		return stageFailure("UPLOAD", err)
 	}
 	var complete struct {
@@ -209,6 +210,56 @@ func run() error {
 		holdUntilDeleted()
 	}
 	return nil
+}
+
+func imageBuildCommand(
+	ctx context.Context, engine, imageRef, sourceArchive string,
+) (*exec.Cmd, string, func() error, error) {
+	if engine == "docker" {
+		archive, err := os.Open(sourceArchive)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		output := "/workspace/image.tar"
+		cmd := exec.CommandContext(
+			ctx,
+			"docker",
+			"buildx",
+			"build",
+			"--progress=plain",
+			"--tag="+imageRef,
+			"--load",
+			"-",
+		)
+		cmd.Stdin = archive
+		return cmd, output, archive.Close, nil
+	}
+	if engine != "" && engine != "kaniko" {
+		return nil, "", nil, errors.New("invalid build engine")
+	}
+	output := "/kaniko/image.tar"
+	cmd := exec.CommandContext(
+		ctx,
+		"/kaniko/executor",
+		"--context=tar://"+sourceArchive,
+		"--dockerfile=Dockerfile",
+		"--destination="+imageRef,
+		// Cloud Run egress shares Google IPs, so unauthenticated Docker Hub
+		// base-image pulls exhaust the anonymous rate limit and fail the
+		// KANIKO stage. mirror.gcr.io serves the cached copy and Kaniko
+		// falls back to the original registry on a miss.
+		"--registry-mirror=mirror.gcr.io",
+		"--no-push",
+		"--no-push-cache",
+		"--cache=false",
+		"--ignore-path=/workspace",
+		"--ignore-path=/etc/resolv.conf",
+		"--ignore-path=/etc/hosts",
+		"--tar-path="+output,
+		"--digest-file=/kaniko/manifest-digest",
+		"--verbosity=info",
+	)
+	return cmd, output, nil, nil
 }
 
 func exitAfterCompleteRequested() bool {
