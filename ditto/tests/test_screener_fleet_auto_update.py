@@ -167,6 +167,7 @@ def test_hetzner_workers_use_release_bound_rootless_analyzer() -> None:
     assert 'rootless_dockerd="$(command -v dockerd-rootless.sh)"' in installer
     assert "ExecStart=${rootless_dockerd}" in installer
     assert 'prepare_l2_analyzer "$revision"' in updater
+    assert '"$release_dir/src/workers/screener" >&2' in updater
     assert 'docker tag "$l2_candidate" "$L2_ANALYZER_ACTIVE"' in updater
     assert "rootless analyzer executor is unavailable" in updater
 

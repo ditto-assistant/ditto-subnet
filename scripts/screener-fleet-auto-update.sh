@@ -145,7 +145,7 @@ prepare_l2_analyzer() {
       --file "$release_dir/src/workers/screener/deploy/l2-analyzer.Dockerfile" \
       --label "ai.heyditto.screener.sha=$revision" \
       --tag "$candidate" \
-      "$release_dir/src/workers/screener"
+      "$release_dir/src/workers/screener" >&2
   fi
   printf '%s' "$candidate"
 }
