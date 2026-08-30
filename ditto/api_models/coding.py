@@ -1227,6 +1227,55 @@ class CodingGradingLeaseResponse(CodingContractModel):
         return self
 
 
+class SubmitCodingShadowResultRequest(BaseModel):
+    """Validator-signed terminal shadow result submission."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    bench_version: Annotated[int, Field(ge=7)]
+    run_row_id: UUID
+    ticket_id: UUID
+    ticket_deadline: datetime
+    agent_artifact_sha256: Sha256
+    screened_image_sha256: Sha256
+    run_evidence_sha256: Sha256
+    evidence: CodingRunEvidence
+    signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
+
+    @model_validator(mode="after")
+    def result_authority_is_coherent(self) -> SubmitCodingShadowResultRequest:
+        if (
+            self.run_row_id.int == 0
+            or self.ticket_id.int == 0
+            or self.ticket_deadline.tzinfo is None
+            or self.ticket_deadline.utcoffset() is None
+            or self.evidence.validator_ticket_id != str(self.ticket_id)
+            or coding_run_evidence_transport_digest(self.evidence)
+            != self.run_evidence_sha256
+        ):
+            raise ValueError("coding shadow result authority is invalid")
+        return self
+
+
+class SubmitCodingShadowResultResponse(CodingContractModel):
+    agent_id: UUID
+    run_row_id: UUID
+    ticket_id: UUID
+    coding_run_id: OpaqueId
+    accepted: Literal[True]
+    idempotent: bool
+    weight_eligible: Literal[False] = False
+
+    @model_validator(mode="after")
+    def response_identity_is_nonzero(self) -> SubmitCodingShadowResultResponse:
+        if any(
+            value.int == 0 for value in (self.agent_id, self.run_row_id, self.ticket_id)
+        ):
+            raise ValueError("coding shadow result response identity is invalid")
+        return self
+
+
 class SubmitCodingAuthoringFreezeRequest(BaseModel):
     """One validator-signed immutable transition out of authoring."""
 
@@ -1352,6 +1401,43 @@ def coding_grading_lease_signing_message(
             timestamp,
         )
     ).encode()
+
+
+def coding_shadow_result_signing_message(
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    run_row_id: UUID,
+    ticket_id: UUID,
+    bench_version: int,
+    ticket_deadline: datetime,
+    agent_artifact_sha256: str,
+    screened_image_sha256: str,
+    run_evidence_sha256: str,
+) -> bytes:
+    if ticket_deadline.tzinfo is None or ticket_deadline.utcoffset() is None:
+        raise ValueError("coding shadow ticket deadline must be timezone-aware")
+    deadline = ticket_deadline.astimezone(UTC).isoformat(timespec="microseconds")
+    return "\x00".join(
+        (
+            "dittobench-coding-shadow-result:v1",
+            validator_hotkey,
+            str(agent_id),
+            str(run_row_id),
+            str(ticket_id),
+            str(bench_version),
+            deadline,
+            agent_artifact_sha256,
+            screened_image_sha256,
+            run_evidence_sha256,
+        )
+    ).encode()
+
+
+def coding_run_evidence_transport_digest(evidence: CodingRunEvidence) -> str:
+    """Hash known wire fields; construct evidence with authority-aware helpers."""
+
+    return sha256_hex(_canonical_json_bytes(evidence))
 
 
 def coding_authoring_evidence_digest(evidence: CodingAuthoringEvidence) -> str:
@@ -1902,12 +1988,16 @@ __all__ = [
     "SubmitCodingCertificationResponse",
     "SubmitCodingAuthoringFreezeRequest",
     "SubmitCodingAuthoringFreezeResponse",
+    "SubmitCodingShadowResultRequest",
+    "SubmitCodingShadowResultResponse",
     "canonical_digest",
     "canonical_json_bytes",
     "coding_certification_receipt_digest",
     "coding_certification_signing_message",
     "coding_authoring_lease_signing_message",
     "coding_grading_lease_signing_message",
+    "coding_shadow_result_signing_message",
+    "coding_run_evidence_transport_digest",
     "coding_authoring_evidence_digest",
     "coding_authoring_freeze_signing_message",
     "coding_budgets_digest",

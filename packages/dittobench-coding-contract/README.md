@@ -40,6 +40,11 @@ contains exactly visible, resource, and grader capabilities; memory is
 structurally absent. Its URLs use reserved `.invalid` transport examples and
 are never usable credentials.
 
+`coding_shadow_result_submission_v1.json` freezes one authority-replayable
+validator-infrastructure submission and accepted response shared by Platform
+and the validator client. It contains synthetic manifests and evidence only,
+no repository, patch, transcript, memory, grader, or private task bytes.
+
 The vectors contain only synthetic identifiers, digests, policies, and reserved
 domain transport examples. Private catalog records, repository bundles, hidden
 tests, policy labels, provider credentials, signing keys, and usable bearer

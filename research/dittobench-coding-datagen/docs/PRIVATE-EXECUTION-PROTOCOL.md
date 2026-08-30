@@ -295,6 +295,14 @@ validator supervisor and pristine grader are wired in a separate review.
 The validator client compares the response patch identity to its locally frozen
 patch before accepting any grading capability.
 
+After pristine grading and canonical aggregation, the validator signs the
+terminal run-evidence digest together with the exact agent, run, ticket,
+deadline, artifact, screened image, and benchmark authority. Its bounded client
+first replays the aggregate against the run manifest and per-task evidence,
+refuses redirects, and accepts Platform's idempotent response only when the
+agent, run, ticket, and coding-run identities match. This transport exists for
+the future shadow worker and does not write the ordinary score ledger.
+
 `coding_run_id` and the manifest are shared across k=3. Validator-specific
 ticket IDs, deadlines, hotkeys, and transport capabilities remain in each lease
 envelope and signed validator evidence; they cannot make the selected task-set

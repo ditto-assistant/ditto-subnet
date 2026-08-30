@@ -376,7 +376,7 @@ class SubmitCodingShadowResultRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
-    bench_version: Annotated[int, Field(ge=7)]
+    bench_version: Annotated[int, Field(strict=True, ge=7)]
     run_row_id: UUID
     ticket_id: UUID
     ticket_deadline: datetime
@@ -395,8 +395,13 @@ class SubmitCodingShadowResultRequest(BaseModel):
 
     @model_validator(mode="after")
     def digest_matches_evidence(self) -> SubmitCodingShadowResultRequest:
-        if coding_run_evidence_digest(self.evidence) != self.run_evidence_sha256:
-            raise ValueError("run_evidence_sha256 does not match known fields")
+        if (
+            self.run_row_id.int == 0
+            or self.ticket_id.int == 0
+            or self.evidence.validator_ticket_id != str(self.ticket_id)
+            or coding_run_evidence_digest(self.evidence) != self.run_evidence_sha256
+        ):
+            raise ValueError("coding shadow result authority is invalid")
         return self
 
 
@@ -408,6 +413,14 @@ class SubmitCodingShadowResultResponse(CodingEvaluationModel):
     accepted: Literal[True]
     idempotent: bool
     weight_eligible: Literal[False] = False
+
+    @model_validator(mode="after")
+    def response_identity_is_nonzero(self) -> SubmitCodingShadowResultResponse:
+        if any(
+            value.int == 0 for value in (self.agent_id, self.run_row_id, self.ticket_id)
+        ):
+            raise ValueError("coding shadow result response identity is invalid")
+        return self
 
 
 class CodingShadowResultRecord(CodingEvaluationModel):

@@ -10362,18 +10362,27 @@ export interface components {
             fallback_used: false;
             /** Inference Grant Sha256 */
             inference_grant_sha256: string;
-            /** Model */
-            model: string;
+            /**
+             * Model
+             * @constant
+             */
+            model: "openai/gpt-5.6-luna";
             /** Prompt Sha256 */
             prompt_sha256: string;
             /** Prompt Tokens */
             prompt_tokens: number;
-            /** Provider */
-            provider: string;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "azure/eu";
             /** Provider Receipt Set Sha256 */
             provider_receipt_set_sha256: string | null;
-            /** Provider Route Profile */
-            provider_route_profile: string;
+            /**
+             * Provider Route Profile
+             * @constant
+             */
+            provider_route_profile: "luna-azure-eu-zdr-v1";
             /**
              * Reasoning Effort
              * @constant

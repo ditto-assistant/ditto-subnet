@@ -23,11 +23,17 @@ from ditto.api_models.coding import (
     CodingCapabilityCertificationReceipt,
     CodingGradingLeaseRequest,
     CodingGradingLeaseResponse,
+    CodingRunEvidence,
+    CodingRunManifest,
+    CodingTaskEvidence,
     SubmitCodingAuthoringFreezeRequest,
     SubmitCodingAuthoringFreezeResponse,
     SubmitCodingCertificationRequest,
     SubmitCodingCertificationResponse,
+    SubmitCodingShadowResultRequest,
+    SubmitCodingShadowResultResponse,
     coding_authoring_evidence_digest,
+    run_evidence_digest,
 )
 from ditto.api_models.inference import (
     InferenceExchangeRequest,
@@ -66,6 +72,7 @@ from ditto.validator.signing import (
     sign_coding_authoring_freeze,
     sign_coding_authoring_lease,
     sign_coding_grading_lease,
+    sign_coding_shadow_result,
     sign_inference_exchange,
     sign_job_fail_request,
     sign_job_request,
@@ -104,6 +111,7 @@ _INFERENCE_BUDGET_EVIDENCE_FIELDS = tuple(_INFERENCE_BUDGET_EVIDENCE_HEADERS)
 _CODING_AUTHORING_LEASE_MAX_BYTES = 512 << 10
 _CODING_AUTHORING_FREEZE_MAX_BYTES = 64 << 10
 _CODING_GRADING_LEASE_MAX_BYTES = 256 << 10
+_CODING_SHADOW_RESULT_MAX_BYTES = 64 << 10
 
 
 def _json_budget_evidence(exchange: InferenceExchangeResponse) -> dict[str, int] | None:
@@ -481,6 +489,109 @@ class PlatformClient:
                 "coding grading lease response identity is invalid"
             )
         return lease
+
+    async def submit_coding_shadow_result(
+        self,
+        agent_id: UUID,
+        *,
+        bench_version: int,
+        run_row_id: UUID,
+        ticket_id: UUID,
+        ticket_deadline: datetime,
+        agent_artifact_sha256: str,
+        screened_image_sha256: str,
+        run_manifest: CodingRunManifest,
+        evidence: CodingRunEvidence,
+        task_evidence: list[CodingTaskEvidence],
+    ) -> SubmitCodingShadowResultResponse:
+        """Submit one terminal shadow result without touching ordinary scores."""
+
+        try:
+            if (
+                run_manifest.agent_id != str(agent_id)
+                or run_manifest.agent_artifact_sha256 != agent_artifact_sha256
+            ):
+                raise ValueError("agent identity disagrees with run manifest")
+            evidence_sha256 = run_evidence_digest(
+                run_manifest,
+                str(ticket_id),
+                evidence,
+                task_evidence,
+            )
+        except ValueError as error:
+            raise PlatformInfrastructureError(
+                "coding shadow result local authority is invalid"
+            ) from error
+        payload = SubmitCodingShadowResultRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            bench_version=bench_version,
+            run_row_id=run_row_id,
+            ticket_id=ticket_id,
+            ticket_deadline=ticket_deadline,
+            agent_artifact_sha256=agent_artifact_sha256,
+            screened_image_sha256=screened_image_sha256,
+            run_evidence_sha256=evidence_sha256,
+            evidence=evidence,
+            signature=sign_coding_shadow_result(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                agent_id=agent_id,
+                run_row_id=run_row_id,
+                ticket_id=ticket_id,
+                bench_version=bench_version,
+                ticket_deadline=ticket_deadline,
+                agent_artifact_sha256=agent_artifact_sha256,
+                screened_image_sha256=screened_image_sha256,
+                run_evidence_sha256=evidence_sha256,
+            ),
+        )
+        body = bytearray()
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base}{_PREFIX}/agent/{agent_id}/coding-shadow-result",
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            ) as response:
+                if response.status_code == 503:
+                    raise PlatformInfrastructureError(
+                        "coding shadow result submission is temporarily unavailable"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        f"coding shadow result rejected ({response.status_code})"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=16 << 10):
+                    if len(body) + len(chunk) > _CODING_SHADOW_RESULT_MAX_BYTES:
+                        raise PlatformInfrastructureError(
+                            "coding shadow result response size is invalid"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding shadow result submission failed"
+            ) from error
+        if not body:
+            raise PlatformInfrastructureError(
+                "coding shadow result response size is invalid"
+            )
+        try:
+            accepted = SubmitCodingShadowResultResponse.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding shadow result response is invalid"
+            ) from None
+        if (
+            accepted.agent_id != agent_id
+            or accepted.run_row_id != run_row_id
+            or accepted.ticket_id != ticket_id
+            or accepted.coding_run_id != evidence.coding_run_id
+        ):
+            raise PlatformInfrastructureError(
+                "coding shadow result response identity is invalid"
+            )
+        return accepted
 
     async def request_v9_confirmation_job(
         self,
