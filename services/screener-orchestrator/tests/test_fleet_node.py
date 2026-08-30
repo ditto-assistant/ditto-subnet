@@ -243,8 +243,12 @@ def test_build_script_emits_only_safe_failure_marker_to_serial() -> None:
 
     assert '>"$output" 2>&1' in script
     assert (
-        "DITTO_SUBMISSION_BUILD_FAILED=(SOURCE|KANIKO|ARCHIVE|UPLOAD|COMPLETE|CONTRACT)"
-    ) in script
+        "marker_pattern='SOURCE|KANIKO|BUILDKIT(_LOCAL_CARGO_DEPENDENCY_MISSING)?'"
+        in script
+    )
+    assert (
+        'marker_pattern="${marker_pattern}|ARCHIVE|UPLOAD|COMPLETE|CONTRACT"' in script
+    )
     assert "printf '%s\\n' \"$marker\" >/dev/ttyS0" in script
     assert 'cat "$output"' not in script
     assert "docker pull registry.invalid/ditto/builder@sha256:" in script
@@ -259,6 +263,11 @@ def test_build_script_emits_only_safe_failure_marker_to_serial() -> None:
     [
         ("SOURCE", "FLEET_SUBMISSION_SOURCE_FAILED"),
         ("KANIKO", "FLEET_SUBMISSION_KANIKO_FAILED"),
+        ("BUILDKIT", "FLEET_SUBMISSION_BUILDKIT_FAILED"),
+        (
+            "BUILDKIT_LOCAL_CARGO_DEPENDENCY_MISSING",
+            "FLEET_SUBMISSION_BUILDKIT_LOCAL_CARGO_DEPENDENCY_MISSING_FAILED",
+        ),
         ("ARCHIVE", "FLEET_SUBMISSION_ARCHIVE_FAILED"),
         ("UPLOAD", "FLEET_SUBMISSION_UPLOAD_FAILED"),
         ("COMPLETE", "FLEET_SUBMISSION_COMPLETE_FAILED"),

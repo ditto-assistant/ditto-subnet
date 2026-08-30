@@ -275,10 +275,15 @@ async def test_bind_fails_closed_without_tar_config_digest(
 
 @pytest.mark.parametrize(
     "error_code",
-    ("TARGON_SUBMISSION_KANIKO_FAILED", "CLOUDRUN_SUBMISSION_KANIKO_FAILED"),
+    (
+        "TARGON_SUBMISSION_KANIKO_FAILED",
+        "CLOUDRUN_SUBMISSION_KANIKO_FAILED",
+        "FLEET_SUBMISSION_BUILDKIT_FAILED",
+        "FLEET_SUBMISSION_BUILDKIT_LOCAL_CARGO_DEPENDENCY_MISSING_FAILED",
+    ),
 )
 @pytest.mark.asyncio
-async def test_finalize_rejects_kaniko_exit_as_docker_build(
+async def test_finalize_rejects_submission_image_build_exit_as_docker_build(
     session_maker: async_sessionmaker[AsyncSession],
     error_code: str,
 ) -> None:

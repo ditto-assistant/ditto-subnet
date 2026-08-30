@@ -124,6 +124,40 @@ func TestFailureStageNameIsBoundedAndPublicSafe(t *testing.T) {
 	}
 }
 
+func TestBuildFailureStageDistinguishesFleetBuildKitFromKaniko(t *testing.T) {
+	missingDependency := strings.Join([]string{
+		"failed to load source for dependency `ditto-harness`",
+		"failed to read `/app/vendor/ditto-harness/Cargo.toml`",
+		"No such file or directory (os error 2)",
+	}, "\n")
+	if got := buildFailureStage("docker", missingDependency); got != "BUILDKIT_LOCAL_CARGO_DEPENDENCY_MISSING" {
+		t.Fatalf("unexpected BuildKit dependency stage: %s", got)
+	}
+	if got := buildFailureStage("docker", "unclassified build error"); got != "BUILDKIT" {
+		t.Fatalf("unexpected generic BuildKit stage: %s", got)
+	}
+	if got := buildFailureStage("kaniko", missingDependency); got != "KANIKO" {
+		t.Fatalf("unexpected Kaniko stage: %s", got)
+	}
+}
+
+func TestLimitedBufferKeepsBuildLogTailBounded(t *testing.T) {
+	var log limitedBuffer
+	first := bytes.Repeat([]byte("a"), maxBuildLogBytes)
+	if _, err := log.Write(first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.Write([]byte("tail")); err != nil {
+		t.Fatal(err)
+	}
+	if got := log.Len(); got != maxBuildLogBytes {
+		t.Fatalf("buffer length %d, want %d", got, maxBuildLogBytes)
+	}
+	if !strings.HasSuffix(log.String(), "tail") {
+		t.Fatal("buffer did not retain build-log tail")
+	}
+}
+
 func writeDockerSave(t *testing.T, config []byte, configName string) string {
 	t.Helper()
 	digest := sha256.Sum256(config)

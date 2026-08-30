@@ -434,7 +434,9 @@ async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(
         json={
             "status": "fallback_required",
             "provider_resource_id": "ditto-build-test",
-            "error_code": "FLEET_SUBMISSION_KANIKO_FAILED",
+            "error_code": (
+                "FLEET_SUBMISSION_BUILDKIT_LOCAL_CARGO_DEPENDENCY_MISSING_FAILED"
+            ),
         },
     )
     assert failed.status_code == 204, failed.text
@@ -446,8 +448,12 @@ async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(
         assert row.runtime_status == "skipped"
         assert row.runtime_error_code == "FLEET_RUNTIME_SKIPPED_BUILD_UNAVAILABLE"
         assert attempt.failure_provider == "hetzner"
-        assert attempt.failure_lane == "build"
-        assert attempt.private_failure_detail == "DITTO_SUBMISSION_BUILD_FAILED=KANIKO"
+        assert attempt.failure_lane == "buildkit"
+        assert attempt.private_failure_detail == (
+            "A local Cargo dependency is declared but absent from the Docker image "
+            "build context. Copy the dependency directory into the build stage "
+            "before running cargo build (for example, COPY vendor ./vendor)."
+        )
         assert attempt.failure_captured_at is not None
 
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
