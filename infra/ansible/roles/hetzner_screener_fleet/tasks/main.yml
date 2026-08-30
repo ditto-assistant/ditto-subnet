@@ -783,6 +783,14 @@
     state: started
   when: screener_fleet_runtime_enabled
 
+- name: Stop and disable screening workers above configured capacity
+  ansible.builtin.systemd:
+    name: "ditto-screener-worker@{{ item }}"
+    enabled: false
+    state: stopped
+  loop: "{{ range(screener_fleet_worker_processes + 1, 17) | list }}"
+  when: screener_fleet_runtime_enabled
+
 - name: Enable and start full screening workers
   ansible.builtin.systemd:
     name: "ditto-screener-worker@{{ item }}"

@@ -206,8 +206,8 @@ ansible-playbook \
 
 The play installs KVM/libvirt and Docker, builds a verified disposable guest
 base, validates X.509 federation without printing the secret, enrolls one node
-identity, starts the trusted lane agent, and starts eight full screener
-processes. The bootstrap operator receives a validated passwordless sudo rule
+identity, starts the trusted lane agent, and starts one full screener process
+for the initial canary. The bootstrap operator receives a validated passwordless sudo rule
 for future Ansible converges; root SSH is disabled. Re-run with `ansible_user`
 set to that operator after the first converge.
 
@@ -242,22 +242,25 @@ Set every lane to `hetzner > gcp`, enable GCE overflow with primary node
 `subnet-screener-1`, backlog multiplier `3`, minimum backlog `12`, and maximum
 GCE instances `6`. After one successful build -> smoke -> source-review
 sequence and one terminal build failure that consumed no review lease, raise
-the node to its 64 GB steady-state limits:
+the node to its initial 64 GB steady-state limits:
 
 ```text
-SCREENING=8 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4
+SCREENING=2 SANDBOX=2 BUILD=2 RUNTIME=2 SOURCE_REVIEW=2
 ```
 
 Backroom shows the exact confirmation phrase before it can append each
-revision. Eight worker processes keep independent submissions moving, while
-the four build/smoke slots cap memory pressure. For any one submission, build
-and smoke finish before source review begins.
+revision. Then set `screener_fleet_worker_processes: 2` in the private inventory
+and re-run Ansible so the host has two claimers for the two admitted screens.
+Keep the process count equal to the Backroom screening ceiling: surplus idle
+pollers add lock pressure without adding throughput. For any one submission,
+build and smoke finish before source review begins.
 
 Leave the GCE MIG at zero during normal load. Before declaring the rollout
-complete, verify four simultaneous cold Rust builds, four smoke transitions,
+complete, verify two simultaneous cold Rust builds, two smoke transitions,
 source review only after successful smoke, and one controlled primary-heartbeat
 outage that scales GCE out and back to zero without moving an already-failed
-job.
+job. Raise to three only after measured peak memory proves simultaneous sandbox
+and source-review guests leave safe host margin.
 
 ## Drain and update
 

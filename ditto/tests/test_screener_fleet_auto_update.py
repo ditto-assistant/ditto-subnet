@@ -150,6 +150,26 @@ def test_role_installs_setpriv_provider() -> None:
     assert "- util-linux" in tasks
 
 
+def test_role_stops_workers_above_configured_capacity() -> None:
+    tasks = yaml.safe_load((ROLE / "tasks/main.yml").read_text())
+    task = next(
+        item
+        for item in tasks
+        if item["name"]
+        == "Stop and disable screening workers above configured capacity"
+    )
+
+    assert task["ansible.builtin.systemd"] == {
+        "name": "ditto-screener-worker@{{ item }}",
+        "enabled": False,
+        "state": "stopped",
+    }
+    assert task["loop"] == (
+        "{{ range(screener_fleet_worker_processes + 1, 17) | list }}"
+    )
+    assert task["when"] == "screener_fleet_runtime_enabled"
+
+
 def test_release_workflow_signs_before_advancing_discovery_channel() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text())
     job = workflow["jobs"]["assemble-screener-fleet-release"]
