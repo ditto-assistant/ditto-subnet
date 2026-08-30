@@ -99,6 +99,8 @@ import {
   confirmationBundleStateSchema,
   confirmationBundleDetailInputSchema,
   createScreenerBootstrapGrantInputSchema,
+  setScreenerProviderSettingsInputSchema,
+  setScreenerNodeChannelSettingsInputSchema,
   setConfirmationBundleSettingsInputSchema,
   authorizeConfirmationBundleRetestInputSchema,
   retryTrustedImageBuildInputSchema,
@@ -187,6 +189,8 @@ import {
   restoreScoredScreeningSnapshot,
   createScreenerBootstrapGrant,
   fetchScreenerCapacity,
+  updateScreenerProviderSettings,
+  updateScreenerNodeChannelSettings,
   fetchScreenerReviewControl,
   applyScreenerReviewSettings,
   fetchScreenerPolicyManifestControl,
@@ -233,6 +237,8 @@ export type BackroomEnv = {
 
 export const WRITE_TOOL_NAMES = new Set([
   'create_screener_bootstrap_grant',
+  'set_screener_provider_settings',
+  'set_screener_node_channel_settings',
   'register_coding_catalog_release',
   'retire_coding_catalog_release',
   'resolve_screening_quarantine',
@@ -469,6 +475,10 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_screener_capacity:
     'Read screener capacity, provider priorities, and recent build, runtime, and source-review jobs before manual retry.',
+  set_screener_provider_settings:
+    'Apply complete revisioned screener routing and bounded GCE overflow settings after reading get_screener_capacity.',
+  set_screener_node_channel_settings:
+    'Apply complete revisioned concurrency limits for one enrolled screener node after reading get_screener_capacity.',
   get_coding_catalog_releases:
     'Read signed shadow catalog commitments, retirement, and exposure counts.',
   register_coding_catalog_release:
@@ -1650,6 +1660,32 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => createScreenerBootstrapGrant(props.session.email, input)),
+  )
+
+  registerTool(
+    'set_screener_provider_settings',
+    {
+      title: 'Set screener provider routing',
+      description:
+        'Apply one complete append-only provider-routing revision for build, runtime smoke, and source review. Read get_screener_capacity immediately before writing and supply its current provider revision as expectedRevision. The three ordered provider lists, primary node, and complete GCE overflow policy are one atomic decision; do not omit fields or infer them from dashboard state. Hetzner-first routing sends new unowned work to the fixed host, while bounded GCE overflow handles primary unavailability or backlog above max(minimum backlog, primary screening concurrency times the configured multiplier). A failed Hetzner lane is terminal and is never retried on GCE. Supply an audit reason and the exact confirmation rendered by the complete settings. Requires backroom:write.',
+      inputSchema: setScreenerProviderSettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => updateScreenerProviderSettings(props.session.email, input)),
+  )
+
+  registerTool(
+    'set_screener_node_channel_settings',
+    {
+      title: 'Set screener node concurrency',
+      description:
+        'Apply one complete append-only concurrency revision to an exact enrolled node. Read get_screener_capacity immediately before writing and supply that node control revision as expectedRevision. screening_concurrency caps full attempts; build and runtime each have a lane cap but share sandbox_slots, and source review has its own cap. Zero disables a lane. Lowering a limit drains active work rather than revoking it. Supply all five limits, an audit reason, and the exact confirmation naming the node and every resulting value. Requires backroom:write.',
+      inputSchema: setScreenerNodeChannelSettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => updateScreenerNodeChannelSettings(props.session.email, input)),
   )
 
   registerTool(
