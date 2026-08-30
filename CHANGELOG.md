@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.170.1 (2026-08-30)
+
+### Bug Fixes
+
+- **backroom**: Default operator queues to active generation
+  ([#1369](https://github.com/ditto-assistant/ditto-subnet/pull/1369),
+  [`6c883bb`](https://github.com/ditto-assistant/ditto-subnet/commit/6c883bb98be8a934977196cb99b9c50dbac94702))
+
+
 ## v0.170.0 (2026-08-30)
 
 ### Bug Fixes
