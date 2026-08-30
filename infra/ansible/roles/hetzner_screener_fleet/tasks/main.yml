@@ -666,6 +666,20 @@
   register: screener_fleet_source_review_key
   when: screener_fleet_runtime_enabled
 
+- name: Require an owner-only source-review key after X.509 materialization
+  ansible.builtin.assert:
+    that:
+      - screener_fleet_source_review_key.stat.exists
+      - screener_fleet_source_review_key.stat.pw_name == screener_fleet_user
+      - screener_fleet_source_review_key.stat.gr_name == screener_fleet_group
+      - screener_fleet_source_review_key.stat.mode == "0400"
+    fail_msg: >-
+      The source-review key must be owned by the screener worker with mode 0400;
+      L2 and L4 reject group-readable credentials before making a model call.
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_x509_enabled
+
 - name: Require source-review authority before initial converge
   ansible.builtin.assert:
     that: screener_fleet_source_review_api_key | length >= 16
