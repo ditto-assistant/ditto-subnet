@@ -297,10 +297,14 @@ class CodingShadowWorker:
                 started=True,
                 now=started_now,
             )
-            if harness.expires_at <= started_now or any(
-                capability.expires_at <= started_now
-                for capability in authoring_lease.capabilities
-            ) or offer.expires_at <= started_now:
+            if (
+                harness.expires_at <= started_now
+                or any(
+                    capability.expires_at <= started_now
+                    for capability in authoring_lease.capabilities
+                )
+                or offer.expires_at <= started_now
+            ):
                 raise CodingAttemptIntegrityError(
                     "coding claim started after preflight authority expired"
                 )
