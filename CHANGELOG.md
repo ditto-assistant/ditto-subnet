@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.164.0 (2026-08-30)
+
+### Features
+
+- **coding**: Bind supervisor execution capabilities
+  ([`99031f2`](https://github.com/ditto-assistant/ditto-subnet/commit/99031f24bb02246e7b08e8befe907047d5790410))
+
+
 ## v0.163.1 (2026-08-30)
 
 ### Bug Fixes
