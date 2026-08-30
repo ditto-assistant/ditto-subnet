@@ -29,6 +29,10 @@ from ditto.api_models.coding_selection import (
     CodingSelectionRunManifest,
     CodingTaskSetManifest,
 )
+from ditto.coding_selection import (
+    CodingSelectionCatalogIntegrityError,
+    CodingSelectionCatalogUnavailableError,
+)
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.endpoints import validator_coding_inference as endpoint_module
 from ditto.api_server.endpoints.validator_coding_inference import (
@@ -317,4 +321,26 @@ async def test_coding_inference_endpoints_reject_disabled_forged_and_replayed(
         json=_grant_payload(mocks.lease),
     )
     assert replay.status_code == 409
+    mocks.ensure.assert_not_awaited()
+
+    mocks.consume_nonce.side_effect = None
+    future = await client.post(
+        "/api/v1/validator/coding-shadow/inference-grant",
+        json=_grant_payload(
+            mocks.lease, requested_at=datetime.now(UTC) + timedelta(minutes=1)
+        ),
+    )
+    assert future.status_code == 409
+    mocks.build_lease.side_effect = CodingSelectionCatalogIntegrityError("digest")
+    catalog_conflict = await client.post(
+        "/api/v1/validator/coding-shadow/inference-grant",
+        json=_grant_payload(mocks.lease),
+    )
+    assert catalog_conflict.status_code == 409
+    mocks.build_lease.side_effect = CodingSelectionCatalogUnavailableError("timeout")
+    catalog_unavailable = await client.post(
+        "/api/v1/validator/coding-shadow/inference-grant",
+        json=_grant_payload(mocks.lease),
+    )
+    assert catalog_unavailable.status_code == 503
     mocks.ensure.assert_not_awaited()

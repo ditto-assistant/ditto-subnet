@@ -40,6 +40,10 @@ from ditto.db.queries.coding_inference_grants import (
     ensure_coding_inference_grant,
     revoke_coding_inference_grant,
 )
+from ditto.coding_selection import (
+    CodingSelectionCatalogIntegrityError,
+    CodingSelectionCatalogUnavailableError,
+)
 from ditto.db.queries.coding_task_leases import (
     CodingTaskLeaseIntegrityError,
     CodingTaskLeaseNotAvailableError,
@@ -112,7 +116,7 @@ def _transport(request: Request) -> CodingInferenceGrantTransport:
 
 
 def _fresh(value: datetime) -> bool:
-    return abs(datetime.now(UTC) - value.astimezone(UTC)) <= _REQUEST_MAX_AGE
+    return timedelta(0) <= datetime.now(UTC) - value.astimezone(UTC) <= _REQUEST_MAX_AGE
 
 
 async def _permitted(
@@ -134,6 +138,7 @@ async def _consume_nonce(
     nonce: UUID,
     validator_hotkey: str,
     now: datetime,
+    requested_at: datetime,
 ) -> None:
     try:
         await consume_validator_nonce(
@@ -141,7 +146,7 @@ async def _consume_nonce(
             nonce=nonce,
             validator_hotkey=validator_hotkey,
             now=now,
-            expires_at=now + _REQUEST_MAX_AGE,
+            expires_at=requested_at.astimezone(UTC) + _REQUEST_MAX_AGE,
         )
     except ValidatorRequestReplayError:
         raise HTTPException(
@@ -225,6 +230,7 @@ async def request_coding_inference_grant(
             nonce=payload.nonce,
             validator_hotkey=payload.validator_hotkey,
             now=now,
+            requested_at=payload.requested_at,
         )
         try:
             await authorize_coding_shadow_task_delivery(
@@ -248,10 +254,18 @@ async def request_coding_inference_grant(
             status_code=404,
             detail="coding shadow ticket is unavailable",
         ) from None
-    except CodingTaskLeaseIntegrityError:
+    except (
+        CodingTaskLeaseIntegrityError,
+        CodingSelectionCatalogIntegrityError,
+    ):
         raise HTTPException(
             status_code=409,
             detail="coding inference task authority is inconsistent",
+        ) from None
+    except CodingSelectionCatalogUnavailableError:
+        raise HTTPException(
+            status_code=503,
+            detail="coding private catalog is temporarily unavailable",
         ) from None
     finally:
         if session.in_transaction():
@@ -348,6 +362,7 @@ async def exchange_coding_inference_grant(
             nonce=payload.nonce,
             validator_hotkey=payload.validator_hotkey,
             now=now,
+            requested_at=payload.requested_at,
         )
         try:
             activated = await activate_coding_inference_grant(
@@ -438,6 +453,7 @@ async def revoke_coding_inference_grant_endpoint(
             nonce=payload.nonce,
             validator_hotkey=payload.validator_hotkey,
             now=now,
+            requested_at=payload.requested_at,
         )
         try:
             revoked = await revoke_coding_inference_grant(
