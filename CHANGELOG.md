@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.148.1 (2026-08-30)
+
+### Bug Fixes
+
+- **backroom**: Expose screener capacity writes through MCP
+  ([#1318](https://github.com/ditto-assistant/ditto-subnet/pull/1318),
+  [`6f0be1e`](https://github.com/ditto-assistant/ditto-subnet/commit/6f0be1e5652a5d91c58fb8ebb491de91cc960fc8))
+
+
 ## v0.148.0 (2026-08-30)
 
 ### Bug Fixes
