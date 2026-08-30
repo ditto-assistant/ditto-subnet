@@ -1789,6 +1789,18 @@ describe('screener review settings schemas', () => {
     expect(parsed.source_review_reasoning_effort).toBe('high')
     expect(parsed.source_review_model).toBe('openai/gpt-5.6-luna')
     expect(parsed.source_review_timeout_seconds).toBe(1_800)
+    expect(parsed.adjudicator_max_steps).toBe(128)
+  })
+
+  it('accepts the time-bound adjudicator step budget and rejects larger values', () => {
+    expect(screenerReviewSettingsSchema.parse({
+      ...settings,
+      adjudicator_max_steps: 256,
+    }).adjudicator_max_steps).toBe(256)
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings,
+      adjudicator_max_steps: 257,
+    })).toThrow()
   })
 
   it('rejects duplicate model chains and short audit reasons', () => {

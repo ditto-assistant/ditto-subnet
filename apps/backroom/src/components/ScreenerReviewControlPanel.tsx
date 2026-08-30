@@ -29,7 +29,7 @@ const defaults: ScreenerReviewSettings = {
   clear_min_notes: 3,
   adjudicator_mode: 'off' as const,
   adjudicator_model: 'z-ai/glm-5.3-flash' as const,
-  adjudicator_max_steps: 24,
+  adjudicator_max_steps: 128,
   adjudicator_timeout_seconds: 600,
   source_review_reasoning_effort: 'high',
   source_review_model: 'openai/gpt-5.6-luna',
