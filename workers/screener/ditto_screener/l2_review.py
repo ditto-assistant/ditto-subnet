@@ -3912,14 +3912,12 @@ class LayeredSourceReviewAgent:
         archive_path: str,
         deadline: float | None = None,
     ) -> SourceReviewObservation:
-        """Decide a hold-bound outcome instead of parking it on an operator.
+        """Decide every outcome that lacks a certified low-risk verdict.
 
-        Only outcomes that would otherwise WAIT are adjudicated, and there are
-        two of them: a medium- or high-risk finding, which quarantines, and a
-        review that ended without admitting itself. A low-risk result already
-        passed, and a retryable infrastructure failure has no evidence to
-        weigh -- adjudicating either spends a model call to re-derive an
-        answer the pipeline already has.
+        L4 owns terminality. Even an L1 provider fault before the first note
+        reaches it: the court has its own bounded read tools and can inspect
+        the archive directly. A clean certified L1 result already has an
+        answer and remains the only outcome that skips this final call.
         """
         if self._adjudicator is None or not _needs_final_adjudication(observation):
             return observation
@@ -4076,16 +4074,12 @@ def _would_hold(observation: SourceReviewObservation) -> bool:
 
 
 def _needs_final_adjudication(observation: SourceReviewObservation) -> bool:
-    """Close every evidence-bearing review that would otherwise retry or hold.
-
-    A transport failure before the reviewer records anything still has no
-    material for a court to weigh and remains retryable infrastructure. Once
-    the typed notes ledger contains evidence, however, a deadline, step cap,
-    incomplete dossier, or later provider fault must not discard that work and
-    start the submission over. L4 receives the accumulated notes and makes the
-    final clear/reject decision under the same renewable lease deadline.
-    """
-    return _would_hold(observation) or bool(observation.notes)
+    """Close every outcome except an already certified low-risk result."""
+    return not (
+        observation.ok
+        and observation.risk_level == "low"
+        and observation.clearance_certified
+    )
 
 
 def _carry_l1_notes(

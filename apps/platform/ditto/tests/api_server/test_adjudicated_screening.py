@@ -116,6 +116,10 @@ async def _seed_held_screen(
                 policy_version=SCREENING_POLICY_VERSION,
                 status="running",
                 build_only=False,
+                review_settings_revision=1,
+                review_settings_instance_id="test-screener",
+                review_settings_scope="*",
+                review_settings_checksum="ab" * 32,
                 started_at=now - timedelta(minutes=10),
                 deadline=now + timedelta(minutes=60),
             )
@@ -223,6 +227,62 @@ async def test_an_adjudicated_reject_is_terminal_with_its_reason(
         # decided rather than "held for anti-cheat review".
         assert agent.screening_reason is not None
         assert "authors the served reply" in agent.screening_reason
+
+
+@pytest.mark.asyncio
+async def test_attempt_bound_enforce_survives_global_canary_window_close(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    attempt_id = await _seed_held_screen(
+        session_maker,
+        observation=_held_observation(_adjudication("clear")),
+        adjudicator_mode="enforce",
+    )
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerReviewSettingsRevision(
+                revision=2,
+                parent_revision=1,
+                scope="*",
+                settings=ScreenerReviewSettings(
+                    mode="off", adjudicator_mode="off"
+                ).model_dump(mode="json"),
+                reason="close exact canary after its claim",
+                actor="tests",
+                checksum="cd" * 32,
+            )
+        )
+
+    await _finalize(session_maker, attempt_id)
+
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.status == "passed"
+
+
+@pytest.mark.asyncio
+async def test_attempt_bound_l4_clear_settles_an_early_l1_provider_fault(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    observation = _held_observation(_adjudication("clear"))
+    observation.update(
+        error_code="source-review-model-response-invalid",
+        failure_disposition="retryable_infra",
+        notes=[],
+    )
+    attempt_id = await _seed_held_screen(
+        session_maker,
+        observation=observation,
+        adjudicator_mode="enforce",
+    )
+
+    await _finalize(session_maker, attempt_id)
+
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.status == "passed"
 
 
 @pytest.mark.asyncio

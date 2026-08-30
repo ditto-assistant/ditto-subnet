@@ -225,6 +225,11 @@ _DEFAULT_MAX_COMPLETION_TOKENS = 8_000
 # A sweep cannot be expressed below this, so a misconfigured floor would
 # guarantee the truncation this budget exists to prevent.
 _MIN_MAX_COMPLETION_TOKENS = 2_000
+# A relayed 429/5xx body is not a model turn and carries no verdict. Retry it
+# inside the same lease and trajectory, but keep the grant deliberately tiny:
+# three total posts, with two short backoffs. This heals a transient provider
+# edge without turning an outage into an unbounded paid loop.
+_MODEL_TRANSPORT_RETRY_DELAYS_SECONDS = (1.0, 3.0)
 
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
@@ -3115,6 +3120,9 @@ class OpenRouterSourceReviewAgent:
         transport: httpx.AsyncBaseTransport | None = None,
         concern_hold_count: int = 1,
         clear_min_notes: int = 3,
+        transport_retry_delays: Sequence[float] = (
+            _MODEL_TRANSPORT_RETRY_DELAYS_SECONDS
+        ),
     ) -> None:
         # Gradient thresholds for a budget-terminated review: this many
         # recorded concerns hold the artifact for operator review; zero
@@ -3131,6 +3139,9 @@ class OpenRouterSourceReviewAgent:
             _MIN_MAX_COMPLETION_TOKENS, int(max_completion_tokens)
         )
         self._reasoning_effort = reasoning_effort
+        self._transport_retry_delays = tuple(
+            max(0.0, float(delay)) for delay in transport_retry_delays
+        )
         self._static_preflight_v2_mode = static_preflight_v2_mode
         self._provenance_manifest_files = (
             (provenance_manifest_file,)
@@ -3439,26 +3450,71 @@ class OpenRouterSourceReviewAgent:
         timeout: float | None = None,
         reasoning_effort: str,
     ) -> dict[str, object]:
-        """Issue one model turn and preserve safe body-shape failure evidence."""
-        response = await self._post_completion(
-            client,
-            api_key,
-            messages,
-            timeout=timeout,
-            reasoning_effort=reasoning_effort,
-        )
-        payload: object | None = None
-        try:
-            payload = response.json()
-            return _assistant_message(payload)
-        except ValueError:
+        """Issue one model turn, healing only bounded transport-class faults."""
+        started = asyncio.get_running_loop().time()
+        attempts = len(self._transport_retry_delays) + 1
+        for attempt in range(attempts):
+            remaining_timeout = timeout
+            if timeout is not None:
+                remaining_timeout = timeout - (
+                    asyncio.get_running_loop().time() - started
+                )
+                if remaining_timeout <= 0:
+                    raise TimeoutError(
+                        "source review model retry exceeded lease budget"
+                    )
+            payload: object | None = None
+            try:
+                response = await self._post_completion(
+                    client,
+                    api_key,
+                    messages,
+                    timeout=remaining_timeout,
+                    reasoning_effort=reasoning_effort,
+                )
+                payload = response.json()
+                return _assistant_message(payload)
+            except httpx.HTTPStatusError as error:
+                status = error.response.status_code
+                fault = str(status) if status == 429 or status >= 500 else None
+                signature = f"http-status={status}"
+                caught: BaseException = error
+            except httpx.RequestError as error:
+                fault = "transport-error"
+                signature = f"type={type(error).__name__}"
+                caught = error
+            except ValueError as error:
+                fault = _retryable_model_error_type(payload)
+                signature = _body_signature(payload)
+                caught = error
+
+            if fault is None or attempt >= len(self._transport_retry_delays):
+                logger.warning(
+                    "source review model body was unusable; parking attempt: "
+                    "fault=%s signature=%s attempts=%d",
+                    fault or "unclassified",
+                    signature,
+                    attempt + 1,
+                )
+                raise caught
+
+            delay = self._transport_retry_delays[attempt]
+            if timeout is not None:
+                remaining = timeout - (asyncio.get_running_loop().time() - started)
+                if remaining <= delay:
+                    raise caught
             logger.warning(
-                "source review model body was unusable; parking attempt: "
-                "fault=%s signature=%s",
-                _retryable_model_error_type(payload) or "unclassified",
-                _body_signature(payload),
+                "source review model transport fault; retrying same turn: "
+                "fault=%s signature=%s attempt=%d/%d delay_s=%.1f",
+                fault,
+                signature,
+                attempt + 1,
+                attempts,
+                delay,
             )
-            raise
+            await asyncio.sleep(delay)
+
+        raise AssertionError("model retry loop exhausted without a result")
 
     async def _post_completion(
         self,
