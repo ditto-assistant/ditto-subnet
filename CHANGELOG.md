@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.162.1 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Survive transient Platform outages
+  ([#1350](https://github.com/ditto-assistant/ditto-subnet/pull/1350),
+  [`2ded83d`](https://github.com/ditto-assistant/ditto-subnet/commit/2ded83d7e7f415c834ec2ba62dce4e450f3c14ff))
+
+
 ## v0.162.0 (2026-08-30)
 
 ### Features
