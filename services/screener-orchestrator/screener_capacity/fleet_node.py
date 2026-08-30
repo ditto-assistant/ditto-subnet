@@ -38,9 +38,8 @@ _JOB_ID = re.compile(r"^[0-9a-f-]{36}$")
 _IMAGE = re.compile(r"^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 _RUNTIME_MARKER = "DITTO_FLEET_RUNTIME_OK"
 _BUILD_FAILURE_MARKER = re.compile(
-    r"(?:^|\n)DITTO_SUBMISSION_BUILD_FAILED="
-    r"(SOURCE|KANIKO|ARCHIVE|UPLOAD|COMPLETE|CONTRACT)(?:\r?$)",
-    re.MULTILINE,
+    r"DITTO_SUBMISSION_BUILD_FAILED="
+    r"(SOURCE|KANIKO|ARCHIVE|UPLOAD|COMPLETE|CONTRACT|DOCKER|PULL|LAUNCH)"
 )
 _GUEST_OSINFO = "debian12"
 _LIBVIRT_URI = "qemu:///system"
@@ -375,14 +374,8 @@ def _cloud_config(script: str) -> str:
     return "\n".join(
         (
             "#cloud-config",
-            "write_files:",
-            "  - path: /usr/local/sbin/ditto-fleet-job",
-            "    owner: root:root",
-            "    permissions: '0700'",
-            "    encoding: b64",
-            f"    content: {encoded}",
             "runcmd:",
-            "  - [ /usr/local/sbin/ditto-fleet-job ]",
+            f'  - [ /bin/sh, -c, "printf %s {encoded} | base64 -d | /bin/sh" ]',
             "power_state:",
             "  mode: poweroff",
             "  timeout: 30",
@@ -408,12 +401,40 @@ mkdir -p /run/ditto-job
 printf %s {token_b64} | base64 -d >/run/ditto-job/token
 DITTO_BUILD_JOB_TOKEN=$(cat /run/ditto-job/token)
 export DITTO_BUILD_JOB_TOKEN
-docker run --rm --network host \\
+output=/run/ditto-job/builder.log
+i=0
+until docker info >/dev/null 2>&1; do
+  i=$((i + 1))
+  if [ "$i" -ge 30 ]; then
+    printf '%s\\n' DITTO_SUBMISSION_BUILD_FAILED=DOCKER >/dev/ttyS0
+    exit 1
+  fi
+  sleep 1
+done
+if ! docker pull {image} >/run/ditto-job/pull.log 2>&1; then
+  printf '%s\\n' DITTO_SUBMISSION_BUILD_FAILED=PULL >/dev/ttyS0
+  exit 1
+fi
+if docker run --rm --pull never --network host \\
   -e DITTO_PLATFORM_URL={shlex.quote(platform_url)} \\
   -e DITTO_BUILD_ID={build_id} \\
   -e DITTO_BUILD_JOB_TOKEN \\
   -e DITTO_BUILD_EXIT_AFTER_COMPLETE=1 \\
-  {image}
+  {image} >"$output" 2>&1; then
+  exit 0
+fi
+marker=$(
+  grep -E \
+    '^DITTO_SUBMISSION_BUILD_FAILED=(SOURCE|KANIKO|ARCHIVE|UPLOAD|COMPLETE|CONTRACT)$' \
+    "$output" |
+    tail -n 1
+)
+if [ -n "$marker" ]; then
+  printf '%s\\n' "$marker" >/dev/ttyS0
+else
+  printf '%s\\n' DITTO_SUBMISSION_BUILD_FAILED=LAUNCH >/dev/ttyS0
+fi
+exit 1
 """
 
 
@@ -470,9 +491,7 @@ def _build_failure_code(*, ok: bool, console: str) -> str:
     if markers:
         return f"FLEET_SUBMISSION_{markers[-1]}_FAILED"
     return (
-        "FLEET_SUBMISSION_BUILD_VM_EXITED"
-        if ok
-        else "FLEET_SUBMISSION_BUILD_VM_FAILED"
+        "FLEET_SUBMISSION_BUILD_VM_EXITED" if ok else "FLEET_SUBMISSION_BUILD_VM_FAILED"
     )
 
 
@@ -661,8 +680,7 @@ class FleetNode:
         if status not in _TERMINAL:
             error_code = _build_failure_code(ok=ok, console=console)
             print(
-                f"fleet build job failed: build_id={build_id} "
-                f"error_code={error_code}"
+                f"fleet build job failed: build_id={build_id} error_code={error_code}"
             )
             self.control.update(
                 "build",
