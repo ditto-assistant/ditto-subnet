@@ -384,12 +384,17 @@ class TargonRentalLoop:
             finalized = True
         return finalized
 
-    def _provider_named(self, stored: str | None) -> ScreeningComputeProvider:
+    def _provider_named(self, stored: str | None) -> ScreeningComputeProvider | None:
         wanted = stored or "targon"
         for provider in self._providers:
             if provider.stored_provider == wanted or provider.name == wanted:
                 return provider
-        return self._providers[0]
+        # Persistent fleet providers (for example Hetzner) share the job rows
+        # with disposable cloud rentals, but are owned by the fleet agent.  An
+        # unknown provider must never silently fall back to Targon: doing so
+        # makes the cloud reaper probe a local Docker container name as a
+        # Targon rental and fail healthy work after the provision timeout.
+        return None
 
     async def _lane_providers(
         self, lane: str, pinned_provider: str | None
@@ -1410,6 +1415,8 @@ class TargonRentalLoop:
                     )
         for kind, row_id, uid, stored_provider, updated_at in candidates:
             provider = self._provider_named(stored_provider)
+            if provider is None:
+                continue
             observation = await self._observe_provision(provider, uid)
             status = observation.status
             if status == "running" and observation.ready is not False:
@@ -1585,4 +1592,7 @@ class TargonRentalLoop:
             stored_provider = (
                 "gcp" if uid.startswith(("job:", "service:")) else "targon"
             )
-        return await self._provider_named(stored_provider).delete(uid)
+        provider = self._provider_named(stored_provider)
+        if provider is None:
+            return False
+        return await provider.delete(uid)
