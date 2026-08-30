@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -285,6 +286,13 @@ const structuredOutputFailureBody = `{"error":{"message":"Upstream error from Gr
 const unexpectedToolFailureBody = `{"error":{"message":"Upstream error from Groq: Tool choice is none, but model called a tool","code":502}}`
 const undeclaredToolFailureBody = `{"error":{"message":"Upstream error from Groq: Tool call validation failed: tool call validation failed: attempted to call tool 'calendar_search_events' which was not in request.tools","code":502}}`
 const invalidToolParametersFailureBody = "{\"error\":{\"message\":\"Upstream error from Groq: Tool call validation failed: tool call validation failed: parameters for tool create_workflow did not match schema: errors: [`/schedule`: expected string, but got null]\",\"code\":502}}"
+const validAggregateChatBody = `{
+	"id":"gen-1","object":"chat.completion","created":1755000000,
+	"model":"openai/gpt-oss-20b","provider":"groq",
+	"choices":[{"index":0,"finish_reason":"stop","logprobs":null,
+		"message":{"role":"assistant","content":"hi"}}],
+	"usage":{"prompt_tokens":3,"completion_tokens":2,"cost":0.0001}
+}`
 
 func aggregateChatConfig(upstreamURL string) config.InferenceProxyConfig {
 	return config.InferenceProxyConfig{
@@ -298,6 +306,7 @@ func aggregateChatConfig(upstreamURL string) config.InferenceProxyConfig {
 
 func TestProviderErrorEnvelopePrecedesIdentityValidation(t *testing.T) {
 	var calls int
+	var slept time.Duration
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		_, _ = w.Write([]byte(structuredOutputFailureBody))
@@ -321,7 +330,7 @@ func TestProviderErrorEnvelopePrecedesIdentityValidation(t *testing.T) {
 	completed, exhausted := completeChatWithRecovery(
 		context.Background(), upstream.Client(), aggregateChatConfig(upstream.URL), payload,
 		"openai/gpt-oss-20b", "openrouter", "", nil, nil,
-		func(context.Context, time.Duration) {},
+		func(_ context.Context, delay time.Duration) { slept += delay },
 	)
 	if completed != nil || exhausted == nil {
 		t.Fatalf("result=%v exhausted=%v", completed, exhausted)
@@ -329,11 +338,163 @@ func TestProviderErrorEnvelopePrecedesIdentityValidation(t *testing.T) {
 	if calls != 1 || exhausted.upstreamAttempts != 1 || exhausted.fallbackPhase != 0 {
 		t.Fatalf("calls/attempts/phase=%d/%d/%d", calls, exhausted.upstreamAttempts, exhausted.fallbackPhase)
 	}
+	if slept != 0 {
+		t.Fatalf("miner-owned generation error slept for %s", slept)
+	}
 	if exhausted.terminalErrorCode != providerGenerationInvalidCode {
 		t.Fatalf("terminal code=%q want %s", exhausted.terminalErrorCode, providerGenerationInvalidCode)
 	}
 	if len(exhausted.phases) != 1 || exhausted.phases[0].errorCode != providerGenerationInvalidCode {
 		t.Fatalf("phase trace=%+v", exhausted.phases)
+	}
+}
+
+func TestRecoverableGenerationErrorRemainsMinerOwnedAtHTTP502(t *testing.T) {
+	var calls int
+	var slept time.Duration
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(unexpectedToolFailureBody))
+	}))
+	defer upstream.Close()
+
+	completed, exhausted := completeChatWithRecovery(
+		context.Background(), upstream.Client(), aggregateChatConfig(upstream.URL),
+		map[string]any{
+			"model":    "openai/gpt-oss-20b",
+			"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+		},
+		"openai/gpt-oss-20b", "openrouter", "", nil, nil,
+		func(_ context.Context, delay time.Duration) { slept += delay },
+	)
+	if completed != nil || exhausted == nil {
+		t.Fatalf("result=%v exhausted=%v", completed, exhausted)
+	}
+	if calls != 1 || exhausted.upstreamAttempts != 1 || slept != 0 {
+		t.Fatalf("calls/attempts/sleep=%d/%d/%s", calls, exhausted.upstreamAttempts, slept)
+	}
+	if exhausted.terminalErrorCode != providerGenerationInvalidCode {
+		t.Fatalf("terminal code=%q want %s", exhausted.terminalErrorCode, providerGenerationInvalidCode)
+	}
+	if got := chatProviderFailure(exhausted).headers[minerRecoverableFailureHeader]; got != minerRecoverableGeneration {
+		t.Fatalf("failure class=%q want %q", got, minerRecoverableGeneration)
+	}
+}
+
+func TestReceiptFree429RetriesOnceAndRecovers(t *testing.T) {
+	var calls int
+	var slept time.Duration
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("Retry-After", "2")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(validAggregateChatBody))
+	}))
+	defer upstream.Close()
+
+	completed, exhausted := completeChatWithRecovery(
+		context.Background(), upstream.Client(), aggregateChatConfig(upstream.URL),
+		map[string]any{"model": "openai/gpt-oss-20b", "messages": []any{}},
+		"openai/gpt-oss-20b", "openrouter", "", nil, nil,
+		func(_ context.Context, delay time.Duration) { slept += delay },
+	)
+	if completed == nil || exhausted != nil {
+		t.Fatalf("result=%v exhausted=%v", completed, exhausted)
+	}
+	if calls != providerSafeRetryMaxAttempts || completed.upstreamAttempts != providerSafeRetryMaxAttempts || slept != 2*time.Second {
+		t.Fatalf("calls/attempts/sleep=%d/%d/%s", calls, completed.upstreamAttempts, slept)
+	}
+	if len(completed.phases) != providerSafeRetryMaxAttempts ||
+		completed.phases[0].errorCode != "upstream_http_429" || completed.phases[1].errorCode != "" {
+		t.Fatalf("phase trace=%+v", completed.phases)
+	}
+}
+
+func TestReceiptFreeHTTP502RetriesOnceAndRecovers(t *testing.T) {
+	var calls int
+	var slept time.Duration
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":{"code":502,"message":"bad gateway"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(validAggregateChatBody))
+	}))
+	defer upstream.Close()
+
+	completed, exhausted := completeChatWithRecovery(
+		context.Background(), upstream.Client(), aggregateChatConfig(upstream.URL),
+		map[string]any{"model": "openai/gpt-oss-20b", "messages": []any{}},
+		"openai/gpt-oss-20b", "openrouter", "", nil, nil,
+		func(_ context.Context, delay time.Duration) { slept += delay },
+	)
+	if completed == nil || exhausted != nil {
+		t.Fatalf("result=%v exhausted=%v", completed, exhausted)
+	}
+	if calls != providerSafeRetryMaxAttempts || completed.upstreamAttempts != providerSafeRetryMaxAttempts || slept != providerGatewayRetryDelay {
+		t.Fatalf("calls/attempts/sleep=%d/%d/%s", calls, completed.upstreamAttempts, slept)
+	}
+}
+
+func TestReceiptBearing429And502RemainSingleShot(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusBadGateway} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var calls int
+			var slept time.Duration
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"error":{"code":` + strconv.Itoa(status) + `,"message":"failed"},"usage":{"cost":0}}`))
+			}))
+			defer upstream.Close()
+
+			completed, exhausted := completeChatWithRecovery(
+				context.Background(), upstream.Client(), aggregateChatConfig(upstream.URL),
+				map[string]any{"model": "openai/gpt-oss-20b", "messages": []any{}},
+				"openai/gpt-oss-20b", "openrouter", "", nil, nil,
+				func(_ context.Context, delay time.Duration) { slept += delay },
+			)
+			if completed != nil || exhausted == nil {
+				t.Fatalf("result=%v exhausted=%v", completed, exhausted)
+			}
+			if calls != 1 || exhausted.upstreamAttempts != 1 || slept != 0 {
+				t.Fatalf("calls/attempts/sleep=%d/%d/%s", calls, exhausted.upstreamAttempts, slept)
+			}
+		})
+	}
+}
+
+func TestHTTP400ProviderRejectionRemainsSingleShot(t *testing.T) {
+	var calls int
+	var slept time.Duration
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"code":400,"message":"invalid request"}}`))
+	}))
+	defer upstream.Close()
+
+	completed, exhausted := completeChatWithRecovery(
+		context.Background(), upstream.Client(), aggregateChatConfig(upstream.URL),
+		map[string]any{"model": "openai/gpt-oss-20b", "messages": []any{}},
+		"openai/gpt-oss-20b", "openrouter", "", nil, nil,
+		func(_ context.Context, delay time.Duration) { slept += delay },
+	)
+	if completed != nil || exhausted == nil {
+		t.Fatalf("result=%v exhausted=%v", completed, exhausted)
+	}
+	if calls != 1 || exhausted.upstreamAttempts != 1 || slept != 0 {
+		t.Fatalf("calls/attempts/sleep=%d/%d/%s", calls, exhausted.upstreamAttempts, slept)
+	}
+	if exhausted.terminalErrorCode != "upstream_http_400" {
+		t.Fatalf("terminal code=%q", exhausted.terminalErrorCode)
 	}
 }
 

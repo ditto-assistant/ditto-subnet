@@ -19,6 +19,8 @@ import (
 
 const (
 	providerMaxAttempts                        = 1
+	providerSafeRetryMaxAttempts               = 2
+	providerGatewayRetryDelay                  = 100 * time.Millisecond
 	providerRetryAfterMaxSeconds               = 5
 	confirmationReaderBackpressureMaxAttempts  = 1
 	confirmationReaderBackpressureMaxElapsed   = 80 * time.Second
@@ -209,12 +211,12 @@ func confirmationReaderBackpressureDelay(header http.Header) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-// providerBackpressureIsReceiptFree fails closed unless a 429/503 is one JSON
-// object with an error and without any OpenRouter completion, usage, cost, or
-// provider receipt fields. Duplicate keys are rejected by the shared strict
-// decoder so contradictory metadata cannot authorize another billed attempt.
-func providerBackpressureIsReceiptFree(result *providerHTTPResult, expectedModel, expectedProvider string) bool {
-	if result == nil || (result.status != http.StatusTooManyRequests && result.status != http.StatusServiceUnavailable) {
+// providerFailureIsReceiptFree fails closed unless the response is one strict
+// JSON error object without any OpenRouter completion, usage, cost, provider,
+// or receipt fields. Duplicate keys are rejected so contradictory metadata
+// cannot authorize another billed attempt.
+func providerFailureIsReceiptFree(result *providerHTTPResult, expectedModel, expectedProvider string) bool {
+	if result == nil {
 		return false
 	}
 	decoded, ok := decodeJSONNumbersRejectDuplicateKeys(result.body)
@@ -254,6 +256,17 @@ func providerBackpressureIsReceiptFree(result *providerHTTPResult, expectedModel
 		}
 	}
 	return !providerReceiptFieldPresent(withoutMetadata)
+}
+
+func providerBackpressureIsReceiptFree(result *providerHTTPResult, expectedModel, expectedProvider string) bool {
+	return result != nil &&
+		(result.status == http.StatusTooManyRequests || result.status == http.StatusServiceUnavailable) &&
+		providerFailureIsReceiptFree(result, expectedModel, expectedProvider)
+}
+
+func providerGatewayIsReceiptFree(result *providerHTTPResult, expectedModel, expectedProvider string) bool {
+	return result != nil && result.status == http.StatusBadGateway &&
+		providerFailureIsReceiptFree(result, expectedModel, expectedProvider)
 }
 
 func providerBackpressureMetadataIsPreProvider(payload map[string]any, expectedModel, expectedProvider string) bool {
@@ -1049,9 +1062,10 @@ type phaseTrace struct {
 
 func (e *chatProviderExhausted) Error() string { return e.terminalErrorCode }
 
-// completeChatWithRecovery retains its wire-compatible name but executes one
-// provider phase. The miner owns any response-level repair; Backroom must
-// reissue the ticket after an enclosing scoring failure.
+// completeChatWithRecovery retains its wire-compatible name and executes one
+// provider phase. It retries one strict receipt-free 429 or generic HTTP 502;
+// known response-generation 502s stay miner-owned, and every ambiguous or
+// potentially billed outcome remains single-shot.
 func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg config.InferenceProxyConfig,
 	payload map[string]any, model, expectedProvider, expectedQuantization string,
 	expectedPromptPrice, expectedCompletionPrice *float64, sleep sleepFunc) (*chatCompletionResult, *chatProviderExhausted) {
@@ -1077,6 +1091,7 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 	lastProvider := ""
 	routeObservable := false
 	var traced []phaseTrace
+phaseLoop:
 	for _, spec := range phases {
 		lastPhase = spec.phase
 		route := "openrouter"
@@ -1084,122 +1099,141 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 			route = "reliable"
 		}
 		sentPayload, _ := json.Marshal(spec.payload)
-		trace := phaseTrace{phase: spec.phase, route: route, payload: sentPayload}
-		result, callErr := postProviderWithRetry(ctx, client, cfg.UpstreamURL, spec.payload, headers,
-			cfg.ResponseBodyBytes, cfg.TimeoutSeconds, true, "", sleep)
-		if callErr != nil {
-			totalAttempts += callErr.attempts
-			lastTimedOut = callErr.timedOut
-			if callErr.timedOut {
-				lastCode = "provider_timeout"
-			} else {
-				lastCode = "provider_transport"
+		for safeAttempt := 1; safeAttempt <= providerSafeRetryMaxAttempts; safeAttempt++ {
+			trace := phaseTrace{phase: spec.phase, route: route, payload: sentPayload}
+			result, callErr := postProviderWithRetry(ctx, client, cfg.UpstreamURL, spec.payload, headers,
+				cfg.ResponseBodyBytes, cfg.TimeoutSeconds, true, "", sleep)
+			if callErr != nil {
+				totalAttempts += callErr.attempts
+				lastTimedOut = callErr.timedOut
+				if callErr.timedOut {
+					lastCode = "provider_timeout"
+				} else {
+					lastCode = "provider_transport"
+				}
+				routeObservable = true
+				trace.attempts, trace.timedOut, trace.errorCode = callErr.attempts, callErr.timedOut, lastCode
+				traced = append(traced, trace)
+				continue phaseLoop
+			}
+			totalAttempts += result.attempts
+			trace.attempts, trace.status, trace.headers, trace.body = result.attempts, result.status, result.header, result.body
+			if result.bodyOverLimit {
+				lastCode = "response_too_large"
+				trace.errorCode = lastCode
+				traced = append(traced, trace)
+				continue phaseLoop
+			}
+			decoded, _ := decodeJSONNumbers(result.body)
+			routerAttempts += openrouterAttemptCount(decoded)
+			if provider := openrouterLastAttemptedProvider(decoded); provider != "" {
+				lastProvider = provider
+			}
+			decodedMap, decodedMapOK := decoded.(map[string]any)
+			if decodedMapOK && minerRecoverableProviderError(spec.payload, decodedMap) {
+				// Generated-output failures need request-aware repair. Preserve the
+				// private recovery class for the miner even when OpenRouter carries
+				// the envelope with an outer HTTP 502 instead of HTTP 200.
+				lastCode = providerGenerationInvalidCode
+				trace.errorCode = lastCode
+				traced = append(traced, trace)
+				continue phaseLoop
+			}
+			if result.status >= 400 {
+				lastTimedOut = result.status == 408 || result.status == 504
+				lastCode = "upstream_http_" + strconv.Itoa(result.status)
+				routeObservable = routeObservable || providerRejectionIsRouteObservable(result.status)
+				trace.errorCode, trace.timedOut = lastCode, lastTimedOut
+				traced = append(traced, trace)
+				retryDelay := time.Duration(0)
+				if result.status == http.StatusTooManyRequests &&
+					providerBackpressureIsReceiptFree(result, model, expectedProvider) {
+					retryDelay = time.Duration(providerRetryAfterSeconds(result.header)) * time.Second
+				} else if providerGatewayIsReceiptFree(result, model, expectedProvider) {
+					retryDelay = providerGatewayRetryDelay
+				}
+				if retryDelay > 0 && safeAttempt < providerSafeRetryMaxAttempts {
+					sleep(ctx, retryDelay)
+					if ctx.Err() != nil {
+						continue phaseLoop
+					}
+					continue
+				}
+				continue phaseLoop
 			}
 			routeObservable = true
-			trace.attempts, trace.timedOut, trace.errorCode = callErr.attempts, callErr.timedOut, lastCode
-			traced = append(traced, trace)
-			continue
-		}
-		totalAttempts += result.attempts
-		trace.attempts, trace.status, trace.headers, trace.body = result.attempts, result.status, result.header, result.body
-		if result.bodyOverLimit {
-			lastCode = "response_too_large"
-			trace.errorCode = lastCode
-			traced = append(traced, trace)
-			continue
-		}
-		decoded, _ := decodeJSONNumbers(result.body)
-		routerAttempts += openrouterAttemptCount(decoded)
-		if provider := openrouterLastAttemptedProvider(decoded); provider != "" {
-			lastProvider = provider
-		}
-		if result.status >= 400 {
-			lastTimedOut = result.status == 408 || result.status == 504
-			lastCode = "upstream_http_" + strconv.Itoa(result.status)
-			routeObservable = routeObservable || providerRejectionIsRouteObservable(result.status)
-			trace.errorCode, trace.timedOut = lastCode, lastTimedOut
-			traced = append(traced, trace)
-			continue
-		}
-		routeObservable = true
-		decodedMap, ok := decoded.(map[string]any)
-		if !ok {
-			lastCode = "invalid_provider_response"
-			trace.errorCode = lastCode
-			traced = append(traced, trace)
-			continue
-		}
-		if minerRecoverableProviderError(spec.payload, decodedMap) {
-			lastCode = providerGenerationInvalidCode
-			trace.errorCode = lastCode
-			traced = append(traced, trace)
-			continue
-		}
-		if _, _, providerError := providerErrorEnvelope(decodedMap); providerError {
-			lastCode = "provider_unavailable"
-			trace.errorCode = lastCode
-			traced = append(traced, trace)
-			continue
-		}
-		if m, ok := decodedMap["model"].(string); !ok || m != model {
-			lastCode = "provider_identity_mismatch"
-			trace.errorCode = lastCode
-			traced = append(traced, trace)
-			continue
-		}
-		phaseResult, herr := func() (*chatCompletionResult, *httpError) {
-			providerValue, herr := upstreamProviderIdentity(decodedMap)
-			if herr != nil {
-				return nil, herr
+			if !decodedMapOK {
+				lastCode = "invalid_provider_response"
+				trace.errorCode = lastCode
+				traced = append(traced, trace)
+				continue phaseLoop
 			}
-			if providerValue == "" || (!aggregate && providerValue != expectedProvider) {
-				return nil, httpErrorf(502, "provider identity mismatch")
+			if _, _, providerError := providerErrorEnvelope(decodedMap); providerError {
+				lastCode = "provider_unavailable"
+				trace.errorCode = lastCode
+				traced = append(traced, trace)
+				continue phaseLoop
 			}
-			prompt, completion, usageOk := boundedUsage(decodedMap)
-			if !usageOk {
-				return nil, httpErrorf(502, "invalid provider response")
+			if m, ok := decodedMap["model"].(string); !ok || m != model {
+				lastCode = "provider_identity_mismatch"
+				trace.errorCode = lastCode
+				traced = append(traced, trace)
+				continue phaseLoop
 			}
-			var cost int64
-			if aggregate {
-				cost = boundedProviderCost(decodedMap)
-				if cost < 0 {
+			phaseResult, herr := func() (*chatCompletionResult, *httpError) {
+				providerValue, herr := upstreamProviderIdentity(decodedMap)
+				if herr != nil {
+					return nil, herr
+				}
+				if providerValue == "" || (!aggregate && providerValue != expectedProvider) {
+					return nil, httpErrorf(502, "provider identity mismatch")
+				}
+				prompt, completion, usageOk := boundedUsage(decodedMap)
+				if !usageOk {
 					return nil, httpErrorf(502, "invalid provider response")
 				}
-			} else {
-				if expectedPromptPrice == nil || expectedCompletionPrice == nil {
+				var cost int64
+				if aggregate {
+					cost = boundedProviderCost(decodedMap)
+					if cost < 0 {
+						return nil, httpErrorf(502, "invalid provider response")
+					}
+				} else {
+					if expectedPromptPrice == nil || expectedCompletionPrice == nil {
+						return nil, httpErrorf(502, "invalid provider response")
+					}
+					cost = int64((float64(prompt)**expectedPromptPrice +
+						float64(completion)**expectedCompletionPrice) * 1_000_000)
+				}
+				public, herr := publicProviderResponse(decodedMap, result.body)
+				if herr != nil {
+					return nil, herr
+				}
+				raw, err := compactJSON(public)
+				if err != nil {
 					return nil, httpErrorf(502, "invalid provider response")
 				}
-				cost = int64((float64(prompt)**expectedPromptPrice +
-					float64(completion)**expectedCompletionPrice) * 1_000_000)
-			}
-			public, herr := publicProviderResponse(decodedMap, result.body)
+				return &chatCompletionResult{
+					raw:              raw,
+					promptTokens:     prompt,
+					completionTokens: completion,
+					costMicrousd:     cost,
+					upstreamProvider: providerValue,
+				}, nil
+			}()
 			if herr != nil {
-				return nil, herr
+				lastCode = phaseErrorCode(herr)
+				trace.errorCode = lastCode
+				traced = append(traced, trace)
+				continue phaseLoop
 			}
-			raw, err := compactJSON(public)
-			if err != nil {
-				return nil, httpErrorf(502, "invalid provider response")
-			}
-			return &chatCompletionResult{
-				raw:              raw,
-				promptTokens:     prompt,
-				completionTokens: completion,
-				costMicrousd:     cost,
-				upstreamProvider: providerValue,
-			}, nil
-		}()
-		if herr != nil {
-			lastCode = phaseErrorCode(herr)
-			trace.errorCode = lastCode
 			traced = append(traced, trace)
-			continue
+			phaseResult.upstreamAttempts = totalAttempts
+			phaseResult.openrouterAttempts = routerAttempts
+			phaseResult.fallbackPhase = spec.phase
+			phaseResult.phases = traced
+			return phaseResult, nil
 		}
-		traced = append(traced, trace)
-		phaseResult.upstreamAttempts = totalAttempts
-		phaseResult.openrouterAttempts = routerAttempts
-		phaseResult.fallbackPhase = spec.phase
-		phaseResult.phases = traced
-		return phaseResult, nil
 	}
 	return nil, &chatProviderExhausted{
 		upstreamAttempts:   totalAttempts,
