@@ -39,7 +39,7 @@
 ###############################################################################
 
 variable "enable_screener_fleet" {
-  description = "Create the autoscaled prod screener fleet (regional MIG + queue-depth autoscaler). Off by default. The pet ditto-screener-prod VM can run alongside the fleet safely (the lease queue serializes work); decommission it once the fleet is verified."
+  description = "Create the autoscaled prod screener fleet (regional MIG + queue-depth autoscaler). Off by default. Its shared signing identity persists independently of the retired ditto-screener-prod pet VM."
   type        = bool
   default     = false
 }
@@ -234,12 +234,6 @@ resource "google_compute_instance_template" "screener_fleet" {
 
   lifecycle {
     create_before_destroy = true
-    precondition {
-      # The template reads the hotkey-mnemonic + api-token secrets that
-      # enable_screener_prod owns; the fleet cannot exist without them.
-      condition     = var.enable_screener_prod
-      error_message = "enable_screener_fleet requires enable_screener_prod=true (the fleet reuses the prod screener identity secrets)."
-    }
   }
 }
 

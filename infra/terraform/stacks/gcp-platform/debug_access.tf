@@ -25,8 +25,8 @@ locals {
   debug_operators = toset(var.debug_operators)
 
   # Named GCE hosts. ssh_users already covers platform-dev/prod (and postgres,
-  # which is intentionally omitted here). Leftover screener/validator VMs are
-  # still live in prod.auto.tfvars while Targon-first retires them.
+  # which is intentionally omitted here). Optional screener/validator VMs are
+  # included only while their reviewed production intent remains enabled.
   debug_named_vms = merge(
     {
       platform_prod = {
@@ -49,7 +49,7 @@ locals {
     } : {},
     var.enable_screener_prod ? {
       screener_prod = {
-        vm                   = module.screener_vm_prod[0].hostname
+        vm                   = google_compute_instance.screener_vm_prod[0].name
         zone                 = var.screener_prod_zone
         covered_by_ssh_users = false
       }

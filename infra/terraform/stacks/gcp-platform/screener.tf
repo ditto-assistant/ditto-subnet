@@ -136,6 +136,12 @@ variable "screener_prod_zone" {
 
 locals {
   screener_prod_count = var.enable_screener_prod ? 1 : 0
+  # The pet VM is disposable, but its signing and API identities are shared by
+  # the retained GCE overflow fleet. Keep those secrets independently of the
+  # obsolete static VM's lifecycle.
+  screener_prod_identity_count = (
+    var.enable_screener_prod || var.enable_screener_fleet || var.enable_screener_fleet_secrets
+  ) ? 1 : 0
 }
 
 # The screener signing hotkey mnemonic (for SS58 5G6fG...KekTtR). VALUE is added
@@ -143,7 +149,7 @@ locals {
 # never through Terraform state. prevent_destroy: losing it means re-registering
 # the hotkey (permit + stake) from scratch.
 resource "google_secret_manager_secret" "screener_hotkey_mnemonic_prod" {
-  count     = local.screener_prod_count
+  count     = local.screener_prod_identity_count
   project   = var.project
   secret_id = "screener-hotkey-mnemonic-prod"
   replication {
@@ -158,7 +164,7 @@ resource "google_secret_manager_secret" "screener_hotkey_mnemonic_prod" {
 # finney mnemonic. The gh-token (validator-gh-token) grant to the same SA is
 # already covered by validator.tf's validator_access binding.
 resource "google_secret_manager_secret_iam_member" "screener_prod_mnemonic_access" {
-  count     = local.screener_prod_count
+  count     = local.screener_prod_identity_count
   project   = var.project
   secret_id = google_secret_manager_secret.screener_hotkey_mnemonic_prod[0].secret_id
   role      = "roles/secretmanager.secretAccessor"
@@ -171,7 +177,7 @@ resource "google_secret_manager_secret_iam_member" "screener_prod_mnemonic_acces
 # never through Terraform state. prevent_destroy: it must stay in sync with the
 # platform's SCREENER_API_TOKEN or screening auth breaks.
 resource "google_secret_manager_secret" "screener_api_token_prod" {
-  count     = local.screener_prod_count
+  count     = local.screener_prod_identity_count
   project   = var.project
   secret_id = "screener-api-token-prod"
   replication {
@@ -185,7 +191,7 @@ resource "google_secret_manager_secret" "screener_api_token_prod" {
 # Both the prod screener VM (sends the token) and the prod platform app VM
 # (verifies it) run as the platform runtime SA and read this secret.
 resource "google_secret_manager_secret_iam_member" "screener_prod_api_token_access" {
-  count     = local.screener_prod_count
+  count     = local.screener_prod_identity_count
   project   = var.project
   secret_id = google_secret_manager_secret.screener_api_token_prod[0].secret_id
   role      = "roles/secretmanager.secretAccessor"
@@ -196,7 +202,7 @@ resource "google_secret_manager_secret_iam_member" "screener_prod_api_token_acce
 # The prod API verifies the same bearer after its VM moves to the dedicated
 # identity. Keep the shared binding during the bounded rollback window.
 resource "google_secret_manager_secret_iam_member" "platform_api_screener_prod_api_token_access" {
-  count     = local.screener_prod_count
+  count     = local.screener_prod_identity_count
   project   = var.project
   secret_id = google_secret_manager_secret.screener_api_token_prod[0].secret_id
   role      = "roles/secretmanager.secretAccessor"
@@ -207,33 +213,67 @@ resource "google_secret_manager_secret_iam_member" "platform_api_screener_prod_a
 # steady-state validator class is a reviewed IaC change after the queue drains;
 # horizontal scaling is provided by the autoscaled fleet in screener-fleet.tf.
 #
-# This VM is superseded by the screener fleet (screener-fleet.tf); decommission
-# it (enable_screener_prod=false + manual delete, it has deletion_protection)
-# once the fleet is live — see docs/screener-scaling.md.
-module "screener_vm_prod" {
-  source   = "../../modules/compute/gcp"
-  count    = local.screener_prod_count
-  project  = var.project
-  name     = "ditto-screener-prod"
-  size     = "screener-burst-n2d"
-  image    = "debian-13"
-  location = var.screener_prod_zone
+# This VM is superseded by the dedicated Hetzner worker plus the autoscaled GCE
+# overflow fleet. It is expressed directly (rather than through the persistent
+# compute module) so its deletion protection can be removed in one reviewed
+# apply before a later apply sets enable_screener_prod=false and destroys it.
+resource "google_compute_instance" "screener_vm_prod" {
+  count        = local.screener_prod_count
+  project      = var.project
+  name         = "ditto-screener-prod"
+  machine_type = "n2d-standard-8"
+  zone         = var.screener_prod_zone
+  labels       = { env = "prod", role = "screener", managed = "terraform" }
+  tags         = [module.network.ssh_target_tag]
 
-  subnetwork       = module.network.subnetwork_id
-  network_tags     = [module.network.ssh_target_tag] # IAP-SSH only; no public ingress
-  assign_public_ip = false                           # egress via Cloud NAT
-  boot_disk_gb     = var.screener_prod_boot_disk_gb
+  allow_stopping_for_update = true
 
-  service_account_email = google_service_account.screener_worker.email
-  labels                = { env = "prod", role = "screener", managed = "terraform" }
+  boot_disk {
+    initialize_params {
+      image = "projects/debian-cloud/global/images/family/debian-13"
+      size  = var.screener_prod_boot_disk_gb
+      type  = "pd-balanced"
+    }
+  }
+
+  network_interface {
+    subnetwork = module.network.subnetwork_id
+  }
+
+  metadata = { enable-oslogin = "TRUE" }
+
+  service_account {
+    email  = google_service_account.screener_worker.email
+    scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+  }
+
+  shielded_instance_config {
+    enable_secure_boot          = false
+    enable_vtpm                 = true
+    enable_integrity_monitoring = true
+  }
+
+  deletion_protection = false
+
+  lifecycle {
+    ignore_changes = [
+      boot_disk[0].initialize_params[0].image,
+      metadata["ssh-keys"],
+    ]
+  }
+}
+
+moved {
+  from = module.screener_vm_prod[0].google_compute_instance.this
+  to   = google_compute_instance.screener_vm_prod[0]
 }
 
 output "screener_prod_vm_name" {
   description = "Name of the prod screener VM (empty when enable_screener_prod = false)."
-  value       = var.enable_screener_prod ? module.screener_vm_prod[0].hostname : ""
+  value       = var.enable_screener_prod ? google_compute_instance.screener_vm_prod[0].name : ""
 }
 
 output "screener_prod_vm_internal_ip" {
   description = "Private IP of the prod screener VM (reachability is via IAP)."
-  value       = var.enable_screener_prod ? module.screener_vm_prod[0].internal_ip : ""
+  value       = var.enable_screener_prod ? google_compute_instance.screener_vm_prod[0].network_interface[0].network_ip : ""
 }
