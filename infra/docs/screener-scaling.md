@@ -27,9 +27,10 @@ The second entry means that separate GCE workers may claim still-unclaimed
 submissions when the capacity policy activates them. It does not mean a failed
 Hetzner lane is retried on GCE.
 
-- **Hetzner primary** (`['hetzner', 'gcp']`): eight full worker processes share
-  one enrolled node identity. Platform initially admits four build/smoke KVM
-  slots and four review slots on the 64 GB host.
+- **Hetzner primary** (`['hetzner', 'gcp']`): one full worker process starts the
+  canary under one enrolled node identity. After the canary, Platform initially
+  admits two build/smoke KVM slots and two review slots on the 64 GB host, with
+  a matching two local worker processes.
 - **GCE-only** (`['gcp']`): an audited emergency posture in which GCE workers
   run the whole build, smoke, and review pipeline locally.
 - **Targon-only** (`['targon']`): retained for rollback compatibility, not the
@@ -211,8 +212,10 @@ After `subnet-screener-1` is converged, use Backroom to:
 5. prove one production build -> smoke -> source-review sequence and one
    build failure that never obtains a review lease;
 6. raise the 64 GB node to
-   `SCREENING=8 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4`, then prove four
-   simultaneous cold build/smoke lanes without memory or disk pressure;
+   `SCREENING=2 SANDBOX=2 BUILD=2 RUNTIME=2 SOURCE_REVIEW=2`, set the private
+   inventory to two worker processes, and prove two simultaneous cold
+   build/smoke lanes without memory or disk pressure; raise to three only after
+   measured sandbox-plus-review memory leaves safe host margin;
 7. exercise one controlled stale-heartbeat event and one above-threshold queue,
    proving GCE claims new work, preserves active leases, and returns to zero;
 8. drain retired nested-Docker Targon worker nodes. Do not re-enable them.

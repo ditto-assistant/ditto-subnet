@@ -59,7 +59,9 @@ screener_fleet_updater_path: >-
 screener_fleet_repo_url: https://github.com/ditto-assistant/ditto-subnet.git
 # Exact public release commit to run. Mutable branches are deliberately rejected.
 screener_fleet_release_sha: ""
-screener_fleet_worker_processes: 8
+# Safe first-converge/canary posture. Raise this alongside the audited
+# Backroom screening concurrency only after the lower setting is proven.
+screener_fleet_worker_processes: 1
 screener_fleet_agent_workers: 12
 screener_fleet_poll_seconds: 2
 screener_fleet_build_timeout_seconds: 2400
