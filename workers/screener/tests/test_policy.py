@@ -10,6 +10,7 @@ from uuid import UUID
 import pytest
 
 from ditto_screener.policy import (
+    _ORACLE_BENCH_VERSION,
     _ORACLE_SYSTEM_PROMPT,
     CORE_ONLY_MANIFEST,
     AgenticSourceReviewModule,
@@ -1067,10 +1068,9 @@ async def test_oracle_request_satisfies_harness_run_contract() -> None:
     """The oracle payload must deserialize as the starter kit's RunRequest.
 
     dittobench-starter-kit `src/protocol.rs` declares `case_id`,
-    `system_prompt` and `user_input` as REQUIRED (no serde default): an honest
-    axum harness 422s on a request missing any of them before its handler
-    runs, which turned every prod screening inconclusive when the oracle
-    omitted `system_prompt`. Keep this list in lockstep with the contract.
+    `system_prompt` and `user_input` as REQUIRED (no serde default). It defaults
+    a missing `bench_version` to zero, then rejects that unsupported version
+    before the handler runs. Keep this list in lockstep with the contract.
     """
     seen: list[dict] = []
 
@@ -1088,11 +1088,12 @@ async def test_oracle_request_satisfies_harness_run_contract() -> None:
     module = BehavioralOracleModule(module_id="v8-behavioral-oracle")
     await module.evaluate(_context(challenge))
     (request,) = seen
-    required = {"case_id", "system_prompt", "user_input"}
+    required = {"case_id", "system_prompt", "user_input", "bench_version"}
     optional = {"tools", "tool_endpoint", "user_id"}
-    for fieldname in required:
+    for fieldname in required - {"bench_version"}:
         value = request.get(fieldname)
         assert isinstance(value, str) and value, f"missing/empty {fieldname}"
+    assert request.get("bench_version") == _ORACLE_BENCH_VERSION
     assert set(request) <= required | optional
 
 
@@ -1161,5 +1162,6 @@ async def test_oracle_request_envelope_matches_scored_tool_traffic() -> None:
         assert isinstance(tool.get("name"), str) and tool["name"]
     # The single scored tool-case system prompt, and NO user_id.
     assert request["system_prompt"] == _ORACLE_SYSTEM_PROMPT
+    assert request["bench_version"] == _ORACLE_BENCH_VERSION
     # Scored tool cases carry no user_id; the oracle must not either.
     assert "user_id" not in request
