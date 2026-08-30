@@ -360,6 +360,41 @@ async def test_reaps_terminal_source_review_rental(
 
 
 @pytest.mark.asyncio
+async def test_cloud_reaper_ignores_persistent_fleet_source_review(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    async with session_maker() as session, session.begin():
+        review = await session.scalar(select(SubmissionSourceReview).limit(1))
+        assert review is not None
+        review.status = "running"
+        review.provider = "hetzner"
+        review.provider_resource_id = "ditto-source-persistent"
+        review.updated_at = datetime.now(UTC) - timedelta(minutes=11)
+        review.lease_expires_at = datetime.now(UTC) + timedelta(minutes=20)
+
+    targon.status = "provisioning"
+    targon.deleted.clear()
+    assert await loop._reap_unprovisioned_rentals() is False
+    async with session_maker() as session:
+        review = await session.scalar(select(SubmissionSourceReview).limit(1))
+        assert review is not None
+        assert review.status == "running"
+        assert review.provider_resource_id == "ditto-source-persistent"
+        assert review.error_code is None
+    assert targon.deleted == []
+
+
+@pytest.mark.asyncio
 async def test_cancels_source_review_when_parent_attempt_is_terminal(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
