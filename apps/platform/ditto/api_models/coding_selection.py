@@ -414,11 +414,19 @@ class CodingPrivateCatalogRecord(CodingEvaluationModel):
             or coding_catalog_budgets_digest(self.budgets)
             != task.payload.budgets_sha256
             or task.payload.runner_plan_sha256 is None
+            or self.runner_plan.case_id != task.payload.task.case_id
+            or self.runner_plan.visible_bundle_sha256
+            != task.payload.task.visible_bundle_sha256
+            or self.runner_plan.base_tree_sha256 != task.payload.task.base_tree_sha256
             or coding_catalog_runner_plan_digest(self.runner_plan)
             != task.payload.runner_plan_sha256
+            or self.grader_plan.case_id != task.payload.task.case_id
             or coding_catalog_grader_plan_digest(self.grader_plan)
             != task.payload.task.grader_plan_sha256
             or self.grader_plan.variant_id != task.payload.task.variant_id
+            or self.grader_plan.visible_bundle_sha256
+            != task.payload.task.visible_bundle_sha256
+            or self.grader_plan.base_tree_sha256 != task.payload.task.base_tree_sha256
             or self.grader_plan.grader_bundle_sha256
             != task.payload.task.grader_bundle_sha256
             or self.grader_plan.grader_image_digest

@@ -321,10 +321,11 @@ async def test_task_version_adapter_preserves_selector_contract() -> None:
     assert len(reader.calls) == 1
 
 
-async def test_source_rejects_grader_plan_task_identity_drift() -> None:
+@pytest.mark.parametrize("field", ["variant_id", "case_id"])
+async def test_source_rejects_grader_plan_task_identity_drift(field: str) -> None:
     vector = _vector()
     record = _record(vector)
-    record["grader_plan"]["variant_id"] = "other-variant"
+    record["grader_plan"][field] = f"other-{field.replace('_', '-')}"
     record["task_version"]["payload"]["task"]["grader_plan_sha256"] = (
         coding_catalog_grader_plan_digest(
             CodingCatalogGraderPlan.model_validate(record["grader_plan"])
