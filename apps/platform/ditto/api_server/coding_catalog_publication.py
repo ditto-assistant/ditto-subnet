@@ -244,7 +244,13 @@ def _read_bounded_regular_file(path: Path, *, maximum_bytes: int, label: str) ->
             raise CodingCatalogPublicationError(f"{label} input is invalid")
         if info.st_size < 1 or info.st_size > maximum_bytes:
             raise CodingCatalogPublicationError(f"{label} input exceeds bounds")
-        body = os.read(fd, maximum_bytes + 1)
+        body = bytearray()
+        while len(body) < maximum_bytes + 1:
+            chunk = os.read(fd, maximum_bytes + 1 - len(body))
+            if not chunk:
+                break
+            body.extend(chunk)
+        body = bytes(body)
     except CodingCatalogPublicationError:
         raise
     except OSError as error:
