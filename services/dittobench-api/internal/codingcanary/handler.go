@@ -9,6 +9,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -231,13 +232,38 @@ func parseRequest(body []byte, now time.Time) (Request, error) {
 		!validSHA256(request.ScreenedImageSHA256) || !validSHA256(request.CanaryManifestSHA256) ||
 		!validSHA256(request.RunnerPlanSHA256) || !validSHA256(request.GraderPlanSHA256) ||
 		!validSHA256(request.ResourceProfileSHA256) || !validSHA256(request.InferencePolicySHA256) ||
-		!validIdentifier(request.ScreenedImageID, 256) || !validIdentifier(request.ScreenedImageRef, 512) ||
+		!validOCIDigest(request.ScreenedImageID) ||
+		request.ScreenedImageRef != "ditto-screen/"+request.AgentID+":latest" ||
 		!validUUID(request.OperationID) || !validUUID(request.LeaseID) ||
 		!validUUID(request.AgentID) || !validUUID(request.ScreenedImageUploadID) ||
-		!request.Deadline.After(now) {
+		request.ScreenedImageSizeBytes <= 0 || request.ScreenedImageSizeBytes > 8<<30 ||
+		request.ScreeningPolicyVersion < 9 || request.ScreeningPolicyVersion > 1_000_000 ||
+		request.BenchVersion < 7 || request.BenchVersion > 1_000_000 ||
+		!validImageURL(request.ImageURL) || !request.Deadline.After(now) ||
+		request.Deadline.After(now.Add(2*time.Hour)) || !request.ImageExpiresAt.After(now) ||
+		request.ImageExpiresAt.After(request.Deadline) || request.ImageExpiresAt.After(now.Add(6*time.Minute)) {
 		return Request{}, ErrInvalid
 	}
 	return request, nil
+}
+
+func validOCIDigest(value string) bool {
+	return strings.HasPrefix(value, "sha256:") && validSHA256(strings.TrimPrefix(value, "sha256:"))
+}
+
+func validImageURL(value string) bool {
+	if len(value) == 0 || len(value) > 16<<10 {
+		return false
+	}
+	for _, character := range value {
+		if character < 32 || character > 126 {
+			return false
+		}
+	}
+	parsed, err := url.ParseRequestURI(value)
+	return err == nil && parsed.Scheme == "https" && parsed.Hostname() != "" && parsed.User == nil &&
+		parsed.Path != "" && parsed.RawQuery != "" && parsed.Fragment == "" &&
+		(parsed.Port() == "" || parsed.Port() == "443")
 }
 
 func remainingTimeout(deadline time.Time, now time.Time, configured time.Duration) time.Duration {

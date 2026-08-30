@@ -8,31 +8,48 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.coding_certification_leases import (
+    CodingCertificationHarnessLaunchRequest,
+    CodingCertificationHarnessLaunchResponse,
     CodingCertificationLeaseAbortRequest,
     CodingCertificationLeaseClaimRequest,
     CodingCertificationLeaseIssueRequest,
     CodingCertificationLeaseResponse,
     CodingCertificationLeaseStatus,
+    coding_certification_harness_launch_signing_message,
     coding_certification_lease_abort_signing_message,
     coding_certification_lease_claim_signing_message,
     coding_certification_lease_issue_signing_message,
 )
+from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.attestation import verify_signature
-from ditto.api_server.dependencies import get_chain_client, get_session
+from ditto.api_server.dependencies import (
+    get_chain_client,
+    get_session,
+    get_storage_client,
+)
 from ditto.api_server.endpoints.validator import (
+    _ARTIFACT_URL_TTL,
     ValidatorAuthError,
     _assert_validator_permitted,
+    _screened_image_key,
 )
+from ditto.api_server.storage import S3StorageClient
 from ditto.chain import ChainClient
+from ditto.db.queries.artifact_fetch_audit import (
+    ENDPOINT_VALIDATOR_CODING_CERTIFICATION_HARNESS,
+    record_artifact_fetch,
+)
 from ditto.db.queries.coding_certification_leases import (
     CodingCertificationLeaseConflictError,
     CodingCertificationLeaseNotAvailableError,
     CodingCertificationLeaseResult,
     CodingCertificationLeaseUnavailableError,
     abort_coding_certification_lease,
+    authorize_coding_certification_harness_delivery,
     claim_coding_certification_lease,
     issue_coding_certification_lease,
 )
@@ -44,6 +61,7 @@ from ditto.db.queries.validator_auth import (
 router = APIRouter(prefix="/validator", tags=["validator"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 ChainDep = Annotated[ChainClient, Depends(get_chain_client)]
+StorageDep = Annotated[S3StorageClient, Depends(get_storage_client)]
 _REQUEST_MAX_AGE = timedelta(minutes=5)
 _NO_STORE = {"Cache-Control": "no-store"}
 
@@ -204,6 +222,183 @@ async def abort_lease(
         conflict_detail="claimed coding certification lease cannot be aborted",
     )
     return _response(result)
+
+
+@router.post(
+    "/coding-certification-leases/{lease_id}/harness-launch",
+    response_model=CodingCertificationHarnessLaunchResponse,
+    responses={
+        401: {"description": "Signature invalid or validator not permitted."},
+        404: {"description": "Coding certification harness unavailable."},
+        409: {"description": "Replay, expiry, or immutable authority conflict."},
+    },
+)
+async def request_coding_certification_harness_launch(
+    lease_id: UUID,
+    payload: CodingCertificationHarnessLaunchRequest,
+    request: Request,
+    response: Response,
+    chain: ChainDep,
+    session: SessionDep,
+    storage: StorageDep,
+) -> CodingCertificationHarnessLaunchResponse:
+    """Return one short-lived screened image capability for a claimed lease."""
+
+    response.headers["Cache-Control"] = "no-store"
+    if payload.lease_id != lease_id:
+        raise HTTPException(
+            status_code=409,
+            detail="coding certification lease mismatch",
+            headers=_NO_STORE,
+        )
+    if not verify_signature(
+        signer=payload.validator_hotkey,
+        payload=coding_certification_harness_launch_signing_message(
+            validator_hotkey=payload.validator_hotkey,
+            lease_id=payload.lease_id,
+            nonce=payload.nonce,
+            requested_at=payload.requested_at,
+        ),
+        signature_hex=payload.signature,
+    ):
+        raise ValidatorAuthError(
+            "coding certification harness launch signature did not verify"
+        )
+    now = datetime.now(UTC)
+    if abs(now - payload.requested_at.astimezone(UTC)) > _REQUEST_MAX_AGE:
+        raise HTTPException(
+            status_code=409,
+            detail="coding certification harness launch request timestamp is stale",
+            headers=_NO_STORE,
+        )
+    await _assert_validator_permitted(
+        chain,
+        request.app.state.config.chain.netuid,
+        payload.validator_hotkey,
+        network=request.app.state.config.chain.subtensor_network,
+    )
+    authority = None
+    async with session.begin():
+        try:
+            await consume_validator_nonce(
+                session,
+                nonce=payload.nonce,
+                validator_hotkey=payload.validator_hotkey,
+                now=now,
+                expires_at=now + _REQUEST_MAX_AGE,
+            )
+        except ValidatorRequestReplayError:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "coding certification harness launch nonce has already been used"
+                ),
+                headers=_NO_STORE,
+            ) from None
+        try:
+            authority = await authorize_coding_certification_harness_delivery(
+                session,
+                lease_id=payload.lease_id,
+                validator_hotkey=payload.validator_hotkey,
+            )
+        except CodingCertificationLeaseNotAvailableError:
+            raise HTTPException(
+                status_code=404,
+                detail="coding certification harness is unavailable",
+                headers=_NO_STORE,
+            ) from None
+    if authority is None:  # pragma: no cover - exhaustive transaction outcome
+        raise HTTPException(
+            status_code=404,
+            detail="coding certification harness is unavailable",
+            headers=_NO_STORE,
+        )
+    issued_at = datetime.now(UTC)
+    ttl_seconds = min(
+        int(_ARTIFACT_URL_TTL.total_seconds()),
+        int((authority.deadline - issued_at).total_seconds()),
+    )
+    if ttl_seconds < 1:
+        raise HTTPException(
+            status_code=409,
+            detail="coding certification harness lease expired",
+            headers=_NO_STORE,
+        )
+    expires_at = issued_at + timedelta(seconds=ttl_seconds)
+    image_url = await storage.presigned_get_url(
+        key=_screened_image_key(
+            authority.agent_id,
+            authority.screened_image_upload_id,
+        ),
+        expires_in=ttl_seconds,
+    )
+    async with session.begin():
+        try:
+            refreshed = await authorize_coding_certification_harness_delivery(
+                session,
+                lease_id=payload.lease_id,
+                validator_hotkey=payload.validator_hotkey,
+            )
+        except CodingCertificationLeaseNotAvailableError:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "coding certification harness authority changed after URL minting"
+                ),
+                headers=_NO_STORE,
+            ) from None
+    if refreshed != authority:
+        raise HTTPException(
+            status_code=409,
+            detail="coding certification harness authority changed after URL minting",
+            headers=_NO_STORE,
+        )
+    if datetime.now(UTC) >= expires_at:
+        raise HTTPException(
+            status_code=409,
+            detail="coding certification harness URL expired",
+            headers=_NO_STORE,
+        )
+    await record_artifact_fetch(
+        session,
+        agent_id=authority.agent_id,
+        endpoint=ENDPOINT_VALIDATOR_CODING_CERTIFICATION_HARNESS,
+        requester_kind="validator",
+        requester_id=payload.validator_hotkey,
+        lease_id=authority.lease_id,
+        bench_version=authority.bench_version,
+        artifact_sha256=authority.agent_artifact_sha256,
+        source_ip=client_ip(request),
+        detail=request_detail(
+            request,
+            served_screened_image=True,
+            screened_image_sha256=authority.screened_image_sha256,
+        ),
+    )
+    try:
+        return CodingCertificationHarnessLaunchResponse(
+            schema="dittobench-coding-certification-harness-launch-v1",
+            coding_contract_version=1,
+            weight_eligible=False,
+            lease_id=authority.lease_id,
+            agent_id=authority.agent_id,
+            lease_deadline=authority.deadline,
+            bench_version=authority.bench_version,
+            agent_artifact_sha256=authority.agent_artifact_sha256,
+            screened_image_sha256=authority.screened_image_sha256,
+            screened_image_size_bytes=authority.screened_image_size_bytes,
+            screened_image_id=authority.screened_image_id,
+            screened_image_ref=authority.screened_image_ref,
+            screening_policy_version=authority.screening_policy_version,
+            image_url=image_url,
+            expires_at=expires_at,
+        )
+    except ValidationError:
+        raise HTTPException(
+            status_code=409,
+            detail="coding certification harness launch authority is inconsistent",
+            headers=_NO_STORE,
+        ) from None
 
 
 def _response(

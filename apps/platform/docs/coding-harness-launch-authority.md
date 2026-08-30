@@ -32,3 +32,10 @@ authoring gate.
 
 This endpoint does not claim coding tickets, start containers, invoke a model,
 publish evidence, score, or set weights.
+
+`POST /api/v1/validator/coding-certification-leases/{lease_id}/harness-launch`
+is the claimed-lease counterpart used only by the public certification canary.
+It reuses the same screened-image object and five-minute URL bound, but
+authorizes a claimed certification lease instead of a private coding ticket.
+It does not require an existing coding certification receipt. The URL remains
+private, redacted, and absent from miner/model/evidence bytes. Flags stay off.

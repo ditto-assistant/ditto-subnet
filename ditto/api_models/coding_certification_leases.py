@@ -6,6 +6,7 @@ import unicodedata
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import (
@@ -19,6 +20,10 @@ from pydantic import (
 
 _SHA256 = r"^[0-9a-f]{64}$"
 _SS58 = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
+_SIGNATURE = r"^[0-9a-fA-F]{128}$"
+_OCI_DIGEST = r"^sha256:[0-9a-f]{64}$"
+_MAX_IMAGE_BYTES = 8 << 30
+_MAX_URL_BYTES = 16 << 10
 
 
 def _opaque(value: str, *, maximum: int = 256) -> str:
@@ -225,7 +230,120 @@ def coding_certification_lease_abort_signing_message(
     ).encode()
 
 
+class CodingCertificationHarnessLaunchRequest(CodingCertificationLeaseModel):
+    validator_hotkey: Annotated[str, Field(pattern=_SS58)]
+    lease_id: UUID
+    nonce: UUID
+    requested_at: datetime
+    signature: Annotated[str, Field(pattern=_SIGNATURE)]
+
+    @field_validator("requested_at")
+    @classmethod
+    def requested_at_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("coding certification harness timestamp must be aware")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def identifiers_are_nonzero(
+        self,
+    ) -> CodingCertificationHarnessLaunchRequest:
+        if self.lease_id.int == 0 or self.nonce.int == 0:
+            raise ValueError("coding certification harness UUID is nil")
+        return self
+
+
+class CodingCertificationHarnessLaunchResponse(CodingCertificationLeaseModel):
+    schema_name: Literal["dittobench-coding-certification-harness-launch-v1"] = Field(
+        alias="schema"
+    )
+    coding_contract_version: Literal[1]
+    weight_eligible: Literal[False]
+    lease_id: UUID
+    agent_id: UUID
+    lease_deadline: datetime
+    bench_version: Annotated[int, Field(strict=True, ge=7, le=1_000_000)]
+    agent_artifact_sha256: Sha256
+    screened_image_sha256: Sha256
+    screened_image_size_bytes: Annotated[
+        int, Field(strict=True, gt=0, le=_MAX_IMAGE_BYTES)
+    ]
+    screened_image_id: Annotated[str, Field(pattern=_OCI_DIGEST)]
+    screened_image_ref: ImageRef
+    screening_policy_version: Annotated[int, Field(strict=True, ge=9, le=1_000_000)]
+    image_url: Annotated[
+        str, Field(min_length=1, max_length=_MAX_URL_BYTES, repr=False)
+    ]
+    expires_at: datetime
+
+    @field_validator("lease_deadline", "expires_at")
+    @classmethod
+    def timestamps_are_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("coding certification harness timestamp must be aware")
+        return value.astimezone(UTC)
+
+    @field_validator("image_url")
+    @classmethod
+    def image_url_is_private_https_capability(cls, value: str) -> str:
+        if len(value.encode()) > _MAX_URL_BYTES or any(
+            ord(character) < 32 or ord(character) > 126 for character in value
+        ):
+            raise ValueError("coding certification harness image URL is outside bounds")
+        parsed = urlsplit(value)
+        try:
+            port = parsed.port
+        except ValueError as error:
+            raise ValueError(
+                "coding certification harness URL port is invalid"
+            ) from error
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or port not in (None, 443)
+            or parsed.username is not None
+            or parsed.password is not None
+            or not parsed.path
+            or not parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("coding certification harness image URL is invalid")
+        return value
+
+    @model_validator(mode="after")
+    def authority_is_coherent(self) -> CodingCertificationHarnessLaunchResponse:
+        if (
+            any(value.int == 0 for value in (self.agent_id, self.lease_id))
+            or self.expires_at > self.lease_deadline
+            or self.screened_image_ref != f"ditto-screen/{self.agent_id}:latest"
+        ):
+            raise ValueError(
+                "coding certification harness launch authority is incoherent"
+            )
+        return self
+
+
+def coding_certification_harness_launch_signing_message(
+    *,
+    validator_hotkey: str,
+    lease_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    return "\x00".join(
+        (
+            "dittobench-coding-certification-harness-launch:v1",
+            validator_hotkey,
+            str(lease_id),
+            str(nonce),
+            _aware_iso(requested_at),
+        )
+    ).encode()
+
+
 __all__ = [
+    "CodingCertificationHarnessLaunchRequest",
+    "CodingCertificationHarnessLaunchResponse",
     "CodingCertificationLeaseAbortRequest",
     "CodingCertificationLeaseAuthority",
     "CodingCertificationLeaseClaimRequest",
@@ -233,6 +351,7 @@ __all__ = [
     "CodingCertificationLeaseResponse",
     "CodingCertificationLeaseStatus",
     "ImageRef",
+    "coding_certification_harness_launch_signing_message",
     "coding_certification_lease_abort_signing_message",
     "coding_certification_lease_claim_signing_message",
     "coding_certification_lease_issue_signing_message",

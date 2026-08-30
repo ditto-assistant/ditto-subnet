@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from ditto.api_models.coding import CodingCapabilityCertificationReceipt
 from ditto.api_models.coding_certification_leases import (
+    CodingCertificationHarnessLaunchResponse,
     CodingCertificationLeaseResponse,
 )
 from ditto.validator.coding_canary import CodingCanaryOutcome
@@ -95,7 +96,9 @@ class CodingCanaryRuntime:
             raise PlatformInfrastructureError("coding canary runtime is unavailable")
 
     async def certify(
-        self, lease: CodingCertificationLeaseResponse
+        self,
+        lease: CodingCertificationLeaseResponse,
+        harness: CodingCertificationHarnessLaunchResponse,
     ) -> CodingCanaryOutcome:
         payload = {
             "schema": _REQUEST_SCHEMA,
@@ -105,9 +108,14 @@ class CodingCanaryRuntime:
             "agent_id": str(lease.authority.agent_id),
             "agent_artifact_sha256": lease.authority.agent_artifact_sha256,
             "screened_image_sha256": lease.authority.screened_image_sha256,
-            "screened_image_id": lease.screened_image_id,
-            "screened_image_ref": lease.screened_image_ref,
+            "screened_image_id": harness.screened_image_id,
+            "screened_image_ref": harness.screened_image_ref,
             "screened_image_upload_id": str(lease.screened_image_upload_id),
+            "screened_image_size_bytes": harness.screened_image_size_bytes,
+            "screening_policy_version": harness.screening_policy_version,
+            "image_url": harness.image_url,
+            "image_expires_at": harness.expires_at.isoformat().replace("+00:00", "Z"),
+            "bench_version": lease.authority.bench_version,
             "canary_manifest_sha256": lease.authority.canary_manifest_sha256,
             "runner_plan_sha256": lease.authority.runner_plan_sha256,
             "grader_plan_sha256": lease.authority.grader_plan_sha256,

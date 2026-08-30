@@ -32,6 +32,10 @@ from ditto.api_models.coding import (
     coding_grading_lease_signing_message,
     coding_shadow_result_signing_message,
 )
+from ditto.api_models.coding_certification_leases import (
+    CodingCertificationHarnessLaunchRequest,
+    coding_certification_harness_launch_signing_message,
+)
 from ditto.api_models.coding_claims import (
     CodingClaimActionRequest,
     CodingClaimNextRequest,
@@ -414,6 +418,59 @@ async def test_coding_harness_client_posts_signed_request_and_parses_capability(
         ).request_coding_harness_launch(ticket_id)
     assert launch.ticket_id == ticket_id
     assert launch.screened_image_sha256 == "bb" * 32
+    assert "X-Amz-Signature" not in repr(launch)
+
+
+async def test_coding_certification_harness_client_posts_signed_lease_request() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    lease_id = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    agent_id = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    response_body = {
+        "schema": "dittobench-coding-certification-harness-launch-v1",
+        "coding_contract_version": 1,
+        "weight_eligible": False,
+        "lease_id": str(lease_id),
+        "agent_id": str(agent_id),
+        "lease_deadline": "2026-08-30T18:20:00+00:00",
+        "bench_version": 12,
+        "agent_artifact_sha256": "aa" * 32,
+        "screened_image_sha256": "1a" * 32,
+        "screened_image_size_bytes": 1024,
+        "screened_image_id": "sha256:" + "ef" * 32,
+        "screened_image_ref": f"ditto-screen/{agent_id}:latest",
+        "screening_policy_version": 9,
+        "image_url": "https://storage.invalid/image.tar?signature=synthetic",
+        "expires_at": "2026-08-30T18:05:00+00:00",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith(
+            f"/validator/coding-certification-leases/{lease_id}/harness-launch"
+        )
+        payload = CodingCertificationHarnessLaunchRequest.model_validate_json(
+            request.content
+        )
+        message = coding_certification_harness_launch_signing_message(
+            validator_hotkey=payload.validator_hotkey,
+            lease_id=payload.lease_id,
+            nonce=payload.nonce,
+            requested_at=payload.requested_at,
+        )
+        assert keypair.verify(message, bytes.fromhex(payload.signature))
+        return httpx.Response(200, json=response_body)
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        launch = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).request_coding_certification_harness_launch(lease_id)
+    assert launch.lease_id == lease_id
+    assert launch.weight_eligible is False
     assert "X-Amz-Signature" not in repr(launch)
 
 

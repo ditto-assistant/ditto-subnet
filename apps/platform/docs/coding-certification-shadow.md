@@ -11,7 +11,7 @@ receipt only when all of these match:
 
 - a permitted validator hotkey and valid sr25519 signature;
 - a claimed certification lease for the same validator, agent, artifact,
-  screened image, benchmark version, canary manifest, and grader plan;
+  screened image, and benchmark version;
 - a representable receipt timestamp no earlier than the lease issuance (with
   five minutes of clock skew), no later than its deadline, and not expired;
 - the agent's immutable source-artifact SHA-256;

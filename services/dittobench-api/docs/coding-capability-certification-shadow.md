@@ -94,13 +94,18 @@ capability publisher, immutable bundle store, and one trusted executor that
 implements both visible authoring commands and pristine grading. It also
 requires validator-local durable outboxes for the transcript and frozen
 submission plus a trusted inference-evidence source; test fixtures cannot be
-used by production adapters. A later integration must reserve only after
-health and seed succeed, then bind terminal sealing to the certifier's exact
-freeze result. This package intentionally does not add that adapter or the
-Platform persistence/screening adapter. That
-later layer must tie the receipt to the screened image digest,
-expire it when the artifact changes, and keep core qualification separate from
-coding qualification.
+used by production adapters.
+
+`internal/codingcanary` is the default-off host adapter. It loads the pinned
+`certification/v1` pack, acquires a lease-shaped screened harness, runs this
+certifier, and always revokes the workspace route and destroys the harness.
+The lease pack hash is the public-canary identity; the receipt
+`canary_manifest_sha256` is this package's execution digest. They are not
+required to be equal. Certified receipts still require observed inference
+evidence; this adapter may persist a failed receipt when inference is not
+observed. The host constructs the adapter only when
+`DITTOBENCH_CODING_CANARY_ENABLED` is set and the certification pack root is
+present. Flags stay false until a separately reviewed activation.
 
 Coding contract v1 remains permanently shadow-only. A separately reviewed
 contract v2, calibration result, and owner-approved emissions policy are

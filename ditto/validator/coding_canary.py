@@ -15,6 +15,7 @@ from ditto.api_models.coding import (
     SubmitCodingCertificationResponse,
 )
 from ditto.api_models.coding_certification_leases import (
+    CodingCertificationHarnessLaunchResponse,
     CodingCertificationLeaseAuthority,
     CodingCertificationLeaseResponse,
     CodingCertificationLeaseStatus,
@@ -37,7 +38,9 @@ class CodingCanaryRuntime(Protocol):
     async def require_available(self) -> None: ...
 
     async def certify(
-        self, lease: CodingCertificationLeaseResponse
+        self,
+        lease: CodingCertificationLeaseResponse,
+        harness: CodingCertificationHarnessLaunchResponse,
     ) -> CodingCanaryOutcome: ...
 
 
@@ -53,6 +56,10 @@ class CodingCanaryPlatform(Protocol):
     async def abort_coding_certification_lease(
         self, lease_id: UUID
     ) -> CodingCertificationLeaseResponse: ...
+
+    async def request_coding_certification_harness_launch(
+        self, lease_id: UUID
+    ) -> CodingCertificationHarnessLaunchResponse: ...
 
     async def submit_coding_certification(
         self,
@@ -164,7 +171,22 @@ class CodingCanaryWorker:
                 raise PlatformInfrastructureError(
                     "coding certification lease claim did not become exclusive"
                 )
-            outcome = await self._runtime.certify(claimed)
+            harness = await self._platform.request_coding_certification_harness_launch(
+                claimed.authority.lease_id
+            )
+            if (
+                harness.lease_id != claimed.authority.lease_id
+                or harness.agent_id != claimed.authority.agent_id
+                or harness.agent_artifact_sha256
+                != claimed.authority.agent_artifact_sha256
+                or harness.screened_image_sha256
+                != claimed.authority.screened_image_sha256
+                or harness.weight_eligible
+            ):
+                raise PlatformInfrastructureError(
+                    "coding certification harness launch authority is invalid"
+                )
+            outcome = await self._runtime.certify(claimed, harness)
         except Exception:
             if claimed is None:
                 await self._abort_issued(issued.authority.lease_id)
@@ -174,8 +196,6 @@ class CodingCanaryWorker:
             or not outcome.harness_destroyed
             or outcome.receipt.weight_eligible
             or outcome.authority.lease_id != claimed.authority.lease_id
-            or outcome.receipt.canary_manifest_sha256
-            != claimed.authority.canary_manifest_sha256
             or outcome.receipt.agent_artifact_sha256
             != claimed.authority.agent_artifact_sha256
         ):

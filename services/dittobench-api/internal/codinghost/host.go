@@ -46,6 +46,9 @@ type Config struct {
 	SourcePublicBaseURL    string
 	Policy                 codingcontract.InferencePolicy
 	RuntimeImageRepository string
+	RuntimeImageDigest     string
+	CanaryEnabled          bool
+	CertificationRoot      string
 	Docker                 *sandbox.LocalDocker
 	CandidateUID           uint32
 	CandidateGID           uint32
@@ -224,11 +227,41 @@ func newHost(config Config, availability func(context.Context) error) (*Host, er
 		_ = backend.Close()
 		return nil, errors.Join(ErrInvalidConfig, err)
 	}
+	var canary *codingcanary.Service
+	if config.CanaryEnabled {
+		pack, packErr := codingcanary.LoadPublicPack(config.CertificationRoot)
+		if packErr != nil {
+			_ = supervisor.Close()
+			_ = backend.Close()
+			_ = publication.Close()
+			return nil, errors.Join(ErrInvalidConfig, packErr)
+		}
+		canaryBackend, backendErr := codingcanary.NewBackend(codingcanary.BackendConfig{
+			Pack: pack, Harnesses: harnesses, Publisher: router.WorkspacePublisher(),
+			Executors: executors, Outbox: outbox, Policy: config.Policy,
+			ImageDigest: config.RuntimeImageDigest, Now: now,
+		})
+		if backendErr != nil {
+			_ = supervisor.Close()
+			_ = backend.Close()
+			_ = publication.Close()
+			return nil, errors.Join(ErrInvalidConfig, backendErr)
+		}
+		canary, err = codingcanary.New(codingcanary.Config{
+			ControlToken: config.ControlToken, Backend: canaryBackend, Now: now,
+		})
+		if err != nil {
+			_ = supervisor.Close()
+			_ = backend.Close()
+			_ = publication.Close()
+			return nil, errors.Join(ErrInvalidConfig, err)
+		}
+	}
 	closeOutbox = false
 	closeRouter = false
 	host := &Host{
 		supervisor: supervisor, backend: backend, publication: publication,
-		router: router, outbox: outbox, sweepDone: make(chan struct{}),
+		canary: canary, router: router, outbox: outbox, sweepDone: make(chan struct{}),
 	}
 	sweepContext, sweepCancel := context.WithCancel(context.Background())
 	host.sweepCancel = sweepCancel

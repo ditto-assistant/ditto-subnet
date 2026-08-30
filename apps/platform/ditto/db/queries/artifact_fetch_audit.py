@@ -57,6 +57,9 @@ RequesterKind = Literal["validator", "screener", "admin", "public"]
 ENDPOINT_PUBLIC_ARTIFACT = "public.agent_artifact"
 ENDPOINT_VALIDATOR_ARTIFACT = "validator.agent_artifact"
 ENDPOINT_VALIDATOR_CODING_HARNESS = "validator.coding_harness_launch"
+ENDPOINT_VALIDATOR_CODING_CERTIFICATION_HARNESS = (
+    "validator.coding_certification_harness_launch"
+)
 ENDPOINT_SCREENER_ARTIFACT = "screener.agent_artifact"
 ENDPOINT_ADMIN_SCREENING_ARTIFACT = "admin.get_screening_artifact"
 ENDPOINT_ADMIN_SOURCE_FILES = "admin.list_screening_source_files"

@@ -30,23 +30,28 @@ var (
 )
 
 type Request struct {
-	Schema                string    `json:"schema"`
-	OperationID           string    `json:"operation_id"`
-	LeaseID               string    `json:"lease_id"`
-	Deadline              time.Time `json:"deadline"`
-	AgentID               string    `json:"agent_id"`
-	AgentArtifactSHA256   string    `json:"agent_artifact_sha256"`
-	ScreenedImageSHA256   string    `json:"screened_image_sha256"`
-	ScreenedImageID       string    `json:"screened_image_id"`
-	ScreenedImageRef      string    `json:"screened_image_ref"`
-	ScreenedImageUploadID string    `json:"screened_image_upload_id"`
-	CanaryManifestSHA256  string    `json:"canary_manifest_sha256"`
-	RunnerPlanSHA256      string    `json:"runner_plan_sha256"`
-	GraderPlanSHA256      string    `json:"grader_plan_sha256"`
-	ResourceProfileSHA256 string    `json:"resource_profile_sha256"`
-	InferencePolicySHA256 string    `json:"inference_policy_sha256"`
-	CodingContractVersion int       `json:"coding_contract_version"`
-	WeightEligible        bool      `json:"weight_eligible"`
+	Schema                 string    `json:"schema"`
+	OperationID            string    `json:"operation_id"`
+	LeaseID                string    `json:"lease_id"`
+	Deadline               time.Time `json:"deadline"`
+	AgentID                string    `json:"agent_id"`
+	AgentArtifactSHA256    string    `json:"agent_artifact_sha256"`
+	ScreenedImageSHA256    string    `json:"screened_image_sha256"`
+	ScreenedImageID        string    `json:"screened_image_id"`
+	ScreenedImageRef       string    `json:"screened_image_ref"`
+	ScreenedImageUploadID  string    `json:"screened_image_upload_id"`
+	ScreenedImageSizeBytes int64     `json:"screened_image_size_bytes"`
+	ScreeningPolicyVersion int       `json:"screening_policy_version"`
+	ImageURL               string    `json:"image_url"`
+	ImageExpiresAt         time.Time `json:"image_expires_at"`
+	BenchVersion           int       `json:"bench_version"`
+	CanaryManifestSHA256   string    `json:"canary_manifest_sha256"`
+	RunnerPlanSHA256       string    `json:"runner_plan_sha256"`
+	GraderPlanSHA256       string    `json:"grader_plan_sha256"`
+	ResourceProfileSHA256  string    `json:"resource_profile_sha256"`
+	InferencePolicySHA256  string    `json:"inference_policy_sha256"`
+	CodingContractVersion  int       `json:"coding_contract_version"`
+	WeightEligible         bool      `json:"weight_eligible"`
 }
 
 type Outcome struct {
