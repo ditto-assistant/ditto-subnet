@@ -118,9 +118,9 @@ func (attempt *Attempt) preparePublication(
 	}
 	ownedBody := append([]byte(nil), body...)
 	store := attempt.store
+	now := store.config.Now().UTC()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	now := store.config.Now().UTC()
 	if err := store.checkOpenAndClock(now); err != nil {
 		return PublicationArtifact{}, err
 	}
@@ -231,9 +231,9 @@ func (attempt *Attempt) acknowledgePublication(
 	}
 	ownedBody := append([]byte(nil), body...)
 	store := attempt.store
+	now := store.config.Now().UTC()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	now := store.config.Now().UTC()
 	if err := store.checkOpenAndClock(now); err != nil {
 		return PublicationArtifact{}, err
 	}
@@ -291,9 +291,10 @@ func (store *Store) PendingPublications(ctx context.Context, limit int) ([]Pendi
 	if ctx == nil || ctx.Err() != nil || limit <= 0 || limit > 10_000 {
 		return nil, ErrInvalid
 	}
+	now := store.config.Now().UTC()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if err := store.checkOpenAndClock(store.config.Now().UTC()); err != nil {
+	if err := store.checkOpenAndClock(now); err != nil {
 		return nil, err
 	}
 	values := make([]PendingPublication, 0)
@@ -348,9 +349,10 @@ func (store *Store) openPublicationPart(
 	if ctx == nil || ctx.Err() != nil || !lowerSHA256(id) || !validPublicationStage(stage) {
 		return nil, ErrInvalid
 	}
+	now := store.config.Now().UTC()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if err := store.checkOpenAndClock(store.config.Now().UTC()); err != nil {
+	if err := store.checkOpenAndClock(now); err != nil {
 		return nil, err
 	}
 	record := store.records[id]
