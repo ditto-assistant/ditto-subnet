@@ -382,6 +382,11 @@ jobs:
       needs.plan.outputs.dittobench_coding_starter_kit == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      # Incremental compilation state is dead weight in CI: it roughly doubles
+      # the cached target/ trees, and the shared repository cache evicts at
+      # 10 GB, taking the warm-build win with it.
+      CARGO_INCREMENTAL: "0"
     permissions:
       contents: read
     defaults:
@@ -446,7 +451,7 @@ jobs:
           tags: dittobench-coding-starter-kit:release-gate
           push: false
           cache-from: type=gha,scope=coding-starter-kit
-          cache-to: type=gha,mode=max,scope=coding-starter-kit
+          cache-to: type=gha,mode=max,scope=coding-starter-kit,compression=zstd
 
       - name: Verify unified starter kit from exact merge source
         working-directory: miners/dittobench-unified-starter-kit
@@ -469,7 +474,7 @@ jobs:
           push: false
           load: true
           cache-from: type=gha,scope=unified-starter-kit
-          cache-to: type=gha,mode=max,scope=unified-starter-kit
+          cache-to: type=gha,mode=max,scope=unified-starter-kit,compression=zstd
 
       - name: Probe unified starter kit routes from exact merge source
         working-directory: .

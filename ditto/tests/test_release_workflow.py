@@ -1355,7 +1355,10 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
                 for line in cache_from.splitlines()
                 if line
             )
-            writer = cache_to.removeprefix("type=gha,mode=max,scope=")
+            # compression tunes the transport, never the scope identity.
+            writer = cache_to.removeprefix("type=gha,mode=max,scope=").removesuffix(
+                ",compression=zstd"
+            )
             assert writer in readers
             reader_scopes.setdefault(job_name, []).append(readers)
             writer_scopes.setdefault(job_name, []).append(writer)
