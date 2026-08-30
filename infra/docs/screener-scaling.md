@@ -140,8 +140,9 @@ floor is zero; normal scale-in is controller-owned and lease-aware.
   under `no_log` and renders `DITTO_TARGON_API_KEY` into the platform `.env`
   like every other platform secret. The value is never logged or placed in
   rental env except the attempt-bound job tokens already required for Kaniko/L1.
-- GCE screener workers and the capacity-controller VM are retained for bounded
-  outage/backlog overflow and return to zero after GCE-owned leases drain.
+- The autoscaled GCE screener workers and capacity-controller VM are retained
+  for bounded outage/backlog overflow and return to zero after GCE-owned leases
+  drain. The superseded static `ditto-screener-prod` pet is retired.
 - `subnet-screener-1` keeps its rotating enrolled-node credential only on the
   trusted host. Disposable build guests receive one build capability; smoke
   guests receive no Platform secret. Neither guest receives the review key.
