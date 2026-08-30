@@ -15,6 +15,7 @@ import asyncio
 import base64
 import hashlib
 import os
+import stat
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,6 +38,43 @@ from ditto_screening_protocol import (
 )
 
 _MAX_SOURCE_BYTES = 20 * 1024 * 1024
+_MAX_PROVIDER_KEY_BYTES = 16 * 1024
+
+
+def _stage_source_review_secret(key_file: str) -> str:
+    """Copy group-readable secret mounts into the job's private tmpfs."""
+    source = Path(key_file)
+    source_stat = source.stat()
+    if not stat.S_ISREG(source_stat.st_mode):
+        raise OSError("source review API key file is not a regular file")
+    if not source_stat.st_mode & 0o077:
+        return key_file
+    if source_stat.st_size > _MAX_PROVIDER_KEY_BYTES:
+        raise OSError("source review API key file is too large")
+
+    credential_path = os.environ.get("SCREENER_NODE_CREDENTIAL_FILE")
+    if not credential_path:
+        raise OSError("SCREENER_NODE_CREDENTIAL_FILE is required for source review")
+    target = Path(credential_path).with_name("source-review-api-key.staged")
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    read_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(source, read_flags), "rb") as handle:
+        value = handle.read(_MAX_PROVIDER_KEY_BYTES + 1)
+    if len(value) > _MAX_PROVIDER_KEY_BYTES:
+        raise OSError("source review API key file is too large")
+
+    write_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    try:
+        with os.fdopen(os.open(target, write_flags, 0o600), "wb") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
+    os.environ["SCREENER_SOURCE_REVIEW_API_KEY_FILE"] = str(target)
+    return str(target)
 
 
 async def _notify_provider_event(
@@ -214,7 +252,9 @@ async def _amain() -> int:
         "SCREENER_NODE_CREDENTIAL_FILE", "/tmp/ditto-source-review/node.json"
     )
     await _materialize_source_review_secret()
-    key_file = _required("SCREENER_SOURCE_REVIEW_API_KEY_FILE")
+    key_file = _stage_source_review_secret(
+        _required("SCREENER_SOURCE_REVIEW_API_KEY_FILE")
+    )
     headers = {"Authorization": f"Bearer {token}"}
     base = f"{platform}/api/v1/screener/submission-source-reviews/{review_id}"
     archive_path: str | None = None
