@@ -24,7 +24,7 @@ type presignCredentials struct {
 // Query-string auth rather than header auth on purpose: Hippius rejects
 // SDK-direct (header-signed) PutObject/GetObject with SignatureDoesNotMatch
 // while accepting presigned URLs from the same credentials (apps/platform
-// hippius.py, ditto-assistant/backend#1078/#1088). Backblaze B2 and AWS
+// hippius.py). Backblaze B2 and AWS
 // accept both, so presign is the one shape that works everywhere.
 //
 // Only the host is signed so the PUT may carry Content-Type and

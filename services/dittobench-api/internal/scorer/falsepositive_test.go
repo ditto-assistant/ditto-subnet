@@ -337,12 +337,12 @@ func obsMemory(called ...string) protocol.CaseScore {
 }
 
 // TestMemoryOverCallFactorTreatsWritesAsOverCallsOnRecall pins the DELIBERATE
-// scope of the lifecycle exemption added in #39: lifecycle write CASES are
+// scope of the lifecycle exemption: lifecycle write CASES are
 // excluded from this factor (see TestMemoryOverCallExcludesLifecycleWrites), but
 // a write tool called during an ordinary recall question is still an over-call.
 //
-// Issue #38 states this explicitly: "Do not globally exempt memory write tools
-// on every recall case." There is a real argument on the other side -- an agent
+// Memory write tools are not globally exempt on every recall case. There is a
+// real argument on the other side -- an agent
 // that saves what it learns while answering is doing the product, not hedging --
 // but that is a product decision about what the benchmark should reward, so it
 // is pinned here as intended behaviour rather than quietly reversed.

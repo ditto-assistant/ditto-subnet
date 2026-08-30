@@ -40,9 +40,8 @@ package main
 //     no longer opens, so the per-case comparison is not computed today; the
 //     injection and its case-window counters below still run.
 //
-// What it deliberately does not do yet: change any score. The mode ladder is
-// the shadow-before-enforce precedent that ditto-platform#506 invariant 5
-// requires of every new gate -- inject and record first, publish the evidence,
+// What it deliberately does not do yet: change any score. The mode ladder
+// injects and records first, publishes the evidence,
 // and only gate once the honest-cohort distribution is measured. The evidence
 // stays in the run transcript (runner.CaseExecution) and operator logs; the
 // signed v9 gate models are untouched, so no protocol version negotiation is

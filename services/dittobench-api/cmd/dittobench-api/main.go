@@ -2307,8 +2307,8 @@ func validateBenchVersionResult(requested, artifactVersion int, details *protoco
 // a clobbered run fell through to DittobenchError -> fail_job("scoring_error"),
 // which spends one of the miner's finite attempts and imposes a 6h cooldown for
 // an outage the miner did not cause. A run killed by a platform grant denial --
-// correctly diagnosed by #103 as "lease revoked ... not an upstream provider
-// fault" -- was still being billed to the agent, because the diagnosis was
+// correctly diagnosed as "lease revoked ... not an upstream provider fault" --
+// was still being billed to the agent, because the diagnosis was
 // discarded three frames later on this path.
 //
 // Direct sandbox resource evidence (OOM, tmpfs exhaustion) still wins over a
