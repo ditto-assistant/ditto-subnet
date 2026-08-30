@@ -345,16 +345,19 @@ describe("screening cross-feed and policy labels", () => {
     );
     const card = container.querySelector("#pipeline-admission .pipeline-item");
     expect(card?.querySelector(".screener-progress-stage")?.textContent).toContain(
-      "L1 source review · 40%",
+      "Broad source scan · 40%",
     );
     // The progress line already carries the stage plus its elapsed time; the
     // state line above it must not print the same string a second time.
     expect(card?.querySelector(".pipeline-admission-state")).toBeNull();
-    expect(card?.getAttribute("aria-label")).toContain("L1 source review · 40%");
+    expect(card?.getAttribute("aria-label")).toContain("Broad source scan · 40%");
     // Source review is one segment of the track, so the card opens it into
     // the four stages the screener runs.
     const ladder = card?.querySelector(".review-ladder");
-    expect(ladder).toHaveAttribute("aria-label", "Source review stage 1 of 4: L1 source review");
+    expect(ladder).toHaveAttribute(
+      "aria-label",
+      "Source review stage 1 of 4: Broad source scan (L1)",
+    );
     expect(ladder?.querySelectorAll(".review-rung")).toHaveLength(4);
   });
 
