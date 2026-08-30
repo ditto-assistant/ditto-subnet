@@ -31,6 +31,10 @@ from ditto.api_server.endpoints.validator import (
     _assert_validator_permitted,
 )
 from ditto.chain import ChainClient
+from ditto.coding_selection import (
+    CodingSelectionCatalogIntegrityError,
+    CodingSelectionCatalogUnavailableError,
+)
 from ditto.db.models import CodingInferenceGrant
 from ditto.db.queries.coding_inference_grants import (
     CodingInferenceGrantConflictError,
@@ -39,10 +43,6 @@ from ditto.db.queries.coding_inference_grants import (
     activate_coding_inference_grant,
     ensure_coding_inference_grant,
     revoke_coding_inference_grant,
-)
-from ditto.coding_selection import (
-    CodingSelectionCatalogIntegrityError,
-    CodingSelectionCatalogUnavailableError,
 )
 from ditto.db.queries.coding_task_leases import (
     CodingTaskLeaseIntegrityError,

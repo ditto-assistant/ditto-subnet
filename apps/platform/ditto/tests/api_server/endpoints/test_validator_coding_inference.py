@@ -29,14 +29,14 @@ from ditto.api_models.coding_selection import (
     CodingSelectionRunManifest,
     CodingTaskSetManifest,
 )
-from ditto.coding_selection import (
-    CodingSelectionCatalogIntegrityError,
-    CodingSelectionCatalogUnavailableError,
-)
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.endpoints import validator_coding_inference as endpoint_module
 from ditto.api_server.endpoints.validator_coding_inference import (
     CodingInferenceGrantTransport,
+)
+from ditto.coding_selection import (
+    CodingSelectionCatalogIntegrityError,
+    CodingSelectionCatalogUnavailableError,
 )
 from ditto.db.queries.coding_inference_grants import (
     CodingInferenceGrantResult,
