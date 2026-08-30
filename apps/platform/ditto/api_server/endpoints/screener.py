@@ -498,6 +498,9 @@ _TRUSTED_RUNTIME_REGISTRY = (
 _CANDIDATE_RUNTIME_REGISTRY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-screening-candidates/miner"
 )
+_FLEET_SUBMISSION_FAILURE_RE = re.compile(
+    r"^FLEET_SUBMISSION_([A-Z][A-Z0-9_]{0,47})_FAILED$"
+)
 
 
 def _trusted_build_view(row: TrustedImageBuild) -> TrustedImageBuildView:
@@ -2797,6 +2800,21 @@ async def update_node_submission_image_build(
         row.started_at = row.started_at or now
         row.updated_at = now
         if payload.status == "fallback_required":
+            attempt = await session.get(
+                ScreeningAttempt, row.attempt_id, with_for_update=True
+            )
+            marker = _FLEET_SUBMISSION_FAILURE_RE.fullmatch(payload.error_code or "")
+            if attempt is not None and marker is not None:
+                attempt.failure_provider = node.provider
+                attempt.failure_lane = "build"
+                attempt.private_failure_detail = (
+                    f"DITTO_SUBMISSION_BUILD_FAILED={marker.group(1)}"
+                )
+                attempt.failure_captured_at = now
+            if row.runtime_status in {"pending", "running"}:
+                row.runtime_status = "skipped"
+                row.runtime_error_code = "FLEET_RUNTIME_SKIPPED_BUILD_UNAVAILABLE"
+                row.runtime_completed_at = now
             row.completed_at = now
             row.lease_expires_at = None
             row.job_token_hash = None
