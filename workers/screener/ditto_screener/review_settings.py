@@ -103,7 +103,10 @@ class ReviewSettings(BaseModel):
     clear_min_notes: Annotated[int, Field(ge=1, le=32)] = 3
     adjudicator_mode: Literal["off", "shadow", "enforce"] = "off"
     adjudicator_model: Literal["z-ai/glm-5.3-flash"] = "z-ai/glm-5.3-flash"
-    adjudicator_max_steps: Annotated[int, Field(ge=1, le=64)] = 24
+    # Keep 24 as the missing-field fallback so checksums issued before this
+    # setting existed remain verifiable. Fresh Platform revisions default to
+    # 128 and always carry the field explicitly.
+    adjudicator_max_steps: Annotated[int, Field(ge=1, le=256)] = 24
     adjudicator_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 600
     max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
     max_output_tokens: Annotated[int, Field(ge=1, le=128_000)]
