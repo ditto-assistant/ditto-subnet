@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.167.1 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Support read-only container health checks
+  ([#1354](https://github.com/ditto-assistant/ditto-subnet/pull/1354),
+  [`44a16c4`](https://github.com/ditto-assistant/ditto-subnet/commit/44a16c405d9c0467c496e143bd61cf1755637fc6))
+
+
 ## v0.167.0 (2026-08-30)
 
 ### Features
