@@ -893,6 +893,43 @@ def test_preexecution_review_failure_never_releases_or_rejects(
     assert not decision.submits_verdict or not decision.passed
 
 
+@pytest.mark.parametrize(
+    ("court_decision", "outcome"),
+    [
+        ("clear", ScreeningOutcome.PASS),
+        ("reject", ScreeningOutcome.QUARANTINE),
+        ("escalate", ScreeningOutcome.QUARANTINE),
+    ],
+)
+def test_final_adjudication_settles_preexecution_source_lead(
+    court_decision: str, outcome: ScreeningOutcome
+) -> None:
+    adjudication = {
+        "decision": court_decision,
+        "reason": "final court decision",
+        "model": "z-ai/glm-5.3-flash",
+        "prompt_revision": "adjudicator-v1-policy-v10",
+        "notes_considered": 2,
+    }
+    observation = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="l2-filenotfounderror",
+        failure_disposition="retryable_infra",
+        adjudication=adjudication,
+    )
+
+    decision = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
+        observation
+    )
+
+    assert decision.outcome == outcome
+    assert decision.adjudication == adjudication
+    assert decision.evidence[0].code == "source-review-adjudicated"
+
+
 async def test_source_review_finding_travels_to_quarantine_decision() -> None:
     finding = _finding_payload("high")
 

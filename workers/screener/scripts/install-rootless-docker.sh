@@ -41,6 +41,7 @@ for command in docker dockerd-rootless.sh newuidmap newgidmap slirp4netns; do
     exit 1
   }
 done
+rootless_dockerd="$(command -v dockerd-rootless.sh)"
 
 getent group "$EXECUTOR_GROUP" >/dev/null \
   || groupadd --system "$EXECUTOR_GROUP"
@@ -102,7 +103,7 @@ Environment=XDG_RUNTIME_DIR=${user_runtime_dir}
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=${user_runtime_dir}/bus
 Environment=DOCKER_HOST=${docker_host}
 ExecStartPre=/usr/bin/systemctl is-active --quiet ditto-screener-egress-guard.service
-ExecStart=/usr/bin/dockerd-rootless.sh --host=${docker_host} --group=${EXECUTOR_GROUP} --data-root=${daemon_root}/data --exec-root=${daemon_exec_root} --pidfile=${user_runtime_dir}/ditto-screener-docker.pid --config-file=${daemon_root}/daemon.json
+ExecStart=${rootless_dockerd} --host=${docker_host} --group=${EXECUTOR_GROUP} --data-root=${daemon_root}/data --exec-root=${daemon_exec_root} --pidfile=${user_runtime_dir}/ditto-screener-docker.pid --config-file=${daemon_root}/daemon.json
 # RootlessKit maps the daemon's supplementary group into the subordinate GID
 # range. Reset only the control socket to the real host group so the screener
 # worker can reach it without granting access to the rootful Docker daemon.

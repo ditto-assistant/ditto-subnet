@@ -150,6 +150,27 @@ def test_role_installs_setpriv_provider() -> None:
     assert "- util-linux" in tasks
 
 
+def test_hetzner_workers_use_release_bound_rootless_analyzer() -> None:
+    tasks = (ROLE / "tasks/main.yml").read_text()
+    defaults = (ROLE / "defaults/main.yml").read_text()
+    environment = (ROLE / "templates/fleet.env.j2").read_text()
+    installer = (
+        ROOT / "workers/screener/scripts/install-rootless-docker.sh"
+    ).read_text()
+    updater = UPDATER.read_text()
+
+    for package in ("uidmap", "slirp4netns", "rootlesskit", "dbus-user-session"):
+        assert f"- {package}" in tasks
+    assert "unix:///run/ditto-screener-docker/docker.sock" in defaults
+    assert "ditto-screener-no-local-docker.sock" not in environment
+    assert "SCREENER_REQUIRE_ROOTLESS_DOCKER=1" in environment
+    assert 'rootless_dockerd="$(command -v dockerd-rootless.sh)"' in installer
+    assert "ExecStart=${rootless_dockerd}" in installer
+    assert 'prepare_l2_analyzer "$revision"' in updater
+    assert 'docker tag "$l2_candidate" "$L2_ANALYZER_ACTIVE"' in updater
+    assert "rootless analyzer executor is unavailable" in updater
+
+
 def test_role_stops_workers_above_configured_capacity() -> None:
     tasks = yaml.safe_load((ROLE / "tasks/main.yml").read_text())
     task = next(
