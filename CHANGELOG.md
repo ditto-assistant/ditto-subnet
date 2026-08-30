@@ -2,6 +2,36 @@
 
 <!-- version list -->
 
+## v0.169.0 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Execute fleet jobs with exact build errors
+  ([#1356](https://github.com/ditto-assistant/ditto-subnet/pull/1356),
+  [`fb81dbb`](https://github.com/ditto-assistant/ditto-subnet/commit/fb81dbb1ebca3b5f185b4bae336f89e57a15c8ad))
+
+- **screener**: Preserve fleet build failure stage
+  ([#1355](https://github.com/ditto-assistant/ditto-subnet/pull/1355),
+  [`55b7f7d`](https://github.com/ditto-assistant/ditto-subnet/commit/55b7f7dd6019539dcad2a74bb155df4681819844))
+
+- **screener**: Preserve fleet build rejection semantics
+  ([#1357](https://github.com/ditto-assistant/ditto-subnet/pull/1357),
+  [`6f0abc8`](https://github.com/ditto-assistant/ditto-subnet/commit/6f0abc8bcea8fd6f1015629c7e0623f880d54ad6))
+
+### Documentation
+
+- **coding**: Define optional unified miner capability
+  ([`9625c77`](https://github.com/ditto-assistant/ditto-subnet/commit/9625c77769ee13630914c4dab358743ff3f2e89e))
+
+### Features
+
+- **coding**: Add private catalog curator verifier
+  ([`0152cc3`](https://github.com/ditto-assistant/ditto-subnet/commit/0152cc3094466909d494641a7a20cb2239f0c105))
+
+- **coding**: Add public practice release verifier
+  ([`7b03b29`](https://github.com/ditto-assistant/ditto-subnet/commit/7b03b299a5dadcc60c330252f6523291c88e818b))
+
+
 ## v0.168.0 (2026-08-30)
 
 ### Bug Fixes
