@@ -10,6 +10,8 @@ from ditto_screening_protocol import (
     AgentStatus,
     ScreenResultOutcome,
     ScreenResultRequest,
+    SubmissionImageBuildResponse,
+    SubmissionSourceReviewResponse,
     verdict_signing_message,
 )
 
@@ -17,6 +19,39 @@ from ditto_screening_protocol import (
 def test_compatibility_imports_are_shared_package_types() -> None:
     assert CompatibilityAgentStatus is AgentStatus
     assert CompatibilityRequest is ScreenResultRequest
+
+
+def test_local_hetzner_jobs_are_valid_screening_wire_responses() -> None:
+    build_id = UUID("550e8400-e29b-41d4-a716-446655440010")
+    attempt_id = UUID("550e8400-e29b-41d4-a716-446655440011")
+
+    build = SubmissionImageBuildResponse(
+        build_id=build_id,
+        attempt_id=attempt_id,
+        status="succeeded",
+        provider="hetzner",
+        artifact_sha256="12" * 32,
+        image_ref=f"ditto-screen/{build_id}-{attempt_id}:latest",
+        output_sha256="34" * 32,
+        output_size_bytes=1024,
+        download_url="https://example.invalid/image.tar.zst",
+        runtime_status="succeeded",
+        runtime_provider="hetzner",
+        runtime_image_reference=(
+            "registry.example.invalid/ditto/screener@sha256:" + "56" * 32
+        ),
+    )
+    review = SubmissionSourceReviewResponse(
+        review_id=UUID("550e8400-e29b-41d4-a716-446655440012"),
+        attempt_id=attempt_id,
+        status="running",
+        provider="hetzner",
+        artifact_sha256="12" * 32,
+    )
+
+    assert build.provider == "hetzner"
+    assert build.runtime_provider == "hetzner"
+    assert review.provider == "hetzner"
 
 
 def test_canonical_versioned_verdict_message_is_wire_compatible() -> None:
