@@ -1944,6 +1944,153 @@ class CodingShadowTicket(Base):
     )
 
 
+class CodingInferenceGrant(Base):
+    """One locked Luna capability bound to one shadow coding ticket."""
+
+    __tablename__ = "coding_inference_grants"
+
+    grant_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    ticket_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    run_row_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    task_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    case_id: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_capability_id: Mapped[str] = mapped_column(Text, nullable=False)
+    inference_grant_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_api: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_route: Mapped[str] = mapped_column(Text, nullable=False)
+    receipt_provider: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_route_profile: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_account_guardrail: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_pipeline_policy: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_cache_policy: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning_effort: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    bearer_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    broker_public_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    request_budget: Mapped[int] = mapped_column(Integer, nullable=False)
+    prompt_token_budget: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    completion_token_budget: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cost_budget_usd_micros: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    request_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    prompt_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    completion_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    cost_usd_micros: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    active_requests: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["ticket_id", "run_row_id", "task_count"],
+            [
+                "coding_shadow_tickets.ticket_id",
+                "coding_shadow_tickets.run_row_id",
+                "coding_shadow_tickets.task_count",
+            ],
+            ondelete="CASCADE",
+            name="coding_inference_grants_ticket_fkey",
+        ),
+        UniqueConstraint(
+            "ticket_id",
+            name="coding_inference_grants_ticket_key",
+        ),
+        UniqueConstraint(
+            "grant_id",
+            "ticket_id",
+            name="coding_inference_grants_grant_ticket_key",
+        ),
+        CheckConstraint(
+            "task_count = 1 AND generation BETWEEN 0 AND 2147483647 "
+            "AND request_budget BETWEEN 1 AND 256 "
+            "AND prompt_token_budget BETWEEN 1 AND 2000000 "
+            "AND completion_token_budget BETWEEN 1 AND 250000 "
+            "AND cost_budget_usd_micros BETWEEN 1 AND 100000000",
+            name="coding_inference_grants_authority_bounds_check",
+        ),
+        CheckConstraint(
+            "request_count BETWEEN 0 AND request_budget "
+            "AND prompt_tokens >= 0 "
+            "AND completion_tokens >= 0 "
+            "AND cost_usd_micros >= 0 "
+            "AND active_requests BETWEEN 0 AND 1",
+            name="coding_inference_grants_accounting_check",
+        ),
+        CheckConstraint(
+            "inference_grant_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND (bearer_digest IS NULL OR bearer_digest ~ '^[0-9a-f]{64}$') "
+            "AND (broker_public_key IS NULL OR "
+            "broker_public_key ~ '^[A-Za-z0-9_-]{43}$')",
+            name="coding_inference_grants_crypto_check",
+        ),
+        CheckConstraint(
+            "model = 'openai/gpt-5.6-luna' "
+            "AND provider_api = 'openrouter' "
+            "AND provider_account_guardrail = 'openrouter_private_account_v1' "
+            "AND provider_pipeline_policy = 'no_plugins_no_transforms_v1' "
+            "AND provider_cache_policy = 'disabled_v1' "
+            "AND reasoning_effort = 'medium'",
+            name="coding_inference_grants_locked_route_check",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'active', 'revoked', 'exhausted') "
+            "AND ((status = 'pending' AND generation = 0 "
+            "AND bearer_digest IS NULL AND broker_public_key IS NULL) "
+            "OR (status = 'active' AND generation > 0 "
+            "AND bearer_digest IS NOT NULL AND broker_public_key IS NOT NULL) "
+            "OR (status IN ('revoked', 'exhausted') "
+            "AND bearer_digest IS NULL AND broker_public_key IS NULL)) "
+            "AND ((status = 'revoked') = (revoked_at IS NOT NULL))",
+            name="coding_inference_grants_state_check",
+        ),
+        CheckConstraint(
+            "octet_length(case_id) BETWEEN 1 AND 256 "
+            "AND octet_length(profile_capability_id) BETWEEN 1 AND 256 "
+            "AND octet_length(provider_route) BETWEEN 1 AND 128 "
+            "AND octet_length(receipt_provider) BETWEEN 1 AND 128 "
+            "AND octet_length(provider_route_profile) BETWEEN 1 AND 128 "
+            "AND case_id !~ '[[:space:][:cntrl:]]' "
+            "AND profile_capability_id !~ '[[:space:][:cntrl:]]'",
+            name="coding_inference_grants_identifiers_check",
+        ),
+        CheckConstraint(
+            "expires_at > created_at AND weight_eligible = false",
+            name="coding_inference_grants_shadow_check",
+        ),
+        Index(
+            "coding_inference_grants_validator_expiry_idx",
+            "validator_hotkey",
+            "expires_at",
+            postgresql_where=text("status IN ('pending', 'active')"),
+        ),
+    )
+
+
 class CodingShadowAuthoringFreeze(Base):
     """One immutable validator-signed freeze transition for a shadow ticket."""
 

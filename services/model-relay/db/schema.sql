@@ -859,6 +859,56 @@ CREATE TABLE public.coding_catalog_retirements (
 
 
 --
+-- Name: coding_inference_grants; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_inference_grants (
+    grant_id uuid NOT NULL,
+    ticket_id uuid NOT NULL,
+    run_row_id uuid NOT NULL,
+    task_count integer NOT NULL,
+    validator_hotkey text NOT NULL,
+    case_id text NOT NULL,
+    profile_capability_id text NOT NULL,
+    inference_grant_sha256 text NOT NULL,
+    model text NOT NULL,
+    provider_api text NOT NULL,
+    provider_route text NOT NULL,
+    receipt_provider text NOT NULL,
+    provider_route_profile text NOT NULL,
+    provider_account_guardrail text NOT NULL,
+    provider_pipeline_policy text NOT NULL,
+    provider_cache_policy text NOT NULL,
+    reasoning_effort text NOT NULL,
+    status text NOT NULL,
+    bearer_digest text,
+    broker_public_key text,
+    generation integer NOT NULL,
+    request_budget integer NOT NULL,
+    prompt_token_budget bigint NOT NULL,
+    completion_token_budget bigint NOT NULL,
+    cost_budget_usd_micros bigint NOT NULL,
+    request_count integer DEFAULT 0 NOT NULL,
+    prompt_tokens bigint DEFAULT 0 NOT NULL,
+    completion_tokens bigint DEFAULT 0 NOT NULL,
+    cost_usd_micros bigint DEFAULT 0 NOT NULL,
+    active_requests integer DEFAULT 0 NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    weight_eligible boolean NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_coding_inference_grants_coding_inference_grants_acco_0c99 CHECK ((((request_count >= 0) AND (request_count <= request_budget)) AND (prompt_tokens >= 0) AND (completion_tokens >= 0) AND (cost_usd_micros >= 0) AND ((active_requests >= 0) AND (active_requests <= 1)))),
+    CONSTRAINT ck_coding_inference_grants_coding_inference_grants_auth_2c48 CHECK (((task_count = 1) AND ((generation >= 0) AND (generation <= 2147483647)) AND ((request_budget >= 1) AND (request_budget <= 256)) AND ((prompt_token_budget >= 1) AND (prompt_token_budget <= 2000000)) AND ((completion_token_budget >= 1) AND (completion_token_budget <= 250000)) AND ((cost_budget_usd_micros >= 1) AND (cost_budget_usd_micros <= 100000000)))),
+    CONSTRAINT ck_coding_inference_grants_coding_inference_grants_crypto_check CHECK (((inference_grant_sha256 ~ '^[0-9a-f]{64}$'::text) AND ((bearer_digest IS NULL) OR (bearer_digest ~ '^[0-9a-f]{64}$'::text)) AND ((broker_public_key IS NULL) OR (broker_public_key ~ '^[A-Za-z0-9_-]{43}$'::text)))),
+    CONSTRAINT ck_coding_inference_grants_coding_inference_grants_iden_a159 CHECK ((((octet_length(case_id) >= 1) AND (octet_length(case_id) <= 256)) AND ((octet_length(profile_capability_id) >= 1) AND (octet_length(profile_capability_id) <= 256)) AND ((octet_length(provider_route) >= 1) AND (octet_length(provider_route) <= 128)) AND ((octet_length(receipt_provider) >= 1) AND (octet_length(receipt_provider) <= 128)) AND ((octet_length(provider_route_profile) >= 1) AND (octet_length(provider_route_profile) <= 128)) AND (case_id !~ '[[:space:][:cntrl:]]'::text) AND (profile_capability_id !~ '[[:space:][:cntrl:]]'::text))),
+    CONSTRAINT ck_coding_inference_grants_coding_inference_grants_lock_dcda CHECK (((model = 'openai/gpt-5.6-luna'::text) AND (provider_api = 'openrouter'::text) AND (provider_account_guardrail = 'openrouter_private_account_v1'::text) AND (provider_pipeline_policy = 'no_plugins_no_transforms_v1'::text) AND (provider_cache_policy = 'disabled_v1'::text) AND (reasoning_effort = 'medium'::text))),
+    CONSTRAINT ck_coding_inference_grants_coding_inference_grants_shadow_check CHECK (((expires_at > created_at) AND (weight_eligible = false))),
+    CONSTRAINT ck_coding_inference_grants_coding_inference_grants_state_check CHECK (((status = ANY (ARRAY['pending'::text, 'active'::text, 'revoked'::text, 'exhausted'::text])) AND (((status = 'pending'::text) AND (generation = 0) AND (bearer_digest IS NULL) AND (broker_public_key IS NULL)) OR ((status = 'active'::text) AND (generation > 0) AND (bearer_digest IS NOT NULL) AND (broker_public_key IS NOT NULL)) OR ((status = ANY (ARRAY['revoked'::text, 'exhausted'::text])) AND (bearer_digest IS NULL) AND (broker_public_key IS NULL))) AND ((status = 'revoked'::text) = (revoked_at IS NOT NULL))))
+);
+
+
+--
 -- Name: coding_selection_assignments; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3545,6 +3595,30 @@ ALTER TABLE ONLY public.coding_capability_certifications
 
 
 --
+-- Name: coding_inference_grants coding_inference_grants_grant_ticket_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_inference_grants
+    ADD CONSTRAINT coding_inference_grants_grant_ticket_key UNIQUE (grant_id, ticket_id);
+
+
+--
+-- Name: coding_inference_grants coding_inference_grants_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_inference_grants
+    ADD CONSTRAINT coding_inference_grants_pkey PRIMARY KEY (grant_id);
+
+
+--
+-- Name: coding_inference_grants coding_inference_grants_ticket_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_inference_grants
+    ADD CONSTRAINT coding_inference_grants_ticket_key UNIQUE (ticket_id);
+
+
+--
 -- Name: coding_selection_assignments coding_selection_assignments_artifact_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4957,6 +5031,13 @@ CREATE INDEX coding_certifications_agent_created_idx ON public.coding_capability
 
 
 --
+-- Name: coding_inference_grants_validator_expiry_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_inference_grants_validator_expiry_idx ON public.coding_inference_grants USING btree (validator_hotkey, expires_at) WHERE (status = ANY (ARRAY['pending'::text, 'active'::text]));
+
+
+--
 -- Name: coding_selection_assignments_agent_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5774,6 +5855,14 @@ ALTER TABLE ONLY public.coding_catalog_retirements
 
 ALTER TABLE ONLY public.coding_capability_certifications
     ADD CONSTRAINT coding_certifications_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_inference_grants coding_inference_grants_ticket_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_inference_grants
+    ADD CONSTRAINT coding_inference_grants_ticket_fkey FOREIGN KEY (ticket_id, run_row_id, task_count) REFERENCES public.coding_shadow_tickets(ticket_id, run_row_id, task_count) ON DELETE CASCADE;
 
 
 --

@@ -32,6 +32,14 @@ from ditto.api_models.coding import (
     coding_grading_lease_signing_message,
     coding_shadow_result_signing_message,
 )
+from ditto.api_models.coding_inference_grants import (
+    CodingInferenceExchangeRequest,
+    CodingInferenceGrantRequest,
+    CodingInferenceRevokeRequest,
+    coding_inference_exchange_signing_message,
+    coding_inference_grant_signing_message,
+    coding_inference_revoke_signing_message,
+)
 from ditto.api_models.validator import (
     FAILURE_DETAIL_MAX_LENGTH,
     LEGACY_FAILURE_DETAIL_MAX_LENGTH,
@@ -184,6 +192,140 @@ async def test_coding_authoring_client_posts_signed_request_and_parses_lease() -
         "memory-bundle",
         "resource-profile",
     ]
+
+
+async def test_coding_inference_client_offer_exchange_and_revoke_are_signed() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    ticket_id = UUID("33333333-3333-4333-8333-333333333333")
+    grant_id = UUID("44444444-4444-4444-8444-444444444444")
+    run_row_id = UUID("55555555-5555-4555-8555-555555555555")
+    expires_at = datetime.now(UTC).replace(microsecond=0)
+    authority = {
+        "coding_contract_version": 1,
+        "weight_eligible": False,
+        "grant_id": str(grant_id),
+        "ticket_id": str(ticket_id),
+        "run_row_id": str(run_row_id),
+        "case_id": "private-case-001",
+        "profile_capability_id": "private-profile-001",
+        "inference_grant_sha256": "11" * 32,
+        "model": "openai/gpt-5.6-luna",
+        "provider_api": "openrouter",
+        "provider_route": "azure/eu",
+        "receipt_provider": "Azure",
+        "provider_route_profile": "luna-azure-eu-zdr-v1",
+        "provider_account_guardrail": "openrouter_private_account_v1",
+        "provider_pipeline_policy": "no_plugins_no_transforms_v1",
+        "provider_cache_policy": "disabled_v1",
+        "reasoning_effort": "medium",
+        "request_budget": 100,
+        "prompt_token_budget": 200_000,
+        "completion_token_budget": 30_000,
+        "cost_budget_usd_micros": 10_000_000,
+        "expires_at": expires_at.isoformat(),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/coding-shadow/inference-grant"):
+            grant_payload = CodingInferenceGrantRequest.model_validate_json(
+                request.content
+            )
+            assert grant_payload.ticket_id == ticket_id
+            assert keypair.verify(
+                coding_inference_grant_signing_message(
+                    validator_hotkey=grant_payload.validator_hotkey,
+                    ticket_id=grant_payload.ticket_id,
+                    nonce=grant_payload.nonce,
+                    requested_at=grant_payload.requested_at,
+                ),
+                bytes.fromhex(grant_payload.signature),
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "schema": "dittobench-coding-inference-grant-offer-v1",
+                    **authority,
+                    "status": "pending",
+                    "generation": 0,
+                    "exchange_url": (
+                        "https://platform.test/api/v1/validator/"
+                        "coding-shadow/inference-exchange"
+                    ),
+                },
+            )
+        if request.url.path.endswith("/coding-shadow/inference-exchange"):
+            exchange_payload = CodingInferenceExchangeRequest.model_validate_json(
+                request.content
+            )
+            assert keypair.verify(
+                coding_inference_exchange_signing_message(
+                    validator_hotkey=exchange_payload.validator_hotkey,
+                    grant_id=exchange_payload.grant_id,
+                    broker_public_key=exchange_payload.broker_public_key,
+                    nonce=exchange_payload.nonce,
+                    requested_at=exchange_payload.requested_at,
+                ),
+                bytes.fromhex(exchange_payload.signature),
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "schema": "dittobench-coding-inference-exchange-v1",
+                    **authority,
+                    "status": "active",
+                    "generation": 1,
+                    "bearer": "b" * 43,
+                    "proxy_url": (
+                        "https://relay.invalid/api/v1/inference/coding/chat/completions"
+                    ),
+                },
+            )
+        revoke_payload = CodingInferenceRevokeRequest.model_validate_json(
+            request.content
+        )
+        assert keypair.verify(
+            coding_inference_revoke_signing_message(
+                validator_hotkey=revoke_payload.validator_hotkey,
+                grant_id=revoke_payload.grant_id,
+                generation=revoke_payload.generation,
+                nonce=revoke_payload.nonce,
+                requested_at=revoke_payload.requested_at,
+            ),
+            bytes.fromhex(revoke_payload.signature),
+        )
+        return httpx.Response(
+            200,
+            json={
+                "schema": "dittobench-coding-inference-revocation-v1",
+                "coding_contract_version": 1,
+                "weight_eligible": False,
+                "grant_id": str(grant_id),
+                "ticket_id": str(ticket_id),
+                "status": "revoked",
+                "generation": 1,
+                "revoked_at": datetime.now(UTC).isoformat(),
+                "idempotent": False,
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        offer = await platform.request_coding_inference_grant(ticket_id)
+        exchange = await platform.exchange_coding_inference_grant(
+            offer,
+            broker_public_key="A" * 43,
+        )
+        revoked = await platform.revoke_coding_inference_grant(
+            grant_id=grant_id,
+            generation=exchange.generation,
+        )
+    assert exchange.bearer == "b" * 43
+    assert exchange.generation == 1
+    assert revoked.status == "revoked"
 
 
 async def test_coding_authoring_client_redacts_invalid_bearer_response() -> None:

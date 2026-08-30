@@ -66,7 +66,8 @@ responsibilities.
 This package stores no provider credential, bearer token, live Platform URL,
 hidden grader, score, or weight. The next integration layers remain:
 
-- Platform coding-grant acquisition and trusted settlement upstream;
+- the trusted Platform/model-relay request and settlement upstream that
+  consumes the unwired coding-grant authority;
 - a validator-local capability gateway that constructs the relay and journal;
 - shadow attempt orchestration and terminal publication;
 - calibration and a separately reviewed versioned activation proposal.
