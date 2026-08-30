@@ -389,7 +389,7 @@ class SourceReviewAdjudicator:
                 error_code=error_code,
                 deadline=deadline,
             )
-        except (ValueError, httpx.HTTPError, json.JSONDecodeError) as error:
+        except (OSError, ValueError, httpx.HTTPError, json.JSONDecodeError) as error:
             logger.warning(
                 "adjudication failed model=%s cause=%s: %s",
                 self._model,
@@ -599,15 +599,17 @@ class SourceReviewAdjudicator:
                 "require_parameters": True,
             },
         }
-        response = await client.post(
-            f"{self._base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                **_OPENROUTER_ATTRIBUTION_HEADERS,
-            },
-            json=request,
-            timeout=timeout if timeout is not None else self._timeout_seconds,
-        )
+        effective_timeout = timeout if timeout is not None else self._timeout_seconds
+        async with asyncio.timeout(effective_timeout):
+            response = await client.post(
+                f"{self._base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    **_OPENROUTER_ATTRIBUTION_HEADERS,
+                },
+                json=request,
+                timeout=effective_timeout,
+            )
         if response.status_code >= 400:
             response.raise_for_status()
         payload: object = response.json()

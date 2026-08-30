@@ -3738,6 +3738,49 @@ async def test_http_failure_is_single_shot_before_deadline(
     assert requests == 1
 
 
+async def test_model_turn_has_an_aggregate_wall_clock_deadline(
+    tmp_path: Path,
+) -> None:
+    requests = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        await asyncio.sleep(1)
+        return httpx.Response(200, json={})
+
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(None, retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        transport=httpx.MockTransport(handler),
+    )
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        with pytest.raises(TimeoutError):
+            await agent._post(
+                client,
+                "test-key",
+                [],
+                artifact_sha256="d" * 64,
+                reasoning_effort="low",
+                model="openai/gpt-5.6-sol",
+                fallback_models=(),
+                provider=None,
+                deadline=asyncio.get_running_loop().time() + 0.01,
+            )
+
+    assert requests == 1
+
+
 def test_catalog_pricing_budget_accounts_for_long_context_tier() -> None:
     assert _cost(80_000, 8_000) == pytest.approx(0.64)
     assert _cost(272_000, 8_000) == pytest.approx(3.08)

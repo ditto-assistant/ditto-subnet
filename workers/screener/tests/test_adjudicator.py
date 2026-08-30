@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import os
@@ -478,6 +479,25 @@ async def test_a_missing_key_escalates_rather_than_raising(tmp_path: Path) -> No
 
     assert result.decision == "escalate"
     assert result.escalation_code == "adjudicator-unavailable"
+
+
+async def test_a_wall_clock_timeout_escalates_rather_than_raising(
+    tmp_path: Path,
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(1)
+        return httpx.Response(200, json={})
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(
+        _archive(tmp_path),
+        notes=[_CONCERN],
+        deadline=asyncio.get_running_loop().time() + 0.01,
+    )
+
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
 
 
 @pytest.mark.parametrize("mode", ("off", "shadow", "enforce"))

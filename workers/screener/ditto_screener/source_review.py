@@ -3436,15 +3436,17 @@ class OpenRouterSourceReviewAgent:
                 "require_parameters": True,
             },
         }
-        response = await client.post(
-            f"{self._base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                **_OPENROUTER_ATTRIBUTION_HEADERS,
-            },
-            json=request,
-            timeout=timeout if timeout is not None else self._timeout_seconds,
-        )
+        effective_timeout = timeout if timeout is not None else self._timeout_seconds
+        async with asyncio.timeout(effective_timeout):
+            response = await client.post(
+                f"{self._base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    **_OPENROUTER_ATTRIBUTION_HEADERS,
+                },
+                json=request,
+                timeout=effective_timeout,
+            )
         response.raise_for_status()
         return response
 
