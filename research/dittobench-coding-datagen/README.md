@@ -54,6 +54,18 @@ uv run dittobench-coding-datagen compile-practice \
 # Verify canonical bytes, hashes, scope, counts, and miner-view leakage.
 uv run dittobench-coding-datagen validate-pack practice/v1
 
+# Build a deterministic public distribution artifact. It contains only the
+# committed public practice pack, a copied manifest, a release descriptor, and
+# release notes; it never reads private-corpus/.
+uv run dittobench-coding-datagen build-public-release \
+  --pack practice/v1 \
+  --output /tmp/dittobench-coding-practice-release
+
+# Verify a downloaded archive before using it locally.
+uv run dittobench-coding-datagen verify-public-release \
+  --archive /tmp/dittobench-coding-practice-release/coding-practice-3x3-v1.tar.gz \
+  --descriptor /tmp/dittobench-coding-practice-release/coding-practice-3x3-v1.release.json
+
 # Materialize one public task for local agent development.
 uv run dittobench-coding-datagen materialize \
   --pack practice/v1 \
@@ -80,6 +92,24 @@ uv run dittobench-coding-datagen evaluate-practice \
 uv run dittobench-coding-datagen audit-curation \
   /path/to/coding-dataset --output /tmp/coding-audit.json
 ```
+
+## Public distribution
+
+The public practice pack may be mirrored to a public Hugging Face dataset only
+as the deterministic release artifact produced by `build-public-release`. The
+release descriptor binds the pack manifest and archive SHA-256; miners must
+download the complete release directory and verify it before extracting the
+archive. The manual
+`publish-coding-practice.yml` workflow requires a pre-existing public dataset
+repository named by the `HF_CODING_PRACTICE_DATASET_REPO` environment variable
+and an environment-scoped `HF_TOKEN`; it has no private-catalog credential or
+corpus input. The operator-owned dataset card remains at the repository root;
+each immutable release contains its own `RELEASE.md` under the release path.
+
+The destination path is content-addressed by the practice-pack ID and manifest
+digest. A new pack revision therefore publishes a new immutable artifact rather
+than replacing a prior miner reference. The practice pack remains static,
+public, and permanently `weight_eligible=false`.
 
 ## Public practice runner
 

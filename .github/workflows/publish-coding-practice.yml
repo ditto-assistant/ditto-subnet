@@ -1,0 +1,108 @@
+name: Publish DittoBench coding public practice pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Existing Hugging Face dataset revision to receive the immutable artifact
+        required: true
+        default: main
+        type: string
+      confirmation:
+        description: Type PUBLISH PUBLIC CODING PRACTICE PACK
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coding-practice-publish-${{ inputs.revision }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      inputs.confirmation == 'PUBLISH PUBLIC CODING PRACTICE PACK'
+    runs-on: ubuntu-24.04
+    environment: coding-practice-publish
+    defaults:
+      run:
+        working-directory: research/dittobench-coding-datagen
+    env:
+      HF_DATASET_REPOSITORY: ${{ vars.HF_CODING_PRACTICE_DATASET_REPO }}
+      HF_DATASET_REVISION: ${{ inputs.revision }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12 and locked public-pack tooling
+        run: |
+          uv python install 3.12
+          uv sync --locked --group dev --python 3.12
+
+      - name: Require an existing public Hugging Face dataset target
+        run: |
+          set -euo pipefail
+          [[ -n "$HF_TOKEN" ]]
+          [[ "$HF_DATASET_REPOSITORY" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}$ ]]
+          [[ "$HF_DATASET_REVISION" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$ ]]
+          target="https://huggingface.co/api/datasets/$HF_DATASET_REPOSITORY"
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $HF_TOKEN" \
+            --output "$RUNNER_TEMP/hf-dataset.json" \
+            "$target"
+          jq -e '.private == false' "$RUNNER_TEMP/hf-dataset.json" >/dev/null
+
+      - name: Build and verify the deterministic public artifact
+        id: artifact
+        run: |
+          set -euo pipefail
+          release_dir="$RUNNER_TEMP/dittobench-coding-practice-release"
+          uv run dittobench-coding-datagen validate-pack practice/v1
+          uv run dittobench-coding-datagen build-public-release \
+            --pack practice/v1 --output "$release_dir"
+          descriptor="$release_dir/coding-practice-3x3-v1.release.json"
+          archive="$release_dir/coding-practice-3x3-v1.tar.gz"
+          uv run dittobench-coding-datagen verify-public-release \
+            --archive "$archive" --descriptor "$descriptor"
+          echo "pack_id=$(jq -r '.practice_pack_id' "$descriptor")" >> "$GITHUB_OUTPUT"
+          echo "manifest_sha256=$(jq -r '.manifest_sha256' "$descriptor")" >> "$GITHUB_OUTPUT"
+          echo "archive_sha256=$(jq -r '.archive_sha256' "$descriptor")" >> "$GITHUB_OUTPUT"
+          echo "release_dir=$release_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse a conflicting immutable artifact
+        run: |
+          set -euo pipefail
+          descriptor_path="releases/${{ steps.artifact.outputs.pack_id }}/${{ steps.artifact.outputs.manifest_sha256 }}/${{ steps.artifact.outputs.pack_id }}.release.json"
+          url="https://huggingface.co/datasets/$HF_DATASET_REPOSITORY/resolve/$HF_DATASET_REVISION/$descriptor_path"
+          status="$(curl --location --silent --output "$RUNNER_TEMP/existing-release.json" --write-out '%{http_code}' "$url")"
+          case "$status" in
+            200)
+              [[ "$(jq -r '.archive_sha256' "$RUNNER_TEMP/existing-release.json")" == '${{ steps.artifact.outputs.archive_sha256 }}' ]]
+              cmp --silent \
+                "$RUNNER_TEMP/existing-release.json" \
+                "${{ steps.artifact.outputs.release_dir }}/${{ steps.artifact.outputs.pack_id }}.release.json"
+              ;;
+            404) ;;
+            *) echo "unexpected Hugging Face release lookup status: $status" >&2; exit 1 ;;
+          esac
+
+      - name: Upload the content-addressed public artifact
+        run: |
+          set -euo pipefail
+          destination="releases/${{ steps.artifact.outputs.pack_id }}/${{ steps.artifact.outputs.manifest_sha256 }}"
+          uvx --from huggingface_hub==0.35.3 hf upload \
+            "$HF_DATASET_REPOSITORY" \
+            "${{ steps.artifact.outputs.release_dir }}" \
+            "$destination" \
+            --repo-type dataset \
+            --revision "$HF_DATASET_REVISION" \
+            --commit-message "Publish ${{ steps.artifact.outputs.pack_id }} ${{ steps.artifact.outputs.manifest_sha256 }}"
