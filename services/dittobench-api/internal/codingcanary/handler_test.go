@@ -1,0 +1,128 @@
+package codingcanary
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ditto-assistant/dittobench-api/internal/codingcertifier"
+)
+
+const testToken = "coding-canary-control-token-00000001"
+
+type stubBackend struct {
+	outcome Outcome
+	err     error
+}
+
+func (stub stubBackend) Certify(context.Context, Request) (Outcome, error) {
+	return stub.outcome, stub.err
+}
+
+func TestHandlerRejectsUnauthorizedAndInvalidRequests(t *testing.T) {
+	t.Parallel()
+	service, err := New(Config{
+		ControlToken: testToken,
+		Backend: stubBackend{outcome: Outcome{
+			LeaseID:             "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+			CapabilitiesRevoked: true, HarnessDestroyed: true,
+		}},
+		Now: func() time.Time { return time.Date(2026, 8, 30, 18, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(service.Handler())
+	t.Cleanup(server.Close)
+
+	unauthorized, err := http.Post(server.URL+"/v1/coding/certifier/canary", "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthorized.Body.Close()
+	if unauthorized.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d", unauthorized.StatusCode)
+	}
+
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/coding/certifier/canary", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+testToken)
+	request.Header.Set("Content-Type", "application/json")
+	invalid, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid.Body.Close()
+	if invalid.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d", invalid.StatusCode)
+	}
+}
+
+func TestHandlerRequiresRevokedDestroyedCanaryResult(t *testing.T) {
+	t.Parallel()
+	leaseID := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	service, err := New(Config{
+		ControlToken: testToken,
+		Backend: stubBackend{outcome: Outcome{
+			LeaseID: leaseID, CapabilitiesRevoked: true, HarnessDestroyed: true,
+			Receipt: codingcertifier.Receipt{Schema: codingcertifier.CertificationSchema, WeightEligible: false},
+		}},
+		Now: func() time.Time { return time.Date(2026, 8, 30, 18, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(service.Handler())
+	t.Cleanup(server.Close)
+
+	payload := map[string]any{
+		"schema": RequestSchema, "operation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"lease_id": leaseID, "deadline": "2026-08-30T18:20:00Z",
+		"agent_id":                 "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+		"agent_artifact_sha256":    strings.Repeat("a", 64),
+		"screened_image_sha256":    strings.Repeat("b", 64),
+		"screened_image_id":        "sha256:" + strings.Repeat("c", 64),
+		"screened_image_ref":       "ditto-screen/coding-cert-lease:latest",
+		"screened_image_upload_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+		"canary_manifest_sha256":   strings.Repeat("d", 64),
+		"runner_plan_sha256":       strings.Repeat("e", 64),
+		"grader_plan_sha256":       strings.Repeat("f", 64),
+		"resource_profile_sha256":  strings.Repeat("1", 64),
+		"inference_policy_sha256":  strings.Repeat("2", 64),
+		"coding_contract_version":  1, "weight_eligible": false,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/coding/certifier/canary", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+testToken)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(response.Body)
+		t.Fatalf("status=%d body=%s", response.StatusCode, raw)
+	}
+	var decoded Response
+	if err := json.NewDecoder(response.Body).Decode(&decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Schema != ResponseSchema || !decoded.CapabilitiesRevoked || !decoded.HarnessDestroyed || decoded.LeaseID != leaseID {
+		t.Fatalf("decoded=%+v", decoded)
+	}
+}

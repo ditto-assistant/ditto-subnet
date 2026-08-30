@@ -194,7 +194,9 @@ def test_shadow_coding_worker_is_present_but_default_off_on_both_sides() -> None
     validator = services["ditto-subnet"]["environment"]
 
     assert _compose_default(scorer["DITTOBENCH_CODING_SHADOW_ENABLED"]) == "false"
+    assert _compose_default(scorer["DITTOBENCH_CODING_CANARY_ENABLED"]) == "false"
     assert _compose_default(validator["VALIDATOR_CODING_SHADOW_ENABLED"]) == "false"
+    assert _compose_default(validator["VALIDATOR_CODING_CANARY_ENABLED"]) == "false"
     assert scorer["DITTOBENCH_CODING_PRIVATE_ROOT"].startswith(
         "/var/lib/dittobench-private-artifacts/"
     )
@@ -206,6 +208,10 @@ def test_shadow_coding_worker_is_present_but_default_off_on_both_sides() -> None
     )
     assert (
         "DITTOBENCH_CODING_SHADOW_ENABLED"
+        not in services["sandbox-docker"]["environment"]
+    )
+    assert (
+        "DITTOBENCH_CODING_CANARY_ENABLED"
         not in services["sandbox-docker"]["environment"]
     )
 

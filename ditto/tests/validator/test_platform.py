@@ -1220,6 +1220,27 @@ async def test_coding_certification_client_posts_exact_signed_envelope() -> None
     assert response.accepted is True
 
 
+async def test_coding_certification_lease_issue_treats_404_as_ineligible() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/coding-certification-leases")
+        return httpx.Response(404, headers={"Cache-Control": "no-store"})
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        result = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).issue_coding_certification_lease(agent_id, bench_version=12)
+    assert result is None
+
+
 def _coding_certification_submit_args() -> tuple[
     UUID, int, datetime, str, CodingCapabilityCertificationReceipt, str
 ]:

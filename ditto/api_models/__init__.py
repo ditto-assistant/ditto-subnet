@@ -29,6 +29,14 @@ from ditto.api_models.coding import (
     SubmitCodingCertificationRequest,
     SubmitCodingCertificationResponse,
 )
+from ditto.api_models.coding_certification_leases import (
+    CodingCertificationLeaseAbortRequest,
+    CodingCertificationLeaseAuthority,
+    CodingCertificationLeaseClaimRequest,
+    CodingCertificationLeaseIssueRequest,
+    CodingCertificationLeaseResponse,
+    CodingCertificationLeaseStatus,
+)
 from ditto.api_models.health import HealthResponse
 from ditto.api_models.miner_avatar import (
     MinerAvatarClearRequest,
@@ -69,6 +77,12 @@ __all__ = [
     "AgentResponse",
     "AgentStatusResponse",
     "CodingCapabilityCertificationReceipt",
+    "CodingCertificationLeaseAbortRequest",
+    "CodingCertificationLeaseAuthority",
+    "CodingCertificationLeaseClaimRequest",
+    "CodingCertificationLeaseIssueRequest",
+    "CodingCertificationLeaseResponse",
+    "CodingCertificationLeaseStatus",
     "CodingCertificationStage",
     "CodingCertificationStatus",
     "EvalPricingResponse",

@@ -36,6 +36,13 @@ from ditto.api_models.coding import (
     coding_authoring_evidence_digest,
     run_evidence_digest,
 )
+from ditto.api_models.coding_certification_leases import (
+    CodingCertificationLeaseAbortRequest,
+    CodingCertificationLeaseClaimRequest,
+    CodingCertificationLeaseIssueRequest,
+    CodingCertificationLeaseResponse,
+    CodingCertificationLeaseStatus,
+)
 from ditto.api_models.coding_claims import (
     CodingClaimActionRequest,
     CodingClaimNextRequest,
@@ -96,6 +103,9 @@ from ditto.validator.signing import (
     sign_artifact_request,
     sign_coding_authoring_freeze,
     sign_coding_authoring_lease,
+    sign_coding_certification_lease_abort,
+    sign_coding_certification_lease_claim,
+    sign_coding_certification_lease_issue,
     sign_coding_claim_action,
     sign_coding_claim_next,
     sign_coding_grading_lease,
@@ -146,6 +156,7 @@ _CODING_SHADOW_RESULT_MAX_BYTES = 64 << 10
 _CODING_INFERENCE_GRANT_MAX_BYTES = 64 << 10
 _CODING_HARNESS_LAUNCH_MAX_BYTES = 64 << 10
 _CODING_CLAIM_MAX_BYTES = 64 << 10
+_CODING_CERTIFICATION_LEASE_MAX_BYTES = 64 << 10
 
 
 def _coding_grant_authority(value: object) -> tuple[object, ...]:
@@ -1938,6 +1949,189 @@ class PlatformClient:
         if resp.status_code in {408, 429} or resp.status_code >= 500:
             raise PlatformInfrastructureError(message)
         raise PlatformError(message)
+
+    async def issue_coding_certification_lease(
+        self,
+        agent_id: UUID,
+        *,
+        bench_version: int,
+        coding_contract_version: int = 1,
+    ) -> CodingCertificationLeaseResponse | None:
+        """Mint one public-canary lease, or return None when the agent is ineligible."""
+
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingCertificationLeaseIssueRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            agent_id=agent_id,
+            bench_version=bench_version,
+            coding_contract_version=coding_contract_version,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_certification_lease_issue(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                agent_id=agent_id,
+                bench_version=bench_version,
+                coding_contract_version=coding_contract_version,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        return await self._send_coding_certification_lease(
+            path="/coding-certification-leases",
+            payload=payload,
+            allow_empty=True,
+            expected_agent_id=agent_id,
+        )
+
+    async def claim_coding_certification_lease(
+        self,
+        lease_id: UUID,
+    ) -> CodingCertificationLeaseResponse:
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingCertificationLeaseClaimRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            lease_id=lease_id,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_certification_lease_claim(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                lease_id=lease_id,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        result = await self._send_coding_certification_lease(
+            path=f"/coding-certification-leases/{lease_id}/claim",
+            payload=payload,
+            allow_empty=False,
+            expected_lease_id=lease_id,
+        )
+        if result is None:  # pragma: no cover - allow_empty is false
+            raise PlatformInfrastructureError(
+                "coding certification lease response is unavailable"
+            )
+        return result
+
+    async def abort_coding_certification_lease(
+        self,
+        lease_id: UUID,
+    ) -> CodingCertificationLeaseResponse:
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingCertificationLeaseAbortRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            lease_id=lease_id,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_certification_lease_abort(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                lease_id=lease_id,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        result = await self._send_coding_certification_lease(
+            path=f"/coding-certification-leases/{lease_id}/abort",
+            payload=payload,
+            allow_empty=False,
+            expected_lease_id=lease_id,
+        )
+        if result is None:  # pragma: no cover - allow_empty is false
+            raise PlatformInfrastructureError(
+                "coding certification lease response is unavailable"
+            )
+        return result
+
+    async def _send_coding_certification_lease(
+        self,
+        *,
+        path: str,
+        payload: (
+            CodingCertificationLeaseIssueRequest
+            | CodingCertificationLeaseClaimRequest
+            | CodingCertificationLeaseAbortRequest
+        ),
+        allow_empty: bool,
+        expected_agent_id: UUID | None = None,
+        expected_lease_id: UUID | None = None,
+    ) -> CodingCertificationLeaseResponse | None:
+        body = bytearray()
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base}{_PREFIX}{path}",
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            ) as response:
+                if "no-store" not in {
+                    directive.strip().lower()
+                    for directive in response.headers.get("Cache-Control", "").split(
+                        ","
+                    )
+                }:
+                    raise PlatformInfrastructureError(
+                        "coding certification lease cache policy is invalid"
+                    )
+                if allow_empty and response.status_code == 404:
+                    return None
+                if response.status_code == 503:
+                    raise PlatformInfrastructureError(
+                        "public certification canary is unavailable"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        "coding certification lease request rejected "
+                        f"({response.status_code})"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=16 << 10):
+                    if len(body) + len(chunk) > _CODING_CERTIFICATION_LEASE_MAX_BYTES:
+                        raise PlatformInfrastructureError(
+                            "coding certification lease response size is invalid"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding certification lease request failed"
+            ) from error
+        if not body:
+            raise PlatformInfrastructureError(
+                "coding certification lease response size is invalid"
+            )
+        try:
+            lease = CodingCertificationLeaseResponse.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding certification lease response is invalid"
+            ) from None
+        if (
+            lease.weight_eligible
+            or lease.authority.weight_eligible
+            or lease.authority.validator_hotkey != self._config.validator_hotkey
+            or (
+                expected_agent_id is not None
+                and lease.authority.agent_id != expected_agent_id
+            )
+            or (
+                expected_lease_id is not None
+                and lease.authority.lease_id != expected_lease_id
+            )
+            or lease.status
+            not in {
+                CodingCertificationLeaseStatus.ISSUED,
+                CodingCertificationLeaseStatus.CLAIMED,
+                CodingCertificationLeaseStatus.ABORTED,
+            }
+        ):
+            raise PlatformInfrastructureError(
+                "coding certification lease response identity is invalid"
+            )
+        return lease
 
     async def submit_coding_certification(
         self,

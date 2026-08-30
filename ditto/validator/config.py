@@ -388,6 +388,12 @@ class ValidatorConfig:
     coding_shadow_poll_seconds: float = 10.0
     """Idle polling interval for the separate shadow coding queue."""
 
+    coding_canary_enabled: bool = False
+    """Run the public certification canary after a score commit. Disabled by default."""
+
+    coding_canary_poll_seconds: float = 10.0
+    """Idle polling interval for the public certification canary worker."""
+
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured (wallet files)."""
         return bool(self.wallet_name and self.wallet_hotkey)
@@ -535,6 +541,14 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         if coding_shadow_enabled
         else 10.0
     )
+    coding_canary_enabled = (
+        os.environ.get("VALIDATOR_CODING_CANARY_ENABLED", "false").lower() in _truthy
+    )
+    coding_canary_poll_seconds = (
+        _parse_float("VALIDATOR_CODING_CANARY_POLL_SECONDS", "10")
+        if coding_canary_enabled
+        else 10.0
+    )
     config = ValidatorConfig(
         platform_api_url=platform_api_url,
         platform_inference_base_url=(
@@ -596,6 +610,8 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         coding_shadow_enabled=coding_shadow_enabled,
         coding_shadow_instance_id=coding_shadow_instance_id,
         coding_shadow_poll_seconds=coding_shadow_poll_seconds,
+        coding_canary_enabled=coding_canary_enabled,
+        coding_canary_poll_seconds=coding_canary_poll_seconds,
     )
     if not config.signing_source_present():
         raise ValidatorConfigError(
@@ -632,5 +648,17 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     ):
         raise ValidatorConfigError(
             "VALIDATOR_CODING_SHADOW_POLL_SECONDS must be in [1, 300]"
+        )
+    if config.coding_canary_enabled and (
+        not 32 <= len(config.dittobench_control_token.encode()) <= 256
+        or not all(
+            character.isascii() and (character.isalnum() or character in "_-")
+            for character in config.dittobench_control_token
+        )
+        or not math.isfinite(config.coding_canary_poll_seconds)
+        or not 1 <= config.coding_canary_poll_seconds <= 300
+    ):
+        raise ValidatorConfigError(
+            "enabled coding canary requires a control token and poll in [1, 300]"
         )
     return config

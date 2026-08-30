@@ -83,6 +83,9 @@ def _result(
         aborted_at=authority.issued_at
         if status is CodingCertificationLeaseStatus.ABORTED
         else None,
+        screened_image_id="sha256:" + "ef" * 32,
+        screened_image_ref="ditto-screen/coding-cert-lease:latest",
+        screened_image_upload_id=UUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd"),
         weight_eligible=False,
     )
     return CodingCertificationLeaseResult(
@@ -206,6 +209,10 @@ async def test_issue_claim_and_abort_are_signed_and_shadow_only(
     assert issued.json()["status"] == "issued"
     assert issued.json()["authority"]["schema"] == (
         "dittobench-coding-certification-lease-v1"
+    )
+    assert issued.json()["screened_image_id"] == "sha256:" + "ef" * 32
+    assert issued.json()["screened_image_ref"] == (
+        "ditto-screen/coding-cert-lease:latest"
     )
 
     claimed = await client.post(

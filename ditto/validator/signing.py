@@ -39,6 +39,11 @@ from ditto.api_models.coding import (
     coding_grading_lease_signing_message,
     coding_shadow_result_signing_message,
 )
+from ditto.api_models.coding_certification_leases import (
+    coding_certification_lease_abort_signing_message,
+    coding_certification_lease_claim_signing_message,
+    coding_certification_lease_issue_signing_message,
+)
 from ditto.api_models.coding_claims import (
     coding_claim_action_signing_message,
     coding_claim_next_signing_message,
@@ -275,6 +280,67 @@ def sign_coding_harness_launch(
         coding_harness_launch_signing_message(
             validator_hotkey=validator_hotkey,
             ticket_id=ticket_id,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
+def sign_coding_certification_lease_issue(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    bench_version: int,
+    coding_contract_version: int,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    signature: bytes = keypair.sign(
+        coding_certification_lease_issue_signing_message(
+            validator_hotkey=validator_hotkey,
+            agent_id=agent_id,
+            bench_version=bench_version,
+            coding_contract_version=coding_contract_version,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
+def sign_coding_certification_lease_claim(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    lease_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    signature: bytes = keypair.sign(
+        coding_certification_lease_claim_signing_message(
+            validator_hotkey=validator_hotkey,
+            lease_id=lease_id,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
+def sign_coding_certification_lease_abort(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    lease_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    signature: bytes = keypair.sign(
+        coding_certification_lease_abort_signing_message(
+            validator_hotkey=validator_hotkey,
+            lease_id=lease_id,
             nonce=nonce,
             requested_at=requested_at,
         )

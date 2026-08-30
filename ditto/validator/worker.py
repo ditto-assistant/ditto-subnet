@@ -502,6 +502,7 @@ class ValidatorWorker:
         system_metrics: SystemMetricsCollector | None = None,
         stack_health: StackHealthCollector | None = None,
         heartbeat_clock: _HeartbeatClock | None = None,
+        after_score: Callable[[UUID, int], None] | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -525,6 +526,7 @@ class ValidatorWorker:
         self._pending_heartbeat_progress: dict[str, BenchmarkProgress] = {}
         self._coalesced_heartbeat_task: asyncio.Task[bool] | None = None
         self._background_heartbeat_tasks: set[asyncio.Task[bool]] = set()
+        self._after_score = after_score
         self._platform_accepted = False
         self._bootstrap_resume_ready = False
         # Cooperative updater drains are acknowledged only after both the
@@ -3428,6 +3430,15 @@ class ValidatorWorker:
             report.seed,
         )
         await self._publish_transcript(agent_id, report, transcript_sha256)
+        if self._after_score is not None and report.bench_version is not None:
+            try:
+                self._after_score(agent_id, report.bench_version)
+            except Exception:
+                logger.warning(
+                    "coding canary offer failed agent=%s",
+                    agent_id,
+                    exc_info=True,
+                )
         return report
 
     async def _publish_transcript(

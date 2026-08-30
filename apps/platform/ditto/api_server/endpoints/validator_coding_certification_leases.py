@@ -220,6 +220,9 @@ def _response(
         status=CodingCertificationLeaseStatus(result.row.status),
         claimed_at=result.row.claimed_at,
         aborted_at=result.row.aborted_at,
+        screened_image_id=result.row.screened_image_id,
+        screened_image_ref=result.row.screened_image_ref,
+        screened_image_upload_id=result.row.screened_image_upload_id,
         weight_eligible=False,
     )
 

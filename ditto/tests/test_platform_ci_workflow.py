@@ -82,6 +82,7 @@ def test_backend_workflow_owns_every_platform_coding_contract_vector() -> None:
     assert {
         "ditto/api_models/coding_harness.py",
         "ditto/api_models/coding_claims.py",
+        "ditto/api_models/coding_certification_leases.py",
         "ditto/api_models/coding_inference.py",
         "ditto/api_models/coding_inference_grants.py",
     } <= backend_paths
