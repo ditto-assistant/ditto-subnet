@@ -96,6 +96,8 @@ describe('screening list summaries', () => {
   it('keeps only the newest attempt in the default submission summary', () => {
     const payload = screeningSubmissionListSchema.parse({
       count: 1,
+      generation: 'active',
+      active_bench_version: 12,
       items: [
         {
           agent_id: agentId(1),

@@ -634,7 +634,14 @@ describe('screening submission admin service', () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(Response.json({ items: [], count: 294 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          items: [],
+          count: 294,
+          generation: 'active',
+          active_bench_version: 12,
+        }),
+      )
       .mockResolvedValueOnce(Response.json({ items: [], count: 73 }))
       .mockResolvedValueOnce(
         Response.json({
@@ -652,7 +659,7 @@ describe('screening submission admin service', () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      'https://platform-api.heyditto.ai/api/v1/admin/screening-submissions?limit=50&offset=100',
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-submissions?generation=active&limit=50&offset=100',
       expect.objectContaining({ method: 'GET' }),
     )
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -663,6 +670,26 @@ describe('screening submission admin service', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
       'https://platform-api.heyditto.ai/api/v1/admin/screening-failures?example_limit=2',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('forwards the explicit all-generation audit opt-in', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        items: [],
+        count: 294,
+        generation: 'all',
+        active_bench_version: 12,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchScreeningSubmissions(25, 0, 'all')
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-submissions?generation=all&limit=25&offset=0',
       expect.objectContaining({ method: 'GET' }),
     )
   })

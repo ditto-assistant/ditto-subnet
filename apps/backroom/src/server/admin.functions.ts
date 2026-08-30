@@ -584,6 +584,7 @@ export const listScreeningSubmissions = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
   .validator(
     z.object({
+      generation: z.enum(['active', 'all']).default('active'),
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
     }),
@@ -591,7 +592,7 @@ export const listScreeningSubmissions = createServerFn({ method: 'GET' })
   .handler(({ data }) => {
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
-    return fetchScreeningSubmissions(data.limit, data.offset)
+    return fetchScreeningSubmissions(data.limit, data.offset, data.generation)
   })
 
 export const getScreeningArtifact = createServerFn({ method: 'GET' })

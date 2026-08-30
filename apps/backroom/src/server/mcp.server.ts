@@ -1044,18 +1044,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List screening submissions',
       description:
-        'Page SN118 submissions newest first by submitted_at then agent_id. detail=summary (default) returns attempt_count and the latest attempt; detail=full returns complete attempt history. get_screening_submission is the exact one-row detail path. Screening belongs to the artifact and is not benchmark-version scoped.',
+        'Page current-benchmark SN118 submissions newest first by submitted_at then agent_id. generation=active (default) uses the Platform benchmark-admission boundary, including current-era arrivals and explicitly adopted carryovers while excluding historical submissions; generation=all is the explicit cross-benchmark audit view. detail=summary (default) returns attempt_count and the latest attempt; detail=full returns complete attempt history. get_screening_submission is the exact one-row detail path.',
       inputSchema: {
+        generation: z.enum(['active', 'all']).default('active'),
         detail: z.enum(['summary', 'full']).default('summary'),
         ...MCP_PAGINATION_INPUT,
       },
       annotations: toolAnnotations('read'),
     },
-    async ({ detail, limit, offset }) =>
+    async ({ generation, detail, limit, offset }) =>
       result(
         compactScreeningSubmissions(
           withPagination(
-            await fetchScreeningSubmissions(limit, offset),
+            await fetchScreeningSubmissions(limit, offset, generation),
             limit,
             offset,
           ),

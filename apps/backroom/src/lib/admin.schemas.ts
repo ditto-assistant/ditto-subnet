@@ -3995,6 +3995,8 @@ export const screeningSubmissionSchema = z.object({
 export const screeningSubmissionListSchema = z.object({
   items: z.array(screeningSubmissionSchema),
   count: z.number().int().nonnegative(),
+  generation: z.enum(['active', 'all']),
+  active_bench_version: z.number().int().positive(),
 })
 
 export const summarizeScreeningFailuresInputSchema = z.object({
