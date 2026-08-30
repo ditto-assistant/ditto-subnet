@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.174.0 (2026-08-30)
+
+### Features
+
+- **dittobench**: Run public canary through codingcertifier
+  ([`7378c22`](https://github.com/ditto-assistant/ditto-subnet/commit/7378c221db470709a6005c006c1f087e7eb2a100))
+
+
 ## v0.173.1 (2026-08-30)
 
 ### Bug Fixes
