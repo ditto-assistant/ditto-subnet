@@ -10,7 +10,7 @@ validator_group: "{{ deploy_group | default('ditto') }}"
 
 validator_root: /opt/ditto/validator # ditto-subnet checkout
 validator_repo: "ditto-assistant/ditto-subnet"
-# Immutable merged-main v0.25.2 pin. Includes #223's bounded admission retry
+# Immutable merged-main v0.25.2 pin. Includes bounded admission retry
 # after sandbox OOM/resource rejection in addition to the v7 ticket, seed,
 # compatibility, and KOTH contracts in the prior pin.
 validator_branch: b9bbe73e31bec7a3a8fa48d308a10db8adc28bf8

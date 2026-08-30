@@ -27,13 +27,13 @@ dittobench_repo: "ditto-assistant/dittobench-api"
 # this pin changes only that dev VM, on the next converge; it does NOT ship
 # anything to the fleet and is not a release gate for a benchmark rollout.
 #
-# Immutable merged-main pin. Contains dittobench-api#98 (v7 strict per-case
+# Immutable merged-main pin with v7 strict per-case
 # scoring and deepened composite gates, version-gated on bench_version >= 7, so
 # v2-v6 replays are unaffected) and its quality-only v7 token contract — v7
 # admission requires no reviewed token baseline, and v7 is never token-scored
 # (scoring_enabled=false in the embedded v7 manifest); activation is the
 # platform's backroom bench rollout, not a validator-side env flag. Also
-# contains #97 (fail closed on platform inference faults) and pins
+# It fails closed on platform inference faults and pins
 # dittobench-datagen v0.12.0 in go.mod — the same generator release the
 # datapipeline Cloud Run image is pinned to in
 # infra/terraform/stacks/gcp-platform/datapipeline.tf. Keep those two in step.

@@ -39,9 +39,7 @@ locals {
     # scaling is implemented.
     "screener-burst" = "e2-standard-8" # 8 vCPU / 32 GB
 
-    # Same burst class on the N2D (AMD EPYC) family: what ditto-screener-prod
-    # was actually recreated as on 2026-07-14 (ditto-screener#12 moved it to
-    # us-central1-c at the same time). Faster cargo builds than e2 at a small
+    # Same burst class on the N2D (AMD EPYC) family. It provides faster cargo builds than e2 at a small
     # price premium; kept as its own logical size so e2 consumers don't move.
     "screener-burst-n2d" = "n2d-standard-8" # 8 vCPU / 32 GB
   }
