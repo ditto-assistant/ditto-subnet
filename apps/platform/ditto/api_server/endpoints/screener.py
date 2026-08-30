@@ -300,6 +300,19 @@ def _remote_provider(providers: tuple[str, ...]) -> Literal["targon", "hetzner"]
     return None
 
 
+def _platform_finalizes_remote_lane(provider: str | None) -> bool:
+    """Whether the Platform callback, rather than its requesting worker, is terminal.
+
+    A Targon controller owns the complete legacy decomposed lane and is allowed
+    to finalize once its runtime or review callback completes. A persistent
+    Hetzner node only performs the local BuildKit/runtime/review job requested
+    by the signed screener worker. The worker remains the sole terminal writer
+    for that attempt; finalizing in both paths races the signed verdict and
+    fences the latter with a misleading 409.
+    """
+    return provider == "targon"
+
+
 def _platform_owns_miner_rentals(request: Request) -> bool:
     """True when this process runs TargonRentalLoop for miner Kaniko/smoke/L1."""
     return getattr(request.app.state, "targon_rental_loop", None) is not None
@@ -1872,7 +1885,9 @@ async def complete_submission_runtime_smoke(
                         constraint="submission_source_reviews_attempt_key"
                     )
                 )
-        finalize_attempt_id = row.attempt_id
+        finalize_attempt_id = (
+            row.attempt_id if _platform_finalizes_remote_lane(row.provider) else None
+        )
     if (
         output_key is not None
         and payload.status != "succeeded"
@@ -1880,7 +1895,7 @@ async def complete_submission_runtime_smoke(
     ):
         await storage.delete_object(key=output_key)
     attester = request.app.state.config.screener_auth.hotkey
-    if attester is not None:
+    if attester is not None and finalize_attempt_id is not None:
         await finalize_targon_screen_and_pin_dataset(
             session,
             storage=storage,
@@ -3312,7 +3327,11 @@ async def complete_submission_source_review(
                 stored_review.provider_resource_id = None
                 stored_review.updated_at = datetime.now(UTC)
     attester = request.app.state.config.screener_auth.hotkey
-    if attester is not None and not parked:
+    if (
+        attester is not None
+        and not parked
+        and _platform_finalizes_remote_lane(provider)
+    ):
         await finalize_targon_screen_and_pin_dataset(
             session,
             storage=storage,
