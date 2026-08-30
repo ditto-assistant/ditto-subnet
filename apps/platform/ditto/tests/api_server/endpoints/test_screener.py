@@ -2543,15 +2543,69 @@ class TestHeartbeat:
             )
             assert attempt is not None
             assert attempt.deadline == renewed_deadline
-        replay = await client.post(
+        unchanged = await client.post(
             "/api/v1/screener/heartbeat",
             json=_heartbeat_payload(
-                timestamp=timestamp,
+                timestamp=timestamp + 1,
                 state="screening",
                 active_agent_id=agent_id,
                 protocol_version=2,
                 progress={
                     "stage": "health_check",
+                    "started_at": int(started.timestamp()),
+                },
+            ),
+        )
+        assert unchanged.status_code == 200
+        assert unchanged.json()["accepted"] is True
+        assert unchanged.json()["lease_deadline"] is None
+        async with session_maker() as session:
+            attempt = await session.scalar(
+                select(ScreeningAttempt).where(ScreeningAttempt.agent_id == agent_id)
+            )
+            assert attempt is not None
+            assert attempt.deadline == renewed_deadline
+        advanced = await client.post(
+            "/api/v1/screener/heartbeat",
+            json=_heartbeat_payload(
+                timestamp=timestamp + 2,
+                state="screening",
+                active_agent_id=agent_id,
+                protocol_version=2,
+                progress={
+                    "stage": "source_review_30",
+                    "started_at": int(started.timestamp()),
+                },
+            ),
+        )
+        assert advanced.status_code == 200
+        assert advanced.json()["accepted"] is True
+        assert advanced.json()["lease_deadline"] is not None
+        regressed = await client.post(
+            "/api/v1/screener/heartbeat",
+            json=_heartbeat_payload(
+                timestamp=timestamp + 3,
+                state="screening",
+                active_agent_id=agent_id,
+                protocol_version=2,
+                progress={
+                    "stage": "source_review_20",
+                    "started_at": int(started.timestamp()),
+                },
+            ),
+        )
+        assert regressed.status_code == 200
+        assert regressed.json()["accepted"] is True
+        assert regressed.json()["lease_deadline"] is None
+        replay = await client.post(
+            "/api/v1/screener/heartbeat",
+            json=_heartbeat_payload(
+                timestamp=timestamp + 3,
+                state="screening",
+                active_agent_id=agent_id,
+                protocol_version=2,
+                progress={
+                    "stage": "source_review_20",
                     "started_at": int(started.timestamp()),
                 },
             ),

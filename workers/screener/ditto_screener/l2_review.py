@@ -3551,16 +3551,20 @@ class KimiSolSourceReviewAgent:
         if reasoning_effort != "model_default":
             request["reasoning"] = {"effort": reasoning_effort}
         timeout = self._turn_timeout(deadline)
-        response = await client.post(
-            f"{self._base_url}/responses",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "X-OpenRouter-Metadata": "enabled",
-                **_OPENROUTER_ATTRIBUTION_HEADERS,
-            },
-            json=request,
-            timeout=timeout,
-        )
+        # HTTPX's read timeout is an inactivity timeout, not a wall-clock cap.
+        # A provider can keep a broken response alive with occasional bytes,
+        # so enforce the signed lease budget around the entire model turn too.
+        async with asyncio.timeout(timeout):
+            response = await client.post(
+                f"{self._base_url}/responses",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "X-OpenRouter-Metadata": "enabled",
+                    **_OPENROUTER_ATTRIBUTION_HEADERS,
+                },
+                json=request,
+                timeout=timeout,
+            )
         response.raise_for_status()
         payload: object | None = None
         with contextlib.suppress(ValueError, TypeError):

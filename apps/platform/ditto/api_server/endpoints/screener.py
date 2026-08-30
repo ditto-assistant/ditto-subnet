@@ -257,6 +257,31 @@ _SCREENED_IMAGE_PART_SIZE = 64 * 1024**2
 # into a short lease extended by accepted signed progress heartbeats.
 _LEGACY_SCREENING_LEASE_TTL = timedelta(minutes=70)
 _RENEWABLE_SCREENING_LEASE_TTL = timedelta(minutes=10)
+_SCREENER_PROGRESS_RANK = {
+    stage: rank
+    for rank, stage in enumerate(
+        (
+            "preparing",
+            "downloading",
+            "validating",
+            "building",
+            "starting",
+            "health_check",
+            "source_review_0",
+            "source_review_10",
+            "source_review_20",
+            "source_review_30",
+            "source_review_40",
+            "source_review_50",
+            "source_review_60",
+            "source_review_70",
+            "source_review_80",
+            "source_review_90",
+            "source_review_100",
+            "submitting",
+        )
+    )
+}
 _HEARTBEAT_MAX_SKEW_SECONDS = 300
 _HEARTBEAT_MAX_BYTES = 4096
 _INSTANCE_ID_PATTERN = r"^[a-zA-Z0-9._-]{1,63}$"
@@ -3571,6 +3596,68 @@ async def heartbeat(
     instance_id = request_body.instance_id or _LEGACY_INSTANCE_ID
     renewed_lease_deadline: datetime | None = None
     async with session.begin():
+        previous_heartbeat = await session.get(
+            ScreenerHeartbeat,
+            (screener_hotkey, instance_id),
+            with_for_update=True,
+        )
+        previous_active_agent_id = (
+            previous_heartbeat.active_agent_id
+            if previous_heartbeat is not None
+            else None
+        )
+        previous_progress = None
+        if previous_heartbeat is not None and isinstance(
+            previous_heartbeat.system_metrics, dict
+        ):
+            previous_progress = previous_heartbeat.system_metrics.get(
+                "screening_progress"
+            )
+        current_progress = (
+            request_body.progress.model_dump(mode="json")
+            if request_body.progress is not None
+            else None
+        )
+        previous_started_at = (
+            previous_progress.get("started_at")
+            if isinstance(previous_progress, dict)
+            else None
+        )
+        current_started_at = (
+            current_progress.get("started_at")
+            if isinstance(current_progress, dict)
+            else None
+        )
+        previous_stage = (
+            previous_progress.get("stage")
+            if isinstance(previous_progress, dict)
+            else None
+        )
+        current_stage = (
+            current_progress.get("stage")
+            if isinstance(current_progress, dict)
+            else None
+        )
+        previous_stage_rank = (
+            _SCREENER_PROGRESS_RANK.get(previous_stage)
+            if isinstance(previous_stage, str)
+            else None
+        )
+        current_stage_rank = (
+            _SCREENER_PROGRESS_RANK.get(current_stage)
+            if isinstance(current_stage, str)
+            else None
+        )
+        progress_advanced = (
+            previous_heartbeat is None
+            or previous_active_agent_id != request_body.active_agent_id
+            or previous_started_at != current_started_at
+            or (
+                previous_stage_rank is not None
+                and current_stage_rank is not None
+                and current_stage_rank > previous_stage_rank
+            )
+        )
         row, accepted = await upsert_screener_heartbeat(
             session,
             screener_hotkey=screener_hotkey,
@@ -3580,11 +3667,7 @@ async def heartbeat(
             policy_version=request_body.policy_version,
             state=request_body.state,
             active_agent_id=request_body.active_agent_id,
-            screening_progress=(
-                request_body.progress.model_dump(mode="json")
-                if request_body.progress is not None
-                else None
-            ),
+            screening_progress=current_progress,
             system_metrics=(
                 request_body.system_metrics.model_dump(mode="json")
                 if request_body.system_metrics is not None
@@ -3617,6 +3700,7 @@ async def heartbeat(
         )
         if (
             accepted
+            and progress_advanced
             and request_body.state == "screening"
             and request_body.active_agent_id is not None
             and request_body.progress is not None
