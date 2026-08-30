@@ -165,10 +165,8 @@ async fn load_haystack(
     })
 }
 
-// ---------------------------------------------------------------------------
 // `/seed` endpoint wire contract — a fresh memory haystack pushed by the
 // validator before it asks memory questions.
-// ---------------------------------------------------------------------------
 
 /// Request body for the harness `POST /seed` route (snake_case). The validator
 /// sends a fresh haystack: conversation pairs, the subjects, and the

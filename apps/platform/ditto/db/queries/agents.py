@@ -121,8 +121,8 @@ async def insert_agent(
 ) -> int:
     """Insert one ``agents`` row inside the caller-owned transaction.
 
-    Status is omitted so the schema default ``'uploaded'`` applies; the
-    screener PR moves it forward through the state machine. The caller
+    Status is omitted so the schema default ``'uploaded'`` applies; screening
+    moves it forward through the state machine. The caller
     runs this together with :func:`insert_evaluation_payment` inside one
     ``async with session.begin():`` block so both rows commit atomically
     (a PK violation on the payment insert rolls the agent insert back).

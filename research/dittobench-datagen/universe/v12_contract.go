@@ -46,8 +46,7 @@ import (
 
 const V12ProvenanceRevision = "dittobench-v12-generator-spec-v1"
 
-// ── Expanded, per-seed label superset (issues #492/#499/#537) ─────────────────
-//
+// Expanded, per-seed label superset.
 // v10/v11 labels sample a 24x20 space. v12 inserts a middle syllable bank,
 // widening the per-seed label superset to 24*16*20 = 7680 so no fixed dispatch
 // table keyed on a label pays across seeds. Generator role names never leak into

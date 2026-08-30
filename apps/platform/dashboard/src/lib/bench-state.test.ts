@@ -1,8 +1,3 @@
-// Parity tests for the benchmark rollout / authority state (assert-inventory
-// rows 19–20). The original Python tests extracted these functions from the
-// served page and executed them under node; the expected outputs below are
-// carried over verbatim.
-
 import { describe, expect, it } from "vitest";
 
 import {

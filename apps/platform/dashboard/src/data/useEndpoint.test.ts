@@ -1,11 +1,7 @@
-// The entity-first read pause (row 30's #648 slice). "An agent deep link is an
-// entity-first surface. Pause the global board, fleet, search-corpus, and
-// timeline reads while its card is open; they are unrelated to the answer the
-// reader is waiting for. Closing the card hydrates the dashboard once."
-//
-// The monolith enforced this with one early return inside load(); the SPA has
-// many readers, so the rule lives here — a gate every polling timer consults
-// and a close-hydrate every owner of a periodic read registers.
+// An agent deep link is an entity-first surface. Pause the global board,
+// fleet, search-corpus, and timeline reads while its card is open; they are
+// unrelated to the answer the reader is waiting for. Closing the card hydrates
+// the dashboard once.
 import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

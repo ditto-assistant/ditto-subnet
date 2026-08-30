@@ -277,9 +277,10 @@ func TestV9FinalToolAndMemoryFamiliesAcrossFortySeeds(t *testing.T) {
 	}
 }
 
-// TestV9MemorySelectionBypassesLegacyFillOrder proves the memory-side finding
-// from #499 is absent in the scored v9 path. The legacy weightedTypeQuota helper
-// is reachable only before v8; v9's coherent-world selector gives every final
+// TestV9MemorySelectionBypassesLegacyFillOrder proves the old memory-side
+// fill-order bias is absent in the scored v9 path. The legacy
+// weightedTypeQuota helper is reachable only before v8; v9's coherent-world
+// selector gives every final
 // computed, temporal, and integrity family a positive full-run floor.
 func TestV9MemorySelectionBypassesLegacyFillOrder(t *testing.T) {
 	prof, _ := ProfileForVersion("full", protocol.BenchVersionV9)

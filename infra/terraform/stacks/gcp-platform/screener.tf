@@ -129,7 +129,7 @@ variable "enable_screener_prod" {
 }
 
 variable "screener_prod_zone" {
-  description = "Zone for the prod screener VM. us-central1-c (not var.zone): the VM was recreated there on 2026-07-14 for N2D capacity, and the ditto-screener deploy workflow targets this zone (ditto-screener#12)."
+  description = "Zone for the prod screener VM. This remains independent of var.zone because the deploy workflow targets us-central1-c."
   type        = string
   default     = "us-central1-c"
 }
@@ -207,13 +207,6 @@ resource "google_secret_manager_secret_iam_member" "platform_api_screener_prod_a
 # steady-state validator class is a reviewed IaC change after the queue drains;
 # horizontal scaling is provided by the autoscaled fleet in screener-fleet.tf.
 #
-# DRIFT RECONCILIATION (2026-07-15): the original us-central1-a e2 VM was
-# deleted and recreated out of band as n2d-standard-8 in us-central1-c
-# (ditto-screener#12). The shared state still holds the deleted VM; before the
-# next full apply, re-point the state at the live instance:
-#   terraform state rm 'module.screener_vm_prod[0].google_compute_instance.this'
-#   terraform import 'module.screener_vm_prod[0].google_compute_instance.this' \
-#     projects/ditto-app-dev/zones/us-central1-c/instances/ditto-screener-prod
 # This VM is superseded by the screener fleet (screener-fleet.tf); decommission
 # it (enable_screener_prod=false + manual delete, it has deletion_protection)
 # once the fleet is live — see docs/screener-scaling.md.

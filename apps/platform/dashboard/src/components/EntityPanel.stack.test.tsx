@@ -1,9 +1,5 @@
-// Parity tests for the validator modal's three stack sections — Capabilities
-// (monolith 9101–9114), Stack identity (9116–9126) and Component health
-// (9128–9139 rendered at 9160–9162), with the helpers they lean on:
-// renderStackComponent 8959–8990, renderScorerBenchmarks 8992–9011,
-// renderScorerProbe 9013–9035, identityRows 8933–8940 and
-// identityComparisonNote 8942–8957.
+// Tests for the validator modal's Capabilities, Stack identity, and Component
+// health sections.
 //
 // These sections escaped BOTH gates of the SPA port: the modal only opens on
 // interaction, so the per-page DOM goldens never contained it, and the old
@@ -12,8 +8,6 @@
 // tests pin the copy, the collapsed/open state and the order, not just
 // presence.
 //
-// Frozen clock 2026-07-31T14:00:00Z, the golden renderer's instant, so the
-// relative probe times are stable.
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

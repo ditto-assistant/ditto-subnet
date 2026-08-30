@@ -1,9 +1,3 @@
-// Parity tests for the fleet page (assert-inventory rows 15, 16, 17, 18, 22,
-// 26). The old suite grepped the monolith's source; these render the SolidJS
-// port against the recorded fixtures (frozen clock 2026-07-31T14:00Z, the
-// golden renderer's instant) and assert the same contracts on the DOM. The
-// pipeline half of the old single operations page is covered by
-// Pipeline.test.tsx.
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -26,9 +20,6 @@ const hotkeyOf = (prefix: string): string =>
     validatorRows.find((v) => String(v.validator_hotkey).startsWith(prefix))?.validator_hotkey,
   );
 
-// Fixture cast: Ditto (healthy, top stake), Rizzo, WildSage active; TAO.com
-// (offline + scorer down), Yuma (offline) and an anonymous obsolete build
-// folded away as inoperative.
 const DITTO = hotkeyOf("5HmP9732");
 const TAO = hotkeyOf("5FU3YKmv");
 const YUMA = hotkeyOf("5CqJAjSj");
@@ -76,7 +67,6 @@ function text(id: string): string {
 describe("accessible fleet status (row 15)", () => {
   it("renders the fleet table with its headings from the three feeds", async () => {
     await renderPage();
-    // Endpoints: the page consumes exactly the three public feeds.
     expect(fetchedPaths().some((u) => u.includes("/public/operations"))).toBe(true);
     expect(fetchedPaths().some((u) => u.includes("/public/validator-names"))).toBe(true);
     expect(fetchedPaths().some((u) => u.includes("/public/screeners"))).toBe(true);
@@ -129,7 +119,6 @@ describe("accessible fleet status (row 15)", () => {
       "aria-label",
       "Screener fleet health",
     );
-    // The screener fold keeps the old title + 24h retention note.
     expect(text("fleet-retired-title")).toBe("Recently offline");
     expect(text("fleet-retired-note")).toContain("Heartbeat history remains visible for 24 hours");
 
@@ -151,7 +140,6 @@ describe("accessible fleet status (row 15)", () => {
 
   it("raises faults in the head and stays silent about sound nodes", async () => {
     await renderPage();
-    // The fixture's inoperative nodes are the faults; they get a count each.
     expect(text("fleet-count-critical")).toBe("2");
     expect(text("fleet-count-offline")).toBe("1");
     expect(document.querySelector(".fleet-ledger")).toHaveAttribute("aria-label", "Fleet faults");
@@ -225,7 +213,6 @@ describe("accessible fleet status (row 15)", () => {
     const status = row?.querySelector(".fleet-node-status");
     expect(status?.textContent).toBe("Paused");
     expect(status?.classList.contains("paused")).toBe(true);
-    // The same verdict drives the dot beside the name.
     expect(row?.querySelector(".fleet-node-dot")?.classList.contains("paused")).toBe(true);
     // An operator pause outranks the failing health underneath it, and a pause
     // is not a fault: the head raises nothing for this fleet.
@@ -298,12 +285,10 @@ describe("accessible fleet status (row 15)", () => {
     const cell = document.querySelector("td.fleet-work-col") as HTMLElement;
     const rails = cell.querySelectorAll(".fleet-work-status");
     expect(rails.length).toBe(1);
-    // Both answers to "what is this cell doing" ride the one rail, in order.
     expect([...rails[0]!.children].map((chip) => chip.textContent)).toEqual([
       "Polling",
       "No active work",
     ]);
-    // And nowhere else — the slot list no longer restates it.
     expect(cell.querySelector(".fleet-slot-overview")?.textContent).not.toContain("No active work");
     // The state block runs rail → updater notice → slot ledger, so a drain is
     // read before the empty slots it explains.
@@ -351,13 +336,11 @@ describe("inoperative fold (row 16)", () => {
     expect(text("fleet-retired-title")).toBe("Inoperative validators");
     expect(text("fleet-retired-summary")).toBe("3 validators · 2 offline · 1 obsolete build");
     expect(document.querySelectorAll("#fleet-retired-rows tr").length).toBe(3);
-    // None of the folded rows leak into the open table.
     expect(document.querySelector(`#fleet-rows tr[data-entity-id="${TAO}"]`)).toBeNull();
   });
 
   it("reads the offline window from the snapshot instead of restating 15 minutes", async () => {
     await renderPage();
-    // stale_window_seconds=900 → "15m"; the copy never hardcodes the window.
     expect(text("fleet-retired-note")).toContain("No heartbeat for over 15m");
     expect(text("fleet-retired-note")).toContain("cannot serve bench v7");
     expect(text("fleet-retired-note")).not.toContain("15 minutes");
@@ -387,8 +370,6 @@ describe("inoperative fold (row 16)", () => {
       expect(row?.classList.contains("entity-target")).toBe(true);
       expect(row).toHaveAttribute("aria-current", "true");
     });
-    // if (folded) folded.open = true — the row must be readable, not hidden
-    // behind a closed disclosure.
     expect(retired.open).toBe(true);
   });
 });
@@ -451,8 +432,6 @@ describe("bench serviceability gate (row 17)", () => {
 
   it("names the bench gate from the snapshot version, never a literal", async () => {
     await renderPage();
-    // The note names v7 because the snapshot says 7 — see fleet.test.ts for
-    // the precedence ladder and the no-version fallback.
     expect(text("fleet-retired-note")).toContain("cannot serve bench v7");
     expect(text("fleet-retired-note")).not.toContain("No bench v7,");
   });
@@ -468,7 +447,6 @@ describe("one shared snapshot + skew (row 18)", () => {
     await renderPage();
     const opsCalls = fetchedPaths().filter((u) => u.includes("/public/operations"));
     expect(opsCalls.length).toBe(1);
-    // Banned per-panel endpoints from the pre-snapshot era.
     expect(fetchedPaths().some((u) => u.includes("/public/validators"))).toBe(false);
     expect(fetchedPaths().some((u) => u.includes("/public/activity?page=1&limit=200"))).toBe(false);
   });
@@ -493,7 +471,6 @@ describe("one shared snapshot + skew (row 18)", () => {
       expect(text("operations-snapshot")).toBe("Shared operations snapshot unavailable"),
     );
     expect(text("fleet-summary")).toBe("Validator status unavailable");
-    // Nothing to count, so no counts — absence is stated once, not twice.
     expect(document.querySelector(".fleet-ledger")).toBeNull();
     expect(document.querySelector("#fleet-rows .empty-msg")?.textContent).toBe(
       "Validator status is temporarily unavailable.",
@@ -624,33 +601,24 @@ describe("accessible benchmark progress (row 22)", () => {
     );
     const cell = document.querySelector("td.fleet-work-col") as HTMLElement;
     const line = cell.querySelector(".fleet-slot-line") as HTMLElement;
-    // The compact chip carries the full version in its tooltip.
     expect(line.querySelector(".benchmark-version-chip")?.textContent).toBe("v7");
     expect(line.querySelector(".benchmark-version-chip")).toHaveAttribute("title", "Bench v7");
     const bar = line.querySelector("progress") as HTMLProgressElement;
     expect(bar).toHaveAttribute("max", "100");
     expect(bar).toHaveAttribute("value", "47");
-    // The full sentence survives compaction on the accessible label and the
-    // line's tooltip; the visible line carries the numbers.
     expect(bar.getAttribute("aria-label")).toContain("Running benchmark");
     expect(bar.getAttribute("aria-label")).toContain("132 of 281 checks");
     expect(line.getAttribute("title")).toContain("Running benchmark");
-    // The numbers sit in their own aligned tracks rather than one run-on
-    // string, so every row's digits line up under each other.
     expect(line.querySelector(".fleet-slot-pct")?.textContent).toBe("47%");
     expect(line.querySelector(".fleet-slot-count")?.textContent).toBe("132/281");
     expect(line.querySelector(".fleet-slot-note")?.textContent).toBe("");
-    // The agent reads by name; its identifier stays on the tooltip.
     expect(line.querySelector(".fleet-slot-agent")?.textContent).toBe("UnderTest");
     expect(line.querySelector(".fleet-slot-agent")).toHaveAttribute("title", "agent-under-test");
-    // The slot ordinal alone, with the full id still addressable.
     expect(line.querySelector(".fleet-slot-id")?.textContent).toBe("0");
     expect(line).toHaveAttribute("data-slot", "slot-0");
-    // Per-second elapsed timer node, driven from progress.started_at.
     const time = line.querySelector(".fleet-slot-elapsed");
     expect(time).toHaveAttribute("data-started-at", "2026-07-31T13:00:00Z");
     expect(time?.textContent).toBe("1h 0m 0s");
-    // The agent under evaluation is linked, not just named.
     expect(line.querySelector('.fleet-slot-agent [data-entity-link="agent"]')).toBeTruthy();
   });
 
@@ -994,11 +962,9 @@ describe("validator names are untrusted decoration (row 26)", () => {
     const order = Array.from(document.querySelectorAll("#fleet-rows tr[data-entity-id]"), (row) =>
       row.getAttribute("data-entity-id"),
     );
-    // Ditto (2.6e14) > Rizzo (1.8e13) > WildSage (5953).
     expect(order[0]).toBe(DITTO);
     const ditto = document.querySelector(`#fleet-rows tr[data-entity-id="${DITTO}"]`);
     expect(ditto?.querySelector(".fleet-node-name")?.textContent).toBe("Ditto");
-    // The hotkey stays the anchor identity beside the decoration, with copy.
     const key = ditto?.querySelector(".fleet-node-key");
     expect(key?.querySelector('[data-entity-link="validator"]')?.textContent).toBe(
       DITTO.slice(0, 8) + "…" + DITTO.slice(-6),
@@ -1056,7 +1022,6 @@ describe("validator names are untrusted decoration (row 26)", () => {
     await waitFor(() =>
       expect(document.querySelector(`#fleet-rows tr[data-entity-id="${DITTO}"]`)).toBeTruthy(),
     );
-    // No decoration: the hotkey-only identity renders instead of a name.
     const ditto = document.querySelector(`#fleet-rows tr[data-entity-id="${DITTO}"]`);
     expect(ditto?.querySelector(".fleet-node-name")).toBeNull();
     expect(ditto?.querySelector(".fleet-node.copyable")).toBeTruthy();
@@ -1139,12 +1104,10 @@ describe("refresh resilience", () => {
     await waitFor(() =>
       expect(container.querySelector("#fleet-rows tr[data-entity-id]")).toBeTruthy(),
     );
-    // Sound feed, silent note — this is the state the delay has to break.
     expect(text("operations-snapshot")).toBe("");
     const rowsBefore = container.querySelectorAll("#fleet-rows tr").length;
     expect(rowsBefore).toBeGreaterThan(0);
 
-    // Every subsequent operations fetch fails; the table must NOT blank.
     restoreFetch?.();
     restoreFetch = null;
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
@@ -1156,8 +1119,6 @@ describe("refresh resilience", () => {
         "Refresh delayed · showing last reconciled snapshot",
       );
     });
-    // A refresh failure does not invalidate the last reconciled snapshot:
-    // the fleet table keeps rendering it while polls retry.
     expect(container.querySelectorAll("#fleet-rows tr").length).toBe(rowsBefore);
     expect(text("operations-snapshot")).toContain("2h ago");
   });
@@ -1178,8 +1139,6 @@ describe("fleet on-chain weights", () => {
     expect(row.querySelector(".fleet-chain-weights-label")?.textContent).toContain(
       "On-chain weights",
     );
-    // Ditto's fixture vector: five destinations, heaviest first, shares
-    // normalized within the vector (UID 160 carries 65535 of ~100k).
     const chips = row.querySelectorAll(".chain-vector-chip") as NodeListOf<HTMLElement>;
     expect(chips.length).toBe(5);
     expect(chips[0]).toHaveClass("top-choice");
@@ -1187,7 +1146,6 @@ describe("fleet on-chain weights", () => {
     expect(chips[0]?.textContent).toContain("65.0%");
     expect(chips[1]).toHaveClass("support");
     expect(chips[1]?.textContent).toContain("UID 31");
-    // Block provenance rides on the tooltip, not a per-row repeat.
     expect(row.querySelector(".fleet-chain-weights")?.getAttribute("title")).toContain(
       "Revealed at block",
     );
@@ -1218,7 +1176,6 @@ describe("fleet on-chain weights", () => {
         expect(row.querySelector(".fleet-chain-weights-none")?.textContent).toBe("none revealed"),
       );
       expect(row.querySelectorAll(".chain-vector-chip").length).toBe(0);
-      // A validator that DOES reveal a vector keeps its chips beside it.
       const withVector = document.querySelector(
         `#fleet-rows tr[data-entity-id="${hotkeyOf("5CFtzzb4")}"]`,
       ) as HTMLElement;

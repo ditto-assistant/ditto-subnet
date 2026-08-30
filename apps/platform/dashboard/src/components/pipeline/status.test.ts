@@ -1,6 +1,3 @@
-// Unit tests for the submission status vocabulary (assert-inventory rows 10
-// and 11, the pure slices). The page-level behavior lives in
-// src/pages/Submissions.test.tsx.
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

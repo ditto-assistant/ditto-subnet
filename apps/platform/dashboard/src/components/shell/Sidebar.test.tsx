@@ -1,12 +1,3 @@
-// Parity tests for the sidebar shell (assert-inventory rows 28 + 29):
-// row 28 (test_sidebar_shell_routes_every_section) — the dashboard is a
-// sidebar shell with hash-routed pages; every section has a nav item with
-// its href + data-page pair, and the theme switcher lives in the sidebar.
-// row 29 (test_advertises_public_source_repositories) — the open-source repo
-// links (platform exactly twice: the sidebar GitHub button and the footer's
-// "Platform source"), with accessible labels.
-// Row 31 (mobile sidebar z-index below the modal) is a stylesheet contract
-// and lives with the CSS port, not this component.
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

@@ -1,9 +1,3 @@
-// Parity tests for the sidebar bench badge (assert-inventory row 33,
-// test_benchmark_badge_communicates_rollout_transition): the badge names the
-// rollout *transition* ("DittoBench v6 → v7 rollout") instead of a bare
-// "latest" claim, and the in-flight rollout target is never promoted to the
-// active seat. (The "· latest" negative grep also lives in
-// src/build-invariants.test.ts.)
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it } from "vitest";
 

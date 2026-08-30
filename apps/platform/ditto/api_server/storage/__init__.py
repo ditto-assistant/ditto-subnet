@@ -3,8 +3,7 @@
 Wraps aioboto3's S3 client. The same client talks to minio in dev
 compose and AWS S3 (or R2 / B2 / any S3-compatible endpoint) in prod
 via the ``STORAGE_ENDPOINT_URL`` env var. Validators retrieve agent
-tars through the API (presigned URL, next PR), never directly from
-this client.
+tars through the API, never directly from this client.
 
 Usage:
     from ditto.api_server.storage import (

@@ -8,7 +8,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
-// Public dataset sampler (task #52).
+// Public dataset sampler.
 //
 // Serves a full, real run-size DatasetArtifact from a reserved public seed so the
 // community can inspect exactly what a validator scores, answer keys included.

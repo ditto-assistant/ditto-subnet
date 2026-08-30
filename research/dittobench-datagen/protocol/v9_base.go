@@ -69,7 +69,7 @@ type V9AuthoritativeToolGateEvidence struct {
 }
 
 // V9ModelDependenceGateEvidence is the causal model-dependence gate added by
-// Bench v12 (issue #532). It is carried as an omitzero value so v9..v11 evidence
+// Bench v12. It is carried as an omitzero value so v9..v11 evidence
 // omits it entirely (and its struct equality/JSON stay byte-identical); it is
 // populated only for bench_version>=12.
 type V9ModelDependenceGateEvidence struct {

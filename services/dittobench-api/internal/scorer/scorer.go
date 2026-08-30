@@ -364,8 +364,8 @@ func CanaryIntegrityFactor(perCase []protocol.CaseScore) float64 {
 }
 
 // MetamorphicConsistency returns the fraction of invariance twin groups whose
-// member cases the harness answered consistently — all correct or all incorrect
-// (Ideas #3). A phrasing-brittle harness that gets one twin right and its
+// member cases the harness answered consistently — all correct or all
+// incorrect. A phrasing-brittle harness that gets one twin right and its
 // reworded twin wrong scores below 1.0. Returns nil when no twin groups ran
 // (nothing to measure). The raw rate is advisory; the derived
 // MetamorphicConsistencyFactor is what folds into the composite.
@@ -812,7 +812,7 @@ func MetamorphicConsistencyFactor(perCase []protocol.CaseScore) float64 {
 }
 
 // CalibrationBrier returns the mean Brier score over cases whose harness
-// reported a confidence (Ideas #6): mean((confidence - outcome)^2) where outcome
+// reported a confidence: mean((confidence - outcome)^2) where outcome
 // is 1 for a correct case and 0 otherwise. Lower is better; a well-calibrated
 // harness minimizes it, and always-claiming-1.0 is punished on its wrong cases.
 // Returns (nil, 0) when no case carried a confidence. Advisory only.
@@ -1058,7 +1058,7 @@ func AggregateForVersion(runID string, perCase []protocol.CaseScore, benchVersio
 		})
 	}
 
-	// Composite standard error (v3 #2): combine the tool-half and memory-half SEs.
+	// Combine the tool-half and memory-half standard errors.
 	// The two halves are independent samples and the composite is 0.5*tool +
 	// 0.5*mem, so Var(composite) = 0.25*Var(toolMean) + 0.25*Var(memMean) and
 	// SE = 0.5*sqrt(se_tool^2 + se_mem^2). When only one half is present the

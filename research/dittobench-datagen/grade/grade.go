@@ -421,9 +421,9 @@ func hitAny(accept []string, response string) bool {
 // screener oracle plus the on-chain transform audit.
 //
 // V9 does not pretend that those mechanisms close this deterministic-grader
-// limit. Its launch-time model-forcing delegate is the bounded inference and
-// embedding ablation qualification in ditto-subnet#386; the broader causal
-// dependence probe remains tracked in ditto-subnet#532.
+// limit. Its launch-time model-forcing delegate is bounded inference and
+// embedding ablation qualification; the broader causal-dependence probe is a
+// separate control.
 func DumpFloor(n int) int {
 	if n <= 0 {
 		return 1 << 30 // no guard set: unreachable, never trips

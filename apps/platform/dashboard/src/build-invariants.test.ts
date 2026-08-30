@@ -1,6 +1,5 @@
-// The built-output gate (assert-inventory rows 3, 7, 8, 20, 33, 34, 35, 36,
-// 40 — the negative-grep halves the DOM tests defer here). Consensus
-// parameters (incumbent margin, champion share, tail size, authority
+// The built-output gate. Consensus parameters (incumbent margin, champion
+// share, tail size, authority
 // threshold, bench version) are API-served and must never be literals: a
 // literal is a claim that silently stops being true, and miners read it as
 // the rule they are judged by. Copy-level bans run against the BUILT dist

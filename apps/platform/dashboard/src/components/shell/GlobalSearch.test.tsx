@@ -1,7 +1,3 @@
-// Parity tests for the global search (assert-inventory row 32,
-// test_includes_accessible_global_search): a combobox/listbox pairing over
-// the miners + submissions corpus with keyboard shortcuts ("/", Cmd/Ctrl+K,
-// arrows, Escape) that navigates to the owning page via pushState.
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 

@@ -139,7 +139,6 @@ class TestUploadCheck:
 
         assert captured["method"] == "POST"
         assert captured["url"].endswith("/api/v1/upload/check")
-        # Body fields match the wire model exactly.
         assert captured["body"]["sha256"] == "ab" * 32
         assert result.ok is False
         assert result.error_codes == [1100]
@@ -214,7 +213,6 @@ class TestUploadAgent:
         assert b"22222222-2222-2222-2222-222222222222" in captured["body"]
 
         body_str = captured["body"].decode("latin-1")
-        # Every Form() field name must appear as a multipart part name.
         for field in (
             "hotkey",
             "sha256",
@@ -310,7 +308,6 @@ class TestAgentStatus:
         with make_client(handler) as client, pytest.raises(ApiResponseError) as e:
             client.get_agent_status(agent_id=UUID(int=0))
 
-        # Must NOT be the specific subclass.
         assert not isinstance(e.value, AgentNotFoundError)
 
 
@@ -404,7 +401,6 @@ class TestOwnerLink:
 
         assert captured["method"] == "POST"
         assert captured["url"].endswith("/api/v1/attestations/owner-link")
-        # Wire body must match the platform's OwnerLinkRequest exactly.
         assert captured["body"] == {
             "netuid": 118,
             "hotkey_a": self.HOTKEY_A,
@@ -473,7 +469,6 @@ class TestTransportErrors:
         msg = str(e.value)
         assert "api unreachable" in msg
         assert "http://test" in msg
-        # Message includes a hint so miners know what to check first.
         assert "Hint" in msg or "hint" in msg
 
     def test_timeout_maps_to_api_response_error(self) -> None:

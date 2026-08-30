@@ -111,7 +111,7 @@ type AuthoritativeToolInput struct {
 
 // ModelDependenceInput carries the trusted counterfactual observations that
 // prove a run's scored answers are causally downstream of the model's
-// completions (issue #532). On a deterministic seeded slice of scored cases,
+// completions. On a deterministic seeded slice of scored cases,
 // the relay records the scored answer under the clean model completion and
 // again under a deterministically perturbed completion; a case is DEPENDENT
 // when those two answers differ. A harness that computes answers in

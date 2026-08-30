@@ -3166,7 +3166,7 @@ func TestV7EmbeddingParksOneTransientPlatformFault(t *testing.T) {
 
 // TestV7EmbeddingIntegrityFaultIsNeverRetriedAndFailsClosed is the other
 // direction. A provider that answers 200 with the WRONG model is an integrity
-// violation -- exactly what #97 exists to catch. Repeating it could not help,
+// violation. Repeating it could not help,
 // so it must be delivered once and must still discard the run.
 func TestV7EmbeddingIntegrityFaultIsNeverRetriedAndFailsClosed(t *testing.T) {
 	vector := make([]float64, embeddingDimensions)
@@ -3284,8 +3284,7 @@ func TestPlatformGrantDenialIsNotCountedAsAnUpstreamProviderFault(t *testing.T) 
 			if end.InfrastructureFailures != 0 {
 				t.Fatalf("a lost lease was miscounted as an upstream provider fault: %+v", end)
 			}
-			// Still fails closed -- #97's rule is intact; only the diagnosis
-			// changed.
+			// Only the diagnosis changes; the run still fails closed.
 			degraded := relayDegradedSince(start, end)
 			if degraded == nil {
 				t.Fatal("a denied grant no longer fails the run closed")

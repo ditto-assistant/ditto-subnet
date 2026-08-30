@@ -334,7 +334,7 @@ func requireTokenAccounting(snapshot relayHealthSnapshot, benchVersion int, runS
 // Everything the accepted branch needs already carries forward to v10/v11 and
 // is NOT v9-only: the discarded route probe runs for `>= BenchVersionV8`
 // (main.go), scoregates.SupportedVersion spans 9..11, and applyV9BaseEvidence
-// assembles the signed root for every version >= 9 (#877). So returning nil
+// assembles the signed root for every version >= 9. So returning nil
 // here lands the run on the ordinary scoring path, where the model-use gate
 // publishes `zero_inference` with factor 0 and the enforce multiplier makes the
 // composite exactly 0.00 -- an accepted, signed, finalizable score rather than
@@ -741,9 +741,8 @@ func (s *server) handleRelayPreflight(w http.ResponseWriter, r *http.Request) {
 }
 
 // errAgentInferenceDeclined and errInferenceLaneSaturated are typed sentinels,
-// not message markers, for the reason dittobench-api #118 introduced the
-// pattern: the harness's own output and its own error strings flow through this
-// process, and a classification that can be produced by printing the right
+// not message markers: the harness's own output and its own error strings flow
+// through this process, and a classification that can be produced by printing the right
 // words is a classification a harness can forge. `errors.Is` cannot be forged
 // by any string a miner controls -- only code in this package can wrap these.
 //
@@ -782,8 +781,7 @@ var (
 // of them entirely the harness's doing -- became "validator_infrastructure,
 // retryable: true", which mints a retry grant, RAISES the attempt cap, and
 // re-leases. An agent that failed the same way every run therefore re-leased
-// itself without bound, holding validator slots and never scoring: the mnemox
-// loop, one layer down from where #282 found it.
+// itself without bound, holding validator slots and never scoring.
 //
 // Only a typed sentinel can leave the default. Nothing derived from harness
 // output, harness error text, or an unrecognised platform code can.

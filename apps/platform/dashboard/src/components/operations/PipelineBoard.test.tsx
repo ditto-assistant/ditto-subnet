@@ -1,6 +1,4 @@
-// Pipeline board behaviors from the monolith's operations section (markup
-// 2742–2862, renderPipelineBoard 7976–8106). Two inline-comment contracts
-// from the old suite are kept verbatim:
+// Pipeline board behaviors. Two contracts carried over verbatim:
 // - "Rank 1 alone must never earn the badge: a gated row can hold the head of
 //   the list while no validator is able to lease it" (#458).
 // - Continual-retest cards project into Evaluating by active slot, not

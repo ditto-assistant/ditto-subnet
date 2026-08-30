@@ -166,16 +166,13 @@ class TestSubmitEvalPayment:
             dest_address=self.HOTKEY_DEST,
         )
 
-        # Subtensor constructed with requested network.
         assert captured["network"] == "finney"
 
-        # transfer() called with rao-converted Balance + correct dest.
         call = fake_subtensor.transfer.call_args
         assert call.kwargs["destination_ss58"] == self.HOTKEY_DEST
         assert call.kwargs["amount"].rao == 1_500_000_000
         assert call.kwargs["wait_for_finalization"] is True
 
-        # Result populated from extrinsic_receipt.
         assert isinstance(result, PaymentReceipt)
         assert result.block_hash == "0x" + "ab" * 32
         assert result.block_number == 42

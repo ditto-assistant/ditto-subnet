@@ -52,7 +52,6 @@ class TestBuildUploadPayload:
 class TestSignUploadPayload:
     def test_returns_lowercase_128_hex_signature(self) -> None:
         keypair = _make_test_keypair()
-        # Build a minimal "live wallet" shim exposing only what signing.py touches.
 
         class _LiveWallet:
             hotkey = keypair
@@ -71,7 +70,6 @@ class TestSignUploadPayload:
 
         assert len(sig_hex) == 128
         assert sig_hex == sig_hex.lower()
-        # Must decode as hex.
         bytes.fromhex(sig_hex)
 
     def test_signature_round_trips_through_server_verifier(self) -> None:

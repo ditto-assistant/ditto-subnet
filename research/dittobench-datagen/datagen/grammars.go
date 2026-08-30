@@ -2,7 +2,7 @@ package datagen
 
 import "github.com/ditto-assistant/dittobench-datagen/persona"
 
-// Grammar-driven prompt surfaces (v2 hardening, question-audit follow-up).
+// Grammar-driven prompt surfaces for v2 hardening.
 // The audited low-variety categories moved from flat template lists to small
 // context-free grammars (persona.Grammar): clause order, synonym slots, and
 // optional phrases multiply the surface a template matcher must cover to

@@ -17,11 +17,10 @@ import (
 // subscribed graphs; "Subscribed workspaces are included in memory search and
 // fetch", ditto-app SubscribePanel). Subscribed hits are distinguished ONLY by a
 // rewritten provenance prefix: annotateSubscribedSlimMemory rewrites Source to
-// "subscribed_graph:<orig>" and SourceContext to "@<username> / <orig>"
-// (backend tools.go:458). The documented failure (backend failure-mode #7,
-// docs/CROSSUSER_EXAMPLES.md; ditto-app graph-scoping fixes 8668a17b/37cce44d/
-// c10335a3) is an agent that ignores the prefix and presents another user's fact
-// as the user's own, or answers about the friend with the user's own value.
+// "subscribed_graph:<orig>" and SourceContext to "@<username> / <orig>".
+// The failure mode is an agent that ignores the prefix and presents another
+// user's fact as the user's own, or answers about the friend with the user's
+// own value.
 //
 // A unit seeds the SAME attribute in both namespaces with different values and
 // asks it two ways:

@@ -1,11 +1,9 @@
-// Parity tests for the benchmark page (assert-inventory rows 37, 39, 41 from
-// TestDashboardScoringTransparency). Class docstring rationale, kept:
-// "The SPA must not restate consensus parameters as literals. Every number
-// here (the incumbent margin, the champion share, the tail size, the
+// The UI must not restate consensus parameters as literals. Every number here
+// (the incumbent margin, the champion share, the tail size, the
 // authority-switch threshold, the benchmark version) is served by the API and
 // can change without touching this file. A literal in the markup is a claim
 // that silently stops being true, which is worse than no claim at all: a
-// miner reads it as the rule they are being judged by."
+// miner reads it as the rule they are being judged by.
 import { cleanup, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

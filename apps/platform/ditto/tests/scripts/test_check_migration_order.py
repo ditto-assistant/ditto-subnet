@@ -286,7 +286,7 @@ def stale_branch_repo(tmp_path: Path) -> Path:
     _commit(repo, "2026_07_26_add_artifact_fetch_audit.py", "e8b3c05d7a41", None)
     _commit(repo, "2026_07_27_record_evicted_leases.py", "b2e9d4a17c60", "e8b3c05d7a41")
 
-    # PR #505 is cut here, while b2e9d4a17c60 is still the head of main.
+    # The feature branch is cut while b2e9d4a17c60 is still the head of main.
     _git(repo, "switch", "-q", "-c", "never-disclose")
     _commit(
         repo,

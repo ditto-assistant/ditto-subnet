@@ -34,8 +34,8 @@ type ProviderMeter interface {
 }
 
 // ExecutionLimits are host/runtime bounds. Provider request, token, and cost
-// ceilings remain frozen in Profile; MaxElapsed is supplied by #387 from the
-// remaining ticket TTL and must be positive.
+// ceilings remain frozen in Profile; MaxElapsed is supplied from the remaining
+// ticket TTL and must be positive.
 type ExecutionLimits struct {
 	MaxElapsed     time.Duration
 	SeedBatchPairs int

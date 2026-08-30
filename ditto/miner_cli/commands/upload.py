@@ -279,7 +279,6 @@ def _run_upload(
 ) -> int:
     explicit_recovery_receipt = _recovery_receipt_from_args(args)
 
-    # Step 1: load wallet
     handle, live_wallet = load_wallet(
         coldkey_name=args.coldkey_name, hotkey_name=args.hotkey_name
     )
@@ -319,14 +318,12 @@ def _run_upload(
             network_api_url=network_api_url,
         )
 
-    # Step 2: pre-flight (raises TarStructureError on missing file)
     print(f"running pre-flight on {args.tar_path}...", file=sys.stderr)
     preflight = run_preflight(args.tar_path)
     _print_result(preflight)
     if not preflight.passed:
         raise TarStructureError("pre-flight failed; see report above")
 
-    # Step 3: sign
     signature_hex = sign_upload_payload(
         handle=handle, live_wallet=live_wallet, sha256_hex=preflight.sha256
     )
@@ -363,7 +360,7 @@ def _run_upload(
                 receipt_source = "saved_reassigned"
 
     with ApiClient(base_url=network_api_url) as client:
-        # Step 4: pre-payment check
+
         def _check(candidate_receipt: PaymentReceipt | None):
             return client.post_upload_check(
                 UploadCheckRequest(
@@ -476,8 +473,8 @@ def _run_upload(
                     payment=reassigned_payment.payment,
                 )
 
-        # Step 5: verify the payment coldkey owns the claimed hotkey. This is
-        # intentionally before pricing/confirmation and is never bypassed by
+        # Verify the payment coldkey owns the claimed hotkey before
+        # pricing/confirmation. This is never bypassed by
         # --yes: the API enforces the same Owner record at payment time.
         preflight_payment_signer(
             live_wallet=live_wallet,
@@ -487,8 +484,8 @@ def _run_upload(
         )
 
         if receipt is None:
-            # Step 6: use the fee atomically bound to this reservation. Fall
-            # back to the legacy pricing endpoint while older servers roll out.
+            # Use the fee atomically bound to this reservation. Fall back to
+            # the legacy pricing endpoint while older servers roll out.
             if (
                 check_response.payment_amount_rao is not None
                 and check_response.payment_send_address is not None
@@ -500,7 +497,6 @@ def _run_upload(
             else:
                 pricing = client.get_eval_pricing()
 
-            # Step 7: confirm payment
             confirm_payment(
                 amount_rao=pricing.amount_rao,
                 dest_address=pricing.send_address,
@@ -509,7 +505,6 @@ def _run_upload(
                 skip=args.yes,
             )
 
-            # Step 8: submit chain payment
             print(
                 f"submitting payment on subtensor={subtensor_network}...",
                 file=sys.stderr,
@@ -559,7 +554,6 @@ def _run_upload(
                 file=sys.stderr,
             )
 
-        # Step 9: post tar + payment proof
         print("uploading tarball...", file=sys.stderr)
         try:
             result = _post_upload_with_retries(
@@ -598,7 +592,6 @@ def _run_upload(
             )
             raise
 
-    # Step 10: print agent_id to stdout, hint to stderr
     print(result.agent_id)
     if not clear_pending_payment(
         network=network_name,
