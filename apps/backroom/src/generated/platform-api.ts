@@ -11160,6 +11160,8 @@ export interface components {
             agent_id: string;
             /** Authoring Evidence Sha256 */
             authoring_evidence_sha256: string;
+            /** Claim Instance Id */
+            claim_instance_id: string;
             /**
              * Freeze Id
              * Format: uuid

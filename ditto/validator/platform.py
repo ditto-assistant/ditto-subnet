@@ -91,7 +91,6 @@ from ditto.validator.coding_publication import (
 from ditto.validator.errors import (
     PlatformError,
     PlatformInfrastructureError,
-    truncate_failure_detail,
 )
 from ditto.validator.signing import (
     sign_artifact_request,
