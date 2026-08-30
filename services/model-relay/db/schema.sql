@@ -894,6 +894,39 @@ CREATE TABLE public.coding_selection_assignments (
 
 
 --
+-- Name: coding_shadow_authoring_freezes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_shadow_authoring_freezes (
+    freeze_id uuid NOT NULL,
+    ticket_id uuid NOT NULL,
+    run_row_id uuid NOT NULL,
+    task_count integer NOT NULL,
+    authoring_evidence_sha256 text NOT NULL,
+    authoring_event_root text NOT NULL,
+    authoring_transcript_sha256 text NOT NULL,
+    authoring_transcript_object_key text NOT NULL,
+    authoring_transcript_bytes bigint NOT NULL,
+    authoring_event_count integer NOT NULL,
+    frozen_patch_sha256 text NOT NULL,
+    frozen_submission_object_key text NOT NULL,
+    changed_path_root text NOT NULL,
+    final_tree_sha256 text NOT NULL,
+    changed_path_count integer NOT NULL,
+    changed_bytes bigint NOT NULL,
+    protected_paths_intact boolean NOT NULL,
+    weight_eligible boolean NOT NULL,
+    evidence jsonb NOT NULL,
+    signature text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_coding_shadow_authoring_freezes_coding_shadow_author_392f CHECK (((authoring_transcript_object_key = ('sha256/'::text || authoring_transcript_sha256)) AND (frozen_submission_object_key = ('sha256/'::text || frozen_patch_sha256)))),
+    CONSTRAINT ck_coding_shadow_authoring_freezes_coding_shadow_author_59a8 CHECK (((task_count = 1) AND ((changed_path_count >= 0) AND (changed_path_count <= 10000)) AND ((changed_bytes >= 0) AND (changed_bytes <= 1073741824)) AND ((authoring_transcript_bytes >= 0) AND (authoring_transcript_bytes <= 536870912)) AND ((authoring_event_count >= 0) AND (authoring_event_count <= 1000)) AND ((authoring_transcript_bytes = 0) = (authoring_event_count = 0)))),
+    CONSTRAINT ck_coding_shadow_authoring_freezes_coding_shadow_author_b43f CHECK ((weight_eligible = false)),
+    CONSTRAINT ck_coding_shadow_authoring_freezes_coding_shadow_author_c877 CHECK (((authoring_evidence_sha256 ~ '^[0-9a-f]{64}$'::text) AND (authoring_event_root ~ '^[0-9a-f]{64}$'::text) AND (authoring_transcript_sha256 ~ '^[0-9a-f]{64}$'::text) AND (frozen_patch_sha256 ~ '^[0-9a-f]{64}$'::text) AND (changed_path_root ~ '^[0-9a-f]{64}$'::text) AND (final_tree_sha256 ~ '^[0-9a-f]{64}$'::text) AND (signature ~ '^[0-9a-f]{128}$'::text)))
+);
+
+
+--
 -- Name: coding_shadow_results; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3552,6 +3585,22 @@ ALTER TABLE ONLY public.coding_selection_assignments
 
 
 --
+-- Name: coding_shadow_authoring_freezes coding_shadow_authoring_freezes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_authoring_freezes
+    ADD CONSTRAINT coding_shadow_authoring_freezes_pkey PRIMARY KEY (freeze_id);
+
+
+--
+-- Name: coding_shadow_authoring_freezes coding_shadow_authoring_freezes_ticket_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_authoring_freezes
+    ADD CONSTRAINT coding_shadow_authoring_freezes_ticket_key UNIQUE (ticket_id);
+
+
+--
 -- Name: coding_shadow_results coding_shadow_results_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4922,6 +4971,13 @@ CREATE INDEX coding_selection_assignments_height_idx ON public.coding_selection_
 
 
 --
+-- Name: coding_shadow_authoring_freezes_run_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_shadow_authoring_freezes_run_created_idx ON public.coding_shadow_authoring_freezes USING btree (run_row_id, created_at);
+
+
+--
 -- Name: coding_shadow_results_run_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5594,6 +5650,13 @@ CREATE TRIGGER coding_selection_assignments_append_only BEFORE DELETE OR UPDATE 
 
 
 --
+-- Name: coding_shadow_authoring_freezes coding_shadow_authoring_freezes_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_shadow_authoring_freezes_append_only BEFORE DELETE OR UPDATE ON public.coding_shadow_authoring_freezes FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
 -- Name: coding_shadow_run_issuances coding_shadow_run_issuances_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -5751,6 +5814,14 @@ ALTER TABLE ONLY public.coding_selection_assignments
 
 ALTER TABLE ONLY public.coding_selection_assignments
     ADD CONSTRAINT coding_selection_assignments_release_fkey FOREIGN KEY (release_row_id, corpus_release_id) REFERENCES public.coding_catalog_releases(release_row_id, corpus_release_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_shadow_authoring_freezes coding_shadow_authoring_freezes_ticket_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_shadow_authoring_freezes
+    ADD CONSTRAINT coding_shadow_authoring_freezes_ticket_fkey FOREIGN KEY (ticket_id, run_row_id, task_count) REFERENCES public.coding_shadow_tickets(ticket_id, run_row_id, task_count) ON DELETE CASCADE;
 
 
 --
