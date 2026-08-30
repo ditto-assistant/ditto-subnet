@@ -193,6 +193,8 @@ def test_build_seed_contains_only_the_attempt_token() -> None:
     assert "SCREENER_API_TOKEN" not in script
     assert "SCREENER_MNEMONIC" not in script
     assert base64.b64encode(token.encode()).decode() in script
+    assert "write_files:" not in seed
+    assert "base64 -d | /bin/sh" in seed
     assert "DITTO_BUILD_EXIT_AFTER_COMPLETE=1" in script
 
 
@@ -230,6 +232,24 @@ def test_build_script_shell_quotes_platform_url() -> None:
     )
 
 
+def test_build_script_emits_only_safe_failure_marker_to_serial() -> None:
+    script = _build_script(
+        platform_url="https://platform.invalid",
+        build_id="12345678-1234-1234-1234-123456789abc",
+        token="attempt-token-" + "x" * 48,
+        image="registry.invalid/ditto/builder@sha256:" + "a" * 64,
+    )
+
+    assert '>"$output" 2>&1' in script
+    assert (
+        "DITTO_SUBMISSION_BUILD_FAILED=(SOURCE|KANIKO|ARCHIVE|UPLOAD|COMPLETE|CONTRACT)"
+    ) in script
+    assert "printf '%s\\n' \"$marker\" >/dev/ttyS0" in script
+    assert 'cat "$output"' not in script
+    assert "docker pull registry.invalid/ditto/builder@sha256:" in script
+    assert "docker run --rm --pull never --network host" in script
+
+
 @pytest.mark.parametrize(
     ("stage", "expected"),
     [
@@ -239,12 +259,18 @@ def test_build_script_shell_quotes_platform_url() -> None:
         ("UPLOAD", "FLEET_SUBMISSION_UPLOAD_FAILED"),
         ("COMPLETE", "FLEET_SUBMISSION_COMPLETE_FAILED"),
         ("CONTRACT", "FLEET_SUBMISSION_CONTRACT_FAILED"),
+        ("DOCKER", "FLEET_SUBMISSION_DOCKER_FAILED"),
+        ("PULL", "FLEET_SUBMISSION_PULL_FAILED"),
+        ("LAUNCH", "FLEET_SUBMISSION_LAUNCH_FAILED"),
     ],
 )
 def test_build_failure_code_preserves_safe_builder_stage(
     stage: str, expected: str
 ) -> None:
-    console = f"private submitted output\nDITTO_SUBMISSION_BUILD_FAILED={stage}\r\n"
+    console = (
+        "private submitted output\n"
+        f"ditto-builder login: DITTO_SUBMISSION_BUILD_FAILED={stage}\r\n"
+    )
 
     assert _build_failure_code(ok=True, console=console) == expected
 
@@ -260,6 +286,7 @@ def test_build_failure_code_does_not_forward_unrecognized_console() -> None:
     assert _build_failure_code(ok=False, console="token=private") == (
         "FLEET_SUBMISSION_BUILD_VM_FAILED"
     )
+
 
 class _Control:
     def __init__(self) -> None:
