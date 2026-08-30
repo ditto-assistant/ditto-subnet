@@ -224,6 +224,43 @@ def test_scheduler_finishes_runtime_before_admitting_build(tmp_path: Path) -> No
     assert control.claimed.index("runtime") < control.claimed.index("build")
 
 
+def test_source_review_uses_image_project_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[list[str]] = []
+
+    class Control:
+        def update(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def status(self, *_args: object) -> str:
+            return "succeeded"
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    node = FleetNode(_settings(tmp_path))
+    node.control = Control()  # type: ignore[assignment]
+    monkeypatch.setattr(subprocess, "run", run)
+
+    node._run_source_review(
+        {
+            "review_id": "12345678-1234-1234-1234-123456789abc",
+            "attempt_id": "22345678-1234-1234-1234-123456789abc",
+            "artifact_sha256": "a" * 64,
+            "job_token": "job-token",
+            "image_reference": "registry.invalid/ditto/screener@sha256:" + "b" * 64,
+        }
+    )
+
+    assert commands[0][-3:] == [
+        "/app/workers/screener/.venv/bin/python",
+        "-m",
+        "ditto_screener.source_review_job",
+    ]
+
+
 def test_stop_request_prevents_new_claims(tmp_path: Path) -> None:
     node = FleetNode(_settings(tmp_path))
     node.control = pytest.fail  # type: ignore[assignment]

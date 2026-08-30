@@ -676,7 +676,18 @@ class FleetNode:
         ]
         if self.settings.source_review_env_file is not None:
             command.extend(["--env-file", str(self.settings.source_review_env_file)])
-        command.extend([image, "python", "-m", "ditto_screener.source_review_job"])
+        # The screener image installs its dependencies into uv's project virtual
+        # environment. Invoke that interpreter directly: system Python lacks the
+        # dependencies, while `uv run` needs a writable cache that this locked-down
+        # read-only container deliberately does not provide.
+        command.extend(
+            [
+                image,
+                "/app/workers/screener/.venv/bin/python",
+                "-m",
+                "ditto_screener.source_review_job",
+            ]
+        )
         result = subprocess.run(
             command,
             env=environment,
