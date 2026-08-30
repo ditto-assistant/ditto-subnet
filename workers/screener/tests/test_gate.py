@@ -389,6 +389,35 @@ async def test_remote_require_does_not_local_build_without_targon_health(
     assert calls == []
 
 
+async def test_remote_kaniko_failure_is_deterministic_docker_rejection(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    from ditto_screener.platform import RemoteSubmissionBuildRejected
+
+    tarball = _valid_tar()
+
+    async def remote_build() -> None:
+        raise RemoteSubmissionBuildRejected("FLEET_SUBMISSION_KANIKO_FAILED")
+
+    gate = _gate_with(
+        make_config(require_rootless_docker=True, remote_build_mode="require"),
+        _ok_run(),
+        tarball=tarball,
+    )
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            remote_build=remote_build,
+        )
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert result.evidence[-1].code == "docker-build"
+    assert result.detail == "build failed: DITTO_SUBMISSION_BUILD_FAILED=KANIKO"
+
+
 async def test_export_rejects_oversize_before_save(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

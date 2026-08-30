@@ -78,7 +78,10 @@ from ditto_screener.l2_review import (
     L2RunResult,
     LayeredSourceReviewAgent,
 )
-from ditto_screener.platform import LocalScreeningProviderSelected
+from ditto_screener.platform import (
+    LocalScreeningProviderSelected,
+    RemoteSubmissionBuildRejected,
+)
 from ditto_screener.policy import (
     ChallengeObservation,
     PolicyContext,
@@ -1011,6 +1014,13 @@ class BuildGate:
                     remote_archive = await remote_build()
                 except LocalScreeningProviderSelected:
                     local_build_selected = True
+                except RemoteSubmissionBuildRejected:
+                    return core_decision(
+                        ScreeningOutcome.DETERMINISTIC_REJECT,
+                        code="docker-build",
+                        summary="artifact Docker image did not build",
+                        detail="build failed: DITTO_SUBMISSION_BUILD_FAILED=KANIKO",
+                    )
                 except Exception:  # noqa: BLE001 - terminal provider failure
                     logger.warning(
                         "remote builder raised unexpectedly; parking screening attempt",

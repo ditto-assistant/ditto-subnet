@@ -97,6 +97,14 @@ class LocalScreeningProviderSelected(RuntimeError):
     """Backroom selected the GCP/local lane as primary for this operation."""
 
 
+class RemoteSubmissionBuildRejected(RuntimeError):
+    """The remote builder reached a deterministic miner Docker build failure."""
+
+    def __init__(self, error_code: str) -> None:
+        super().__init__(error_code)
+        self.error_code = error_code
+
+
 class PlatformClient:
     """HTTP client for one platform base URL, screener-flavoured."""
 
@@ -426,6 +434,10 @@ class PlatformClient:
                         == "TARGON_SUBMISSION_BUILD_DISABLED_BY_POLICY"
                     ):
                         raise LocalScreeningProviderSelected("GCP build lane selected")
+                    if build.status == "fallback_required" and (
+                        build.error_code or ""
+                    ).endswith("_SUBMISSION_KANIKO_FAILED"):
+                        raise RemoteSubmissionBuildRejected(build.error_code)
                     logger.warning(
                         "remote build unavailable code=%s",
                         build.error_code or "TARGON_SUBMISSION_BUILD_UNAVAILABLE",

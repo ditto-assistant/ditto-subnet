@@ -326,7 +326,7 @@ async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     from ditto.api_models.agent_status import AgentStatus
-    from ditto.db.models import SubmissionImageBuild
+    from ditto.db.models import ScreeningAttempt, SubmissionImageBuild
     from ditto.tests.api_server.endpoints.test_screener import (
         _AUTH_HEADER,
         _CLAIM_URL,
@@ -427,6 +427,28 @@ async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(
         assert row is not None
         assert row.node_id == "subnet-screener-1"
         assert row.provider == "hetzner"
+
+    failed = await client.put(
+        f"/api/v1/screener/nodes/jobs/submission-image-builds/{build_id}",
+        headers=node_headers,
+        json={
+            "status": "fallback_required",
+            "provider_resource_id": "ditto-build-test",
+            "error_code": "FLEET_SUBMISSION_KANIKO_FAILED",
+        },
+    )
+    assert failed.status_code == 204, failed.text
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        row = await session.get(SubmissionImageBuild, build_id)
+        assert attempt is not None
+        assert row is not None
+        assert row.runtime_status == "skipped"
+        assert row.runtime_error_code == "FLEET_RUNTIME_SKIPPED_BUILD_UNAVAILABLE"
+        assert attempt.failure_provider == "hetzner"
+        assert attempt.failure_lane == "build"
+        assert attempt.private_failure_detail == "DITTO_SUBMISSION_BUILD_FAILED=KANIKO"
+        assert attempt.failure_captured_at is not None
 
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)

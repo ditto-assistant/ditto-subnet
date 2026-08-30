@@ -22,7 +22,7 @@ from ditto_screener.enrollment import (
 )
 from ditto_screener.errors import PlatformError
 from ditto_screener.heartbeat import ScreenerHeartbeatRequest
-from ditto_screener.platform import PlatformClient
+from ditto_screener.platform import PlatformClient, RemoteSubmissionBuildRejected
 from ditto_screener.review_settings import bootstrap_review_settings
 from ditto_screening_protocol import SCREENING_POLICY_VERSION, ScreenResultOutcome
 
@@ -312,6 +312,36 @@ async def test_targon_build_digest_mismatch_discards_and_falls_back(
     assert deletes == [
         f"/api/v1/screener/agent/{_AGENT}/submission-image-builds/{build_id}"
     ]
+
+
+async def test_remote_kaniko_failure_is_a_deterministic_build_rejection(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    attempt_id = uuid4()
+    build_id = uuid4()
+    status = {
+        "build_id": str(build_id),
+        "attempt_id": str(attempt_id),
+        "status": "fallback_required",
+        "provider": "hetzner",
+        "artifact_sha256": "de" * 32,
+        "image_ref": f"ditto-screen/{_AGENT}-{attempt_id}:latest",
+        "error_code": "FLEET_SUBMISSION_KANIKO_FAILED",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        return httpx.Response(200, json=status)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(
+            RemoteSubmissionBuildRejected,
+            match="FLEET_SUBMISSION_KANIKO_FAILED",
+        ):
+            await client.build_submission_image(
+                _AGENT, attempt_id=attempt_id, timeout=1
+            )
 
 
 @pytest.mark.parametrize(
