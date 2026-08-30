@@ -315,6 +315,69 @@
     mode: "0750"
   when: platform_trace_enabled | bool
 
+- name: Validate private coding catalog activation
+  ansible.builtin.assert:
+    that:
+      - platform_coding_catalog_bucket | default('') | length > 0
+      - platform_coding_catalog_endpoint | default('') | length > 0
+      - platform_coding_catalog_region | default('') | length > 0
+      - platform_coding_catalog_bucket != platform_bucket
+      - platform_coding_catalog_bucket != (platform_hippius_bucket | default(''))
+      - secret_coding_catalog_access_key != secret_hmac_secret
+      - secret_coding_catalog_secret_key != secret_hmac_secret
+      - secret_coding_catalog_access_key != secret_hippius_access_key_id
+      - secret_coding_catalog_access_key != secret_hippius_secret_access_key
+      - secret_coding_catalog_secret_key != secret_hippius_access_key_id
+      - secret_coding_catalog_secret_key != secret_hippius_secret_access_key
+      - secret_coding_catalog_access_key != secret_coding_catalog_secret_key
+      - platform_coding_catalog_max_record_bytes | int >= 4096
+      - platform_coding_catalog_max_record_bytes | int <= 2097152
+      - platform_coding_catalog_timeout_seconds | float >= 0.1
+      - platform_coding_catalog_timeout_seconds | float <= 60
+    fail_msg: >-
+      Private coding catalog activation requires a dedicated bucket, endpoint,
+      region, distinct Secret Manager identities, and bounded record/timeout
+      limits. Do not reuse upload or avatar storage credentials.
+  when: platform_coding_catalog_enabled | bool
+
+- name: Read private coding catalog access key from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_coding_catalog_access_key }} --project={{ gcp_project }}"
+  register: platform_coding_catalog_access_key_read
+  changed_when: false
+  no_log: true
+  when: platform_coding_catalog_enabled | bool
+
+- name: Read private coding catalog secret key from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_coding_catalog_secret_key }} --project={{ gcp_project }}"
+  register: platform_coding_catalog_secret_key_read
+  changed_when: false
+  no_log: true
+  when: platform_coding_catalog_enabled | bool
+
+- name: Validate private coding catalog credentials
+  ansible.builtin.assert:
+    that:
+      - platform_coding_catalog_access_key_read.stdout | default('') | length > 0
+      - platform_coding_catalog_secret_key_read.stdout | default('') | length > 0
+      - platform_coding_catalog_access_key_read.stdout != platform_coding_catalog_secret_key_read.stdout
+      - platform_coding_catalog_access_key_read.stdout != (platform_secrets.hmac_secret | default(''))
+      - platform_coding_catalog_secret_key_read.stdout != (platform_secrets.hmac_secret | default(''))
+      - platform_coding_catalog_access_key_read.stdout != (platform_secrets.hippius_access_key_id | default(''))
+      - platform_coding_catalog_access_key_read.stdout != (platform_secrets.hippius_secret_access_key | default(''))
+      - platform_coding_catalog_secret_key_read.stdout != (platform_secrets.hippius_access_key_id | default(''))
+      - platform_coding_catalog_secret_key_read.stdout != (platform_secrets.hippius_secret_access_key | default(''))
+    fail_msg: >-
+      Private coding catalog credentials must be nonempty and distinct from
+      upload HMAC and avatar Hippius credentials.
+  when: platform_coding_catalog_enabled | bool
+  no_log: true
+
+- name: Fold private coding catalog credentials into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'coding_catalog_access_key': platform_coding_catalog_access_key_read.stdout, 'coding_catalog_secret_key': platform_coding_catalog_secret_key_read.stdout}) }}"
+  no_log: true
+  when: platform_coding_catalog_enabled | bool
+
 - name: Render .env
   ansible.builtin.template:
     src: platform.env.j2

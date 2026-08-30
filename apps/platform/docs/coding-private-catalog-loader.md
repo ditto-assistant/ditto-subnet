@@ -25,6 +25,49 @@ source has no list operation and reads at most one bounded object per selector
 probe. Catalog bytes are held in memory only; this layer creates no plaintext
 disk cache.
 
+## Deployment activation
+
+The Platform Ansible role renders this source only when
+`platform_coding_catalog_enabled: true`. Its defaults keep the feature off. An
+operator must first create a distinct private S3-compatible bucket, then add
+the catalog access-key and secret-key versions to Secret Manager. Terraform
+creates only the empty secret containers
+`platform-coding-catalog-access-key` and
+`platform-coding-catalog-secret-key`; it never receives a credential value or
+creates a corpus object.
+
+The catalog identity must have only the permissions required by Platform:
+`GetObject` under `coding-catalog/v1/*`, with no list, write, delete, public
+read, or miner-upload-bucket access. It must be distinct from both the upload
+and avatar identities. The Ansible role supplies it to the Python Platform API
+through `DITTO_CODING_CATALOG_STORAGE_*`; the shared PM2 environment explicitly
+clears it for the Go model-relay slots, and validators and miners never receive
+it. The current app VM service account remains a host trust boundary: stronger
+per-process cloud-secret isolation requires a separate service account or
+secret-delivery service. Bucket policy, encryption, retention, and curator
+upload are separate operator-reviewed controls and do not become active merely
+by merging this code.
+
+The reviewed activation sequence is:
+
+```yaml
+# infra/ansible/host_vars/ditto-platform-<environment>.yml
+platform_coding_catalog_enabled: true
+platform_coding_catalog_endpoint: "https://<private-s3-origin>"
+platform_coding_catalog_region: "<region>"
+platform_coding_catalog_bucket: "<private-coding-catalog-bucket>"
+```
+
+After Terraform has created the two empty Secret Manager containers, the
+operator adds the dedicated read-only key values out of band, converges the
+Platform app role, and reruns `scripts/start.sh` or restarts/reloads the Platform
+PM2 process with `--update-env` so it receives the new `.env`. The role rejects
+empty catalog secret versions and rejects catalog identities or key material
+that reuse upload HMAC or avatar Hippius credentials. Leaving the flag false is
+the rollback; it omits every catalog variable from `.env` and leaves the source
+unavailable after rerunning `scripts/start.sh` or restarting/reloading with
+`--update-env`.
+
 ## Record contract
 
 Each object uses `dittobench-coding-private-catalog-record-v1` and contains:

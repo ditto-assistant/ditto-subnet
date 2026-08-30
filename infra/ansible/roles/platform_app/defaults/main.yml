@@ -147,6 +147,20 @@ platform_trace_embedding_vectors: true
 secret_backblaze_key_id: platform-backblaze-key-id
 secret_backblaze_application_key: platform-backblaze-application-key
 
+# Private Coding catalog. This is deliberately a separate read-only S3
+# authority, never the miner-upload or avatar bucket. It remains disabled
+# until an operator creates the private bucket, installs the two secret
+# versions, and explicitly enables it in environment host_vars.
+platform_coding_catalog_enabled: false
+platform_coding_catalog_endpoint: "https://s3.hippius.com"
+platform_coding_catalog_region: decentralized
+platform_coding_catalog_bucket: ""
+platform_coding_catalog_use_tls: true
+platform_coding_catalog_max_record_bytes: 2097152
+platform_coding_catalog_timeout_seconds: 10
+secret_coding_catalog_access_key: platform-coding-catalog-access-key
+secret_coding_catalog_secret_key: platform-coding-catalog-secret-key
+
 # Subnet / pricing config (mirrors .env.example defaults).
 platform_netuid: 118
 platform_subtensor_network: finney

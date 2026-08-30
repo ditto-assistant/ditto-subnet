@@ -53,6 +53,8 @@ locals {
       google_secret_manager_secret.hippius_secret_access_key.secret_id,
       google_secret_manager_secret.backblaze_key_id.secret_id,
       google_secret_manager_secret.backblaze_application_key.secret_id,
+      google_secret_manager_secret.coding_catalog_access_key.secret_id,
+      google_secret_manager_secret.coding_catalog_secret_key.secret_id,
     ],
     [for s in google_secret_manager_secret.pylon_open_access_token : s.secret_id],
   )
@@ -357,6 +359,32 @@ resource "google_secret_manager_secret" "hippius_access_key_id" {
 resource "google_secret_manager_secret" "hippius_secret_access_key" {
   project   = var.project
   secret_id = "platform-hippius-secret-access-key"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# Private Coding corpus credentials. These containers deliberately hold a
+# distinct, read-only S3 identity scoped to coding-catalog/v1/*; values are
+# added out of band, never through Terraform state. The actual private bucket
+# is provisioned and access-reviewed separately before Ansible enables it.
+resource "google_secret_manager_secret" "coding_catalog_access_key" {
+  project   = var.project
+  secret_id = "platform-coding-catalog-access-key"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_secret_manager_secret" "coding_catalog_secret_key" {
+  project   = var.project
+  secret_id = "platform-coding-catalog-secret-key"
   replication {
     auto {}
   }
