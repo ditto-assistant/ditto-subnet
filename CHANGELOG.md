@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.163.0 (2026-08-30)
+
+### Features
+
+- **coding**: Compose durable supervisor phase runner
+  ([`cb35fc3`](https://github.com/ditto-assistant/ditto-subnet/commit/cb35fc3ce70f65a9fd7597a1da9c528b8c84e655))
+
+
 ## v0.162.1 (2026-08-30)
 
 ### Bug Fixes
