@@ -24,7 +24,10 @@ from ditto.api_models.coding_artifacts import (
 from ditto.api_models.coding_selection import coding_task_set_manifest_digest
 from ditto.api_server.coding_private_catalog import CodingPrivateCatalogConfig
 from ditto.api_server.storage.client import S3StorageClient
-from ditto.api_server.storage.errors import ObjectUploadFailedError
+from ditto.api_server.storage.errors import (
+    ObjectNotFoundError,
+    ObjectUploadFailedError,
+)
 from ditto.api_server.storage.models import ObjectMetadata
 from ditto.db.queries.coding_task_leases import CodingShadowTaskLeaseCore
 
@@ -88,12 +91,7 @@ class CodingArtifactCapabilitySet:
     validator_hotkey: str
     ticket_deadline: datetime
     expires_at: datetime
-    capabilities: tuple[
-        CodingArtifactCapability,
-        CodingArtifactCapability,
-        CodingArtifactCapability,
-        CodingArtifactCapability,
-    ]
+    capabilities: tuple[CodingArtifactCapability, ...]
     weight_eligible: Literal[False] = False
 
 
@@ -130,6 +128,46 @@ class CodingArtifactCapabilityMinter:
         self,
         lease: CodingShadowTaskLeaseCore,
     ) -> CodingArtifactCapabilitySet:
+        """Mint the complete internal four-kind set."""
+
+        return await self._mint(
+            lease,
+            kinds=(
+                CodingArtifactKind.VISIBLE_BUNDLE,
+                CodingArtifactKind.MEMORY_BUNDLE,
+                CodingArtifactKind.RESOURCE_PROFILE,
+                CodingArtifactKind.GRADER_BUNDLE,
+            ),
+        )
+
+    async def mint_authoring(
+        self,
+        lease: CodingShadowTaskLeaseCore,
+    ) -> CodingArtifactCapabilitySet:
+        """Mint only visible, memory, and resource authoring capabilities."""
+
+        return await self._mint(
+            lease,
+            kinds=(
+                CodingArtifactKind.VISIBLE_BUNDLE,
+                CodingArtifactKind.MEMORY_BUNDLE,
+                CodingArtifactKind.RESOURCE_PROFILE,
+            ),
+        )
+
+    async def _mint(
+        self,
+        lease: CodingShadowTaskLeaseCore,
+        *,
+        kinds: tuple[CodingArtifactKind, ...],
+    ) -> CodingArtifactCapabilitySet:
+        canonical_kinds = tuple(
+            kind for kind in CodingArtifactKind if kind in frozenset(kinds)
+        )
+        if not kinds or kinds != canonical_kinds:
+            raise CodingArtifactCapabilityIntegrityError(
+                "coding artifact capability kinds must be unique and canonical"
+            )
         now = _aware(self._clock())
         deadline = _aware(lease.deadline)
         remaining = math.floor((deadline - now).total_seconds())
@@ -166,15 +204,13 @@ class CodingArtifactCapabilityMinter:
             raise CodingArtifactCapabilityIntegrityError(
                 "coding lease task material disagrees with shared manifest"
             )
-        identities = (
-            (CodingArtifactKind.VISIBLE_BUNDLE, manifest_task.visible_bundle_sha256),
-            (CodingArtifactKind.MEMORY_BUNDLE, manifest_task.memory_bundle_sha256),
-            (
-                CodingArtifactKind.RESOURCE_PROFILE,
-                manifest_task.resource_profile_sha256,
-            ),
-            (CodingArtifactKind.GRADER_BUNDLE, manifest_task.grader_bundle_sha256),
-        )
+        digest_by_kind = {
+            CodingArtifactKind.VISIBLE_BUNDLE: manifest_task.visible_bundle_sha256,
+            CodingArtifactKind.MEMORY_BUNDLE: manifest_task.memory_bundle_sha256,
+            CodingArtifactKind.RESOURCE_PROFILE: manifest_task.resource_profile_sha256,
+            CodingArtifactKind.GRADER_BUNDLE: manifest_task.grader_bundle_sha256,
+        }
+        identities = tuple((kind, digest_by_kind[kind]) for kind in kinds)
         verified: list[tuple[CodingArtifactKind, str, str, ObjectMetadata]] = []
         for kind, digest in identities:
             key = coding_artifact_object_key(kind=kind, sha256=digest)
@@ -185,7 +221,7 @@ class CodingArtifactCapabilityMinter:
                 raise CodingArtifactCapabilityUnavailableError(
                     "coding artifact metadata verification timed out"
                 ) from None
-            except ObjectUploadFailedError:
+            except (ObjectNotFoundError, ObjectUploadFailedError):
                 raise CodingArtifactCapabilityUnavailableError(
                     "coding artifact capability source is unavailable"
                 ) from None
@@ -245,7 +281,7 @@ class CodingArtifactCapabilityMinter:
                     url=url,
                 )
             )
-        if len(capabilities) != 4:  # pragma: no cover - fixed tuple invariant
+        if len(capabilities) != len(kinds):  # pragma: no cover - loop invariant
             raise RuntimeError("coding artifact capability set is incomplete")
         capability_set_expires_at = min(
             capability.expires_at for capability in capabilities
@@ -264,12 +300,7 @@ class CodingArtifactCapabilityMinter:
             validator_hotkey=lease.validator_hotkey,
             ticket_deadline=deadline,
             expires_at=capability_set_expires_at,
-            capabilities=(
-                capabilities[0],
-                capabilities[1],
-                capabilities[2],
-                capabilities[3],
-            ),
+            capabilities=tuple(capabilities),
         )
 
 

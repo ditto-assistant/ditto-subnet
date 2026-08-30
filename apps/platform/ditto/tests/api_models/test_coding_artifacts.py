@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -16,6 +18,9 @@ from ditto.api_models.coding_artifacts import (
     CodingArtifactCapabilityEnvelope,
     CodingArtifactDeliveryPhase,
     CodingArtifactKind,
+    CodingAuthoringLeaseRequest,
+    CodingAuthoringLeaseResponse,
+    coding_authoring_lease_signing_message,
     parse_coding_artifact_capability_json,
 )
 
@@ -26,6 +31,13 @@ _VECTOR_PATH = (
     / "testdata"
     / "coding_artifact_capability_v1.json"
 )
+_SELECTION_PATH = (
+    Path(__file__).parents[5]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_selection_v1.json"
+)
 
 
 def _vectors() -> dict:
@@ -34,6 +46,32 @@ def _vectors() -> dict:
     assert vectors["coding_contract_version"] == 1
     assert vectors["weight_eligible"] is False
     return vectors
+
+
+def _authoring_response() -> dict:
+    selection = json.loads(_SELECTION_PATH.read_text(encoding="utf-8"))
+    task = selection["task_version"]["payload"]
+    return {
+        "schema": "dittobench-coding-authoring-lease-v1",
+        "coding_contract_version": 1,
+        "weight_eligible": False,
+        "ticket_id": _vectors()["capabilities"][0]["ticket_id"],
+        "ticket_deadline": _vectors()["capabilities"][0]["ticket_deadline"],
+        "coding_run_id": selection["run_manifest"]["coding_run_id"],
+        "run_manifest_sha256": selection["run_authority"]["run_manifest_sha256"],
+        "task_set_manifest_sha256": selection["run_manifest"][
+            "task_set_manifest_sha256"
+        ],
+        "repository_epoch": task["repository_epoch"],
+        "issue_sha256": task["issue_sha256"],
+        "runtime_policy_sha256": task["runtime_policy_sha256"],
+        "budgets_sha256": task["budgets_sha256"],
+        "issue": selection["issue"],
+        "runtime_policy": selection["runtime_policy"],
+        "budgets": selection["budgets"],
+        "run_manifest": selection["run_manifest"],
+        "capabilities": _vectors()["capabilities"][:3],
+    }
 
 
 def test_python_accepts_every_shared_capability_vector() -> None:
@@ -204,3 +242,50 @@ def test_raw_parser_redacts_invalid_bearer_url() -> None:
         parse_coding_artifact_capability_json(json.dumps(raw))
     assert "synthetic-visible-authoring" not in str(captured.value)
     assert raw["url"] not in str(captured.value)
+
+
+def test_authoring_request_signing_message_binds_ticket_nonce_and_time() -> None:
+    requested_at = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    payload = CodingAuthoringLeaseRequest(
+        validator_hotkey="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+        ticket_id=UUID("33333333-3333-4333-8333-333333333333"),
+        nonce=UUID("77777777-7777-4777-8777-777777777777"),
+        requested_at=requested_at,
+        signature="88" * 64,
+    )
+    assert coding_authoring_lease_signing_message(
+        validator_hotkey=payload.validator_hotkey,
+        ticket_id=payload.ticket_id,
+        nonce=payload.nonce,
+        requested_at=payload.requested_at,
+    ) == (
+        b"dittobench-coding-authoring-lease:v1\x00"
+        b"5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY\x00"
+        b"33333333-3333-4333-8333-333333333333\x00"
+        b"77777777-7777-4777-8777-777777777777\x00"
+        b"2026-08-21T12:00:00.000000+00:00"
+    )
+
+
+def test_authoring_response_binds_material_and_exact_three_capabilities() -> None:
+    raw = _authoring_response()
+    response = CodingAuthoringLeaseResponse.model_validate(raw)
+    assert [item.artifact_kind.value for item in response.capabilities] == [
+        "visible-bundle",
+        "memory-bundle",
+        "resource-profile",
+    ]
+    assert "grader-bundle" not in response.model_dump_json()
+    extended = {**raw, "future_delivery_hint": "ignored"}
+    assert (
+        "future_delivery_hint"
+        not in CodingAuthoringLeaseResponse.model_validate(extended).model_fields_set
+    )
+
+    drifted = deepcopy(raw)
+    drifted["capabilities"][0]["sha256"] = "ff" * 32
+    drifted["capabilities"][0]["url"] = drifted["capabilities"][0]["url"].replace(
+        "05" * 32, "ff" * 32
+    )
+    with pytest.raises(ValidationError, match="capabilities"):
+        CodingAuthoringLeaseResponse.model_validate(drifted)

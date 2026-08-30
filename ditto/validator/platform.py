@@ -17,6 +17,8 @@ import httpx
 from pydantic import ValidationError
 
 from ditto.api_models.coding import (
+    CodingAuthoringLeaseRequest,
+    CodingAuthoringLeaseResponse,
     CodingCapabilityCertificationReceipt,
     SubmitCodingCertificationRequest,
     SubmitCodingCertificationResponse,
@@ -55,6 +57,7 @@ from ditto.api_models.validator_confirmation import (
 from ditto.validator.errors import PlatformError, PlatformInfrastructureError
 from ditto.validator.signing import (
     sign_artifact_request,
+    sign_coding_authoring_lease,
     sign_inference_exchange,
     sign_job_fail_request,
     sign_job_request,
@@ -90,6 +93,7 @@ _INFERENCE_BUDGET_EVIDENCE_HEADERS = {
     "max_output_tokens": "X-Ditto-Max-Output-Tokens",
 }
 _INFERENCE_BUDGET_EVIDENCE_FIELDS = tuple(_INFERENCE_BUDGET_EVIDENCE_HEADERS)
+_CODING_AUTHORING_LEASE_MAX_BYTES = 512 << 10
 
 
 def _json_budget_evidence(exchange: InferenceExchangeResponse) -> dict[str, int] | None:
@@ -212,6 +216,70 @@ class PlatformClient:
                 f"job request rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return JobResponse.model_validate(resp.json())
+
+    async def request_coding_authoring_lease(
+        self,
+        ticket_id: UUID,
+    ) -> CodingAuthoringLeaseResponse:
+        """Fetch one explicit shadow authoring lease; the worker does not call this."""
+
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingAuthoringLeaseRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            ticket_id=ticket_id,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_authoring_lease(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                ticket_id=ticket_id,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        body = bytearray()
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base}{_PREFIX}/coding-shadow/authoring-lease",
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            ) as response:
+                if response.status_code == 503:
+                    raise PlatformInfrastructureError(
+                        "coding authoring lease delivery is temporarily unavailable"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        f"coding authoring lease rejected ({response.status_code})"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=64 << 10):
+                    if len(body) + len(chunk) > _CODING_AUTHORING_LEASE_MAX_BYTES:
+                        raise PlatformInfrastructureError(
+                            "coding authoring lease response size is invalid"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding authoring lease request failed"
+            ) from error
+        if not body:
+            raise PlatformInfrastructureError(
+                "coding authoring lease response size is invalid"
+            )
+        try:
+            lease = CodingAuthoringLeaseResponse.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding authoring lease response is invalid"
+            ) from None
+        if lease.ticket_id != ticket_id:
+            raise PlatformInfrastructureError(
+                "coding authoring lease response identity is invalid"
+            )
+        return lease
 
     async def request_v9_confirmation_job(
         self,

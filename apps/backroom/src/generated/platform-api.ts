@@ -4846,6 +4846,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/coding-shadow/authoring-lease": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Coding Authoring Lease
+         * @description Return one task and three authoring capabilities; never grader bytes.
+         */
+        post: operations["request_coding_authoring_lease_api_v1_validator_coding_shadow_authoring_lease_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/heartbeat": {
         parameters: {
             query?: never;
@@ -10072,6 +10092,142 @@ export interface components {
              */
             v: number;
         };
+        /**
+         * CodingArtifactAudience
+         * @enum {string}
+         */
+        CodingArtifactAudience: "workspace-materializer" | "memory-seed-projector" | "resource-supervisor" | "protected-grader";
+        /**
+         * CodingArtifactCapabilityEnvelope
+         * @description One audience- and phase-projected bearer capability.
+         */
+        CodingArtifactCapabilityEnvelope: {
+            artifact_kind: components["schemas"]["CodingArtifactKind"];
+            audience: components["schemas"]["CodingArtifactAudience"];
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            delivery_phase: components["schemas"]["CodingArtifactDeliveryPhase"];
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-artifact-capability-v1";
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Url */
+            url: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * CodingArtifactDeliveryPhase
+         * @enum {string}
+         */
+        CodingArtifactDeliveryPhase: "authoring" | "grading";
+        /**
+         * CodingArtifactKind
+         * @enum {string}
+         */
+        CodingArtifactKind: "visible-bundle" | "memory-bundle" | "resource-profile" | "grader-bundle";
+        /**
+         * CodingAuthoringLeaseRequest
+         * @description Signed request for one validator-owned shadow authoring lease.
+         */
+        CodingAuthoringLeaseRequest: {
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * CodingAuthoringLeaseResponse
+         * @description One selected task and exactly three authoring artifact capabilities.
+         */
+        CodingAuthoringLeaseResponse: {
+            budgets: components["schemas"]["CodingCatalogBudgets"];
+            /** Budgets Sha256 */
+            budgets_sha256: string;
+            /** Capabilities */
+            capabilities: components["schemas"]["CodingArtifactCapabilityEnvelope"][];
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Coding Run Id */
+            coding_run_id: string;
+            issue: components["schemas"]["CodingCatalogIssue"];
+            /** Issue Sha256 */
+            issue_sha256: string;
+            /** Repository Epoch */
+            repository_epoch: string;
+            run_manifest: components["schemas"]["CodingSelectionRunManifest"];
+            /** Run Manifest Sha256 */
+            run_manifest_sha256: string;
+            runtime_policy: components["schemas"]["CodingCatalogRuntimePolicy"];
+            /** Runtime Policy Sha256 */
+            runtime_policy_sha256: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-authoring-lease-v1";
+            /** Task Set Manifest Sha256 */
+            task_set_manifest_sha256: string;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
         /** CodingCapabilityCertificationReceipt */
         CodingCapabilityCertificationReceipt: {
             /** Agent Artifact Sha256 */
@@ -10146,6 +10302,17 @@ export interface components {
              */
             weight_eligible: false;
         };
+        /** CodingCatalogBudgets */
+        CodingCatalogBudgets: {
+            /** Model Input Tokens */
+            model_input_tokens: number;
+            /** Model Output Tokens */
+            model_output_tokens: number;
+            /** Wall Time Seconds */
+            wall_time_seconds: number;
+            /** Workspace Tool Calls */
+            workspace_tool_calls: number;
+        };
         /** CodingCatalogCommitment */
         CodingCatalogCommitment: {
             /** Catalog Merkle Root */
@@ -10184,6 +10351,55 @@ export interface components {
              */
             weight_eligible: false;
         };
+        /** CodingCatalogIssue */
+        CodingCatalogIssue: {
+            /** Constraints */
+            constraints: string[];
+            /** Description */
+            description: string;
+            /** Title */
+            title: string;
+        };
+        /**
+         * CodingCatalogManifestTask
+         * @description The miner-visible task identity committed by one private catalog leaf.
+         */
+        CodingCatalogManifestTask: {
+            /** Base Tree Sha256 */
+            base_tree_sha256: string;
+            /** Case Id */
+            case_id: string;
+            /** Environment Image Digest */
+            environment_image_digest: string;
+            /**
+             * Environment Platform
+             * @constant
+             */
+            environment_platform: "linux/amd64";
+            /** Grader Bundle Sha256 */
+            grader_bundle_sha256: string;
+            /** Grader Image Digest */
+            grader_image_digest: string;
+            /** Grader Plan Sha256 */
+            grader_plan_sha256: string;
+            /**
+             * Grader Platform
+             * @constant
+             */
+            grader_platform: "linux/amd64";
+            /** Memory Bundle Sha256 */
+            memory_bundle_sha256: string;
+            /** Profile Capability Id */
+            profile_capability_id: string;
+            /** Resource Profile Sha256 */
+            resource_profile_sha256: string;
+            /** Test Manifest Sha256 */
+            test_manifest_sha256: string;
+            /** Variant Id */
+            variant_id: string;
+            /** Visible Bundle Sha256 */
+            visible_bundle_sha256: string;
+        };
         /** CodingCatalogReleaseRecord */
         CodingCatalogReleaseRecord: {
             commitment: components["schemas"]["CodingCatalogCommitment"];
@@ -10221,6 +10437,15 @@ export interface components {
             shadow_only: true;
             /** Signature */
             signature: string;
+        };
+        /** CodingCatalogRuntimePolicy */
+        CodingCatalogRuntimePolicy: {
+            /** Build Command Ids */
+            build_command_ids: string[];
+            /** Editable Paths */
+            editable_paths: string[];
+            /** Test Command Ids */
+            test_command_ids: string[];
         };
         /** CodingCertificationModelEvidence */
         CodingCertificationModelEvidence: {
@@ -10465,6 +10690,60 @@ export interface components {
             /**
              * Weight Eligible
              * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * CodingSelectionRunManifest
+         * @description Platform mirror of the shared coding run-manifest v1 contract.
+         */
+        CodingSelectionRunManifest: {
+            /** Agent Artifact Sha256 */
+            agent_artifact_sha256: string;
+            /** Agent Id */
+            agent_id: string;
+            /**
+             * Bench Family
+             * @constant
+             */
+            bench_family: "coding";
+            /** Catalog Merkle Root */
+            catalog_merkle_root: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Coding Run Id */
+            coding_run_id: string;
+            /** Corpus Release Id */
+            corpus_release_id: string;
+            /** Grader Contract Sha256 */
+            grader_contract_sha256: string;
+            /** Inference Grant Sha256 */
+            inference_grant_sha256: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-run-manifest-v1";
+            /** Selection Block Hash */
+            selection_block_hash: string;
+            /** Selection Block Number */
+            selection_block_number: number;
+            /** Selection Chain Genesis Hash */
+            selection_chain_genesis_hash: string;
+            /** Selection Derivation Id */
+            selection_derivation_id: string;
+            /** Task Set Id */
+            task_set_id: string;
+            /** Task Set Manifest Sha256 */
+            task_set_manifest_sha256: string;
+            /** Tasks */
+            tasks: components["schemas"]["CodingCatalogManifestTask"][];
+            /**
+             * Weight Eligible
              * @constant
              */
             weight_eligible: false;
@@ -31396,6 +31675,67 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    request_coding_authoring_lease_api_v1_validator_coding_shadow_authoring_lease_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingAuthoringLeaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingAuthoringLeaseResponse"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Coding shadow ticket not available to this validator. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Replay, expiry, or immutable authority conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Private catalog or artifact signer unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

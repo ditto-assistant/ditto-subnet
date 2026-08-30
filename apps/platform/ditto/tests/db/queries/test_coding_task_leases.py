@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -29,6 +30,7 @@ from ditto.db.queries import coding_task_leases
 from ditto.db.queries.coding_task_leases import (
     CodingTaskLeaseIntegrityError,
     CodingTaskLeaseNotAvailableError,
+    authorize_coding_shadow_task_delivery,
     build_coding_shadow_task_lease,
 )
 
@@ -161,6 +163,7 @@ def _fixture() -> SimpleNamespace:
         exposure=exposure,
         assignment_row=object(),
         now=now,
+        catalog_now=now,
         delivery_now=now,
     )
 
@@ -185,6 +188,7 @@ class _Session:
         values = (
             self.fixture.issuance,
             self.fixture.now,
+            self.fixture.catalog_now,
             self.fixture.delivery_now,
         )
         value = values[self.scalar_index]
@@ -194,6 +198,21 @@ class _Session:
     async def scalars(self, statement):
         del statement
         return [self.fixture.exposure]
+
+
+class _AuthorizationSession:
+    def __init__(self, fixture: SimpleNamespace) -> None:
+        self.fixture = fixture
+
+    async def get(self, model, identity):
+        assert model is CodingShadowTicket
+        return (
+            self.fixture.ticket if identity == self.fixture.ticket.ticket_id else None
+        )
+
+    async def scalar(self, statement):
+        del statement
+        return self.fixture.now
 
 
 async def _build(monkeypatch, fixture: SimpleNamespace):
@@ -235,6 +254,29 @@ async def test_task_lease_reconstructs_exact_shared_authority(monkeypatch) -> No
     assert lease.weight_eligible is False
 
 
+async def test_delivery_authorization_precedes_private_catalog_access() -> None:
+    fixture = _fixture()
+    session = _AuthorizationSession(fixture)
+    await authorize_coding_shadow_task_delivery(
+        session,  # type: ignore[arg-type]
+        ticket_id=fixture.ticket.ticket_id,
+        validator_hotkey=fixture.ticket.validator_hotkey,
+    )
+    with pytest.raises(CodingTaskLeaseNotAvailableError, match="unavailable"):
+        await authorize_coding_shadow_task_delivery(
+            session,  # type: ignore[arg-type]
+            ticket_id=fixture.ticket.ticket_id,
+            validator_hotkey="5" + "X" * 47,
+        )
+    fixture.now = fixture.ticket.deadline
+    with pytest.raises(CodingTaskLeaseNotAvailableError, match="unavailable"):
+        await authorize_coding_shadow_task_delivery(
+            session,  # type: ignore[arg-type]
+            ticket_id=fixture.ticket.ticket_id,
+            validator_hotkey=fixture.ticket.validator_hotkey,
+        )
+
+
 async def test_different_validator_tickets_share_identical_manifests(
     monkeypatch,
 ) -> None:
@@ -271,6 +313,40 @@ async def test_task_lease_rejects_persisted_authority_drift(
             fixture.issuance.assignment_sha256 = "ff" * 32
     with pytest.raises(CodingTaskLeaseIntegrityError, match="disagrees"):
         await _build(monkeypatch, fixture)
+
+
+async def test_task_lease_rejects_insufficient_lifetime_before_catalog_read(
+    monkeypatch,
+) -> None:
+    fixture = _fixture()
+    fixture.now = fixture.ticket.deadline - timedelta(seconds=30)
+    fixture.catalog_now = fixture.now
+    monkeypatch.setattr(
+        coding_task_leases,
+        "assignment_from_row",
+        lambda _row: fixture.assignment,
+    )
+    monkeypatch.setattr(
+        coding_task_leases,
+        "get_coding_catalog_release",
+        AsyncMock(
+            return_value=SimpleNamespace(commitment=fixture.commitment.model_dump())
+        ),
+    )
+    monkeypatch.setattr(
+        coding_task_leases,
+        "catalog_release_matches_commitment",
+        lambda _row, *, commitment: bool(commitment),
+    )
+    source = AsyncMock()
+    source.timeout_seconds = 60.0
+    with pytest.raises(CodingTaskLeaseNotAvailableError, match="insufficient lifetime"):
+        await build_coding_shadow_task_lease(
+            _Session(fixture),  # type: ignore[arg-type]
+            ticket_id=fixture.ticket.ticket_id,
+            material_source=source,
+        )
+    source.get_task_material.assert_not_awaited()
 
 
 async def test_task_lease_rejects_expired_ticket_before_catalog_read() -> None:

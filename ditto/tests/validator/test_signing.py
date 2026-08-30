@@ -20,6 +20,7 @@ from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgress
 from ditto.api_models.coding import (
     CodingCapabilityCertificationReceipt,
+    coding_authoring_lease_signing_message,
     coding_certification_signing_message,
 )
 from ditto.api_models.confirmation_progress import ConfirmationProgress
@@ -43,6 +44,7 @@ from ditto.validator.signing import (
     job_signing_message,
     ledger_signing_message,
     score_signing_message,
+    sign_coding_authoring_lease,
     sign_coding_certification,
     sign_heartbeat,
     sign_job_fail_request,
@@ -130,6 +132,27 @@ def test_coding_certification_signature_matches_shared_message() -> None:
         ticket_deadline=datetime.fromisoformat(expected["ticket_deadline"]),
         screened_image_sha256=expected["screened_image_sha256"],
         certification_sha256=receipt.certification_sha256,
+    )
+    assert keypair.verify(message, bytes.fromhex(signature))
+
+
+def test_coding_authoring_lease_signature_binds_request() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    ticket_id = UUID("33333333-3333-4333-8333-333333333333")
+    nonce = UUID("77777777-7777-4777-8777-777777777777")
+    requested_at = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    signature = sign_coding_authoring_lease(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        ticket_id=ticket_id,
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    message = coding_authoring_lease_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        ticket_id=ticket_id,
+        nonce=nonce,
+        requested_at=requested_at,
     )
     assert keypair.verify(message, bytes.fromhex(signature))
 

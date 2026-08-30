@@ -232,6 +232,10 @@ class S3CodingPrivateCatalogSource:
         self._config = config
         self._object_reader = object_reader or S3StorageClient(config.storage_config())
 
+    @property
+    def timeout_seconds(self) -> float:
+        return self._config.timeout_seconds
+
     async def get_task_version(
         self,
         *,

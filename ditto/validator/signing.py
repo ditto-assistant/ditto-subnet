@@ -33,6 +33,7 @@ from ditto.api_models.benchmark_progress import (
 )
 from ditto.api_models.coding import (
     CodingCapabilityCertificationReceipt,
+    coding_authoring_lease_signing_message,
     coding_certification_signing_message,
 )
 from ditto.api_models.confirmation_progress import (
@@ -201,6 +202,26 @@ def sign_coding_certification(
         ticket_deadline=ticket_deadline,
         screened_image_sha256=screened_image_sha256,
         certification_sha256=receipt.certification_sha256,
+    )
+    signature: bytes = keypair.sign(message)
+    return signature.hex()
+
+
+def sign_coding_authoring_lease(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    ticket_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    """Sign one shadow authoring-lease request."""
+
+    message = coding_authoring_lease_signing_message(
+        validator_hotkey=validator_hotkey,
+        ticket_id=ticket_id,
+        nonce=nonce,
+        requested_at=requested_at,
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()

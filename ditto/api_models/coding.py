@@ -8,11 +8,15 @@ weight eligible.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
+import posixpath
+import re
 import unicodedata
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Annotated, Any, Literal
+from urllib.parse import parse_qs, urlparse
 from uuid import UUID
 
 from pydantic import (
@@ -38,6 +42,9 @@ _BLOCK_HASH_PATTERN = r"^0x[0-9a-f]{64}$"
 _CONTENT_KEY_PATTERN = r"^sha256/[0-9a-f]{64}$"
 _SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 _SIGNATURE_HEX_PATTERN = r"^[0-9a-fA-F]{128}$"
+_ARTIFACT_RFC3339 = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$"
+)
 _REQUIRED_TEST_GROUPS = frozenset(
     {"adversarial", "fail_to_pass", "hidden", "integrity", "pass_to_pass"}
 )
@@ -934,6 +941,294 @@ class SubmitCodingCertificationResponse(BaseModel):
     active: bool
 
 
+class CodingArtifactKind(StrEnum):
+    VISIBLE_BUNDLE = "visible-bundle"
+    MEMORY_BUNDLE = "memory-bundle"
+    RESOURCE_PROFILE = "resource-profile"
+    GRADER_BUNDLE = "grader-bundle"
+
+
+class CodingArtifactAudience(StrEnum):
+    WORKSPACE_MATERIALIZER = "workspace-materializer"
+    MEMORY_SEED_PROJECTOR = "memory-seed-projector"
+    RESOURCE_SUPERVISOR = "resource-supervisor"
+    PROTECTED_GRADER = "protected-grader"
+
+
+class CodingArtifactDeliveryPhase(StrEnum):
+    AUTHORING = "authoring"
+    GRADING = "grading"
+
+
+_ARTIFACT_POLICY = {
+    CodingArtifactKind.VISIBLE_BUNDLE: (
+        CodingArtifactAudience.WORKSPACE_MATERIALIZER,
+        2 << 30,
+        frozenset(
+            {
+                CodingArtifactDeliveryPhase.AUTHORING,
+                CodingArtifactDeliveryPhase.GRADING,
+            }
+        ),
+    ),
+    CodingArtifactKind.MEMORY_BUNDLE: (
+        CodingArtifactAudience.MEMORY_SEED_PROJECTOR,
+        64 << 20,
+        frozenset({CodingArtifactDeliveryPhase.AUTHORING}),
+    ),
+    CodingArtifactKind.RESOURCE_PROFILE: (
+        CodingArtifactAudience.RESOURCE_SUPERVISOR,
+        4 << 20,
+        frozenset(
+            {
+                CodingArtifactDeliveryPhase.AUTHORING,
+                CodingArtifactDeliveryPhase.GRADING,
+            }
+        ),
+    ),
+    CodingArtifactKind.GRADER_BUNDLE: (
+        CodingArtifactAudience.PROTECTED_GRADER,
+        512 << 20,
+        frozenset({CodingArtifactDeliveryPhase.GRADING}),
+    ),
+}
+
+
+class CodingArtifactCapabilityEnvelope(CodingContractModel):
+    schema_name: Literal["dittobench-coding-artifact-capability-v1"] = Field(
+        alias="schema"
+    )
+    coding_contract_version: Literal[1]
+    weight_eligible: Literal[False]
+    ticket_id: UUID
+    ticket_deadline: datetime
+    delivery_phase: CodingArtifactDeliveryPhase
+    artifact_kind: CodingArtifactKind
+    audience: CodingArtifactAudience
+    sha256: Sha256
+    size_bytes: Annotated[int, Field(ge=1)]
+    url: Annotated[str, Field(min_length=1, max_length=16 << 10, repr=False)]
+    expires_at: datetime
+
+    @model_validator(mode="after")
+    def capability_is_coherent(self) -> CodingArtifactCapabilityEnvelope:
+        audience, maximum, phases = _ARTIFACT_POLICY[self.artifact_kind]
+        if (
+            self.ticket_id.int == 0
+            or self.expires_at.microsecond != 0
+            or self.expires_at > self.ticket_deadline
+            or self.size_bytes > maximum
+            or self.audience is not audience
+            or self.delivery_phase not in phases
+        ):
+            raise ValueError("coding artifact capability authority is incoherent")
+        _validate_artifact_url(self)
+        return self
+
+
+class CodingAuthoringLeaseRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    ticket_id: UUID
+    nonce: UUID
+    requested_at: datetime
+    signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
+
+    @model_validator(mode="after")
+    def request_is_coherent(self) -> CodingAuthoringLeaseRequest:
+        if (
+            self.ticket_id.int == 0
+            or self.nonce.int == 0
+            or self.requested_at.tzinfo is None
+            or self.requested_at.utcoffset() is None
+        ):
+            raise ValueError("coding authoring request authority is invalid")
+        return self
+
+
+class CodingAuthoringLeaseResponse(CodingContractModel):
+    schema_name: Literal["dittobench-coding-authoring-lease-v1"] = Field(alias="schema")
+    coding_contract_version: Literal[1]
+    weight_eligible: Literal[False]
+    ticket_id: UUID
+    ticket_deadline: datetime
+    coding_run_id: OpaqueId
+    run_manifest_sha256: Sha256
+    task_set_manifest_sha256: Sha256
+    repository_epoch: OpaqueId
+    issue_sha256: Sha256
+    runtime_policy_sha256: Sha256
+    budgets_sha256: Sha256
+    issue: CodingIssue
+    runtime_policy: CodingRuntimePolicy
+    budgets: CodingBudgets
+    run_manifest: CodingRunManifest
+    capabilities: Annotated[
+        list[CodingArtifactCapabilityEnvelope], Field(min_length=3, max_length=3)
+    ]
+
+    @model_validator(mode="after")
+    def authoring_authority_is_coherent(self) -> CodingAuthoringLeaseResponse:
+        if (
+            self.ticket_id.int == 0
+            or self.ticket_deadline.tzinfo is None
+            or len(self.run_manifest.tasks) != 1
+            or self.run_manifest.coding_run_id != self.coding_run_id
+            or self.run_manifest.task_set_manifest_sha256
+            != self.task_set_manifest_sha256
+            or canonical_digest(self.run_manifest) != self.run_manifest_sha256
+            or coding_issue_digest(self.issue) != self.issue_sha256
+            or coding_runtime_policy_digest(self.runtime_policy)
+            != self.runtime_policy_sha256
+            or coding_budgets_digest(self.budgets) != self.budgets_sha256
+        ):
+            raise ValueError("coding authoring lease material disagrees with authority")
+        expected_kinds = [
+            CodingArtifactKind.VISIBLE_BUNDLE,
+            CodingArtifactKind.MEMORY_BUNDLE,
+            CodingArtifactKind.RESOURCE_PROFILE,
+        ]
+        if [
+            capability.artifact_kind for capability in self.capabilities
+        ] != expected_kinds:
+            raise ValueError(
+                "coding authoring capabilities are incomplete or unordered"
+            )
+        task = self.run_manifest.tasks[0]
+        expected_digests = [
+            task.visible_bundle_sha256,
+            task.memory_bundle_sha256,
+            task.resource_profile_sha256,
+        ]
+        if any(
+            capability.ticket_id != self.ticket_id
+            or capability.ticket_deadline != self.ticket_deadline
+            or capability.delivery_phase is not CodingArtifactDeliveryPhase.AUTHORING
+            or capability.sha256 != expected_digest
+            for capability, expected_digest in zip(
+                self.capabilities, expected_digests, strict=True
+            )
+        ):
+            raise ValueError("coding authoring capabilities disagree with the lease")
+        return self
+
+
+def coding_authoring_lease_signing_message(
+    *,
+    validator_hotkey: str,
+    ticket_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    if requested_at.tzinfo is None or requested_at.utcoffset() is None:
+        raise ValueError("coding authoring request timestamp must be timezone-aware")
+    timestamp = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    return "\x00".join(
+        (
+            "dittobench-coding-authoring-lease:v1",
+            validator_hotkey,
+            str(ticket_id),
+            str(nonce),
+            timestamp,
+        )
+    ).encode()
+
+
+def _validate_artifact_url(capability: CodingArtifactCapabilityEnvelope) -> None:
+    value = capability.url
+    if (
+        len(value.encode()) > 16 << 10
+        or not value.isascii()
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise ValueError("coding artifact URL is outside bounds")
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("coding artifact URL is invalid") from error
+    hostname = parsed.hostname
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or not parsed.query
+        or ";" in parsed.query
+        or not _artifact_percent_encoding(parsed.query)
+        or "%" in parsed.path
+        or "//" in parsed.path
+        or posixpath.normpath(parsed.path) != parsed.path
+        or (port is not None and not 1 <= port <= 65_535)
+    ):
+        raise ValueError("coding artifact URL is invalid")
+    if parsed.scheme == "http" and not _artifact_loopback(hostname):
+        raise ValueError("coding artifact URL requires HTTPS outside loopback")
+    expected = (
+        f"/coding-artifacts/v1/{capability.artifact_kind.value}"
+        f"/sha256/{capability.sha256}"
+    )
+    if not parsed.path.endswith(expected):
+        raise ValueError("coding artifact URL path disagrees with known fields")
+    query: dict[str, list[str]] = {}
+    for name, values in parse_qs(parsed.query).items():
+        query.setdefault(name.lower(), []).extend(values)
+    v4, v2 = query.get("x-amz-signature", []), query.get("signature", [])
+    if bool(v4) == bool(v2):
+        raise ValueError("coding artifact signature fields are ambiguous")
+    if v4:
+        dates = query.get("x-amz-date", [])
+        durations = query.get("x-amz-expires", [])
+        if len(v4) != 1 or len(dates) != 1 or len(durations) != 1:
+            raise ValueError("coding artifact v4 signature fields are invalid")
+        signed_at = datetime.strptime(dates[0], "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+        duration = _artifact_decimal(durations[0])
+        if not 60 <= duration <= 900:
+            raise ValueError("coding artifact v4 expiry is outside bounds")
+        expires_at = signed_at + timedelta(seconds=duration)
+    else:
+        expires = query.get("expires", [])
+        if len(v2) != 1 or len(expires) != 1:
+            raise ValueError("coding artifact v2 signature fields are invalid")
+        expires_at = datetime.fromtimestamp(_artifact_decimal(expires[0]), tz=UTC)
+    if expires_at != capability.expires_at:
+        raise ValueError("coding artifact signed expiry disagrees with known fields")
+
+
+def _artifact_decimal(value: str) -> int:
+    if not value or any(character not in "0123456789" for character in value):
+        raise ValueError("coding artifact expiry must be ASCII decimal")
+    return int(value)
+
+
+def _artifact_loopback(hostname: str) -> bool:
+    if hostname.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _artifact_percent_encoding(value: str) -> bool:
+    hex_digits = frozenset("0123456789abcdefABCDEF")
+    index = 0
+    while index < len(value):
+        if value[index] != "%":
+            index += 1
+            continue
+        if (
+            index + 2 >= len(value)
+            or value[index + 1] not in hex_digits
+            or value[index + 2] not in hex_digits
+        ):
+            return False
+        index += 3
+    return True
+
+
 def _canonical_json_bytes(value: BaseModel | dict[str, Any] | list[Any]) -> bytes:
     """Serialize one validated known-field projection into deterministic JSON."""
 
@@ -1298,6 +1593,12 @@ def run_evidence_digest(
 __all__ = [
     "CODING_CONTRACT_VERSION",
     "REPAIR_SCORE_RESOLVED_MICROS",
+    "CodingArtifactAudience",
+    "CodingArtifactCapabilityEnvelope",
+    "CodingArtifactDeliveryPhase",
+    "CodingArtifactKind",
+    "CodingAuthoringLeaseRequest",
+    "CodingAuthoringLeaseResponse",
     "CodingAuthoringEvidence",
     "CodingBudgets",
     "CodingBuildEvidence",
@@ -1332,6 +1633,7 @@ __all__ = [
     "canonical_json_bytes",
     "coding_certification_receipt_digest",
     "coding_certification_signing_message",
+    "coding_authoring_lease_signing_message",
     "coding_budgets_digest",
     "coding_issue_digest",
     "coding_runtime_policy_digest",

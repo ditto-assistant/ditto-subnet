@@ -12,6 +12,8 @@ import pytest
 from pydantic import ValidationError
 
 from ditto.api_models.coding import (
+    CodingAuthoringLeaseRequest,
+    CodingAuthoringLeaseResponse,
     CodingBudgets,
     CodingCapabilityCertificationReceipt,
     CodingGraderExecutionReceipt,
@@ -27,6 +29,7 @@ from ditto.api_models.coding import (
     SubmitCodingCertificationRequest,
     canonical_digest,
     canonical_json_bytes,
+    coding_authoring_lease_signing_message,
     coding_budgets_digest,
     coding_certification_receipt_digest,
     coding_certification_signing_message,
@@ -54,6 +57,10 @@ _SELECTION_VECTOR_PATH = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_selection_v1.json"
 )
+_ARTIFACT_VECTOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json"
+)
 
 
 def _vectors() -> dict[str, Any]:
@@ -62,6 +69,33 @@ def _vectors() -> dict[str, Any]:
 
 def _body(value: Any) -> bytes:
     return json.dumps(value, separators=(",", ":")).encode()
+
+
+def _authoring_response() -> dict[str, Any]:
+    selection = json.loads(_SELECTION_VECTOR_PATH.read_text(encoding="utf-8"))
+    artifacts = json.loads(_ARTIFACT_VECTOR_PATH.read_text(encoding="utf-8"))
+    task = selection["task_version"]["payload"]
+    return {
+        "schema": "dittobench-coding-authoring-lease-v1",
+        "coding_contract_version": 1,
+        "weight_eligible": False,
+        "ticket_id": artifacts["capabilities"][0]["ticket_id"],
+        "ticket_deadline": artifacts["capabilities"][0]["ticket_deadline"],
+        "coding_run_id": selection["run_manifest"]["coding_run_id"],
+        "run_manifest_sha256": selection["run_authority"]["run_manifest_sha256"],
+        "task_set_manifest_sha256": selection["run_manifest"][
+            "task_set_manifest_sha256"
+        ],
+        "repository_epoch": task["repository_epoch"],
+        "issue_sha256": task["issue_sha256"],
+        "runtime_policy_sha256": task["runtime_policy_sha256"],
+        "budgets_sha256": task["budgets_sha256"],
+        "issue": selection["issue"],
+        "runtime_policy": selection["runtime_policy"],
+        "budgets": selection["budgets"],
+        "run_manifest": selection["run_manifest"],
+        "capabilities": artifacts["capabilities"][:3],
+    }
 
 
 def test_coding_certification_vector_matches_canonical_receipt_and_signature() -> None:
@@ -136,6 +170,39 @@ def test_private_selection_vector_matches_validator_run_manifest() -> None:
         coding_budgets_digest(budgets)
         == vector["task_version"]["payload"]["budgets_sha256"]
     )
+
+
+def test_authoring_request_and_response_match_platform_contract() -> None:
+    requested_at = datetime.fromisoformat("2026-08-21T12:00:00+00:00")
+    request = CodingAuthoringLeaseRequest(
+        validator_hotkey="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+        ticket_id=UUID("33333333-3333-4333-8333-333333333333"),
+        nonce=UUID("77777777-7777-4777-8777-777777777777"),
+        requested_at=requested_at,
+        signature="88" * 64,
+    )
+    assert coding_authoring_lease_signing_message(
+        validator_hotkey=request.validator_hotkey,
+        ticket_id=request.ticket_id,
+        nonce=request.nonce,
+        requested_at=request.requested_at,
+    ) == (
+        b"dittobench-coding-authoring-lease:v1\x00"
+        b"5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY\x00"
+        b"33333333-3333-4333-8333-333333333333\x00"
+        b"77777777-7777-4777-8777-777777777777\x00"
+        b"2026-08-21T12:00:00.000000+00:00"
+    )
+
+    response = CodingAuthoringLeaseResponse.model_validate_json(
+        json.dumps(_authoring_response())
+    )
+    assert [item.artifact_kind.value for item in response.capabilities] == [
+        "visible-bundle",
+        "memory-bundle",
+        "resource-profile",
+    ]
+    assert "grader-bundle" not in response.model_dump_json()
 
 
 def test_evidence_golden_vectors_require_manifest_authority() -> None:
