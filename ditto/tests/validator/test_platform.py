@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 from unittest.mock import MagicMock
 from uuid import UUID
 
@@ -31,6 +31,12 @@ from ditto.api_models.coding import (
     coding_certification_signing_message,
     coding_grading_lease_signing_message,
     coding_shadow_result_signing_message,
+)
+from ditto.api_models.coding_claims import (
+    CodingClaimActionRequest,
+    CodingClaimNextRequest,
+    coding_claim_action_signing_message,
+    coding_claim_next_signing_message,
 )
 from ditto.api_models.coding_harness import (
     CodingHarnessLaunchRequest,
@@ -411,6 +417,107 @@ async def test_coding_harness_client_posts_signed_request_and_parses_capability(
     assert "X-Amz-Signature" not in repr(launch)
 
 
+async def test_coding_claim_client_signs_claim_start_and_heartbeat() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    ticket_id = UUID("33333333-3333-4333-8333-333333333333")
+    instance_id = "coding-worker-instance-001"
+    calls = 0
+
+    def response(*, started: bool) -> dict[str, object]:
+        now = datetime.now(UTC)
+        return {
+            "schema": "dittobench-coding-ticket-claim-v1",
+            "coding_contract_version": 1,
+            "weight_eligible": False,
+            "validator_hotkey": keypair.ss58_address,
+            "instance_id": instance_id,
+            "claim_generation": 1,
+            "claim_expires_at": (now.replace(microsecond=0)).isoformat(),
+            "claim_started_at": now.isoformat() if started else None,
+            "idempotent": False,
+            "agent_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "run_row_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "ticket_id": str(ticket_id),
+            "ticket_deadline": (now.replace(microsecond=0)).isoformat(),
+            "bench_version": 12,
+            "coding_run_id": "coding-run-001",
+            "agent_artifact_sha256": "aa" * 32,
+            "screened_image_sha256": "bb" * 32,
+            "run_manifest_sha256": "cc" * 32,
+            "task_set_manifest_sha256": "dd" * 32,
+        }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            payload = CodingClaimNextRequest.model_validate_json(request.content)
+            message = coding_claim_next_signing_message(
+                validator_hotkey=payload.validator_hotkey,
+                instance_id=payload.instance_id,
+                nonce=payload.nonce,
+                requested_at=payload.requested_at,
+            )
+            started = False
+        else:
+            action: Literal["start", "heartbeat"] = (
+                "start" if calls == 2 else "heartbeat"
+            )
+            payload = CodingClaimActionRequest.model_validate_json(request.content)
+            message = coding_claim_action_signing_message(
+                action=action,
+                validator_hotkey=payload.validator_hotkey,
+                instance_id=payload.instance_id,
+                ticket_id=payload.ticket_id,
+                claim_generation=payload.claim_generation,
+                nonce=payload.nonce,
+                requested_at=payload.requested_at,
+            )
+            assert request.url.path.endswith(f"/{action}")
+            started = True
+        assert keypair.verify(message, bytes.fromhex(payload.signature))
+        body = response(started=started)
+        body["claim_expires_at"] = (
+            datetime.now(UTC) + timedelta(minutes=2)
+        ).isoformat()
+        body["ticket_deadline"] = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+        return httpx.Response(
+            200,
+            headers={"Cache-Control": "no-store"},
+            json=body,
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        claim = await client.claim_next_coding_ticket(instance_id)
+        assert claim is not None
+        started = await client.start_coding_ticket_claim(claim)
+        await client.heartbeat_coding_ticket_claim(started)
+    assert calls == 3
+
+
+async def test_coding_claim_client_treats_no_store_404_as_empty_queue() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, headers={"Cache-Control": "no-store"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        claim = await PlatformClient(
+            SimpleNamespace(
+                platform_api_url="https://platform.test",
+                validator_hotkey=keypair.ss58_address,
+            ),  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).claim_next_coding_ticket("coding-worker-instance-001")
+    assert claim is None
+
+
 async def test_coding_authoring_client_rejects_oversized_response() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     ticket_id = UUID("33333333-3333-4333-8333-333333333333")
@@ -512,6 +619,7 @@ async def test_coding_grading_client_posts_signed_request_and_parses_lease() -> 
             run_row_id=payload.run_row_id,
             ticket_id=payload.ticket_id,
             freeze_id=payload.freeze_id,
+            claim_instance_id=payload.claim_instance_id,
             authoring_evidence_sha256=payload.authoring_evidence_sha256,
             nonce=payload.nonce,
             requested_at=payload.requested_at,
@@ -533,6 +641,7 @@ async def test_coding_grading_client_posts_signed_request_and_parses_lease() -> 
             run_row_id=UUID(raw_request["run_row_id"]),
             ticket_id=UUID(raw_request["ticket_id"]),
             freeze_id=UUID(raw_request["freeze_id"]),
+            claim_instance_id=raw_request["claim_instance_id"],
             authoring_evidence_sha256=raw_request["authoring_evidence_sha256"],
             expected_frozen_patch_sha256=response_body["frozen_patch_sha256"],
         )
@@ -562,6 +671,7 @@ async def test_coding_grading_client_bounds_and_refuses_redirects() -> None:
             run_row_id=UUID(raw["run_row_id"]),
             ticket_id=UUID(raw["ticket_id"]),
             freeze_id=UUID(raw["freeze_id"]),
+            claim_instance_id=raw["claim_instance_id"],
             authoring_evidence_sha256=raw["authoring_evidence_sha256"],
             expected_frozen_patch_sha256=vector["response"]["frozen_patch_sha256"],
         )
@@ -628,6 +738,7 @@ async def test_coding_grading_client_rejects_identity_drift_without_url_leak() -
                 run_row_id=UUID(raw["run_row_id"]),
                 ticket_id=UUID(raw["ticket_id"]),
                 freeze_id=UUID(raw["freeze_id"]),
+                claim_instance_id=raw["claim_instance_id"],
                 authoring_evidence_sha256=raw["authoring_evidence_sha256"],
                 expected_frozen_patch_sha256=vector["response"]["frozen_patch_sha256"],
             )
@@ -661,6 +772,7 @@ async def test_coding_grading_client_rejects_frozen_patch_drift() -> None:
                 run_row_id=UUID(raw["run_row_id"]),
                 ticket_id=UUID(raw["ticket_id"]),
                 freeze_id=UUID(raw["freeze_id"]),
+                claim_instance_id=raw["claim_instance_id"],
                 authoring_evidence_sha256=raw["authoring_evidence_sha256"],
                 expected_frozen_patch_sha256=expected_patch_sha256,
             )
@@ -715,6 +827,53 @@ async def test_coding_shadow_result_client_posts_signed_evidence() -> None:
         )
     assert accepted.accepted is True
     assert accepted.weight_eligible is False
+
+
+async def test_prepared_coding_publication_sends_the_exact_durable_bytes() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    vector = _shadow_result_vector()
+    raw = vector["request"]
+    manifest, task_evidence = _shadow_result_authority(vector)
+    observed = b""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal observed
+        observed = request.content
+        return httpx.Response(
+            200,
+            headers={"Cache-Control": "no-store"},
+            json=vector["response"],
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = PlatformClient(
+            SimpleNamespace(
+                platform_api_url="https://platform.test",
+                validator_hotkey=keypair.ss58_address,
+            ),  # type: ignore[arg-type]
+            http,
+            keypair,
+        )
+        prepared = client.prepare_coding_shadow_result(
+            UUID(vector["agent_id"]),
+            bench_version=raw["bench_version"],
+            run_row_id=UUID(raw["run_row_id"]),
+            ticket_id=UUID(raw["ticket_id"]),
+            ticket_deadline=datetime.fromisoformat(raw["ticket_deadline"]),
+            agent_artifact_sha256=raw["agent_artifact_sha256"],
+            screened_image_sha256=raw["screened_image_sha256"],
+            run_manifest=manifest,
+            evidence=SubmitCodingShadowResultRequest.model_validate_json(
+                json.dumps(raw)
+            ).evidence,
+            task_evidence=task_evidence,
+        )
+        accepted, acknowledgement = await client.publish_prepared_coding_publication(
+            prepared
+        )
+    assert observed == prepared.body
+    assert json.loads(acknowledgement) == vector["response"]
+    assert accepted.ticket_id == prepared.ticket_id
 
 
 async def test_coding_shadow_result_client_bounds_and_refuses_redirects() -> None:

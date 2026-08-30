@@ -332,6 +332,7 @@ def test_grading_vector_binds_request_signature_and_exact_three_capabilities() -
         run_row_id=request.run_row_id,
         ticket_id=request.ticket_id,
         freeze_id=request.freeze_id,
+        claim_instance_id=request.claim_instance_id,
         authoring_evidence_sha256=request.authoring_evidence_sha256,
         nonce=request.nonce,
         requested_at=request.requested_at,

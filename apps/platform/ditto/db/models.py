@@ -1896,6 +1896,22 @@ class CodingShadowTicket(Base):
         TIMESTAMP(timezone=True), nullable=False
     )
     deadline: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    claim_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    claim_instance_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    claim_acquired_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    claim_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    claim_expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    claim_started_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -1936,10 +1952,45 @@ class CodingShadowTicket(Base):
             "deadline > issued_at AND deadline <= issued_at + interval '2 hours'",
             name="coding_shadow_tickets_deadline_check",
         ),
+        CheckConstraint(
+            "(claim_generation = 0 AND claim_instance_id IS NULL "
+            "AND claim_acquired_at IS NULL AND claim_heartbeat_at IS NULL "
+            "AND claim_expires_at IS NULL AND claim_started_at IS NULL) OR "
+            "(claim_generation BETWEEN 1 AND 2147483647 AND "
+            "((claim_instance_id IS NULL AND claim_acquired_at IS NULL "
+            "AND claim_heartbeat_at IS NULL AND claim_expires_at IS NULL "
+            "AND claim_started_at IS NULL) OR "
+            "(claim_instance_id IS NOT NULL AND "
+            "octet_length(claim_instance_id) BETWEEN 1 AND 128 "
+            "AND claim_instance_id !~ '[[:space:][:cntrl:]]' "
+            "AND claim_acquired_at IS NOT NULL AND claim_heartbeat_at IS NOT NULL "
+            "AND claim_expires_at IS NOT NULL "
+            "AND claim_heartbeat_at >= claim_acquired_at "
+            "AND claim_expires_at > claim_heartbeat_at "
+            "AND claim_expires_at <= deadline "
+            "AND (claim_started_at IS NULL OR "
+            "(claim_started_at >= claim_acquired_at "
+            "AND claim_started_at <= claim_heartbeat_at "
+            "AND claim_started_at < deadline)))))",
+            name="coding_shadow_tickets_claim_check",
+        ),
         Index(
             "coding_shadow_tickets_validator_deadline_idx",
             "validator_hotkey",
             "deadline",
+        ),
+        Index(
+            "coding_shadow_tickets_claim_instance_idx",
+            "validator_hotkey",
+            "claim_instance_id",
+            "claim_expires_at",
+        ),
+        Index(
+            "coding_shadow_tickets_claim_instance_key",
+            "validator_hotkey",
+            "claim_instance_id",
+            unique=True,
+            postgresql_where=text("claim_instance_id IS NOT NULL"),
         ),
     )
 

@@ -207,6 +207,10 @@ async def submit_coding_authoring_freeze(
             raise RuntimeError("database clock did not return a timestamp")
         if (
             _aware(ticket.deadline) <= _aware(database_now)
+            or ticket.claim_instance_id is None
+            or ticket.claim_started_at is None
+            or ticket.claim_expires_at is None
+            or _aware(ticket.claim_expires_at) <= _aware(database_now)
             or certification is None
             or certification.status != "certified"
             or certification.agent_id != agent_id

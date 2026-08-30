@@ -393,6 +393,13 @@ async def _seed(
             issued_at=_NOW,
             deadline=deadline,
         )
+        assert isinstance(ticket.row, CodingShadowTicket)
+        ticket.row.claim_generation = 1
+        ticket.row.claim_instance_id = "coding-endpoint-worker-001"
+        ticket.row.claim_acquired_at = _NOW
+        ticket.row.claim_heartbeat_at = _NOW
+        ticket.row.claim_expires_at = deadline
+        ticket.row.claim_started_at = _NOW
     return agent_id, run.row, ticket.row, deadline
 
 
@@ -490,6 +497,13 @@ async def test_signed_authoring_freeze_is_idempotent_and_operator_visible(
     assert first.headers["Cache-Control"] == "no-store"
     assert first.json()["idempotent"] is False
     assert first.json()["authoring_evidence_sha256"] == digest
+    async with session_maker() as session, session.begin():
+        stored_ticket = await session.get(CodingShadowTicket, ticket.ticket_id)
+        assert stored_ticket is not None
+        stored_ticket.claim_acquired_at = _NOW - timedelta(minutes=4)
+        stored_ticket.claim_started_at = _NOW - timedelta(minutes=3)
+        stored_ticket.claim_heartbeat_at = _NOW - timedelta(minutes=2)
+        stored_ticket.claim_expires_at = _NOW - timedelta(minutes=1)
     replay = await client.post(url, json=payload)
     assert replay.status_code == 200
     assert replay.json()["idempotent"] is True

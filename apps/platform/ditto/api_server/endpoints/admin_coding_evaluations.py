@@ -281,6 +281,12 @@ async def agent_coding_shadow_evaluations(
                 certification_row_id=ticket.certification_row_id,
                 issued_at=ticket.issued_at,
                 deadline=ticket.deadline,
+                claim_generation=ticket.claim_generation,
+                claim_instance_id=ticket.claim_instance_id,
+                claim_acquired_at=ticket.claim_acquired_at,
+                claim_heartbeat_at=ticket.claim_heartbeat_at,
+                claim_expires_at=ticket.claim_expires_at,
+                claim_started_at=ticket.claim_started_at,
                 authoring_freeze=freeze_records.get(ticket.ticket_id),
                 result=result_records.get(ticket.ticket_id),
             )

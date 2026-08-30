@@ -20,7 +20,7 @@ import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, localcontext
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from ditto.api_models.benchmark_capacity import (
@@ -38,6 +38,10 @@ from ditto.api_models.coding import (
     coding_certification_signing_message,
     coding_grading_lease_signing_message,
     coding_shadow_result_signing_message,
+)
+from ditto.api_models.coding_claims import (
+    coding_claim_action_signing_message,
+    coding_claim_next_signing_message,
 )
 from ditto.api_models.coding_harness import coding_harness_launch_signing_message
 from ditto.api_models.coding_inference_grants import (
@@ -278,6 +282,50 @@ def sign_coding_harness_launch(
     return signature.hex()
 
 
+def sign_coding_claim_next(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    instance_id: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    signature: bytes = keypair.sign(
+        coding_claim_next_signing_message(
+            validator_hotkey=validator_hotkey,
+            instance_id=instance_id,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
+def sign_coding_claim_action(
+    keypair: Any,
+    *,
+    action: Literal["start", "heartbeat"],
+    validator_hotkey: str,
+    instance_id: str,
+    ticket_id: UUID,
+    claim_generation: int,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    signature: bytes = keypair.sign(
+        coding_claim_action_signing_message(
+            action=action,
+            validator_hotkey=validator_hotkey,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=claim_generation,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
 def sign_coding_inference_exchange(
     keypair: Any,
     *,
@@ -376,6 +424,7 @@ def sign_coding_grading_lease(
     run_row_id: UUID,
     ticket_id: UUID,
     freeze_id: UUID,
+    claim_instance_id: str,
     authoring_evidence_sha256: str,
     nonce: UUID,
     requested_at: datetime,
@@ -388,6 +437,7 @@ def sign_coding_grading_lease(
         run_row_id=run_row_id,
         ticket_id=ticket_id,
         freeze_id=freeze_id,
+        claim_instance_id=claim_instance_id,
         authoring_evidence_sha256=authoring_evidence_sha256,
         nonce=nonce,
         requested_at=requested_at,
