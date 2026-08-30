@@ -342,7 +342,13 @@ class TargonRentalLoop:
         return repaired > 0
 
     async def _finalize_ready_attempts(self) -> bool:
-        """Attest Targon passes after smoke, or park the failed lane."""
+        """Finalize Platform-owned Targon/Cloud Run lanes after smoke.
+
+        A persistent Hetzner node only supplies local build/runtime/review
+        evidence to the signed screener worker.  It must never be selected by
+        this legacy controller finalizer: the worker's signed verdict is the
+        sole terminal result for that attempt.
+        """
         if self._complete_screen is None:
             return False
         now = datetime.now(UTC)
@@ -356,6 +362,7 @@ class TargonRentalLoop:
                     )
                     .where(
                         SubmissionImageBuild.environment == self._config.environment,
+                        SubmissionImageBuild.provider.in_(("targon", "gcp")),
                         ScreeningAttempt.status == "running",
                         ScreeningAttempt.deadline > now,
                         or_(
