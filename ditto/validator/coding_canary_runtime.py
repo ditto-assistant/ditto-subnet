@@ -18,6 +18,9 @@ from ditto.api_models.coding_certification_leases import (
     CodingCertificationHarnessLaunchResponse,
     CodingCertificationLeaseResponse,
 )
+from ditto.api_models.coding_inference_grants import (
+    CodingCertificationInferenceExchangeResponse,
+)
 from ditto.validator.coding_canary import CodingCanaryOutcome
 from ditto.validator.config import ValidatorConfig
 from ditto.validator.errors import (
@@ -99,7 +102,19 @@ class CodingCanaryRuntime:
         self,
         lease: CodingCertificationLeaseResponse,
         harness: CodingCertificationHarnessLaunchResponse,
+        grant: CodingCertificationInferenceExchangeResponse,
+        *,
+        broker_public_key: str,
+        broker_private_key: str,
     ) -> CodingCanaryOutcome:
+        if (
+            grant.lease_id != lease.authority.lease_id
+            or grant.weight_eligible
+            or grant.status != "active"
+        ):
+            raise ValidatorInfrastructureError(
+                "coding canary inference grant identity is invalid"
+            )
         payload = {
             "schema": _REQUEST_SCHEMA,
             "operation_id": str(uuid4()),
@@ -123,6 +138,11 @@ class CodingCanaryRuntime:
             "inference_policy_sha256": lease.authority.inference_policy_sha256,
             "coding_contract_version": 1,
             "weight_eligible": False,
+            "grant": {
+                **grant.model_dump(mode="json", by_alias=True),
+                "broker_public_key": broker_public_key,
+                "broker_private_key": broker_private_key,
+            },
         }
         body = bytearray()
         try:

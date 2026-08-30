@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
@@ -24,9 +26,21 @@ from ditto.api_models.coding_certification_leases import (
     coding_certification_lease_claim_signing_message,
     coding_certification_lease_issue_signing_message,
 )
+from ditto.api_models.coding_inference import CodingInferencePolicy
+from ditto.api_models.coding_inference_grants import (
+    CodingCertificationInferenceGrantRequest,
+    CodingInferenceExchangeRequest,
+    CodingInferenceRevokeRequest,
+    coding_certification_inference_grant_signing_message,
+    coding_inference_exchange_signing_message,
+    coding_inference_revoke_signing_message,
+)
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.endpoints import (
     validator_coding_certification_leases as endpoint_module,
+)
+from ditto.api_server.endpoints.validator_coding_inference import (
+    CodingInferenceGrantTransport,
 )
 from ditto.db.models import CodingCertificationLease
 from ditto.db.queries.coding_certification_leases import (
@@ -34,6 +48,11 @@ from ditto.db.queries.coding_certification_leases import (
     CodingCertificationLeaseNotAvailableError,
     CodingCertificationLeaseResult,
     CodingCertificationLeaseUnavailableError,
+)
+from ditto.db.queries.coding_inference_grants import (
+    CodingInferenceGrantActivation,
+    CodingInferenceGrantResult,
+    CodingInferenceGrantRevocation,
 )
 from ditto.db.queries.validator_auth import ValidatorRequestReplayError
 from ditto.tests.api_server.conftest import override_get_storage_client
@@ -402,3 +421,188 @@ async def test_claimed_lease_harness_launch_rejects_forgery(
         json=_harness_payload(signature="00" * 64),
     )
     assert forged.status_code == 401
+
+
+_GRANT = UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+_POLICY_PATH = (
+    Path(__file__).parents[6]
+    / "packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json"
+)
+
+
+def _policy() -> CodingInferencePolicy:
+    return CodingInferencePolicy.model_validate(
+        json.loads(_POLICY_PATH.read_text(encoding="utf-8"))["policy"]
+    )
+
+
+def _cert_grant(policy: CodingInferencePolicy) -> SimpleNamespace:
+    return SimpleNamespace(
+        grant_id=_GRANT,
+        lease_id=_LEASE,
+        case_id="PRACTICE-LEDGER-001",
+        profile_capability_id="public-certification-v1",
+        inference_grant_sha256="33" * 32,
+        model=policy.model,
+        provider_api=policy.provider_api,
+        provider_route=policy.provider_route,
+        receipt_provider=policy.receipt_provider,
+        provider_route_profile=policy.provider_route_profile,
+        provider_account_guardrail=policy.provider_account_guardrail,
+        provider_pipeline_policy=policy.provider_pipeline_policy,
+        provider_cache_policy=policy.provider_cache_policy,
+        reasoning_effort=policy.reasoning_effort,
+        request_budget=32,
+        prompt_token_budget=10_000,
+        completion_token_budget=2_000,
+        cost_budget_usd_micros=policy.max_cost_usd_micros,
+        expires_at=datetime.now(UTC) + timedelta(minutes=20),
+        status="pending",
+        generation=0,
+        revoked_at=None,
+    )
+
+
+def _install_grant_transport(app: FastAPI, monkeypatch) -> SimpleNamespace:
+    policy = _policy()
+    grant = _cert_grant(policy)
+    app.state.coding_inference_grant_transport = CodingInferenceGrantTransport(
+        policy=policy,
+        exchange_url=("https://test/api/v1/validator/coding-shadow/inference-exchange"),
+        proxy_url="https://relay.invalid/api/v1/inference/coding/chat/completions",
+        revoke_url="https://test/api/v1/validator/coding-shadow/inference-revoke-capability",
+    )
+    mocks = SimpleNamespace(
+        ensure=AsyncMock(
+            return_value=CodingInferenceGrantResult(grant=grant, idempotent=False)
+        ),
+        activate=AsyncMock(),
+        revoke=AsyncMock(),
+        grant=grant,
+        policy=policy,
+    )
+    monkeypatch.setattr(
+        endpoint_module, "ensure_coding_certification_inference_grant", mocks.ensure
+    )
+    monkeypatch.setattr(
+        endpoint_module, "activate_coding_certification_inference_grant", mocks.activate
+    )
+    monkeypatch.setattr(
+        endpoint_module, "revoke_coding_certification_inference_grant", mocks.revoke
+    )
+    return mocks
+
+
+def _grant_payload(**updates) -> dict:
+    nonce = updates.pop("nonce", uuid4())
+    requested_at = updates.pop("requested_at", datetime.now(UTC))
+    request = CodingCertificationInferenceGrantRequest(
+        validator_hotkey=_VALIDATOR,
+        lease_id=_LEASE,
+        nonce=nonce,
+        requested_at=requested_at,
+        signature=_KEYPAIR.sign(
+            coding_certification_inference_grant_signing_message(
+                validator_hotkey=_VALIDATOR,
+                lease_id=_LEASE,
+                nonce=nonce,
+                requested_at=requested_at,
+            )
+        ).hex(),
+    ).model_dump(mode="json")
+    request.update(updates)
+    return request
+
+
+async def test_claimed_lease_inference_grant_is_signed_no_store_and_default_off(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    _install(app, session_maker, monkeypatch)
+    disabled = await client.post(
+        f"/api/v1/validator/coding-certification-leases/{_LEASE}/inference-grant",
+        json=_grant_payload(),
+    )
+    assert disabled.status_code == 503
+
+    mocks = _install_grant_transport(app, monkeypatch)
+    offer_response = await client.post(
+        f"/api/v1/validator/coding-certification-leases/{_LEASE}/inference-grant",
+        json=_grant_payload(),
+    )
+    assert offer_response.status_code == 200, offer_response.text
+    assert offer_response.headers["Cache-Control"] == "no-store"
+    offer = offer_response.json()
+    assert offer["weight_eligible"] is False
+    assert offer["status"] == "pending"
+    assert offer["lease_id"] == str(_LEASE)
+    assert "bearer" not in offer_response.text
+    assert offer["exchange_url"].endswith(
+        "/api/v1/validator/coding-certification-leases/inference-exchange"
+    )
+
+    mocks.grant.status = "active"
+    mocks.grant.generation = 1
+    mocks.activate.return_value = CodingInferenceGrantActivation(
+        grant=mocks.grant,
+        bearer="b" * 43,
+        revoke_bearer="r" * 43,
+    )
+    exchange_nonce = uuid4()
+    exchange_at = datetime.now(UTC)
+    broker = "A" * 43
+    exchanged = await client.post(
+        "/api/v1/validator/coding-certification-leases/inference-exchange",
+        json=CodingInferenceExchangeRequest(
+            validator_hotkey=_VALIDATOR,
+            grant_id=_GRANT,
+            broker_public_key=broker,
+            nonce=exchange_nonce,
+            requested_at=exchange_at,
+            signature=_KEYPAIR.sign(
+                coding_inference_exchange_signing_message(
+                    validator_hotkey=_VALIDATOR,
+                    grant_id=_GRANT,
+                    broker_public_key=broker,
+                    nonce=exchange_nonce,
+                    requested_at=exchange_at,
+                )
+            ).hex(),
+        ).model_dump(mode="json"),
+    )
+    assert exchanged.status_code == 200, exchanged.text
+    assert exchanged.json()["bearer"] == "b" * 43
+    assert exchanged.json()["revoke_url"].endswith(
+        "/api/v1/validator/coding-shadow/inference-revoke-capability"
+    )
+
+    mocks.grant.revoked_at = datetime.now(UTC)
+    mocks.revoke.return_value = CodingInferenceGrantRevocation(
+        grant=mocks.grant, idempotent=False
+    )
+    revoke_nonce = uuid4()
+    revoke_at = datetime.now(UTC)
+    revoked = await client.post(
+        "/api/v1/validator/coding-certification-leases/inference-revoke",
+        json=CodingInferenceRevokeRequest(
+            validator_hotkey=_VALIDATOR,
+            grant_id=_GRANT,
+            generation=1,
+            nonce=revoke_nonce,
+            requested_at=revoke_at,
+            signature=_KEYPAIR.sign(
+                coding_inference_revoke_signing_message(
+                    validator_hotkey=_VALIDATOR,
+                    grant_id=_GRANT,
+                    generation=1,
+                    nonce=revoke_nonce,
+                    requested_at=revoke_at,
+                )
+            ).hex(),
+        ).model_dump(mode="json"),
+    )
+    assert revoked.status_code == 200, revoked.text
+    assert revoked.json()["status"] == "revoked"
+    assert revoked.json()["lease_id"] == str(_LEASE)

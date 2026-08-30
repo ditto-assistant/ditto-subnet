@@ -44,6 +44,9 @@ from ditto.coding_selection import (
     CodingSelectionCatalogUnavailableError,
 )
 from ditto.db.models import CodingInferenceGrant
+from ditto.db.queries.coding_certification_inference_grants import (
+    revoke_coding_certification_inference_grant_by_capability,
+)
 from ditto.db.queries.coding_inference_grants import (
     CodingInferenceGrantConflictError,
     CodingInferenceGrantIntegrityError,
@@ -505,10 +508,27 @@ async def revoke_coding_inference_grant_capability_endpoint(
                 generation=payload.generation,
                 revoke_bearer=bearer,
             )
-        except (
-            CodingInferenceGrantNotAvailableError,
-            CodingInferenceGrantConflictError,
-        ) as error:
+        except CodingInferenceGrantNotAvailableError:
+            try:
+                canary = (
+                    await revoke_coding_certification_inference_grant_by_capability(
+                        session,
+                        grant_id=payload.grant_id,
+                        lease_id=payload.ticket_id,
+                        generation=payload.generation,
+                        revoke_bearer=bearer,
+                    )
+                )
+            except CodingInferenceGrantConflictError as error:
+                grant_error = error
+            else:
+                if canary is None:
+                    grant_error = CodingInferenceGrantNotAvailableError(
+                        "coding inference revoke capability is unavailable"
+                    )
+                else:
+                    revoked = canary
+        except CodingInferenceGrantConflictError as error:
             grant_error = error
     if isinstance(grant_error, CodingInferenceGrantNotAvailableError):
         raise HTTPException(
@@ -525,12 +545,13 @@ async def revoke_coding_inference_grant_capability_endpoint(
             status_code=503,
             detail="coding inference revocation result is unavailable",
         )
+    binding_id = getattr(revoked.grant, "ticket_id", None) or revoked.grant.lease_id
     return CodingInferenceRevokeResponse(
         schema="dittobench-coding-inference-revocation-v1",
         coding_contract_version=1,
         weight_eligible=False,
         grant_id=revoked.grant.grant_id,
-        ticket_id=revoked.grant.ticket_id,
+        ticket_id=binding_id,
         status="revoked",
         generation=revoked.grant.generation,
         revoked_at=revoked.grant.revoked_at,

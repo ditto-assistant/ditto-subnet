@@ -3,6 +3,8 @@ package codingcanary
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -103,6 +105,7 @@ func TestHandlerRequiresRevokedDestroyedCanaryResult(t *testing.T) {
 		"resource_profile_sha256":   strings.Repeat("1", 64),
 		"inference_policy_sha256":   strings.Repeat("2", 64),
 		"coding_contract_version":   1, "weight_eligible": false,
+		"grant": testGrant(leaseID),
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -205,6 +208,7 @@ func postCanary(t *testing.T, service *Service, leaseID string) *http.Response {
 		"resource_profile_sha256":   strings.Repeat("1", 64),
 		"inference_policy_sha256":   strings.Repeat("2", 64),
 		"coding_contract_version":   1, "weight_eligible": false,
+		"grant": testGrant(leaseID),
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -221,6 +225,26 @@ func postCanary(t *testing.T, service *Service, leaseID string) *http.Response {
 		t.Fatal(err)
 	}
 	return response
+}
+
+func testGrant(leaseID string) map[string]any {
+	private := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{1}, ed25519.SeedSize))
+	public := private.Public().(ed25519.PublicKey)
+	return map[string]any{
+		"schema":                  "dittobench-coding-certification-inference-exchange-v1",
+		"coding_contract_version": 1, "weight_eligible": false, "status": "active",
+		"grant_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "lease_id": leaseID,
+		"case_id": publicCanaryTaskID, "profile_capability_id": publicCanaryProfileID,
+		"inference_grant_sha256": strings.Repeat("3", 64), "generation": 1, "request_budget": 32,
+		"prompt_token_budget": 10_000, "completion_token_budget": 2_000, "cost_budget_usd_micros": 1_000_000,
+		"bearer":             strings.Repeat("b", 43),
+		"proxy_url":          "https://relay.invalid/api/v1/inference/coding/chat/completions",
+		"revoke_bearer":      strings.Repeat("r", 43),
+		"revoke_url":         "https://platform.invalid/api/v1/validator/coding-shadow/inference-revoke-capability",
+		"broker_public_key":  base64.RawURLEncoding.EncodeToString(public),
+		"broker_private_key": base64.RawURLEncoding.EncodeToString(private),
+		"expires_at":         "2026-08-30T18:20:00Z",
+	}
 }
 
 func assertErrorCode(t *testing.T, response *http.Response, want string) {

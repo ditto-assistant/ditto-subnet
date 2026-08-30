@@ -360,7 +360,186 @@ def coding_inference_revoke_signing_message(
     ).encode()
 
 
+class CodingCertificationInferenceGrantRequest(BaseModel):
+    """Signed request for the one grant bound to a claimed certification lease."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    lease_id: UUID
+    nonce: UUID
+    requested_at: datetime
+    signature: Annotated[str, Field(pattern=_SIGNATURE_PATTERN)]
+
+    @field_validator("requested_at")
+    @classmethod
+    def requested_at_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("coding certification inference timestamp must be aware")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def identifiers_are_nonzero(self) -> CodingCertificationInferenceGrantRequest:
+        if self.lease_id.int == 0 or self.nonce.int == 0:
+            raise ValueError("coding certification inference UUID is nil")
+        return self
+
+
+class CodingCertificationInferenceGrantAuthority(CodingInferenceGrantModel):
+    coding_contract_version: Literal[1]
+    weight_eligible: Literal[False]
+    grant_id: UUID
+    lease_id: UUID
+    case_id: OpaqueId
+    profile_capability_id: OpaqueId
+    inference_grant_sha256: Sha256
+    model: Literal["openai/gpt-5.6-luna"]
+    provider_api: Literal["openrouter"]
+    provider_route: ShortName
+    receipt_provider: ShortName
+    provider_route_profile: ShortName
+    provider_account_guardrail: Literal["openrouter_private_account_v1"]
+    provider_pipeline_policy: Literal["no_plugins_no_transforms_v1"]
+    provider_cache_policy: Literal["disabled_v1"]
+    reasoning_effort: Literal["medium"]
+    request_budget: Annotated[int, Field(strict=True, ge=1, le=256)]
+    prompt_token_budget: Annotated[int, Field(strict=True, ge=1, le=2_000_000)]
+    completion_token_budget: Annotated[int, Field(strict=True, ge=1, le=250_000)]
+    cost_budget_usd_micros: Annotated[int, Field(strict=True, ge=1, le=100_000_000)]
+    expires_at: datetime
+
+    @field_validator("expires_at")
+    @classmethod
+    def expires_at_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("coding certification inference expiry must be aware")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def authority_is_coherent(self) -> CodingCertificationInferenceGrantAuthority:
+        if self.grant_id.int == 0 or self.lease_id.int == 0:
+            raise ValueError("coding certification inference UUID is nil")
+        return self
+
+
+class CodingCertificationInferenceGrantOffer(
+    CodingCertificationInferenceGrantAuthority
+):
+    schema_name: Literal["dittobench-coding-certification-inference-grant-offer-v1"] = (
+        Field(alias="schema")
+    )
+    status: Literal["pending", "active"]
+    generation: Annotated[int, Field(strict=True, ge=0, le=(1 << 31) - 1)]
+    exchange_url: Annotated[str, Field(min_length=1, max_length=_MAX_URL_BYTES)]
+
+    @field_validator("exchange_url")
+    @classmethod
+    def exchange_url_is_approved(cls, value: str) -> str:
+        return _validate_https_url(
+            value,
+            suffix="/api/v1/validator/coding-certification-leases/inference-exchange",
+        )
+
+    @model_validator(mode="after")
+    def offer_state_is_coherent(self) -> CodingCertificationInferenceGrantOffer:
+        if (self.status == "pending") != (self.generation == 0):
+            raise ValueError("coding certification inference offer status disagrees")
+        return self
+
+
+class CodingCertificationInferenceExchangeResponse(
+    CodingCertificationInferenceGrantAuthority
+):
+    schema_name: Literal["dittobench-coding-certification-inference-exchange-v1"] = (
+        Field(alias="schema")
+    )
+    status: Literal["active"]
+    generation: Annotated[int, Field(strict=True, ge=1, le=(1 << 31) - 1)]
+    bearer: Annotated[str, Field(pattern=_BEARER_PATTERN, repr=False)]
+    proxy_url: Annotated[str, Field(min_length=1, max_length=_MAX_URL_BYTES)]
+    revoke_bearer: Annotated[str, Field(pattern=_BEARER_PATTERN, repr=False)]
+    revoke_url: Annotated[str, Field(min_length=1, max_length=_MAX_URL_BYTES)]
+
+    @field_validator("proxy_url")
+    @classmethod
+    def proxy_url_is_approved(cls, value: str) -> str:
+        return _validate_https_url(
+            value,
+            suffix="/api/v1/inference/coding/chat/completions",
+        )
+
+    @field_validator("revoke_url")
+    @classmethod
+    def revoke_url_is_approved(cls, value: str) -> str:
+        return _validate_https_url(
+            value,
+            suffix="/api/v1/validator/coding-shadow/inference-revoke-capability",
+        )
+
+    @model_validator(mode="after")
+    def bearer_scopes_are_distinct(
+        self,
+    ) -> CodingCertificationInferenceExchangeResponse:
+        if self.bearer == self.revoke_bearer:
+            raise ValueError("coding inference and revoke bearers must differ")
+        return self
+
+
+class CodingCertificationInferenceRevokeResponse(CodingInferenceGrantModel):
+    schema_name: Literal["dittobench-coding-certification-inference-revocation-v1"] = (
+        Field(alias="schema")
+    )
+    coding_contract_version: Literal[1]
+    weight_eligible: Literal[False]
+    grant_id: UUID
+    lease_id: UUID
+    status: Literal["revoked"]
+    generation: Annotated[int, Field(strict=True, ge=0, le=(1 << 31) - 1)]
+    revoked_at: datetime
+    idempotent: bool
+
+    @field_validator("revoked_at")
+    @classmethod
+    def revoked_at_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("coding certification inference timestamp must be aware")
+        return value.astimezone(UTC)
+
+    @field_validator("idempotent", mode="before")
+    @classmethod
+    def idempotent_is_strict_boolean(cls, value: object) -> object:
+        if type(value) is not bool:
+            raise ValueError(
+                "coding certification inference idempotency must be boolean"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def identifiers_are_nonzero(self) -> CodingCertificationInferenceRevokeResponse:
+        if self.grant_id.int == 0 or self.lease_id.int == 0:
+            raise ValueError("coding certification inference UUID is nil")
+        return self
+
+
+def coding_certification_inference_grant_signing_message(
+    *, validator_hotkey: str, lease_id: UUID, nonce: UUID, requested_at: datetime
+) -> bytes:
+    return ":".join(
+        (
+            "dittobench-coding-certification-inference-grant:v1",
+            validator_hotkey,
+            str(lease_id),
+            str(nonce),
+            _timestamp(requested_at),
+        )
+    ).encode()
+
+
 __all__ = [
+    "CodingCertificationInferenceExchangeResponse",
+    "CodingCertificationInferenceGrantOffer",
+    "CodingCertificationInferenceGrantRequest",
+    "CodingCertificationInferenceRevokeResponse",
     "CodingInferenceCapabilityRevokeRequest",
     "CodingInferenceExchangeRequest",
     "CodingInferenceExchangeResponse",
@@ -368,6 +547,7 @@ __all__ = [
     "CodingInferenceGrantRequest",
     "CodingInferenceRevokeRequest",
     "CodingInferenceRevokeResponse",
+    "coding_certification_inference_grant_signing_message",
     "coding_inference_exchange_signing_message",
     "coding_inference_grant_signing_message",
     "coding_inference_revoke_signing_message",

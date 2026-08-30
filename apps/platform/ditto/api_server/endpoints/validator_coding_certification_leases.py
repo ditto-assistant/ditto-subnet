@@ -24,6 +24,17 @@ from ditto.api_models.coding_certification_leases import (
     coding_certification_lease_claim_signing_message,
     coding_certification_lease_issue_signing_message,
 )
+from ditto.api_models.coding_inference_grants import (
+    CodingCertificationInferenceExchangeResponse,
+    CodingCertificationInferenceGrantOffer,
+    CodingCertificationInferenceGrantRequest,
+    CodingCertificationInferenceRevokeResponse,
+    CodingInferenceExchangeRequest,
+    CodingInferenceRevokeRequest,
+    coding_certification_inference_grant_signing_message,
+    coding_inference_exchange_signing_message,
+    coding_inference_revoke_signing_message,
+)
 from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.attestation import verify_signature
 from ditto.api_server.dependencies import (
@@ -37,11 +48,17 @@ from ditto.api_server.endpoints.validator import (
     _assert_validator_permitted,
     _screened_image_key,
 )
+from ditto.api_server.endpoints.validator_coding_inference import _transport
 from ditto.api_server.storage import S3StorageClient
 from ditto.chain import ChainClient
 from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_VALIDATOR_CODING_CERTIFICATION_HARNESS,
     record_artifact_fetch,
+)
+from ditto.db.queries.coding_certification_inference_grants import (
+    activate_coding_certification_inference_grant,
+    ensure_coding_certification_inference_grant,
+    revoke_coding_certification_inference_grant,
 )
 from ditto.db.queries.coding_certification_leases import (
     CodingCertificationLeaseConflictError,
@@ -52,6 +69,11 @@ from ditto.db.queries.coding_certification_leases import (
     authorize_coding_certification_harness_delivery,
     claim_coding_certification_lease,
     issue_coding_certification_lease,
+)
+from ditto.db.queries.coding_inference_grants import (
+    CodingInferenceGrantConflictError,
+    CodingInferenceGrantIntegrityError,
+    CodingInferenceGrantNotAvailableError,
 )
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
@@ -399,6 +421,321 @@ async def request_coding_certification_harness_launch(
             detail="coding certification harness launch authority is inconsistent",
             headers=_NO_STORE,
         ) from None
+
+
+_CANARY_EXCHANGE_SUFFIX = (
+    "/api/v1/validator/coding-certification-leases/inference-exchange"
+)
+_TICKET_EXCHANGE_SUFFIX = "/api/v1/validator/coding-shadow/inference-exchange"
+
+
+def _canary_exchange_url(exchange_url: str) -> str:
+    if not exchange_url.endswith(_TICKET_EXCHANGE_SUFFIX):
+        raise ValueError("coding certification inference exchange URL is invalid")
+    return exchange_url[: -len(_TICKET_EXCHANGE_SUFFIX)] + _CANARY_EXCHANGE_SUFFIX
+
+
+def _certification_grant_authority(grant: object) -> dict[str, object]:
+    return {
+        "coding_contract_version": 1,
+        "weight_eligible": False,
+        "grant_id": grant.grant_id,
+        "lease_id": grant.lease_id,
+        "case_id": grant.case_id,
+        "profile_capability_id": grant.profile_capability_id,
+        "inference_grant_sha256": grant.inference_grant_sha256,
+        "model": grant.model,
+        "provider_api": grant.provider_api,
+        "provider_route": grant.provider_route,
+        "receipt_provider": grant.receipt_provider,
+        "provider_route_profile": grant.provider_route_profile,
+        "provider_account_guardrail": grant.provider_account_guardrail,
+        "provider_pipeline_policy": grant.provider_pipeline_policy,
+        "provider_cache_policy": grant.provider_cache_policy,
+        "reasoning_effort": grant.reasoning_effort,
+        "request_budget": grant.request_budget,
+        "prompt_token_budget": grant.prompt_token_budget,
+        "completion_token_budget": grant.completion_token_budget,
+        "cost_budget_usd_micros": grant.cost_budget_usd_micros,
+        "expires_at": grant.expires_at,
+    }
+
+
+@router.post(
+    "/coding-certification-leases/{lease_id}/inference-grant",
+    response_model=CodingCertificationInferenceGrantOffer,
+)
+async def request_coding_certification_inference_grant(
+    lease_id: UUID,
+    payload: CodingCertificationInferenceGrantRequest,
+    request: Request,
+    response: Response,
+    chain: ChainDep,
+    session: SessionDep,
+) -> CodingCertificationInferenceGrantOffer:
+    """Mint or replay the one pending/active grant for a claimed canary lease."""
+
+    response.headers["Cache-Control"] = "no-store"
+    transport = _transport(request)
+    if payload.lease_id != lease_id:
+        raise HTTPException(
+            status_code=409,
+            detail="coding certification lease mismatch",
+            headers=_NO_STORE,
+        )
+    now = await _verify_signed_request(
+        request=request,
+        chain=chain,
+        validator_hotkey=payload.validator_hotkey,
+        requested_at=payload.requested_at,
+        signature=payload.signature,
+        message=coding_certification_inference_grant_signing_message(
+            validator_hotkey=payload.validator_hotkey,
+            lease_id=payload.lease_id,
+            nonce=payload.nonce,
+            requested_at=payload.requested_at,
+        ),
+    )
+    result = None
+    grant_error: Exception | None = None
+    async with session.begin():
+        try:
+            await consume_validator_nonce(
+                session,
+                nonce=payload.nonce,
+                validator_hotkey=payload.validator_hotkey,
+                now=now,
+                expires_at=now + _REQUEST_MAX_AGE,
+            )
+            result = await ensure_coding_certification_inference_grant(
+                session,
+                lease_id=payload.lease_id,
+                validator_hotkey=payload.validator_hotkey,
+                policy=transport.policy,
+            )
+        except ValidatorRequestReplayError:
+            raise HTTPException(
+                status_code=409,
+                detail="coding certification lease request replayed",
+                headers=_NO_STORE,
+            ) from None
+        except CodingInferenceGrantNotAvailableError as error:
+            grant_error = error
+        except CodingInferenceGrantIntegrityError as error:
+            grant_error = error
+    if isinstance(grant_error, CodingInferenceGrantNotAvailableError):
+        raise HTTPException(
+            status_code=404,
+            detail="coding certification inference grant is unavailable",
+            headers=_NO_STORE,
+        )
+    if grant_error is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="coding certification inference grant authority is inconsistent",
+            headers=_NO_STORE,
+        )
+    if result is None:
+        raise HTTPException(
+            status_code=503,
+            detail="coding certification inference grant result is unavailable",
+            headers=_NO_STORE,
+        )
+    try:
+        return CodingCertificationInferenceGrantOffer.model_validate(
+            {
+                "schema": "dittobench-coding-certification-inference-grant-offer-v1",
+                **_certification_grant_authority(result.grant),
+                "status": result.grant.status,
+                "generation": result.grant.generation,
+                "exchange_url": _canary_exchange_url(transport.exchange_url),
+            }
+        )
+    except (TypeError, ValueError, ValidationError):
+        raise HTTPException(
+            status_code=503,
+            detail="coding certification inference transport is invalid",
+            headers=_NO_STORE,
+        ) from None
+
+
+@router.post(
+    "/coding-certification-leases/inference-exchange",
+    response_model=CodingCertificationInferenceExchangeResponse,
+)
+async def exchange_coding_certification_inference_grant(
+    payload: CodingInferenceExchangeRequest,
+    request: Request,
+    response: Response,
+    chain: ChainDep,
+    session: SessionDep,
+) -> CodingCertificationInferenceExchangeResponse:
+    """Rotate a live canary grant onto one validator broker key."""
+
+    response.headers["Cache-Control"] = "no-store"
+    transport = _transport(request)
+    now = await _verify_signed_request(
+        request=request,
+        chain=chain,
+        validator_hotkey=payload.validator_hotkey,
+        requested_at=payload.requested_at,
+        signature=payload.signature,
+        message=coding_inference_exchange_signing_message(
+            validator_hotkey=payload.validator_hotkey,
+            grant_id=payload.grant_id,
+            broker_public_key=payload.broker_public_key,
+            nonce=payload.nonce,
+            requested_at=payload.requested_at,
+        ),
+    )
+    activated = None
+    grant_error: Exception | None = None
+    async with session.begin():
+        try:
+            await consume_validator_nonce(
+                session,
+                nonce=payload.nonce,
+                validator_hotkey=payload.validator_hotkey,
+                now=now,
+                expires_at=now + _REQUEST_MAX_AGE,
+            )
+            activated = await activate_coding_certification_inference_grant(
+                session,
+                grant_id=payload.grant_id,
+                validator_hotkey=payload.validator_hotkey,
+                broker_public_key=payload.broker_public_key,
+                policy=transport.policy,
+            )
+        except ValidatorRequestReplayError:
+            raise HTTPException(
+                status_code=409,
+                detail="coding certification lease request replayed",
+                headers=_NO_STORE,
+            ) from None
+        except (
+            CodingInferenceGrantNotAvailableError,
+            CodingInferenceGrantIntegrityError,
+        ) as error:
+            grant_error = error
+    if grant_error is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="coding certification inference grant is not live",
+            headers=_NO_STORE,
+        )
+    if activated is None:
+        raise HTTPException(
+            status_code=503,
+            detail="coding certification inference exchange result is unavailable",
+            headers=_NO_STORE,
+        )
+    try:
+        return CodingCertificationInferenceExchangeResponse.model_validate(
+            {
+                "schema": "dittobench-coding-certification-inference-exchange-v1",
+                **_certification_grant_authority(activated.grant),
+                "status": "active",
+                "generation": activated.grant.generation,
+                "bearer": activated.bearer,
+                "proxy_url": transport.proxy_url,
+                "revoke_bearer": activated.revoke_bearer,
+                "revoke_url": transport.revoke_url,
+            }
+        )
+    except (TypeError, ValueError, ValidationError):
+        raise HTTPException(
+            status_code=503,
+            detail="coding certification inference transport is invalid",
+            headers=_NO_STORE,
+        ) from None
+
+
+@router.post(
+    "/coding-certification-leases/inference-revoke",
+    response_model=CodingCertificationInferenceRevokeResponse,
+)
+async def revoke_coding_certification_inference_grant_endpoint(
+    payload: CodingInferenceRevokeRequest,
+    request: Request,
+    response: Response,
+    chain: ChainDep,
+    session: SessionDep,
+) -> CodingCertificationInferenceRevokeResponse:
+    """Durably revoke exactly the validator's observed canary grant generation."""
+
+    response.headers["Cache-Control"] = "no-store"
+    now = await _verify_signed_request(
+        request=request,
+        chain=chain,
+        validator_hotkey=payload.validator_hotkey,
+        requested_at=payload.requested_at,
+        signature=payload.signature,
+        message=coding_inference_revoke_signing_message(
+            validator_hotkey=payload.validator_hotkey,
+            grant_id=payload.grant_id,
+            generation=payload.generation,
+            nonce=payload.nonce,
+            requested_at=payload.requested_at,
+        ),
+    )
+    revoked = None
+    grant_error: Exception | None = None
+    async with session.begin():
+        try:
+            await consume_validator_nonce(
+                session,
+                nonce=payload.nonce,
+                validator_hotkey=payload.validator_hotkey,
+                now=now,
+                expires_at=now + _REQUEST_MAX_AGE,
+            )
+            revoked = await revoke_coding_certification_inference_grant(
+                session,
+                grant_id=payload.grant_id,
+                validator_hotkey=payload.validator_hotkey,
+                generation=payload.generation,
+            )
+        except ValidatorRequestReplayError:
+            raise HTTPException(
+                status_code=409,
+                detail="coding certification lease request replayed",
+                headers=_NO_STORE,
+            ) from None
+        except (
+            CodingInferenceGrantNotAvailableError,
+            CodingInferenceGrantIntegrityError,
+            CodingInferenceGrantConflictError,
+        ) as error:
+            grant_error = error
+    if isinstance(grant_error, CodingInferenceGrantNotAvailableError):
+        raise HTTPException(
+            status_code=404,
+            detail="coding certification inference grant is unavailable",
+            headers=_NO_STORE,
+        )
+    if grant_error is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="coding certification inference grant is not revocable",
+            headers=_NO_STORE,
+        )
+    if revoked is None or revoked.grant.revoked_at is None:
+        raise HTTPException(
+            status_code=503,
+            detail="coding certification inference revocation result is unavailable",
+            headers=_NO_STORE,
+        )
+    return CodingCertificationInferenceRevokeResponse(
+        schema="dittobench-coding-certification-inference-revocation-v1",
+        coding_contract_version=1,
+        weight_eligible=False,
+        grant_id=revoked.grant.grant_id,
+        lease_id=revoked.grant.lease_id,
+        status="revoked",
+        generation=revoked.grant.generation,
+        revoked_at=revoked.grant.revoked_at,
+        idempotent=revoked.idempotent,
+    )
 
 
 def _response(

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from base64 import urlsafe_b64encode
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 from uuid import UUID
+
+from Crypto.PublicKey import ECC
 
 from ditto.api_models.coding import (
     CodingCapabilityCertificationReceipt,
@@ -20,7 +23,16 @@ from ditto.api_models.coding_certification_leases import (
     CodingCertificationLeaseResponse,
     CodingCertificationLeaseStatus,
 )
-from ditto.validator.errors import PlatformError, PlatformInfrastructureError
+from ditto.api_models.coding_inference_grants import (
+    CodingCertificationInferenceExchangeResponse,
+    CodingCertificationInferenceGrantOffer,
+    CodingCertificationInferenceRevokeResponse,
+)
+from ditto.validator.errors import (
+    PlatformError,
+    PlatformInfrastructureError,
+    ValidatorInfrastructureError,
+)
 
 logger = logging.getLogger(__name__)
 _MAX_QUEUE = 32
@@ -41,6 +53,10 @@ class CodingCanaryRuntime(Protocol):
         self,
         lease: CodingCertificationLeaseResponse,
         harness: CodingCertificationHarnessLaunchResponse,
+        grant: CodingCertificationInferenceExchangeResponse,
+        *,
+        broker_public_key: str,
+        broker_private_key: str,
     ) -> CodingCanaryOutcome: ...
 
 
@@ -60,6 +76,24 @@ class CodingCanaryPlatform(Protocol):
     async def request_coding_certification_harness_launch(
         self, lease_id: UUID
     ) -> CodingCertificationHarnessLaunchResponse: ...
+
+    async def request_coding_certification_inference_grant(
+        self, lease_id: UUID
+    ) -> CodingCertificationInferenceGrantOffer: ...
+
+    async def exchange_coding_certification_inference_grant(
+        self,
+        offer: CodingCertificationInferenceGrantOffer,
+        *,
+        broker_public_key: str,
+    ) -> CodingCertificationInferenceExchangeResponse: ...
+
+    async def revoke_coding_certification_inference_grant(
+        self,
+        *,
+        grant_id: UUID,
+        generation: int,
+    ) -> CodingCertificationInferenceRevokeResponse: ...
 
     async def submit_coding_certification(
         self,
@@ -163,6 +197,11 @@ class CodingCanaryWorker:
                 "coding certification lease was not issued exclusively"
             )
         claimed: CodingCertificationLeaseResponse | None = None
+        offer: CodingCertificationInferenceGrantOffer | None = None
+        exchange: CodingCertificationInferenceExchangeResponse | None = None
+        outcome: CodingCanaryOutcome | None = None
+        primary_error: BaseException | None = None
+        revoke_error: BaseException | None = None
         try:
             claimed = await self._platform.claim_coding_certification_lease(
                 issued.authority.lease_id
@@ -186,11 +225,58 @@ class CodingCanaryWorker:
                 raise PlatformInfrastructureError(
                     "coding certification harness launch authority is invalid"
                 )
-            outcome = await self._runtime.certify(claimed, harness)
-        except Exception:
+            public_key, private_key = _ed25519_broker_pair()
+            offer = await self._platform.request_coding_certification_inference_grant(
+                claimed.authority.lease_id
+            )
+            if offer.lease_id != claimed.authority.lease_id or offer.weight_eligible:
+                raise PlatformInfrastructureError(
+                    "coding certification inference grant authority is invalid"
+                )
+            exchange = (
+                await self._platform.exchange_coding_certification_inference_grant(
+                    offer, broker_public_key=public_key
+                )
+            )
+            if (
+                exchange.lease_id != claimed.authority.lease_id
+                or exchange.grant_id != offer.grant_id
+                or exchange.weight_eligible
+            ):
+                raise PlatformInfrastructureError(
+                    "coding certification inference exchange authority is invalid"
+                )
+            outcome = await self._runtime.certify(
+                claimed,
+                harness,
+                exchange,
+                broker_public_key=public_key,
+                broker_private_key=private_key,
+            )
+        except Exception as error:
+            primary_error = error
             if claimed is None:
                 await self._abort_issued(issued.authority.lease_id)
-            raise
+        finally:
+            authority = exchange or offer
+            if authority is not None:
+                try:
+                    await asyncio.shield(
+                        self._platform.revoke_coding_certification_inference_grant(
+                            grant_id=authority.grant_id,
+                            generation=authority.generation,
+                        )
+                    )
+                except BaseException as error:
+                    revoke_error = error
+        if revoke_error is not None:
+            raise ValidatorInfrastructureError(
+                "coding certification inference grant revocation failed"
+            ) from revoke_error
+        if primary_error is not None:
+            raise primary_error
+        if claimed is None or outcome is None:
+            raise PlatformInfrastructureError("coding canary outcome is unavailable")
         if (
             not outcome.capabilities_revoked
             or not outcome.harness_destroyed
@@ -248,6 +334,18 @@ class CodingCanaryWorker:
                 lease_id,
                 type(error).__name__,
             )
+
+
+def _ed25519_broker_pair() -> tuple[str, str]:
+    key = ECC.generate(curve="Ed25519")
+    seed = bytes(key.seed)
+    public = key.public_key().export_key(format="raw")
+    if len(seed) != 32 or len(public) != 32:
+        raise ValidatorInfrastructureError("coding canary broker key is invalid")
+    return (
+        urlsafe_b64encode(public).decode().rstrip("="),
+        urlsafe_b64encode(seed + public).decode().rstrip("="),
+    )
 
 
 async def _wait_or_stop(stop: asyncio.Event, seconds: float) -> None:

@@ -238,7 +238,7 @@ func newHost(config Config, availability func(context.Context) error) (*Host, er
 		}
 		canaryBackend, backendErr := codingcanary.NewBackend(codingcanary.BackendConfig{
 			Pack: pack, Harnesses: harnesses, Publisher: router.WorkspacePublisher(),
-			Executors: executors, Outbox: outbox, Policy: config.Policy,
+			Executors: executors, Outbox: outbox, Inference: inference, Policy: config.Policy,
 			ImageDigest: config.RuntimeImageDigest, Now: now,
 		})
 		if backendErr != nil {

@@ -3,6 +3,7 @@ package codingcanary
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,15 +15,17 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/codingcertifier"
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
 	"github.com/ditto-assistant/dittobench-api/internal/codingexecutor"
+	"github.com/ditto-assistant/dittobench-api/internal/codinggateway"
 	"github.com/ditto-assistant/dittobench-api/internal/codingharness"
 	"github.com/ditto-assistant/dittobench-api/internal/codingoutbox"
 	"github.com/ditto-assistant/dittobench-api/internal/codingphase"
+	"github.com/ditto-assistant/dittobench-api/internal/codingplatform"
+	"github.com/ditto-assistant/dittobench-api/internal/codingrelay"
 )
 
 const (
-	certificationTTL      = time.Hour
-	publicCanaryEpoch     = "practice-ledger-v2"
-	unobservedInferenceID = "coding-certification-inference-unobserved-v1"
+	certificationTTL  = time.Hour
+	publicCanaryEpoch = "practice-ledger-v2"
 )
 
 type canaryHarnesses interface {
@@ -35,6 +38,7 @@ type BackendConfig struct {
 	Publisher   codingcertifier.CapabilityPublisher
 	Executors   *codingexecutor.PhaseFactory
 	Outbox      *codingoutbox.Store
+	Inference   codingphase.InferenceActivator
 	Policy      codingcontract.InferencePolicy
 	ImageDigest string
 	Now         func() time.Time
@@ -46,6 +50,7 @@ type certifierBackend struct {
 	publisher   codingcertifier.CapabilityPublisher
 	executors   *codingexecutor.PhaseFactory
 	outbox      *codingoutbox.Store
+	inference   codingphase.InferenceActivator
 	policy      codingcontract.InferencePolicy
 	imageDigest string
 	now         func() time.Time
@@ -54,7 +59,7 @@ type certifierBackend struct {
 func NewBackend(config BackendConfig) (Backend, error) {
 	if config.Pack.CanaryManifestSHA256 == "" || config.Pack.TaskID != publicCanaryTaskID ||
 		config.Harnesses == nil || config.Publisher == nil || config.Executors == nil ||
-		config.Outbox == nil || config.Policy.Validate() != nil ||
+		config.Outbox == nil || config.Inference == nil || config.Policy.Validate() != nil ||
 		!strings.HasPrefix(config.ImageDigest, "sha256:") ||
 		len(strings.TrimPrefix(config.ImageDigest, "sha256:")) != 64 {
 		return nil, ErrInvalidConfig
@@ -65,8 +70,8 @@ func NewBackend(config BackendConfig) (Backend, error) {
 	}
 	return &certifierBackend{
 		pack: config.Pack, harnesses: config.Harnesses, publisher: config.Publisher,
-		executors: config.Executors, outbox: config.Outbox, policy: config.Policy,
-		imageDigest: config.ImageDigest, now: now,
+		executors: config.Executors, outbox: config.Outbox, inference: config.Inference,
+		policy: config.Policy, imageDigest: config.ImageDigest, now: now,
 	}, nil
 }
 
@@ -122,7 +127,68 @@ func (backend *certifierBackend) Certify(ctx context.Context, request Request) (
 	if err != nil {
 		return outcome, err
 	}
-	grantSHA := unobservedGrantSHA256(request.LeaseID, backend.pack.InferencePolicySHA256)
+	privateKey, ok := decodeBrokerPrivateKey(request.Grant.BrokerPrivateKey)
+	if !ok {
+		return outcome, ErrInvalid
+	}
+	relayBinding := codingrelay.Binding{
+		AttemptID: request.LeaseID, AgentArtifactSHA256: request.AgentArtifactSHA256,
+		HarnessInstanceID: harness.InstanceID(), TicketID: request.LeaseID, CaseID: publicCanaryTaskID,
+		ProfileCapabilityID: publicCanaryProfileID, GrantID: request.Grant.GrantID,
+		Generation: request.Grant.Generation, InferenceGrantSHA256: request.Grant.InferenceGrantSHA256,
+		IssuedAt: now, Deadline: request.Deadline, RequestBudget: request.Grant.RequestBudget,
+		PromptTokenBudget: request.Grant.PromptTokenBudget, CompletionTokenBudget: request.Grant.CompletionTokenBudget,
+		CostBudgetUSDMicros: request.Grant.CostBudgetUSDMicros,
+	}
+	activation := codingphase.InferenceActivation{
+		Policy: backend.policy,
+		Capability: codingplatform.GrantCapability{
+			Binding: relayBinding, Bearer: request.Grant.Bearer, BrokerPublicKey: request.Grant.BrokerPublicKey,
+			BrokerPrivateKey: ed25519.PrivateKey(append([]byte(nil), privateKey...)), ProxyURL: request.Grant.ProxyURL,
+		},
+		Revocation: codingplatform.RevocationCapability{
+			GrantID: request.Grant.GrantID, TicketID: request.LeaseID, Generation: request.Grant.Generation,
+			InferenceGrantSHA256: request.Grant.InferenceGrantSHA256, Deadline: request.Grant.ExpiresAt,
+			Bearer: request.Grant.RevokeBearer, URL: request.Grant.RevokeURL,
+		},
+		Authorizer: reservedAuthorizer{
+			outbox: backend.outbox,
+			binding: codingoutbox.Binding{
+				Purpose: codingoutbox.PurposeCertification, ExecutionID: request.LeaseID,
+				AgentArtifactSHA256: request.AgentArtifactSHA256, HarnessInstanceID: harness.InstanceID(),
+				AuthoritySHA256: backend.pack.CanaryManifestSHA256, TicketID: request.LeaseID,
+				CaseID: publicCanaryTaskID, ProfileCapabilityID: publicCanaryProfileID, Deadline: request.Deadline,
+			},
+			relay: relayBinding,
+		},
+	}
+	gateway, err := backend.inference.Activate(ctx, activation)
+	zeroBytes(privateKey)
+	zeroBytes(activation.Capability.BrokerPrivateKey)
+	activation.Capability.Bearer = ""
+	activation.Capability.ProxyURL = ""
+	activation.Revocation.Bearer = ""
+	activation.Revocation.URL = ""
+	if err != nil || gateway == nil {
+		return outcome, errors.Join(ErrUnavailable, err)
+	}
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		revokeErr := gateway.Revoke(cleanup)
+		closeErr := gateway.Close()
+		cancel()
+		if revokeErr != nil {
+			outcome.CapabilitiesRevoked = false
+			err = errors.Join(err, revokeErr)
+		}
+		if closeErr != nil && !errors.Is(closeErr, codinggateway.ErrNotRevoked) {
+			err = errors.Join(err, closeErr)
+		}
+	}()
+	inferenceURL, err := gateway.URL()
+	if err != nil || inferenceURL == "" {
+		return outcome, errors.Join(ErrUnavailable, err)
+	}
 	certRequest := codingcertifier.Request{
 		CertificationID: request.LeaseID, AgentArtifactSHA256: request.AgentArtifactSHA256,
 		HarnessAttestation: codingcertifier.HarnessAttestation{
@@ -133,8 +199,8 @@ func (backend *certifierBackend) Certify(ctx context.Context, request Request) (
 		Seed: seed, Issue: codingcontract.Issue{
 			Title: backend.pack.IssueTitle, Description: backend.pack.IssueDescription, Constraints: []string{},
 		},
-		RepositoryEpoch: publicCanaryEpoch, InferenceBaseURL: "http://inference.invalid/capability",
-		InferenceGrantSHA256: grantSHA, SolverModel: codingcertifier.CertificationSolverModel,
+		RepositoryEpoch: publicCanaryEpoch, InferenceBaseURL: inferenceURL,
+		InferenceGrantSHA256: request.Grant.InferenceGrantSHA256, SolverModel: codingcertifier.CertificationSolverModel,
 		SolverProvider: backend.policy.ProviderAPI, ProviderRouteProfile: backend.policy.ProviderRouteProfile,
 		Budgets: codingcontract.Budgets{
 			ModelInputTokens: 10_000, ModelOutputTokens: 2_000, WorkspaceToolCalls: 16, WallTimeSeconds: 60,
@@ -148,8 +214,9 @@ func (backend *certifierBackend) Certify(ctx context.Context, request Request) (
 	certifier, err := codingcertifier.New(codingcertifier.Config{
 		Harness: harness.Client(), Publisher: backend.publisher, Executor: executor,
 		TranscriptSink: outboxTranscriptSink{attempt: attempt}, FrozenSubmissionSink: outboxFrozenSink{attempt: attempt},
-		InferenceEvidence: unobservedInference{}, OpenVisibleBundle: bytesOpener(plans.visible),
-		OpenGraderBundle: bytesOpener(plans.graderBundle), CertificationTTL: certificationTTL, Now: backend.now,
+		InferenceEvidence: canaryInference{gateway: gateway, costBudgetUSDMicros: request.Grant.CostBudgetUSDMicros},
+		OpenVisibleBundle: bytesOpener(plans.visible), OpenGraderBundle: bytesOpener(plans.graderBundle),
+		CertificationTTL: certificationTTL, Now: backend.now,
 	})
 	if err != nil {
 		return outcome, err
@@ -162,13 +229,62 @@ func (backend *certifierBackend) Certify(ctx context.Context, request Request) (
 	return outcome, nil
 }
 
-type unobservedInference struct{}
+type reservedAuthorizer struct {
+	outbox  *codingoutbox.Store
+	binding codingoutbox.Binding
+	relay   codingrelay.Binding
+}
 
-func (unobservedInference) Evidence(
-	context.Context,
-	codingcertifier.InferenceBinding,
+func (authorizer reservedAuthorizer) Authorize(
+	ctx context.Context,
+	observed codinggateway.CapabilityBinding,
+) error {
+	_, record, err := authorizer.outbox.Lookup(ctx, authorizer.binding.Purpose, authorizer.binding.ExecutionID)
+	if err != nil || record.State != codingoutbox.StateReserved || record.Binding != authorizer.binding ||
+		observed.AttemptID != authorizer.relay.AttemptID ||
+		observed.AgentArtifactSHA256 != authorizer.relay.AgentArtifactSHA256 ||
+		observed.HarnessInstanceID != authorizer.relay.HarnessInstanceID ||
+		observed.TicketID != authorizer.relay.TicketID || observed.CaseID != authorizer.relay.CaseID ||
+		observed.ProfileCapabilityID != authorizer.relay.ProfileCapabilityID ||
+		observed.GrantID != authorizer.relay.GrantID || observed.Generation != authorizer.relay.Generation ||
+		observed.InferenceGrantSHA256 != authorizer.relay.InferenceGrantSHA256 ||
+		!observed.IssuedAt.Equal(authorizer.relay.IssuedAt) || !observed.Deadline.Equal(authorizer.relay.Deadline) ||
+		observed.RequestBudget != authorizer.relay.RequestBudget ||
+		observed.PromptTokenBudget != authorizer.relay.PromptTokenBudget ||
+		observed.CompletionTokenBudget != authorizer.relay.CompletionTokenBudget {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+type canaryInference struct {
+	gateway             codingphase.InferenceGateway
+	costBudgetUSDMicros uint64
+}
+
+func (source canaryInference) Evidence(
+	ctx context.Context,
+	binding codingcertifier.InferenceBinding,
 ) (codingcontract.ModelEvidence, error) {
-	return codingcontract.ModelEvidence{}, codingcertifier.ErrInferenceNotObserved
+	if err := source.gateway.Revoke(ctx); err != nil {
+		return codingcontract.ModelEvidence{}, err
+	}
+	return source.gateway.Evidence(ctx, codingrelay.EvidenceBinding{
+		AttemptID: binding.CertificationID, AgentArtifactSHA256: binding.AgentArtifactSHA256,
+		HarnessInstanceID: binding.HarnessInstanceID, TicketID: binding.TicketID,
+		CaseID: binding.CaseID, ProfileCapabilityID: binding.ProfileCapabilityID,
+		InferenceGrantSHA256: binding.InferenceGrantSHA256, Deadline: binding.Deadline,
+		RequestBudget:         binding.RequestBudget,
+		PromptTokenBudget:     binding.Budgets.ModelInputTokens,
+		CompletionTokenBudget: binding.Budgets.ModelOutputTokens,
+		CostBudgetUSDMicros:   source.costBudgetUSDMicros,
+	})
+}
+
+func zeroBytes(value []byte) {
+	for index := range value {
+		value[index] = 0
+	}
 }
 
 func bytesOpener(body []byte) codingcertifier.BundleOpener {
@@ -207,9 +323,6 @@ func memoryBundleDigest(memories []codingcontract.VisibleMemory) (string, error)
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func unobservedGrantSHA256(leaseID, policySHA string) string {
-	digest := sha256.Sum256([]byte(unobservedInferenceID + "\x00" + leaseID + "\x00" + policySHA))
-	return hex.EncodeToString(digest[:])
-}
-
 var _ Backend = (*certifierBackend)(nil)
+var _ codinggateway.ActivationAuthorizer = reservedAuthorizer{}
+var _ codingcertifier.InferenceEvidenceSource = canaryInference{}

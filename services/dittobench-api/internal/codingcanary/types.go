@@ -52,6 +52,31 @@ type Request struct {
 	InferencePolicySHA256  string    `json:"inference_policy_sha256"`
 	CodingContractVersion  int       `json:"coding_contract_version"`
 	WeightEligible         bool      `json:"weight_eligible"`
+	Grant                  Grant     `json:"grant"`
+}
+
+type Grant struct {
+	Schema                string    `json:"schema"`
+	CodingContractVersion int       `json:"coding_contract_version"`
+	WeightEligible        bool      `json:"weight_eligible"`
+	Status                string    `json:"status"`
+	GrantID               string    `json:"grant_id"`
+	LeaseID               string    `json:"lease_id"`
+	CaseID                string    `json:"case_id"`
+	ProfileCapabilityID   string    `json:"profile_capability_id"`
+	InferenceGrantSHA256  string    `json:"inference_grant_sha256"`
+	Generation            uint32    `json:"generation"`
+	RequestBudget         uint32    `json:"request_budget"`
+	PromptTokenBudget     uint64    `json:"prompt_token_budget"`
+	CompletionTokenBudget uint64    `json:"completion_token_budget"`
+	CostBudgetUSDMicros   uint64    `json:"cost_budget_usd_micros"`
+	Bearer                string    `json:"bearer"`
+	ProxyURL              string    `json:"proxy_url"`
+	RevokeBearer          string    `json:"revoke_bearer"`
+	RevokeURL             string    `json:"revoke_url"`
+	BrokerPublicKey       string    `json:"broker_public_key"`
+	BrokerPrivateKey      string    `json:"broker_private_key"`
+	ExpiresAt             time.Time `json:"expires_at"`
 }
 
 type Outcome struct {

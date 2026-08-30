@@ -9,10 +9,19 @@ plugin policy, cache policy, or coding-ticket identity.
 
 ## Authority and lifecycle
 
-One grant is uniquely bound to one `coding_shadow_tickets` row. Grant creation
-occurs only after Platform reconstructs the private task lease and rechecks the
-ticket, run, screened artifact, active coding certification, authoring phase,
-case, profile capability, and canonical inference-policy digest.
+One ticket grant is uniquely bound to one `coding_shadow_tickets` row. Grant
+creation occurs only after Platform reconstructs the private task lease and
+rechecks the ticket, run, screened artifact, active coding certification,
+authoring phase, case, profile capability, and canonical inference-policy digest.
+
+Public-canary inference uses a separate table,
+`coding_certification_inference_grants`. One grant is uniquely bound to one
+claimed `coding_certification_leases` row. Creation does not require a private
+coding ticket or a prior certified receipt; it rechecks the claimed lease,
+current screened image, and canonical locked policy digest. The grant SHA is
+the parsed policy digest, not the pack file hash. The capability-revoke path
+reuses `/coding-shadow/inference-revoke-capability` with the lease UUID in
+`ticket_id` so the existing Go revoker accepts it.
 
 The persisted authority fixes:
 
@@ -42,6 +51,9 @@ domain-separated sr25519 signature:
 - `POST /api/v1/validator/coding-shadow/inference-grant`
 - `POST /api/v1/validator/coding-shadow/inference-exchange`
 - `POST /api/v1/validator/coding-shadow/inference-revoke`
+- `POST /api/v1/validator/coding-certification-leases/{lease_id}/inference-grant`
+- `POST /api/v1/validator/coding-certification-leases/inference-exchange`
+- `POST /api/v1/validator/coding-certification-leases/inference-revoke`
 
 The trusted Go gateway can additionally call
 `POST /api/v1/validator/coding-shadow/inference-revoke-capability` with the

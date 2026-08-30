@@ -55,6 +55,10 @@ from ditto.api_models.coding_harness import (
     CodingHarnessLaunchResponse,
 )
 from ditto.api_models.coding_inference_grants import (
+    CodingCertificationInferenceExchangeResponse,
+    CodingCertificationInferenceGrantOffer,
+    CodingCertificationInferenceGrantRequest,
+    CodingCertificationInferenceRevokeResponse,
     CodingInferenceExchangeRequest,
     CodingInferenceExchangeResponse,
     CodingInferenceGrantOffer,
@@ -106,6 +110,7 @@ from ditto.validator.signing import (
     sign_coding_authoring_freeze,
     sign_coding_authoring_lease,
     sign_coding_certification_harness_launch,
+    sign_coding_certification_inference_grant,
     sign_coding_certification_lease_abort,
     sign_coding_certification_lease_claim,
     sign_coding_certification_lease_issue,
@@ -160,6 +165,33 @@ _CODING_INFERENCE_GRANT_MAX_BYTES = 64 << 10
 _CODING_HARNESS_LAUNCH_MAX_BYTES = 64 << 10
 _CODING_CLAIM_MAX_BYTES = 64 << 10
 _CODING_CERTIFICATION_LEASE_MAX_BYTES = 64 << 10
+
+
+def _coding_certification_grant_authority(value: object) -> tuple[object, ...]:
+    fields = (
+        "coding_contract_version",
+        "weight_eligible",
+        "grant_id",
+        "lease_id",
+        "case_id",
+        "profile_capability_id",
+        "inference_grant_sha256",
+        "model",
+        "provider_api",
+        "provider_route",
+        "receipt_provider",
+        "provider_route_profile",
+        "provider_account_guardrail",
+        "provider_pipeline_policy",
+        "provider_cache_policy",
+        "reasoning_effort",
+        "request_budget",
+        "prompt_token_budget",
+        "completion_token_budget",
+        "cost_budget_usd_micros",
+        "expires_at",
+    )
+    return tuple(getattr(value, field) for field in fields)
 
 
 def _coding_grant_authority(value: object) -> tuple[object, ...]:
@@ -2114,6 +2146,217 @@ class PlatformClient:
                 "coding certification harness launch response identity is invalid"
             )
         return launch
+
+    async def request_coding_certification_inference_grant(
+        self,
+        lease_id: UUID,
+    ) -> CodingCertificationInferenceGrantOffer:
+        """Fetch the unwired Luna grant bound to one claimed canary lease."""
+
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingCertificationInferenceGrantRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            lease_id=lease_id,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_certification_inference_grant(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                lease_id=lease_id,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        body = bytearray()
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base}{_PREFIX}/coding-certification-leases/{lease_id}/inference-grant",
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            ) as response:
+                if response.status_code == 503:
+                    raise PlatformInfrastructureError(
+                        "coding certification inference grants are "
+                        "temporarily unavailable"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        "coding certification inference grant rejected "
+                        f"({response.status_code})"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=16 << 10):
+                    if len(body) + len(chunk) > _CODING_INFERENCE_GRANT_MAX_BYTES:
+                        raise PlatformInfrastructureError(
+                            "coding certification inference grant response "
+                            "size is invalid"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding certification inference grant request failed"
+            ) from error
+        try:
+            offer = CodingCertificationInferenceGrantOffer.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding certification inference grant response is invalid"
+            ) from None
+        expected_exchange_url = (
+            f"{self._base}{_PREFIX}/coding-certification-leases/inference-exchange"
+        )
+        if offer.lease_id != lease_id or offer.exchange_url != expected_exchange_url:
+            raise PlatformInfrastructureError(
+                "coding certification inference grant response identity is invalid"
+            )
+        return offer
+
+    async def exchange_coding_certification_inference_grant(
+        self,
+        offer: CodingCertificationInferenceGrantOffer,
+        *,
+        broker_public_key: str,
+    ) -> CodingCertificationInferenceExchangeResponse:
+        """Rotate one offered canary grant onto the local trusted broker key."""
+
+        expected_url = (
+            f"{self._base}{_PREFIX}/coding-certification-leases/inference-exchange"
+        )
+        if offer.exchange_url != expected_url:
+            raise PlatformInfrastructureError(
+                "coding certification inference exchange URL is invalid"
+            )
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingInferenceExchangeRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            grant_id=offer.grant_id,
+            broker_public_key=broker_public_key,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_inference_exchange(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                grant_id=offer.grant_id,
+                broker_public_key=broker_public_key,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        body = bytearray()
+        try:
+            async with self._client.stream(
+                "POST",
+                expected_url,
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            ) as response:
+                if response.status_code == 503:
+                    raise PlatformInfrastructureError(
+                        "coding certification inference exchange is "
+                        "temporarily unavailable"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        "coding certification inference exchange rejected "
+                        f"({response.status_code})"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=16 << 10):
+                    if len(body) + len(chunk) > _CODING_INFERENCE_GRANT_MAX_BYTES:
+                        raise PlatformInfrastructureError(
+                            "coding certification inference exchange "
+                            "response size is invalid"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding certification inference exchange request failed"
+            ) from error
+        try:
+            exchange = CodingCertificationInferenceExchangeResponse.model_validate_json(
+                body
+            )
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding certification inference exchange response is invalid"
+            ) from None
+        if (
+            _coding_certification_grant_authority(exchange)
+            != _coding_certification_grant_authority(offer)
+            or exchange.generation <= offer.generation
+        ):
+            raise PlatformInfrastructureError(
+                "coding certification inference exchange response identity is invalid"
+            )
+        return exchange
+
+    async def revoke_coding_certification_inference_grant(
+        self,
+        *,
+        grant_id: UUID,
+        generation: int,
+    ) -> CodingCertificationInferenceRevokeResponse:
+        """Durably revoke the exact canary grant generation observed locally."""
+
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingInferenceRevokeRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            grant_id=grant_id,
+            generation=generation,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_inference_revoke(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                grant_id=grant_id,
+                generation=generation,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        try:
+            response = await self._client.post(
+                f"{self._base}{_PREFIX}/coding-certification-leases/inference-revoke",
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            )
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding certification inference revocation request failed"
+            ) from error
+        if response.status_code == 503:
+            raise PlatformInfrastructureError(
+                "coding certification inference revocation is temporarily unavailable"
+            )
+        if response.status_code != 200:
+            raise PlatformError(
+                "coding certification inference revocation rejected "
+                f"({response.status_code})"
+            )
+        if not response.content or len(response.content) > (
+            _CODING_INFERENCE_GRANT_MAX_BYTES
+        ):
+            raise PlatformInfrastructureError(
+                "coding certification inference revocation response size is invalid"
+            )
+        try:
+            revoked = CodingCertificationInferenceRevokeResponse.model_validate_json(
+                response.content
+            )
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding certification inference revocation response is invalid"
+            ) from None
+        if revoked.grant_id != grant_id or revoked.generation != generation:
+            raise PlatformInfrastructureError(
+                "coding certification inference revocation response identity is invalid"
+            )
+        return revoked
 
     async def _send_coding_certification_lease(
         self,
