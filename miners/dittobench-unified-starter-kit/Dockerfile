@@ -35,9 +35,9 @@ RUN mkdir -p \
        /app/dittobench-coding-starter-kit/src \
        /app/dittobench-unified-starter-kit/src
 
-COPY dittobench-starter-kit ./dittobench-starter-kit
-COPY dittobench-coding-starter-kit ./dittobench-coding-starter-kit
-COPY dittobench-unified-starter-kit ./dittobench-unified-starter-kit
+COPY dittobench-starter-kit /app/dittobench-starter-kit
+COPY dittobench-coding-starter-kit /app/dittobench-coding-starter-kit
+COPY dittobench-unified-starter-kit /app/dittobench-unified-starter-kit
 
 # Ensure source timestamps cannot make the former stubs look current when the
 # cached dependency layer is restored by BuildKit.

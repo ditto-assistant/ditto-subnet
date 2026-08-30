@@ -104,19 +104,19 @@ def test_unified_starter_image_caches_dependencies_before_source() -> None:
         (
             "COPY dittobench-starter-kit/Cargo.toml "
             "dittobench-starter-kit/Cargo.lock ./dittobench-starter-kit/",
-            "COPY dittobench-starter-kit ./dittobench-starter-kit",
+            "COPY dittobench-starter-kit /app/dittobench-starter-kit",
         ),
         (
             "COPY dittobench-coding-starter-kit/Cargo.toml "
             "dittobench-coding-starter-kit/Cargo.lock "
             "./dittobench-coding-starter-kit/",
-            "COPY dittobench-coding-starter-kit ./dittobench-coding-starter-kit",
+            "COPY dittobench-coding-starter-kit /app/dittobench-coding-starter-kit",
         ),
         (
             "COPY dittobench-unified-starter-kit/Cargo.toml "
             "dittobench-unified-starter-kit/Cargo.lock "
             "./dittobench-unified-starter-kit/",
-            "COPY dittobench-unified-starter-kit ./dittobench-unified-starter-kit",
+            "COPY dittobench-unified-starter-kit /app/dittobench-unified-starter-kit",
         ),
     )
     warmup_build = "cargo build --locked --release --bin dittobench-unified-miner"
