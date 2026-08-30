@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.152.0 (2026-08-30)
+
+### Bug Fixes
+
+- **platform**: Isolate fleet jobs from cloud reaper
+  ([#1340](https://github.com/ditto-assistant/ditto-subnet/pull/1340),
+  [`762b57c`](https://github.com/ditto-assistant/ditto-subnet/commit/762b57cc501be1bb3e0df9dcb769ae56f0c214e4))
+
+### Features
+
+- **coding**: Define locked Luna relay contract
+  ([`c67eda4`](https://github.com/ditto-assistant/ditto-subnet/commit/c67eda431cc49f9b285ca6fb35bbebea43b1132c))
+
+
 ## v0.151.0 (2026-08-30)
 
 ### Features
