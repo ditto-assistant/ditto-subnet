@@ -30,7 +30,7 @@ _CONTRACT = json.loads((_TESTDATA / "coding_contract_v1.json").read_text())
 
 def _config() -> Any:
     return SimpleNamespace(
-        dittobench_api_url="http://dittobench-api:8000",
+        dittobench_api_url="https://dittobench-api:8000",
         dittobench_control_token="coding-supervisor-control-token-000000000000",
     )
 
@@ -186,6 +186,17 @@ def test_runtime_configuration_and_vector_shape() -> None:
             invalid,
             object(),  # type: ignore[arg-type]
         )
+    plaintext: Any = SimpleNamespace(
+        dittobench_api_url="http://dittobench-api:8000",
+        dittobench_control_token="coding-supervisor-control-token-000000000000",
+    )
+    with pytest.raises(ValueError):
+        CodingSupervisorRuntime(plaintext, object())  # type: ignore[arg-type]
+    loopback: Any = SimpleNamespace(
+        dittobench_api_url="http://127.0.0.1:8000",
+        dittobench_control_token="coding-supervisor-control-token-000000000000",
+    )
+    CodingSupervisorRuntime(loopback, object())  # type: ignore[arg-type]
     for operation, request in _SUPERVISOR["requests"].items():
         assert request["schema"] == "dittobench-coding-attempt-supervisor-request-v1"
         assert request["operation"] == operation

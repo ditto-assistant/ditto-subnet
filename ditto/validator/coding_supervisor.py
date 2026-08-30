@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 from datetime import datetime
 from typing import Any, Literal
@@ -147,7 +148,7 @@ class CodingSupervisorRuntime:
         parsed = urlsplit(config.dittobench_api_url)
         token = config.dittobench_control_token
         if (
-            parsed.scheme not in {"http", "https"}
+            not _tls_or_loopback(parsed.scheme, parsed.hostname)
             or not parsed.netloc
             or parsed.username is not None
             or parsed.password is not None
@@ -398,6 +399,22 @@ class CodingSupervisorRuntime:
 
     def __repr__(self) -> str:
         return "CodingSupervisorRuntime(private=True)"
+
+
+def _tls_or_loopback(scheme: str, hostname: str | None) -> bool:
+    if hostname is None or hostname == "":
+        return False
+    if scheme == "https":
+        return True
+    if scheme != "http":
+        return False
+    host = hostname.casefold()
+    if host in {"localhost", "localhost."}:
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 def _authoring_payload(authoring: CodingAuthoringOutcome) -> dict[str, Any]:

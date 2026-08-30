@@ -30,9 +30,10 @@ projected to generic codes and never include task, provider, lease, or secret
 text.
 
 The Python client sends the existing scorer control token only to
-`VALIDATOR_DITTOBENCH_API_URL`, disables redirects per request, bounds response
-bytes, requires `Cache-Control: no-store` and JSON, and independently validates
-the operation, operation UUID, ticket, run, and typed outcome before returning
+`VALIDATOR_DITTOBENCH_API_URL` over HTTPS, or over HTTP to loopback during
+local development. It disables redirects per request, bounds response bytes,
+requires `Cache-Control: no-store` and JSON, and independently validates the
+operation, operation UUID, ticket, run, and typed outcome before returning
 coordinator dataclasses.
 
 ## Current boundary
