@@ -153,11 +153,21 @@ jobs:
               ditto/tests/api_server/endpoints/test_public.py
               ditto/tests/api_server/endpoints/test_validator.py
             object_storage: false
+          # test_screener.py and test_inference.py are the two largest files
+          # after the public/validator pair; their own shard keeps the four
+          # endpoint-heavy lanes near-equal instead of one ~5-minute long pole.
+          - suite: screener-inference-endpoints
+            pytest_args: >-
+              ditto/tests/api_server/endpoints/test_screener.py
+              ditto/tests/api_server/endpoints/test_inference.py
+            object_storage: false
           - suite: other-endpoints
             pytest_args: >-
               ditto/tests/api_server/endpoints
               --ignore=ditto/tests/api_server/endpoints/test_public.py
               --ignore=ditto/tests/api_server/endpoints/test_validator.py
+              --ignore=ditto/tests/api_server/endpoints/test_screener.py
+              --ignore=ditto/tests/api_server/endpoints/test_inference.py
             object_storage: false
           - suite: api-server
             pytest_args: ditto/tests/api_server --ignore=ditto/tests/api_server/endpoints
