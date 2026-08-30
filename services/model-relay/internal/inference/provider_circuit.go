@@ -3,6 +3,7 @@ package inference
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/google/uuid"
@@ -93,4 +94,35 @@ func receiptFreeResultOverload(result *providerHTTPResult, model, provider strin
 	return result != nil &&
 		providerIsBackpressure(result.status, result.header) &&
 		providerBackpressureIsReceiptFree(result, model, provider)
+}
+
+// receiptFreeGatewayFailure recognizes the narrow 502 class that the trusted
+// scorer broker may safely redeliver inside its existing ticket. Every phase
+// must be an explicit gateway error envelope with no provider receipt fields.
+// Response-generation failures are deliberately excluded: those are returned
+// to the miner under miner_recoverable_generation so its own control loop can
+// repair the turn without making the score look like infrastructure failure.
+func receiptFreeGatewayFailure(phases []phaseTrace, expectedModel, expectedProvider string) bool {
+	if len(phases) == 0 {
+		return false
+	}
+	for _, phase := range phases {
+		if phase.timedOut || phase.errorCode == providerGenerationInvalidCode ||
+			(phase.status != http.StatusOK && phase.status != http.StatusBadGateway) {
+			return false
+		}
+		// OpenRouter sometimes wraps its error envelope in HTTP 200. Normalize
+		// only for the strict body proof; the envelope's own code must still be
+		// exactly 502, and every receipt/metadata invariant remains enforced by
+		// the same classifier that authorized the relay's first safe retry.
+		result := &providerHTTPResult{
+			status: http.StatusBadGateway,
+			header: phase.headers,
+			body:   phase.body,
+		}
+		if !providerGatewayIsReceiptFree(result, expectedModel, expectedProvider) {
+			return false
+		}
+	}
+	return true
 }

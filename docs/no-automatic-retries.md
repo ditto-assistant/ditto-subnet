@@ -14,6 +14,16 @@ their private recovery class instead of being replayed by the relay. The retry
 stays inside the same signed inference request, grant, lease, and cumulative
 budget lineage; it never creates a new scoring ticket or provider fallback.
 
+If that in-request retry still ends in a strictly receipt-free 502, the relay
+may return `relay_recoverable_gateway`. The scorer broker keeps the same logical
+request and pauses for three bounded redeliveries (5s, 10s, then 20s). Each has
+a fresh nonce and durable Platform request row, so request-budget lineage stays
+exact while token and dollar accounting remain zero for failed receipt-free
+deliveries. One validator-wide probe token serializes concurrent leases behind
+a canary. Exhaustion parks the existing score attempt. Ambiguous 502s,
+transport failures, timeouts, receipt-bearing errors, 400s, and
+`miner_recoverable_generation` are not covered by this second exception.
+
 This policy applies even when the failure is classified as infrastructure and
 even when an identical request would be idempotent. Infrastructure
 classification remains evidence; it is not retry authority.
@@ -27,7 +37,7 @@ classification remains evidence; it is not retry authority.
 | Trusted screener image build | `failed`, `fallback_required`, and `canceled` rows remain parked | `get_screener_capacity` supplies the build/status/attempt guards; `retry_trusted_image_build` requeues that exact build and appends an audit event |
 | Screening compute provider | Only the first configured provider is authoritative; no Targon/GCP or model failover occurs | `get_screener_capacity` and the screener-provider settings controls select the one provider before a manual retry |
 | Validator scoring ticket | The first failed/expired lease exhausts its base budget; infrastructure grants do not wake it | `get_validation_retry`, `retry_validator_evaluation`, and `batch_retry_validator_evaluation` grant exactly one future lease per selected exhausted ticket |
-| Hosted chat inference | One provider dispatch plus at most one same-route replay for a strict receipt-free 429 or generic HTTP 502; generated-output 502s are returned to the miner; all ambiguous failures and fallbacks remain single-shot | Retry the enclosing validator evaluation only after the bounded in-request recovery is exhausted |
+| Hosted chat inference | One provider dispatch plus one same-request relay retry; after an exhausted strict receipt-free 502, at most three serialized same-grant scorer redeliveries; generated-output 502s are returned to the miner; ambiguous failures and fallbacks remain single-shot | Retry the enclosing validator evaluation only after bounded recovery is exhausted |
 | Hosted embedding inference | One provider dispatch, fallbacks disabled; any status, malformed response, timeout, transport error, or capacity rejection parks the score attempt | Retry the enclosing validator evaluation; an individual embedding request is never replayed independently |
 | Harness `/run`, LongMem seed/run, provider certification, and model relay | One dispatch; failures are returned as terminal evidence | Retry the enclosing validator evaluation or explicitly rerun the operator-owned certification job |
 | Score submission and score replacement | One delivery; a failed replacement request releases its claim without another automatic attempt | `queue_validator_score_retests` creates a new audited replacement request; canonical scoring uses the validator retry controls |

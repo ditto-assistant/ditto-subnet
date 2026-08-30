@@ -43,11 +43,17 @@ import (
 const (
 	minerRecoverableFailureHeader = "X-Ditto-Inference-Failure-Class"
 	minerRecoverableGeneration    = "miner_recoverable_generation"
+	relayRecoverableGateway       = "relay_recoverable_gateway"
 )
 
 func minerRecoverablePlatformFailure(legacyGateway string, trustedChatHandler http.Handler, status int, class string) bool {
 	return legacyGateway == "" && trustedChatHandler == nil &&
 		status == http.StatusBadGateway && class == minerRecoverableGeneration
+}
+
+func relayRecoverablePlatformGateway(legacyGateway string, trustedChatHandler http.Handler, status int, class string) bool {
+	return legacyGateway == "" && trustedChatHandler == nil &&
+		status == http.StatusBadGateway && class == relayRecoverableGateway
 }
 
 const (
@@ -63,6 +69,9 @@ const (
 	brokerWriteTimeout         = 2 * time.Minute
 	brokerIdleTimeout          = 30 * time.Second
 	brokerMaximumHeaderBytes   = 32 << 10
+	ticketGatewayMaxAttempts   = 4
+	ticketGatewayBackoffBase   = 5 * time.Second
+	ticketGatewayBackoffMax    = 20 * time.Second
 	platformInferenceAPIPath   = "/api/v1/inference/chat/completions"
 	platformEmbeddingAPIPath   = "/api/v1/inference/embeddings"
 	embeddingAPIPath           = "/api/embed"
@@ -78,6 +87,17 @@ const (
 	embeddingSessionInputBytes = 1 << 30
 	brokerAblationTraceBytes   = 256 << 20
 )
+
+func ticketGatewayBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := ticketGatewayBackoffBase << (attempt - 1)
+	if delay > ticketGatewayBackoffMax {
+		return ticketGatewayBackoffMax
+	}
+	return delay
+}
 
 // usesPlatformEmbedding is the single version boundary for the hosted,
 // ticket-scoped embedding route. Bench v2-v6 retain the frozen local Ollama
@@ -576,11 +596,15 @@ type inferenceBroker struct {
 	embeddingURL          string
 	embeddingSlots        chan struct{}
 	embeddingBackpressure embeddingBackpressureGate
-	embeddingRequestTTL   time.Duration
-	delayFP               delayFingerprintConfig
-	sleep                 func(context.Context, time.Duration) error
-	relayWait             func(string, bool)
-	terminalAgentFailure  func(string)
+	// gatewayRecoveryProbe serializes receipt-free gateway redeliveries across
+	// every live session on this validator. Ordinary first deliveries remain
+	// concurrent; after an outage, exactly one logical call probes recovery.
+	gatewayRecoveryProbe chan struct{}
+	embeddingRequestTTL  time.Duration
+	delayFP              delayFingerprintConfig
+	sleep                func(context.Context, time.Duration) error
+	relayWait            func(string, bool)
+	terminalAgentFailure func(string)
 }
 
 // embeddingBackpressureGate is a validator-wide circuit breaker for the
@@ -1264,10 +1288,11 @@ func newInferenceBroker(maxSessions int, embeddingCapacity ...int) *inferenceBro
 				return http.ErrUseLastResponse
 			},
 		},
-		maxSessions:      maxSessions * 2,
-		embeddingSlots:   make(chan struct{}, capacity),
-		controlToken:     strings.TrimSpace(os.Getenv("DITTOBENCH_BROKER_CONTROL_TOKEN")),
-		platformProxyURL: platformProxyURL,
+		maxSessions:          maxSessions * 2,
+		embeddingSlots:       make(chan struct{}, capacity),
+		gatewayRecoveryProbe: make(chan struct{}, 1),
+		controlToken:         strings.TrimSpace(os.Getenv("DITTOBENCH_BROKER_CONTROL_TOKEN")),
+		platformProxyURL:     platformProxyURL,
 		platformTransportURL: configuredPlatformTransportURL(
 			os.Getenv("DITTOBENCH_PLATFORM_INFERENCE_TRANSPORT_URL"), platformProxyURL,
 		),
@@ -3943,14 +3968,30 @@ func (b *inferenceBroker) proxy(
 	var responseFailureClass string
 	var preReservationReaderRejection bool
 	var totalLatency uint64
-	// Every ticket-scoped provider call is single-shot. Platform and the broker
-	// both park failures; only a Backroom ticket retry may repeat paid work.
-	func() {
+	var endRelayWait func()
+	var gatewayProbeHeld bool
+	defer func() {
+		if endRelayWait != nil {
+			endRelayWait()
+		}
+		if gatewayProbeHeld {
+			<-b.gatewayRecoveryProbe
+		}
+	}()
+	// The default remains one dispatch. The only automatic exception is an
+	// authenticated relay_recoverable_gateway response: the relay has proven
+	// that the 502 carried no provider receipt, so repeating it cannot duplicate
+	// billed work. Every redelivery keeps this grant and logical broker request,
+	// but receives a fresh signed nonce and its own Platform request row.
+	for attempt := 1; attempt <= ticketGatewayMaxAttempts; attempt++ {
+		responseBody = nil
+		responseStatus = 0
+		responseFailureClass = ""
 		nonce := uuid.NewString()
 		requested := time.Now().UTC().Format("2006-01-02T15:04:05.000000+00:00")
 		req, buildErr := http.NewRequestWithContext(requestCtx, http.MethodPost, proxyURL, bytes.NewReader(body))
 		if buildErr != nil {
-			return
+			break
 		}
 		req.Header.Set("Content-Type", "application/json")
 		if legacyGateway == "" && trustedChatHandler == nil {
@@ -3988,10 +4029,7 @@ func (b *inferenceBroker) proxy(
 		}
 		totalLatency += uint64(time.Since(started).Milliseconds())
 		if requestErr != nil {
-			if requestCtx.Err() != nil {
-				return
-			}
-			return
+			break
 		}
 		atCapacity := legacyGateway == "" && trustedChatHandler == nil && platformIsAtCapacity(resp)
 		candidateBody, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
@@ -3999,7 +4037,7 @@ func (b *inferenceBroker) proxy(
 		responseStatus = resp.StatusCode
 		responseFailureClass = resp.Header.Get(minerRecoverableFailureHeader)
 		if readErr != nil || len(candidateBody) > 16<<20 {
-			return
+			break
 		}
 		responseBody = candidateBody
 		// Backpressure is terminal for this ticket-scoped request. Record its
@@ -4009,7 +4047,7 @@ func (b *inferenceBroker) proxy(
 			session.mu.Lock()
 			session.capacityExhaustions++
 			session.mu.Unlock()
-			return
+			break
 		}
 		// Auth class: the platform declined the grant. The lease is gone, or its
 		// budget is spent, so every further attempt would fail identically while
@@ -4017,12 +4055,38 @@ func (b *inferenceBroker) proxy(
 		// that cannot serve it. Stop immediately -- both terminal reasons want
 		// the same action here, and only the reporting below tells them apart.
 		if platformDeniesGrant(grantDenialRoute, responseStatus) {
-			return
+			break
 		}
-		if responseStatus == http.StatusRequestTimeout || responseStatus == http.StatusTooManyRequests || responseStatus >= 500 {
-			return
+		if relayRecoverablePlatformGateway(
+			legacyGateway, trustedChatHandler, responseStatus, responseFailureClass,
+		) {
+			if attempt == ticketGatewayMaxAttempts {
+				session.mu.Lock()
+				session.recoveryExhaustions++
+				session.mu.Unlock()
+				break
+			}
+			if endRelayWait == nil {
+				endRelayWait = b.beginRelayWait(session)
+			}
+			if !gatewayProbeHeld {
+				select {
+				case b.gatewayRecoveryProbe <- struct{}{}:
+					gatewayProbeHeld = true
+				case <-requestCtx.Done():
+					break
+				}
+				if !gatewayProbeHeld {
+					break
+				}
+			}
+			if b.sleep(requestCtx, ticketGatewayBackoff(attempt)) != nil {
+				break
+			}
+			continue
 		}
-	}()
+		break
+	}
 	if requestCtx.Err() != nil {
 		session.mu.Lock()
 		session.callerCancels++
