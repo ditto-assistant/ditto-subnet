@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.162.0 (2026-08-30)
+
+### Features
+
+- **coding**: Deliver private execution plans
+  ([`55f91c2`](https://github.com/ditto-assistant/ditto-subnet/commit/55f91c2fcc9fa0d34ef87724609d7dd20c147d6a))
+
+
 ## v0.161.0 (2026-08-30)
 
 ### Bug Fixes
