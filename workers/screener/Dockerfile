@@ -14,6 +14,6 @@ COPY workers/screener/tools/l2_analyzer.py ./tools/l2_analyzer.py
 RUN uv sync --frozen --no-dev
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD ["uv", "run", "--no-sync", "python", "-m", "ditto_screener.health"]
+    CMD ["/app/workers/screener/.venv/bin/python", "-m", "ditto_screener.health"]
 
-CMD ["uv", "run", "--no-sync", "python", "-m", "ditto_screener"]
+CMD ["/app/workers/screener/.venv/bin/python", "-m", "ditto_screener"]
