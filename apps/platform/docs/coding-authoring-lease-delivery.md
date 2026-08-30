@@ -27,9 +27,10 @@ resource-profile
 
 The response binds the shared run manifest and digest, task-set digest,
 repository epoch, issue/runtime/budget material and digests, ticket deadline,
-and `weight_eligible=false`. It is `Cache-Control: no-store`. Grader capability,
-grader tests, gold patches, catalog coordinates, source URLs, policy labels,
-and curator metadata are structurally absent.
+and `weight_eligible=false`. It is `Cache-Control: no-store`. The manifest still
+carries opaque catalog identifiers. Grader capability, grader tests, gold
+patches, private catalog records, source URLs, policy labels, and curator
+metadata are structurally absent.
 
 The root validator client has a typed request method with a 512 KiB response
 ceiling and redacted parse errors. No worker or scheduler calls the method.
