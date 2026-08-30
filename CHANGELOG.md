@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.157.1 (2026-08-30)
+
+### Bug Fixes
+
+- **release**: Retry controller SSH propagation
+  ([#1347](https://github.com/ditto-assistant/ditto-subnet/pull/1347),
+  [`965bfa4`](https://github.com/ditto-assistant/ditto-subnet/commit/965bfa41e51ed9123393194645bde09a7fa08876))
+
+
 ## v0.157.0 (2026-08-30)
 
 ### Features
