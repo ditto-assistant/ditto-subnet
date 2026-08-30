@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.150.3 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Run fleet source review in image venv
+  ([#1337](https://github.com/ditto-assistant/ditto-subnet/pull/1337),
+  [`f8a4e6f`](https://github.com/ditto-assistant/ditto-subnet/commit/f8a4e6f0b940159b9bdd87c6d33ab77cb53b49a1))
+
+
 ## v0.150.2 (2026-08-30)
 
 ### Bug Fixes
