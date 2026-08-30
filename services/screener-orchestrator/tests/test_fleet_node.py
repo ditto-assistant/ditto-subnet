@@ -259,6 +259,8 @@ def test_source_review_uses_image_project_environment(
         "-m",
         "ditto_screener.source_review_job",
     ]
+    user_index = commands[0].index("--user")
+    assert commands[0][user_index + 1] == f"{os.getuid()}:{os.getgid()}"
 
 
 def test_stop_request_prevents_new_claims(tmp_path: Path) -> None:
