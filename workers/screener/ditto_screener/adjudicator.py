@@ -21,9 +21,9 @@ than model size. The host checks every citation against the archive AND
 against what this adjudicator actually read, so a decision resting on a
 hallucinated or unread location is refused rather than executed.
 
-A refused decision escalates: the hold stands and an operator sees it. There
-is no path here that releases or rejects on evidence the host could not
-verify.
+A refused decision settles clear under the published no-proven-breach rule.
+There is no path here that rejects on evidence the host could not verify, and
+a bounded automated court can never strand a submission in an operator hold.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ from ditto_screening_protocol import (
 
 logger = logging.getLogger(__name__)
 
-ADJUDICATOR_PROMPT_REVISION = "adjudicator-v1-policy-v10"
+ADJUDICATOR_PROMPT_REVISION = "adjudicator-v2-policy-v10"
 _DEFAULT_MODEL = "z-ai/glm-5.3-flash"
 _MAX_STEPS = 128
 _MAX_COMPLETION_TOKENS = 6_000
@@ -289,6 +289,37 @@ def _escalate(
     )
 
 
+def _settle_refusal(
+    adjudication: SourceReviewAdjudication,
+    *,
+    model: str,
+    notes: int,
+) -> SourceReviewAdjudication:
+    """Turn a refused court output into the only fair terminal fallback.
+
+    A missing, timed-out, exhausted, or malformed court result proves no miner
+    breach.  Reject still requires verified executable citations; when that
+    proof is absent, the published rule is to clear rather than park the
+    submission indefinitely or punish the miner for reviewer infrastructure.
+    """
+    if adjudication.decision != "escalate":
+        return adjudication
+    refusal_code = adjudication.escalation_code or "court-refused"
+    return SourceReviewAdjudication(
+        decision="clear",
+        reason=(
+            f"Automated adjudication ended ({refusal_code}) without a verified "
+            f"policy breach after considering {notes} persisted review notes; "
+            "cleared under "
+            "the no-proven-breach-before-deadline rule"
+        ),
+        clear_clause=AdjudicationClearClause.NO_PROVEN_BREACH,
+        model=model,
+        prompt_revision=ADJUDICATOR_PROMPT_REVISION,
+        notes_considered=notes,
+    )
+
+
 def _bounded_sequence(value: object, limit: int) -> list[object]:
     """Take at most ``limit`` items from untrusted model or finding JSON."""
     if not isinstance(value, list):
@@ -399,16 +430,20 @@ class SourceReviewAdjudicator:
         error_code: str | None = None,
         deadline: float | None = None,
     ) -> SourceReviewAdjudication:
-        """Decide one held review. Never raises: a failure escalates."""
+        """Decide one held review. Never raises and always settles terminally."""
         note_count = len(notes)
         try:
             api_key = self._read_api_key()
             repository = TarSourceRepository(archive_path)
         except (OSError, ValueError) as error:
             logger.warning("adjudication could not start: %s", error)
-            return _escalate(
-                "adjudicator-unavailable",
-                "Automated adjudication was unavailable; held for operator review",
+            return _settle_refusal(
+                _escalate(
+                    "adjudicator-unavailable",
+                    "Automated adjudication was unavailable",
+                    model=self._model,
+                    notes=note_count,
+                ),
                 model=self._model,
                 notes=note_count,
             )
@@ -428,16 +463,24 @@ class SourceReviewAdjudicator:
                 type(error).__name__,
                 error,
             )
-            return _escalate(
-                "adjudicator-failed",
-                "Automated adjudication did not complete; held for operator review",
+            return _settle_refusal(
+                _escalate(
+                    "adjudicator-failed",
+                    "Automated adjudication did not complete",
+                    model=self._model,
+                    notes=note_count,
+                ),
                 model=self._model,
                 notes=note_count,
             )
-        return self._certify(
-            verdict,
-            repository=repository,
-            read_locations=read_locations,
+        return _settle_refusal(
+            self._certify(
+                verdict,
+                repository=repository,
+                read_locations=read_locations,
+                notes=note_count,
+            ),
+            model=self._model,
             notes=note_count,
         )
 

@@ -76,7 +76,7 @@ def _adjudication(decision: str, **overrides: object) -> dict[str, object]:
         "citations": [{"path": "src/main.rs", "line": 6}],
         "notes_considered": 1,
         "model": "z-ai/glm-5.3-flash",
-        "prompt_revision": "adjudicator-v1-policy-v10",
+        "prompt_revision": "adjudicator-v2-policy-v10",
     }
     if decision == "clear":
         payload["clear_clause"] = "model_authors_graded_slot"
@@ -325,7 +325,7 @@ async def test_an_escalated_adjudication_still_holds(
                 "citations": [],
                 "notes_considered": 1,
                 "model": "z-ai/glm-5.3-flash",
-                "prompt_revision": "adjudicator-v1-policy-v10",
+                "prompt_revision": "adjudicator-v2-policy-v10",
                 "escalation_code": "cited-unread-source",
             }
         ),
@@ -351,7 +351,7 @@ async def test_l4_escalation_terminally_holds_an_early_l1_provider_fault(
             "citations": [],
             "notes_considered": 0,
             "model": "z-ai/glm-5.3-flash",
-            "prompt_revision": "adjudicator-v1-policy-v10",
+            "prompt_revision": "adjudicator-v2-policy-v10",
             "escalation_code": "adjudicator-failed",
         }
     )

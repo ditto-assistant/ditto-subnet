@@ -272,7 +272,7 @@ export const screenerReviewSettingsSchema = z
     clear_min_notes: z.number().int().min(1).max(32).default(3),
     adjudicator_mode: z.enum(['off', 'shadow', 'enforce']).default('off'),
     adjudicator_model: z.literal('z-ai/glm-5.3-flash').default('z-ai/glm-5.3-flash'),
-    adjudicator_max_steps: z.number().int().min(1).max(256).default(128),
+    adjudicator_max_steps: z.number().int().min(1).max(1024).default(128),
     adjudicator_timeout_seconds: z.number().int().min(60).max(3_600).default(600),
     max_input_tokens: z.number().int().min(1).max(1_000_000),
     max_output_tokens: z.number().int().min(1).max(128_000),

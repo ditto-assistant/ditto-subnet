@@ -4009,7 +4009,7 @@ class TestClaim:
             citations=[{"path": "src/main.rs", "line": 6}],
             notes_considered=1,
             model="z-ai/glm-5.3-flash",
-            prompt_revision="adjudicator-v1-policy-v10",
+            prompt_revision="adjudicator-v2-policy-v10",
         )
 
         response = await client.post(
