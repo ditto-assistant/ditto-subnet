@@ -457,8 +457,8 @@ func unusedV8ChatLane(benchVersion int, usage protocol.TokenUsage, execution rel
 		execution.CallerCancellations == 0
 }
 
-// relayDegradedSince keeps #97's fail-closed rule: a run must never be scored
-// on degraded inference. What changed is only the DIAGNOSIS. A lost lease and a
+// relayDegradedSince is the strict health check used when the route has not
+// demonstrated recovery. A lost lease and a
 // provider fault used to produce the same "upstream failure" sentence, so a
 // platform-side ticket force-expiry -- which revokes the grant and makes the
 // scorer's next request fail -- was reported as if the provider had blipped.
@@ -524,6 +524,32 @@ func relayDegradedSince(start, end relayHealthSnapshot) error {
 		return fmt.Errorf("relay recorded %d upstream failure(s) during benchmark", end.InfrastructureFailures-start.InfrastructureFailures)
 	}
 	return nil
+}
+
+// relayCompletedSince is the scored-run and route-proof boundary. The caller
+// invokes it only after the harness request or the complete benchmark sweep has
+// returned, so an authenticated success after one or more provider failures is
+// proof that the miner received the failure and recovered from it. In that
+// shape, discarding the finished work only buys the same artifact another paid
+// lease; the failed calls already remain committed to RelayExecution and any
+// case the miner did not recover still grades normally.
+//
+// A wholly unavailable route remains validator infrastructure. Grant denials
+// also remain terminal even when another overlapping call succeeded: they can
+// mean a revoked/expired lease or an agent-spent allowance, and those ownership
+// rules must still flow through relayFinalizeFailure. Counter rollback remains
+// fail-closed because no delta can be trusted after a relay restart.
+func relayCompletedSince(start, end relayHealthSnapshot) error {
+	if relayRestarted(start, end) {
+		return fmt.Errorf("relay restarted during benchmark")
+	}
+	if end.GrantDenials > start.GrantDenials {
+		return relayDegradedSince(start, end)
+	}
+	if end.Successes > start.Successes {
+		return nil
+	}
+	return relayDegradedSince(start, end)
 }
 
 // relayRestarted reports whether any monotonic counter went backwards, which
@@ -659,7 +685,7 @@ func (s *server) relayRunResult(ctx context.Context, runID string, start relayHe
 		end, err = readRelayHealth(ctx, gateway)
 	}
 	if err == nil {
-		err = relayDegradedSince(start, end)
+		err = relayCompletedSince(start, end)
 	}
 	if err != nil {
 		s.failRelayUnavailableForContext(ctx, runID, err)
