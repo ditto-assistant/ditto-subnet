@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.155.2 (2026-08-30)
+
+### Bug Fixes
+
+- **platform**: Terminally hold L4 escalation
+  ([#1344](https://github.com/ditto-assistant/ditto-subnet/pull/1344),
+  [`271611c`](https://github.com/ditto-assistant/ditto-subnet/commit/271611c203aba52a86dbea39cc6d04e6d8410f6b))
+
+
 ## v0.155.1 (2026-08-30)
 
 ### Bug Fixes
