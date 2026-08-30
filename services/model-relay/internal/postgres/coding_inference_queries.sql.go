@@ -152,6 +152,9 @@ WHERE grant_id = $1::uuid
 // Shadow coding inference: the coding grant row is the per-grant
 // serialization point. The handler always locks it before reading or writing
 // request history, so two relay replicas cannot admit sibling dispatches.
+// Cross-grant validator/global concurrency is then reserved with
+// pg_advisory_xact_lock(hashtext('coding_inference_admission')) in the same
+// transaction before COUNT + INSERT.
 func (q *Queries) GetCodingInferenceGrant(ctx context.Context, grantID pgtype.UUID) (CodingInferenceGrant, error) {
 	row := q.db.QueryRow(ctx, getCodingInferenceGrant, grantID)
 	var i CodingInferenceGrant
