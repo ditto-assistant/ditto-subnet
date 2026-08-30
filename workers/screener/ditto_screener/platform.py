@@ -76,6 +76,11 @@ logger = logging.getLogger(__name__)
 _PREFIX = "/api/v1/screener"
 _IMAGE_REQUEST_TIMEOUT = httpx.Timeout(300.0, connect=30.0, pool=30.0)
 _REMOTE_BUILD_POLL_SECONDS = 5.0
+_TRANSIENT_PLATFORM_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
+
+
+def _is_transient_platform_status(status_code: int) -> bool:
+    return status_code in {408, 425, 429} or status_code >= 500
 
 
 @dataclass(frozen=True)
@@ -582,12 +587,27 @@ class PlatformClient:
                         max(0.0, deadline - asyncio.get_running_loop().time()),
                     )
                 )
-                response = await self._client.get(
-                    f"{base_url}/{review.review_id}",
-                    params={"attempt_id": str(attempt_id)},
-                    headers=await self._auth_headers(),
-                )
+                try:
+                    response = await self._client.get(
+                        f"{base_url}/{review.review_id}",
+                        params={"attempt_id": str(attempt_id)},
+                        headers=await self._auth_headers(),
+                    )
+                except httpx.HTTPError as error:
+                    logger.warning(
+                        "remote source-review poll failed transiently; "
+                        "retrying within review deadline: %s",
+                        error,
+                    )
+                    continue
                 if response.status_code != 200:
+                    if _is_transient_platform_status(response.status_code):
+                        logger.warning(
+                            "remote source-review poll rejected transiently "
+                            "status=%d; retrying within review deadline",
+                            response.status_code,
+                        )
+                        continue
                     raise PlatformError(
                         f"remote source-review poll rejected ({response.status_code})"
                     )
@@ -680,15 +700,30 @@ class PlatformClient:
             policy_only=policy_only,
         )
         body = payload.model_dump(mode="json")
-        try:
-            resp = await self._client.post(
-                url, json=body, headers=await self._auth_headers()
+        last_error = "verdict submit did not run"
+        for retry_index in range(len(_TRANSIENT_PLATFORM_RETRY_DELAYS) + 1):
+            try:
+                resp = await self._client.post(
+                    url, json=body, headers=await self._auth_headers()
+                )
+            except httpx.HTTPError as error:
+                last_error = f"verdict submit failed: {error}"
+                transient = True
+            else:
+                if resp.status_code == 200:
+                    return ScreenResultResponse.model_validate(resp.json())
+                last_error = f"verdict rejected ({resp.status_code}): {resp.text[:200]}"
+                transient = _is_transient_platform_status(resp.status_code)
+            if not transient or retry_index >= len(_TRANSIENT_PLATFORM_RETRY_DELAYS):
+                raise PlatformError(last_error)
+            delay = _TRANSIENT_PLATFORM_RETRY_DELAYS[retry_index]
+            logger.warning(
+                "%s; retrying signed verdict in %.0fs",
+                last_error,
+                delay,
             )
-        except httpx.HTTPError as error:
-            raise PlatformError(f"verdict submit failed: {error}") from error
-        if resp.status_code == 200:
-            return ScreenResultResponse.model_validate(resp.json())
-        raise PlatformError(f"verdict rejected ({resp.status_code}): {resp.text[:200]}")
+            await asyncio.sleep(delay)
+        raise PlatformError(last_error)  # pragma: no cover
 
     async def upload_screened_image(
         self,
