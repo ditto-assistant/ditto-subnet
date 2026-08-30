@@ -207,11 +207,14 @@ func (store *Store) Complete(
 	if err := store.checkOpen(); err != nil {
 		return err
 	}
+	if store.state == nil {
+		return ErrState
+	}
 	ownedEntry, err := cloneJournalEntry(entry)
 	if err != nil || validateCompletedEntry(store.config.Policy, *store.state.Binding, ownedEntry) != nil {
 		return ErrInvalid
 	}
-	if store.state == nil || !bindingsEqual(*store.state.Binding, binding) {
+	if !bindingsEqual(*store.state.Binding, binding) {
 		return ErrConflict
 	}
 	sequence := ownedEntry.Dispatch.Sequence

@@ -119,6 +119,12 @@ func openOrCreateDirectory(parentFD int, name string) (*os.File, error) {
 		_ = unix.Close(fd)
 		return nil, errors.New("open relay journal directory handle")
 	}
+	if created {
+		if err := unix.Fchmod(fd, 0o700); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("set relay journal directory permissions: %w", err)
+		}
+	}
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR ||
 		stat.Mode&0o777 != 0o700 || stat.Uid != uint32(os.Geteuid()) {

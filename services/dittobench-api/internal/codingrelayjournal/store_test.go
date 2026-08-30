@@ -261,6 +261,18 @@ func completedJournalEntry(t *testing.T, fixture journalFixture) codingrelay.Jou
 	return snapshot.Entries[0]
 }
 
+func TestStoreCompleteWithoutBeginFailsClosed(t *testing.T) {
+	fixture := newJournalFixture(t)
+	store, err := Open(fixture.storeConfig(makeJournalRoot(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Complete(t.Context(), fixture.binding, codingrelay.JournalEntry{Completed: true}); !errors.Is(err, ErrState) {
+		t.Fatalf("empty complete err=%v", err)
+	}
+}
+
 func TestStoreSurvivesRestartAndReplaysExactMinerResponse(t *testing.T) {
 	fixture := newJournalFixture(t)
 	root := makeJournalRoot(t)
