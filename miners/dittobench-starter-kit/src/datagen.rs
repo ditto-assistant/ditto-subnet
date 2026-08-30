@@ -196,7 +196,7 @@ const CATEGORIES: &[Category] = &[
 /// catalog descriptions, so the cases are fair, not gotchas.
 /// `(category, prompt, expected_tool, expected_behavior)`.
 const HARD_CASES: &[(&str, &str, &str, &str)] = &[
-    // --- routing: pick the RIGHT source ---
+    // Route to the required source.
     (
         "route_link",
         "Summarize what's on https://example.com/q3-report.html for me.",
@@ -227,7 +227,7 @@ const HARD_CASES: &[(&str, &str, &str, &str)] = &[
         "search_web",
         "current external info; search the web",
     ),
-    // --- no tool: answer directly (over-calling is wrong) ---
+    // Answer directly when no tool is required.
     (
         "answer_direct",
         "Explain the difference between TCP and UDP.",
@@ -258,7 +258,7 @@ const HARD_CASES: &[(&str, &str, &str, &str)] = &[
         "",
         "simple arithmetic; answer directly without a tool",
     ),
-    // --- run vs read: execute_agent_job vs artifacts ---
+    // Distinguish executing an agent job from reading its artifacts.
     (
         "run_code",
         "Clone https://github.com/octocat/Hello-World and run its test suite.",
@@ -303,7 +303,7 @@ fn render(template: &str, filler: &str) -> String {
     template.replacen("%s", filler, 1)
 }
 
-// --- Memory case generation -------------------------------------------------
+// Memory case generation.
 
 struct MemoryFact {
     /// Short label for the fact (used in generated case ids / debugging).
