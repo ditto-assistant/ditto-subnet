@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.156.0 (2026-08-30)
+
+### Features
+
+- **platform**: Persist shadow coding inference requests
+  ([`ff2b112`](https://github.com/ditto-assistant/ditto-subnet/commit/ff2b1123f3888dcd28185b826c5a178bd9d47d1c))
+
+
 ## v0.155.3 (2026-08-30)
 
 ### Bug Fixes
