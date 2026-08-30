@@ -475,11 +475,33 @@ jobs:
           artifact_uri="gs://ditto-platform-agents-${TARGET_ENVIRONMENT}/relay-releases/${DEPLOY_REVISION}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tgz"
           # The artifact IS the tarball (created before upload by relay-build,
           # because the artifact store strips file permissions); ship it as-is.
-          # GCS avoids pushing the binary through IAP's very slow TCP tunnel.
+          # GCS avoids pushing the binary through IAP's very slow TCP tunnel
+          # (~40KB/s: 12MB took 5 minutes in run 33339251076).
           # The create-only deploy identity writes a unique attempt object; the
           # VM's attached runtime identity reads and removes it after staging.
+          #
+          # The upload is a direct objects.insert instead of `gcloud storage
+          # cp`: gcloud intermittently preflights the destination with a
+          # bucket-level storage.objects.list, which the object-name-scoped
+          # conditional grants can never satisfy and which the create-only
+          # trust model must not add — list would enumerate every agent
+          # tarball in the bucket. The insert is exactly the call the grant
+          # covers, so staging no longer depends on which preflight gcloud
+          # picks (denied in run 33339251076, allowed in the two before it).
           mv relay-artifact/relay-artifact.tgz relay-artifact.tgz
-          if gcloud storage cp relay-artifact.tgz "$artifact_uri" --quiet; then
+          stage_relay_artifact() {
+            local token object
+            object="relay-releases%2F${DEPLOY_REVISION}%2F${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tgz"
+            token="$(gcloud auth print-access-token)" || return 1
+            curl --fail --silent --show-error --output /dev/null \
+              --retry 3 --retry-all-errors --retry-delay 2 \
+              --request POST \
+              --header "Authorization: Bearer $token" \
+              --header 'Content-Type: application/gzip' \
+              --data-binary @relay-artifact.tgz \
+              "https://storage.googleapis.com/upload/storage/v1/b/ditto-platform-agents-${TARGET_ENVIRONMENT}/o?uploadType=media&name=$object"
+          }
+          if stage_relay_artifact; then
             echo "staged relay artifact through private GCS"
             remote_fetch="sudo -iu deploy gcloud storage cp '$artifact_uri' '$remote_artifact/relay-artifact.tgz' --quiet"
             remote_cleanup="sudo -iu deploy gcloud storage rm '$artifact_uri' --quiet >/dev/null 2>&1 || true"
