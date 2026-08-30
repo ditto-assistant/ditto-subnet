@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.171.1 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Report fleet buildkit failures
+  ([#1372](https://github.com/ditto-assistant/ditto-subnet/pull/1372),
+  [`fc0490e`](https://github.com/ditto-assistant/ditto-subnet/commit/fc0490ef403e6ffe0596550c0832201582001432))
+
+### Chores
+
+- Agent backroom review loop ([#1243](https://github.com/ditto-assistant/ditto-subnet/pull/1243),
+  [`1da4b10`](https://github.com/ditto-assistant/ditto-subnet/commit/1da4b10457ad5a2fddeb267c67cf1d3a73159c56))
+
+
 ## v0.171.0 (2026-08-30)
 
 ### Bug Fixes
