@@ -414,11 +414,14 @@ func (store *Store) recover() error {
 	}
 	if stateBody != nil {
 		state, err := decodeStateRecord(stateBody)
-		if err != nil || validateBinding(store.config.Policy, *state.Binding) != nil {
-			if err == nil {
-				err = ErrCorrupt
-			}
+		if err != nil {
 			return err
+		}
+		if state.Binding.CostBudgetUSDMicros == 0 {
+			state.Binding.CostBudgetUSDMicros = store.config.Policy.MaxCostUSDMicros
+		}
+		if validateBinding(store.config.Policy, *state.Binding) != nil {
+			return ErrCorrupt
 		}
 		store.state = state
 		store.stateBytes = stateSize
@@ -940,7 +943,8 @@ func validateBinding(policy codingcontract.InferencePolicy, binding codingrelay.
 		deadline.After(issuedAt.Add(2*time.Hour)) || binding.RequestBudget == 0 ||
 		binding.RequestBudget > policy.MaxRequests || binding.PromptTokenBudget == 0 ||
 		binding.PromptTokenBudget > policy.MaxPromptTokens || binding.CompletionTokenBudget == 0 ||
-		binding.CompletionTokenBudget > policy.MaxCompletionTokens {
+		binding.CompletionTokenBudget > policy.MaxCompletionTokens ||
+		binding.CostBudgetUSDMicros == 0 || binding.CostBudgetUSDMicros > policy.MaxCostUSDMicros {
 		return ErrInvalid
 	}
 	return nil
