@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.150.5 (2026-08-30)
+
+### Bug Fixes
+
+- **platform**: Renew screening through active source review
+  ([#1339](https://github.com/ditto-assistant/ditto-subnet/pull/1339),
+  [`372469b`](https://github.com/ditto-assistant/ditto-subnet/commit/372469bb720223d8207ad8c9e4c7c6065410d1e8))
+
+
 ## v0.150.4 (2026-08-30)
 
 ### Bug Fixes
