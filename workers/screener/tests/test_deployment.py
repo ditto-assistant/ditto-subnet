@@ -180,6 +180,18 @@ def test_pull_request_ci_keeps_fast_safety_gates() -> None:
     assert "screener-core-e2e" not in workflow
 
 
+def test_container_entrypoints_do_not_require_a_writable_uv_cache() -> None:
+    dockerfile = (ROOT / "Dockerfile").read_text()
+
+    assert (
+        'CMD ["/app/workers/screener/.venv/bin/python", "-m", "ditto_screener.health"]'
+    ) in dockerfile
+    assert (
+        'CMD ["/app/workers/screener/.venv/bin/python", "-m", "ditto_screener"]'
+    ) in dockerfile
+    assert 'CMD ["uv", "run"' not in dockerfile
+
+
 def test_core_e2e_is_daily_and_manually_dispatchable() -> None:
     workflow = workflow_text("screener-core-e2e.yml")
 
