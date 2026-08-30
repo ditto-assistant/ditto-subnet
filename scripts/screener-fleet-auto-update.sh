@@ -163,17 +163,53 @@ write_release_env() {
 stop_fleet() {
   local pids=() index
   "$SYSTEMCTL" stop ditto-screener-fleet-agent.service & pids+=("$!")
-  for index in $(seq 1 "$WORKER_PROCESSES"); do
+
+  # Do not derive the drain set from the *new* worker count. During a canary
+  # that count intentionally shrinks, so an older worker above the new bound
+  # can otherwise stay alive on the old release, keep polling, and claim work
+  # alongside the canary. ``list-units --all`` includes both running workers
+  # and stopped-but-enabled instances; only accept the fixed numeric unit
+  # shape before interpolating it into a systemd unit name.
+  for index in $(
+    "$SYSTEMCTL" list-units --all --type=service --plain --no-legend \
+      'ditto-screener-worker@*.service' \
+      | awk '$1 ~ /^ditto-screener-worker@[1-9][0-9]*\\.service$/ {
+          worker = $1
+          sub(/^ditto-screener-worker@/, "", worker)
+          sub(/\\.service$/, "", worker)
+          print worker
+        }'
+  ); do
     "$SYSTEMCTL" stop "ditto-screener-worker@$index.service" & pids+=("$!")
   done
   for index in "${pids[@]}"; do wait "$index"; done
+
+  # Ansible normally reconciles this at converge time. The self-updater must
+  # enforce the same bound too: release delivery is deliberately pull-based,
+  # and it must be safe even when no Ansible run follows the canary change.
+  for index in $(
+    "$SYSTEMCTL" list-units --all --type=service --plain --no-legend \
+      'ditto-screener-worker@*.service' \
+      | awk '$1 ~ /^ditto-screener-worker@[1-9][0-9]*\\.service$/ {
+          worker = $1
+          sub(/^ditto-screener-worker@/, "", worker)
+          sub(/\\.service$/, "", worker)
+          print worker
+        }'
+  ); do
+    if [ "$index" -gt "$WORKER_PROCESSES" ]; then
+      "$SYSTEMCTL" disable "ditto-screener-worker@$index.service"
+    fi
+  done
 }
 
 start_fleet() {
   local index
   "$SYSTEMCTL" start ditto-screener-fleet-agent.service
   for index in $(seq 1 "$WORKER_PROCESSES"); do
-    "$SYSTEMCTL" start "ditto-screener-worker@$index.service"
+    # Re-enable the declared set too, so a previous smaller canary cannot
+    # leave a later intentional scale-up stopped until an Ansible converge.
+    "$SYSTEMCTL" enable --now "ditto-screener-worker@$index.service"
   done
   sleep 5
   "$SYSTEMCTL" is-active --quiet ditto-screener-fleet-agent.service
