@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.174.2 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Normalize tagged remote image archives
+  ([#1381](https://github.com/ditto-assistant/ditto-subnet/pull/1381),
+  [`91b0518`](https://github.com/ditto-assistant/ditto-subnet/commit/91b051838ef2159165d3d683acbb5d03e1f6b18b))
+
+
 ## v0.174.1 (2026-08-30)
 
 ### Bug Fixes
