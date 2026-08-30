@@ -484,4 +484,15 @@ func TestCanonicalJSONHasOneTrailingNewline(t *testing.T) {
 	if !bytes.HasSuffix(body, []byte("\n")) || bytes.HasSuffix(body, []byte("\n\n")) {
 		t.Fatalf("canonical JSON has invalid terminator: %q", body[len(body)-2:])
 	}
+	if err := RequireExactCanonicalJSON(body); err != nil {
+		t.Fatalf("canonical manifest rejected: %v", err)
+	}
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, bytes.TrimSpace(body), "", "  "); err != nil {
+		t.Fatal(err)
+	}
+	pretty.WriteByte('\n')
+	if err := RequireExactCanonicalJSON(pretty.Bytes()); err == nil {
+		t.Fatal("pretty-printed JSON accepted as canonical")
+	}
 }

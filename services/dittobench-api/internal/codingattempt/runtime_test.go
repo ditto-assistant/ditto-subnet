@@ -23,6 +23,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
 	"github.com/ditto-assistant/dittobench-api/internal/codinggrader"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
+	"github.com/ditto-assistant/dittobench-api/internal/codingseed"
 )
 
 type artifactKey struct {
@@ -37,6 +38,15 @@ func (function artifactSourceFunc) Open(
 	capability codingartifacts.Capability,
 ) (io.ReadCloser, error) {
 	return function(ctx, capability)
+}
+
+type seedProjectorFunc func(io.Reader, codingseed.Binding) (codingseed.Projection, error)
+
+func (function seedProjectorFunc) Project(
+	reader io.Reader,
+	binding codingseed.Binding,
+) (codingseed.Projection, error) {
+	return function(reader, binding)
 }
 
 type revokerFunc func(context.Context) error
@@ -162,6 +172,7 @@ type fixture struct {
 	gradingSpec    GradingSpec
 	source         *fixtureSource
 	executor       *fixtureExecutor
+	projector      *codingseed.Projector
 	runtime        *Runtime
 	resourceSHA256 string
 	memorySHA256   string
@@ -198,7 +209,13 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	resource := resourceBytes(t, policy)
-	memory := []byte("{\"schema\":\"synthetic-memory-bundle\"}\n")
+	repository, validFrom := "repository-attempt-001", "repository-epoch-1"
+	memory := memoryBytes(t, []codingcontract.VisibleMemory{{
+		MemoryID: "memory-attempt-001", RepositoryCapabilityID: &repository,
+		FactGroupID: nil, Scope: "repository", Type: "project_experience",
+		Content:        "Preserve incomplete parser input between calls.",
+		ValidFromEpoch: &validFrom, ValidUntilEpoch: nil, Supersedes: []string{}, ConfidenceMicros: 900_000,
+	}})
 	grader := tarBytes(t, map[string]string{
 		".dittobench-grader/hidden_test.py": "assert True\n",
 		".dittobench-grader/runner.json":    "{}\n",
@@ -256,14 +273,23 @@ func newFixture(t *testing.T) *fixture {
 		{codingartifacts.PhaseGrading, codingartifacts.KindGraderBundle}:      grader,
 	}}
 	executor := &fixtureExecutor{manifest: graderManifest}
-	runtime, err := NewRuntime(RuntimeConfig{Artifacts: source, Executor: executor, Now: func() time.Time { return now }})
+	projector, err := codingseed.New(codingseed.Config{
+		MaxBundleBytes: codingcontract.MaxCanonicalJSONBytes,
+		SeedTimeout:    time.Second, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewRuntime(RuntimeConfig{
+		Artifacts: source, Executor: executor, SeedProjector: projector, Now: func() time.Time { return now },
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	value := &fixture{
 		now: now, binding: binding, visible: visible, memory: memory, resource: resource, grader: grader,
 		policy: policy, runnerManifest: runnerManifest, graderManifest: graderManifest,
-		source: source, executor: executor, runtime: runtime,
+		source: source, executor: executor, projector: projector, runtime: runtime,
 		resourceSHA256: resourceSHA, memorySHA256: memorySHA,
 		visibleSHA256: visibleSHA, graderSHA256: graderSHA,
 	}
@@ -297,9 +323,13 @@ func TestBeginAuthoringConsumesOnlyAuthoringArtifactsAndFreezesAfterRevoke(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	memory, err := io.ReadAll(session.MemoryBundle())
-	if err != nil || !bytes.Equal(memory, fixture.memory) {
-		t.Fatalf("memory=%q err=%v", memory, err)
+	seed := session.SeedProjection().Request()
+	if seed.MemoryBundleSHA256 != fixture.memorySHA256 || len(seed.Memories) != 1 {
+		t.Fatalf("seed=%#v", seed)
+	}
+	seed.Memories[0].Content = "mutated"
+	if session.SeedProjection().Request().Memories[0].Content == "mutated" {
+		t.Fatal("session seed projection was mutable")
 	}
 	callTool(t, session.Handler(), codingrunner.ToolRequest{
 		CodingContractVersion: codingrunner.ContractVersion,
@@ -313,6 +343,9 @@ func TestBeginAuthoringConsumesOnlyAuthoringArtifactsAndFreezesAfterRevoke(t *te
 	frozen, err := session.Freeze(t.Context(), revoker)
 	if err != nil || frozen.Submission == nil || revoker.calls != 1 {
 		t.Fatalf("frozen=%#v revoke_calls=%d err=%v", frozen, revoker.calls, err)
+	}
+	if retained := session.SeedProjection().Request(); retained.CaseID != "" || retained.Memories != nil {
+		t.Fatalf("frozen session retained seed projection: %#v", retained)
 	}
 	var transcript bytes.Buffer
 	identity, err := session.WriteTranscript(&transcript)
@@ -371,7 +404,7 @@ func TestAuthoringSessionDiagnosticsAndJSONAreRedacted(t *testing.T) {
 		t.Fatal("authoring session serialized")
 	}
 	rendered := fmt.Sprintf("%#v", session)
-	if strings.Contains(rendered, "synthetic-memory") || strings.Contains(rendered, os.TempDir()) {
+	if strings.Contains(rendered, "Preserve incomplete parser") || strings.Contains(rendered, os.TempDir()) {
 		t.Fatalf("authoring session diagnostics leaked private state: %s", rendered)
 	}
 	if err := session.Close(); !errors.Is(err, ErrClosedBeforeFreeze) {
@@ -551,7 +584,7 @@ func TestProtectedGraderOpenUsesLeaseContextAndClosesBrokenReader(t *testing.T) 
 		}
 		return fixture.source.Open(ctx, capability)
 	})
-	runtime, err := NewRuntime(RuntimeConfig{Artifacts: source, Executor: fixture.executor, Now: func() time.Time {
+	runtime, err := NewRuntime(RuntimeConfig{Artifacts: source, Executor: fixture.executor, SeedProjector: fixture.projector, Now: func() time.Time {
 		return fixture.now
 	}})
 	if err != nil {
@@ -588,7 +621,7 @@ func TestProtectedGraderCloseFailureOverridesResolvedResult(t *testing.T) {
 		}
 		return fixture.source.Open(ctx, capability)
 	})
-	runtime, err := NewRuntime(RuntimeConfig{Artifacts: source, Executor: fixture.executor, Now: func() time.Time {
+	runtime, err := NewRuntime(RuntimeConfig{Artifacts: source, Executor: fixture.executor, SeedProjector: fixture.projector, Now: func() time.Time {
 		return fixture.now
 	}})
 	if err != nil {
@@ -637,6 +670,66 @@ func TestResourceProfileTamperingStopsBeforeVisibleOrMemory(t *testing.T) {
 	}
 	if len(fixture.source.calls) != 1 || fixture.source.calls[0] != key {
 		t.Fatalf("unexpected artifact calls: %v", fixture.source.calls)
+	}
+}
+
+func TestMemoryProjectionFailureClosesRawReader(t *testing.T) {
+	fixture := newFixture(t)
+	broken := &trackingReadCloser{Reader: strings.NewReader(`{"memories":null}`)}
+	source := artifactSourceFunc(func(
+		ctx context.Context,
+		capability codingartifacts.Capability,
+	) (io.ReadCloser, error) {
+		if capability.Kind == codingartifacts.KindMemoryBundle {
+			return broken, nil
+		}
+		return fixture.source.Open(ctx, capability)
+	})
+	runtime, err := NewRuntime(RuntimeConfig{
+		Artifacts: source, Executor: fixture.executor, SeedProjector: fixture.projector,
+		Now: func() time.Time { return fixture.now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.BeginAuthoring(t.Context(), fixture.authoringSpec); err == nil {
+		t.Fatal("invalid memory artifact was projected")
+	}
+	if !broken.closed {
+		t.Fatal("invalid memory artifact reader was not closed")
+	}
+}
+
+func TestBeginAuthoringRejectsUnboundProjectionAndClosesRawReader(t *testing.T) {
+	fixture := newFixture(t)
+	memory := &trackingReadCloser{Reader: bytes.NewReader(fixture.memory)}
+	source := artifactSourceFunc(func(
+		ctx context.Context,
+		capability codingartifacts.Capability,
+	) (io.ReadCloser, error) {
+		if capability.Kind == codingartifacts.KindMemoryBundle {
+			return memory, nil
+		}
+		return fixture.source.Open(ctx, capability)
+	})
+	runtime, err := NewRuntime(RuntimeConfig{
+		Artifacts: source, Executor: fixture.executor,
+		SeedProjector: seedProjectorFunc(func(
+			io.Reader,
+			codingseed.Binding,
+		) (codingseed.Projection, error) {
+			return codingseed.Projection{}, nil
+		}),
+		Now: func() time.Time { return fixture.now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session, err := runtime.BeginAuthoring(t.Context(), fixture.authoringSpec); err == nil || session != nil {
+		t.Fatalf("unbound projection accepted: session=%#v err=%v", session, err)
+	}
+	if !memory.closed {
+		t.Fatal("memory reader was not closed after unbound projection")
 	}
 }
 
@@ -698,7 +791,13 @@ func TestResourceDecoderRejectsDuplicateAndOversizedJSON(t *testing.T) {
 
 func TestRuntimeRejectsTypedNilDependenciesAndInvalidArtifactReaders(t *testing.T) {
 	var nilSource *fixtureSource
-	if _, err := NewRuntime(RuntimeConfig{Artifacts: nilSource, Executor: &fixtureExecutor{}}); err == nil {
+	projector, projectorErr := codingseed.New(codingseed.Config{
+		MaxBundleBytes: codingcontract.MaxCanonicalJSONBytes, SeedTimeout: time.Second,
+	})
+	if projectorErr != nil {
+		t.Fatal(projectorErr)
+	}
+	if _, err := NewRuntime(RuntimeConfig{Artifacts: nilSource, Executor: &fixtureExecutor{}, SeedProjector: projector}); err == nil {
 		t.Fatal("typed-nil artifact source accepted")
 	}
 	var nilExecutor *fixtureExecutor
@@ -706,9 +805,18 @@ func TestRuntimeRejectsTypedNilDependenciesAndInvalidArtifactReaders(t *testing.
 		Artifacts: artifactSourceFunc(func(context.Context, codingartifacts.Capability) (io.ReadCloser, error) {
 			return nil, errors.New("unused")
 		}),
-		Executor: nilExecutor,
+		Executor: nilExecutor, SeedProjector: projector,
 	}); err == nil {
 		t.Fatal("typed-nil executor accepted")
+	}
+	var nilProjector *codingseed.Projector
+	if _, err := NewRuntime(RuntimeConfig{
+		Artifacts: artifactSourceFunc(func(context.Context, codingartifacts.Capability) (io.ReadCloser, error) {
+			return nil, errors.New("unused")
+		}),
+		Executor: &fixtureExecutor{}, SeedProjector: nilProjector,
+	}); err == nil {
+		t.Fatal("typed-nil seed projector accepted")
 	}
 
 	broken := &trackingReadCloser{Reader: strings.NewReader("unused")}
@@ -826,6 +934,29 @@ func resourceBytes(t *testing.T, policy codinggrader.ResourcePolicy) []byte {
 		t.Fatal(err)
 	}
 	return append(body, '\n')
+}
+
+func memoryBytes(t *testing.T, memories []codingcontract.VisibleMemory) []byte {
+	t.Helper()
+	raw, err := json.Marshal(struct {
+		Memories []codingcontract.VisibleMemory `json:"memories"`
+	}{Memories: memories})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var projection any
+	if err := decoder.Decode(&projection); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	encoder := json.NewEncoder(&output)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(projection); err != nil {
+		t.Fatal(err)
+	}
+	return output.Bytes()
 }
 
 func limitsValue(limits codingrunner.Limits) limitsWire {

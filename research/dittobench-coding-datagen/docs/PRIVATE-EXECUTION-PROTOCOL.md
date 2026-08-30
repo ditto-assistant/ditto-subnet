@@ -322,6 +322,14 @@ does not rank production memories for the miner. For each selected task it
 delivers one visible, task-scoped user bundle to the harness, which builds its
 own index and decides what to retrieve.
 
+The stored `memory-bundle` is exactly canonical `{"memories":[...]}` known-field
+JSON, not a seed request or curator envelope. Ticket, case, and profile identity
+come only from the trusted lease. The Go projector verifies those raw bytes and
+exposes a deep-owned seed request; the attempt runtime closes the raw reader
+before returning the authoring session. Platform, the artifact fetcher, the
+canonical JSON contract, and the starter HTTP body limit all use a 4 MiB
+maximum; embeddings remain miner-owned and are never shipped in the artifact.
+
 The visible memory record contains only information needed for retrieval and
 freshness reasoning:
 
@@ -616,8 +624,11 @@ classification remains a later worker layer.
 The trusted Go attempt runtime now composes verified phase-specific artifacts,
 the runner/freezer, sandbox executor, and pristine grader in process. Authoring
 types cannot contain grader material; grading types cannot contain memory. The
-outer workspace route must be revoked before the runtime freezes the internal
-session. The validator-local evidence outbox now has an unwired durable core;
+attempt runtime invokes the scoped-memory projector and closes raw memory bytes
+during authoring construction, retaining only an immutable miner-visible seed
+projection. The outer workspace route must be revoked before the runtime
+freezes the internal session. The validator-local evidence outbox now has an
+unwired durable core;
 a later local gateway still owns its reservation/sealing lifecycle, the
 harness, Luna relay, Python coordinator connection, and host sweep schedule.
 

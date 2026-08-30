@@ -263,7 +263,7 @@ async def test_nearly_expired_ticket_mints_nothing() -> None:
         _Store(size_bytes=0),
         _Store(size_bytes=True),
         _Store(size_by_kind={"visible-bundle": (2 << 30) + 1}),
-        _Store(size_by_kind={"memory-bundle": (64 << 20) + 1}),
+        _Store(size_by_kind={"memory-bundle": (4 << 20) + 1}),
         _Store(size_by_kind={"resource-profile": (4 << 20) + 1}),
         _Store(size_by_kind={"grader-bundle": (512 << 20) + 1}),
     ],
