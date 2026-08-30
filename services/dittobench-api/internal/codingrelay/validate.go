@@ -1,6 +1,7 @@
 package codingrelay
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -142,6 +143,8 @@ func errorCode(err error) string {
 		return "budget_exhausted"
 	case errors.Is(err, ErrProviderFailure):
 		return "provider_failure"
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "request_timeout"
 	default:
 		return "relay_unavailable"
 	}

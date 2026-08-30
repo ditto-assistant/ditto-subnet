@@ -192,6 +192,40 @@ func TestRelayHandlerMapsCapabilityBudgetAndProviderFailures(t *testing.T) {
 	})
 }
 
+func TestRelayHandlerReportsClientTimeoutAsRequestTimeout(t *testing.T) {
+	fixture := newRelayFixture(t)
+	relay, err := New(t.Context(), fixture.config(upstreamFunc(func(context.Context, UpstreamRequest) (UpstreamResult, error) {
+		return UpstreamResult{}, errors.New("unused")
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, ctx := range map[string]context.Context{
+		"canceled": func() context.Context {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			return ctx
+		}(),
+		"deadline": func() context.Context {
+			ctx, cancel := context.WithTimeout(t.Context(), 0)
+			t.Cleanup(cancel)
+			return ctx
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := relayRequest(http.MethodPost, "https://relay.invalid/chat/completions", fixture.requests[0])
+			request = request.WithContext(ctx)
+			recorder := httptest.NewRecorder()
+			relay.Handler().ServeHTTP(recorder, request)
+			failure := decodeRelayError(t, recorder)
+			if recorder.Code != http.StatusRequestTimeout || failure["code"] != "request_timeout" ||
+				failure["message"] != "request timeout" {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestNilRelayHandlerFailsClosed(t *testing.T) {
 	var relay *Relay
 	recorder := httptest.NewRecorder()
