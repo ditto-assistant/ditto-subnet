@@ -23,6 +23,7 @@ from ditto.api_models.coding_artifacts import (
 from ditto.api_models.coding_selection import (
     CodingCatalogBudgets,
     CodingCatalogIssue,
+    CodingCatalogRunnerPlan,
     CodingCatalogRuntimePolicy,
     CodingSelectionRunManifest,
     CodingTaskSetManifest,
@@ -51,10 +52,18 @@ _SELECTION_PATH = (
     / "testdata"
     / "coding_selection_v1.json"
 )
+_EXECUTION_PATH = (
+    Path(__file__).parents[6]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_execution_plan_v1.json"
+)
 
 
 def _lease() -> CodingShadowTaskLeaseCore:
     vector = json.loads(_SELECTION_PATH.read_text(encoding="utf-8"))
+    execution = json.loads(_EXECUTION_PATH.read_text(encoding="utf-8"))
     return CodingShadowTaskLeaseCore(
         ticket_id=UUID("33333333-3333-4333-8333-333333333333"),
         validator_hotkey=_VALIDATOR,
@@ -71,6 +80,8 @@ def _lease() -> CodingShadowTaskLeaseCore:
             vector["runtime_policy"]
         ),
         budgets=CodingCatalogBudgets.model_validate(vector["budgets"]),
+        runner_plan_sha256=execution["expected"]["runner_plan_sha256"],
+        runner_plan=CodingCatalogRunnerPlan.model_validate(execution["runner_plan"]),
     )
 
 
@@ -209,6 +220,10 @@ async def test_signed_authoring_lease_returns_only_three_no_store_capabilities(
         "resource-profile",
     ]
     assert all(item["delivery_phase"] == "authoring" for item in body["capabilities"])
+    assert body["runner_plan_sha256"] == lease.runner_plan_sha256
+    assert body["runner_plan"]["case_id"] == lease.run_manifest.tasks[0].case_id
+    assert "grader_plan" not in body
+    assert "grader_resource_profile" not in body
     assert "grader-bundle" not in response.text
 
 
@@ -270,6 +285,21 @@ async def test_authoring_lease_rejects_forgery_replay_and_wrong_validator(
     assert (
         await client.post("/api/v1/validator/coding-shadow/authoring-lease", json=stale)
     ).status_code == 409
+
+
+async def test_authoring_lease_rejects_missing_runner_plan(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    lease = replace(_lease(), runner_plan_sha256=None, runner_plan=None)
+    _install(app, session_maker, monkeypatch, lease)
+    response = await client.post(
+        "/api/v1/validator/coding-shadow/authoring-lease",
+        json=_payload(lease),
+    )
+    assert response.status_code == 409
 
 
 async def test_authoring_lease_fails_closed_when_private_delivery_is_disabled(

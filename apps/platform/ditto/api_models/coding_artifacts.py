@@ -30,13 +30,20 @@ from ditto.api_models.coding_evaluation import (
 )
 from ditto.api_models.coding_selection import (
     CodingCatalogBudgets,
+    CodingCatalogGraderPlan,
     CodingCatalogIssue,
+    CodingCatalogResourceProfile,
+    CodingCatalogRunnerPlan,
     CodingCatalogRuntimePolicy,
     CodingSelectionRunManifest,
     coding_catalog_budgets_digest,
+    coding_catalog_grader_plan_digest,
     coding_catalog_issue_digest,
+    coding_catalog_resource_profile_digest,
+    coding_catalog_runner_plan_digest,
     coding_catalog_runtime_policy_digest,
     coding_selection_run_manifest_digest,
+    validate_coding_catalog_grading_bundle,
 )
 
 _MAX_JSON_BYTES = 32 << 10
@@ -226,6 +233,8 @@ class CodingAuthoringLeaseResponse(CodingEvaluationModel):
     issue: CodingCatalogIssue
     runtime_policy: CodingCatalogRuntimePolicy
     budgets: CodingCatalogBudgets
+    runner_plan_sha256: Sha256
+    runner_plan: CodingCatalogRunnerPlan
     run_manifest: CodingSelectionRunManifest
     capabilities: Annotated[
         list[CodingArtifactCapabilityEnvelope], Field(min_length=3, max_length=3)
@@ -254,6 +263,8 @@ class CodingAuthoringLeaseResponse(CodingEvaluationModel):
             or coding_catalog_runtime_policy_digest(self.runtime_policy)
             != self.runtime_policy_sha256
             or coding_catalog_budgets_digest(self.budgets) != self.budgets_sha256
+            or coding_catalog_runner_plan_digest(self.runner_plan)
+            != self.runner_plan_sha256
         ):
             raise ValueError("coding authoring lease material disagrees with authority")
         expected_kinds = [
@@ -268,6 +279,22 @@ class CodingAuthoringLeaseResponse(CodingEvaluationModel):
                 "coding authoring capabilities are incomplete or unordered"
             )
         task = self.run_manifest.tasks[0]
+        if (
+            self.runner_plan.case_id != task.case_id
+            or self.runner_plan.visible_bundle_sha256 != task.visible_bundle_sha256
+            or self.runner_plan.base_tree_sha256 != task.base_tree_sha256
+            or self.runtime_policy.editable_paths
+            != sorted(
+                self.runner_plan.editable_paths
+                + self.runner_plan.creatable_paths
+                + self.runner_plan.deletable_paths
+            )
+            or self.runtime_policy.test_command_ids
+            != [command.id for command in self.runner_plan.test_commands]
+            or self.runtime_policy.build_command_ids
+            != [command.id for command in self.runner_plan.build_commands]
+        ):
+            raise ValueError("coding authoring runner plan disagrees with the lease")
         expected_digests = [
             task.visible_bundle_sha256,
             task.memory_bundle_sha256,
@@ -342,6 +369,8 @@ class CodingGradingLeaseResponse(CodingEvaluationModel):
     frozen_patch_sha256: Sha256
     frozen_submission_object_key: ContentAddressedKey
     run_manifest: CodingSelectionRunManifest
+    grader_plan: CodingCatalogGraderPlan
+    grader_resource_profile: CodingCatalogResourceProfile
     capabilities: Annotated[
         list[CodingArtifactCapabilityEnvelope], Field(min_length=3, max_length=3)
     ]
@@ -376,6 +405,10 @@ class CodingGradingLeaseResponse(CodingEvaluationModel):
             or coding_selection_run_manifest_digest(self.run_manifest)
             != self.run_manifest_sha256
             or self.frozen_submission_object_key != f"sha256/{self.frozen_patch_sha256}"
+            or coding_catalog_grader_plan_digest(self.grader_plan)
+            != self.run_manifest.tasks[0].grader_plan_sha256
+            or coding_catalog_resource_profile_digest(self.grader_resource_profile)
+            != self.run_manifest.tasks[0].resource_profile_sha256
         ):
             raise ValueError("coding grading lease material disagrees with authority")
         expected_kinds = [
@@ -386,6 +419,19 @@ class CodingGradingLeaseResponse(CodingEvaluationModel):
         if [item.artifact_kind for item in self.capabilities] != expected_kinds:
             raise ValueError("coding grading capabilities are incomplete or unordered")
         task = self.run_manifest.tasks[0]
+        if (
+            self.grader_plan.case_id != task.case_id
+            or self.grader_plan.variant_id != task.variant_id
+            or self.grader_plan.visible_bundle_sha256 != task.visible_bundle_sha256
+            or self.grader_plan.base_tree_sha256 != task.base_tree_sha256
+            or self.grader_plan.grader_bundle_sha256 != task.grader_bundle_sha256
+            or self.grader_plan.grader_image_digest != task.grader_image_digest
+            or self.grader_plan.test_manifest_sha256 != task.test_manifest_sha256
+        ):
+            raise ValueError("coding grading plan disagrees with the selected task")
+        validate_coding_catalog_grading_bundle(
+            self.grader_plan, self.grader_resource_profile
+        )
         expected_digests = [
             task.visible_bundle_sha256,
             task.resource_profile_sha256,

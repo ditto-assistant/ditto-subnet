@@ -62,8 +62,10 @@ limits. The phase-separated grader plan and resource profile contain synthetic
 protected command paths and are validator-only. Python and Go independently
 recompute all three digests and reject cross-phase identity, command, path,
 limit, resource, or compiled-grader drift. Rust and miner-facing code must never
-consume this vector. The vector defines authority only; a later PR must bind its
-digests into the private catalog and deliver each preimage in the correct lease.
+consume this vector. `generate_execution_delivery_vectors.py` binds the runner
+digest through the selected task commitment and keeps the related selection,
+artifact-capability, and grading-lease fixtures coherent. Platform returns only
+the runner plan in authoring and only protected plan/resource fields in grading.
 
 `coding_inference_miner_v1.json` freezes two synthetic, miner-visible Luna Chat
 Completions turns using the public coding prompt and ordered workspace-tool

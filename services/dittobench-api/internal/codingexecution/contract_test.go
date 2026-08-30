@@ -186,8 +186,16 @@ func TestExecutionPlanRejectsDriftAndUnsafeAuthority(t *testing.T) {
 	if _, err := ParseRunnerPlan(unsafeBody); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("shell command err=%v", err)
 	}
+	oversized := cloneRunnerPlan(runner)
+	oversized.TestCommands[0].Argv = []string{
+		"python", strings.Repeat("x", 4096), strings.Repeat("y", 4096),
+	}
+	oversizedBody, _ := json.Marshal(oversized)
+	if _, err := ParseRunnerPlan(oversizedBody); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("oversized command err=%v", err)
+	}
 	overlap := cloneRunnerPlan(runner)
-	overlap.CreatablePaths = []string{"src/parser.py"}
+	overlap.CreatablePaths = []string{overlap.EditablePaths[0]}
 	overlapBody, _ := json.Marshal(overlap)
 	if _, err := ParseRunnerPlan(overlapBody); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("overlap err=%v", err)

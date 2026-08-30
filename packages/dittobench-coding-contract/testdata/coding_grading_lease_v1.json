@@ -25,8 +25,8 @@
     "ticket_id": "33333333-3333-4333-8333-333333333333",
     "ticket_deadline": "2026-08-21T13:00:00Z",
     "coding_run_id": "coding-run-private-001",
-    "run_manifest_sha256": "2337b09196f9193cf38fe66ee2d28672b572ba667137679cb26cee65353c7b18",
-    "task_set_manifest_sha256": "c4d5de09716f3f61e0a9ff0eff46f2d3a21006ed2f221b283e35773a426b0a80",
+    "run_manifest_sha256": "53d3487a30365910c879bb4d9b8efc6e3c1cc77d4d673d2e22bbce6f31f1c527",
+    "task_set_manifest_sha256": "25d644c4334a61f0c63431aa6f66cee346916e4389954d95cdf1b270c0077a8c",
     "freeze_id": "44444444-4444-4444-8444-444444444444",
     "authoring_evidence_sha256": "4e63fece4539d15ca915c30409b97ad41f1554732631b55d633642622ea6aac9",
     "frozen_patch_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -40,15 +40,15 @@
       "agent_id": "00000000-0000-4000-8000-000000000001",
       "agent_artifact_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
       "corpus_release_id": "private-coding-corpus-v1",
-      "catalog_merkle_root": "0f832d36b225cee4abf6b04ebcc50f697cc86a4132a43fa0c67c4993003ab3cc",
+      "catalog_merkle_root": "b17b7b7241beb0e3bec0f2f238dfe56eefeb5c562e0edbbfa91e11588ba58a99",
       "selection_derivation_id": "coding-selection-v1",
       "selection_chain_genesis_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
       "selection_block_number": 123456,
       "selection_block_hash": "0x7777777777777777777777777777777777777777777777777777777777777777",
       "inference_grant_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
-      "grader_contract_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
-      "task_set_id": "coding-task-set-v1-c4d5de09716f3f61e0a9ff0eff46f2d3a21006ed2f221b283e35773a426b0a80",
-      "task_set_manifest_sha256": "c4d5de09716f3f61e0a9ff0eff46f2d3a21006ed2f221b283e35773a426b0a80",
+      "grader_contract_sha256": "c002260a02a46d7187175e789c9b2b232f0d1072b214330347e136c466368055",
+      "task_set_id": "coding-task-set-v1-25d644c4334a61f0c63431aa6f66cee346916e4389954d95cdf1b270c0077a8c",
+      "task_set_manifest_sha256": "25d644c4334a61f0c63431aa6f66cee346916e4389954d95cdf1b270c0077a8c",
       "tasks": [
         {
           "case_id": "private-case-004",
@@ -59,12 +59,12 @@
           "memory_bundle_sha256": "2525252525252525252525252525252525252525252525252525252525252525",
           "environment_image_digest": "sha256:3535353535353535353535353535353535353535353535353535353535353535",
           "environment_platform": "linux/amd64",
-          "resource_profile_sha256": "4545454545454545454545454545454545454545454545454545454545454545",
+          "resource_profile_sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
           "grader_bundle_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
           "grader_image_digest": "sha256:6565656565656565656565656565656565656565656565656565656565656565",
           "grader_platform": "linux/amd64",
           "test_manifest_sha256": "7575757575757575757575757575757575757575757575757575757575757575",
-          "grader_plan_sha256": "8585858585858585858585858585858585858585858585858585858585858585"
+          "grader_plan_sha256": "4c99626862d7b605041e8587895f5f4834058acdb1325f22f18ee59674889cba"
         }
       ]
     },
@@ -92,9 +92,9 @@
         "delivery_phase": "grading",
         "artifact_kind": "resource-profile",
         "audience": "resource-supervisor",
-        "sha256": "4545454545454545454545454545454545454545454545454545454545454545",
+        "sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
         "size_bytes": 4096,
-        "url": "https://storage.invalid/private-coding/coding-artifacts/v1/resource-profile/sha256/4545454545454545454545454545454545454545454545454545454545454545?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-resource-grading",
+        "url": "https://storage.invalid/private-coding/coding-artifacts/v1/resource-profile/sha256/5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-resource-grading",
         "expires_at": "2026-08-21T12:05:00Z"
       },
       {
@@ -111,6 +111,145 @@
         "url": "https://storage.invalid/private-coding/coding-artifacts/v1/grader-bundle/sha256/5555555555555555555555555555555555555555555555555555555555555555?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-grader-grading",
         "expires_at": "2026-08-21T12:05:00Z"
       }
-    ]
+    ],
+    "grader_plan": {
+      "schema": "dittobench-coding-grader-plan-v1",
+      "coding_contract_version": 1,
+      "case_id": "private-case-004",
+      "variant_id": "v1",
+      "visible_bundle_sha256": "0505050505050505050505050505050505050505050505050505050505050505",
+      "base_tree_sha256": "1515151515151515151515151515151515151515151515151515151515151515",
+      "grader_contract_sha256": "c002260a02a46d7187175e789c9b2b232f0d1072b214330347e136c466368055",
+      "grader_bundle_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "grader_image_digest": "sha256:6565656565656565656565656565656565656565656565656565656565656565",
+      "grader_platform": "linux/amd64",
+      "test_manifest_sha256": "7575757575757575757575757575757575757575757575757575757575757575",
+      "resource_profile_sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
+      "execution_timeout_milliseconds": 1800000,
+      "build_required": true,
+      "build_command": {
+        "id": "grader-build-check-4",
+        "argv": [
+          "python",
+          "-m",
+          "compileall",
+          "src"
+        ],
+        "timeout_milliseconds": 60000
+      },
+      "test_groups": [
+        {
+          "group": "adversarial",
+          "command": {
+            "id": "test-adversarial",
+            "argv": [
+              "python",
+              "-m",
+              "pytest",
+              "grader/adversarial.py"
+            ],
+            "timeout_milliseconds": 60000
+          },
+          "expected_total": 2
+        },
+        {
+          "group": "fail_to_pass",
+          "command": {
+            "id": "test-fail_to_pass",
+            "argv": [
+              "python",
+              "-m",
+              "pytest",
+              "grader/fail_to_pass.py"
+            ],
+            "timeout_milliseconds": 60000
+          },
+          "expected_total": 3
+        },
+        {
+          "group": "hidden",
+          "command": {
+            "id": "test-hidden",
+            "argv": [
+              "python",
+              "-m",
+              "pytest",
+              "grader/hidden.py"
+            ],
+            "timeout_milliseconds": 60000
+          },
+          "expected_total": 2
+        },
+        {
+          "group": "integrity",
+          "command": {
+            "id": "test-integrity",
+            "argv": [
+              "python",
+              "-m",
+              "pytest",
+              "grader/integrity.py"
+            ],
+            "timeout_milliseconds": 60000
+          },
+          "expected_total": 1
+        },
+        {
+          "group": "pass_to_pass",
+          "command": {
+            "id": "test-pass_to_pass",
+            "argv": [
+              "python",
+              "-m",
+              "pytest",
+              "grader/pass_to_pass.py"
+            ],
+            "timeout_milliseconds": 60000
+          },
+          "expected_total": 8
+        }
+      ],
+      "execution_order": [
+        "fail_to_pass",
+        "pass_to_pass",
+        "hidden",
+        "adversarial",
+        "integrity"
+      ]
+    },
+    "grader_resource_profile": {
+      "schema": "dittobench-coding-grader-resource-v1",
+      "candidate_limits": {
+        "max_bundle_bytes": 536870912,
+        "max_workspace_bytes": 1073741824,
+        "max_file_bytes": 33554432,
+        "max_patch_bytes": 33554432,
+        "max_entries": 50000,
+        "max_tool_calls": 256,
+        "max_read_bytes": 32768,
+        "max_response_bytes": 262144,
+        "max_search_results": 100,
+        "max_replay_cache_bytes": 67108864,
+        "max_transcript_bytes": 134217728
+      },
+      "protected_limits": {
+        "max_bundle_bytes": 536870912,
+        "max_workspace_bytes": 1073741824,
+        "max_file_bytes": 33554432,
+        "max_patch_bytes": 33554432,
+        "max_entries": 50000,
+        "max_tool_calls": 256,
+        "max_read_bytes": 32768,
+        "max_response_bytes": 262144,
+        "max_search_results": 100,
+        "max_replay_cache_bytes": 67108864,
+        "max_transcript_bytes": 134217728
+      },
+      "max_combined_disk_bytes": 4294967296,
+      "memory_limit_bytes": 4294967296,
+      "scratch_limit_bytes": 1073741824,
+      "pids_limit": 512,
+      "cpu_quota_millis": 2000
+    }
   }
 }

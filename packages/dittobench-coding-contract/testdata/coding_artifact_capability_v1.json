@@ -76,9 +76,9 @@
       "delivery_phase": "authoring",
       "artifact_kind": "resource-profile",
       "audience": "resource-supervisor",
-      "sha256": "4545454545454545454545454545454545454545454545454545454545454545",
+      "sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
       "size_bytes": 4096,
-      "url": "https://storage.invalid/private-coding/coding-artifacts/v1/resource-profile/sha256/4545454545454545454545454545454545454545454545454545454545454545?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-resource-authoring",
+      "url": "https://storage.invalid/private-coding/coding-artifacts/v1/resource-profile/sha256/5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-resource-authoring",
       "expires_at": "2026-08-21T12:05:00Z"
     },
     {
@@ -104,9 +104,9 @@
       "delivery_phase": "grading",
       "artifact_kind": "resource-profile",
       "audience": "resource-supervisor",
-      "sha256": "4545454545454545454545454545454545454545454545454545454545454545",
+      "sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
       "size_bytes": 4096,
-      "url": "https://storage.invalid/private-coding/coding-artifacts/v1/resource-profile/sha256/4545454545454545454545454545454545454545454545454545454545454545?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-resource-grading",
+      "url": "https://storage.invalid/private-coding/coding-artifacts/v1/resource-profile/sha256/5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-resource-grading",
       "expires_at": "2026-08-21T12:05:00Z"
     },
     {

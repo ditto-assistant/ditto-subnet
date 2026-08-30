@@ -10373,6 +10373,9 @@ export interface components {
             run_manifest: components["schemas"]["CodingSelectionRunManifest"];
             /** Run Manifest Sha256 */
             run_manifest_sha256: string;
+            runner_plan: components["schemas"]["CodingCatalogRunnerPlan"];
+            /** Runner Plan Sha256 */
+            runner_plan_sha256: string;
             runtime_policy: components["schemas"]["CodingCatalogRuntimePolicy"];
             /** Runtime Policy Sha256 */
             runtime_policy_sha256: string;
@@ -10543,6 +10546,15 @@ export interface components {
             /** Workspace Tool Calls */
             workspace_tool_calls: number;
         };
+        /** CodingCatalogCommand */
+        CodingCatalogCommand: {
+            /** Argv */
+            argv: string[];
+            /** Id */
+            id: string;
+            /** Timeout Milliseconds */
+            timeout_milliseconds: number;
+        };
         /** CodingCatalogCommitment */
         CodingCatalogCommitment: {
             /** Catalog Merkle Root */
@@ -10581,6 +10593,62 @@ export interface components {
              */
             weight_eligible: false;
         };
+        /** CodingCatalogGraderGroup */
+        CodingCatalogGraderGroup: {
+            command: components["schemas"]["CodingCatalogCommand"];
+            /** Expected Total */
+            expected_total: number;
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "fail_to_pass" | "pass_to_pass" | "hidden" | "adversarial" | "integrity";
+        };
+        /** CodingCatalogGraderPlan */
+        CodingCatalogGraderPlan: {
+            /** Base Tree Sha256 */
+            base_tree_sha256: string;
+            build_command: components["schemas"]["CodingCatalogCommand"];
+            /** Build Required */
+            build_required: boolean;
+            /** Case Id */
+            case_id: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Execution Order */
+            execution_order: string[];
+            /** Execution Timeout Milliseconds */
+            execution_timeout_milliseconds: number;
+            /** Grader Bundle Sha256 */
+            grader_bundle_sha256: string;
+            /** Grader Contract Sha256 */
+            grader_contract_sha256: string;
+            /** Grader Image Digest */
+            grader_image_digest: string;
+            /**
+             * Grader Platform
+             * @constant
+             */
+            grader_platform: "linux/amd64";
+            /** Resource Profile Sha256 */
+            resource_profile_sha256: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-grader-plan-v1";
+            /** Test Groups */
+            test_groups: components["schemas"]["CodingCatalogGraderGroup"][];
+            /** Test Manifest Sha256 */
+            test_manifest_sha256: string;
+            /** Variant Id */
+            variant_id: string;
+            /** Visible Bundle Sha256 */
+            visible_bundle_sha256: string;
+        };
         /** CodingCatalogIssue */
         CodingCatalogIssue: {
             /** Constraints */
@@ -10589,6 +10657,31 @@ export interface components {
             description: string;
             /** Title */
             title: string;
+        };
+        /** CodingCatalogLimits */
+        CodingCatalogLimits: {
+            /** Max Bundle Bytes */
+            max_bundle_bytes: number;
+            /** Max Entries */
+            max_entries: number;
+            /** Max File Bytes */
+            max_file_bytes: number;
+            /** Max Patch Bytes */
+            max_patch_bytes: number;
+            /** Max Read Bytes */
+            max_read_bytes: number;
+            /** Max Replay Cache Bytes */
+            max_replay_cache_bytes: number;
+            /** Max Response Bytes */
+            max_response_bytes: number;
+            /** Max Search Results */
+            max_search_results: number;
+            /** Max Tool Calls */
+            max_tool_calls: number;
+            /** Max Transcript Bytes */
+            max_transcript_bytes: number;
+            /** Max Workspace Bytes */
+            max_workspace_bytes: number;
         };
         /**
          * CodingCatalogManifestTask
@@ -10667,6 +10760,56 @@ export interface components {
             shadow_only: true;
             /** Signature */
             signature: string;
+        };
+        /** CodingCatalogResourceProfile */
+        CodingCatalogResourceProfile: {
+            candidate_limits: components["schemas"]["CodingCatalogLimits"];
+            /** Cpu Quota Millis */
+            cpu_quota_millis: number;
+            /** Max Combined Disk Bytes */
+            max_combined_disk_bytes: number;
+            /** Memory Limit Bytes */
+            memory_limit_bytes: number;
+            /** Pids Limit */
+            pids_limit: number;
+            protected_limits: components["schemas"]["CodingCatalogLimits"];
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-grader-resource-v1";
+            /** Scratch Limit Bytes */
+            scratch_limit_bytes: number;
+        };
+        /** CodingCatalogRunnerPlan */
+        CodingCatalogRunnerPlan: {
+            /** Base Tree Sha256 */
+            base_tree_sha256: string;
+            /** Build Commands */
+            build_commands: components["schemas"]["CodingCatalogCommand"][];
+            /** Case Id */
+            case_id: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Creatable Paths */
+            creatable_paths: string[];
+            /** Deletable Paths */
+            deletable_paths: string[];
+            /** Editable Paths */
+            editable_paths: string[];
+            limits: components["schemas"]["CodingCatalogLimits"];
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-runner-plan-v1";
+            /** Test Commands */
+            test_commands: components["schemas"]["CodingCatalogCommand"][];
+            /** Visible Bundle Sha256 */
+            visible_bundle_sha256: string;
         };
         /** CodingCatalogRuntimePolicy */
         CodingCatalogRuntimePolicy: {
@@ -10876,6 +11019,8 @@ export interface components {
             frozen_patch_sha256: string;
             /** Frozen Submission Object Key */
             frozen_submission_object_key: string;
+            grader_plan: components["schemas"]["CodingCatalogGraderPlan"];
+            grader_resource_profile: components["schemas"]["CodingCatalogResourceProfile"];
             run_manifest: components["schemas"]["CodingSelectionRunManifest"];
             /** Run Manifest Sha256 */
             run_manifest_sha256: string;

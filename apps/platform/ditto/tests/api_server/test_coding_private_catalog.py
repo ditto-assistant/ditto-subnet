@@ -12,6 +12,10 @@ import pytest
 
 from ditto.api_models.coding_canonical import coding_canonical_sha256
 from ditto.api_models.coding_catalog import CodingCatalogCommitment
+from ditto.api_models.coding_selection import (
+    CodingCatalogGraderPlan,
+    coding_catalog_grader_plan_digest,
+)
 from ditto.api_server.coding_private_catalog import (
     CodingPrivateCatalogConfig,
     CodingPrivateCatalogConfigurationError,
@@ -34,6 +38,13 @@ _VECTOR_PATH = (
     / "dittobench-coding-contract"
     / "testdata"
     / "coding_selection_v1.json"
+)
+_EXECUTION_PATH = (
+    Path(__file__).parents[5]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_execution_plan_v1.json"
 )
 _RECURSIVE_JSON = b'{"future":' + b"[" * 1100 + b"0" + b"]" * 1100 + b"}"
 
@@ -64,7 +75,12 @@ def _vector() -> dict[str, Any]:
     return json.loads(_VECTOR_PATH.read_text(encoding="utf-8"))
 
 
+def _execution() -> dict[str, Any]:
+    return json.loads(_EXECUTION_PATH.read_text(encoding="utf-8"))
+
+
 def _record(vector: dict[str, Any]) -> dict[str, Any]:
+    execution = _execution()
     return {
         "schema": "dittobench-coding-private-catalog-record-v1",
         "catalog_commitment_sha256": vector["commitment"]["commitment_sha256"],
@@ -73,6 +89,9 @@ def _record(vector: dict[str, Any]) -> dict[str, Any]:
         "issue": deepcopy(vector["issue"]),
         "runtime_policy": deepcopy(vector["runtime_policy"]),
         "budgets": deepcopy(vector["budgets"]),
+        "runner_plan": execution["runner_plan"],
+        "grader_plan": execution["grader_plan"],
+        "grader_resource_profile": execution["grader_resource_profile"],
     }
 
 
@@ -97,7 +116,7 @@ def _config(**overrides: object) -> CodingPrivateCatalogConfig:
         "secret_key": "catalog-secret",
         "region": "eu-west-1",
         "use_tls": True,
-        "max_record_bytes": 1 << 20,
+        "max_record_bytes": 2 << 20,
         "timeout_seconds": 1.0,
     }
     values.update(overrides)
@@ -139,7 +158,7 @@ def test_private_catalog_default_record_bound_covers_contract_maximum() -> None:
         }
     )
     assert config is not None
-    assert config.max_record_bytes == 1 << 20
+    assert config.max_record_bytes == 2 << 20
 
 
 def test_private_catalog_configuration_is_separate_and_redacted() -> None:
@@ -265,6 +284,10 @@ async def test_source_loads_exactly_one_bounded_record() -> None:
     assert material.runtime_policy.model_dump(mode="json") == vector["runtime_policy"]
     assert material.budgets.model_dump(mode="json") == vector["budgets"]
     assert (
+        material.task_version.payload.runner_plan_sha256
+        == _execution()["expected"]["runner_plan_sha256"]
+    )
+    assert (
         proof.catalog_membership_proof_sha256
         == vector["membership_proof"]["catalog_membership_proof_sha256"]
     )
@@ -274,7 +297,7 @@ async def test_source_loads_exactly_one_bounded_record() -> None:
                 catalog_commitment_sha256=commitment.commitment_sha256,
                 catalog_index=4,
             ),
-            1 << 20,
+            2 << 20,
         )
     ]
 
@@ -296,6 +319,24 @@ async def test_task_version_adapter_preserves_selector_contract() -> None:
         == vector["membership_proof"]["catalog_membership_proof_sha256"]
     )
     assert len(reader.calls) == 1
+
+
+@pytest.mark.parametrize("field", ["variant_id", "case_id"])
+async def test_source_rejects_grader_plan_task_identity_drift(field: str) -> None:
+    vector = _vector()
+    record = _record(vector)
+    record["grader_plan"][field] = f"other-{field.replace('_', '-')}"
+    record["task_version"]["payload"]["task"]["grader_plan_sha256"] = (
+        coding_catalog_grader_plan_digest(
+            CodingCatalogGraderPlan.model_validate(record["grader_plan"])
+        )
+    )
+    source, _reader = _source(_body(record))
+    with pytest.raises(CodingSelectionCatalogIntegrityError):
+        await source.get_task_material(
+            commitment=_commitment(vector),
+            catalog_index=4,
+        )
 
 
 @pytest.mark.parametrize(
@@ -349,6 +390,11 @@ async def test_source_rejects_excessive_unknown_field_depth() -> None:
         "issue",
         "runtime_policy",
         "budgets",
+        "runner_plan",
+        "runner_digest",
+        "grader_plan",
+        "resource_profile",
+        "missing_plan",
     ],
 )
 async def test_source_rejects_record_or_membership_drift(mutation: str) -> None:
@@ -378,6 +424,16 @@ async def test_source_rejects_record_or_membership_drift(mutation: str) -> None:
         record["runtime_policy"]["editable_paths"] = ["src/other.py"]
     elif mutation == "budgets":
         record["budgets"]["workspace_tool_calls"] += 1
+    elif mutation == "runner_plan":
+        record["runner_plan"]["test_commands"][0]["timeout_milliseconds"] += 1
+    elif mutation == "runner_digest":
+        record["task_version"]["payload"]["runner_plan_sha256"] = "ff" * 32
+    elif mutation == "grader_plan":
+        record["grader_plan"]["test_groups"][0]["expected_total"] += 1
+    elif mutation == "resource_profile":
+        record["grader_resource_profile"]["memory_limit_bytes"] += 1
+    elif mutation == "missing_plan":
+        record.pop("grader_plan")
     source, _reader = _source(_body(record))
     with pytest.raises(CodingSelectionCatalogIntegrityError):
         await source.get_task_version(

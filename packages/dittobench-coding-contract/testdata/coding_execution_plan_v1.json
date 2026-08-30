@@ -3,30 +3,49 @@
   "coding_contract_version": 1,
   "weight_eligible": false,
   "runtime_policy": {
-    "editable_paths": ["src/parser.py"],
-    "test_command_ids": ["visible-parser-tests"],
-    "build_command_ids": ["typecheck-parser"]
+    "editable_paths": [
+      "src/app.py"
+    ],
+    "test_command_ids": [
+      "visible-tests-4"
+    ],
+    "build_command_ids": [
+      "build-check-4"
+    ]
   },
   "runner_plan": {
     "schema": "dittobench-coding-runner-plan-v1",
     "coding_contract_version": 1,
-    "case_id": "case-001",
-    "visible_bundle_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-    "base_tree_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-    "editable_paths": ["src/parser.py"],
+    "case_id": "private-case-004",
+    "visible_bundle_sha256": "0505050505050505050505050505050505050505050505050505050505050505",
+    "base_tree_sha256": "1515151515151515151515151515151515151515151515151515151515151515",
+    "editable_paths": [
+      "src/app.py"
+    ],
     "creatable_paths": [],
     "deletable_paths": [],
     "test_commands": [
       {
-        "id": "visible-parser-tests",
-        "argv": ["python", "-m", "pytest", "tests/test_parser.py", "-q"],
+        "id": "visible-tests-4",
+        "argv": [
+          "python",
+          "-m",
+          "pytest",
+          "tests/test_visible.py",
+          "-q"
+        ],
         "timeout_milliseconds": 120000
       }
     ],
     "build_commands": [
       {
-        "id": "typecheck-parser",
-        "argv": ["python", "-m", "compileall", "src"],
+        "id": "build-check-4",
+        "argv": [
+          "python",
+          "-m",
+          "compileall",
+          "src"
+        ],
         "timeout_milliseconds": 60000
       }
     ],
@@ -81,35 +100,111 @@
   "grader_plan": {
     "schema": "dittobench-coding-grader-plan-v1",
     "coding_contract_version": 1,
-    "case_id": "case-001",
-    "variant_id": "variant-v1",
-    "visible_bundle_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-    "base_tree_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "case_id": "private-case-004",
+    "variant_id": "v1",
+    "visible_bundle_sha256": "0505050505050505050505050505050505050505050505050505050505050505",
+    "base_tree_sha256": "1515151515151515151515151515151515151515151515151515151515151515",
     "grader_contract_sha256": "c002260a02a46d7187175e789c9b2b232f0d1072b214330347e136c466368055",
-    "grader_bundle_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
-    "grader_image_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "grader_bundle_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "grader_image_digest": "sha256:6565656565656565656565656565656565656565656565656565656565656565",
     "grader_platform": "linux/amd64",
-    "test_manifest_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "test_manifest_sha256": "7575757575757575757575757575757575757575757575757575757575757575",
     "resource_profile_sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
     "execution_timeout_milliseconds": 1800000,
     "build_required": true,
     "build_command": {
-      "id": "typecheck-parser",
-      "argv": ["python", "-m", "compileall", "src"],
+      "id": "grader-build-check-4",
+      "argv": [
+        "python",
+        "-m",
+        "compileall",
+        "src"
+      ],
       "timeout_milliseconds": 60000
     },
     "test_groups": [
-      {"group": "adversarial", "command": {"id": "test-adversarial", "argv": ["python", "-m", "pytest", "grader/adversarial.py"], "timeout_milliseconds": 60000}, "expected_total": 2},
-      {"group": "fail_to_pass", "command": {"id": "test-fail_to_pass", "argv": ["python", "-m", "pytest", "grader/fail_to_pass.py"], "timeout_milliseconds": 60000}, "expected_total": 3},
-      {"group": "hidden", "command": {"id": "test-hidden", "argv": ["python", "-m", "pytest", "grader/hidden.py"], "timeout_milliseconds": 60000}, "expected_total": 2},
-      {"group": "integrity", "command": {"id": "test-integrity", "argv": ["python", "-m", "pytest", "grader/integrity.py"], "timeout_milliseconds": 60000}, "expected_total": 1},
-      {"group": "pass_to_pass", "command": {"id": "test-pass_to_pass", "argv": ["python", "-m", "pytest", "grader/pass_to_pass.py"], "timeout_milliseconds": 60000}, "expected_total": 8}
+      {
+        "group": "adversarial",
+        "command": {
+          "id": "test-adversarial",
+          "argv": [
+            "python",
+            "-m",
+            "pytest",
+            "grader/adversarial.py"
+          ],
+          "timeout_milliseconds": 60000
+        },
+        "expected_total": 2
+      },
+      {
+        "group": "fail_to_pass",
+        "command": {
+          "id": "test-fail_to_pass",
+          "argv": [
+            "python",
+            "-m",
+            "pytest",
+            "grader/fail_to_pass.py"
+          ],
+          "timeout_milliseconds": 60000
+        },
+        "expected_total": 3
+      },
+      {
+        "group": "hidden",
+        "command": {
+          "id": "test-hidden",
+          "argv": [
+            "python",
+            "-m",
+            "pytest",
+            "grader/hidden.py"
+          ],
+          "timeout_milliseconds": 60000
+        },
+        "expected_total": 2
+      },
+      {
+        "group": "integrity",
+        "command": {
+          "id": "test-integrity",
+          "argv": [
+            "python",
+            "-m",
+            "pytest",
+            "grader/integrity.py"
+          ],
+          "timeout_milliseconds": 60000
+        },
+        "expected_total": 1
+      },
+      {
+        "group": "pass_to_pass",
+        "command": {
+          "id": "test-pass_to_pass",
+          "argv": [
+            "python",
+            "-m",
+            "pytest",
+            "grader/pass_to_pass.py"
+          ],
+          "timeout_milliseconds": 60000
+        },
+        "expected_total": 8
+      }
     ],
-    "execution_order": ["fail_to_pass", "pass_to_pass", "hidden", "adversarial", "integrity"]
+    "execution_order": [
+      "fail_to_pass",
+      "pass_to_pass",
+      "hidden",
+      "adversarial",
+      "integrity"
+    ]
   },
   "expected": {
-    "runner_plan_sha256": "53e2c9aca02cb06226e46f262162043bafe954f986d413e0758d72f2d3fa09f9",
-    "grader_plan_sha256": "0357d8279fa37ced9a30794ed58c346e73710904c93c3ce13b4be556b16de8c0",
+    "runner_plan_sha256": "932d2bafc03a73c935ee0b58ae9cd7f6e7494722cb5f5aee7204cb8bf7d33227",
+    "grader_plan_sha256": "4c99626862d7b605041e8587895f5f4834058acdb1325f22f18ee59674889cba",
     "grader_resource_profile_sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6"
   }
 }

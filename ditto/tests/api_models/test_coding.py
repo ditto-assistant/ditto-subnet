@@ -108,6 +108,7 @@ def _body(value: Any) -> bytes:
 def _authoring_response() -> dict[str, Any]:
     selection = json.loads(_SELECTION_VECTOR_PATH.read_text(encoding="utf-8"))
     artifacts = json.loads(_ARTIFACT_VECTOR_PATH.read_text(encoding="utf-8"))
+    execution = json.loads(_EXECUTION_PLAN_VECTOR_PATH.read_text(encoding="utf-8"))
     task = selection["task_version"]["payload"]
     return {
         "schema": "dittobench-coding-authoring-lease-v1",
@@ -127,6 +128,8 @@ def _authoring_response() -> dict[str, Any]:
         "issue": selection["issue"],
         "runtime_policy": selection["runtime_policy"],
         "budgets": selection["budgets"],
+        "runner_plan_sha256": execution["expected"]["runner_plan_sha256"],
+        "runner_plan": execution["runner_plan"],
         "run_manifest": selection["run_manifest"],
         "capabilities": artifacts["capabilities"][:3],
     }
@@ -236,7 +239,11 @@ def test_authoring_request_and_response_match_platform_contract() -> None:
         "memory-bundle",
         "resource-profile",
     ]
+    assert response.runner_plan.case_id == response.run_manifest.tasks[0].case_id
+    assert response.runner_plan_sha256
     assert "grader-bundle" not in response.model_dump_json()
+    assert "grader_plan" not in response.model_dump(mode="json")
+    assert "grader_resource_profile" not in response.model_dump(mode="json")
 
 
 def test_authoring_freeze_vector_matches_platform_contract() -> None:
@@ -321,7 +328,10 @@ def test_grading_lease_vector_matches_platform_contract() -> None:
         "resource-profile",
         "grader-bundle",
     ]
+    assert response.grader_plan.case_id == response.run_manifest.tasks[0].case_id
+    assert response.grader_resource_profile.candidate_limits.max_tool_calls > 0
     assert "memory-bundle" not in response.model_dump_json()
+    assert "runner_plan" not in response.model_dump_json()
 
 
 def test_shadow_result_submission_vector_matches_platform_contract() -> None:
@@ -505,8 +515,17 @@ def test_execution_plan_rejects_authority_drift_and_unsafe_commands() -> None:
     with pytest.raises(ValidationError, match="executable"):
         parse_canonical_json(CodingRunnerPlan, _body(unsafe))
 
+    oversized = copy.deepcopy(vector["runner_plan"])
+    oversized["test_commands"][0]["argv"] = [
+        "python",
+        "x" * 4096,
+        "y" * 4096,
+    ]
+    with pytest.raises(ValidationError, match="8192"):
+        parse_canonical_json(CodingRunnerPlan, _body(oversized))
+
     overlapping = copy.deepcopy(vector["runner_plan"])
-    overlapping["creatable_paths"] = ["src/parser.py"]
+    overlapping["creatable_paths"] = [overlapping["editable_paths"][0]]
     with pytest.raises(ValidationError, match="path sets"):
         parse_canonical_json(CodingRunnerPlan, _body(overlapping))
 

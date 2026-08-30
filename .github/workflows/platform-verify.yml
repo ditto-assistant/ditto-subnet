@@ -133,6 +133,12 @@ jobs:
           uv run python ../../scripts/generate_confirmation_installation.py
           --check
 
+      - name: Coding execution delivery vectors match their generator
+        run: |
+          uv run ruff format --check ../../packages/dittobench-coding-contract/generate_execution_delivery_vectors.py
+          uv run ruff check ../../packages/dittobench-coding-contract/generate_execution_delivery_vectors.py
+          uv run python ../../packages/dittobench-coding-contract/generate_execution_delivery_vectors.py --check
+
   test:
     needs: validate
     if: inputs.backend

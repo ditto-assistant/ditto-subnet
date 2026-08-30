@@ -37,7 +37,10 @@ Each object uses `dittobench-coding-private-catalog-record-v1` and contains:
   "membership_proof": {},
   "issue": {},
   "runtime_policy": {},
-  "budgets": {}
+  "budgets": {},
+  "runner_plan": {},
+  "grader_plan": {},
+  "grader_resource_profile": {}
 }
 ```
 
@@ -48,11 +51,21 @@ known fields and canonical digests. The issue, model-visible runtime policy,
 and model/tool/wall budgets are hydrated in the same envelope and must
 reproduce the three digests committed by the selected task leaf.
 
-The default and hard record bound is 1 MiB. This covers the contract maximum
-issue and constraint material after canonical JSON escaping without permitting
-an operator to expand the in-memory transport budget further. Tabs, newlines,
-and carriage returns remain valid issue text; other control characters are
-rejected so a contract-valid maximum cannot expand sixfold during JSON encoding.
+The task payload additionally commits `runner_plan_sha256`. The record must
+reproduce that authoring preimage, the selected task's existing
+`grader_plan_sha256`, and `resource_profile_sha256`. Cross-phase validation
+binds the runner plan to the model-visible path/command IDs and binds both plans
+to the same case, visible bundle, base tree, candidate limits, and compiled
+grader contract. The loader returns the complete record internally; phase
+delivery endpoints project only the authoring or grading subset.
+
+The default and hard record bound is 2 MiB, and every command argv is
+independently capped at 8 KiB. A curator must keep the complete projected
+record within that operational envelope; an otherwise field-valid oversized
+plan is deliberately undeliverable. Operators cannot expand the in-memory
+transport budget further. Tabs, newlines, and carriage returns remain valid
+issue text; other control characters are rejected so a contract-valid maximum
+cannot expand sixfold during JSON encoding.
 
 Before returning a record, the loader independently checks the exact registered
 commitment digest, contract version, release, catalog index, Merkle root, task

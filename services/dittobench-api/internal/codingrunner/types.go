@@ -147,6 +147,13 @@ func (command CommandSpec) Validate() error {
 			return errors.New("coding command argument is outside contract bounds")
 		}
 	}
+	var argumentBytes int
+	for _, argument := range command.Argv {
+		argumentBytes += len(argument)
+	}
+	if argumentBytes > 8192 {
+		return errors.New("coding command argv exceeds 8192 UTF-8 bytes")
+	}
 	return nil
 }
 

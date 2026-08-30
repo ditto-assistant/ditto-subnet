@@ -51,10 +51,18 @@ _FREEZE_VECTOR_PATH = (
     / "testdata"
     / "coding_authoring_freeze_v1.json"
 )
+_EXECUTION_VECTOR_PATH = (
+    Path(__file__).parents[6]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_execution_plan_v1.json"
+)
 
 
 def _fixture() -> SimpleNamespace:
     vector = json.loads(_VECTOR_PATH.read_text(encoding="utf-8"))
+    execution_vector = json.loads(_EXECUTION_VECTOR_PATH.read_text(encoding="utf-8"))
     freeze_vector = json.loads(_FREEZE_VECTOR_PATH.read_text(encoding="utf-8"))
     freeze_evidence = freeze_vector["request"]["evidence"]
     commitment = CodingCatalogCommitment.model_validate(vector["commitment"])
@@ -70,6 +78,9 @@ def _fixture() -> SimpleNamespace:
             "issue": vector["issue"],
             "runtime_policy": vector["runtime_policy"],
             "budgets": vector["budgets"],
+            "runner_plan": execution_vector["runner_plan"],
+            "grader_plan": execution_vector["grader_plan"],
+            "grader_resource_profile": execution_vector["grader_resource_profile"],
         }
     )
     rebuilt = rebuild_coding_selection_result(

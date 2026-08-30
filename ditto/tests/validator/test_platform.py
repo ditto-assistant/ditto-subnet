@@ -70,6 +70,10 @@ _ARTIFACT_VECTOR_PATH = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json"
 )
+_EXECUTION_VECTOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json"
+)
 _AUTHORING_FREEZE_VECTOR_PATH = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json"
@@ -90,6 +94,7 @@ _SHADOW_RESULT_VECTOR_PATH = (
 def _authoring_response() -> dict[str, Any]:
     selection = json.loads(_SELECTION_VECTOR_PATH.read_text(encoding="utf-8"))
     artifacts = json.loads(_ARTIFACT_VECTOR_PATH.read_text(encoding="utf-8"))
+    execution = json.loads(_EXECUTION_VECTOR_PATH.read_text(encoding="utf-8"))
     task = selection["task_version"]["payload"]
     return {
         "schema": "dittobench-coding-authoring-lease-v1",
@@ -109,6 +114,8 @@ def _authoring_response() -> dict[str, Any]:
         "issue": selection["issue"],
         "runtime_policy": selection["runtime_policy"],
         "budgets": selection["budgets"],
+        "runner_plan_sha256": execution["expected"]["runner_plan_sha256"],
+        "runner_plan": execution["runner_plan"],
         "run_manifest": selection["run_manifest"],
         "capabilities": artifacts["capabilities"][:3],
     }
@@ -360,7 +367,7 @@ async def test_coding_authoring_client_rejects_oversized_response() -> None:
     class OversizedStream(httpx.AsyncByteStream):
         async def __aiter__(self) -> AsyncIterator[bytes]:
             nonlocal seen_chunks
-            for _ in range(9):
+            for _ in range(33):
                 seen_chunks += 1
                 yield b"x" * (64 << 10)
             raise AssertionError("validator consumed data after the response bound")
@@ -379,7 +386,7 @@ async def test_coding_authoring_client_rejects_oversized_response() -> None:
                 http,
                 keypair,
             ).request_coding_authoring_lease(ticket_id)
-    assert seen_chunks == 9
+    assert seen_chunks == 33
 
 
 async def test_coding_authoring_client_rejects_ticket_identity_drift() -> None:
@@ -529,7 +536,7 @@ async def test_coding_grading_client_bounds_and_refuses_redirects() -> None:
     class OversizedStream(httpx.AsyncByteStream):
         async def __aiter__(self) -> AsyncIterator[bytes]:
             nonlocal seen_chunks
-            for _ in range(5):
+            for _ in range(33):
                 seen_chunks += 1
                 yield b"x" * (64 << 10)
             raise AssertionError("validator consumed data after the response bound")
@@ -541,7 +548,7 @@ async def test_coding_grading_client_bounds_and_refuses_redirects() -> None:
     ) as http:
         with pytest.raises(PlatformInfrastructureError, match="size"):
             await request_lease(http)
-    assert seen_chunks == 5
+    assert seen_chunks == 33
 
 
 async def test_coding_grading_client_rejects_identity_drift_without_url_leak() -> None:

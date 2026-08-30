@@ -19,6 +19,7 @@ from ditto.api_models.coding import (
     SubmitCodingAuthoringFreezeResponse,
     SubmitCodingShadowResultResponse,
     coding_authoring_evidence_digest,
+    validate_run_evidence_against_manifest,
 )
 from ditto.validator.coding_attempt import (
     CodingAttemptCoordinator,
@@ -36,6 +37,7 @@ _ARTIFACTS = _TESTDATA / "coding_artifact_capability_v1.json"
 _FREEZE = _TESTDATA / "coding_authoring_freeze_v1.json"
 _GRADING = _TESTDATA / "coding_grading_lease_v1.json"
 _RESULT = _TESTDATA / "coding_shadow_result_submission_v1.json"
+_EXECUTION = _TESTDATA / "coding_execution_plan_v1.json"
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -45,6 +47,7 @@ def _json(path: Path) -> dict[str, Any]:
 def _authoring_lease() -> CodingAuthoringLeaseResponse:
     selection = _json(_SELECTION)
     artifacts = _json(_ARTIFACTS)
+    execution = _json(_EXECUTION)
     task = selection["task_version"]["payload"]
     raw = {
         "schema": "dittobench-coding-authoring-lease-v1",
@@ -64,6 +67,8 @@ def _authoring_lease() -> CodingAuthoringLeaseResponse:
         "issue": selection["issue"],
         "runtime_policy": selection["runtime_policy"],
         "budgets": selection["budgets"],
+        "runner_plan_sha256": execution["expected"]["runner_plan_sha256"],
+        "runner_plan": execution["runner_plan"],
         "run_manifest": selection["run_manifest"],
         "capabilities": artifacts["capabilities"][:3],
     }
@@ -117,8 +122,23 @@ def _grading_lease(
 
 def _grading_outcome() -> CodingGradingOutcome:
     vector = _json(_RESULT)
+    manifest = _json(_SELECTION)["run_manifest"]
+    selected_task = manifest["tasks"][0]
     tasks = tuple(
-        CodingTaskEvidence.model_validate_json(json.dumps(item))
+        CodingTaskEvidence.model_validate_json(
+            json.dumps(
+                {
+                    **item,
+                    "coding_run_id": manifest["coding_run_id"],
+                    "agent_id": manifest["agent_id"],
+                    "agent_artifact_sha256": manifest["agent_artifact_sha256"],
+                    "corpus_release_id": manifest["corpus_release_id"],
+                    "task_set_id": manifest["task_set_id"],
+                    "task_set_manifest_sha256": manifest["task_set_manifest_sha256"],
+                    "task": selected_task,
+                }
+            )
+        )
         for item in vector["authority"]["task_evidence"]
     )
     return CodingGradingOutcome(
@@ -189,8 +209,15 @@ class _Platform:
     ) -> SubmitCodingShadowResultResponse:
         assert agent_id == _ticket().agent_id
         assert kwargs["run_manifest"] == self.grading_lease.run_manifest
-        assert kwargs["evidence"] == CodingRunEvidence.model_validate_json(
-            json.dumps(_json(_RESULT)["request"]["evidence"])
+        evidence = CodingRunEvidence.model_validate(kwargs["evidence"])
+        task_evidence = [
+            CodingTaskEvidence.model_validate(item) for item in kwargs["task_evidence"]
+        ]
+        validate_run_evidence_against_manifest(
+            self.grading_lease.run_manifest,
+            str(self.grading_lease.ticket_id),
+            evidence,
+            task_evidence,
         )
         self.events.append("submit_result")
         return self.result_response

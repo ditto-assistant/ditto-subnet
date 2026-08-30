@@ -1,10 +1,11 @@
 # Private coding execution-plan contract
 
 `internal/codingexecution` freezes the task-static authority that the future
-private supervisor phase runner needs but current leases do not yet deliver.
-It is a contract and projector only: it has no catalog reader, lease endpoint,
-artifact credential, workspace, harness, listener, worker, scorer, or weight
-path.
+private supervisor phase runner needs. Platform now mirrors the contract,
+verifies complete plan bundles in the private catalog, and delivers only the
+correct phase projection. The Go package remains a contract and projector: it
+has no catalog reader, artifact credential, workspace, harness, listener,
+worker, scorer, or weight path.
 
 ## Phase split
 
@@ -43,12 +44,15 @@ cross-phase identity are fail-closed.
 
 ## Current boundary
 
-The shared vector is synthetic and uses no repository, patch, memory, usable
-capability, provider credential, signing key, or private catalog record. No
-Platform model or endpoint consumes these plans yet. The next PR must commit
-the authoring plan digest in the private catalog, return only the runner plan
-through the authoring lease, and return the protected plan/resource projection
-only after an accepted freeze through the grading lease.
+The shared vectors are synthetic and use no repository, patch, memory, usable
+capability, provider credential, signing key, or real private catalog record.
+The runner-plan digest is committed through `task_commitment_sha256`; authoring
+leases return only that runner plan. Protected grader/resource projections are
+returned only after Platform accepts and revalidates an immutable freeze.
+
+No validator runtime consumes the plans yet. The next PR composes the durable
+phase runner and must still reserve its evidence outbox and commit the
+non-rerunnable activation marker before any harness call.
 
 No production composition root imports this package. Coding contract v1 stays
 permanently `weight_eligible=false`.

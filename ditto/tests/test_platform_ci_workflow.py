@@ -71,7 +71,11 @@ def test_backend_workflow_owns_every_platform_coding_contract_vector() -> None:
     )
     assert (
         "packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json"
-        not in backend_paths
+        in backend_paths
+    )
+    assert (
+        "packages/dittobench-coding-contract/generate_execution_delivery_vectors.py"
+        in backend_paths
     )
 
 
@@ -136,6 +140,12 @@ def test_shared_verification_keeps_static_database_and_security_gates() -> None:
     assert _step(static, "ruff format check")["run"] == "uv run ruff format --check ."
     assert _step(static, "ruff check")["run"] == "uv run ruff check ."
     assert _step(static, "mypy")["run"] == "uv run mypy ditto/"
+    execution_generator = _step(
+        static, "Coding execution delivery vectors match their generator"
+    )["run"]
+    assert "ruff format --check" in execution_generator
+    assert "ruff check" in execution_generator
+    assert "generate_execution_delivery_vectors.py --check" in execution_generator
     assert jobs["security"]["if"] == "inputs.security"
     assert _step(jobs["security"], "Scan reachable Git history for secrets")
     assert test_job["services"]["postgres"]["image"] == "postgres:16-alpine"

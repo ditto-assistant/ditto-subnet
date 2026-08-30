@@ -49,6 +49,13 @@ _GRADING_PATH = (
     / "testdata"
     / "coding_grading_lease_v1.json"
 )
+_EXECUTION_PATH = (
+    Path(__file__).parents[5]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_execution_plan_v1.json"
+)
 
 
 def _vectors() -> dict:
@@ -61,6 +68,7 @@ def _vectors() -> dict:
 
 def _authoring_response() -> dict:
     selection = json.loads(_SELECTION_PATH.read_text(encoding="utf-8"))
+    execution = json.loads(_EXECUTION_PATH.read_text(encoding="utf-8"))
     task = selection["task_version"]["payload"]
     return {
         "schema": "dittobench-coding-authoring-lease-v1",
@@ -80,6 +88,8 @@ def _authoring_response() -> dict:
         "issue": selection["issue"],
         "runtime_policy": selection["runtime_policy"],
         "budgets": selection["budgets"],
+        "runner_plan_sha256": execution["expected"]["runner_plan_sha256"],
+        "runner_plan": execution["runner_plan"],
         "run_manifest": selection["run_manifest"],
         "capabilities": _vectors()["capabilities"][:3],
     }
@@ -292,7 +302,11 @@ def test_authoring_response_binds_material_and_exact_three_capabilities() -> Non
         "memory-bundle",
         "resource-profile",
     ]
+    assert response.runner_plan.case_id == response.run_manifest.tasks[0].case_id
+    assert response.runner_plan_sha256
     assert "grader-bundle" not in response.model_dump_json()
+    assert "grader_plan" not in response.model_dump(mode="json")
+    assert "grader_resource_profile" not in response.model_dump(mode="json")
     extended = {**raw, "future_delivery_hint": "ignored"}
     assert (
         "future_delivery_hint"
@@ -331,7 +345,10 @@ def test_grading_vector_binds_request_signature_and_exact_three_capabilities() -
         "resource-profile",
         "grader-bundle",
     ]
+    assert response.grader_plan.case_id == response.run_manifest.tasks[0].case_id
+    assert response.grader_resource_profile.candidate_limits.max_tool_calls > 0
     assert "memory-bundle" not in response.model_dump_json()
+    assert "runner_plan" not in response.model_dump_json()
     extended = {**vectors["response"], "future_grading_hint": {"ignored": True}}
     assert (
         "future_grading_hint"
