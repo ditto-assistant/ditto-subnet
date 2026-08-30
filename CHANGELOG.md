@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.174.3 (2026-08-30)
+
+### Performance Improvements
+
+- **coding-starter-kit**: Keep kit caches warm within the repository budget
+  ([#1378](https://github.com/ditto-assistant/ditto-subnet/pull/1378),
+  [`3892575`](https://github.com/ditto-assistant/ditto-subnet/commit/38925753440fa9235621cc99290149a79b580378))
+
+
 ## v0.174.2 (2026-08-30)
 
 ### Bug Fixes
