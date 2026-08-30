@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.168.0 (2026-08-30)
+
+### Bug Fixes
+
+- **dittobench**: Score miner-recovered relay failures
+  ([#1345](https://github.com/ditto-assistant/ditto-subnet/pull/1345),
+  [`9087931`](https://github.com/ditto-assistant/ditto-subnet/commit/9087931a37b9ad22d4c081177fc95acaa24f53c5))
+
+### Features
+
+- **platform**: Configure private coding catalog storage
+  ([`52b6d36`](https://github.com/ditto-assistant/ditto-subnet/commit/52b6d36ab2a34e4ff5ab773584de182bb92fca6d))
+
+
 ## v0.167.1 (2026-08-30)
 
 ### Bug Fixes
