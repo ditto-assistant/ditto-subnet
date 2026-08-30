@@ -103,7 +103,7 @@ usage. Retry count is receipt count minus logical request count.
 
 ## Activation boundary
 
-This PR defines replayable bytes only. It adds no listener, OpenRouter client,
+This layer defines replayable bytes only. It adds no listener, OpenRouter client,
 API key, Platform grant row, exchange endpoint, source-bound capability,
 harness lifecycle, worker, score, or weight path. The next layer may implement
 an unwired `codingrelay` core against this contract. Dedicated Platform/model-
