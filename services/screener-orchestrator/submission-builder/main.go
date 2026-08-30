@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -33,6 +34,7 @@ import (
 const (
 	maxSourceBytes      = 20 * 1024 * 1024
 	maxOutputBytes      = int64(4 * 1024 * 1024 * 1024)
+	maxBuildLogBytes    = 64 * 1024
 	successHoldDuration = 30 * time.Minute
 )
 
@@ -86,7 +88,7 @@ func failureExitCode(stage string) int {
 	switch stage {
 	case "SOURCE":
 		return 71
-	case "KANIKO":
+	case "KANIKO", "BUILDKIT", "BUILDKIT_LOCAL_CARGO_DEPENDENCY_MISSING":
 		return 72
 	case "ARCHIVE":
 		return 73
@@ -149,16 +151,20 @@ func run() error {
 		ctx, engine, source.ImageRef, "/workspace/source.tar.gz",
 	)
 	if err != nil {
-		return stageFailure("KANIKO", err)
+		return stageFailure(buildFailureStage(engine, ""), err)
 	}
 	if closeInput != nil {
 		defer closeInput()
 	}
 	cmd.Env = sanitizedEnvironment()
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var buildLog limitedBuffer
+	cmd.Stdout = io.MultiWriter(os.Stdout, &buildLog)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &buildLog)
 	if err := cmd.Run(); err != nil {
-		return stageFailure("KANIKO", fmt.Errorf("image build failed: %w", err))
+		return stageFailure(
+			buildFailureStage(engine, buildLog.String()),
+			fmt.Errorf("image build failed: %w", err),
+		)
 	}
 	if engine == "docker" {
 		save := exec.CommandContext(
@@ -210,6 +216,56 @@ func run() error {
 		holdUntilDeleted()
 	}
 	return nil
+}
+
+// limitedBuffer keeps untrusted build output out of the durable log path. Its
+// sole use is to map a known, non-secret compiler condition to a bounded
+// miner-private diagnostic; raw output is never sent to Platform or serial.
+type limitedBuffer struct {
+	mu    sync.Mutex
+	value bytes.Buffer
+}
+
+func (b *limitedBuffer) Write(value []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	originalLength := len(value)
+	if len(value) >= maxBuildLogBytes {
+		b.value.Reset()
+		_, _ = b.value.Write(value[len(value)-maxBuildLogBytes:])
+		return originalLength, nil
+	}
+	if overflow := b.value.Len() + len(value) - maxBuildLogBytes; overflow > 0 {
+		tail := append([]byte(nil), b.value.Bytes()[overflow:]...)
+		b.value.Reset()
+		_, _ = b.value.Write(tail)
+	}
+	_, _ = b.value.Write(value)
+	return originalLength, nil
+}
+
+func (b *limitedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.value.String()
+}
+
+func (b *limitedBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.value.Len()
+}
+
+func buildFailureStage(engine, output string) string {
+	if engine != "docker" {
+		return "KANIKO"
+	}
+	if strings.Contains(output, "failed to load source for dependency") &&
+		strings.Contains(output, "Cargo.toml") &&
+		strings.Contains(output, "No such file or directory") {
+		return "BUILDKIT_LOCAL_CARGO_DEPENDENCY_MISSING"
+	}
+	return "BUILDKIT"
 }
 
 func imageBuildCommand(

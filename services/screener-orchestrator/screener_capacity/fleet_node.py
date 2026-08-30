@@ -39,7 +39,7 @@ _IMAGE = re.compile(r"^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}
 _RUNTIME_MARKER = "DITTO_FLEET_RUNTIME_OK"
 _BUILD_FAILURE_MARKER = re.compile(
     r"DITTO_SUBMISSION_BUILD_FAILED="
-    r"(SOURCE|KANIKO|ARCHIVE|UPLOAD|COMPLETE|CONTRACT|DOCKER|PULL|LAUNCH)"
+    r"(SOURCE|KANIKO|BUILDKIT(?:_LOCAL_CARGO_DEPENDENCY_MISSING)?|ARCHIVE|UPLOAD|COMPLETE|CONTRACT|DOCKER|PULL|LAUNCH)"
 )
 _GUEST_OSINFO = "debian12"
 _LIBVIRT_URI = "qemu:///system"
@@ -427,9 +427,10 @@ if docker run --rm --pull never --network host \\
   {image} >"$output" 2>&1; then
   exit 0
 fi
+marker_pattern='SOURCE|KANIKO|BUILDKIT(_LOCAL_CARGO_DEPENDENCY_MISSING)?'
+marker_pattern="${{marker_pattern}}|ARCHIVE|UPLOAD|COMPLETE|CONTRACT"
 marker=$(
-  grep -E \
-    '^DITTO_SUBMISSION_BUILD_FAILED=(SOURCE|KANIKO|ARCHIVE|UPLOAD|COMPLETE|CONTRACT)$' \
+  grep -E "^DITTO_SUBMISSION_BUILD_FAILED=(${{marker_pattern}})$" \
     "$output" |
     tail -n 1
 )

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import secrets
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
@@ -58,7 +59,10 @@ logger = logging.getLogger(__name__)
 _LEASE_TTL = timedelta(minutes=45)
 _SCREENED_IMAGE_TTL = timedelta(days=1)
 _PLATFORM_COPY_PREFIX = "platform-targon-copy:"
-_KANIKO_FAILED_SUFFIX = "_SUBMISSION_KANIKO_FAILED"
+_SUBMISSION_IMAGE_BUILD_FAILURE = re.compile(
+    r"^(?:FLEET|TARGON|CLOUDRUN)_SUBMISSION_"
+    r"(?:KANIKO|BUILDKIT(?:_[A-Z0-9_]{1,47})?)_FAILED$"
+)
 _CLOUDRUN_RUNTIME_PROVISION_CODES = frozenset(
     {
         "CLOUDRUN_PROVISION_ERROR",
@@ -377,7 +381,7 @@ async def maybe_finalize_targon_screen(
     )
     if build is None or build.status not in {"succeeded", "consumed"}:
         if build is not None and build.status == "fallback_required":
-            if (build.error_code or "").endswith(_KANIKO_FAILED_SUFFIX):
+            if _SUBMISSION_IMAGE_BUILD_FAILURE.fullmatch(build.error_code or ""):
                 await _reject_build(
                     session,
                     attempt,

@@ -501,6 +501,13 @@ _CANDIDATE_RUNTIME_REGISTRY = (
 _FLEET_SUBMISSION_FAILURE_RE = re.compile(
     r"^FLEET_SUBMISSION_([A-Z][A-Z0-9_]{0,47})_FAILED$"
 )
+_FLEET_PRIVATE_BUILD_FAILURE_DETAILS = {
+    "BUILDKIT_LOCAL_CARGO_DEPENDENCY_MISSING": (
+        "A local Cargo dependency is declared but absent from the Docker image "
+        "build context. Copy the dependency directory into the build stage "
+        "before running cargo build (for example, COPY vendor ./vendor)."
+    ),
+}
 
 
 def _trusted_build_view(row: TrustedImageBuild) -> TrustedImageBuildView:
@@ -2806,9 +2813,14 @@ async def update_node_submission_image_build(
             marker = _FLEET_SUBMISSION_FAILURE_RE.fullmatch(payload.error_code or "")
             if attempt is not None and marker is not None:
                 attempt.failure_provider = node.provider
-                attempt.failure_lane = "build"
+                stage = marker.group(1)
+                attempt.failure_lane = (
+                    "buildkit" if stage.startswith("BUILDKIT") else "build"
+                )
                 attempt.private_failure_detail = (
-                    f"DITTO_SUBMISSION_BUILD_FAILED={marker.group(1)}"
+                    _FLEET_PRIVATE_BUILD_FAILURE_DETAILS.get(
+                        stage, f"DITTO_SUBMISSION_BUILD_FAILED={stage}"
+                    )
                 )
                 attempt.failure_captured_at = now
             if row.runtime_status in {"pending", "running"}:
