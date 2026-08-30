@@ -307,6 +307,18 @@
       "related": ["coding-publication-journal", "coding-private-runtime-adapters", "coding-attempt-supervisor", "coding-repair-research", "platform-api", "dittobench-scoring"]
     },
     {
+      "id": "coding-shadow-worker",
+      "title": "Default-off shadow coding worker composition",
+      "keywords": ["coding shadow worker", "default off coding", "coding host composition", "coding worker recovery", "coding feature gate", "phase executor factory"],
+      "summary": "Compose the exclusive claim, phase-separated supervisor, durable publication outbox, and validator worker behind independent default-off gates without changing ordinary scoring or weights.",
+      "owns": ["ditto/validator/coding_worker.py", "services/dittobench-api/internal/codinghost", "services/dittobench-api/cmd/dittobench-api/coding_shadow.go", "docs/coding-shadow-worker.md", "packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json"],
+      "read": ["docs/coding-shadow-worker.md", "apps/platform/docs/coding-ticket-claims.md", "services/dittobench-api/docs/coding-attempt-supervisor-shadow.md", "services/dittobench-api/docs/coding-supervisor-phase-runner-shadow.md", "services/dittobench-api/docs/coding-publication-handoff-shadow.md", "services/dittobench-api/docs/coding-evidence-outbox-shadow.md", "docker-compose.yml"],
+      "search": ["rg -n 'CodingShadowWorker|DurableCodingAttemptPlatform|coding_shadow_enabled' ditto/validator", "rg -n 'codinghost|DITTOBENCH_CODING_SHADOW_ENABLED|codingShadowHostFromEnvironment' services/dittobench-api docker-compose.yml", "rg -n 'authoring_published|terminal_pending|Prepare.*Publication|Acknowledge.*Publication' services/dittobench-api/internal ditto/validator"],
+      "validate": ["uv run pytest -q ditto/tests/validator/test_coding_worker.py ditto/tests/validator/test_coding_attempt.py ditto/tests/validator/test_coding_supervisor.py ditto/tests/validator/test_coding_publication.py", "cd services/dittobench-api && go test -race ./internal/codinghost ./internal/codingpublication ./internal/codingsupervisor ./internal/codingphase ./internal/codingattempt ./internal/codingexecutor", "cd services/dittobench-api && go vet ./...", "uv run python packages/dittobench-coding-contract/generate_inference_vectors.py --check", "uv run python .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
+      "invariants": ["Every committed Platform, scorer, and validator coding worker gate is false.", "Platform start commits before candidate execution and a started claim never grants a clean authoring retry.", "Recovery republishes exact durable bytes; grading without a process-local session requires acknowledged authoring evidence independently observed in the outbox.", "Authoring and grading executors are phase-separated so protected grader authority is unavailable during authoring.", "The coding worker submits no ordinary score and coding v1 remains permanently weight_eligible=false."],
+      "related": ["coding-worker-handoff", "coding-attempt-supervisor", "coding-private-runtime-adapters", "coding-publication-journal", "coding-repair-research", "platform-api", "dittobench-scoring"]
+    },
+    {
       "id": "coding-inference-grants",
       "title": "Shadow coding inference grant authority",
       "keywords": ["coding inference grant", "Luna grant authority", "coding inference exchange", "coding inference revoke", "coding revoke capability", "revocation-only bearer", "coding grant bearer"],

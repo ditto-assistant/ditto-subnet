@@ -6,8 +6,9 @@ control-token-protected local operations:
 
 - `prepare` stores exact signed authoring-freeze or terminal-result request
   bytes before any Platform transmission;
-- `acknowledge` stores the exact verified Platform response and binds it to the
-  prepared request digest;
+- `acknowledge` stores the exact verified Platform response, binds it to the
+  prepared request digest, and releases terminal evidence only after that
+  acknowledgement is durable;
 - `pending` returns only bounded metadata for the next replayable publication
   per ticket;
 - `open` streams the exact content-addressed request or acknowledgement bytes
@@ -31,5 +32,7 @@ and returns the exact verified acknowledgement bytes. The final worker wiring
 must order them as prepare -> Platform publish -> acknowledge and replay only
 `pending` bytes after restart.
 
-The local service exists but no command or production worker mounts it in this
-PR. Coding remains shadow-only and `weight_eligible=false`.
+`internal/codinghost` mounts the local service only behind the scorer shadow
+gate, and `CodingShadowWorker` uses it only behind the separate validator gate.
+Both committed defaults are false. Coding remains shadow-only and
+`weight_eligible=false`.

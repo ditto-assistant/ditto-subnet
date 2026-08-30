@@ -73,6 +73,20 @@ async def test_publication_client_preserves_exact_request_and_acknowledgement() 
         elif operation == "open":
             base["record_id"] = "11" * 32
             base["body_base64"] = base64.b64encode(_REQUEST).decode()
+        elif operation == "lookup":
+            base["record_id"] = "11" * 32
+            base["publication"] = {
+                "record_id": "11" * 32,
+                "ticket_id": "33333333-3333-4333-8333-333333333333",
+                "stage": "terminal_result",
+                "authority": _authority().model_dump(mode="json"),
+                "request": {
+                    "object_key": "sha256/" + _REQUEST_SHA256,
+                    "sha256": _REQUEST_SHA256,
+                    "size_bytes": len(_REQUEST),
+                },
+                "acknowledgement": None,
+            }
         return httpx.Response(
             200,
             headers={"Cache-Control": "no-store"},
@@ -102,6 +116,11 @@ async def test_publication_client_preserves_exact_request_and_acknowledgement() 
         )
         assert acknowledged.sha256 == _ACK_SHA256
         assert await client.pending() == []
+        looked_up = await client.lookup(
+            ticket_id="33333333-3333-4333-8333-333333333333",
+            stage="terminal_result",
+        )
+        assert looked_up.record_id == record_id
         assert (
             await client.open(
                 record_id=record_id,
@@ -120,6 +139,7 @@ async def test_publication_client_preserves_exact_request_and_acknowledgement() 
         "prepare",
         "acknowledge",
         "pending",
+        "lookup",
         "open",
         "open",
     ]

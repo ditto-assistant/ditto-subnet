@@ -44,6 +44,7 @@ _ROOT = Path(__file__).parents[5]
 _TESTDATA = _ROOT / "packages/dittobench-coding-contract/testdata"
 _MINER_VECTOR = _TESTDATA / "coding_inference_miner_v1.json"
 _POLICY_VECTOR = _TESTDATA / "coding_inference_policy_v1.json"
+_LOCKED_POLICY = _TESTDATA / "coding_inference_policy_locked_v1.json"
 _GENERATOR = _ROOT / "packages/dittobench-coding-contract/generate_inference_vectors.py"
 
 
@@ -118,6 +119,10 @@ def test_miner_and_policy_vectors_share_exact_prompt_and_tools() -> None:
     prompt = _parse(CodingInferenceSystemPrompt, miner["system_prompt"])
     tools = _parse(CodingInferenceToolSchema, miner["tool_schema"])
     policy = _parse(CodingInferencePolicy, vector["policy"])
+    assert (
+        parse_coding_inference_json(CodingInferencePolicy, _LOCKED_POLICY.read_bytes())
+        == policy
+    )
 
     assert system_prompt_digest(prompt) == miner["expected"]["prompt_sha256"]
     assert tool_schema_digest(tools) == miner["expected"]["tool_schema_sha256"]

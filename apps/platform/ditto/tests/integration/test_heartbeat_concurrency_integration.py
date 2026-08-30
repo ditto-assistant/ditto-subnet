@@ -203,24 +203,38 @@ async def test_capacity_progress_does_not_wait_behind_ticket_accounting_lock(
                 now=now,
             )
 
-    async with session_maker() as accounting_session:
-        transaction = await accounting_session.begin()
-        locked = await accounting_session.scalar(
-            select(ValidatorTicket)
-            .where(
-                ValidatorTicket.agent_id == agent_id,
-                ValidatorTicket.bench_version == 8,
-                ValidatorTicket.validator_hotkey == _HOTKEY,
+    async with session_maker() as validation_session, validation_session.begin():
+        # Time heartbeat validation itself, not first-connection setup on a
+        # saturated xdist worker.
+        await validation_session.connection()
+        async with session_maker() as accounting_session:
+            transaction = await accounting_session.begin()
+            locked = await accounting_session.scalar(
+                select(ValidatorTicket)
+                .where(
+                    ValidatorTicket.agent_id == agent_id,
+                    ValidatorTicket.bench_version == 8,
+                    ValidatorTicket.validator_hotkey == _HOTKEY,
+                )
+                .with_for_update()
             )
-            .with_for_update()
-        )
-        assert locked is not None
+            assert locked is not None
 
-        work = await asyncio.wait_for(validate_while_busy(), timeout=1)
-        assert work.benchmark_capacity is not None
-        assert [slot.agent_id for slot in work.benchmark_capacity.active] == [agent_id]
-        assert locked.first_reported_at is None
-        await transaction.rollback()
+            work = await asyncio.wait_for(
+                _validated_heartbeat_work(
+                    validation_session,
+                    validator_hotkey=_HOTKEY,
+                    request_body=heartbeat,
+                    now=now,
+                ),
+                timeout=1,
+            )
+            assert work.benchmark_capacity is not None
+            assert [slot.agent_id for slot in work.benchmark_capacity.active] == [
+                agent_id
+            ]
+            assert locked.first_reported_at is None
+            await transaction.rollback()
 
     # The skipped stamp is best-effort, not lost.  Once accounting releases the
     # row, the next heartbeat records that this lease has testified.

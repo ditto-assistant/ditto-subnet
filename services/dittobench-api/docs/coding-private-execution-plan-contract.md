@@ -50,13 +50,14 @@ The runner-plan digest is committed through `task_commitment_sha256`; authoring
 leases return only that runner plan. Protected grader/resource projections are
 returned only after Platform accepts and revalidates an immutable freeze.
 
-The unwired `internal/codingphase` runtime now consumes each phase projection,
-reserves its evidence outbox, and commits the non-rerunnable activation marker
-before harness activation. The next PR supplies only disabled composition-root
-adapters and worker registration.
+The default-off `internal/codinghost` composition now supplies each phase
+projection to `internal/codingphase`, reserves its evidence outbox, and commits
+the non-rerunnable activation marker before harness activation. Authoring and
+grading executors are constructed separately so the protected plan remains
+unavailable during authoring.
 
-No production composition root imports this package. Coding contract v1 stays
-permanently `weight_eligible=false`.
+All committed feature gates are false. Coding contract v1 stays permanently
+`weight_eligible=false`.
 
 Validation:
 

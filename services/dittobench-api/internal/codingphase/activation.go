@@ -8,8 +8,11 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codinggateway"
@@ -18,29 +21,35 @@ import (
 )
 
 type GatewayActivatorConfig struct {
-	JournalRoot          string
-	JournalMaxTotalBytes int64
-	JournalMaxEntries    int
-	Publisher            codinggateway.CapabilityPublisher
-	Transport            http.RoundTripper
-	Now                  func() time.Time
-	NewRequestID         func() string
-	NewNonce             func() string
-	OperationTimeout     time.Duration
-	CleanupTimeout       time.Duration
+	JournalRoot           string
+	JournalMaxTotalBytes  int64
+	JournalMaxEntries     int
+	JournalMaxDirectories int
+	Publisher             codinggateway.CapabilityPublisher
+	Transport             http.RoundTripper
+	Now                   func() time.Time
+	NewRequestID          func() string
+	NewNonce              func() string
+	OperationTimeout      time.Duration
+	CleanupTimeout        time.Duration
 }
 
 // GatewayActivator is the unwired adapter from phase authority to the reviewed
 // inference gateway. Each ticket/grant generation receives one deterministic
 // private journal directory and one separate revocation-only client.
 type GatewayActivator struct {
+	mu     sync.Mutex
 	config GatewayActivatorConfig
 }
 
 func NewGatewayActivator(config GatewayActivatorConfig) (*GatewayActivator, error) {
+	if config.JournalMaxDirectories == 0 {
+		config.JournalMaxDirectories = 64
+	}
 	if !filepath.IsAbs(config.JournalRoot) || filepath.Clean(config.JournalRoot) == string(filepath.Separator) ||
 		config.JournalMaxTotalBytes <= 0 || config.JournalMaxTotalBytes > 1<<40 ||
 		config.JournalMaxEntries <= 0 || config.JournalMaxEntries > 4096 || nilLike(config.Publisher) ||
+		config.JournalMaxDirectories < 1 || config.JournalMaxDirectories > 4096 ||
 		(config.Transport != nil && nilLike(config.Transport)) || config.OperationTimeout < 0 ||
 		config.OperationTimeout > 30*time.Second || config.CleanupTimeout < 0 ||
 		(config.CleanupTimeout > 0 && config.CleanupTimeout < time.Second) ||
@@ -72,8 +81,15 @@ func (activator *GatewayActivator) Activate(
 		return nil, activator.failBeforeGateway(ctx, revoker, activation.Capability.Binding, ErrInvalidConfig)
 	}
 	journalRoot := filepath.Join(activator.config.JournalRoot, journalLeaf(activation.Capability.Binding))
-	if err := ensureJournalDirectory(activator.config.JournalRoot, filepath.Base(journalRoot)); err != nil {
-		return nil, activator.failBeforeGateway(ctx, revoker, activation.Capability.Binding, err)
+	activator.mu.Lock()
+	directoryErr := ensureBoundedJournalDirectory(
+		activator.config.JournalRoot,
+		filepath.Base(journalRoot),
+		activator.config.JournalMaxDirectories,
+	)
+	activator.mu.Unlock()
+	if directoryErr != nil {
+		return nil, activator.failBeforeGateway(ctx, revoker, activation.Capability.Binding, directoryErr)
 	}
 	maximumEntries := int(activation.Capability.Binding.RequestBudget) + int(activation.Policy.MaxRetries)
 	if maximumEntries > activator.config.JournalMaxEntries {
@@ -94,6 +110,28 @@ func (activator *GatewayActivator) Activate(
 		return nil, activator.failBeforeGateway(ctx, revoker, activation.Capability.Binding, err)
 	}
 	return gateway, nil
+}
+
+func ensureBoundedJournalDirectory(root, leaf string, maximum int) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	exists := false
+	count := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "relay-") || len(name) != len("relay-")+64 ||
+			!lowerSHA256(strings.TrimPrefix(name, "relay-")) || entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
+			return errors.New("coding relay journal root contains an unexpected entry")
+		}
+		count++
+		exists = exists || name == leaf
+	}
+	if !exists && count >= maximum {
+		return errors.New("coding relay journal directory capacity is exhausted")
+	}
+	return ensureJournalDirectory(root, leaf)
 }
 
 func (activator *GatewayActivator) failBeforeGateway(

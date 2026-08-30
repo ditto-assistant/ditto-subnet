@@ -164,6 +164,17 @@ func TestPublicationServiceDurablyPreparesReplaysAndAcknowledges(t *testing.T) {
 	if prepared.Artifact == nil || prepared.RecordID == "" {
 		t.Fatalf("prepared=%#v", prepared)
 	}
+	response = invoke(t, fixture.service, "lookup", map[string]any{
+		"schema": commandSchema, "ticket_id": fixture.ticketID,
+		"stage": codingoutbox.PublicationTerminalResult,
+	}, fixtureControlToken)
+	lookedUp := decodeResult(t, response)
+	if response.Code != http.StatusOK || lookedUp.Publication == nil ||
+		lookedUp.Publication.RecordID != prepared.RecordID ||
+		lookedUp.Publication.Request != *prepared.Artifact ||
+		lookedUp.Publication.Acknowledgement != nil {
+		t.Fatalf("lookup=%#v status=%d", lookedUp, response.Code)
+	}
 	response = invoke(t, fixture.service, "pending", map[string]any{
 		"schema": commandSchema, "limit": 10,
 	}, fixtureControlToken)
@@ -190,6 +201,15 @@ func TestPublicationServiceDurablyPreparesReplaysAndAcknowledges(t *testing.T) {
 	acknowledged := decodeResult(t, response)
 	if response.Code != http.StatusOK || acknowledged.Artifact == nil {
 		t.Fatalf("acknowledged=%#v status=%d", acknowledged, response.Code)
+	}
+	response = invoke(t, fixture.service, "lookup", map[string]any{
+		"schema": commandSchema, "ticket_id": fixture.ticketID,
+		"stage": codingoutbox.PublicationTerminalResult,
+	}, fixtureControlToken)
+	lookedUp = decodeResult(t, response)
+	if lookedUp.Publication == nil || lookedUp.Publication.Acknowledgement == nil ||
+		*lookedUp.Publication.Acknowledgement != *acknowledged.Artifact {
+		t.Fatalf("acknowledged lookup=%#v", lookedUp)
 	}
 	response = invoke(t, fixture.service, "pending", map[string]any{
 		"schema": commandSchema, "limit": 10,

@@ -13,6 +13,7 @@
 | Local OpenAPI generation | `apps/backroom/scripts/platform-contract/generate.sh` |
 | Shadow coding harness launch | `apps/platform/ditto/api_server/endpoints/validator_coding_harness.py`, `apps/platform/docs/coding-harness-launch-authority.md` |
 | Shadow coding ticket claims | `apps/platform/ditto/api_server/endpoints/validator_coding_claims.py`, `apps/platform/ditto/db/queries/coding_claims.py`, `apps/platform/docs/coding-ticket-claims.md` |
+| Default-off coding inference transport | `apps/platform/ditto/api_server/endpoints/validator_coding_inference.py`, `docs/coding-shadow-worker.md` |
 | Shadow coding revocation adapter | `services/dittobench-api/internal/codinggrantrevoke/`, `services/dittobench-api/docs/coding-private-runtime-adapters-shadow.md` |
 | Affected-component graph | `release/components.toml` |
 | Production DB and Targon logs (read-only) | `.agents/skills/gcloud-ditto-readonly/` |

@@ -115,6 +115,9 @@ from ditto.api_server.endpoints import (
     validator_confirmation_router,
     validator_router,
 )
+from ditto.api_server.endpoints.validator_coding_inference import (
+    coding_inference_transport_from_env,
+)
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
 from ditto.api_server.inference_concurrency_settings import (
     InferenceConcurrencySettingsResolver,
@@ -261,6 +264,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 CodingArtifactCapabilityMinter(config.coding_private_catalog)
                 if config.coding_private_catalog is not None
                 and _process_role() == PLATFORM_ROLE
+                else None
+            )
+            app.state.coding_inference_grant_transport = (
+                coding_inference_transport_from_env()
+                if _process_role() == PLATFORM_ROLE
                 else None
             )
 
@@ -478,6 +486,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # a separate least-privilege private-catalog credential set.
     app.state.coding_private_catalog_source = None
     app.state.coding_artifact_capability_minter = None
+    app.state.coding_inference_grant_transport = None
     # Hot-swappable efficiency-bonus policy: the compute path resolves the
     # latest append-only revision through this resolver (short TTL), falling
     # back to the env seed (config.efficiency_bonus) when none exists. The DB

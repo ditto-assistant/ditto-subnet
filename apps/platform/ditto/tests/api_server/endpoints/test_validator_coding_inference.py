@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 import bittensor
 import httpx
+import pytest
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -34,6 +35,7 @@ from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.endpoints import validator_coding_inference as endpoint_module
 from ditto.api_server.endpoints.validator_coding_inference import (
     CodingInferenceGrantTransport,
+    coding_inference_transport_from_env,
 )
 from ditto.coding_selection import (
     CodingSelectionCatalogIntegrityError,
@@ -52,6 +54,11 @@ _POLICY_PATH = (
     _ROOT
     / "packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json"
 )
+_LOCKED_POLICY_PATH = (
+    _ROOT
+    / "packages/dittobench-coding-contract/testdata"
+    / "coding_inference_policy_locked_v1.json"
+)
 _SELECTION_PATH = (
     _ROOT / "packages/dittobench-coding-contract/testdata/coding_selection_v1.json"
 )
@@ -65,6 +72,35 @@ def _policy() -> CodingInferencePolicy:
     return CodingInferencePolicy.model_validate(
         json.loads(_POLICY_PATH.read_text(encoding="utf-8"))["policy"]
     )
+
+
+def test_coding_inference_transport_is_complete_and_default_off() -> None:
+    assert coding_inference_transport_from_env({}) is None
+    values = {
+        "DITTO_CODING_SHADOW_ENABLED": "true",
+        "DITTO_CODING_INFERENCE_POLICY_FILE": str(_LOCKED_POLICY_PATH),
+        "DITTO_CODING_INFERENCE_EXCHANGE_URL": (
+            "https://platform.invalid/api/v1/validator/coding-shadow/inference-exchange"
+        ),
+        "DITTO_CODING_INFERENCE_PROXY_URL": (
+            "https://relay.invalid/api/v1/inference/coding/chat/completions"
+        ),
+        "DITTO_CODING_INFERENCE_REVOKE_URL": (
+            "https://platform.invalid/api/v1/validator/coding-shadow/"
+            "inference-revoke-capability"
+        ),
+    }
+    transport = coding_inference_transport_from_env(values)
+    assert transport is not None
+    assert transport.policy == _policy()
+    with pytest.raises(ValueError):
+        coding_inference_transport_from_env(
+            {**values, "DITTO_CODING_INFERENCE_POLICY_FILE": ""}
+        )
+    with pytest.raises(ValueError):
+        coding_inference_transport_from_env(
+            {**values, "DITTO_CODING_INFERENCE_PROXY_URL": "http://relay.invalid/x"}
+        )
 
 
 def _lease(policy: CodingInferencePolicy) -> CodingShadowTaskLeaseCore:

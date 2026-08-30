@@ -30,6 +30,14 @@ type Executor interface {
 	codinggrader.Executor
 }
 
+// ExecutorFactory constructs phase-scoped executors only after the relevant
+// immutable lease projection has been verified. Authoring never receives the
+// protected grader plan; grading never reuses candidate-command state.
+type ExecutorFactory interface {
+	Authoring(context.Context, string, codinggrader.ResourcePolicy) (codingrunner.CommandExecutor, error)
+	Grading(context.Context, codinggrader.Manifest) (codinggrader.Executor, error)
+}
+
 // CapabilityRevoker closes the source-bound outer workspace route before the
 // internal runner freezes its immutable submission.
 type CapabilityRevoker interface {
@@ -51,14 +59,15 @@ type Binding struct {
 // AuthoringSpec contains only authoring-phase capabilities. Grader material is
 // structurally absent.
 type AuthoringSpec struct {
-	Binding               Binding
-	VisibleBundle         codingartifacts.Capability
-	MemoryBundle          codingartifacts.Capability
-	ResourceProfile       codingartifacts.Capability
-	RunnerManifest        codingrunner.Manifest
-	CandidateLimits       codingrunner.Limits
-	MemoryBundleSHA256    string
-	ResourceProfileSHA256 string
+	Binding                Binding
+	VisibleBundle          codingartifacts.Capability
+	MemoryBundle           codingartifacts.Capability
+	ResourceProfile        codingartifacts.Capability
+	RunnerManifest         codingrunner.Manifest
+	CandidateLimits        codingrunner.Limits
+	EnvironmentImageDigest string
+	MemoryBundleSHA256     string
+	ResourceProfileSHA256  string
 }
 
 // GradingSpec contains only grading-phase capabilities. Memory is structurally
@@ -79,6 +88,7 @@ type GradingSpec struct {
 type RuntimeConfig struct {
 	Artifacts     ArtifactSource
 	Executor      Executor
+	Executors     ExecutorFactory
 	SeedProjector SeedProjector
 	Now           func() time.Time
 }
@@ -88,6 +98,7 @@ type RuntimeConfig struct {
 type Runtime struct {
 	artifacts     ArtifactSource
 	executor      Executor
+	executors     ExecutorFactory
 	seedProjector SeedProjector
 	now           func() time.Time
 }

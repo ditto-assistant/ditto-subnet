@@ -378,15 +378,18 @@ func validateGrading(outcome GradingOutcome, codingRunID, ticketID string) error
 
 func validateRecovery(outcome RecoveryOutcome) error {
 	validState := outcome.State == "none" || outcome.State == "authoring_pending" ||
+		outcome.State == "authoring_published" ||
 		outcome.State == "terminal_pending" || outcome.State == "released" ||
 		outcome.State == "ambiguous" || outcome.State == "expired"
 	if !validState {
 		return ErrConflict
 	}
-	pending := outcome.State == "authoring_pending" || outcome.State == "terminal_pending"
-	if pending {
+	publication := outcome.State == "authoring_pending" || outcome.State == "authoring_published" ||
+		outcome.State == "terminal_pending"
+	if publication {
 		if outcome.PublicationStage == nil || outcome.RequestSHA256 == nil ||
-			(outcome.State == "authoring_pending" && *outcome.PublicationStage != "authoring_freeze") ||
+			((outcome.State == "authoring_pending" || outcome.State == "authoring_published") &&
+				*outcome.PublicationStage != "authoring_freeze") ||
 			(outcome.State == "terminal_pending" && *outcome.PublicationStage != "terminal_result") ||
 			!lowerSHA256(*outcome.RequestSHA256) {
 			return ErrConflict
@@ -706,7 +709,16 @@ func validIdentifier(value string, maximum int) bool {
 }
 
 func validControlToken(value string) bool {
-	return len(value) >= 32 && len(value) <= 256 && validIdentifier(value, 256)
+	if len(value) < 32 || len(value) > 256 {
+		return false
+	}
+	for _, character := range value {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') && character != '_' && character != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func nilLike(value any) bool {

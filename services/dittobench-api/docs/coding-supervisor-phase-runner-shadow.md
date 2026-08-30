@@ -70,12 +70,12 @@ publication recovery.
 
 ## Current boundary
 
-The reviewed dormant harness, source-bound route, grant-revocation, and
-inference-activation adapters now exist, but no listener, command, scheduler,
-worker, or validator composition root constructs them. This package does not
-claim work, call a live miner, publish Platform evidence, set a score, or
-change a weight. Coding contract v1 remains permanently
-`weight_eligible=false`.
+`internal/codinghost` now mounts this runner behind the private supervisor only
+when the scorer shadow gate is explicitly enabled. The separate validator
+worker and Platform transport have independent default-off gates; committed
+deployment configuration enables none of them. The composition remains
+shadow-only, submits no ordinary score, and cannot change a weight. See
+`docs/coding-shadow-worker.md`.
 
 Validation:
 

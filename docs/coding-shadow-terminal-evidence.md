@@ -32,7 +32,6 @@ again against every task before it can reach the signed result client.
 
 ## Activation
 
-The builder is used only by the still-unwired shadow attempt coordinator. No
-runtime scheduler, worker, miner execution, ordinary score, rank, or emissions
-path imports it. Coding contract v1 remains permanently
-`weight_eligible=false`.
+The default-off shadow worker uses the builder only after pristine grading.
+No ordinary score, rank, or emissions path imports it. Coding contract v1
+remains permanently `weight_eligible=false`.

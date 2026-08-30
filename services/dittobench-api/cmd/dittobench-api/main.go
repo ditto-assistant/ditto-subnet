@@ -29,6 +29,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ditto-assistant/dittobench-api/internal/codinghost"
 	"github.com/ditto-assistant/dittobench-api/internal/efficiency"
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
 	"github.com/ditto-assistant/dittobench-api/internal/netguard"
@@ -196,6 +197,10 @@ type server struct {
 	// trusted LongMem/ablation dependency have been installed. Nil is the
 	// production-safe default and is independent of public v8 capabilities.
 	confirmation confirmationExecutor
+	// codingHost is nil unless the separate shadow coding pipeline is
+	// explicitly enabled. Its handlers remain protected by both the control
+	// plane and their own exact bearer contract.
+	codingHost *codinghost.Host
 }
 
 func main() {
@@ -301,6 +306,15 @@ func main() {
 	brokerPort := envIntDefault("DITTOBENCH_BROKER_PORT", 11436)
 	if brokerPort < 1024 || brokerPort > 65535 || brokerPort == *port {
 		log.Fatalf("invalid DITTOBENCH_BROKER_PORT: must be an unprivileged port distinct from the API port")
+	}
+	codingHost, err := codingShadowHostFromEnvironment(sandboxRuntime, *port, brokerPort)
+	if err != nil {
+		log.Fatalf("shadow coding runtime configuration failed: %v", err)
+	}
+	s.codingHost = codingHost
+	defer closeCodingShadowHost(codingHost)
+	if codingHost != nil {
+		log.Printf("shadow coding runtime enabled on private control and source-bound routes")
 	}
 	go func() {
 		brokerAddr := "0.0.0.0:" + strconv.Itoa(brokerPort)

@@ -302,7 +302,8 @@ func newFixture(t *testing.T) *fixture {
 		ResourceProfile: capability(binding, codingartifacts.PhaseAuthoring, codingartifacts.KindResourceProfile,
 			codingartifacts.AudienceResourceSupervisor, resourceSHA, len(resource)),
 		RunnerManifest: runnerManifest, CandidateLimits: policy.CandidateLimits,
-		MemoryBundleSHA256: memorySHA, ResourceProfileSHA256: resourceSHA,
+		EnvironmentImageDigest: executor.manifest.GraderImageDigest,
+		MemoryBundleSHA256:     memorySHA, ResourceProfileSHA256: resourceSHA,
 	}
 	value.gradingSpec = GradingSpec{
 		Binding: binding, FreezeID: "44444444-4444-4444-8444-444444444444", AuthoringEvidenceSHA256: strings.Repeat("4", 64),

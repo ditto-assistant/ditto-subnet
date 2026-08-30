@@ -74,17 +74,14 @@ private URL.
 
 ## Current boundary
 
-`internal/codingphase` now implements the injected `PhaseRunner` and commits
-the durable activation marker before candidate execution. The runner itself is
-still unwired: no composition root constructs its dormant-harness or inference
-adapters, injects it into `SessionBackend`, mounts `Handler`, or constructs the
-Python `CodingSupervisorRuntime` worker. The session state remains deliberately
-process-local; authoritative transcript, patch, and publication bytes belong
-to the durable outbox and gateway journals.
+`internal/codinghost` now injects `internal/codingphase` into `SessionBackend`
+and mounts the handler only behind the scorer shadow gate. The separate Python
+worker uses `CodingSupervisorRuntime` only behind the validator gate. Session
+state remains deliberately process-local; authoritative transcript, patch, and
+publication bytes belong to the durable outbox and gateway journals.
 
-The next review is a separate disabled-shadow wiring PR. Until that lands this
-stack cannot claim work, call a live miner, publish Platform evidence, affect a
-score, or set weights.
+Committed deployment gates are false. This stack remains shadow-only, submits
+no ordinary score, and cannot set weights. See `docs/coding-shadow-worker.md`.
 
 Validation:
 

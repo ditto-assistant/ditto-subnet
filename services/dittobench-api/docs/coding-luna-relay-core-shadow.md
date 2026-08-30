@@ -1,14 +1,15 @@
 # Ticket-bound Luna relay core
 
-`internal/codingrelay` is the unwired, validator-local execution core for the
+`internal/codingrelay` is the validator-local execution core for the
 locked Luna contract. It accepts miner-visible Chat Completions requests,
 projects them through `codingcontract.LockInferenceRequest`, dispatches only a
 deep-owned typed request to a trusted upstream, and returns only the miner-safe
 response projection.
 
-This package does not open a listener or read a provider key. It has no
-Platform grant exchange, worker, score, or weight path. A future local gateway
-must construct one relay per ticket, mount its handler behind an unguessable
+This package does not open a listener or read a provider key. The default-off
+local gateway supplies its source-bound route and ticket grant. It has no
+score or weight path. The gateway constructs one relay per ticket, mounts its
+handler behind an unguessable
 source-bound capability, and supply both required ports.
 
 ## Immutable binding

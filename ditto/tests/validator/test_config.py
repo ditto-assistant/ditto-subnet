@@ -158,6 +158,31 @@ class TestLongMemCapacity:
         assert parse_validator_config_from_env().longmem_capacity == 0
 
 
+class TestCodingShadowConfig:
+    def test_default_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        config = parse_validator_config_from_env()
+        assert config.coding_shadow_enabled is False
+
+    def test_enable_requires_stable_identity_and_control_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_SHADOW_ENABLED", "true")
+        with pytest.raises(ValidatorConfigError, match="shadow coding"):
+            parse_validator_config_from_env()
+        monkeypatch.setenv(
+            "VALIDATOR_DITTOBENCH_CONTROL_TOKEN",
+            "coding-shadow-control-token-0000000000000001",
+        )
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_SHADOW_INSTANCE_ID", "coding-shadow-primary"
+        )
+        config = parse_validator_config_from_env()
+        assert config.coding_shadow_enabled is True
+        assert config.coding_shadow_instance_id == "coding-shadow-primary"
+
+
 class TestRequiredConfig:
     """Every validator both scores and sets weights, so all of it is required."""
 

@@ -193,6 +193,15 @@ services:
       # The sandbox-docker entrypoint initializes this shared volume as a real
       # 0700 directory owned by the scorer's uid before its healthcheck passes.
       DITTOBENCH_PRIVATE_ARTIFACT_DIR: /var/lib/dittobench-private-artifacts
+      # Separate coding pipeline: all reviewed code is present, but claiming,
+      # candidate execution, Luna dispatch, grading, and publication remain off
+      # until an operator explicitly enables the complete rootless profile.
+      DITTOBENCH_CODING_SHADOW_ENABLED: ${DITTOBENCH_CODING_SHADOW_ENABLED:-false}
+      DITTOBENCH_CODING_PRIVATE_ROOT: /var/lib/dittobench-private-artifacts/coding-shadow-v1
+      DITTOBENCH_CODING_POLICY_FILE: /opt/ditto/coding/coding_inference_policy_locked_v1.json
+      DITTOBENCH_CODING_SOURCE_PORT: "11438"
+      DITTOBENCH_CODING_SOURCE_PUBLIC_BASE_URL: http://host.docker.internal:11438
+      DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY: ${DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY:-}
       # Authorizes the validator's session prepare/activate/cancel calls. Same
       # anchor as VALIDATOR_DITTOBENCH_CONTROL_TOKEN on the validator.
       DITTOBENCH_BROKER_CONTROL_TOKEN: *broker-control-token
@@ -270,6 +279,9 @@ services:
       # only. Same anchor as the scorer's DITTOBENCH_BROKER_CONTROL_TOKEN; it
       # is never sent to the platform, Pylon, or any other host.
       VALIDATOR_DITTOBENCH_CONTROL_TOKEN: *broker-control-token
+      VALIDATOR_CODING_SHADOW_ENABLED: ${VALIDATOR_CODING_SHADOW_ENABLED:-false}
+      VALIDATOR_CODING_SHADOW_INSTANCE_ID: ${VALIDATOR_CODING_SHADOW_INSTANCE_ID:-coding-shadow-primary}
+      VALIDATOR_CODING_SHADOW_POLL_SECONDS: ${VALIDATOR_CODING_SHADOW_POLL_SECONDS:-10}
       # The PINNED scorer revision links its identity into the binary, so the
       # only acceptable answer from /v1/capabilities is a binary-derived
       # revision. An environment-asserted revision from this pin means the

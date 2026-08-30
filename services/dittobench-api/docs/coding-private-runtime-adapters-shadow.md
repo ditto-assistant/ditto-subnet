@@ -61,11 +61,11 @@ ownership durably revokes the already-exchanged grant.
 
 ## Boundary
 
-This PR does not register a listener, construct a Docker client, claim a
-ticket, mount the supervisor, publish Platform evidence, score a miner, or set
-a weight. Coding contract v1 remains shadow-only and permanently
-`weight_eligible=false`. The next review owns the exclusive ticket claim and
-durable publication handoff; the final review owns default-off worker wiring.
+`internal/codinghost` now registers the source-bound listener, constructs these
+adapters, and mounts the private supervisor only behind the scorer shadow gate.
+The validator claim/publication worker has a separate gate and Platform
+transport has a third. Every committed default is false. Coding contract v1
+remains shadow-only and permanently `weight_eligible=false`.
 
 Validation:
 

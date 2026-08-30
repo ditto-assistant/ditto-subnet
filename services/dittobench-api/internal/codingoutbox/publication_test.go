@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
 )
 
@@ -63,23 +64,37 @@ func newPublicationFixture(t *testing.T, suffix string) publicationFixture {
 
 func (fixture publicationFixture) authoringRequest(t *testing.T) []byte {
 	t.Helper()
-	body, err := json.Marshal(map[string]any{
-		"validator_hotkey":          strings.Repeat("5", 48),
-		"agent_id":                  fixture.authority.AgentID,
-		"bench_version":             12,
-		"run_row_id":                fixture.authority.RunRowID,
-		"ticket_id":                 fixture.binding.TicketID,
-		"ticket_deadline":           fixture.binding.Deadline,
-		"coding_run_id":             fixture.authority.CodingRunID,
-		"agent_artifact_sha256":     fixture.binding.AgentArtifactSHA256,
-		"screened_image_sha256":     fixture.authority.ScreenedImageSHA256,
-		"run_manifest_sha256":       fixture.authority.RunManifestSHA256,
-		"task_set_manifest_sha256":  fixture.authority.TaskSetManifestSHA256,
-		"authoring_evidence_sha256": fixture.authority.EvidenceSHA256,
-		"evidence": map[string]any{
-			"authoring_transcript_sha256": fixture.transcript.SHA256,
-			"frozen_patch_sha256":         fixture.frozen.FrozenPatchSHA256,
+	receipt := strings.Repeat("6", 64)
+	evidence := codingcontract.AuthoringEvidence{
+		Model: codingcontract.ModelEvidence{
+			Model: "openai/gpt-5.6-luna", Provider: "azure/eu",
+			ProviderRouteProfile: "luna-azure-eu-zdr-v1", ReasoningEffort: "medium",
+			InferenceGrantSHA256: strings.Repeat("7", 64), PromptSHA256: strings.Repeat("8", 64),
+			ToolSchemaSHA256: strings.Repeat("9", 64), UsageStatus: codingcontract.ModelUsageComplete,
+			CostSource: "provider_receipt_v1", Currency: "USD", ProviderReceiptSetSHA256: &receipt,
+			Requests: 1, PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12, CostUSDMicros: 1,
 		},
+		AuthoringEventRoot:        strings.Repeat("a", 64),
+		AuthoringTranscriptSHA256: fixture.transcript.SHA256,
+		FrozenPatchSHA256:         fixture.frozen.FrozenPatchSHA256,
+		ChangedPathRoot:           fixture.frozen.ChangedPathRoot,
+		FinalTreeSHA256:           fixture.frozen.FinalTreeSHA256,
+		ChangedPathCount:          1, ChangedBytes: 1, ProtectedPathsIntact: true,
+	}
+	body, err := json.Marshal(map[string]any{
+		"validator_hotkey":                strings.Repeat("5", 48),
+		"agent_id":                        fixture.authority.AgentID,
+		"bench_version":                   12,
+		"run_row_id":                      fixture.authority.RunRowID,
+		"ticket_id":                       fixture.binding.TicketID,
+		"ticket_deadline":                 fixture.binding.Deadline,
+		"coding_run_id":                   fixture.authority.CodingRunID,
+		"agent_artifact_sha256":           fixture.binding.AgentArtifactSHA256,
+		"screened_image_sha256":           fixture.authority.ScreenedImageSHA256,
+		"run_manifest_sha256":             fixture.authority.RunManifestSHA256,
+		"task_set_manifest_sha256":        fixture.authority.TaskSetManifestSHA256,
+		"authoring_evidence_sha256":       fixture.authority.EvidenceSHA256,
+		"evidence":                        evidence,
 		"authoring_transcript_object_key": fixture.transcript.ObjectKey,
 		"authoring_transcript_bytes":      fixture.transcript.SizeBytes,
 		"authoring_event_count":           fixture.transcript.Events,
@@ -237,6 +252,26 @@ func TestShadowPublicationLifecycleSurvivesRestartAndGatesRelease(t *testing.T) 
 		t.Context(), authoringArtifact.SHA256, authoringAck,
 	); err != nil {
 		t.Fatal(err)
+	}
+	var authoringRequest authoringFreezeRequest
+	if err := json.Unmarshal(authoringBody, &authoringRequest); err != nil {
+		t.Fatal(err)
+	}
+	outcome := AuthoringPublicationOutcome{
+		Evidence:                     authoringRequest.Evidence,
+		AuthoringTranscriptObjectKey: authoringRequest.AuthoringTranscriptObjectKey,
+		AuthoringTranscriptBytes:     authoringRequest.AuthoringTranscriptBytes,
+		AuthoringEventCount:          authoringRequest.AuthoringEventCount,
+		FrozenSubmissionObjectKey:    authoringRequest.FrozenSubmissionObjectKey,
+	}
+	if err := fixture.attempt.ValidateAuthoringPublicationOutcome(t.Context(), outcome); err != nil {
+		t.Fatalf("authoring outcome validation err=%v", err)
+	}
+	drifted := outcome
+	drifted.Evidence = append(json.RawMessage(nil), outcome.Evidence...)
+	drifted.Evidence[len(drifted.Evidence)-2] ^= 1
+	if err := fixture.attempt.ValidateAuthoringPublicationOutcome(t.Context(), drifted); !errors.Is(err, ErrConflict) {
+		t.Fatalf("authoring outcome drift err=%v", err)
 	}
 	if err := fixture.store.Release(
 		t.Context(), fixture.attempt.ID(), fixture.terminalAuthority().EvidenceSHA256,
@@ -598,6 +633,10 @@ func TestPlatformPublicationVectorsMatchJournalBoundary(t *testing.T) {
 	if err := json.Unmarshal(authoring.Request, &authoringRequest); err != nil {
 		t.Fatal(err)
 	}
+	var authoringEvidence codingcontract.AuthoringEvidence
+	if err := json.Unmarshal(authoringRequest.Evidence, &authoringEvidence); err != nil {
+		t.Fatal(err)
+	}
 	authoringRecord := &Record{
 		Binding: Binding{
 			Purpose: PurposeShadowAttempt, TicketID: authoringRequest.TicketID,
@@ -610,13 +649,13 @@ func TestPlatformPublicationVectorsMatchJournalBoundary(t *testing.T) {
 		State: StateReady,
 		Transcript: &TranscriptArtifact{
 			ObjectKey: authoringRequest.AuthoringTranscriptObjectKey,
-			SHA256:    authoringRequest.Evidence.AuthoringTranscriptSHA256,
+			SHA256:    authoringEvidence.AuthoringTranscriptSHA256,
 			SizeBytes: authoringRequest.AuthoringTranscriptBytes,
 			Events:    authoringRequest.AuthoringEventCount,
 		},
 		Frozen: &FrozenRecord{Artifact: FrozenArtifact{
 			ObjectKey:         authoringRequest.FrozenSubmissionObjectKey,
-			FrozenPatchSHA256: authoringRequest.Evidence.FrozenPatchSHA256,
+			FrozenPatchSHA256: authoringEvidence.FrozenPatchSHA256,
 		}},
 	}
 	authoringAuthority := PublicationAuthority{

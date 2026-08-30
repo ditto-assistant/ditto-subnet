@@ -3635,6 +3635,7 @@ class ValidatorWorker:
         *,
         drain_requested: asyncio.Event | None = None,
         bootstrap_resume: Callable[[], bool] | None = None,
+        extra_busy: Callable[[], bool] | None = None,
     ) -> None:
         """Run independent scoring and weight loops until ``stop`` is set.
 
@@ -3667,6 +3668,7 @@ class ValidatorWorker:
                         stop,
                         drain_requested,
                         bootstrap_resume=bootstrap_resume_pending,
+                        extra_busy=extra_busy,
                     )
                     # Bootstrap recovery is deliberately one-shot. Once the
                     # process's initial drain ends, a later operator-requested
@@ -3908,6 +3910,7 @@ class ValidatorWorker:
         drain_requested: asyncio.Event,
         *,
         bootstrap_resume: Callable[[], bool] | None = None,
+        extra_busy: Callable[[], bool] | None = None,
     ) -> None:
         """Publish drained only once scoring and weight work are quiescent."""
         while (
@@ -3915,6 +3918,7 @@ class ValidatorWorker:
             or self._weights_active
             or self._longmem_active
             or self._unresolved_live_tickets()
+            or (extra_busy is not None and extra_busy())
         ) and not stop.is_set():
             await self._sleep_or_stop(stop, 0.05)
         if stop.is_set():

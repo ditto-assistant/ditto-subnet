@@ -32,6 +32,7 @@
 | Shadow durable coding phase runner | `services/dittobench-api/internal/codingphase/`, `services/dittobench-api/docs/coding-supervisor-phase-runner-shadow.md` |
 | Shadow private coding runtime adapters | `services/dittobench-api/internal/codingharness/`, `services/dittobench-api/internal/codingsource/`, `services/dittobench-api/internal/codinggrantrevoke/`, `services/dittobench-api/docs/coding-private-runtime-adapters-shadow.md` |
 | Shadow coding worker handoff | `apps/platform/ditto/db/queries/coding_claims.py`, `services/dittobench-api/internal/codingpublication/`, `ditto/validator/coding_publication.py` |
+| Default-off shadow coding worker | `ditto/validator/coding_worker.py`, `services/dittobench-api/internal/codinghost/`, `docs/coding-shadow-worker.md` |
 | Shadow private execution-plan contract | `services/dittobench-api/internal/codingexecution/`, `packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json`, `services/dittobench-api/docs/coding-private-execution-plan-contract.md` |
 | Shadow private catalog selector | `apps/platform/ditto/coding_selection.py` |
 | Shadow private catalog loader | `apps/platform/ditto/api_server/coding_private_catalog.py` |

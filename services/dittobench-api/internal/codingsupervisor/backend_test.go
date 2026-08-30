@@ -18,11 +18,12 @@ import (
 const fixtureSessionID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 type phaseRunnerFuncs struct {
-	author         func(context.Context, AuthoringInput) (AuthoringOutcome, error)
-	grade          func(context.Context, Request) (GradingOutcome, error)
-	abortAuthoring func(context.Context, Request) error
-	abortGrading   func(context.Context, Request) error
-	recover        func(context.Context, Request) (RecoveryOutcome, error)
+	author           func(context.Context, AuthoringInput) (AuthoringOutcome, error)
+	grade            func(context.Context, Request) (GradingOutcome, error)
+	abortAuthoring   func(context.Context, Request) error
+	abortGrading     func(context.Context, Request) error
+	recover          func(context.Context, Request) (RecoveryOutcome, error)
+	recoverAuthoring func(context.Context, Request) error
 }
 
 func (runner *phaseRunnerFuncs) Author(ctx context.Context, input AuthoringInput) (AuthoringOutcome, error) {
@@ -58,6 +59,13 @@ func (runner *phaseRunnerFuncs) Recover(ctx context.Context, request Request) (R
 		return RecoveryOutcome{}, ErrUnavailable
 	}
 	return runner.recover(ctx, request)
+}
+
+func (runner *phaseRunnerFuncs) RecoverAuthoring(ctx context.Context, request Request) error {
+	if runner.recoverAuthoring == nil {
+		return ErrUnavailable
+	}
+	return runner.recoverAuthoring(ctx, request)
 }
 
 func fixtureBackend(t *testing.T, runner PhaseRunner, maximum int) *SessionBackend {
@@ -296,6 +304,48 @@ func TestSessionBackendRejectsOrderingAndAuthorityDrift(t *testing.T) {
 	driftedGrade.Lease = json.RawMessage(`{"schema":"different-grading-lease"}`)
 	if _, err := backend.Execute(t.Context(), driftedGrade); !errors.Is(err, ErrConflict) {
 		t.Fatalf("cached grade lease drift err=%v", err)
+	}
+}
+
+func TestSessionBackendRestoresOnlyDurablyPublishedAuthoringForGrading(t *testing.T) {
+	vector := loadFixtureVector(t)
+	expectedAuthoring := *vectorResponse(t, vector, "author").Authoring
+	expectedGrading := *vectorResponse(t, vector, "grade").Grading
+	recoverCalls, gradeCalls := 0, 0
+	stage, digest := "authoring_freeze", strings.Repeat("a", 64)
+	runner := &phaseRunnerFuncs{
+		recover: func(context.Context, Request) (RecoveryOutcome, error) {
+			recoverCalls++
+			if recoverCalls > 1 {
+				return RecoveryOutcome{State: "released"}, nil
+			}
+			return RecoveryOutcome{
+				State: "authoring_published", PublicationStage: &stage, RequestSHA256: &digest,
+			}, nil
+		},
+		recoverAuthoring: func(context.Context, Request) error { return nil },
+		grade: func(_ context.Context, request Request) (GradingOutcome, error) {
+			gradeCalls++
+			if !requestMatchesAuthoring(request.Authoring, expectedAuthoring) {
+				t.Fatal("restored grade lost exact authoring evidence")
+			}
+			return cloneGradingOutcome(expectedGrading), nil
+		},
+	}
+	backend := fixtureBackend(t, runner, 2)
+	grade := backendRequest(t, vector, OperationGrade, &expectedAuthoring)
+	response, err := backend.Execute(t.Context(), grade)
+	if err != nil || response.Grading == nil {
+		t.Fatalf("restored grade=%#v err=%v", response, err)
+	}
+	if recoverCalls != 1 || gradeCalls != 1 {
+		t.Fatalf("calls recover=%d grade=%d", recoverCalls, gradeCalls)
+	}
+	recoverRequest := backendRequest(t, vector, OperationRecover, nil)
+	recovered, err := backend.Execute(t.Context(), recoverRequest)
+	if err != nil || recovered.Recovery == nil || recovered.Recovery.State != "released" ||
+		len(backend.sessions) != 0 {
+		t.Fatalf("released recovery=%#v sessions=%d err=%v", recovered, len(backend.sessions), err)
 	}
 }
 

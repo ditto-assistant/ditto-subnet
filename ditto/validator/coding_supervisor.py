@@ -1,4 +1,4 @@
-"""Private, currently unwired client for the shadow coding attempt supervisor."""
+"""Private client used only by the default-off shadow coding worker."""
 
 from __future__ import annotations
 
@@ -6,7 +6,8 @@ import asyncio
 import base64
 import ipaddress
 import json
-from datetime import datetime
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
@@ -97,6 +98,7 @@ class CodingSupervisorRecovery(_WireModel):
     state: Literal[
         "none",
         "authoring_pending",
+        "authoring_published",
         "terminal_pending",
         "released",
         "ambiguous",
@@ -107,13 +109,17 @@ class CodingSupervisorRecovery(_WireModel):
 
     @model_validator(mode="after")
     def pending_shape_is_coherent(self) -> CodingSupervisorRecovery:
-        pending = self.state in {"authoring_pending", "terminal_pending"}
-        if pending != (
+        publication = self.state in {
+            "authoring_pending",
+            "authoring_published",
+            "terminal_pending",
+        }
+        if publication != (
             self.publication_stage is not None and self.request_sha256 is not None
         ):
             raise ValueError("coding supervisor recovery shape is invalid")
         if (
-            self.state == "authoring_pending"
+            self.state in {"authoring_pending", "authoring_published"}
             and self.publication_stage != "authoring_freeze"
         ) or (
             self.state == "terminal_pending"
@@ -201,6 +207,7 @@ class CodingSupervisorRuntime:
         config: ValidatorConfig,
         client: httpx.AsyncClient,
         platform: CodingInferencePlatform,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         parsed = urlsplit(config.dittobench_api_url)
         token = config.dittobench_control_token
@@ -211,14 +218,14 @@ class CodingSupervisorRuntime:
             or parsed.password is not None
             or parsed.query
             or parsed.fragment
-            or not 32 <= len(token) <= 256
-            or any(character.isspace() or ord(character) < 32 for character in token)
+            or not _valid_control_token(token)
         ):
             raise ValueError("coding supervisor configuration is invalid")
         self._base = config.dittobench_api_url.rstrip("/")
         self._token = token
         self._client = client
         self._platform = platform
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     async def author(
         self,
@@ -466,45 +473,65 @@ class CodingSupervisorRuntime:
             ) from error
         if len(body) > _MAX_BODY_BYTES:
             raise CodingAttemptIntegrityError("coding supervisor request is too large")
+        now = self._clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise CodingAttemptIntegrityError("coding supervisor clock is invalid")
+        remaining = (deadline.astimezone(UTC) - now.astimezone(UTC)).total_seconds()
+        if remaining <= 0:
+            raise CodingAttemptIntegrityError("coding supervisor deadline expired")
+        timeout = httpx.Timeout(
+            remaining,
+            connect=min(10.0, remaining),
+            write=min(60.0, remaining),
+            pool=min(10.0, remaining),
+        )
         endpoint = operation.replace("_", "-")
         received = bytearray()
         try:
-            async with self._client.stream(
-                "POST",
-                f"{self._base}/v1/coding/supervisor/{endpoint}",
-                headers={
-                    "Authorization": f"Bearer {self._token}",
-                    "Content-Type": "application/json",
-                    "Cache-Control": "no-store",
-                },
-                content=body,
-                follow_redirects=False,
-            ) as response:
-                if response.status_code != 200:
-                    if response.status_code in {400, 409}:
-                        raise CodingAttemptIntegrityError(
-                            f"coding supervisor rejected {operation}"
-                        )
-                    raise ValidatorInfrastructureError(
-                        f"coding supervisor unavailable for {operation}"
-                    )
-                if response.headers.get("cache-control") != "no-store":
-                    raise ValidatorInfrastructureError(
-                        "coding supervisor response cache policy is invalid"
-                    )
-                media_type = response.headers.get("content-type", "").split(";", 1)[0]
-                if media_type != "application/json" or response.headers.get(
-                    "content-encoding"
-                ):
-                    raise ValidatorInfrastructureError(
-                        "coding supervisor response encoding is invalid"
-                    )
-                async for chunk in response.aiter_bytes(chunk_size=64 << 10):
-                    if len(received) + len(chunk) > _MAX_BODY_BYTES:
+            async with asyncio.timeout(remaining):
+                async with self._client.stream(
+                    "POST",
+                    f"{self._base}/v1/coding/supervisor/{endpoint}",
+                    headers={
+                        "Authorization": f"Bearer {self._token}",
+                        "Content-Type": "application/json",
+                        "Cache-Control": "no-store",
+                    },
+                    content=body,
+                    follow_redirects=False,
+                    timeout=timeout,
+                ) as response:
+                    if response.status_code != 200:
+                        if response.status_code in {400, 409}:
+                            raise CodingAttemptIntegrityError(
+                                f"coding supervisor rejected {operation}"
+                            )
                         raise ValidatorInfrastructureError(
-                            "coding supervisor response is too large"
+                            f"coding supervisor unavailable for {operation}"
                         )
-                    received.extend(chunk)
+                    if response.headers.get("cache-control") != "no-store":
+                        raise ValidatorInfrastructureError(
+                            "coding supervisor response cache policy is invalid"
+                        )
+                    media_type = response.headers.get("content-type", "").split(";", 1)[
+                        0
+                    ]
+                    if media_type != "application/json" or response.headers.get(
+                        "content-encoding"
+                    ):
+                        raise ValidatorInfrastructureError(
+                            "coding supervisor response encoding is invalid"
+                        )
+                    async for chunk in response.aiter_bytes(chunk_size=64 << 10):
+                        if len(received) + len(chunk) > _MAX_BODY_BYTES:
+                            raise ValidatorInfrastructureError(
+                                "coding supervisor response is too large"
+                            )
+                        received.extend(chunk)
+        except TimeoutError as error:
+            raise ValidatorInfrastructureError(
+                f"coding supervisor deadline exceeded for {operation}"
+            ) from error
         except httpx.HTTPError as error:
             raise ValidatorInfrastructureError(
                 f"coding supervisor transport failed for {operation}"
@@ -558,6 +585,13 @@ def _authoring_payload(authoring: CodingAuthoringOutcome) -> dict[str, Any]:
     }
 
 
+def _valid_control_token(value: str) -> bool:
+    return 32 <= len(value) <= 256 and all(
+        character.isascii() and (character.isalnum() or character in "_-")
+        for character in value
+    )
+
+
 def _validate_grant_authority(
     lease: CodingAuthoringLeaseResponse,
     authority: CodingInferenceGrantOffer | CodingInferenceExchangeResponse,
@@ -579,8 +613,18 @@ def _validate_grant_authority(
         )
 
 
+def validate_coding_grant_preflight(
+    lease: CodingAuthoringLeaseResponse,
+    authority: CodingInferenceGrantOffer,
+) -> None:
+    """Validate the non-secret offer before the worker commits claim start."""
+
+    _validate_grant_authority(lease, authority)
+
+
 __all__ = [
     "CodingInferencePlatform",
     "CodingSupervisorRecovery",
     "CodingSupervisorRuntime",
+    "validate_coding_grant_preflight",
 ]

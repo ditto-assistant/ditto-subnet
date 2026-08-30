@@ -32,7 +32,9 @@ const outerRevocationTimeout = 30 * time.Second
 
 // NewRuntime returns an unwired, fail-closed attempt runtime.
 func NewRuntime(config RuntimeConfig) (*Runtime, error) {
-	if nilLike(config.Artifacts) || nilLike(config.Executor) || nilLike(config.SeedProjector) {
+	fixed := !nilLike(config.Executor)
+	dynamic := !nilLike(config.Executors)
+	if nilLike(config.Artifacts) || fixed == dynamic || nilLike(config.SeedProjector) {
 		return nil, errors.New("coding attempt runtime dependencies are incomplete")
 	}
 	if config.Now == nil {
@@ -40,7 +42,7 @@ func NewRuntime(config RuntimeConfig) (*Runtime, error) {
 	}
 	return &Runtime{
 		artifacts: config.Artifacts, executor: config.Executor,
-		seedProjector: config.SeedProjector, now: config.Now,
+		executors: config.Executors, seedProjector: config.SeedProjector, now: config.Now,
 	}, nil
 }
 
@@ -63,11 +65,18 @@ func (runtime *Runtime) BeginAuthoring(ctx context.Context, spec AuthoringSpec) 
 	if decodeErr != nil || resourceCloseErr != nil || decoded.CandidateLimits != spec.CandidateLimits {
 		return nil, errors.Join(errors.New("verify coding authoring resource profile"), decodeErr, resourceCloseErr)
 	}
+	executor := codingrunner.CommandExecutor(runtime.executor)
+	if runtime.executors != nil {
+		executor, err = runtime.executors.Authoring(ctx, spec.EnvironmentImageDigest, decoded)
+		if err != nil || nilLike(executor) {
+			return nil, errors.Join(errors.New("construct coding authoring executor"), err)
+		}
+	}
 	visible, err := openArtifact(ctx, runtime.artifacts, spec.VisibleBundle)
 	if err != nil {
 		return nil, fmt.Errorf("open coding authoring visible bundle: %w", err)
 	}
-	runner, runnerErr := codingrunner.NewSession(ctx, spec.RunnerManifest, visible, runtime.executor)
+	runner, runnerErr := codingrunner.NewSession(ctx, spec.RunnerManifest, visible, executor)
 	visibleCloseErr := visible.Close()
 	if runnerErr != nil || visibleCloseErr != nil {
 		if runner != nil {
@@ -202,6 +211,14 @@ func (runtime *Runtime) Grade(
 	if err != nil {
 		return codinggrader.Result{}, fmt.Errorf("open coding grading visible bundle: %w", err)
 	}
+	executor := codinggrader.Executor(runtime.executor)
+	if runtime.executors != nil {
+		executor, err = runtime.executors.Grading(ctx, spec.GraderManifest)
+		if err != nil || nilLike(executor) {
+			_ = visible.Close()
+			return codinggrader.Result{}, errors.Join(errors.New("construct coding grading executor"), err)
+		}
+	}
 	result := codinggrader.GradeWithProtectedOpener(
 		ctx,
 		spec.GraderManifest,
@@ -214,7 +231,7 @@ func (runtime *Runtime) Grade(
 			}
 			return grader, nil
 		},
-		runtime.executor,
+		executor,
 	)
 	if closeErr := visible.Close(); closeErr != nil {
 		return codinggrader.Result{}, errors.Join(errors.New("close coding grading artifacts"), closeErr)
@@ -260,7 +277,8 @@ func validateAuthoringSpec(spec AuthoringSpec, now time.Time) error {
 	if err := spec.RunnerManifest.Validate(now); err != nil {
 		return fmt.Errorf("coding authoring runner manifest: %w", err)
 	}
-	if spec.CandidateLimits.Validate() != nil || !lowerSHA256(spec.ResourceProfileSHA256) ||
+	if spec.CandidateLimits.Validate() != nil || !ociDigest(spec.EnvironmentImageDigest) ||
+		!lowerSHA256(spec.ResourceProfileSHA256) ||
 		spec.RunnerManifest.Limits != spec.CandidateLimits || !lowerSHA256(spec.MemoryBundleSHA256) {
 		return errors.New("coding authoring resource authority is invalid")
 	}
@@ -414,4 +432,8 @@ func lowerSHA256(value string) bool {
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil
+}
+
+func ociDigest(value string) bool {
+	return strings.HasPrefix(value, "sha256:") && lowerSHA256(strings.TrimPrefix(value, "sha256:"))
 }

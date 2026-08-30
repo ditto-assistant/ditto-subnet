@@ -80,12 +80,27 @@ type openCommand struct {
 	Acknowledgement bool                          `json:"acknowledgement"`
 }
 
+type lookupCommand struct {
+	Schema   string                        `json:"schema"`
+	TicketID string                        `json:"ticket_id"`
+	Stage    codingoutbox.PublicationStage `json:"stage"`
+}
+
 type pendingResult struct {
 	RecordID  string                            `json:"record_id"`
 	TicketID  string                            `json:"ticket_id"`
 	Stage     codingoutbox.PublicationStage     `json:"stage"`
 	Authority codingoutbox.PublicationAuthority `json:"authority"`
 	Request   codingoutbox.PublicationArtifact  `json:"request"`
+}
+
+type publicationResult struct {
+	RecordID        string                            `json:"record_id"`
+	TicketID        string                            `json:"ticket_id"`
+	Stage           codingoutbox.PublicationStage     `json:"stage"`
+	Authority       codingoutbox.PublicationAuthority `json:"authority"`
+	Request         codingoutbox.PublicationArtifact  `json:"request"`
+	Acknowledgement *codingoutbox.PublicationArtifact `json:"acknowledgement,omitempty"`
 }
 
 type result struct {
@@ -96,6 +111,7 @@ type result struct {
 	RecordID              string                            `json:"record_id,omitempty"`
 	Artifact              *codingoutbox.PublicationArtifact `json:"artifact,omitempty"`
 	Pending               []pendingResult                   `json:"pending"`
+	Publication           *publicationResult                `json:"publication,omitempty"`
 	BodyBase64            string                            `json:"body_base64,omitempty"`
 }
 
@@ -206,7 +222,7 @@ func (service *Service) execute(ctx context.Context, operation string, body []by
 		if err != nil {
 			return result{}, err
 		}
-		attempt, _, err := service.store.Lookup(ctx, codingoutbox.PurposeShadowAttempt, command.TicketID)
+		attempt, record, err := service.store.Lookup(ctx, codingoutbox.PurposeShadowAttempt, command.TicketID)
 		if err != nil {
 			return result{}, err
 		}
@@ -215,6 +231,15 @@ func (service *Service) execute(ctx context.Context, operation string, body []by
 			artifact, err = attempt.AcknowledgeAuthoringPublication(ctx, command.RequestSHA256, raw)
 		} else {
 			artifact, err = attempt.AcknowledgeTerminalPublication(ctx, command.RequestSHA256, raw)
+			if err == nil {
+				if record.TerminalPublication == nil {
+					err = codingoutbox.ErrState
+				} else {
+					err = service.store.Release(
+						ctx, attempt.ID(), record.TerminalPublication.Authority.EvidenceSHA256,
+					)
+				}
+			}
 		}
 		if err != nil {
 			return result{}, err
@@ -262,6 +287,30 @@ func (service *Service) execute(ctx context.Context, operation string, body []by
 		}
 		base.RecordID = command.RecordID
 		base.BodyBase64 = base64.StdEncoding.EncodeToString(raw)
+		return base, nil
+	case "lookup":
+		var command lookupCommand
+		if decodeRequired(body, &command, "schema", "ticket_id", "stage") != nil ||
+			command.Schema != commandSchema || !validTicketID(command.TicketID) || !validStage(command.Stage) {
+			return result{}, ErrInvalid
+		}
+		attempt, record, err := service.store.Lookup(ctx, codingoutbox.PurposeShadowAttempt, command.TicketID)
+		if err != nil {
+			return result{}, err
+		}
+		publication := record.AuthoringPublication
+		if command.Stage == codingoutbox.PublicationTerminalResult {
+			publication = record.TerminalPublication
+		}
+		if publication == nil || publication.Stage != command.Stage {
+			return result{}, codingoutbox.ErrState
+		}
+		base.RecordID = attempt.ID()
+		base.Publication = &publicationResult{
+			RecordID: attempt.ID(), TicketID: record.Binding.TicketID, Stage: publication.Stage,
+			Authority: publication.Authority, Request: publication.Request,
+			Acknowledgement: publication.Acknowledgement,
+		}
 		return base, nil
 	default:
 		return result{}, ErrInvalid
@@ -350,7 +399,7 @@ func validStage(stage codingoutbox.PublicationStage) bool {
 
 func validOperation(value string) bool {
 	switch value {
-	case "prepare", "acknowledge", "pending", "open":
+	case "prepare", "acknowledge", "pending", "open", "lookup":
 		return true
 	default:
 		return false
@@ -358,7 +407,16 @@ func validOperation(value string) bool {
 }
 
 func validControlToken(value string) bool {
-	return len(value) >= 32 && len(value) <= 256 && validIdentifier(value, 256)
+	if len(value) < 32 || len(value) > 256 {
+		return false
+	}
+	for _, character := range value {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') && character != '_' && character != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func validIdentifier(value string, maximum int) bool {

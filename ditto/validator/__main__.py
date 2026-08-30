@@ -18,6 +18,9 @@ import httpx
 
 from ditto.chain import ChainConfig, create_chain_client
 from ditto.system_health import SystemMetricsCollector
+from ditto.validator.coding_publication import CodingPublicationClient
+from ditto.validator.coding_supervisor import CodingSupervisorRuntime
+from ditto.validator.coding_worker import CodingShadowWorker
 from ditto.validator.config import parse_validator_config_from_env
 from ditto.validator.dittobench import DittobenchClient
 from ditto.validator.platform import PlatformClient
@@ -131,14 +134,59 @@ async def _amain() -> int:
                     system_metrics=SystemMetricsCollector(),
                     stack_health=StackHealthCollector(config, http),
                 )
+                coding_worker: CodingShadowWorker | None = None
+                if config.coding_shadow_enabled:
+                    publication = CodingPublicationClient(
+                        base_url=config.dittobench_api_url,
+                        control_token=config.dittobench_control_token,
+                        client=http,
+                    )
+                    coding_runtime = CodingSupervisorRuntime(config, http, platform)
+                    coding_worker = CodingShadowWorker(
+                        platform=platform,
+                        runtime=coding_runtime,
+                        publication=publication,
+                        instance_id=config.coding_shadow_instance_id,
+                        poll_seconds=config.coding_shadow_poll_seconds,
+                    )
+                    logger.info(
+                        "shadow coding worker enabled instance=%s",
+                        config.coding_shadow_instance_id,
+                    )
                 _apply_ditto_logging()  # re-assert: bittensor has initialised
-                await worker.run_forever(
-                    stop,
-                    drain_requested=drain_requested,
-                    bootstrap_resume=(
-                        mark_bootstrap_resumed if bootstrap_drain_pending else None
-                    ),
-                )
+
+                async def run_ordinary_worker() -> None:
+                    await worker.run_forever(
+                        stop,
+                        drain_requested=drain_requested,
+                        bootstrap_resume=(
+                            mark_bootstrap_resumed if bootstrap_drain_pending else None
+                        ),
+                        extra_busy=(
+                            (lambda: coding_worker.busy)
+                            if coding_worker is not None
+                            else None
+                        ),
+                    )
+
+                try:
+                    if coding_worker is None:
+                        await run_ordinary_worker()
+                    else:
+                        async with asyncio.TaskGroup() as group:
+                            group.create_task(
+                                run_ordinary_worker(),
+                                name="validator-ordinary-worker",
+                            )
+                            group.create_task(
+                                coding_worker.run_forever(
+                                    stop,
+                                    drain_requested=drain_requested,
+                                ),
+                                name="validator-coding-shadow-worker",
+                            )
+                finally:
+                    stop.set()
     finally:
         write_update_state("stopping")
         telemetry.close()

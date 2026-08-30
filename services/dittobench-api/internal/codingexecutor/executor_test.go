@@ -357,6 +357,41 @@ func TestPreflightBindsActualDaemonImageAndPlan(t *testing.T) {
 	}
 }
 
+func TestPhaseFactorySeparatesAuthoringFromProtectedGradingAuthority(t *testing.T) {
+	config := testConfig(t)
+	factory, err := NewPhaseFactory(FactoryConfig{
+		ImageRepository: "registry.invalid/dittobench-coding-supervisor",
+		CandidateUID:    65532, CandidateGID: 65532,
+		RequireRootless: true, RequireIsolatedDaemon: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authoring, err := factory.Authoring(t.Context(), config.Manifest.GraderImageDigest, config.Manifest.ResourcePolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorExecutor, ok := authoring.(*Executor)
+	if !ok || !authorExecutor.config.AuthoringOnly ||
+		authorExecutor.config.Manifest.GraderPlanSHA256 != "" ||
+		authorExecutor.config.ImageRef != config.ImageRef {
+		t.Fatalf("authoring executor=%#v", authorExecutor)
+	}
+	if _, err := authorExecutor.Preflight(t.Context(), config.Manifest.GraderPlanSHA256); err == nil {
+		t.Fatal("authoring-only executor exposed grader preflight")
+	}
+	grading, err := factory.Grading(t.Context(), config.Manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gradeExecutor, ok := grading.(*Executor)
+	if !ok || gradeExecutor.config.AuthoringOnly ||
+		gradeExecutor.config.Manifest.GraderPlanSHA256 != config.Manifest.GraderPlanSHA256 ||
+		gradeExecutor.config.ImageRef != config.ImageRef {
+		t.Fatalf("grading executor=%#v", gradeExecutor)
+	}
+}
+
 func TestPreflightRejectsUntrustedDaemonAndImage(t *testing.T) {
 	tests := map[string]func(*fakeDocker){
 		"not rootless": func(value *fakeDocker) { value.security = []string{"name=seccomp"} },

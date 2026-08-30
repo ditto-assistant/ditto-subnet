@@ -870,6 +870,7 @@ def main() -> int:
     outputs = {
         TESTDATA / "coding_inference_miner_v1.json": rendered(miner),
         TESTDATA / "coding_inference_policy_v1.json": rendered(policy),
+        TESTDATA / "coding_inference_policy_locked_v1.json": rendered(policy["policy"]),
     }
     if args.check:
         drift = [
