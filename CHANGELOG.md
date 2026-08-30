@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.154.0 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Bind fleet review policy and adjudicator
+  ([#1341](https://github.com/ditto-assistant/ditto-subnet/pull/1341),
+  [`46d5a16`](https://github.com/ditto-assistant/ditto-subnet/commit/46d5a164232da97e9a3161e189e8e404ab33f942))
+
+### Features
+
+- **coding**: Add durable Luna relay journal
+  ([`55df272`](https://github.com/ditto-assistant/ditto-subnet/commit/55df272fd17a4b0955ce9338a6db942588a4abd9))
+
+
 ## v0.153.0 (2026-08-30)
 
 ### Features
