@@ -64,6 +64,7 @@ import {
   sourceSearchResultSchema,
   unavailableCopyReviewComparison,
   validatorAssignmentListSchema,
+  validatorAssignmentListInputSchema,
   releaseValidatorAssignmentInputSchema,
   releaseValidatorAssignmentResponseSchema,
   retryValidationInputSchema,
@@ -1780,8 +1781,11 @@ export async function fetchScreeningArtifact(rawInput: unknown, actor: string) {
   return screeningArtifactSchema.parse(payload)
 }
 
-export async function fetchValidatorAssignments() {
-  const payload = await platformAdminRequest('/api/v1/admin/validator-assignments')
+export async function fetchValidatorAssignments(rawInput: unknown = {}) {
+  const input = validatorAssignmentListInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/validator-assignments?generation=${input.generation}`,
+  )
   return validatorAssignmentListSchema.parse(payload)
 }
 

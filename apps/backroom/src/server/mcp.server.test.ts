@@ -3571,6 +3571,8 @@ describe('Backroom MCP tools', () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       Response.json({
         count: 1,
+        generation: 'active',
+        active_bench_version: 12,
         items: [
           {
             agent_id: agentId,
@@ -3597,11 +3599,13 @@ describe('Backroom MCP tools', () => {
     expect(response.isError).not.toBe(true)
     expect(readJsonResult(response)).toMatchObject({
       count: 1,
+      generation: 'active',
+      active_bench_version: 12,
       returned: 1,
       items: [{ agent_id: agentId, agent_name: 'lets_5.6', bench_version: 11 }],
     })
     expect(fetchMock).toHaveBeenLastCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/validator-assignments',
+      'https://platform-api.heyditto.ai/api/v1/admin/validator-assignments?generation=active',
       expect.objectContaining({ method: 'GET' }),
     )
 

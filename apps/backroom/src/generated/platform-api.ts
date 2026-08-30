@@ -2391,7 +2391,14 @@ export interface paths {
         };
         /**
          * List Validator Assignments
-         * @description List live scoring leases for operator recovery tooling.
+         * @description List current-era live scoring leases unless history is requested.
+         *
+         *     An issued lease can survive a benchmark activation.  It is still useful
+         *     forensic evidence, but re-leasing it is not current recovery work, so the
+         *     default inventory excludes tickets below the active version.  A newer
+         *     ticket remains visible while its rollout is in progress.  ``generation``
+         *     is explicit rather than inferred from the agent's latest score because a
+         *     ticket is already the authoritative record of which benchmark it runs.
          */
         get: operations["list_validator_assignments_api_v1_admin_validator_assignments_get"];
         put?: never;
@@ -9270,8 +9277,15 @@ export interface components {
         };
         /** AdminValidatorAssignmentList */
         AdminValidatorAssignmentList: {
+            /** Active Bench Version */
+            active_bench_version: number;
             /** Count */
             count: number;
+            /**
+             * Generation
+             * @enum {string}
+             */
+            generation: "active" | "all";
             /** Items */
             items: components["schemas"]["AdminValidatorAssignment"][];
         };
@@ -28542,7 +28556,9 @@ export interface operations {
     };
     list_validator_assignments_api_v1_admin_validator_assignments_get: {
         parameters: {
-            query?: never;
+            query?: {
+                generation?: "active" | "all";
+            };
             header?: {
                 authorization?: string | null;
             };

@@ -4403,6 +4403,14 @@ export const validatorAssignmentSchema = z.object({
 export const validatorAssignmentListSchema = z.object({
   items: z.array(validatorAssignmentSchema),
   count: z.number().int().nonnegative(),
+  generation: z.enum(['active', 'all']),
+  active_bench_version: z.number().int().positive(),
+})
+
+export const validatorAssignmentListInputSchema = z.object({
+  // The live lease inventory is an operator worklist. Older issued leases
+  // remain available only through an intentional cross-generation audit.
+  generation: z.enum(['active', 'all']).default('active'),
 })
 
 export const releaseValidatorAssignmentInputSchema = z.object({

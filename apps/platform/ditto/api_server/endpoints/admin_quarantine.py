@@ -506,9 +506,19 @@ def _dispute_item(
 async def list_validator_assignments(
     _admin: AdminDep,
     session: SessionDep,
+    generation: Annotated[Literal["active", "all"], Query()] = "active",
 ) -> AdminValidatorAssignmentList:
-    """List live scoring leases for operator recovery tooling."""
+    """List current-era live scoring leases unless history is requested.
+
+    An issued lease can survive a benchmark activation.  It is still useful
+    forensic evidence, but re-leasing it is not current recovery work, so the
+    default inventory excludes tickets below the active version.  A newer
+    ticket remains visible while its rollout is in progress.  ``generation``
+    is explicit rather than inferred from the agent's latest score because a
+    ticket is already the authoritative record of which benchmark it runs.
+    """
     now = datetime.now(UTC)
+    active_version = await active_bench_version(session)
     score_count = (
         select(func.count(Score.validator_hotkey))
         .where(
@@ -529,6 +539,15 @@ async def list_validator_assignments(
         .correlate(ValidatorTicket)
         .scalar_subquery()
     )
+    where: list[ColumnElement[bool]] = [
+        ValidatorTicket.status == TicketStatus.ISSUED,
+        ValidatorTicket.deadline > now,
+    ]
+    if generation == "active":
+        # Keep forward rollout work visible but exclude leases left behind by
+        # a completed older era.  ``generation=all`` is the deliberate audit
+        # opt-in for those historical tickets.
+        where.append(ValidatorTicket.bench_version >= active_version)
     rows = (
         await session.execute(
             select(
@@ -538,10 +557,7 @@ async def list_validator_assignments(
                 provisional_composite,
             )
             .join(Agent, Agent.agent_id == ValidatorTicket.agent_id)
-            .where(
-                ValidatorTicket.status == TicketStatus.ISSUED,
-                ValidatorTicket.deadline > now,
-            )
+            .where(*where)
             .order_by(ValidatorTicket.deadline.asc(), ValidatorTicket.agent_id.asc())
         )
     ).all()
@@ -568,7 +584,12 @@ async def list_validator_assignments(
         )
         for ticket, agent, score_count, provisional_composite in rows
     ]
-    return AdminValidatorAssignmentList(items=items, count=len(items))
+    return AdminValidatorAssignmentList(
+        items=items,
+        count=len(items),
+        generation=generation,
+        active_bench_version=active_version,
+    )
 
 
 @router.post(

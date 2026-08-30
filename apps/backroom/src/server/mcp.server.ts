@@ -553,7 +553,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_validator_fleet:
     'Read validator heartbeats, stack identity, and version histogram.',
   list_validator_assignments:
-    'Read live validator scoring leases.',
+    'Active validator leases.',
   get_miner_owner_footprint:
     'Trace payment-record links for one miner hotkey or coldkey. Payment provenance is a common-control signal, not ownership; confirm metagraph ownership separately.',
   get_inference_concurrency_settings:
@@ -1955,16 +1955,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List validator assignments',
       description:
-        'Read live SN118 scoring leases from the platform validator-assignment ledger: agent id and name, miner hotkey, validator hotkey, slot_id, purpose (canonical_quorum or continual_retest), agent_status, issued_at, deadline, first_reported_at, bench_version, attempt_count, score_count, and provisional_composite. A continual_retest ticket on a scored or banned agent with first_reported_at null is the awaiting-progress zombie shape. Pair with get_validator_fleet for software/stack identity, claimed_slots, and updater versions. Optional agentId and validatorHotkey filters apply after the platform returns the full live set. Requires backroom:read and changes nothing.',
+        'Read live SN118 scoring leases from the platform validator-assignment ledger: agent id and name, miner hotkey, validator hotkey, slot_id, purpose (canonical_quorum or continual_retest), agent_status, issued_at, deadline, first_reported_at, bench_version, attempt_count, score_count, and provisional_composite. generation=active (default) lists the active era plus newer in-progress rollout leases, excluding issued leases stranded below the active benchmark. Pass generation=all only for the historical audit. A continual_retest ticket on a scored or banned agent with first_reported_at null is the awaiting-progress zombie shape. Pair with get_validator_fleet for software/stack identity, claimed_slots, and updater versions. Optional agentId and validatorHotkey filters apply after the platform returns the selected generation. Requires backroom:read and changes nothing.',
       inputSchema: {
+        generation: z.enum(['active', 'all']).default('active'),
         agentId: z.string().uuid().optional(),
         validatorHotkey: z.string().min(1).max(64).optional(),
         ...MCP_PAGINATION_INPUT,
       },
       annotations: toolAnnotations('read'),
     },
-    async ({ agentId, validatorHotkey, limit, offset }) => {
-      const list = await fetchValidatorAssignments()
+    async ({ generation, agentId, validatorHotkey, limit, offset }) => {
+      const list = await fetchValidatorAssignments({ generation })
       const items = list.items.filter((item) => {
         if (agentId && item.agent_id !== agentId) return false
         if (validatorHotkey && item.validator_hotkey !== validatorHotkey) return false
@@ -1972,7 +1973,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       })
       return result(
         compactValidatorAssignments(
-          paginateLocalCollection({ items, count: items.length }, 'items', limit, offset),
+          paginateLocalCollection({ ...list, items, count: items.length }, 'items', limit, offset),
         ),
       )
     },

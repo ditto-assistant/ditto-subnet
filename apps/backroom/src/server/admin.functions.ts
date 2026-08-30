@@ -58,6 +58,7 @@ import {
   authorizeConfirmationBundleRetestInputSchema,
   batchRetryValidationInputSchema,
   listStuckSubmissionsInputSchema,
+  validatorAssignmentListInputSchema,
 } from '../lib/admin.schemas'
 import {
   startBenchmarkRollout as startBenchmarkRolloutService,
@@ -606,10 +607,11 @@ export const getScreeningArtifact = createServerFn({ method: 'GET' })
 
 export const listValidatorAssignments = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
-  .handler(() => {
+  .validator(validatorAssignmentListInputSchema)
+  .handler(({ data }) => {
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
-    return fetchValidatorAssignments()
+    return fetchValidatorAssignments(data)
   })
 
 export const releaseActiveValidatorAssignment = createServerFn({ method: 'POST' })

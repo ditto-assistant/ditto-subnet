@@ -635,6 +635,8 @@ describe('admin API schemas', () => {
   it('parses live validator assignments and requires an audit reason to release', () => {
     const assignments = validatorAssignmentListSchema.parse({
       count: 1,
+      generation: 'active',
+      active_bench_version: 12,
       items: [
         {
           agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',

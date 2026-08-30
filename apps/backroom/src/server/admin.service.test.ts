@@ -16,6 +16,7 @@ import {
   fetchScreeningFailureSummary,
   fetchOwnerAttestations,
   fetchScreeningDisputes,
+  fetchValidatorAssignments,
   fetchValidationRetry,
   fetchValidatorScoreReplacement,
   invalidateCopyReviewsCache,
@@ -401,6 +402,43 @@ describe('Bench v9 confirmation bundle administration', () => {
     expect(parsed.shadow_calibration.measured_base_cost_microusd).toBe(130_000)
     expect(parsed.shadow_calibration.projected_epoch_spend_microusd).toBeNull()
     expect(parsed.items[0].settings_checksum).toBe(digest)
+  })
+
+  it('defaults validator assignments to the active generation and forwards the audit opt-in', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          count: 0,
+          generation: 'active',
+          active_bench_version: 12,
+          items: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          count: 0,
+          generation: 'all',
+          active_bench_version: 12,
+          items: [],
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchValidatorAssignments()
+    await fetchValidatorAssignments({ generation: 'all' })
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://platform-api.heyditto.ai/api/v1/admin/validator-assignments?generation=active',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://platform-api.heyditto.ai/api/v1/admin/validator-assignments?generation=all',
+      expect.objectContaining({ method: 'GET' }),
+    )
   })
 
   it('diagnoses the confirmation lane without a new Platform endpoint', async () => {

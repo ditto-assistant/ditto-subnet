@@ -22,7 +22,7 @@ import {
 export const Route = createFileRoute('/_authenticated/screening-quarantine/')({
   loader: async () => {
     const [assignments, quarantines, disputes, submissions, stuck] = await Promise.all([
-      listValidatorAssignments(),
+      listValidatorAssignments({ data: { generation: 'active' } }),
       listScreeningQuarantines({ data: { status: 'active', sort: 'oldest' } }),
       listScreeningDisputes({ data: { status: 'pending', limit: 1, offset: 0 } }),
       listScreeningSubmissions({ data: { limit: 1, offset: 0 } }),
