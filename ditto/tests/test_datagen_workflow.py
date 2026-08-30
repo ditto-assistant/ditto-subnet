@@ -74,6 +74,7 @@ def test_public_practice_publish_is_manual_public_and_content_addressed() -> Non
         if step.get("name") == "Refuse a conflicting immutable artifact"
     )["run"]
     assert "cmp --silent" in conflict
+    assert "curl --location --silent" in conflict
 
 
 def test_generate_release_verifier_uses_monorepo_paths_and_component_version() -> None:

@@ -88,6 +88,9 @@ def test_public_practice_release_rejects_tampered_artifacts_and_unsafe_output(
     with pytest.raises(CorpusError, match="inside the practice pack"):
         build_public_practice_release(PACK, PACK / "release")
 
+    with pytest.raises(CorpusError, match="root or mountpoint"):
+        build_public_practice_release(PACK, Path("/"), replace=True)
+
 
 def test_public_practice_release_rejects_descriptor_identity_drift(
     tmp_path: Path,
@@ -100,4 +103,16 @@ def test_public_practice_release_rejects_descriptor_identity_drift(
     body["practice_pack_id"] = "../../not-a-pack"
     descriptor.write_text(json.dumps(body), encoding="utf-8")
     with pytest.raises(CorpusError, match="pack identity"):
+        verify_public_practice_release(archive=archive, descriptor=descriptor)
+
+
+def test_public_practice_release_rejects_oversized_descriptor(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "release"
+    build_public_practice_release(PACK, output)
+    archive = _artifact(output, ".tar.gz")
+    descriptor = _artifact(output, ".release.json")
+    descriptor.write_bytes(b"{" + (b"x" * (1 << 20)) + b"}")
+    with pytest.raises(CorpusError, match="exceeds its byte bound"):
         verify_public_practice_release(archive=archive, descriptor=descriptor)

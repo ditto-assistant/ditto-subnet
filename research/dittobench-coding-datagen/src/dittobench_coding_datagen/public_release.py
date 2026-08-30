@@ -24,6 +24,9 @@ from dittobench_coding_datagen.validation import validate_pack
 _RELEASE_SCHEMA = "dittobench-coding-public-practice-release-v1"
 _ARCHIVE_ROOT = "practice"
 _MAX_ARCHIVE_BYTES = 64 << 20
+_MAX_DESCRIPTOR_BYTES = 1 << 20
+_MAX_UNCOMPRESSED_BYTES = 64 << 20
+_MAX_ARCHIVE_MEMBERS = 4096
 _PACK_ID = re.compile(r"^coding-practice-3x3-v[1-9][0-9]*$")
 _DESCRIPTOR_KEYS = frozenset(
     {
@@ -124,7 +127,10 @@ def verify_public_practice_release(
     if not archive_body or len(archive_body) > _MAX_ARCHIVE_BYTES:
         raise CorpusError("public practice archive is outside its byte bound")
     try:
-        descriptor_body = descriptor.read_bytes()
+        with descriptor.open("rb") as stream:
+            descriptor_body = stream.read(_MAX_DESCRIPTOR_BYTES + 1)
+        if len(descriptor_body) > _MAX_DESCRIPTOR_BYTES:
+            raise CorpusError("public practice descriptor exceeds its byte bound")
         decoded = json.loads(descriptor_body)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise CorpusError(
@@ -150,7 +156,11 @@ def verify_public_practice_release(
     with tempfile.TemporaryDirectory(prefix="dittobench-coding-release-") as temporary:
         unpacked = Path(temporary) / _ARCHIVE_ROOT / pack_id
         _extract_archive(archive, destination=Path(temporary), pack_id=pack_id)
-        if (unpacked / "manifest.json").read_bytes() != manifest_copy_body:
+        try:
+            archive_manifest_body = (unpacked / "manifest.json").read_bytes()
+        except FileNotFoundError as error:
+            raise CorpusError("public practice archive manifest is missing") from error
+        if archive_manifest_body != manifest_copy_body:
             raise CorpusError("public practice archive manifest disagrees with copy")
         manifest = validate_pack(unpacked)
     _validate_descriptor_against_manifest(decoded, manifest)
@@ -167,6 +177,8 @@ def _release_output(pack: Path, output: Path, *, replace: bool) -> Path:
     if output.is_symlink():
         raise CorpusError(f"release output must not be a symlink: {output}")
     output = output.resolve()
+    if _is_forbidden_replace_target(output):
+        raise CorpusError("release output must not be a filesystem root or mountpoint")
     if output == pack or output.is_relative_to(pack):
         raise CorpusError("release output must not be inside the practice pack")
     if output.exists():
@@ -181,6 +193,15 @@ def _release_output(pack: Path, output: Path, *, replace: bool) -> Path:
     return output
 
 
+def _is_forbidden_replace_target(path: Path) -> bool:
+    if path.parent == path:
+        return True
+    try:
+        return path.exists() and path.is_mount()
+    except OSError:
+        return True
+
+
 def _write_archive(pack: Path, archive: Path, *, pack_id: str) -> None:
     archive.parent.mkdir(parents=True, exist_ok=True)
     with (
@@ -188,7 +209,13 @@ def _write_archive(pack: Path, archive: Path, *, pack_id: str) -> None:
         gzip.GzipFile(
             fileobj=raw, mode="wb", filename="", mtime=0, compresslevel=9
         ) as zipped,
-        tarfile.open(fileobj=zipped, mode="w|", format=tarfile.USTAR_FORMAT) as tar,
+        tarfile.open(
+            fileobj=zipped,
+            mode="w|",
+            format=tarfile.PAX_FORMAT,
+            encoding="utf-8",
+            errors="strict",
+        ) as tar,
     ):
         for identity in tree_identities(pack):
             relative = safe_relative_path(identity.path)
@@ -208,7 +235,9 @@ def _write_archive(pack: Path, archive: Path, *, pack_id: str) -> None:
 def _extract_archive(archive: Path, *, destination: Path, pack_id: str) -> None:
     root = f"{_ARCHIVE_ROOT}/{pack_id}/"
     seen: set[str] = set()
-    with tarfile.open(archive, mode="r:gz") as tar:
+    total_bytes = 0
+    unpack_root = destination / _ARCHIVE_ROOT / pack_id
+    with tarfile.open(archive, mode="r:gz", encoding="utf-8", errors="strict") as tar:
         for member in tar:
             if (
                 not member.isfile()
@@ -222,17 +251,55 @@ def _extract_archive(archive: Path, *, destination: Path, pack_id: str) -> None:
                 or member.gname
             ):
                 raise CorpusError("public practice archive metadata is invalid")
+            if member.size < 0 or member.size > _MAX_UNCOMPRESSED_BYTES:
+                raise CorpusError(
+                    "public practice archive member exceeds its byte bound"
+                )
+            if len(seen) >= _MAX_ARCHIVE_MEMBERS:
+                raise CorpusError("public practice archive has too many members")
+            remaining = _MAX_UNCOMPRESSED_BYTES - total_bytes
+            if member.size > remaining:
+                raise CorpusError(
+                    "public practice archive exceeds its uncompressed bound"
+                )
             relative = safe_relative_path(member.name.removeprefix(root))
-            target = destination / _ARCHIVE_ROOT / pack_id / relative
+            if Path(relative).drive or Path(relative).is_absolute():
+                raise CorpusError("public practice archive member path is not relative")
+            target = unpack_root / relative
+            try:
+                resolved_root = unpack_root.resolve()
+                resolved_target = target.resolve()
+            except OSError as error:
+                raise CorpusError(
+                    "public practice archive member path is invalid"
+                ) from error
+            if not resolved_target.is_relative_to(resolved_root):
+                raise CorpusError("public practice archive member path is not relative")
             target.parent.mkdir(parents=True, exist_ok=True)
             source = tar.extractfile(member)
             if source is None:  # pragma: no cover - tarfile invariant
                 raise CorpusError("public practice archive member is unreadable")
             with source, target.open("xb") as output:
-                shutil.copyfileobj(source, output)
+                copied = _copy_bounded(source, output, limit=member.size)
+            if copied != member.size:
+                raise CorpusError("public practice archive member size is invalid")
+            total_bytes += copied
             seen.add(member.name)
     if not seen:
         raise CorpusError("public practice archive is empty")
+
+
+def _copy_bounded(source: Any, dest: Any, *, limit: int) -> int:
+    copied = 0
+    while copied < limit:
+        chunk = source.read(min(1024 * 1024, limit - copied))
+        if not chunk:
+            break
+        dest.write(chunk)
+        copied += len(chunk)
+    if source.read(1):
+        raise CorpusError("public practice archive member exceeds its byte bound")
+    return copied
 
 
 def _validate_descriptor(value: dict[str, Any]) -> None:

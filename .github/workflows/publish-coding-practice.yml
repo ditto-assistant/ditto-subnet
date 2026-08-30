@@ -83,7 +83,7 @@ jobs:
           set -euo pipefail
           descriptor_path="releases/${{ steps.artifact.outputs.pack_id }}/${{ steps.artifact.outputs.manifest_sha256 }}/${{ steps.artifact.outputs.pack_id }}.release.json"
           url="https://huggingface.co/datasets/$HF_DATASET_REPOSITORY/resolve/$HF_DATASET_REVISION/$descriptor_path"
-          status="$(curl --silent --output "$RUNNER_TEMP/existing-release.json" --write-out '%{http_code}' "$url")"
+          status="$(curl --location --silent --output "$RUNNER_TEMP/existing-release.json" --write-out '%{http_code}' "$url")"
           case "$status" in
             200)
               [[ "$(jq -r '.archive_sha256' "$RUNNER_TEMP/existing-release.json")" == '${{ steps.artifact.outputs.archive_sha256 }}' ]]
