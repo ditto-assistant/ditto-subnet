@@ -70,11 +70,12 @@ publication recovery.
 
 ## Current boundary
 
-This package supplies interfaces for a dormant harness controller and an
-inference activator. No listener, command, scheduler, worker, or validator
-composition root constructs them. It does not claim work, call a live miner,
-publish Platform evidence, set a score, or change a weight. Coding contract v1
-remains permanently `weight_eligible=false`.
+The reviewed dormant harness, source-bound route, grant-revocation, and
+inference-activation adapters now exist, but no listener, command, scheduler,
+worker, or validator composition root constructs them. This package does not
+claim work, call a live miner, publish Platform evidence, set a score, or
+change a weight. Coding contract v1 remains permanently
+`weight_eligible=false`.
 
 Validation:
 

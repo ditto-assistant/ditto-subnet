@@ -70,6 +70,20 @@ func TestTransientAcquisitionFailuresAreMarkedUnavailable(t *testing.T) {
 	})
 }
 
+func TestCodingScreenedImageLoadRejectsSourceMaterialBeforeAcquisition(t *testing.T) {
+	docker := &LocalDocker{}
+	source := Source{
+		GitURL:              "https://github.invalid/private.git",
+		ScreenedImageURL:    "https://storage.invalid/image.tar?signature=secret",
+		ScreenedImageSHA256: strings.Repeat("a", 64), ScreenedImageSize: 1024,
+		ScreenedImageID:  "sha256:" + strings.Repeat("b", 64),
+		ScreenedImageRef: "ditto-screen/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:latest",
+	}
+	if _, _, err := docker.LoadScreenedImage(t.Context(), source); err == nil {
+		t.Fatal("coding image loader accepted source material")
+	}
+}
+
 // THE BOUND. Every failure that is deterministic in the bytes the platform
 // stored stays terminal. A no-fault verdict on any of these would re-lease the
 // same permanently broken image forever -- the mnemox loop, rebuilt.

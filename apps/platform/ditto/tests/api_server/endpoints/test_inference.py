@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
 import bittensor
@@ -19,6 +20,7 @@ from ditto.api_models.inference import (
     InferenceGrantOffer,
 )
 from ditto.api_server.config import InferenceProxyConfig
+from ditto.api_server.endpoints import inference as inference_endpoint
 from ditto.api_server.endpoints.inference import (
     _ALLOWED_REQUEST_FIELDS,
     _DROPPED_REQUEST_FIELDS,
@@ -1922,16 +1924,17 @@ def test_v7_matching_request_resolves_to_the_same_locked_model() -> None:
     )
 
 
-def test_v7_model_mismatch_is_recorded_as_an_evasion_signal(caplog) -> None:
+def test_v7_model_mismatch_is_recorded_as_an_evasion_signal(monkeypatch) -> None:
     grant = _FakeGrant(bench_version=7, allowed_models=["openai/gpt-oss-20b"])
-    with caplog.at_level("WARNING"):
-        _locked_grant_model(grant, requested="qwen/qwen3-32b", config=_FakeConfig())
-    assert any(
-        "model mismatch" in record.getMessage()
-        and "qwen/qwen3-32b" in record.getMessage()
-        and "openai/gpt-oss-20b" in record.getMessage()
-        for record in caplog.records
-    )
+    warning = MagicMock()
+    monkeypatch.setattr(inference_endpoint.logger, "warning", warning)
+    _locked_grant_model(grant, requested="qwen/qwen3-32b", config=_FakeConfig())
+    warning.assert_called_once()
+    template, *arguments = warning.call_args.args
+    rendered = template % tuple(arguments)
+    assert "model mismatch" in rendered
+    assert "qwen/qwen3-32b" in rendered
+    assert "openai/gpt-oss-20b" in rendered
 
 
 def test_v7_grant_without_a_pinned_model_fails_closed() -> None:

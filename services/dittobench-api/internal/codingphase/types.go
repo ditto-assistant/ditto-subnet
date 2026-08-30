@@ -115,6 +115,7 @@ type HarnessBinding struct {
 	AgentArtifactSHA256    string
 	TicketID               string
 	CaseID                 string
+	ProfileCapabilityID    string
 	Deadline               time.Time
 	BenchVersion           int
 	ScreenedImageSHA256    string

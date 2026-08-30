@@ -64,10 +64,11 @@ result types reject JSON diagnostics and provide redacted string/log values.
 
 This package is not constructed by the validator. Its model-relay target now
 exists but is independently disabled by default and has no deployment
-configuration. `internal/codinggateway` now composes this client with the relay,
-journal, source-bound publisher, and exact grant revocation, but no production
-composition root invokes that gateway. Harness/attempt orchestration,
-deployment, scoring, and weights remain separate later reviews.
+configuration. `internal/codinggateway` composes this client with the relay and
+journal; the private runtime adapter now supplies the source-bound publisher
+and exact revocation-only client. No production composition root invokes that
+gateway. Ticket claiming, evidence publication, deployment, scoring, and
+weights remain separate later reviews.
 
 Validation:
 

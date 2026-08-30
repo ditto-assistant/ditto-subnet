@@ -519,7 +519,7 @@ func (fixture *phaseFixture) authorRequest(t *testing.T) codingsupervisor.Reques
 		"agent_artifact_sha256": fixture.manifest.AgentArtifactSHA256,
 		"screened_image_sha256": strings.Repeat("2", 64), "screened_image_size_bytes": 1024,
 		"screened_image_id":  "sha256:" + strings.Repeat("3", 64),
-		"screened_image_ref": "ditto-screened/phase:latest", "screening_policy_version": 9,
+		"screened_image_ref": "ditto-screen/" + fixtureAgent + ":latest", "screening_policy_version": 9,
 		"image_url":  "https://storage.invalid/screened-image.tar?X-Amz-Signature=synthetic",
 		"expires_at": fixture.now.Add(5 * time.Minute),
 	}

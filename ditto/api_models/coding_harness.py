@@ -139,6 +139,7 @@ class CodingHarnessLaunchResponse(CodingHarnessModel):
                 for value in (self.agent_id, self.run_row_id, self.ticket_id)
             )
             or self.expires_at > self.ticket_deadline
+            or self.screened_image_ref != f"ditto-screen/{self.agent_id}:latest"
         ):
             raise ValueError("coding harness launch authority is incoherent")
         return self

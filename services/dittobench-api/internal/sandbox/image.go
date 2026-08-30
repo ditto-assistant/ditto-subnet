@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/netguard"
 )
@@ -236,6 +237,30 @@ func (d *LocalDocker) loadScreenedImage(ctx context.Context, src Source, workdir
 	}
 	cleanupSourceRef = false
 	return localRef, tail(string(loadOut), 2000), nil
+}
+
+// LoadScreenedImage verifies and loads one already-screened Docker-save
+// archive without materializing miner source. Coding authoring uses this path
+// because its ticket carries only the accepted image capability; anti-copy
+// source processing happened before the immutable screened image was issued.
+func (d *LocalDocker) LoadScreenedImage(ctx context.Context, src Source) (string, string, error) {
+	if d == nil || ctx == nil || ctx.Err() != nil || src.ScreenedImageURL == "" ||
+		src.GitURL != "" || src.GitRef != "" || src.GitSubdir != "" || src.TarballURL != "" ||
+		src.TarballSHA256 != "" {
+		return "", "", errors.New("screened image load authority is invalid")
+	}
+	timeout := d.BuildTimeout
+	if timeout <= 0 || timeout > 30*time.Minute {
+		timeout = 25 * time.Minute
+	}
+	loadContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	workdir, err := os.MkdirTemp("", "dittobench-screened-")
+	if err != nil {
+		return "", "", unavailable(fmt.Errorf("create screened image workspace: %w", err))
+	}
+	defer os.RemoveAll(workdir)
+	return d.loadScreenedImage(loadContext, src, workdir)
 }
 
 func validateDockerSaveArchive(path, expectedRef, expectedID string) (bool, error) {
