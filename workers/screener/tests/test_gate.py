@@ -77,7 +77,9 @@ def _make_tar(files: dict[str, bytes]) -> bytes:
     return buffer.getvalue()
 
 
-def _oci_image_save_archive() -> tuple[bytes, str, bytes]:
+def _oci_image_save_archive(
+    *, repo_tags: list[str] | None = None
+) -> tuple[bytes, str, bytes]:
     layer = _make_tar({"app/ready.txt": b"ready\n"})
     compressed_layer = gzip.compress(layer, mtime=0)
     diff_id = "sha256:" + hashlib.sha256(layer).hexdigest()
@@ -95,7 +97,7 @@ def _oci_image_save_archive() -> tuple[bytes, str, bytes]:
         [
             {
                 "Config": f"blobs/sha256/{config_hex}",
-                "RepoTags": None,
+                "RepoTags": repo_tags,
                 "Layers": [f"blobs/sha256/{layer_hex}"],
             }
         ],
@@ -297,6 +299,37 @@ async def test_export_image_hashes_exact_docker_archive(
                 }
             ]
             assert portable.extractfile(manifest[0]["Layers"][0]).read() == layer
+    finally:
+        os.unlink(exported.path)
+
+
+async def test_export_image_strips_attempt_scoped_remote_tag(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A remote builder tag is transport metadata, never scorer authority."""
+    attempt_tag = f"ditto-screen/{_AGENT}-{_ATTEMPT}:latest"
+    archive, config_id, _ = _oci_image_save_archive(repo_tags=[attempt_tag])
+    gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+
+    async def run(args: list[str], **_: Any) -> tuple[int, str]:
+        if args[:3] == ["image", "save", "--output"]:
+            Path(args[3]).write_bytes(archive)
+            return 0, ""
+        if args[:3] == ["image", "inspect", "--format"]:
+            return 0, str(len(archive))
+        raise AssertionError(args)
+
+    gate._run = run  # type: ignore[method-assign]
+    exported = await gate._export_image(
+        "sha256:" + "34" * 32,
+        image_ref=f"ditto-screen/{_AGENT}:latest",
+        deadline=None,
+    )
+    try:
+        assert exported.image_id == config_id
+        with tarfile.open(exported.path, mode="r:") as portable:
+            manifest = json.load(portable.extractfile("manifest.json"))
+        assert manifest[0]["RepoTags"] is None
     finally:
         os.unlink(exported.path)
 

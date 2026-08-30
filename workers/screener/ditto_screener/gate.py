@@ -1519,7 +1519,22 @@ class BuildGate:
                     or not isinstance(layer_names, list)
                     or not all(isinstance(name, str) for name in layer_names)
                     or len(layer_names) > 256
-                    or repo_tags not in (None, [])
+                    # The remote builders tag their one output with the
+                    # attempt-scoped destination.  This normalizer does not
+                    # preserve that mutable name: identity remains bound to
+                    # the verified config and layer bytes below, and the
+                    # portable archive it emits is always untagged.
+                    or not (
+                        repo_tags is None
+                        or (
+                            isinstance(repo_tags, list)
+                            and len(repo_tags) <= 1
+                            and all(
+                                isinstance(tag, str) and 0 < len(tag) <= 512
+                                for tag in repo_tags
+                            )
+                        )
+                    )
                 ):
                     raise _ScreenedImageExportError(
                         "Docker image manifest entry has an invalid shape"
