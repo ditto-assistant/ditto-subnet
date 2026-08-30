@@ -35,7 +35,7 @@ export function StuckSubmissionFleetPanel({
     setError(null)
     try {
       const next = await listFn({
-        data: { state: ['exhausted'], limit: 200, offset: 0 },
+        data: { generation: 'active', state: ['exhausted'], limit: 200, offset: 0 },
       })
       setData(next)
       setSelected((current) => new Set(next.submissions
@@ -79,7 +79,7 @@ export function StuckSubmissionFleetPanel({
             <h2 className="text-sm font-semibold">Fleet retry backlog</h2>
           </div>
           <p className="mt-1 max-w-[76ch] text-xs leading-5 text-[var(--muted)]">
-            Exhausted validator assignments. Retry only when recommended_action is retry (verified infrastructure). Agent-attributable rows recommend withdraw — re-leasing the same image cannot repair them, and a retry grant is refused.
+            Current benchmark v{data.active_bench_version}. Historical rows are hidden by default. Retry only when recommended_action is retry (verified infrastructure). Agent-attributable rows recommend withdraw — re-leasing the same image cannot repair them, and a retry grant is refused.
           </p>
         </div>
         <button type="button" onClick={() => void refresh()} disabled={busy} className="ml-auto flex min-h-10 items-center gap-2 rounded-lg border border-[var(--line)] px-3 text-xs disabled:opacity-40">

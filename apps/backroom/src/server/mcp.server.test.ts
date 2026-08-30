@@ -5999,6 +5999,8 @@ describe('Backroom MCP tools', () => {
     const snapshot = 'ab'.repeat(32)
     const payload = {
       generated_at: '2026-07-21T00:00:00Z',
+      generation: 'active',
+      active_bench_version: 7,
       quorum: 3,
       counts: { exhausted: 1, cooling_down: 0 },
       count: 1,
@@ -6043,7 +6045,7 @@ describe('Backroom MCP tools', () => {
       submissions: [{ agent_id: agentId, retry_state: 'exhausted' }],
     })
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries?state=exhausted&state=cooling_down&limit=10&offset=0',
+      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries?generation=active&state=exhausted&state=cooling_down&limit=10&offset=0',
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer platform-admin-token',
@@ -6055,11 +6057,13 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('lists every stuck submission when no state filter is given', async () => {
+  it('permits an explicit all-generation stuck-submission audit', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const fetchMock = vi.fn().mockResolvedValue(
       Response.json({
         generated_at: '2026-07-21T00:00:00Z',
+        generation: 'all',
+        active_bench_version: 7,
         quorum: 3,
         counts: {},
         count: 0,
@@ -6075,12 +6079,12 @@ describe('Backroom MCP tools', () => {
 
     const response = await client.callTool({
       name: 'list_stuck_submissions',
-      arguments: {},
+      arguments: { generation: 'all' },
     })
 
     expect(response.isError).not.toBe(true)
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries?limit=10&offset=0',
+      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries?generation=all&limit=10&offset=0',
       expect.anything(),
     )
 
@@ -6111,6 +6115,8 @@ describe('Backroom MCP tools', () => {
     }
     const payload = {
       generated_at: '2026-07-25T18:00:00Z',
+      generation: 'active',
+      active_bench_version: 7,
       quorum: 3,
       counts: { exhausted: 2 },
       count: 2,
@@ -6163,7 +6169,7 @@ describe('Backroom MCP tools', () => {
     expect(summarised).toMatchObject({ count: 2, limit: 1, offset: 1 })
     expect(summarised).not.toHaveProperty('submissions_shared')
     expect(fetchMock).toHaveBeenLastCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries?limit=1&offset=1',
+      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries?generation=active&limit=1&offset=1',
       expect.anything(),
     )
 

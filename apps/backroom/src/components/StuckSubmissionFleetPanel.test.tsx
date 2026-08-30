@@ -61,6 +61,8 @@ const blocked = {
 function response(submissions = [first, second, blocked]) {
   return {
     generated_at: '2026-08-11T20:00:00Z',
+    generation: 'active' as const,
+    active_bench_version: 12,
     quorum: 3,
     counts: { exhausted: submissions.length },
     count: submissions.length,
@@ -105,7 +107,7 @@ describe('StuckSubmissionFleetPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
 
     await waitFor(() => expect(listStuckSubmissions).toHaveBeenCalledWith({
-      data: { state: ['exhausted'], limit: 200, offset: 0 },
+      data: { generation: 'active', state: ['exhausted'], limit: 200, offset: 0 },
     }))
     expect(await screen.findByText('first-agent v2')).toBeTruthy()
     expect(screen.queryByText('second-agent')).toBeNull()

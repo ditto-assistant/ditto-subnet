@@ -257,6 +257,10 @@ class AdminStuckSubmission(BaseModel):
 
 class AdminStuckSubmissionsResponse(BaseModel):
     generated_at: datetime
+    generation: Literal["active", "all"]
+    """Whether this is the current-work view or an explicit historical audit."""
+    active_bench_version: int = Field(ge=1)
+    """The benchmark version currently holding Platform authority."""
     quorum: int
     counts: dict[RetryState, int]
     count: int

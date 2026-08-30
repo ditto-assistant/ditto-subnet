@@ -1412,7 +1412,7 @@ export interface paths {
         };
         /**
          * Summarize Screening Failures
-         * @description Group currently screening / screening_failed agents by reason_code.
+         * @description Group live screening failures in the current era unless history is requested.
          */
         get: operations["summarize_screening_failures_api_v1_admin_screening_failures_get"];
         put?: never;
@@ -2097,14 +2097,17 @@ export interface paths {
         };
         /**
          * List Validation Retries
-         * @description Fleet-wide triage of every below-quorum submission and why it is stuck.
+         * @description Fleet-wide triage of below-quorum submissions and why each is stuck.
          *
          *     The single-agent detail route answers "why is *this* one stuck?"; this
          *     answers "which ones need me?" without a per-agent sweep. Filter with one or
-         *     more ``state`` query params (e.g. ``?state=exhausted``); ``counts`` always
-         *     reflects the whole fleet so a filtered view still shows the totals. The
-         *     list is paginated after the stable triage sort, and complete ticket history
-         *     stays on the single-agent detail route.
+         *     more ``state`` query params (e.g. ``?state=exhausted``). ``generation`` is
+         *     ``active`` by default: it shows the current benchmark era and any newer
+         *     in-progress rollout work, while excluding closed historical eras. Pass
+         *     ``generation=all`` for a cross-benchmark audit. ``counts`` always reflects
+         *     the selected generation before any state filter. The list is paginated
+         *     after the stable triage sort, and complete ticket history stays on the
+         *     single-agent detail route.
          */
         get: operations["list_validation_retries_api_v1_admin_validation_retries_get"];
         put?: never;
@@ -8148,11 +8151,18 @@ export interface components {
          * @description Operator view of the live screening pipeline jam, grouped by cause.
          */
         AdminScreeningFailureSummary: {
+            /** Active Bench Version */
+            active_bench_version: number;
             /**
              * Generated At
              * Format: date-time
              */
             generated_at: string;
+            /**
+             * Generation
+             * @enum {string}
+             */
+            generation: "active" | "all";
             /** Groups */
             groups: components["schemas"]["AdminScreeningFailureGroup"][];
             /** Screening */
@@ -8672,6 +8682,8 @@ export interface components {
         };
         /** AdminStuckSubmissionsResponse */
         AdminStuckSubmissionsResponse: {
+            /** Active Bench Version */
+            active_bench_version: number;
             /** Count */
             count: number;
             /** Counts */
@@ -8683,6 +8695,11 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
+            /**
+             * Generation
+             * @enum {string}
+             */
+            generation: "active" | "all";
             /** Has More */
             has_more: boolean;
             /** Limit */
@@ -26764,6 +26781,7 @@ export interface operations {
     summarize_screening_failures_api_v1_admin_screening_failures_get: {
         parameters: {
             query?: {
+                generation?: "active" | "all";
                 example_limit?: number;
             };
             header?: {
@@ -28118,6 +28136,7 @@ export interface operations {
     list_validation_retries_api_v1_admin_validation_retries_get: {
         parameters: {
             query?: {
+                generation?: "active" | "all";
                 state?: string[] | null;
                 limit?: number;
                 offset?: number;

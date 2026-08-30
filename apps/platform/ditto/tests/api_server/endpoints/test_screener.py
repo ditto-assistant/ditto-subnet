@@ -5653,6 +5653,64 @@ class TestQuarantineAdmin:
             "jam-b",
         }
 
+    async def test_screening_failure_summary_defaults_to_active_generation(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        now = datetime.now(UTC)
+        historical = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING_FAILED,
+            name="historical-jam",
+            created_at=now - timedelta(days=2),
+        )
+        current = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING_FAILED,
+            name="current-jam",
+            created_at=now + timedelta(seconds=1),
+        )
+        async with session_maker() as session, session.begin():
+            session.add(
+                BenchmarkRollout(
+                    rollout_id=uuid4(),
+                    from_version=_SOURCE_VERSION,
+                    desired_version=_TARGET_VERSION,
+                    status="activated",
+                    cohort_size=5,
+                    created_at=now,
+                    activated_at=now,
+                )
+            )
+            for agent_id in (historical, current):
+                agent = await session.get(Agent, agent_id)
+                assert agent is not None
+                agent.screening_reason_code = "source-review-timeout"
+        _install_db(app, session_maker)
+        headers = {
+            "Authorization": "Bearer test-admin-token-at-least-32-characters",
+        }
+
+        active = await client.get("/api/v1/admin/screening-failures", headers=headers)
+        all_generations = await client.get(
+            "/api/v1/admin/screening-failures?generation=all", headers=headers
+        )
+
+        assert active.status_code == 200, active.text
+        assert active.json()["generation"] == "active"
+        assert active.json()["active_bench_version"] == _TARGET_VERSION
+        assert active.json()["screening_failed"] == 1
+        assert active.json()["groups"][0]["examples"][0]["agent_id"] == str(current)
+        assert all_generations.status_code == 200, all_generations.text
+        assert all_generations.json()["generation"] == "all"
+        assert all_generations.json()["screening_failed"] == 2
+
     async def test_exact_screening_submission_requires_auth_and_returns_404(
         self,
         app: FastAPI,

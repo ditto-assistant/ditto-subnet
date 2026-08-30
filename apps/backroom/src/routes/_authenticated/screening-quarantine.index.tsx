@@ -27,7 +27,7 @@ export const Route = createFileRoute('/_authenticated/screening-quarantine/')({
       listScreeningDisputes({ data: { status: 'pending', limit: 1, offset: 0 } }),
       listScreeningSubmissions({ data: { limit: 1, offset: 0 } }),
       listStuckSubmissions({
-        data: { state: ['exhausted'], limit: 200, offset: 0 },
+        data: { generation: 'active', state: ['exhausted'], limit: 200, offset: 0 },
       }),
     ])
     return { assignments, quarantines, disputes, submissions, stuck }

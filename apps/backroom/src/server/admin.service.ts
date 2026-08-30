@@ -1652,6 +1652,7 @@ export async function fetchScreeningSubmission(rawInput: unknown) {
 export async function fetchScreeningFailureSummary(rawInput: unknown = {}) {
   const input = summarizeScreeningFailuresInputSchema.parse(rawInput)
   const query = new URLSearchParams({
+    generation: input.generation,
     example_limit: String(input.exampleLimit),
   })
   const payload = await platformAdminRequest(
@@ -1921,6 +1922,7 @@ export async function reinstateValidation(rawInput: unknown, actor: string) {
 export async function fetchStuckSubmissions(rawInput: unknown) {
   const input = listStuckSubmissionsInputSchema.parse(rawInput)
   const query = new URLSearchParams()
+  query.set('generation', input.generation)
   for (const state of input.state ?? []) {
     query.append('state', state)
   }

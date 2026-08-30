@@ -13,7 +13,7 @@ import json
 import statistics
 from collections import Counter
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -83,6 +83,7 @@ from ditto.db.queries.audit import (
     append_audit_entry,
     get_latest_score_retest_event,
 )
+from ditto.db.queries.benchmark_admission import admitted_agent_ids
 from ditto.db.queries.benchmark_rollout import (
     MIN_SCOREABLE_BENCH_VERSION,
     active_bench_version,
@@ -540,18 +541,22 @@ async def _load_withdrawal(
 async def list_validation_retries(
     _admin: AdminDep,
     session: SessionDep,
+    generation: Annotated[Literal["active", "all"], Query()] = "active",
     state: Annotated[list[str] | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> AdminStuckSubmissionsResponse:
-    """Fleet-wide triage of every below-quorum submission and why it is stuck.
+    """Fleet-wide triage of below-quorum submissions and why each is stuck.
 
     The single-agent detail route answers "why is *this* one stuck?"; this
     answers "which ones need me?" without a per-agent sweep. Filter with one or
-    more ``state`` query params (e.g. ``?state=exhausted``); ``counts`` always
-    reflects the whole fleet so a filtered view still shows the totals. The
-    list is paginated after the stable triage sort, and complete ticket history
-    stays on the single-agent detail route.
+    more ``state`` query params (e.g. ``?state=exhausted``). ``generation`` is
+    ``active`` by default: it shows the current benchmark era and any newer
+    in-progress rollout work, while excluding closed historical eras. Pass
+    ``generation=all`` for a cross-benchmark audit. ``counts`` always reflects
+    the selected generation before any state filter. The list is paginated
+    after the stable triage sort, and complete ticket history stays on the
+    single-agent detail route.
     """
     now = datetime.now(UTC)
     requested_states = set(state or [])
@@ -583,17 +588,38 @@ async def list_validation_retries(
         )
         known = {agent.agent_id for agent in agents}
         agents.extend(agent for agent in rollout_agents if agent.agent_id not in known)
+    active_version = await active_bench_version(session)
     classified = await classify_agent_retry_states(
         session,
         agents=agents,
         now=now,
         require_work_available_validator=True,
+        canonical_version=active_version,
     )
     agents_by_id = {agent.agent_id: agent for agent in agents}
+    admitted_to_active = await admitted_agent_ids(
+        session,
+        bench_version=active_version,
+        agent_ids=list(classified),
+    )
 
     submissions: list[AdminStuckSubmission] = []
     counts: dict[RetryState, int] = {}
     for agent_id, retry in classified.items():
+        # ``resolve_bench_version`` preserves any newer desired-version
+        # rollout work. Older versions cannot obtain a current lease, so the
+        # default operator view keeps them out of the action queue. The
+        # admission check closes the no-ticket fallback loophole: an old row
+        # with no score or ticket must not appear current just because the
+        # resolver has to fall back to the active version.
+        if generation == "active" and (
+            retry.bench_version < active_version
+            or (
+                retry.bench_version == active_version
+                and agent_id not in admitted_to_active
+            )
+        ):
+            continue
         counts[retry.state] = counts.get(retry.state, 0) + 1
         if requested_states and retry.state not in requested_states:
             continue
@@ -648,6 +674,8 @@ async def list_validation_retries(
     page = submissions[offset : offset + limit]
     return AdminStuckSubmissionsResponse(
         generated_at=now,
+        generation=generation,
+        active_bench_version=active_version,
         quorum=SCORING_QUORUM,
         counts=counts,
         count=count,

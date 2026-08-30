@@ -62,6 +62,8 @@ function batchRetryPayload(count: number) {
 function stuckSubmissionsPayload(count: number) {
   return stuckSubmissionsListSchema.parse({
     generated_at: CREATED_AT,
+    generation: 'active',
+    active_bench_version: 7,
     quorum: 3,
     counts: { exhausted: count },
     count,
