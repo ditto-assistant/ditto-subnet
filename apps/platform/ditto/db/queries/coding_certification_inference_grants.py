@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import re
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -26,14 +27,31 @@ from ditto.db.queries.coding_certification_leases import (
     authorize_coding_certification_harness_delivery,
 )
 from ditto.db.queries.coding_inference_grants import (
-    CodingInferenceGrantActivation,
     CodingInferenceGrantConflictError,
     CodingInferenceGrantIntegrityError,
     CodingInferenceGrantNotAvailableError,
-    CodingInferenceGrantResult,
-    CodingInferenceGrantRevocation,
     coding_inference_bearer_digest,
 )
+
+
+@dataclass(frozen=True)
+class CodingCertificationInferenceGrantResult:
+    grant: CodingCertificationInferenceGrant
+    idempotent: bool
+
+
+@dataclass(frozen=True)
+class CodingCertificationInferenceGrantRevocation:
+    grant: CodingCertificationInferenceGrant
+    idempotent: bool
+
+
+@dataclass(frozen=True)
+class CodingCertificationInferenceGrantActivation:
+    grant: CodingCertificationInferenceGrant
+    bearer: str
+    revoke_bearer: str
+
 
 _CANARY_CASE_ID = "PRACTICE-LEDGER-001"
 _CANARY_PROFILE_ID = "public-certification-v1"
@@ -139,7 +157,7 @@ async def ensure_coding_certification_inference_grant(
     lease_id: UUID,
     validator_hotkey: str,
     policy: CodingInferencePolicy,
-) -> CodingInferenceGrantResult:
+) -> CodingCertificationInferenceGrantResult:
     """Create or return the one immutable policy grant for a claimed lease."""
 
     try:
@@ -171,7 +189,7 @@ async def ensure_coding_certification_inference_grant(
             raise CodingInferenceGrantNotAvailableError(
                 "coding certification inference grant is terminal"
             )
-        return CodingInferenceGrantResult(grant=grant, idempotent=True)
+        return CodingCertificationInferenceGrantResult(grant=grant, idempotent=True)
     row = CodingCertificationInferenceGrant(
         grant_id=uuid4(),
         **expected,
@@ -191,7 +209,7 @@ async def ensure_coding_certification_inference_grant(
     )
     session.add(row)
     await session.flush()
-    return CodingInferenceGrantResult(grant=row, idempotent=False)
+    return CodingCertificationInferenceGrantResult(grant=row, idempotent=False)
 
 
 async def activate_coding_certification_inference_grant(
@@ -201,7 +219,7 @@ async def activate_coding_certification_inference_grant(
     validator_hotkey: str,
     broker_public_key: str,
     policy: CodingInferencePolicy,
-) -> CodingInferenceGrantActivation:
+) -> CodingCertificationInferenceGrantActivation:
     """Rotate a live canary grant onto one broker key."""
 
     try:
@@ -261,7 +279,7 @@ async def activate_coding_certification_inference_grant(
     grant.revoked_at = None
     grant.updated_at = now
     await session.flush()
-    return CodingInferenceGrantActivation(
+    return CodingCertificationInferenceGrantActivation(
         grant=grant, bearer=bearer, revoke_bearer=revoke_bearer
     )
 
@@ -272,7 +290,7 @@ async def revoke_coding_certification_inference_grant(
     grant_id: UUID,
     validator_hotkey: str,
     generation: int,
-) -> CodingInferenceGrantRevocation:
+) -> CodingCertificationInferenceGrantRevocation:
     """Durably revoke exactly the caller's observed canary grant generation."""
 
     grant = await session.scalar(
@@ -291,7 +309,7 @@ async def revoke_coding_certification_inference_grant(
             raise CodingInferenceGrantConflictError(
                 "coding certification inference grant generation disagrees"
             )
-        return CodingInferenceGrantRevocation(grant=grant, idempotent=True)
+        return CodingCertificationInferenceGrantRevocation(grant=grant, idempotent=True)
     if grant.generation != generation:
         raise CodingInferenceGrantConflictError(
             "coding certification inference grant generation disagrees"
@@ -306,7 +324,7 @@ async def revoke_coding_certification_inference_grant(
         )
     _revoke(grant, now=now)
     await session.flush()
-    return CodingInferenceGrantRevocation(grant=grant, idempotent=False)
+    return CodingCertificationInferenceGrantRevocation(grant=grant, idempotent=False)
 
 
 async def revoke_coding_certification_inference_grant_by_capability(
@@ -316,7 +334,7 @@ async def revoke_coding_certification_inference_grant_by_capability(
     lease_id: UUID,
     generation: int,
     revoke_bearer: str,
-) -> CodingInferenceGrantRevocation | None:
+) -> CodingCertificationInferenceGrantRevocation | None:
     """Idempotently revoke one active canary generation through its bearer."""
 
     if (
@@ -351,11 +369,11 @@ async def revoke_coding_certification_inference_grant_by_capability(
     ):
         return None
     if grant.status == "revoked":
-        return CodingInferenceGrantRevocation(grant=grant, idempotent=True)
+        return CodingCertificationInferenceGrantRevocation(grant=grant, idempotent=True)
     if grant.status != "active" or grant.active_requests != 0:
         raise CodingInferenceGrantConflictError(
             "coding certification inference grant is not active"
         )
     _revoke(grant, now=now)
     await session.flush()
-    return CodingInferenceGrantRevocation(grant=grant, idempotent=False)
+    return CodingCertificationInferenceGrantRevocation(grant=grant, idempotent=False)

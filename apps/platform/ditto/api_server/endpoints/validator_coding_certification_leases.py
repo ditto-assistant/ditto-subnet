@@ -51,6 +51,7 @@ from ditto.api_server.endpoints.validator import (
 from ditto.api_server.endpoints.validator_coding_inference import _transport
 from ditto.api_server.storage import S3StorageClient
 from ditto.chain import ChainClient
+from ditto.db.models import CodingCertificationInferenceGrant
 from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_VALIDATOR_CODING_CERTIFICATION_HARNESS,
     record_artifact_fetch,
@@ -435,7 +436,9 @@ def _canary_exchange_url(exchange_url: str) -> str:
     return exchange_url[: -len(_TICKET_EXCHANGE_SUFFIX)] + _CANARY_EXCHANGE_SUFFIX
 
 
-def _certification_grant_authority(grant: object) -> dict[str, object]:
+def _certification_grant_authority(
+    grant: CodingCertificationInferenceGrant,
+) -> dict[str, object]:
     return {
         "coding_contract_version": 1,
         "weight_eligible": False,

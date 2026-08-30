@@ -338,13 +338,20 @@ class CodingCanaryWorker:
 
 def _ed25519_broker_pair() -> tuple[str, str]:
     key = ECC.generate(curve="Ed25519")
-    seed = bytes(key.seed)
+    seed = getattr(key, "seed", None)
     public = key.public_key().export_key(format="raw")
-    if len(seed) != 32 or len(public) != 32:
+    if (
+        not isinstance(seed, (bytes, bytearray))
+        or len(seed) != 32
+        or not isinstance(public, (bytes, bytearray))
+        or len(public) != 32
+    ):
         raise ValidatorInfrastructureError("coding canary broker key is invalid")
+    seed_bytes = bytes(seed)
+    public_bytes = bytes(public)
     return (
-        urlsafe_b64encode(public).decode().rstrip("="),
-        urlsafe_b64encode(seed + public).decode().rstrip("="),
+        urlsafe_b64encode(public_bytes).decode().rstrip("="),
+        urlsafe_b64encode(seed_bytes + public_bytes).decode().rstrip("="),
     )
 
 

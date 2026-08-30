@@ -42,17 +42,20 @@ from ditto.api_server.endpoints import (
 from ditto.api_server.endpoints.validator_coding_inference import (
     CodingInferenceGrantTransport,
 )
-from ditto.db.models import CodingCertificationLease
+from ditto.db.models import (
+    CodingCertificationInferenceGrant,
+    CodingCertificationLease,
+)
+from ditto.db.queries.coding_certification_inference_grants import (
+    CodingCertificationInferenceGrantActivation,
+    CodingCertificationInferenceGrantResult,
+    CodingCertificationInferenceGrantRevocation,
+)
 from ditto.db.queries.coding_certification_leases import (
     CodingCertificationLeaseConflictError,
     CodingCertificationLeaseNotAvailableError,
     CodingCertificationLeaseResult,
     CodingCertificationLeaseUnavailableError,
-)
-from ditto.db.queries.coding_inference_grants import (
-    CodingInferenceGrantActivation,
-    CodingInferenceGrantResult,
-    CodingInferenceGrantRevocation,
 )
 from ditto.db.queries.validator_auth import ValidatorRequestReplayError
 from ditto.tests.api_server.conftest import override_get_storage_client
@@ -474,7 +477,10 @@ def _install_grant_transport(app: FastAPI, monkeypatch) -> SimpleNamespace:
     )
     mocks = SimpleNamespace(
         ensure=AsyncMock(
-            return_value=CodingInferenceGrantResult(grant=grant, idempotent=False)
+            return_value=CodingCertificationInferenceGrantResult(
+                grant=cast(CodingCertificationInferenceGrant, grant),
+                idempotent=False,
+            )
         ),
         activate=AsyncMock(),
         revoke=AsyncMock(),
@@ -545,8 +551,8 @@ async def test_claimed_lease_inference_grant_is_signed_no_store_and_default_off(
 
     mocks.grant.status = "active"
     mocks.grant.generation = 1
-    mocks.activate.return_value = CodingInferenceGrantActivation(
-        grant=mocks.grant,
+    mocks.activate.return_value = CodingCertificationInferenceGrantActivation(
+        grant=cast(CodingCertificationInferenceGrant, mocks.grant),
         bearer="b" * 43,
         revoke_bearer="r" * 43,
     )
@@ -579,8 +585,9 @@ async def test_claimed_lease_inference_grant_is_signed_no_store_and_default_off(
     )
 
     mocks.grant.revoked_at = datetime.now(UTC)
-    mocks.revoke.return_value = CodingInferenceGrantRevocation(
-        grant=mocks.grant, idempotent=False
+    mocks.revoke.return_value = CodingCertificationInferenceGrantRevocation(
+        grant=cast(CodingCertificationInferenceGrant, mocks.grant),
+        idempotent=False,
     )
     revoke_nonce = uuid4()
     revoke_at = datetime.now(UTC)

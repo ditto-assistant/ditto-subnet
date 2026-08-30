@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -40,6 +41,10 @@ from ditto.api_server.endpoints.validator_coding_inference import (
 from ditto.coding_selection import (
     CodingSelectionCatalogIntegrityError,
     CodingSelectionCatalogUnavailableError,
+)
+from ditto.db.models import CodingCertificationInferenceGrant
+from ditto.db.queries.coding_certification_inference_grants import (
+    CodingCertificationInferenceGrantRevocation,
 )
 from ditto.db.queries.coding_inference_grants import (
     CodingInferenceGrantActivation,
@@ -380,7 +385,10 @@ async def test_capability_revoke_falls_back_to_certification_lease_grant(
         revoked_at=datetime.now(UTC),
     )
     fallback = AsyncMock(
-        return_value=CodingInferenceGrantRevocation(grant=canary, idempotent=True)
+        return_value=CodingCertificationInferenceGrantRevocation(
+            grant=cast(CodingCertificationInferenceGrant, canary),
+            idempotent=True,
+        )
     )
     monkeypatch.setattr(
         endpoint_module,
@@ -400,6 +408,7 @@ async def test_capability_revoke_falls_back_to_certification_lease_grant(
     assert revoked.json()["ticket_id"] == str(lease_id)
     assert revoked.json()["idempotent"] is True
     fallback.assert_awaited_once()
+    assert fallback.await_args is not None
     assert fallback.await_args.kwargs == {
         "grant_id": _GRANT_ID,
         "lease_id": lease_id,

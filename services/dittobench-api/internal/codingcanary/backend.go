@@ -127,6 +127,15 @@ func (backend *certifierBackend) Certify(ctx context.Context, request Request) (
 	if err != nil {
 		return outcome, err
 	}
+	policySHA, err := codingcontract.InferencePolicySHA256(backend.policy)
+	requestBudget := codingcontract.EffectiveInferenceRequestBudget(16)
+	if err != nil || request.Grant.InferenceGrantSHA256 != policySHA ||
+		request.Grant.RequestBudget != requestBudget ||
+		request.Grant.PromptTokenBudget != 10_000 ||
+		request.Grant.CompletionTokenBudget != 2_000 ||
+		request.Grant.CostBudgetUSDMicros != backend.policy.MaxCostUSDMicros {
+		return outcome, ErrInvalid
+	}
 	privateKey, ok := decodeBrokerPrivateKey(request.Grant.BrokerPrivateKey)
 	if !ok {
 		return outcome, ErrInvalid
