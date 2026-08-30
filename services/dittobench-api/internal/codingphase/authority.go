@@ -365,7 +365,7 @@ func parseGrant(
 		Generation: grant.Generation, InferenceGrantSHA256: grant.InferenceGrantSHA256,
 		IssuedAt: now, Deadline: grant.ExpiresAt,
 		RequestBudget: grant.RequestBudget, PromptTokenBudget: grant.PromptTokenBudget,
-		CompletionTokenBudget: grant.CompletionTokenBudget,
+		CompletionTokenBudget: grant.CompletionTokenBudget, CostBudgetUSDMicros: grant.CostBudgetUSDMicros,
 	}
 	return codingplatform.GrantCapability{
 		Binding: binding, Bearer: grant.Bearer, BrokerPublicKey: brokerPublicKey,

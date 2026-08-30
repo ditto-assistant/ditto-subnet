@@ -38,6 +38,7 @@ func (adapter *CertifierEvidenceAdapter) Evidence(
 		RequestBudget:         binding.RequestBudget,
 		PromptTokenBudget:     binding.Budgets.ModelInputTokens,
 		CompletionTokenBudget: binding.Budgets.ModelOutputTokens,
+		CostBudgetUSDMicros:   adapter.relay.binding.CostBudgetUSDMicros,
 	})
 	return evidence, err
 }

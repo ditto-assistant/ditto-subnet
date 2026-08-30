@@ -205,7 +205,7 @@ func (runner *Runner) finalizeAuthoring(
 	cancel()
 	if freezeErr != nil {
 		retryContext, retryCancel := runner.cleanupContext(ctx)
-		freezeErr = revocations.Revoke(retryContext)
+		freezeErr = errors.Join(freezeErr, revocations.Revoke(retryContext))
 		retryCancel()
 	}
 
@@ -248,7 +248,7 @@ func (runner *Runner) finalizeAuthoring(
 		}
 	}
 
-	cleanupErr := runner.closeAuthoring(ctx, state)
+	cleanupErr := runner.closeAuthoring(ctx, request.TicketID, state)
 	allErr := errors.Join(primary, freezeErr, transcriptErr, persistErr, evidenceErr, cleanupErr)
 	if allErr != nil || result.Submission == nil {
 		return codingsupervisor.AuthoringOutcome{}, errors.Join(ErrLifecycle, allErr)
@@ -363,8 +363,11 @@ func (runner *Runner) Recover(
 	if err != nil {
 		return codingsupervisor.RecoveryOutcome{}, errors.Join(ErrLifecycle, err)
 	}
-	if record.Binding.TicketID != request.TicketID || record.Binding.Deadline != request.Deadline {
+	if record.Binding.TicketID != request.TicketID || !record.Binding.Deadline.Equal(request.Deadline) {
 		return codingsupervisor.RecoveryOutcome{}, ErrInvalid
+	}
+	if err := runner.revokeLiveGateway(ctx, request.TicketID); err != nil {
+		return codingsupervisor.RecoveryOutcome{}, errors.Join(ErrLifecycle, err)
 	}
 	switch record.State {
 	case codingoutbox.StateReserved:
@@ -417,7 +420,8 @@ func validateModelEvidence(
 	if _, err := codingcontract.InferenceModelEvidenceSHA256(policy, evidence); err != nil ||
 		evidence.Requests > uint64(binding.RequestBudget) ||
 		evidence.PromptTokens > binding.PromptTokenBudget ||
-		evidence.CompletionTokens > binding.CompletionTokenBudget {
+		evidence.CompletionTokens > binding.CompletionTokenBudget ||
+		evidence.CostUSDMicros > binding.CostBudgetUSDMicros {
 		return ErrInvalid
 	}
 	return nil
@@ -500,7 +504,7 @@ func evidenceBinding(binding codingrelay.Binding) codingrelay.EvidenceBinding {
 		CaseID: binding.CaseID, ProfileCapabilityID: binding.ProfileCapabilityID,
 		InferenceGrantSHA256: binding.InferenceGrantSHA256, Deadline: binding.Deadline,
 		RequestBudget: binding.RequestBudget, PromptTokenBudget: binding.PromptTokenBudget,
-		CompletionTokenBudget: binding.CompletionTokenBudget,
+		CompletionTokenBudget: binding.CompletionTokenBudget, CostBudgetUSDMicros: binding.CostBudgetUSDMicros,
 	}
 }
 
@@ -548,13 +552,16 @@ func (set revocationSet) Revoke(ctx context.Context) error {
 	return errors.Join(workspaceErr, inferenceErr)
 }
 
-func (runner *Runner) closeAuthoring(ctx context.Context, state *authoringState) error {
+func (runner *Runner) closeAuthoring(ctx context.Context, ticketID string, state *authoringState) error {
 	var workspaceErr, gatewayErr, sessionErr, harnessErr error
 	if !nilLike(state.workspace) {
 		workspaceErr = state.workspace.Close()
 	}
 	if !nilLike(state.gateway) {
 		gatewayErr = state.gateway.Close()
+		if errors.Is(gatewayErr, codinggateway.ErrNotRevoked) {
+			runner.keepLiveGateway(ticketID, state.gateway)
+		}
 	}
 	if state.session != nil {
 		sessionErr = state.session.Close()
@@ -565,6 +572,36 @@ func (runner *Runner) closeAuthoring(ctx context.Context, state *authoringState)
 		cancel()
 	}
 	return errors.Join(workspaceErr, gatewayErr, sessionErr, harnessErr)
+}
+
+func (runner *Runner) keepLiveGateway(ticketID string, gateway InferenceGateway) {
+	if runner == nil || ticketID == "" || nilLike(gateway) {
+		return
+	}
+	runner.mu.Lock()
+	if runner.liveGateways == nil {
+		runner.liveGateways = map[string]InferenceGateway{}
+	}
+	runner.liveGateways[ticketID] = gateway
+	runner.mu.Unlock()
+}
+
+func (runner *Runner) revokeLiveGateway(ctx context.Context, ticketID string) error {
+	if runner == nil {
+		return nil
+	}
+	runner.mu.Lock()
+	gateway := runner.liveGateways[ticketID]
+	delete(runner.liveGateways, ticketID)
+	runner.mu.Unlock()
+	if nilLike(gateway) {
+		return nil
+	}
+	if err := gateway.Revoke(ctx); err != nil {
+		runner.keepLiveGateway(ticketID, gateway)
+		return err
+	}
+	return gateway.Close()
 }
 
 func (runner *Runner) destroyHarness(ctx context.Context, harness Harness, primary error) error {

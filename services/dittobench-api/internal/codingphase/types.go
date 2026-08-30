@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingattempt"
@@ -149,10 +150,11 @@ type Config struct {
 	CleanupTimeout  time.Duration
 }
 
-// Runner implements codingsupervisor.PhaseRunner. It keeps no per-attempt
-// process-local state; grading, abort, and recovery resolve the durable outbox
-// record by the ticket-bound execution identity.
+// Runner implements codingsupervisor.PhaseRunner. Durable grading, abort, and
+// recovery resolve the outbox record by ticket. Unrevoked inference gateways
+// are retained until Recover can finish revocation.
 type Runner struct {
+	mu              sync.Mutex
 	attempts        AttemptRuntime
 	outbox          *codingoutbox.Store
 	seeds           SeedDeliverer
@@ -162,6 +164,7 @@ type Runner struct {
 	policy          codingcontract.InferencePolicy
 	now             func() time.Time
 	cleanupTimeout  time.Duration
+	liveGateways    map[string]InferenceGateway
 }
 
 func (binding HarnessBinding) String() string   { return "CodingPhaseHarnessBinding{private}" }

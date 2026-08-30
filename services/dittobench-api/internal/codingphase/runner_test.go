@@ -620,13 +620,12 @@ func TestRunnerFailureStillRevokesFreezesAndForbidsCleanRetry(t *testing.T) {
 func TestRunnerRetriesAmbiguousRevocationBeforeReturningEvidence(t *testing.T) {
 	fixture := newPhaseFixture(t)
 	fixture.workspace.failRevokeOnce = true
-	authoring, err := fixture.runner.Author(t.Context(), fixture.input)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := fixture.runner.Author(t.Context(), fixture.input); err == nil {
+		t.Fatal("freeze failure was cleared by retry revocation")
 	}
-	if !authoring.CapabilitiesRevoked || fixture.workspace.handle.revokeAttempts != 2 ||
+	if fixture.workspace.handle.revokeAttempts != 2 ||
 		!fixture.workspace.handle.revoked || !fixture.inference.gateway.revoked {
-		t.Fatalf("authoring=%#v workspace=%#v gateway=%#v", authoring, fixture.workspace.handle, fixture.inference.gateway)
+		t.Fatalf("workspace=%#v gateway=%#v", fixture.workspace.handle, fixture.inference.gateway)
 	}
 }
 
