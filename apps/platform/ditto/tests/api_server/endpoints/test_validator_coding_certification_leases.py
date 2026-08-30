@@ -13,11 +13,13 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.coding_certification_leases import (
+    CodingCertificationHarnessLaunchRequest,
     CodingCertificationLeaseAbortRequest,
     CodingCertificationLeaseAuthority,
     CodingCertificationLeaseClaimRequest,
     CodingCertificationLeaseIssueRequest,
     CodingCertificationLeaseStatus,
+    coding_certification_harness_launch_signing_message,
     coding_certification_lease_abort_signing_message,
     coding_certification_lease_claim_signing_message,
     coding_certification_lease_issue_signing_message,
@@ -34,6 +36,7 @@ from ditto.db.queries.coding_certification_leases import (
     CodingCertificationLeaseUnavailableError,
 )
 from ditto.db.queries.validator_auth import ValidatorRequestReplayError
+from ditto.tests.api_server.conftest import override_get_storage_client
 
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
 _VALIDATOR = _KEYPAIR.ss58_address
@@ -189,6 +192,32 @@ def _install(
     monkeypatch.setattr(
         endpoint_module, "abort_coding_certification_lease", mocks.abort
     )
+    storage = override_get_storage_client(app)
+    storage.presigned_get_url = AsyncMock(
+        return_value="https://storage.invalid/screened.tar?signature=test"
+    )
+    authority = SimpleNamespace(
+        agent_id=_AGENT,
+        lease_id=_LEASE,
+        deadline=datetime.now(UTC) + timedelta(minutes=20),
+        bench_version=_BENCH,
+        agent_artifact_sha256="aa" * 32,
+        screened_image_sha256="bb" * 32,
+        screened_image_size_bytes=1024,
+        screened_image_id="sha256:" + "ef" * 32,
+        screened_image_ref=f"ditto-screen/{_AGENT}:latest",
+        screened_image_upload_id=UUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd"),
+        screening_policy_version=9,
+    )
+    mocks.storage = storage
+    mocks.authorize = AsyncMock(return_value=authority)
+    mocks.audit = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        endpoint_module,
+        "authorize_coding_certification_harness_delivery",
+        mocks.authorize,
+    )
+    monkeypatch.setattr(endpoint_module, "record_artifact_fetch", mocks.audit)
     return mocks
 
 
@@ -314,3 +343,62 @@ async def test_expired_claim_returns_404_after_commit(
     assert expired.status_code == 404
     assert mocks.consume.await_count == 1
     assert mocks.claim.await_count == 1
+
+
+def _harness_payload(**updates) -> dict:
+    nonce = updates.pop("nonce", uuid4())
+    requested_at = updates.pop("requested_at", datetime.now(UTC))
+    request = CodingCertificationHarnessLaunchRequest(
+        validator_hotkey=_VALIDATOR,
+        lease_id=_LEASE,
+        nonce=nonce,
+        requested_at=requested_at,
+        signature=_KEYPAIR.sign(
+            coding_certification_harness_launch_signing_message(
+                validator_hotkey=_VALIDATOR,
+                lease_id=_LEASE,
+                nonce=nonce,
+                requested_at=requested_at,
+            )
+        ).hex(),
+    ).model_dump(mode="json")
+    request.update(updates)
+    return request
+
+
+async def test_claimed_lease_harness_launch_is_signed_and_no_store(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    mocks = _install(app, session_maker, monkeypatch)
+    response = await client.post(
+        f"/api/v1/validator/coding-certification-leases/{_LEASE}/harness-launch",
+        json=_harness_payload(),
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["Cache-Control"] == "no-store"
+    body = response.json()
+    assert body["schema"] == "dittobench-coding-certification-harness-launch-v1"
+    assert body["weight_eligible"] is False
+    assert body["lease_id"] == str(_LEASE)
+    assert body["screened_image_ref"] == f"ditto-screen/{_AGENT}:latest"
+    assert body["image_url"].startswith("https://storage.invalid/")
+    assert mocks.authorize.await_count == 2
+    mocks.storage.presigned_get_url.assert_awaited_once()
+    mocks.audit.assert_awaited_once()
+
+
+async def test_claimed_lease_harness_launch_rejects_forgery(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    _install(app, session_maker, monkeypatch)
+    forged = await client.post(
+        f"/api/v1/validator/coding-certification-leases/{_LEASE}/harness-launch",
+        json=_harness_payload(signature="00" * 64),
+    )
+    assert forged.status_code == 401

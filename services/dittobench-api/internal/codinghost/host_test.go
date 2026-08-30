@@ -46,6 +46,13 @@ func TestHostComposesPrivateHandlersAndClosesWithoutExecutingCandidate(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/coding/certifier/canary", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	host.CanaryHandler().ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("default canary status=%d", response.Code)
+	}
 	for path, handler := range map[string]http.Handler{
 		"/v1/coding/supervisor/recover":   host.SupervisorHandler(),
 		"/v1/coding/publications/pending": host.PublicationHandler(),
@@ -63,6 +70,74 @@ func TestHostComposesPrivateHandlersAndClosesWithoutExecutingCandidate(t *testin
 	}
 	if _, err := os.Stat(filepath.Join(root, "outbox")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHostAttachesCanaryWhenThePublicPackIsPresent(t *testing.T) {
+	listener, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	docker := sandbox.NewLocalDocker()
+	docker.RequireRootless = true
+	docker.RequireIsolatedDaemon = true
+	docker.EgressNetwork = "coding-sandbox"
+	docker.EgressProxy = "http://proxy.invalid:3128"
+	repo, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := newHost(Config{
+		ControlToken: testControlToken, PrivateRoot: root, SourceListener: listener,
+		SourcePublicBaseURL: "http://host.docker.internal:" + strconv.Itoa(port),
+		Policy:              loadPolicy(t), RuntimeImageRepository: "registry.invalid/coding-runtime",
+		RuntimeImageDigest: "sha256:" + strings.Repeat("2", 64), CanaryEnabled: true, CertificationRoot: repo,
+		Docker: docker, CandidateUID: 65532, CandidateGID: 65532,
+		MaxTotalBytes: 512 << 20, MaxAttempts: 4,
+	}, func(context.Context) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/coding/certifier/canary", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	host.CanaryHandler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("enabled canary status=%d", response.Code)
+	}
+	if err := host.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHostFailsClosedWhenCanaryIsEnabledWithoutThePublicPack(t *testing.T) {
+	listener, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	docker := sandbox.NewLocalDocker()
+	docker.RequireRootless = true
+	docker.RequireIsolatedDaemon = true
+	docker.EgressNetwork = "coding-sandbox"
+	docker.EgressProxy = "http://proxy.invalid:3128"
+	_, err = newHost(Config{
+		ControlToken: testControlToken, PrivateRoot: root, SourceListener: listener,
+		SourcePublicBaseURL: "http://host.docker.internal:1", Policy: loadPolicy(t),
+		RuntimeImageRepository: "registry.invalid/coding-runtime", RuntimeImageDigest: "sha256:" + strings.Repeat("2", 64),
+		CanaryEnabled: true, CertificationRoot: root, Docker: docker,
+		CandidateUID: 65532, CandidateGID: 65532, MaxTotalBytes: 512 << 20, MaxAttempts: 4,
+	}, func(context.Context) error { return nil })
+	if err == nil {
+		t.Fatal("expected canary-enabled host without a pack to fail closed")
 	}
 }
 

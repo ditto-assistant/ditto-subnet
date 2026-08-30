@@ -40,6 +40,7 @@ from ditto.api_models.coding import (
     coding_shadow_result_signing_message,
 )
 from ditto.api_models.coding_certification_leases import (
+    coding_certification_harness_launch_signing_message,
     coding_certification_lease_abort_signing_message,
     coding_certification_lease_claim_signing_message,
     coding_certification_lease_issue_signing_message,
@@ -339,6 +340,27 @@ def sign_coding_certification_lease_abort(
 ) -> str:
     signature: bytes = keypair.sign(
         coding_certification_lease_abort_signing_message(
+            validator_hotkey=validator_hotkey,
+            lease_id=lease_id,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
+def sign_coding_certification_harness_launch(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    lease_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    """Sign one claimed-lease screened-image launch request."""
+
+    signature: bytes = keypair.sign(
+        coding_certification_harness_launch_signing_message(
             validator_hotkey=validator_hotkey,
             lease_id=lease_id,
             nonce=nonce,

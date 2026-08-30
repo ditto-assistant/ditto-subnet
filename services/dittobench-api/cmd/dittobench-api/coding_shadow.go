@@ -76,6 +76,9 @@ func codingShadowHostFromEnvironment(
 		ControlToken: controlTokenFromEnv(), PrivateRoot: root,
 		SourceListener: listener, SourcePublicBaseURL: publicBase, Policy: policy,
 		RuntimeImageRepository: strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY")),
+		RuntimeImageDigest:     strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST")),
+		CanaryEnabled:          envBool("DITTOBENCH_CODING_CANARY_ENABLED"),
+		CertificationRoot:      strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_CERTIFICATION_ROOT")),
 		Docker:                 docker, CandidateUID: uint32(candidateUID), CandidateGID: uint32(candidateGID),
 		MaxTotalBytes: 16 << 30, JournalMaxTotalBytes: 3 << 30, MaxAttempts: 64,
 	})

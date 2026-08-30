@@ -15,6 +15,7 @@ from ditto.api_models.coding import (
     SubmitCodingCertificationResponse,
 )
 from ditto.api_models.coding_certification_leases import (
+    CodingCertificationHarnessLaunchResponse,
     CodingCertificationLeaseAuthority,
     CodingCertificationLeaseResponse,
     CodingCertificationLeaseStatus,
@@ -71,9 +72,31 @@ def _lease(
         status=status,
         claimed_at=_NOW if status is CodingCertificationLeaseStatus.CLAIMED else None,
         screened_image_id="sha256:" + "ef" * 32,
-        screened_image_ref="ditto-screen/coding-cert-lease:latest",
+        screened_image_ref=f"ditto-screen/{_AGENT}:latest",
         screened_image_upload_id=_UPLOAD,
         weight_eligible=False,
+    )
+
+
+def _harness() -> CodingCertificationHarnessLaunchResponse:
+    return CodingCertificationHarnessLaunchResponse.model_validate(
+        {
+            "schema": "dittobench-coding-certification-harness-launch-v1",
+            "coding_contract_version": 1,
+            "weight_eligible": False,
+            "lease_id": _LEASE,
+            "agent_id": _AGENT,
+            "lease_deadline": _NOW + timedelta(minutes=20),
+            "bench_version": 12,
+            "agent_artifact_sha256": "aa" * 32,
+            "screened_image_sha256": "1a" * 32,
+            "screened_image_size_bytes": 1024,
+            "screened_image_id": "sha256:" + "ef" * 32,
+            "screened_image_ref": f"ditto-screen/{_AGENT}:latest",
+            "screening_policy_version": 9,
+            "image_url": "https://storage.invalid/image.tar?signature=synthetic",
+            "expires_at": _NOW + timedelta(minutes=5),
+        }
     )
 
 
@@ -97,6 +120,7 @@ class _Platform:
         self.issues = 0
         self.claims = 0
         self.aborts = 0
+        self.launches = 0
         self.submits = 0
         self.issued = _lease()
         self.claimed = _lease(status=CodingCertificationLeaseStatus.CLAIMED)
@@ -128,6 +152,13 @@ class _Platform:
         self.aborts += 1
         assert lease_id == _LEASE
         return _lease(status=CodingCertificationLeaseStatus.ABORTED)
+
+    async def request_coding_certification_harness_launch(
+        self, lease_id: UUID
+    ) -> CodingCertificationHarnessLaunchResponse:
+        self.launches += 1
+        assert lease_id == _LEASE
+        return _harness()
 
     async def submit_coding_certification(
         self,
@@ -168,9 +199,12 @@ class _Runtime:
             raise PlatformInfrastructureError("coding canary runtime is unavailable")
 
     async def certify(
-        self, lease: CodingCertificationLeaseResponse
+        self,
+        lease: CodingCertificationLeaseResponse,
+        harness: CodingCertificationHarnessLaunchResponse,
     ) -> CodingCanaryOutcome:
         self.certified.append(lease)
+        assert harness.lease_id == lease.authority.lease_id
         return CodingCanaryOutcome(
             authority=lease.authority,
             receipt=_receipt(),
@@ -193,6 +227,7 @@ async def test_canary_worker_claims_issued_lease_then_runs_certifier() -> None:
     assert await worker.run_once() is True
     assert platform.issues == 1
     assert platform.claims == 1
+    assert platform.launches == 1
     assert platform.submits == 1
     assert len(runtime.certified) == 1
     assert runtime.certified[0].status is CodingCertificationLeaseStatus.CLAIMED
@@ -326,7 +361,8 @@ async def test_canary_runtime_certify_accepts_private_json() -> None:
     ) as http:
         runtime = CodingCanaryRuntime(_runtime_config(), http)
         outcome = await runtime.certify(
-            _lease(status=CodingCertificationLeaseStatus.CLAIMED)
+            _lease(status=CodingCertificationLeaseStatus.CLAIMED),
+            _harness(),
         )
     assert outcome.receipt.weight_eligible is False
     assert outcome.capabilities_revoked is True
@@ -350,7 +386,10 @@ async def test_canary_runtime_rejects_missing_no_store() -> None:
     ) as http:
         runtime = CodingCanaryRuntime(_runtime_config(), http)
         with pytest.raises(ValidatorInfrastructureError, match="cache policy"):
-            await runtime.certify(_lease(status=CodingCertificationLeaseStatus.CLAIMED))
+            await runtime.certify(
+                _lease(status=CodingCertificationLeaseStatus.CLAIMED),
+                _harness(),
+            )
 
 
 @pytest.mark.asyncio

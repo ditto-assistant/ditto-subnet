@@ -37,6 +37,8 @@ from ditto.api_models.coding import (
     run_evidence_digest,
 )
 from ditto.api_models.coding_certification_leases import (
+    CodingCertificationHarnessLaunchRequest,
+    CodingCertificationHarnessLaunchResponse,
     CodingCertificationLeaseAbortRequest,
     CodingCertificationLeaseClaimRequest,
     CodingCertificationLeaseIssueRequest,
@@ -103,6 +105,7 @@ from ditto.validator.signing import (
     sign_artifact_request,
     sign_coding_authoring_freeze,
     sign_coding_authoring_lease,
+    sign_coding_certification_harness_launch,
     sign_coding_certification_lease_abort,
     sign_coding_certification_lease_claim,
     sign_coding_certification_lease_issue,
@@ -2045,6 +2048,72 @@ class PlatformClient:
                 "coding certification lease response is unavailable"
             )
         return result
+
+    async def request_coding_certification_harness_launch(
+        self,
+        lease_id: UUID,
+    ) -> CodingCertificationHarnessLaunchResponse:
+        """Fetch one claimed-lease screened-image launch capability."""
+
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingCertificationHarnessLaunchRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            lease_id=lease_id,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_certification_harness_launch(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                lease_id=lease_id,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        body = bytearray()
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base}{_PREFIX}/coding-certification-leases/{lease_id}/harness-launch",
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            ) as response:
+                if response.status_code == 503:
+                    raise PlatformInfrastructureError(
+                        "coding certification harness launch is temporarily unavailable"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        "coding certification harness launch rejected "
+                        f"({response.status_code})"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=16 << 10):
+                    if len(body) + len(chunk) > _CODING_HARNESS_LAUNCH_MAX_BYTES:
+                        raise PlatformInfrastructureError(
+                            "coding certification harness launch response "
+                            "size is invalid"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding certification harness launch request failed"
+            ) from error
+        if not body:
+            raise PlatformInfrastructureError(
+                "coding certification harness launch response size is invalid"
+            )
+        try:
+            launch = CodingCertificationHarnessLaunchResponse.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding certification harness launch response is invalid"
+            ) from None
+        if launch.lease_id != lease_id:
+            raise PlatformInfrastructureError(
+                "coding certification harness launch response identity is invalid"
+            )
+        return launch
 
     async def _send_coding_certification_lease(
         self,

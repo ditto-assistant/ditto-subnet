@@ -82,6 +82,16 @@ func (factory *PhaseFactory) Grading(
 	return New(factory.executorConfig(manifest, false))
 }
 
+func (factory *PhaseFactory) Certification(
+	ctx context.Context,
+	manifest codinggrader.Manifest,
+) (*Executor, error) {
+	if factory == nil || ctx == nil || ctx.Err() != nil || manifest.Validate(factory.now().UTC()) != nil {
+		return nil, errors.New("coding certification executor authority is invalid")
+	}
+	return New(factory.executorConfig(manifest, false))
+}
+
 func (factory *PhaseFactory) executorConfig(manifest codinggrader.Manifest, authoring bool) Config {
 	return Config{
 		Manifest: manifest, ImageRef: factory.config.ImageRepository + "@" + manifest.GraderImageDigest,

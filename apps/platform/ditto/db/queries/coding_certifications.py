@@ -115,8 +115,6 @@ def coding_certification_lease_accepts_receipt(
         and lease.screened_image_sha256 == screened_image_sha256
         and lease.bench_version == bench_version
         and lease.coding_contract_version == receipt.coding_contract_version
-        and lease.canary_manifest_sha256 == receipt.canary_manifest_sha256
-        and lease.grader_plan_sha256 == receipt.grader_plan_sha256
         and not lease.weight_eligible
         and not receipt.weight_eligible
     )

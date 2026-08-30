@@ -50,6 +50,21 @@ class CodingCertificationLeaseResult:
     idempotent: bool
 
 
+@dataclass(frozen=True)
+class CodingCertificationHarnessAuthority:
+    agent_id: UUID
+    lease_id: UUID
+    deadline: datetime
+    bench_version: int
+    agent_artifact_sha256: str
+    screened_image_sha256: str
+    screened_image_size_bytes: int
+    screened_image_id: str
+    screened_image_ref: str
+    screened_image_upload_id: UUID
+    screening_policy_version: int
+
+
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
@@ -338,3 +353,54 @@ async def get_coding_certification_lease(
     lease_id: UUID,
 ) -> CodingCertificationLease | None:
     return await session.get(CodingCertificationLease, lease_id)
+
+
+async def authorize_coding_certification_harness_delivery(
+    session: AsyncSession,
+    *,
+    lease_id: UUID,
+    validator_hotkey: str,
+) -> CodingCertificationHarnessAuthority:
+    """Return the current screened image for one claimed certification lease."""
+
+    lease = await session.get(CodingCertificationLease, lease_id, with_for_update=True)
+    agent = await session.get(Agent, lease.agent_id) if lease is not None else None
+    now = await _database_now(session)
+    if (
+        lease is None
+        or agent is None
+        or lease.validator_hotkey != validator_hotkey
+        or lease.status != CodingCertificationLeaseStatus.CLAIMED.value
+        or lease.weight_eligible
+        or _aware(lease.deadline) <= now
+        or lease.artifact_sha256 != agent.sha256
+        or lease.screened_image_sha256 != agent.screened_image_sha256
+        or agent.screened_image_sha256 is None
+        or agent.screened_image_size_bytes is None
+        or agent.screened_image_size_bytes <= 0
+        or agent.screened_image_size_bytes > 8 << 30
+        or agent.screened_image_id is None
+        or agent.screened_image_ref is None
+        or agent.screened_image_upload_id is None
+        or agent.screening_policy_version < 9
+        or agent.screened_image_id != lease.screened_image_id
+        or agent.screened_image_ref != lease.screened_image_ref
+        or agent.screened_image_upload_id != lease.screened_image_upload_id
+        or agent.screened_image_ref != f"ditto-screen/{agent.agent_id}:latest"
+    ):
+        raise CodingCertificationLeaseNotAvailableError(
+            "coding certification harness is unavailable for this validator"
+        )
+    return CodingCertificationHarnessAuthority(
+        agent_id=agent.agent_id,
+        lease_id=lease.lease_id,
+        deadline=_aware(lease.deadline),
+        bench_version=lease.bench_version,
+        agent_artifact_sha256=lease.artifact_sha256,
+        screened_image_sha256=agent.screened_image_sha256,
+        screened_image_size_bytes=agent.screened_image_size_bytes,
+        screened_image_id=agent.screened_image_id,
+        screened_image_ref=agent.screened_image_ref,
+        screened_image_upload_id=agent.screened_image_upload_id,
+        screening_policy_version=agent.screening_policy_version,
+    )

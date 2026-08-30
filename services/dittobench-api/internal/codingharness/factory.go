@@ -61,6 +61,28 @@ func New(config Config) (*Factory, error) {
 	}, nil
 }
 
+const (
+	publicCanaryCaseID              = "PRACTICE-LEDGER-001"
+	publicCanaryProfileCapabilityID = "public-certification-v1"
+)
+
+// CanaryBinding is one claimed certification lease plus a short-lived
+// screened-image capability. It is not a private coding ticket.
+type CanaryBinding struct {
+	LeaseID                string
+	AgentID                string
+	AgentArtifactSHA256    string
+	Deadline               time.Time
+	BenchVersion           int
+	ScreenedImageSHA256    string
+	ScreenedImageSize      int64
+	ScreenedImageID        string
+	ScreenedImageRef       string
+	ScreeningPolicyVersion int
+	ImageURL               string
+	ImageExpiresAt         time.Time
+}
+
 func (factory *Factory) Acquire(
 	ctx context.Context,
 	binding codingphase.HarnessBinding,
@@ -74,6 +96,38 @@ func (factory *Factory) Acquire(
 	if !validHarnessBinding(binding, now) {
 		return nil, ErrInvalid
 	}
+	return factory.acquireValidated(ctx, binding)
+}
+
+func (factory *Factory) AcquireCanary(
+	ctx context.Context,
+	binding CanaryBinding,
+) (codingphase.Harness, error) {
+	if factory == nil || ctx == nil || ctx.Err() != nil {
+		return nil, ErrInvalid
+	}
+	now := factory.now().UTC()
+	binding.Deadline = binding.Deadline.UTC()
+	binding.ImageExpiresAt = binding.ImageExpiresAt.UTC()
+	if !validCanaryBinding(binding, now) {
+		return nil, ErrInvalid
+	}
+	return factory.acquireValidated(ctx, codingphase.HarnessBinding{
+		ExecutionID: binding.LeaseID, AgentID: binding.AgentID, RunRowID: binding.LeaseID,
+		AgentArtifactSHA256: binding.AgentArtifactSHA256, TicketID: binding.LeaseID,
+		CaseID: publicCanaryCaseID, ProfileCapabilityID: publicCanaryProfileCapabilityID,
+		Deadline: binding.Deadline, BenchVersion: binding.BenchVersion,
+		ScreenedImageSHA256: binding.ScreenedImageSHA256, ScreenedImageSize: binding.ScreenedImageSize,
+		ScreenedImageID: binding.ScreenedImageID, ScreenedImageRef: binding.ScreenedImageRef,
+		ScreeningPolicyVersion: binding.ScreeningPolicyVersion, ImageURL: binding.ImageURL,
+		ImageExpiresAt: binding.ImageExpiresAt,
+	})
+}
+
+func (factory *Factory) acquireValidated(
+	ctx context.Context,
+	binding codingphase.HarnessBinding,
+) (codingphase.Harness, error) {
 	instanceID := factory.newID()
 	if !validIdentifier(instanceID, 256) {
 		return nil, ErrLifecycle
@@ -128,6 +182,22 @@ func (factory *Factory) releaseReservation(handle *Handle) error {
 	}
 	delete(factory.instances, handle.instanceID)
 	return nil
+}
+
+func validCanaryBinding(binding CanaryBinding, now time.Time) bool {
+	if !canonicalUUID(binding.LeaseID) || !canonicalUUID(binding.AgentID) ||
+		!lowerSHA256(binding.AgentArtifactSHA256) || binding.BenchVersion < 7 || binding.BenchVersion > 1_000_000 ||
+		!lowerSHA256(binding.ScreenedImageSHA256) || binding.ScreenedImageSize <= 0 || binding.ScreenedImageSize > 8<<30 ||
+		binding.ScreenedImageID != "sha256:"+strings.TrimPrefix(binding.ScreenedImageID, "sha256:") ||
+		!lowerSHA256(strings.TrimPrefix(binding.ScreenedImageID, "sha256:")) ||
+		binding.ScreenedImageRef != "ditto-screen/"+binding.AgentID+":latest" ||
+		binding.ScreeningPolicyVersion < 9 || binding.ScreeningPolicyVersion > 1_000_000 ||
+		!validImageURL(binding.ImageURL) || now.IsZero() || !binding.Deadline.After(now) ||
+		binding.Deadline.After(now.Add(2*time.Hour)) || !binding.ImageExpiresAt.After(now) ||
+		binding.ImageExpiresAt.After(binding.Deadline) || binding.ImageExpiresAt.After(now.Add(6*time.Minute)) {
+		return false
+	}
+	return true
 }
 
 func validHarnessBinding(binding codingphase.HarnessBinding, now time.Time) bool {

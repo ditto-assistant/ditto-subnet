@@ -198,6 +198,8 @@ services:
       # until an operator explicitly enables the complete rootless profile.
       DITTOBENCH_CODING_SHADOW_ENABLED: ${DITTOBENCH_CODING_SHADOW_ENABLED:-false}
       DITTOBENCH_CODING_CANARY_ENABLED: ${DITTOBENCH_CODING_CANARY_ENABLED:-false}
+      DITTOBENCH_CODING_CERTIFICATION_ROOT: ${DITTOBENCH_CODING_CERTIFICATION_ROOT:-}
+      DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST: ${DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST:-}
       DITTOBENCH_CODING_PRIVATE_ROOT: /var/lib/dittobench-private-artifacts/coding-shadow-v1
       DITTOBENCH_CODING_POLICY_FILE: /opt/ditto/coding/coding_inference_policy_locked_v1.json
       DITTOBENCH_CODING_SOURCE_PORT: "11438"

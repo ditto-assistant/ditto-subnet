@@ -21,12 +21,16 @@ For one stable worker instance it:
 7. obtains the freeze-bound grading lease, runs the protected grader, and uses
    the same prepare -> publish -> acknowledge order for terminal evidence.
 
-The Go host is constructed only when
-`DITTOBENCH_CODING_SHADOW_ENABLED=true`. It composes the phase-specific Docker
+The Go host is constructed when `DITTOBENCH_CODING_SHADOW_ENABLED=true` or
+`DITTOBENCH_CODING_CANARY_ENABLED=true`. It composes the phase-specific Docker
 executor factory, artifact fetcher, scoped memory projector, durable outbox,
 dormant screened-harness controller, direct-source registry, opaque workspace
 and Luna routes, relay journal, attempt supervisor, publication service, and a
-bounded outbox sweep loop.
+bounded outbox sweep loop. The public-canary handler is attached only when
+`DITTOBENCH_CODING_CANARY_ENABLED=true` and
+`DITTOBENCH_CODING_CERTIFICATION_ROOT` contains the pinned `certification/v1`
+pack; a canary-enabled host without that pack fails closed. The canary path
+does not claim private tickets or set weights.
 The relay-journal root has a durable directory-cardinality ceiling equal to the
 host attempt bound; an unexpected entry or exhausted root fails closed instead
 of allocating unbounded restart residue.

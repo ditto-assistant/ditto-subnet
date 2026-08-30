@@ -4918,6 +4918,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/coding-certification-leases/{lease_id}/harness-launch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Coding Certification Harness Launch
+         * @description Return one short-lived screened image capability for a claimed lease.
+         */
+        post: operations["request_coding_certification_harness_launch_api_v1_validator_coding_certification_leases__lease_id__harness_launch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/coding-shadow/authoring-freeze": {
         parameters: {
             query?: never;
@@ -11010,6 +11030,82 @@ export interface components {
             editable_paths: string[];
             /** Test Command Ids */
             test_command_ids: string[];
+        };
+        /** CodingCertificationHarnessLaunchRequest */
+        CodingCertificationHarnessLaunchRequest: {
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** CodingCertificationHarnessLaunchResponse */
+        CodingCertificationHarnessLaunchResponse: {
+            /** Agent Artifact Sha256 */
+            agent_artifact_sha256: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Image Url */
+            image_url: string;
+            /**
+             * Lease Deadline
+             * Format: date-time
+             */
+            lease_deadline: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-certification-harness-launch-v1";
+            /** Screened Image Id */
+            screened_image_id: string;
+            /** Screened Image Ref */
+            screened_image_ref: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Screened Image Size Bytes */
+            screened_image_size_bytes: number;
+            /** Screening Policy Version */
+            screening_policy_version: number;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
         };
         /** CodingCertificationLeaseAbortRequest */
         CodingCertificationLeaseAbortRequest: {
@@ -33289,6 +33385,62 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CodingCertificationLeaseResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_coding_certification_harness_launch_api_v1_validator_coding_certification_leases__lease_id__harness_launch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lease_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingCertificationHarnessLaunchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingCertificationHarnessLaunchResponse"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Coding certification harness unavailable. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Replay, expiry, or immutable authority conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -117,9 +117,9 @@ The implementation must be split after this contract:
 1. Platform persistence and authenticated issue/claim/abort endpoints for the
    qualified certification lease, including migration-order and stale-binding
    tests. See `apps/platform/docs/coding-certification-lease.md`.
-2. Validator integration that claims one lease, launches the screened image in
-   the existing hardened sandbox, runs `codingcertifier`, and revokes every
-   route.
+2. Validator integration that claims one lease, fetches a lease-bound
+   screened-image capability, launches the screened image in the existing
+   hardened sandbox, runs `codingcertifier`, and revokes every route.
 3. Platform receipt acceptance that verifies the claimed-lease binding and
    exposes operator-only certification state. The validator submits the
    terminal receipt against that lease.

@@ -9,6 +9,7 @@ from ditto.api_models.coding_certification_leases import (
     CodingCertificationLeaseIssueRequest,
     CodingCertificationLeaseResponse,
     CodingCertificationLeaseStatus,
+    coding_certification_harness_launch_signing_message,
 )
 
 _ROOT = Path(__file__).resolve().parents[5]
@@ -75,6 +76,20 @@ def test_qualified_certification_lease_rejects_weight_or_nil_authority() -> None
         CodingCertificationLeaseAuthority.model_validate(
             _authority(lease_id="00000000-0000-0000-0000-000000000000")
         )
+
+
+def test_certification_harness_launch_signing_domain_is_exact() -> None:
+    requested_at = datetime.fromisoformat("2026-08-30T18:00:00+00:00")
+    lease_id = uuid4()
+    nonce = uuid4()
+    message = coding_certification_harness_launch_signing_message(
+        validator_hotkey="5" * 48,
+        lease_id=lease_id,
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    assert message.startswith(b"dittobench-coding-certification-harness-launch:v1\x00")
+    assert b"ticket" not in message
 
 
 def test_qualified_certification_lease_response_requires_image_identity() -> None:

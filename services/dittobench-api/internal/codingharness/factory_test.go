@@ -128,6 +128,43 @@ func newHarnessFixture(t *testing.T) (*Factory, *fakeRuntime, *codingsource.Regi
 	return factory, runtime, registry, now
 }
 
+func fixtureCanaryBinding(now time.Time) CanaryBinding {
+	agentID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	return CanaryBinding{
+		LeaseID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", AgentID: agentID,
+		AgentArtifactSHA256: strings.Repeat("a", 64), Deadline: now.Add(time.Hour), BenchVersion: 12,
+		ScreenedImageSHA256: strings.Repeat("b", 64), ScreenedImageSize: 1024,
+		ScreenedImageID: "sha256:" + strings.Repeat("c", 64), ScreenedImageRef: "ditto-screen/" + agentID + ":latest",
+		ScreeningPolicyVersion: 9, ImageURL: "https://storage.invalid/image.tar?signature=synthetic",
+		ImageExpiresAt: now.Add(5 * time.Minute),
+	}
+}
+
+func TestAcquireCanaryRejectsPrivateTicketFieldsAndLoadsTheLeaseImage(t *testing.T) {
+	factory, runtime, _, now := newHarnessFixture(t)
+	binding := fixtureCanaryBinding(now)
+	binding.ScreenedImageRef = "ditto-screen/coding-cert-lease:latest"
+	if _, err := factory.AcquireCanary(t.Context(), binding); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("private-shaped image ref err=%v", err)
+	}
+	harness, err := factory.AcquireCanary(t.Context(), fixtureCanaryBinding(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.loaded != 1 || runtime.started != 0 {
+		t.Fatalf("loaded/started=%d/%d", runtime.loaded, runtime.started)
+	}
+	owned := harness.(*Handle)
+	if owned.binding.TicketID != fixtureCanaryBinding(now).LeaseID ||
+		owned.binding.RunRowID != fixtureCanaryBinding(now).LeaseID ||
+		owned.binding.CaseID != publicCanaryCaseID {
+		t.Fatalf("canary handle leaked a private ticket identity: %+v", owned.binding)
+	}
+	if owned.binding.ImageURL != "" {
+		t.Fatal("dormant canary handle retained the screened-image capability")
+	}
+}
+
 func TestAcquireIsDormantThenActivateRegistersExactSource(t *testing.T) {
 	factory, runtime, registry, now := newHarnessFixture(t)
 	if factory.client.Timeout != 0 {
