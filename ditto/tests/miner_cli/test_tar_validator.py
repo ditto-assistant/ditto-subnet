@@ -33,7 +33,6 @@ class TestPreflight:
 
         real_checks = [c for c in result.checks if not c.deferred]
         assert all(c.passed for c in real_checks)
-        # We expect the three real checks: file_size, gzip_valid, tar_opens.
         real_names = {c.name for c in real_checks}
         assert real_names == {"file_size", "gzip_valid", "tar_opens"}
 
@@ -93,7 +92,6 @@ class TestDeferredChecks:
             run_preflight(good_tar)
 
         debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
-        # One debug line per deferred check.
         assert any("manifest_present" in m for m in debug_msgs)
         assert any("dependency_allowlist" in m for m in debug_msgs)
         assert any("schema_diff" in m for m in debug_msgs)
