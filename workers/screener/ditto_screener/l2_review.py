@@ -3890,6 +3890,7 @@ class LayeredSourceReviewAgent:
         concern_hold_count: int = 3,
         clear_min_notes: int = 3,
         adjudicator: SourceReviewAdjudicator | None = None,
+        adjudicator_reserve_seconds: float = 0.0,
     ) -> None:
         if mode not in {"off", "shadow", "enforce"}:
             raise ValueError("invalid L2 mode")
@@ -3899,6 +3900,7 @@ class LayeredSourceReviewAgent:
         self._concern_hold_count = max(1, int(concern_hold_count))
         self._clear_min_notes = max(1, int(clear_min_notes))
         self._adjudicator = adjudicator
+        self._adjudicator_reserve_seconds = max(0.0, float(adjudicator_reserve_seconds))
         self._shadow_results: dict[UUID, L2RunResult] = {}
 
     def pop_shadow_result(self, attempt_id: UUID) -> L2RunResult | None:
@@ -3970,11 +3972,21 @@ class LayeredSourceReviewAgent:
             if progress is not None:
                 progress(completed, total * 2)
 
+        # L4 is the terminal court, so the exploratory stages may not consume
+        # its entire wall-clock allowance.  They share a deadline shortened by
+        # the configured court timeout; L4 receives the original deadline and
+        # can therefore decide from whatever durable notes/finding exist when
+        # L1/L2 run out of time.
+        review_deadline = (
+            None
+            if deadline is None or self._adjudicator is None
+            else deadline - self._adjudicator_reserve_seconds
+        )
         l1 = await self._l1.review(
             archive_path,
             artifact_sha256=artifact_sha256,
             progress=report_l1 if progress is not None else None,
-            deadline=deadline,
+            deadline=review_deadline,
             policy_version=policy_version,
         )
         return await self.resolve_lead(
@@ -3984,6 +3996,7 @@ class LayeredSourceReviewAgent:
             l1_observation=l1,
             progress=progress,
             deadline=deadline,
+            review_deadline=review_deadline,
             policy_version=policy_version,
         )
 
@@ -3996,10 +4009,13 @@ class LayeredSourceReviewAgent:
         l1_observation: SourceReviewObservation,
         progress: Callable[[int, int], None] | None = None,
         deadline: float | None = None,
+        review_deadline: float | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
     ) -> SourceReviewObservation:
         """Resolve a precomputed, artifact-bound L1 lead without rerunning L1."""
         l1 = l1_observation
+        if review_deadline is None and deadline is not None and self._adjudicator:
+            review_deadline = deadline - self._adjudicator_reserve_seconds
         always_escalate = os.environ.get(
             "SCREENER_L2_ALWAYS_ESCALATE", ""
         ).strip().lower() in {"1", "true", "yes", "on"}
@@ -4039,7 +4055,7 @@ class LayeredSourceReviewAgent:
             artifact_sha256=artifact_sha256,
             attempt_id=attempt_id,
             l1_observation=l1,
-            deadline=deadline,
+            deadline=review_deadline,
             policy_version=policy_version,
             on_l3_start=lambda: report(8),
         )

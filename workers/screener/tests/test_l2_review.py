@@ -612,9 +612,11 @@ class _FakeL1:
     def __init__(self, result: SourceReviewObservation) -> None:
         self.result = result
         self.calls = 0
+        self.deadline: float | None = None
 
-    async def review(self, *_args: Any, **_kwargs: Any) -> SourceReviewObservation:
+    async def review(self, *_args: Any, **kwargs: Any) -> SourceReviewObservation:
         self.calls += 1
+        self.deadline = kwargs.get("deadline")
         return self.result
 
 
@@ -622,9 +624,11 @@ class _FakeL2:
     def __init__(self, result: L2RunResult) -> None:
         self.result = result
         self.calls = 0
+        self.deadline: float | None = None
 
     async def review(self, *_args: Any, **kwargs: Any) -> L2RunResult:
         self.calls += 1
+        self.deadline = kwargs.get("deadline")
         # The real reviewer announces the analyst→L3 boundary; the fake keeps
         # that contract so the public progress ladder stays under test.
         on_l3_start = kwargs.get("on_l3_start")
@@ -4317,12 +4321,14 @@ class _FakeAdjudicator:
         self.calls = 0
         self.seen_notes: tuple[Any, ...] = ()
         self.seen_finding: Any = None
+        self.deadline: float | None = None
         self._decision = decision
 
     async def adjudicate(self, _archive: str, **kwargs: Any) -> Any:
         self.calls += 1
         self.seen_notes = tuple(kwargs.get("notes") or ())
         self.seen_finding = kwargs.get("finding")
+        self.deadline = kwargs.get("deadline")
         return SourceReviewAdjudication(
             decision=self._decision,
             reason="the model authors the served reply at src/main.rs:6",
@@ -4331,6 +4337,55 @@ class _FakeAdjudicator:
             model="z-ai/glm-5.3-flash",
             prompt_revision="adjudicator-v1-policy-v10",
         )
+
+
+async def test_exploration_reserves_the_terminal_adjudicator_deadline() -> None:
+    l1 = _FakeL1(_l1("medium"))
+    l2 = _FakeL2(_model_result(_safe()))
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=l1,
+        l2=l2,
+        mode="enforce",
+        adjudicator=court,  # type: ignore[arg-type]
+        adjudicator_reserve_seconds=600,
+    )
+
+    await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT, deadline=1800
+    )
+
+    assert l1.deadline == 1200
+    assert l2.deadline == 1200
+    assert court.deadline == 1800
+
+
+async def test_l2_wall_clock_timeout_still_hands_off_to_l4(tmp_path: Path) -> None:
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+
+    async def slow_provider(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(1)
+        return httpx.Response(200, json={})
+
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(_l1("medium")),
+        l2=_sol_agent(tmp_path, _FakeHarness(), slow_provider),
+        mode="enforce",
+        adjudicator=court,  # type: ignore[arg-type]
+        adjudicator_reserve_seconds=0.8,
+    )
+
+    result = await layered.review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        deadline=asyncio.get_running_loop().time() + 1,
+    )
+
+    assert court.calls == 1
+    assert result.adjudication is not None
+    assert result.adjudication["decision"] == "clear"
 
 
 async def test_a_held_review_reaches_the_adjudicator_with_its_ledger() -> None:

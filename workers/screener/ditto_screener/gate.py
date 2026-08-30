@@ -627,6 +627,7 @@ class BuildGate:
             concern_hold_count=config.review_concern_hold_count,
             clear_min_notes=config.review_clear_min_notes,
             adjudicator=build_adjudicator(config),
+            adjudicator_reserve_seconds=config.adjudicator_timeout_seconds,
         )
 
     def apply_review_settings(self, effective: EffectiveReviewSettings) -> bool:
