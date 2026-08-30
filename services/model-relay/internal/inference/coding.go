@@ -220,6 +220,11 @@ func (d *Deps) admitCodingDispatch(
 	if dispatch.LockedRequest.MaxCompletionTokens > remainingCompletion {
 		return zeroRequest, zeroGrant, httpErrorf(409, "coding inference completion budget is exhausted")
 	}
+	// Serialize cross-grant COUNT + INSERT so concurrent transactions locking
+	// different grants cannot all pass the concurrency rails before inserting.
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext('coding_inference_admission'))"); err != nil {
+		return zeroRequest, zeroGrant, httpErrorf(500, "coding inference admission failed")
+	}
 	validatorActive, err := q.CountActiveCodingInferenceRequestsForValidator(ctx, postgres.CountActiveCodingInferenceRequestsForValidatorParams{
 		Now: pgTime(now), ValidatorHotkey: grant.ValidatorHotkey,
 	})
