@@ -28,7 +28,16 @@ const (
 	maximumSignedURLBytes = 16 << 10
 	maximumRequestTimeout = 15 * time.Minute
 	maximumTicketLifetime = 2 * time.Hour
+	minimumCapabilityTTL  = time.Minute
 	maximumCapabilityTTL  = 15 * time.Minute
+)
+
+// DeliveryPhase separates authoring bytes from pristine-grading bytes.
+type DeliveryPhase string
+
+const (
+	PhaseAuthoring DeliveryPhase = "authoring"
+	PhaseGrading   DeliveryPhase = "grading"
 )
 
 // Kind identifies one of the four contract-v1 artifact classes.
@@ -62,6 +71,7 @@ var (
 // URL must never be logged, persisted, or sent to the miner or model context.
 type Capability struct {
 	TicketID       string
+	Phase          DeliveryPhase
 	Kind           Kind
 	Audience       Audience
 	SHA256         string
@@ -74,8 +84,8 @@ type Capability struct {
 // String deliberately omits the bearer URL.
 func (capability Capability) String() string {
 	return fmt.Sprintf(
-		"CodingArtifactCapability{ticket=%q kind=%q audience=%q size_bytes=%d expires_at=%q}",
-		capability.TicketID, capability.Kind, capability.Audience,
+		"CodingArtifactCapability{ticket=%q phase=%q kind=%q audience=%q size_bytes=%d expires_at=%q}",
+		capability.TicketID, capability.Phase, capability.Kind, capability.Audience,
 		capability.SizeBytes, capability.ExpiresAt.UTC().Format(time.RFC3339),
 	)
 }
@@ -89,6 +99,7 @@ func (capability Capability) GoString() string {
 func (capability Capability) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("ticket", capability.TicketID),
+		slog.String("phase", string(capability.Phase)),
 		slog.String("kind", string(capability.Kind)),
 		slog.String("audience", string(capability.Audience)),
 		slog.Int64("size_bytes", capability.SizeBytes),
@@ -286,12 +297,7 @@ func (fetcher *Fetcher) Open(ctx context.Context, capability Capability) (io.Rea
 }
 
 func (fetcher *Fetcher) validate(ctx context.Context, capability Capability, now time.Time) (*url.URL, *http.Client, error) {
-	maximum, audience, knownKind := kindPolicy(capability.Kind)
-	if !knownKind || audience != capability.Audience ||
-		!validUUID(capability.TicketID) || !lowerSHA256(capability.SHA256) ||
-		capability.SizeBytes <= 0 || capability.SizeBytes > maximum ||
-		capability.ExpiresAt.IsZero() || capability.ExpiresAt.Nanosecond() != 0 ||
-		capability.TicketDeadline.IsZero() || capability.TicketDeadline.Before(capability.ExpiresAt) ||
+	if err := validateCapabilityKnownFields(capability); err != nil ||
 		capability.TicketDeadline.After(now.Add(maximumTicketLifetime)) ||
 		capability.ExpiresAt.After(now.Add(maximumCapabilityTTL)) {
 		return nil, nil, fail(ErrInvalidCapability, "known fields disagree")
@@ -310,6 +316,21 @@ func (fetcher *Fetcher) validate(ctx context.Context, capability Capability, now
 }
 
 func (fetcher *Fetcher) validateURL(ctx context.Context, capability Capability) (*url.URL, bool, error) {
+	parsed, loopback, err := validateCapabilityURL(capability)
+	if err != nil {
+		return nil, false, err
+	}
+	if loopback {
+		if !fetcher.allowLoopback {
+			return nil, false, fail(ErrInvalidCapability, "loopback transport is disabled")
+		}
+	} else if err := netguard.ValidateURLContext(ctx, capability.URL, false); err != nil {
+		return nil, false, fail(ErrInvalidCapability, "URL destination is invalid")
+	}
+	return parsed, loopback, nil
+}
+
+func validateCapabilityURL(capability Capability) (*url.URL, bool, error) {
 	if len(capability.URL) == 0 || len(capability.URL) > maximumSignedURLBytes ||
 		strings.IndexFunc(capability.URL, func(character rune) bool {
 			return character < 32 || character > 126
@@ -329,15 +350,8 @@ func (fetcher *Fetcher) validateURL(ctx context.Context, capability Capability) 
 		}
 	}
 	loopback := isLoopbackHost(parsed.Hostname())
-	if parsed.Scheme != "https" && !(fetcher.allowLoopback && loopback && parsed.Scheme == "http") {
+	if parsed.Scheme != "https" && !(loopback && parsed.Scheme == "http") {
 		return nil, false, fail(ErrInvalidCapability, "URL transport is invalid")
-	}
-	if loopback {
-		if !fetcher.allowLoopback {
-			return nil, false, fail(ErrInvalidCapability, "loopback transport is disabled")
-		}
-	} else if err := netguard.ValidateURLContext(ctx, capability.URL, false); err != nil {
-		return nil, false, fail(ErrInvalidCapability, "URL destination is invalid")
 	}
 	key := "coding-artifacts/v1/" + string(capability.Kind) + "/sha256/" + capability.SHA256
 	if !strings.HasSuffix(parsed.Path, "/"+key) {
@@ -380,8 +394,9 @@ func signedURLExpiry(values url.Values) (time.Time, error) {
 		if err != nil {
 			return time.Time{}, err
 		}
-		durationSeconds, err := strconv.ParseInt(durationValues[0], 10, 64)
-		if err != nil || durationSeconds <= 0 || durationSeconds > int64(maximumCapabilityTTL/time.Second) {
+		durationSeconds, err := parseDecimal(durationValues[0])
+		if err != nil || durationSeconds < int64(minimumCapabilityTTL/time.Second) ||
+			durationSeconds > int64(maximumCapabilityTTL/time.Second) {
 			return time.Time{}, errors.New("invalid v4 expiry")
 		}
 		return signedAt.Add(time.Duration(durationSeconds) * time.Second).UTC(), nil
@@ -390,7 +405,7 @@ func signedURLExpiry(values url.Values) (time.Time, error) {
 	if len(versionTwo) != 1 || versionTwo[0] == "" || len(expiryValues) != 1 {
 		return time.Time{}, errors.New("invalid v2 signature fields")
 	}
-	seconds, err := strconv.ParseInt(expiryValues[0], 10, 64)
+	seconds, err := parseDecimal(expiryValues[0])
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -444,6 +459,43 @@ func kindPolicy(kind Kind) (int64, Audience, bool) {
 	default:
 		return 0, "", false
 	}
+}
+
+func validateCapabilityKnownFields(capability Capability) error {
+	maximum, audience, knownKind := kindPolicy(capability.Kind)
+	if !knownKind || audience != capability.Audience ||
+		!phaseAllows(capability.Phase, capability.Kind) ||
+		!validUUID(capability.TicketID) || !lowerSHA256(capability.SHA256) ||
+		capability.SizeBytes <= 0 || capability.SizeBytes > maximum ||
+		capability.ExpiresAt.IsZero() || capability.ExpiresAt.Nanosecond() != 0 ||
+		capability.TicketDeadline.IsZero() || capability.TicketDeadline.Nanosecond()%1_000 != 0 ||
+		capability.TicketDeadline.Before(capability.ExpiresAt) {
+		return errors.New("coding artifact known fields disagree")
+	}
+	return nil
+}
+
+func phaseAllows(phase DeliveryPhase, kind Kind) bool {
+	switch phase {
+	case PhaseAuthoring:
+		return kind == KindVisibleBundle || kind == KindMemoryBundle || kind == KindResourceProfile
+	case PhaseGrading:
+		return kind == KindVisibleBundle || kind == KindResourceProfile || kind == KindGraderBundle
+	default:
+		return false
+	}
+}
+
+func parseDecimal(value string) (int64, error) {
+	if value == "" {
+		return 0, errors.New("coding artifact expiry is empty")
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return 0, errors.New("coding artifact expiry is not ASCII decimal")
+		}
+	}
+	return strconv.ParseInt(value, 10, 64)
 }
 
 func fail(kind error, message string) error {
