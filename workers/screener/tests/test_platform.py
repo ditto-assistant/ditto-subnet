@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -416,8 +417,70 @@ async def test_submit_result_posts_signed_verdict(
     assert captured["attempt_id"] == "550e8400-e29b-41d4-a716-446655440001"
 
 
-async def test_submit_result_parks_transient_server_failure(
+async def test_source_review_retries_transient_platform_failure(
+    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempt_id = uuid4()
+    review_id = uuid4()
+    polls = 0
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal polls
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "review_id": str(review_id),
+                    "attempt_id": str(attempt_id),
+                    "status": "running",
+                    "provider": "hetzner",
+                    "artifact_sha256": "de" * 32,
+                    "observation": None,
+                    "error_code": None,
+                },
+            )
+        if request.method == "GET":
+            polls += 1
+            if polls == 1:
+                return httpx.Response(502, text="rolling platform deploy")
+            return httpx.Response(
+                200,
+                json={
+                    "review_id": str(review_id),
+                    "attempt_id": str(attempt_id),
+                    "status": "succeeded",
+                    "provider": "hetzner",
+                    "artifact_sha256": "de" * 32,
+                    "observation": {
+                        "ok": True,
+                        "risk_level": "low",
+                        "categories": [],
+                        "clearance_certified": True,
+                    },
+                    "error_code": None,
+                },
+            )
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        result = await client.review_submission_source(
+            _AGENT, attempt_id=attempt_id, timeout=1
+        )
+    assert result is not None
+    assert result.clearance_certified is True
+    assert polls == 2
+
+
+async def test_submit_result_retries_transient_server_failure(
     make_config: Callable[..., ScreenerConfig],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = 0
 
@@ -431,19 +494,23 @@ async def test_submit_result_parks_transient_server_failure(
             json={"agent_id": str(_AGENT), "status": "evaluating", "accepted": True},
         )
 
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
     client, http = _make_client(make_config(), handler)
     async with http:
-        with pytest.raises(PlatformError, match="502"):
-            await client.submit_result(
-                _AGENT,
-                signature="ab" * 64,
-                passed=False,
-                policy_version=SCREENING_POLICY_VERSION,
-                attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
-                outcome=ScreenResultOutcome.RETRYABLE_INFRA,
-            )
+        response = await client.submit_result(
+            _AGENT,
+            signature="ab" * 64,
+            passed=False,
+            policy_version=SCREENING_POLICY_VERSION,
+            attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
+            outcome=ScreenResultOutcome.RETRYABLE_INFRA,
+        )
 
-    assert calls == 1
+    assert response.accepted is True
+    assert calls == 3
 
 
 async def test_submit_result_does_not_retry_conflict(
