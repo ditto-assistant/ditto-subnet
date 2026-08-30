@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.173.0 (2026-08-30)
+
+### Features
+
+- **platform**: Bind coding certification receipts to claimed leases
+  ([`5102083`](https://github.com/ditto-assistant/ditto-subnet/commit/5102083226a7b385789205c23dd7b5e425c1e4e1))
+
+
 ## v0.172.0 (2026-08-30)
 
 ### Bug Fixes
