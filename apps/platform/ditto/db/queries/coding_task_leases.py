@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
 from uuid import UUID
 
@@ -47,6 +47,8 @@ class CodingTaskLeaseNotAvailableError(Exception):
 
 
 class CodingTaskMaterialSource(Protocol):
+    timeout_seconds: float
+
     async def get_task_material(
         self,
         *,
@@ -96,6 +98,22 @@ async def authorize_coding_shadow_task_delivery(
 
 def _aware(value: datetime) -> datetime:
     return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+_MAX_CATALOG_TIMEOUT_SECONDS = 60.0
+
+
+def _catalog_timeout_seconds(material_source: CodingTaskMaterialSource) -> float:
+    timeout_seconds = getattr(
+        material_source, "timeout_seconds", _MAX_CATALOG_TIMEOUT_SECONDS
+    )
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, int | float)
+        or not 0.1 <= float(timeout_seconds) <= _MAX_CATALOG_TIMEOUT_SECONDS
+    ):
+        return _MAX_CATALOG_TIMEOUT_SECONDS
+    return float(timeout_seconds)
 
 
 def _run_matches(run: CodingShadowRun, authority: object) -> bool:
@@ -256,6 +274,16 @@ async def build_coding_shadow_task_lease(
         ) from error
     if not catalog_release_matches_commitment(release, commitment=commitment):
         raise CodingTaskLeaseIntegrityError("coding catalog commitment drifted")
+    catalog_now = await session.scalar(select(func.clock_timestamp()))
+    if not isinstance(catalog_now, datetime):  # pragma: no cover - DB invariant
+        raise RuntimeError("database clock did not return a timestamp")
+    timeout_seconds = _catalog_timeout_seconds(material_source)
+    if _aware(ticket.deadline) - _aware(catalog_now) <= timedelta(
+        seconds=timeout_seconds
+    ):
+        raise CodingTaskLeaseNotAvailableError(
+            "coding ticket has insufficient lifetime for private catalog access"
+        )
     material = await material_source.get_task_material(
         commitment=commitment,
         catalog_index=issuance.selection_catalog_index,

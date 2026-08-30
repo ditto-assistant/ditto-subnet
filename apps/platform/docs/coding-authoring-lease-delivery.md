@@ -12,7 +12,9 @@ freshness, current chain permit, nonce, and ticket ownership before reading the
 private catalog. The nonce row is retained until that signed timestamp leaves
 the five-minute freshness window, so a future-dated request cannot be replayed
 after janitorial deletion while it would still be accepted. A wrong-validator
-or expired ticket therefore cannot trigger a private object read.
+ticket is rejected before any private catalog read. An expired ticket, or one
+whose remaining lifetime does not exceed the catalog timeout, is also rejected
+before that read.
 
 Platform then reconstructs the complete task lease, rechecks the current exact
 artifact certification, and invokes an authoring-only minter. That minter

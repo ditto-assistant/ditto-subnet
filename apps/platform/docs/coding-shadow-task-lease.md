@@ -9,7 +9,8 @@ ticket-bounded artifact capabilities described in
 The builder verifies the ticket, current artifact certification, finalized
 issuance, immutable assignment, registered catalog commitment, selected private
 record, position-bound Merkle proof, run manifest, private task-set manifest,
-and irreversible exposure projection. It rejects an expired ticket or any
+and irreversible exposure projection. It rejects an expired ticket, a ticket
+whose remaining lifetime does not exceed the catalog timeout, or any
 stored/refetched digest drift.
 
 The resulting lease core contains the validator ticket identity and deadline,
