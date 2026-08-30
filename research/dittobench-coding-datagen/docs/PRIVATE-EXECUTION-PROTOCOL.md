@@ -555,6 +555,20 @@ retry policy. The OpenRouter credential remains in Platform secrets. The miner
 receives only a source-bound ticket capability and placeholder compatibility
 keys.
 
+`inference_grant_sha256` is the SHA-256 of the canonical known-field
+`dittobench-coding-inference-policy-v1` preimage, not an opaque label. The
+public synthetic policy fixes the Chat Completions transport, Luna model,
+Azure route/profile, medium reasoning, prompt/tool contracts, ZDR posture,
+no-fallback rules, and hard resource/retry ceilings without containing a URL,
+bearer, key, or live grant identity. The task lease supplies lower per-task
+budgets; a relay must enforce the minimum of lease and policy.
+
+`prompt_sha256` identifies the fixed public system-prompt projection and
+`tool_schema_sha256` identifies the complete ordered model-facing tool
+projection. Dynamic task, memory, assistant, and tool-result messages remain
+private and are committed by the full locked-request SHA-256 in each trusted
+provider receipt.
+
 Scored routing disables unbound provider fallback. Requests require supported
 parameters, deny data collection, and require a reviewed zero-data-retention
 endpoint. Model/provider identity and usage returned by the upstream are
@@ -569,6 +583,12 @@ provider-failure forms require a provider receipt-set root, declare
 `fallback_used=false`, and identify provider-receipt USD cost as the accounting
 source. This makes no-op, hardcoded, and pre-model failures representable
 without fabricating provider use.
+
+Receipt order is trusted dispatch order. Only a receipt-free pre-provider
+attempt with no selected provider, response, usage, or billing evidence may be
+retried. Completed and provider-failure receipts are terminal; missing,
+duplicate, foreign, fallback, or ambiguous settlements make evidence
+unavailable rather than authorizing another provider call or synthetic usage.
 
 The existing Chat Completions broker is the compatibility baseline. A Responses
 API transport requires its own reviewed relay contract and is not implied by
