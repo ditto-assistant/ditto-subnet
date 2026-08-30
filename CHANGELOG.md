@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.174.1 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Keep Hetzner verdicts worker-owned
+  ([#1380](https://github.com/ditto-assistant/ditto-subnet/pull/1380),
+  [`bd6ea21`](https://github.com/ditto-assistant/ditto-subnet/commit/bd6ea2169623240a386f276852ce65183c9f4210))
+
+
 ## v0.174.0 (2026-08-30)
 
 ### Features
