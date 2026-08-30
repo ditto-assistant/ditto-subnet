@@ -35,7 +35,7 @@ _EXPECTED_CALL_FUNCTION = "transfer_keep_alive"
 class PaymentVerifier:
     """Verifies a miner-supplied payment proof against the on-chain extrinsic.
 
-    The orchestrator (``/upload/agent``, next PR) calls
+    The ``/upload/agent`` orchestrator calls
     :meth:`verify_payment` exactly once per upload attempt. All chain
     I/O is delegated to the injected :class:`ChainClient` +
     :class:`PriceOracle`; the verifier itself owns no resources and is

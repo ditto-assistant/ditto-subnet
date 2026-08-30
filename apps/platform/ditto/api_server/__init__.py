@@ -6,9 +6,6 @@ Owns the asyncpg engine and Pylon-backed chain client on ``app.state``
 through the FastAPI lifespan, so per-request ``Depends`` factories
 share the same connections without re-opening anything.
 
-This PR ships only the shell + ops endpoints + middleware; business
-endpoints land per-feature in subsequent PRs.
-
 Usage:
     from ditto.api_server import create_api_server, parse_api_server_config_from_env
 

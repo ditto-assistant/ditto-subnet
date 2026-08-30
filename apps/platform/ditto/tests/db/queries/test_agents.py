@@ -209,8 +209,7 @@ class TestInsertAgentHappyPath:
         assert row.code_embed_model == "stub@test"
 
     async def test_status_defaults_to_uploaded(self, session: AsyncSession):
-        """The schema default places new rows in the initial state. The
-        screener PR moves them forward; this PR must not bypass it."""
+        """The schema default places new rows in the initial state."""
         kwargs = _make_kwargs()
         async with session.begin():
             await insert_agent(session, **kwargs)  # type: ignore[arg-type]
@@ -336,9 +335,7 @@ class TestGetLatestAgentByHotkey:
         assert result.agent_id == target.agent_id
 
     async def test_status_unfiltered(self, session: AsyncSession):
-        """A banned latest row is still the latest; no filter applies.
-        Hotkey-level banned surfacing belongs to a later PR alongside
-        the ``banned_hotkeys`` table."""
+        """A banned latest row is still the latest; no filter applies."""
         hotkey = "5HKBannedHotkey"
         await _seed_agent(
             session,
