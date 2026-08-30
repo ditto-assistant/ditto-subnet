@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
+from sqlalchemy.sql.elements import ColumnElement
 
 from ditto.api_models.admin_quarantine import (
     AdminArtifactDuplicate,
@@ -155,6 +156,10 @@ from ditto.db.queries.audit import (
     append_audit_entry,
     benchmark_contract_refresh_event,
     screened_image_rebuild_event,
+)
+from ditto.db.queries.benchmark_admission import (
+    admission_rollout_for_active_version,
+    benchmark_admission_predicate,
 )
 from ditto.db.queries.benchmark_rollout import (
     DatasetPin as RolloutDatasetPin,
@@ -1642,23 +1647,35 @@ def _screening_submission(
 async def list_screening_submissions(
     _admin: AdminDep,
     session: SessionDep,
+    generation: Annotated[Literal["active", "all"], Query()] = "active",
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> AdminScreeningSubmissionList:
-    """Return private screening history without source or artifact URLs."""
-    total = int((await session.scalar(select(func.count()).select_from(Agent))) or 0)
-    agents = (
-        (
-            await session.execute(
-                select(Agent)
-                .order_by(Agent.created_at.desc(), Agent.agent_id.desc())
-                .offset(offset)
-                .limit(limit)
-            )
+    """Return current-benchmark screening rows unless history is requested."""
+    active_version = await active_bench_version(session)
+    where: list[ColumnElement[bool]] = []
+    if generation == "active":
+        rollout = await admission_rollout_for_active_version(
+            session, bench_version=active_version
         )
-        .scalars()
-        .all()
+        if rollout is not None:
+            where.append(
+                benchmark_admission_predicate(
+                    rollout=rollout, bench_version=active_version
+                )
+            )
+    total = int(
+        (await session.scalar(select(func.count()).select_from(Agent).where(*where)))
+        or 0
     )
+    statement = (
+        select(Agent)
+        .where(*where)
+        .order_by(Agent.created_at.desc(), Agent.agent_id.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    agents = (await session.execute(statement)).scalars().all()
     attempts_by_agent = await _screening_attempts_by_agent(
         session, [agent.agent_id for agent in agents]
     )
@@ -1667,6 +1684,8 @@ async def list_screening_submissions(
     )
     return AdminScreeningSubmissionList(
         count=total,
+        generation=generation,
+        active_bench_version=active_version,
         items=[
             _screening_submission(
                 agent,

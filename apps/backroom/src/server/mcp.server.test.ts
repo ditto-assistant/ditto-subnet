@@ -1040,6 +1040,12 @@ describe('Backroom MCP tools', () => {
         default: 'summary',
         enum: ['summary', 'full'],
       })
+      if (name === 'list_screening_submissions') {
+        expect(properties?.generation, name).toMatchObject({
+          default: 'active',
+          enum: ['active', 'all'],
+        })
+      }
     }
 
     await client.close()
@@ -4357,7 +4363,14 @@ describe('Backroom MCP tools', () => {
 
   it('lists screening attempt history without write access', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const fetchMock = vi.fn().mockResolvedValue(Response.json({ items: [], count: 0 }))
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        items: [],
+        count: 0,
+        generation: 'active',
+        active_bench_version: 12,
+      }),
+    )
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     const response = await client.callTool({
@@ -4369,11 +4382,13 @@ describe('Backroom MCP tools', () => {
     expect(readJsonResult(response)).toMatchObject({
       items: [],
       count: 0,
+      generation: 'active',
+      active_bench_version: 12,
       limit: 17,
       offset: 34,
     })
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/screening-submissions?limit=17&offset=34',
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-submissions?generation=active&limit=17&offset=34',
       expect.any(Object),
     )
 

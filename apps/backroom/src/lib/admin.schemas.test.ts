@@ -582,6 +582,8 @@ describe('admin API schemas', () => {
   it('parses rejected screening history and short-lived artifact access', () => {
     const history = screeningSubmissionListSchema.parse({
       count: 1,
+      generation: 'active',
+      active_bench_version: 12,
       items: [
         {
           agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',

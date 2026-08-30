@@ -184,6 +184,8 @@ class AdminScreeningSubmission(BaseModel):
 class AdminScreeningSubmissionList(BaseModel):
     items: list[AdminScreeningSubmission]
     count: int
+    generation: Literal["active", "all"]
+    active_bench_version: int = Field(ge=1)
 
 
 class AdminScreeningFailureExample(BaseModel):

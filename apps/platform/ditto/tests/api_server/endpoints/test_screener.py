@@ -5489,6 +5489,85 @@ class TestQuarantineAdmin:
             "expires_in": 300,
         }
 
+    async def test_screening_submission_list_defaults_to_active_benchmark_era(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        now = datetime.now(UTC)
+        historical = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCORED,
+            name="historical",
+            created_at=now - timedelta(days=2),
+        )
+        adopted = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCORED,
+            name="adopted",
+            created_at=now - timedelta(days=1),
+        )
+        current = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING,
+            name="current",
+            created_at=now + timedelta(seconds=1),
+        )
+        rollout_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                BenchmarkRollout(
+                    rollout_id=rollout_id,
+                    from_version=_SOURCE_VERSION,
+                    desired_version=_TARGET_VERSION,
+                    status="activated",
+                    cohort_size=5,
+                    created_at=now,
+                    activated_at=now,
+                )
+            )
+            session.add(
+                BenchmarkRolloutMember(
+                    rollout_id=rollout_id,
+                    agent_id=adopted,
+                    position=1,
+                    frozen_miner_hotkey=_MINER_HOTKEY,
+                    frozen_composite=0.9,
+                )
+            )
+        _install_db(app, session_maker)
+        headers = {"Authorization": "Bearer test-admin-token-at-least-32-characters"}
+
+        active = await client.get(
+            "/api/v1/admin/screening-submissions", headers=headers
+        )
+        all_generations = await client.get(
+            "/api/v1/admin/screening-submissions?generation=all", headers=headers
+        )
+
+        assert active.status_code == 200
+        assert active.json()["generation"] == "active"
+        assert active.json()["active_bench_version"] == _TARGET_VERSION
+        assert active.json()["count"] == 2
+        assert [item["agent_id"] for item in active.json()["items"]] == [
+            str(current),
+            str(adopted),
+        ]
+        assert all_generations.status_code == 200
+        assert all_generations.json()["generation"] == "all"
+        assert all_generations.json()["active_bench_version"] == _TARGET_VERSION
+        assert all_generations.json()["count"] == 3
+        assert {item["agent_id"] for item in all_generations.json()["items"]} == {
+            str(current),
+            str(adopted),
+            str(historical),
+        }
+
     async def test_screening_failure_summary_groups_live_pipeline_by_reason_code(
         self,
         app: FastAPI,

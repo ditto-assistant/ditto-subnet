@@ -1557,7 +1557,7 @@ export interface paths {
         };
         /**
          * List Screening Submissions
-         * @description Return private screening history without source or artifact URLs.
+         * @description Return current-benchmark screening rows unless history is requested.
          */
         get: operations["list_screening_submissions_api_v1_admin_screening_submissions_get"];
         put?: never;
@@ -8119,8 +8119,15 @@ export interface components {
         };
         /** AdminScreeningSubmissionList */
         AdminScreeningSubmissionList: {
+            /** Active Bench Version */
+            active_bench_version: number;
             /** Count */
             count: number;
+            /**
+             * Generation
+             * @enum {string}
+             */
+            generation: "active" | "all";
             /** Items */
             items: components["schemas"]["AdminScreeningSubmission"][];
         };
@@ -25542,6 +25549,7 @@ export interface operations {
     list_screening_submissions_api_v1_admin_screening_submissions_get: {
         parameters: {
             query?: {
+                generation?: "active" | "all";
                 limit?: number;
                 offset?: number;
             };

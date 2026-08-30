@@ -1625,8 +1625,13 @@ export async function openAthReview(rawInput: unknown, actor: string) {
   return openAthReviewResponseSchema.parse(payload)
 }
 
-export async function fetchScreeningSubmissions(limit = 200, offset = 0) {
+export async function fetchScreeningSubmissions(
+  limit = 200,
+  offset = 0,
+  generation: 'active' | 'all' = 'active',
+) {
   const query = new URLSearchParams({
+    generation,
     limit: String(limit),
     offset: String(offset),
   })
