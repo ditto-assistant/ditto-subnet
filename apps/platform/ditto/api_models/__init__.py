@@ -283,6 +283,8 @@ __all__ = [
     "CodingCatalogCommitment",
     "CodingCatalogReleaseRecord",
     "CodingCatalogTaskExposure",
+    "CodingCertificationLeaseAuthority",
+    "CodingCertificationLeaseClaimRequest",
     "CodingCertificationRecord",
     "CodingCertificationStage",
     "CodingCertificationStatus",
