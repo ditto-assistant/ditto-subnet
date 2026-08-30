@@ -23,7 +23,12 @@ from ditto.api_server.coding_private_catalog import (
 from ditto.coding_selection import CodingSelectionCatalogIntegrityError
 
 _MAX_RECORD_BYTES = 2 << 20
-_MAX_PLAN_BYTES = 64 << 20
+# The commitment schema permits 1_000_000 tasks. Each plan object is a small
+# known-field envelope (indexes, object key, two SHA-256 fields, size, and a
+# 256-byte task_version_id). 4 KiB/object plus 1 MiB of wrapping is above the
+# canonical serialization of that maximum catalog.
+_MAX_PLAN_OBJECT_BYTES = 4 << 10
+_MAX_PLAN_BYTES = (1_000_000 * _MAX_PLAN_OBJECT_BYTES) + (1 << 20)
 _MAX_JSON_DEPTH = 32
 _RECORD_NAME = re.compile(r"^(?P<index>[0-9]{6})\.json$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -194,7 +199,8 @@ def _load_canonical_model(
     if path.is_symlink() or not path.is_file():
         raise CodingCatalogPublicationError(f"{label} input is invalid")
     try:
-        body = path.read_bytes()
+        with path.open("rb") as stream:
+            body = stream.read(maximum_bytes + 1)
     except OSError as error:
         raise CodingCatalogPublicationError(f"{label} input is unreadable") from error
     if not body or len(body) > maximum_bytes:

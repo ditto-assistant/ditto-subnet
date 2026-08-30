@@ -20,6 +20,7 @@ from ditto.api_models.coding_selection import (
     coding_catalog_task_commitment_digest,
 )
 from ditto.api_server.coding_catalog_publication import (
+    _MAX_PLAN_BYTES,
     CodingCatalogPublicationError,
     plan_private_catalog_publication,
     write_private_catalog_publication_plan,
@@ -161,3 +162,15 @@ def test_curator_publication_rejects_noncanonical_or_incomplete_records(
             commitment_path=commitment_path,
             records_dir=records_dir,
         )
+
+    commitment_path, records_dir = _write_fixture(tmp_path / "oversized")
+    commitment_path.write_bytes(b"{" + (b"x" * ((1 << 20) + 1)) + b"}")
+    with pytest.raises(CodingCatalogPublicationError, match="exceeds bounds"):
+        plan_private_catalog_publication(
+            commitment_path=commitment_path,
+            records_dir=records_dir,
+        )
+
+
+def test_publication_plan_bound_covers_maximum_committed_catalog() -> None:
+    assert _MAX_PLAN_BYTES >= (1_000_000 * 1024) + (1 << 20)
