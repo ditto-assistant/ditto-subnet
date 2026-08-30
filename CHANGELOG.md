@@ -2,6 +2,61 @@
 
 <!-- version list -->
 
+## v0.149.0 (2026-08-30)
+
+### Bug Fixes
+
+- **dashboard**: Let a fleet deep link navigate away
+  ([#1320](https://github.com/ditto-assistant/ditto-subnet/pull/1320),
+  [`f473ae9`](https://github.com/ditto-assistant/ditto-subnet/commit/f473ae95410fe1a307d3bb86b30a53acbe0e6041))
+
+- **model-relay**: Regenerate schema for authoring freezes
+  ([#1324](https://github.com/ditto-assistant/ditto-subnet/pull/1324),
+  [`493b5b5`](https://github.com/ditto-assistant/ditto-subnet/commit/493b5b5024937034650241fef13c5c11b19648ab))
+
+- **scoring**: Classify recoverable generation errors
+  ([#1319](https://github.com/ditto-assistant/ditto-subnet/pull/1319),
+  [`206024d`](https://github.com/ditto-assistant/ditto-subnet/commit/206024df0ee12427cca4dbc78b57f4ad700a74be))
+
+- **screener**: Accept Hetzner provider responses
+  ([#1322](https://github.com/ditto-assistant/ditto-subnet/pull/1322),
+  [`301d1a4`](https://github.com/ditto-assistant/ditto-subnet/commit/301d1a4207d111c30dc4dc6e456cd9db0150e4c1))
+
+- **screener**: Heartbeat the effective rollback policy
+  ([#1323](https://github.com/ditto-assistant/ditto-subnet/pull/1323),
+  [`9336a39`](https://github.com/ditto-assistant/ditto-subnet/commit/9336a3986db313190667bea4c91e0ec420e125f8))
+
+### Features
+
+- **coding**: Add trusted shadow attempt runtime
+  ([`21028fd`](https://github.com/ditto-assistant/ditto-subnet/commit/21028fd6572982e496f8a93f6e0e98478c62e595))
+
+- **platform**: Deliver shadow coding authoring leases
+  ([`1dc3391`](https://github.com/ditto-assistant/ditto-subnet/commit/1dc3391f71e6dd9a78dc7b50485f2c27c62645bf))
+
+- **platform**: Deliver shadow coding grading leases
+  ([`4eabfd1`](https://github.com/ditto-assistant/ditto-subnet/commit/4eabfd1cc61eae81c14fba5620c9fe76b8acbc1e))
+
+- **platform**: Name the source-review stages for what they do
+  ([#1325](https://github.com/ditto-assistant/ditto-subnet/pull/1325),
+  [`0a2d18c`](https://github.com/ditto-assistant/ditto-subnet/commit/0a2d18cb28808ca041af180df2ab7dc57c31e3f4))
+
+- **platform**: Persist shadow coding authoring freezes
+  ([`1c5b027`](https://github.com/ditto-assistant/ditto-subnet/commit/1c5b027c02bea8434f50fed0349b54e697e6ce58))
+
+- **validator**: Build shadow coding run evidence
+  ([`98e0ed9`](https://github.com/ditto-assistant/ditto-subnet/commit/98e0ed9cc71b32bb0d6097fc00239ef47a00d71a))
+
+- **validator**: Classify shadow coding failures
+  ([`be8e8a1`](https://github.com/ditto-assistant/ditto-subnet/commit/be8e8a176e2b2b35aade76df1ed88d6903d690db))
+
+- **validator**: Coordinate shadow coding attempts
+  ([`cb57339`](https://github.com/ditto-assistant/ditto-subnet/commit/cb57339000fe5bd7657cbcfdf43a5b76cc7f9c77))
+
+- **validator**: Submit shadow coding results
+  ([`2a275ff`](https://github.com/ditto-assistant/ditto-subnet/commit/2a275ffdd7032930c605063c98f3d2098e31c9dd))
+
+
 ## v0.148.2 (2026-08-30)
 
 ### Bug Fixes
