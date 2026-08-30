@@ -93,6 +93,8 @@ describe('Backroom MCP tools', () => {
         'download_runtime_profile',
         'get_queue_policy_settings',
         'get_screener_capacity',
+        'set_screener_provider_settings',
+        'set_screener_node_channel_settings',
         'create_screener_bootstrap_grant',
         'get_screener_review_settings',
         'apply_screener_review_settings',
@@ -199,7 +201,7 @@ describe('Backroom MCP tools', () => {
     // number is the coarse whole-payload backstop, and input schemas dominate
     // it. Curve v3 and the runtime metrics/capture contracts added legitimate,
     // bounded input schemas without relaxing either prose budget below. The
-    // 108_000 whole-payload includes the L1 model/timeout fields on the
+    // 111_000 whole-payload includes the L1 model/timeout fields on the
     // screener-review settings write schema, the validator fleet/assignment
     // read schemas, the three inference-trace archive tools, the operator
     // screening-reject tool, the gradient-hold and adjudicator controls, the
@@ -207,10 +209,11 @@ describe('Backroom MCP tools', () => {
     // tool, the four bounded shadow core-qualification operations, the
     // shadow coding-evaluation ledger read, the exact
     // node/resource/image/controller bootstrap-grant schema, and the signed
-    // catalog register/retire/read tools. Keep modest headroom for schema
+    // catalog register/retire/read tools, plus the two complete screener
+    // provider/node capacity write schemas. Keep modest headroom for schema
     // evolution; tighten the description budgets, not this whole-payload
     // backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(108_000)
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(111_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. 22_800 admits the screener
@@ -1906,6 +1909,183 @@ describe('Backroom MCP tools', () => {
       'https://platform-api.heyditto.ai/api/v1/admin/screener-capacity',
       expect.any(Object),
     )
+    await client.close()
+    await server.close()
+  })
+
+  it('applies screener provider routing as the connected operator', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const settings = {
+      build_provider_priority: ['hetzner', 'gcp'],
+      runtime_provider_priority: ['hetzner', 'gcp'],
+      source_review_provider_priority: ['hetzner', 'gcp'],
+      gce_overflow_enabled: true,
+      primary_node_id: 'subnet-screener-1',
+      gce_overflow_backlog_multiplier: 3,
+      gce_overflow_min_backlog: 12,
+      gce_overflow_max_instances: 6,
+    }
+    const reason = 'Start the approved one-slot Hetzner production canary'
+    const confirmation =
+      'APPLY SCREENER PROVIDERS BUILDS=hetzner>gcp RUNTIME=hetzner>gcp ' +
+      'SOURCE_REVIEW=hetzner>gcp ' +
+      'GCE_OVERFLOW=ENABLED:subnet-screener-1:3X:MIN=12:MAX=6'
+    const control = {
+      current: {
+        environment: 'prod',
+        revision: 1,
+        parent_revision: 0,
+        settings,
+        reason,
+        actor: 'peyton@omniaura.ai',
+        created_at: '2026-08-30T00:00:00Z',
+      },
+      history: [],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_screener_provider_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings,
+        reason,
+        confirmation,
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      current: { revision: 1, settings, actor: 'peyton@omniaura.ai' },
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-provider-settings',
+    )
+    expect(init.headers).toMatchObject({
+      Authorization: 'Bearer platform-admin-token',
+      'X-Admin-Actor': 'peyton@omniaura.ai',
+    })
+    expect(JSON.parse(String(init.body))).toEqual({
+      environment: 'prod',
+      expected_revision: 0,
+      settings,
+      reason,
+      actor: 'peyton@omniaura.ai',
+      confirmation,
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('applies one screener node concurrency revision as the connected operator', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const settings = {
+      screening_concurrency: 1,
+      sandbox_slots: 1,
+      build_concurrency: 1,
+      runtime_concurrency: 1,
+      source_review_concurrency: 1,
+    }
+    const reason = 'Start the approved one-slot Hetzner production canary'
+    const confirmation =
+      'APPLY SCREENER NODE subnet-screener-1 ' +
+      'SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1'
+    const control = {
+      current: {
+        environment: 'prod',
+        node_id: 'subnet-screener-1',
+        revision: 1,
+        parent_revision: 0,
+        settings,
+        reason,
+        actor: 'peyton@omniaura.ai',
+        created_at: '2026-08-30T00:00:00Z',
+      },
+      history: [],
+      usage: {
+        screening_active: 0,
+        sandbox_active: 0,
+        build_active: 0,
+        runtime_active: 0,
+        source_review_active: 0,
+      },
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_screener_node_channel_settings',
+      arguments: {
+        nodeId: 'subnet-screener-1',
+        expectedRevision: 0,
+        settings,
+        reason,
+        confirmation,
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      current: { node_id: 'subnet-screener-1', revision: 1, settings },
+    })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-nodes/subnet-screener-1/channel-settings',
+    )
+    expect(init.headers).toMatchObject({
+      Authorization: 'Bearer platform-admin-token',
+      'X-Admin-Actor': 'peyton@omniaura.ai',
+    })
+    expect(JSON.parse(String(init.body))).toEqual({
+      environment: 'prod',
+      expected_revision: 0,
+      settings,
+      reason,
+      actor: 'peyton@omniaura.ai',
+      confirmation,
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('does not change screener capacity without the write scope', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_screener_node_channel_settings',
+      arguments: {
+        nodeId: 'subnet-screener-1',
+        expectedRevision: 0,
+        settings: {
+          screening_concurrency: 1,
+          sandbox_slots: 1,
+          build_concurrency: 1,
+          runtime_concurrency: 1,
+          source_review_concurrency: 1,
+        },
+        reason: 'Start the approved one-slot Hetzner production canary',
+        confirmation:
+          'APPLY SCREENER NODE subnet-screener-1 ' +
+          'SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
     await client.close()
     await server.close()
   })
