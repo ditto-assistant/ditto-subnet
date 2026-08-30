@@ -253,6 +253,9 @@ def _build_reviewer(
         ),
         clear_min_notes=int(os.environ.get("SCREENER_REVIEW_CLEAR_MIN_NOTES", "3")),
         adjudicator=adjudicator,
+        adjudicator_reserve_seconds=float(
+            os.environ.get("SCREENER_ADJUDICATOR_TIMEOUT_SECONDS", "600")
+        ),
     )
 
 
