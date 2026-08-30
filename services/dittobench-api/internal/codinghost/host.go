@@ -21,6 +21,7 @@ import (
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingartifacts"
 	"github.com/ditto-assistant/dittobench-api/internal/codingattempt"
+	"github.com/ditto-assistant/dittobench-api/internal/codingcanary"
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
 	"github.com/ditto-assistant/dittobench-api/internal/codingexecutor"
 	"github.com/ditto-assistant/dittobench-api/internal/codingharness"
@@ -60,6 +61,7 @@ type Host struct {
 	supervisor  *codingsupervisor.Service
 	backend     *codingsupervisor.SessionBackend
 	publication *codingpublication.Service
+	canary      *codingcanary.Service
 	router      *codingsource.Router
 	outbox      *codingoutbox.Store
 	sweepCancel context.CancelFunc
@@ -248,6 +250,13 @@ func (host *Host) PublicationHandler() http.Handler {
 	return host.publication.Handler()
 }
 
+func (host *Host) CanaryHandler() http.Handler {
+	if host == nil || host.canary == nil {
+		return http.NotFoundHandler()
+	}
+	return host.canary.Handler()
+}
+
 func (host *Host) Close(ctx context.Context) error {
 	if host == nil {
 		return nil
@@ -266,7 +275,12 @@ func (host *Host) Close(ctx context.Context) error {
 	case <-ctx.Done():
 		return errors.Join(ErrClosed, ctx.Err())
 	}
-	if err := errors.Join(host.supervisor.Close(), host.publication.Close(), host.backend.Close()); err != nil {
+	if err := errors.Join(
+		host.supervisor.Close(),
+		host.publication.Close(),
+		host.canary.Close(),
+		host.backend.Close(),
+	); err != nil {
 		return errors.Join(ErrClosed, err)
 	}
 	if err := host.router.Close(ctx); err != nil {

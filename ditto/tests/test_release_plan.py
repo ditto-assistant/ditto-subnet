@@ -265,6 +265,7 @@ def test_coding_contract_models_select_scorer_and_validator_stack(
         "ditto/api_models/coding_inference_grants.py",
         "ditto/api_models/coding_harness.py",
         "ditto/api_models/coding_claims.py",
+        "ditto/api_models/coding_certification_leases.py",
     ],
 )
 def test_validator_coding_inference_models_are_release_owned(

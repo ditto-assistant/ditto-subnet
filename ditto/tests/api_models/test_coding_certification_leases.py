@@ -11,13 +11,13 @@ from ditto.api_models.coding_certification_leases import (
     CodingCertificationLeaseStatus,
 )
 
-_ROOT = Path(__file__).resolve().parents[5]
+_ROOT = Path(__file__).parents[3]
 
 
-def test_validator_lease_contract_module_matches_platform_byte_for_byte() -> None:
+def test_platform_lease_contract_module_matches_validator_byte_for_byte() -> None:
     validator = _ROOT / "ditto/api_models/coding_certification_leases.py"
     platform = _ROOT / "apps/platform/ditto/api_models/coding_certification_leases.py"
-    assert platform.read_bytes() == validator.read_bytes()
+    assert validator.read_bytes() == platform.read_bytes()
 
 
 def _authority(**updates: object) -> dict[str, object]:

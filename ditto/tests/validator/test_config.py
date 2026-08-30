@@ -183,6 +183,27 @@ class TestCodingShadowConfig:
         assert config.coding_shadow_instance_id == "coding-shadow-primary"
 
 
+class TestCodingCanaryConfig:
+    def test_default_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        config = parse_validator_config_from_env()
+        assert config.coding_canary_enabled is False
+
+    def test_enable_requires_control_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_ENABLED", "true")
+        with pytest.raises(ValidatorConfigError, match="coding canary"):
+            parse_validator_config_from_env()
+        monkeypatch.setenv(
+            "VALIDATOR_DITTOBENCH_CONTROL_TOKEN",
+            "coding-canary-control-token-0000000000000001",
+        )
+        config = parse_validator_config_from_env()
+        assert config.coding_canary_enabled is True
+
+
 class TestRequiredConfig:
     """Every validator both scores and sets weights, so all of it is required."""
 

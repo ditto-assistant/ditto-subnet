@@ -13,11 +13,14 @@ import contextlib
 import logging
 import os
 import signal
+from typing import Protocol
 
 import httpx
 
 from ditto.chain import ChainConfig, create_chain_client
 from ditto.system_health import SystemMetricsCollector
+from ditto.validator.coding_canary import CodingCanaryWorker
+from ditto.validator.coding_canary_runtime import CodingCanaryRuntime
 from ditto.validator.coding_publication import CodingPublicationClient
 from ditto.validator.coding_supervisor import CodingSupervisorRuntime
 from ditto.validator.coding_worker import CodingShadowWorker
@@ -124,6 +127,14 @@ async def _amain() -> int:
             )
             logger.info("weight mode: Pylon identity (put_weights)")
             async with create_chain_client(chain_config) as chain:
+                coding_canary: CodingCanaryWorker | None = None
+                if config.coding_canary_enabled:
+                    coding_canary = CodingCanaryWorker(
+                        platform=platform,
+                        runtime=CodingCanaryRuntime(config, http),
+                        poll_seconds=config.coding_canary_poll_seconds,
+                    )
+                    logger.info("coding canary worker enabled")
                 worker = ValidatorWorker(
                     config=config,
                     platform=platform,
@@ -133,6 +144,9 @@ async def _amain() -> int:
                     telemetry=telemetry,
                     system_metrics=SystemMetricsCollector(),
                     stack_health=StackHealthCollector(config, http),
+                    after_score=(
+                        coding_canary.offer if coding_canary is not None else None
+                    ),
                 )
                 coding_worker: CodingShadowWorker | None = None
                 if config.coding_shadow_enabled:
@@ -162,15 +176,16 @@ async def _amain() -> int:
                         bootstrap_resume=(
                             mark_bootstrap_resumed if bootstrap_drain_pending else None
                         ),
-                        extra_busy=(
-                            (lambda: coding_worker.busy)
-                            if coding_worker is not None
-                            else None
-                        ),
+                        extra_busy=_extra_busy(coding_worker, coding_canary),
                     )
 
+                extras: list[tuple[str, _ExtraWorker]] = []
+                if coding_worker is not None:
+                    extras.append(("validator-coding-shadow-worker", coding_worker))
+                if coding_canary is not None:
+                    extras.append(("validator-coding-canary-worker", coding_canary))
                 try:
-                    if coding_worker is None:
+                    if not extras:
                         await run_ordinary_worker()
                     else:
                         async with asyncio.TaskGroup() as group:
@@ -178,13 +193,14 @@ async def _amain() -> int:
                                 run_ordinary_worker(),
                                 name="validator-ordinary-worker",
                             )
-                            group.create_task(
-                                coding_worker.run_forever(
-                                    stop,
-                                    drain_requested=drain_requested,
-                                ),
-                                name="validator-coding-shadow-worker",
-                            )
+                            for name, extra_worker in extras:
+                                group.create_task(
+                                    extra_worker.run_forever(
+                                        stop,
+                                        drain_requested=drain_requested,
+                                    ),
+                                    name=name,
+                                )
                 finally:
                     stop.set()
     finally:
@@ -192,6 +208,32 @@ async def _amain() -> int:
         telemetry.close()
     logger.info("validator worker stopped")
     return 0
+
+
+class _ExtraWorker(Protocol):
+    busy: bool
+
+    async def run_forever(
+        self,
+        stop: asyncio.Event,
+        *,
+        drain_requested: asyncio.Event,
+    ) -> None: ...
+
+
+def _extra_busy(
+    coding_worker: CodingShadowWorker | None,
+    coding_canary: CodingCanaryWorker | None,
+):
+    if coding_worker is None and coding_canary is None:
+        return None
+
+    def _busy() -> bool:
+        return (coding_worker is not None and coding_worker.busy) or (
+            coding_canary is not None and coding_canary.busy
+        )
+
+    return _busy
 
 
 def _apply_ditto_logging() -> None:

@@ -28,7 +28,7 @@ func codingShadowHostFromEnvironment(
 	apiPort int,
 	brokerPort int,
 ) (*codinghost.Host, error) {
-	if !envBool("DITTOBENCH_CODING_SHADOW_ENABLED") {
+	if !envBool("DITTOBENCH_CODING_SHADOW_ENABLED") && !envBool("DITTOBENCH_CODING_CANARY_ENABLED") {
 		return nil, nil
 	}
 	port, err := strictCodingEnvInt("DITTOBENCH_CODING_SOURCE_PORT", 11438)

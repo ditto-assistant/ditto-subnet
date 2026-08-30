@@ -11158,6 +11158,15 @@ export interface components {
             authority: components["schemas"]["CodingCertificationLeaseAuthority"];
             /** Claimed At */
             claimed_at?: string | null;
+            /** Screened Image Id */
+            screened_image_id: string;
+            /** Screened Image Ref */
+            screened_image_ref: string;
+            /**
+             * Screened Image Upload Id
+             * Format: uuid
+             */
+            screened_image_upload_id: string;
             status: components["schemas"]["CodingCertificationLeaseStatus"];
             /**
              * Weight Eligible
