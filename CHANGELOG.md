@@ -2,6 +2,26 @@
 
 <!-- version list -->
 
+## v0.161.0 (2026-08-30)
+
+### Bug Fixes
+
+- **infra**: Enable the local Hetzner review court
+  ([#1349](https://github.com/ditto-assistant/ditto-subnet/pull/1349),
+  [`7fcc7c9`](https://github.com/ditto-assistant/ditto-subnet/commit/7fcc7c946f0266e387d79171af5c3645725896d1))
+
+### Features
+
+- **coding**: Add shadow supervisor session backend
+  ([`98d346e`](https://github.com/ditto-assistant/ditto-subnet/commit/98d346ebc4c13eedfa52ed63df03fc37860fcf4a))
+
+- **coding**: Bind supervisor inference grant exchange
+  ([`7e0c8b0`](https://github.com/ditto-assistant/ditto-subnet/commit/7e0c8b01c9f8832e84e276984089c5ef7edbb947))
+
+- **coding**: Define private execution plan contract
+  ([`97e9bb2`](https://github.com/ditto-assistant/ditto-subnet/commit/97e9bb2a5a3404570ae2e2db48b10cd6e80a3740))
+
+
 ## v0.160.0 (2026-08-30)
 
 ### Features
