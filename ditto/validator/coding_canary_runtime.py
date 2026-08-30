@@ -89,7 +89,7 @@ class CodingCanaryRuntime:
             raise PlatformInfrastructureError(
                 "coding canary runtime is unreachable"
             ) from error
-        if response.status_code == 404:
+        if response.status_code in {401, 404, 503} or response.status_code >= 500:
             raise PlatformInfrastructureError("coding canary runtime is unavailable")
 
     async def certify(
@@ -139,8 +139,8 @@ class CodingCanaryRuntime:
             ) from error
         try:
             parsed = _CanaryResponse.model_validate_json(body)
-            receipt = CodingCapabilityCertificationReceipt.model_validate(
-                parsed.receipt
+            receipt = CodingCapabilityCertificationReceipt.model_validate_json(
+                json.dumps(parsed.receipt, separators=(",", ":"))
             )
         except (ValidationError, ValueError, json.JSONDecodeError) as error:
             raise ValidatorInfrastructureError(

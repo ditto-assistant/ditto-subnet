@@ -209,7 +209,7 @@ func (service *Service) trustedNow() (time.Time, error) {
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	if !now.After(service.lastNow) && !now.Equal(service.lastNow) {
+	if now.Before(service.lastNow) {
 		return time.Time{}, ErrUnavailable
 	}
 	service.lastNow = now

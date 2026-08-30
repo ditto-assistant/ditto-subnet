@@ -13,6 +13,7 @@ import contextlib
 import logging
 import os
 import signal
+from typing import Protocol
 
 import httpx
 
@@ -178,11 +179,9 @@ async def _amain() -> int:
                         extra_busy=_extra_busy(coding_worker, coding_canary),
                     )
 
-                extras: list[tuple[str, object]] = []
+                extras: list[tuple[str, _ExtraWorker]] = []
                 if coding_worker is not None:
-                    extras.append(
-                        ("validator-coding-shadow-worker", coding_worker)
-                    )
+                    extras.append(("validator-coding-shadow-worker", coding_worker))
                 if coding_canary is not None:
                     extras.append(("validator-coding-canary-worker", coding_canary))
                 try:
@@ -209,6 +208,17 @@ async def _amain() -> int:
         telemetry.close()
     logger.info("validator worker stopped")
     return 0
+
+
+class _ExtraWorker(Protocol):
+    busy: bool
+
+    async def run_forever(
+        self,
+        stop: asyncio.Event,
+        *,
+        drain_requested: asyncio.Event,
+    ) -> None: ...
 
 
 def _extra_busy(

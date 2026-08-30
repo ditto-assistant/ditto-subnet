@@ -224,19 +224,10 @@ func newHost(config Config, availability func(context.Context) error) (*Host, er
 		_ = backend.Close()
 		return nil, errors.Join(ErrInvalidConfig, err)
 	}
-	canary, err := codingcanary.New(codingcanary.Config{
-		ControlToken: config.ControlToken, Backend: hostCanaryBackend{harnesses: harnesses},
-		OperationTimeout: 21 * time.Minute, Now: now,
-	})
-	if err != nil {
-		_ = supervisor.Close()
-		_ = backend.Close()
-		return nil, errors.Join(ErrInvalidConfig, err)
-	}
 	closeOutbox = false
 	closeRouter = false
 	host := &Host{
-		supervisor: supervisor, backend: backend, publication: publication, canary: canary,
+		supervisor: supervisor, backend: backend, publication: publication,
 		router: router, outbox: outbox, sweepDone: make(chan struct{}),
 	}
 	sweepContext, sweepCancel := context.WithCancel(context.Background())
@@ -264,54 +255,6 @@ func (host *Host) CanaryHandler() http.Handler {
 		return http.NotFoundHandler()
 	}
 	return host.canary.Handler()
-}
-
-type hostCanaryBackend struct {
-	harnesses *codingharness.Factory
-}
-
-func (backend hostCanaryBackend) Certify(
-	ctx context.Context,
-	request codingcanary.Request,
-) (outcome codingcanary.Outcome, err error) {
-	outcome.LeaseID = request.LeaseID
-	if backend.harnesses == nil || ctx == nil {
-		return outcome, codingcanary.ErrUnavailable
-	}
-	harness, acquireErr := backend.harnesses.Acquire(ctx, codingphase.HarnessBinding{
-		ExecutionID: request.LeaseID, AgentID: request.AgentID,
-		AgentArtifactSHA256: request.AgentArtifactSHA256, TicketID: request.LeaseID,
-		Deadline: request.Deadline, ScreenedImageSHA256: request.ScreenedImageSHA256,
-		ScreenedImageID: request.ScreenedImageID, ScreenedImageRef: request.ScreenedImageRef,
-	})
-	if acquireErr != nil || nilLike(harness) {
-		return outcome, errors.Join(codingcanary.ErrUnavailable, acquireErr)
-	}
-	defer func() {
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		destroyErr := harness.Destroy(cleanup)
-		cancel()
-		outcome.HarnessDestroyed = destroyErr == nil
-		outcome.CapabilitiesRevoked = outcome.HarnessDestroyed
-		if destroyErr != nil && err == nil {
-			err = destroyErr
-		}
-	}()
-	if activateErr := harness.Activate(ctx); activateErr != nil {
-		return outcome, errors.Join(codingcanary.ErrUnavailable, activateErr)
-	}
-	client := harness.Client()
-	if nilLike(client) {
-		return outcome, codingcanary.ErrUnavailable
-	}
-	health, healthErr := client.Health(ctx)
-	if healthErr != nil {
-		return outcome, healthErr
-	}
-	if health.Status != "ok" {
-		return outcome, codingcanary.ErrUnavailable
-	}
-	return outcome, codingcanary.ErrUnavailable
 }
 
 func (host *Host) Close(ctx context.Context) error {

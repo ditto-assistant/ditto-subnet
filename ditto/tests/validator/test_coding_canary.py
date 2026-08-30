@@ -83,8 +83,10 @@ class _Platform:
     def __init__(self) -> None:
         self.issues = 0
         self.claims = 0
+        self.aborts = 0
         self.issued = _lease()
         self.claimed = _lease(status=CodingCertificationLeaseStatus.CLAIMED)
+        self.claim_error: Exception | None = None
 
     async def issue_coding_certification_lease(
         self, agent_id: UUID, *, bench_version: int
@@ -99,7 +101,16 @@ class _Platform:
     ) -> CodingCertificationLeaseResponse:
         self.claims += 1
         assert lease_id == _LEASE
+        if self.claim_error is not None:
+            raise self.claim_error
         return self.claimed
+
+    async def abort_coding_certification_lease(
+        self, lease_id: UUID
+    ) -> CodingCertificationLeaseResponse:
+        self.aborts += 1
+        assert lease_id == _LEASE
+        return _lease(status=CodingCertificationLeaseStatus.ABORTED)
 
 
 class _Runtime:
@@ -172,3 +183,19 @@ async def test_canary_worker_does_not_claim_when_runtime_is_down() -> None:
     assert await worker.run_once() is False
     assert platform.issues == 0
     assert platform.claims == 0
+    assert platform.aborts == 0
+
+
+@pytest.mark.asyncio
+async def test_canary_worker_aborts_issued_lease_if_claim_fails() -> None:
+    platform = _Platform()
+    platform.claim_error = PlatformInfrastructureError("claim failed")
+    runtime = _Runtime()
+    worker = CodingCanaryWorker(platform=platform, runtime=runtime, clock=lambda: _NOW)
+    worker.offer(_AGENT, 12)
+    with pytest.raises(PlatformInfrastructureError, match="claim failed"):
+        await worker.run_once()
+    assert platform.issues == 1
+    assert platform.claims == 1
+    assert platform.aborts == 1
+    assert runtime.certified == []

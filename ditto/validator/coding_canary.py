@@ -38,13 +38,27 @@ class CodingCanaryRuntime(Protocol):
     ) -> CodingCanaryOutcome: ...
 
 
+class CodingCanaryPlatform(Protocol):
+    async def issue_coding_certification_lease(
+        self, agent_id: UUID, *, bench_version: int
+    ) -> CodingCertificationLeaseResponse | None: ...
+
+    async def claim_coding_certification_lease(
+        self, lease_id: UUID
+    ) -> CodingCertificationLeaseResponse: ...
+
+    async def abort_coding_certification_lease(
+        self, lease_id: UUID
+    ) -> CodingCertificationLeaseResponse: ...
+
+
 class CodingCanaryWorker:
     """Claim one public-canary lease and run codingcertifier. Default off."""
 
     def __init__(
         self,
         *,
-        platform: object,
+        platform: CodingCanaryPlatform,
         runtime: CodingCanaryRuntime,
         poll_seconds: float = 10.0,
         clock: Callable[[], datetime] | None = None,
@@ -113,14 +127,20 @@ class CodingCanaryWorker:
             return False
         if issued.status is not CodingCertificationLeaseStatus.ISSUED:
             return False
-        claimed = await self._platform.claim_coding_certification_lease(
-            issued.authority.lease_id
-        )
-        if claimed.status is not CodingCertificationLeaseStatus.CLAIMED:
-            raise PlatformInfrastructureError(
-                "coding certification lease claim did not become exclusive"
+        claimed: CodingCertificationLeaseResponse | None = None
+        try:
+            claimed = await self._platform.claim_coding_certification_lease(
+                issued.authority.lease_id
             )
-        outcome = await self._runtime.certify(claimed)
+            if claimed.status is not CodingCertificationLeaseStatus.CLAIMED:
+                raise PlatformInfrastructureError(
+                    "coding certification lease claim did not become exclusive"
+                )
+            outcome = await self._runtime.certify(claimed)
+        except Exception:
+            if claimed is None:
+                await self._abort_issued(issued.authority.lease_id)
+            raise
         if (
             not outcome.capabilities_revoked
             or not outcome.harness_destroyed
@@ -150,6 +170,16 @@ class CodingCanaryWorker:
             )
         except PlatformError:
             return None
+
+    async def _abort_issued(self, lease_id: UUID) -> None:
+        try:
+            await self._platform.abort_coding_certification_lease(lease_id)
+        except Exception as error:
+            logger.warning(
+                "coding canary abort failed lease=%s type=%s",
+                lease_id,
+                type(error).__name__,
+            )
 
 
 async def _wait_or_stop(stop: asyncio.Event, seconds: float) -> None:
