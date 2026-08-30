@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 from uuid import UUID
 
+import httpx
 import pytest
 
 from ditto.api_models.coding import CodingCapabilityCertificationReceipt
@@ -14,7 +17,14 @@ from ditto.api_models.coding_certification_leases import (
     CodingCertificationLeaseStatus,
 )
 from ditto.validator.coding_canary import CodingCanaryOutcome, CodingCanaryWorker
-from ditto.validator.errors import PlatformError, PlatformInfrastructureError
+from ditto.validator.coding_canary_runtime import CodingCanaryRuntime
+from ditto.validator.errors import (
+    PlatformError,
+    PlatformInfrastructureError,
+    ValidatorInfrastructureError,
+)
+
+_TOKEN = "coding-canary-control-token-00000001"
 
 _NOW = datetime(2026, 8, 30, 18, tzinfo=UTC)
 _AGENT = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
@@ -86,6 +96,7 @@ class _Platform:
         self.aborts = 0
         self.issued = _lease()
         self.claimed = _lease(status=CodingCertificationLeaseStatus.CLAIMED)
+        self.issue_error: Exception | None = None
         self.claim_error: Exception | None = None
 
     async def issue_coding_certification_lease(
@@ -94,6 +105,8 @@ class _Platform:
         self.issues += 1
         assert agent_id == _AGENT
         assert bench_version == 12
+        if self.issue_error is not None:
+            raise self.issue_error
         return self.issued
 
     async def claim_coding_certification_lease(
@@ -187,6 +200,29 @@ async def test_canary_worker_does_not_claim_when_runtime_is_down() -> None:
 
 
 @pytest.mark.asyncio
+async def test_canary_worker_does_not_skip_issue_infrastructure_failure() -> None:
+    platform = _Platform()
+    platform.issue_error = PlatformInfrastructureError(
+        "public certification canary is unavailable"
+    )
+    runtime = _Runtime()
+    worker = CodingCanaryWorker(platform=platform, runtime=runtime, clock=lambda: _NOW)
+    worker.offer(_AGENT, 12)
+    with pytest.raises(PlatformInfrastructureError, match="unavailable"):
+        await worker.run_once()
+    assert platform.issues == 1
+    assert platform.claims == 0
+    assert platform.aborts == 0
+    assert runtime.certified == []
+
+    platform.issue_error = None
+    assert await worker.run_once() is True
+    assert platform.issues == 2
+    assert platform.claims == 1
+    assert len(runtime.certified) == 1
+
+
+@pytest.mark.asyncio
 async def test_canary_worker_aborts_issued_lease_if_claim_fails() -> None:
     platform = _Platform()
     platform.claim_error = PlatformInfrastructureError("claim failed")
@@ -199,3 +235,76 @@ async def test_canary_worker_aborts_issued_lease_if_claim_fails() -> None:
     assert platform.claims == 1
     assert platform.aborts == 1
     assert runtime.certified == []
+
+
+def _runtime_config() -> Any:
+    return SimpleNamespace(
+        dittobench_api_url="http://127.0.0.1:18081",
+        dittobench_control_token=_TOKEN,
+    )
+
+
+def _canary_response_payload() -> dict[str, object]:
+    return {
+        "schema": "dittobench-coding-certification-canary-response-v1",
+        "lease_id": str(_LEASE),
+        "capabilities_revoked": True,
+        "harness_destroyed": True,
+        "receipt": json.loads(_receipt().model_dump_json()),
+    }
+
+
+@pytest.mark.asyncio
+async def test_canary_runtime_certify_accepts_private_json() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Cache-Control"] == "no-store"
+        assert request.headers["Authorization"] == f"Bearer {_TOKEN}"
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json", "Cache-Control": "no-store"},
+            json=_canary_response_payload(),
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), trust_env=False
+    ) as http:
+        runtime = CodingCanaryRuntime(_runtime_config(), http)
+        outcome = await runtime.certify(
+            _lease(status=CodingCertificationLeaseStatus.CLAIMED)
+        )
+    assert outcome.receipt.weight_eligible is False
+    assert outcome.capabilities_revoked is True
+    assert outcome.harness_destroyed is True
+    assert outcome.authority.lease_id == _LEASE
+
+
+@pytest.mark.asyncio
+async def test_canary_runtime_rejects_missing_no_store() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Cache-Control"] == "no-store"
+        assert request.headers["Authorization"] == f"Bearer {_TOKEN}"
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            json=_canary_response_payload(),
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), trust_env=False
+    ) as http:
+        runtime = CodingCanaryRuntime(_runtime_config(), http)
+        with pytest.raises(ValidatorInfrastructureError, match="cache policy"):
+            await runtime.certify(_lease(status=CodingCertificationLeaseStatus.CLAIMED))
+
+
+@pytest.mark.asyncio
+async def test_canary_runtime_probe_treats_404_as_unavailable() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="not found")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), trust_env=False
+    ) as http:
+        runtime = CodingCanaryRuntime(_runtime_config(), http)
+        with pytest.raises(PlatformInfrastructureError, match="unavailable"):
+            await runtime.require_available()

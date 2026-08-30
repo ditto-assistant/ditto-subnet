@@ -111,10 +111,12 @@ func (service *Service) Handler() http.Handler {
 		backend, beginErr := service.begin(value.LeaseID)
 		if beginErr != nil {
 			status := http.StatusConflict
+			code := "conflict"
 			if beginErr == ErrClosed || beginErr == ErrUnavailable {
 				status = http.StatusServiceUnavailable
+				code = "unavailable"
 			}
-			writeError(response, status, "conflict")
+			writeError(response, status, code)
 			return
 		}
 		defer service.release(value.LeaseID)

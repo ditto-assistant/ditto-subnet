@@ -1955,7 +1955,6 @@ class PlatformClient:
         agent_id: UUID,
         *,
         bench_version: int,
-        coding_contract_version: int = 1,
     ) -> CodingCertificationLeaseResponse | None:
         """Mint one public-canary lease, or return None when the agent is ineligible."""
 
@@ -1965,7 +1964,7 @@ class PlatformClient:
             validator_hotkey=self._config.validator_hotkey,
             agent_id=agent_id,
             bench_version=bench_version,
-            coding_contract_version=coding_contract_version,
+            coding_contract_version=1,
             nonce=nonce,
             requested_at=requested_at,
             signature=sign_coding_certification_lease_issue(
@@ -1973,7 +1972,7 @@ class PlatformClient:
                 validator_hotkey=self._config.validator_hotkey,
                 agent_id=agent_id,
                 bench_version=bench_version,
-                coding_contract_version=coding_contract_version,
+                coding_contract_version=1,
                 nonce=nonce,
                 requested_at=requested_at,
             ),

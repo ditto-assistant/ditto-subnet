@@ -122,11 +122,17 @@ class CodingCanaryWorker:
             agent_id, bench_version = self._queue.get_nowait()
         except asyncio.QueueEmpty:
             return False
-        issued = await self._issue(agent_id, bench_version)
+        try:
+            issued = await self._issue(agent_id, bench_version)
+        except PlatformInfrastructureError:
+            self._requeue(agent_id, bench_version)
+            raise
         if issued is None:
             return False
         if issued.status is not CodingCertificationLeaseStatus.ISSUED:
-            return False
+            raise PlatformInfrastructureError(
+                "coding certification lease was not issued exclusively"
+            )
         claimed: CodingCertificationLeaseResponse | None = None
         try:
             claimed = await self._platform.claim_coding_certification_lease(
@@ -168,8 +174,16 @@ class CodingCanaryWorker:
             return await self._platform.issue_coding_certification_lease(
                 agent_id, bench_version=bench_version
             )
+        except PlatformInfrastructureError:
+            raise
         except PlatformError:
             return None
+
+    def _requeue(self, agent_id: UUID, bench_version: int) -> None:
+        try:
+            self._queue.put_nowait((agent_id, bench_version))
+        except asyncio.QueueFull:
+            logger.warning("coding canary requeue is full agent=%s", agent_id)
 
     async def _abort_issued(self, lease_id: UUID) -> None:
         try:

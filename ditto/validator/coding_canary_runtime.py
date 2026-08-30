@@ -91,6 +91,8 @@ class CodingCanaryRuntime:
             ) from error
         if response.status_code in {401, 404, 503} or response.status_code >= 500:
             raise PlatformInfrastructureError("coding canary runtime is unavailable")
+        if not _private_json_headers(response.headers):
+            raise PlatformInfrastructureError("coding canary runtime is unavailable")
 
     async def certify(
         self, lease: CodingCertificationLeaseResponse
@@ -127,6 +129,10 @@ class CodingCanaryRuntime:
                     raise ValidatorInfrastructureError(
                         f"coding canary runtime rejected ({response.status_code})"
                     )
+                if not _private_json_headers(response.headers):
+                    raise ValidatorInfrastructureError(
+                        "coding canary runtime cache policy is invalid"
+                    )
                 async for chunk in response.aiter_bytes(chunk_size=16 << 10):
                     if len(body) + len(chunk) > _MAX_BODY_BYTES:
                         raise ValidatorInfrastructureError(
@@ -161,7 +167,15 @@ class CodingCanaryRuntime:
         return {
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
+            "Cache-Control": "no-store",
         }
+
+
+def _private_json_headers(headers: httpx.Headers) -> bool:
+    return "no-store" in {
+        directive.strip().lower()
+        for directive in headers.get("Cache-Control", "").split(",")
+    } and headers.get("Content-Type", "").lower().startswith("application/json")
 
 
 def _tls_or_loopback(scheme: str, hostname: str | None) -> bool:
