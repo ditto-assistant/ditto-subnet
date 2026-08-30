@@ -54,14 +54,14 @@ arbitrary destination.
 Grant offer and exchange are mounted but fail with `503` unless the application
 receives an explicit `CodingInferenceGrantTransport`. Revocation remains
 available for already-persisted grants if that transport is removed. The normal
-factory does not create a transport. No provider or model-relay route consumes
-these grants, and no request or settlement ledger exists yet. Consequently this
-PR cannot send a Luna request, produce model evidence, run a coding task, affect
-a score, or affect weights.
+factory does not create a transport. The separate request ledger can reserve
+and settle an already-authorized generation, but no provider or model-relay
+route invokes it. Consequently the current stack cannot send a Luna request,
+produce model evidence, run a coding task, affect a score, or affect weights.
 
-The next PR should add the trusted Platform/model-relay request reservation and
-settlement source that consumes this exact grant generation and produces the
-canonical settlement projection required by `codingrelay.Upstream`.
+See `coding-inference-request-ledger.md` for the durable dispatch boundary. A
+later PR must add the dedicated provider adapter and gateway without exposing
+OpenRouter credentials or accepting miner-authored settlement evidence.
 
 Validation:
 

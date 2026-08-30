@@ -2091,6 +2091,133 @@ class CodingInferenceGrant(Base):
     )
 
 
+class CodingInferenceRequest(Base):
+    """One durable request reservation and its trusted provider settlement."""
+
+    __tablename__ = "coding_inference_requests"
+
+    request_row_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    grant_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    ticket_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    case_id: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_capability_id: Mapped[str] = mapped_column(Text, nullable=False)
+    inference_grant_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    locked_request_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_settlement_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_generation_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_settlement_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    unsettled_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    settled_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["grant_id", "ticket_id"],
+            [
+                "coding_inference_grants.grant_id",
+                "coding_inference_grants.ticket_id",
+            ],
+            ondelete="CASCADE",
+            name="coding_inference_requests_grant_fkey",
+        ),
+        UniqueConstraint(
+            "grant_id",
+            "sequence",
+            name="coding_inference_requests_grant_sequence_key",
+        ),
+        UniqueConstraint(
+            "grant_id",
+            "request_sequence",
+            "attempt",
+            name="coding_inference_requests_request_attempt_key",
+        ),
+        UniqueConstraint(
+            "grant_id",
+            "request_id",
+            "attempt",
+            name="coding_inference_requests_request_id_attempt_key",
+        ),
+        UniqueConstraint(
+            "provider_settlement_sha256",
+            name="coding_inference_requests_settlement_key",
+        ),
+        UniqueConstraint(
+            "provider_generation_id",
+            name="coding_inference_requests_provider_generation_key",
+        ),
+        CheckConstraint(
+            "generation BETWEEN 1 AND 2147483647 "
+            "AND sequence BETWEEN 1 AND 1100 "
+            "AND request_sequence BETWEEN 1 AND 256 "
+            "AND attempt BETWEEN 1 AND 3",
+            name="coding_inference_requests_order_check",
+        ),
+        CheckConstraint(
+            "inference_grant_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND locked_request_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND (provider_settlement_sha256 IS NULL OR "
+            "provider_settlement_sha256 ~ '^[0-9a-f]{64}$') "
+            "AND (provider_generation_id IS NULL OR "
+            "(octet_length(provider_generation_id) BETWEEN 1 AND 256 "
+            "AND provider_generation_id !~ '[[:space:][:cntrl:]]'))",
+            name="coding_inference_requests_digests_check",
+        ),
+        CheckConstraint(
+            "octet_length(case_id) BETWEEN 1 AND 256 "
+            "AND octet_length(profile_capability_id) BETWEEN 1 AND 256 "
+            "AND case_id !~ '[[:space:][:cntrl:]]' "
+            "AND profile_capability_id !~ '[[:space:][:cntrl:]]' "
+            "AND (provider_settlement_json IS NULL OR "
+            "octet_length(provider_settlement_json) BETWEEN 1 AND 65536)",
+            name="coding_inference_requests_bounds_check",
+        ),
+        CheckConstraint(
+            "status IN ('started', 'receipt_free_retry', 'complete', "
+            "'provider_failure', 'unsettled') "
+            "AND ((status = 'started' "
+            "AND provider_settlement_sha256 IS NULL "
+            "AND provider_generation_id IS NULL "
+            "AND provider_settlement_json IS NULL "
+            "AND unsettled_reason IS NULL AND settled_at IS NULL) "
+            "OR (status IN ('receipt_free_retry', 'complete', "
+            "'provider_failure') "
+            "AND provider_settlement_sha256 IS NOT NULL "
+            "AND provider_settlement_json IS NOT NULL "
+            "AND unsettled_reason IS NULL AND settled_at IS NOT NULL) "
+            "OR (status = 'unsettled' "
+            "AND provider_settlement_sha256 IS NULL "
+            "AND provider_generation_id IS NULL "
+            "AND provider_settlement_json IS NULL "
+            "AND unsettled_reason IN ('provider_settlement_unavailable', "
+            "'provider_response_lost', 'relay_infrastructure', "
+            "'invalid_provider_settlement') "
+            "AND settled_at IS NOT NULL)) "
+            "AND (settled_at IS NULL OR settled_at >= started_at) "
+            "AND weight_eligible = false",
+            name="coding_inference_requests_state_check",
+        ),
+        Index(
+            "coding_inference_requests_grant_status_idx",
+            "grant_id",
+            "status",
+            "sequence",
+        ),
+    )
+
+
 class CodingShadowAuthoringFreeze(Base):
     """One immutable validator-signed freeze transition for a shadow ticket."""
 
