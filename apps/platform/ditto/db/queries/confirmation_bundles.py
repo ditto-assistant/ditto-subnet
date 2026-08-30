@@ -1455,6 +1455,7 @@ async def list_confirmation_bundles(
     session: AsyncSession,
     *,
     state: str | None = None,
+    minimum_bench_version: int | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> Sequence[ConfirmationBundle]:
@@ -1463,15 +1464,26 @@ async def list_confirmation_bundles(
     )
     if state is not None:
         statement = statement.where(ConfirmationBundle.state == state)
+    if minimum_bench_version is not None:
+        statement = statement.where(
+            ConfirmationBundle.bench_version >= minimum_bench_version
+        )
     return list(await session.scalars(statement.limit(limit).offset(offset)))
 
 
 async def count_confirmation_bundles(
-    session: AsyncSession, *, state: str | None = None
+    session: AsyncSession,
+    *,
+    state: str | None = None,
+    minimum_bench_version: int | None = None,
 ) -> int:
     statement = select(func.count()).select_from(ConfirmationBundle)
     if state is not None:
         statement = statement.where(ConfirmationBundle.state == state)
+    if minimum_bench_version is not None:
+        statement = statement.where(
+            ConfirmationBundle.bench_version >= minimum_bench_version
+        )
     return int(await session.scalar(statement) or 0)
 
 

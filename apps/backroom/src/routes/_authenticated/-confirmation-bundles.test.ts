@@ -25,6 +25,8 @@ describe('confirmation bundles route loader', () => {
       settings: { revision: 3 },
       bundles: { items: [], count: 0 },
     })
-    expect(listConfirmationBundles).toHaveBeenCalledWith({ data: { limit: 20 } })
+    expect(listConfirmationBundles).toHaveBeenCalledWith({
+      data: { generation: 'active', limit: 20 },
+    })
   })
 })

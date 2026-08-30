@@ -4802,6 +4802,87 @@ class TestQuarantineAdmin:
             assert retry_after < deadline + timedelta(hours=6)
             assert len(scores) == 2
 
+    async def test_validator_assignment_list_defaults_to_current_benchmark_era(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        historical = await _seed_agent(
+            session_maker, status=AgentStatus.EVALUATING, name="historical-lease"
+        )
+        current = await _seed_agent(
+            session_maker, status=AgentStatus.EVALUATING, name="current-lease"
+        )
+        now = datetime.now(UTC)
+        async with (
+            session_maker() as session,
+            retired_era_writes_allowed(session),
+            session.begin(),
+        ):
+            session.add(
+                BenchmarkRollout(
+                    rollout_id=uuid4(),
+                    from_version=_SOURCE_VERSION,
+                    desired_version=_TARGET_VERSION,
+                    status="activated",
+                    cohort_size=5,
+                    created_at=now,
+                    activated_at=now,
+                )
+            )
+            session.add_all(
+                [
+                    ValidatorTicket(
+                        agent_id=historical,
+                        validator_hotkey="5HistoricalAssignment",
+                        status=TicketStatus.ISSUED,
+                        issued_at=now,
+                        deadline=now + timedelta(minutes=45),
+                        bench_version=_SOURCE_VERSION,
+                        attempt_count=1,
+                    ),
+                    ValidatorTicket(
+                        agent_id=current,
+                        validator_hotkey="5CurrentAssignment",
+                        status=TicketStatus.ISSUED,
+                        issued_at=now,
+                        deadline=now + timedelta(minutes=45),
+                        bench_version=_TARGET_VERSION,
+                        attempt_count=1,
+                    ),
+                ]
+            )
+        _install_db(app, session_maker)
+        headers = {
+            "Authorization": "Bearer test-admin-token-at-least-32-characters",
+        }
+
+        active = await client.get(
+            "/api/v1/admin/validator-assignments", headers=headers
+        )
+        all_generations = await client.get(
+            "/api/v1/admin/validator-assignments?generation=all", headers=headers
+        )
+
+        assert active.status_code == 200, active.text
+        assert active.json()["generation"] == "active"
+        assert active.json()["active_bench_version"] == _TARGET_VERSION
+        assert active.json()["count"] == 1
+        assert [item["agent_id"] for item in active.json()["items"]] == [str(current)]
+        assert all_generations.status_code == 200, all_generations.text
+        assert all_generations.json()["generation"] == "all"
+        assert all_generations.json()["active_bench_version"] == _TARGET_VERSION
+        assert all_generations.json()["count"] == 2
+        assert {item["agent_id"] for item in all_generations.json()["items"]} == {
+            str(historical),
+            str(current),
+        }
+
     @pytest.mark.parametrize(
         ("resolution", "expected_status"),
         [

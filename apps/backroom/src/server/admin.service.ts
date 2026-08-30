@@ -64,6 +64,7 @@ import {
   sourceSearchResultSchema,
   unavailableCopyReviewComparison,
   validatorAssignmentListSchema,
+  validatorAssignmentListInputSchema,
   releaseValidatorAssignmentInputSchema,
   releaseValidatorAssignmentResponseSchema,
   retryValidationInputSchema,
@@ -807,6 +808,7 @@ export async function setConfirmationBundleSettings(rawInput: unknown, actor: st
 export async function fetchConfirmationBundles(rawInput: unknown = {}) {
   const input = confirmationBundleListInputSchema.parse(rawInput)
   const query = new URLSearchParams({
+    generation: input.generation,
     limit: String(input.limit),
     offset: String(input.offset),
   })
@@ -859,12 +861,18 @@ function confirmationLanePage(list: {
   }
 }
 
-export async function fetchConfirmationLaneDiagnosis() {
+export async function fetchConfirmationLaneDiagnosis(rawInput: unknown = {}) {
+  const input = confirmationBundleListInputSchema.parse(rawInput)
   const [settings, fleet, ...lists] = await Promise.all([
     fetchConfirmationBundleSettings(),
     fetchValidatorFleet(),
     ...CONFIRMATION_LANE_STATES.map((state) =>
-      fetchConfirmationBundles({ state, limit: 100, offset: 0 }),
+      fetchConfirmationBundles({
+        generation: input.generation,
+        state,
+        limit: 100,
+        offset: 0,
+      }),
     ),
   ])
   const pages = Object.fromEntries(
@@ -873,17 +881,21 @@ export async function fetchConfirmationLaneDiagnosis() {
       confirmationLanePage(lists[index]!),
     ]),
   ) as Record<(typeof CONFIRMATION_LANE_STATES)[number], ConfirmationLanePage>
-  return diagnoseConfirmationLane({
-    observedAt: new Date().toISOString(),
-    mode: settings.effective.settings.mode,
-    issuanceActive: settings.effective.issuance_active,
-    settingsRevision: settings.effective.revision,
-    dailyBundleCap: settings.effective.settings.daily_bundle_cap,
-    dailyDollarCapMicrousd: settings.effective.settings.daily_dollar_cap_microusd,
-    profileRevision: settings.effective.settings.profile_revision,
-    fleet,
-    pages,
-  })
+  return {
+    ...diagnoseConfirmationLane({
+      observedAt: new Date().toISOString(),
+      mode: settings.effective.settings.mode,
+      issuanceActive: settings.effective.issuance_active,
+      settingsRevision: settings.effective.revision,
+      dailyBundleCap: settings.effective.settings.daily_bundle_cap,
+      dailyDollarCapMicrousd: settings.effective.settings.daily_dollar_cap_microusd,
+      profileRevision: settings.effective.settings.profile_revision,
+      fleet,
+      pages,
+    }),
+    generation: input.generation,
+    active_bench_version: lists[0]!.active_bench_version,
+  }
 }
 
 export async function authorizeConfirmationBundleRetest(
@@ -1780,8 +1792,11 @@ export async function fetchScreeningArtifact(rawInput: unknown, actor: string) {
   return screeningArtifactSchema.parse(payload)
 }
 
-export async function fetchValidatorAssignments() {
-  const payload = await platformAdminRequest('/api/v1/admin/validator-assignments')
+export async function fetchValidatorAssignments(rawInput: unknown = {}) {
+  const input = validatorAssignmentListInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/validator-assignments?generation=${input.generation}`,
+  )
   return validatorAssignmentListSchema.parse(payload)
 }
 

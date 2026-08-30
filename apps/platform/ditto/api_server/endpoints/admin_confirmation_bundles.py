@@ -418,17 +418,30 @@ async def get_confirmation_bundles(
     _admin: AdminDep,
     session: SessionDep,
     state: Annotated[ConfirmationBundleState | None, Query()] = None,
+    generation: Annotated[Literal["active", "all"], Query()] = "active",
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> AdminConfirmationBundleListResponse:
+    """List current-era confirmation evidence unless history is requested.
+
+    Bundles are immutable evidence records, so a historical bundle remains
+    available by exact id for audit and manual retest.  The generic worklist
+    instead follows the benchmark currently in force (plus any newer rollout
+    work); ``generation=all`` is the explicit way to inspect the full lineage.
+    """
+    active_version = await active_bench_version(session)
+    minimum_bench_version = active_version if generation == "active" else None
     rows = await list_confirmation_bundles(
         session,
         state=state.value if state is not None else None,
+        minimum_bench_version=minimum_bench_version,
         limit=limit,
         offset=offset,
     )
     count = await count_confirmation_bundles(
-        session, state=state.value if state is not None else None
+        session,
+        state=state.value if state is not None else None,
+        minimum_bench_version=minimum_bench_version,
     )
     now = datetime.now(UTC)
     today = now.date()
@@ -438,11 +451,13 @@ async def get_confirmation_bundles(
     return AdminConfirmationBundleListResponse(
         items=[await _bundle_view(session, row) for row in rows],
         count=count,
+        generation=generation,
+        active_bench_version=active_version,
         budget=_budget_view(budget),
         shadow_calibration=await _shadow_calibration_view(
             session,
             now=now,
-            bench_version=await active_bench_version(session),
+            bench_version=active_version,
             profile_revision=effective_settings.profile_revision,
             profile_checksum=effective_settings.profile_checksum,
         ),

@@ -10,7 +10,9 @@ import {
 export async function loadConfirmationBundlesPage() {
   const [settings, bundles] = await Promise.all([
     getConfirmationBundleSettings(),
-    listConfirmationBundles({ data: { limit: CONFIRMATION_BUNDLE_PAGE_SIZE } }),
+    listConfirmationBundles({
+      data: { generation: 'active', limit: CONFIRMATION_BUNDLE_PAGE_SIZE },
+    }),
   ])
   return { settings, bundles }
 }
@@ -28,9 +30,9 @@ function ConfirmationBundlesPage() {
   return (
     <div>
       <PageHeader
-        label="Bench v9 qualification"
+        label="Current benchmark qualification"
         title="Confirmation bundles"
-        description="Audit the shared LongMem and binary-ablation evidence that qualifies Bench v9 candidates, control bounded issuance through append-only settings, and explicitly authorize evidence retests. This surface cannot submit evidence, change canonical scores, or activate rewards."
+        description="Audit the shared LongMem and binary-ablation evidence qualifying current-benchmark candidates, control bounded issuance through append-only settings, and explicitly authorize evidence retests. Historical evidence remains available by exact bundle lookup or an explicit MCP audit request. This surface cannot submit evidence, change canonical scores, or activate rewards."
         aside={
           <div className="flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted-strong)]">
             <FlaskConical className="h-3.5 w-3.5 text-[var(--cyan)]" />

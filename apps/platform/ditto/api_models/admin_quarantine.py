@@ -824,6 +824,8 @@ class AdminValidatorAssignment(BaseModel):
 class AdminValidatorAssignmentList(BaseModel):
     items: list[AdminValidatorAssignment]
     count: int
+    generation: Literal["active", "all"]
+    active_bench_version: int
 
 
 class AdminValidatorAssignmentReleaseRequest(BaseModel):

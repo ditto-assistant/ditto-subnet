@@ -635,6 +635,8 @@ describe('admin API schemas', () => {
   it('parses live validator assignments and requires an audit reason to release', () => {
     const assignments = validatorAssignmentListSchema.parse({
       count: 1,
+      generation: 'active',
+      active_bench_version: 12,
       items: [
         {
           agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
@@ -1485,9 +1487,13 @@ describe('Bench v9 confirmation bundle schemas', () => {
 
   it('parses bounded list filters and rejects reward/activation controls', () => {
     expect(confirmationBundleListInputSchema.parse({ state: 'failed', limit: 25 })).toEqual({
+      generation: 'active',
       state: 'failed',
       limit: 25,
       offset: 0,
+    })
+    expect(confirmationBundleListInputSchema.parse({ generation: 'all' })).toMatchObject({
+      generation: 'all',
     })
     expect(() =>
       confirmationBundleListInputSchema.parse({ state: 'failed', limit: 25, reward: true }),
@@ -1515,6 +1521,8 @@ describe('Bench v9 confirmation bundle schemas', () => {
     const parsed = confirmationBundleListSchema.parse({
       items: [confirmationBundle()],
       count: 1,
+      generation: 'active',
+      active_bench_version: 9,
       budget: {
         utc_day: '2026-08-08',
         revision: 3,
@@ -1534,6 +1542,8 @@ describe('Bench v9 confirmation bundle schemas', () => {
       confirmationBundleListSchema.parse({
         items: [],
         count: 0,
+        generation: 'active',
+        active_bench_version: 9,
         budget: {
           utc_day: '2026-08-08',
           revision: 0,
@@ -1557,6 +1567,8 @@ describe('Bench v9 confirmation bundle schemas', () => {
       confirmationBundleListSchema.parse({
         items: [],
         count: 0,
+        generation: 'active',
+        active_bench_version: 9,
         budget: {
           utc_day: '2026-08-08',
           revision: 0,
@@ -1574,6 +1586,8 @@ describe('Bench v9 confirmation bundle schemas', () => {
       confirmationBundleListSchema.parse({
         items: [confirmationBundle()],
         count: 0,
+        generation: 'active',
+        active_bench_version: 9,
         budget: {
           utc_day: '2026-08-08',
           revision: 0,

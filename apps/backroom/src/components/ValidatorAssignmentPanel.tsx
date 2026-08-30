@@ -47,7 +47,7 @@ export function ValidatorAssignmentPanel({
     setLoading(true)
     setError('')
     try {
-      const result = await listAssignments()
+      const result = await listAssignments({ data: { generation: 'active' } })
       setItems(result.items)
       setSelected(
         (current) =>
@@ -115,8 +115,9 @@ export function ValidatorAssignmentPanel({
             </span>
           </div>
           <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
-            Release only when a validator has stopped or cannot finish. Existing
-            scores and the miner submission are preserved.
+            Current-benchmark leases only. Release only when a validator has
+            stopped or cannot finish; existing scores and the miner submission
+            are preserved.
           </p>
         </div>
         <button

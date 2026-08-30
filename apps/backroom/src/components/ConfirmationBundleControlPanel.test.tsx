@@ -383,6 +383,8 @@ function listing(
   return {
     items,
     count,
+    generation: 'active',
+    active_bench_version: 9,
     budget: {
       utc_day: '2026-08-08',
       revision: 4,
@@ -558,7 +560,7 @@ describe('ConfirmationBundleControlPanel', () => {
   it('passes lifecycle filters to the authenticated no-store read', async () => {
     render(<ConfirmationBundleControlPanel initialSettings={control()} initialBundles={listing()} readOnly={false} />)
     fireEvent.click(screen.getByRole('button', { name: 'Completed' }))
-    await waitFor(() => expect(listConfirmationBundles).toHaveBeenCalledWith({ data: { state: 'completed', limit: 20, offset: 0 } }))
+    await waitFor(() => expect(listConfirmationBundles).toHaveBeenCalledWith({ data: { generation: 'active', state: 'completed', limit: 20, offset: 0 } }))
   })
 
   it('pages through the Platform-owned total count with explicit offsets', async () => {
@@ -570,7 +572,7 @@ describe('ConfirmationBundleControlPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
 
     await waitFor(() =>
-      expect(listConfirmationBundles).toHaveBeenCalledWith({ data: { limit: 20, offset: 20 } }),
+      expect(listConfirmationBundles).toHaveBeenCalledWith({ data: { generation: 'active', limit: 20, offset: 20 } }),
     )
   })
 

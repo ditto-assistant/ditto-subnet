@@ -486,6 +486,8 @@ class AdminConfirmationBundleListResponse(BaseModel):
 
     items: list[ConfirmationBundleView]
     count: int
+    generation: Literal["active", "all"]
+    active_bench_version: int
     budget: ConfirmationDailyBudgetView
     shadow_calibration: ConfirmationShadowCalibrationView
 

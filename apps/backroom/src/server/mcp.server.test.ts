@@ -377,6 +377,16 @@ describe('Backroom MCP tools', () => {
     expect(validationRetryRead?.description).toContain('infra_retry_grants')
     expect(validationRetryRead?.description).toContain('silently_expired')
     expect(validationRetryRead?.description).toContain('failure_reason')
+    for (const name of ['list_confirmation_bundles', 'get_confirmation_lane_diagnosis']) {
+      const tool = response.tools.find((candidate) => candidate.name === name)
+      const properties = tool?.inputSchema?.properties as
+        | Record<string, { default?: unknown; enum?: Array<string> }>
+        | undefined
+      expect(properties?.generation, name).toMatchObject({
+        default: 'active',
+        enum: ['active', 'all'],
+      })
+    }
     const stuckList = response.tools.find(
       (tool) => tool.name === 'list_stuck_submissions',
     )
@@ -679,6 +689,8 @@ describe('Backroom MCP tools', () => {
     const emptyList = {
       items: [] as Array<typeof failedBundle>,
       count: 0,
+      generation: 'active',
+      active_bench_version: 11,
       budget: {
         utc_day: '2026-08-18',
         revision: 15,
@@ -756,8 +768,13 @@ describe('Backroom MCP tools', () => {
       policy: { mode: 'shadow', issuance_active: true, settings_revision: 15 },
       counts: { failed: 9, completed: 0 },
       likely_cause: { code: 'leftover_validator_v9_identity_pin' },
+      generation: 'active',
+      active_bench_version: 11,
     })
-    expect(fetchMock).toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/admin/confirmation-bundles?generation=active'),
+      expect.anything(),
+    )
 
     await client.close()
     await server.close()
@@ -3571,6 +3588,8 @@ describe('Backroom MCP tools', () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       Response.json({
         count: 1,
+        generation: 'active',
+        active_bench_version: 12,
         items: [
           {
             agent_id: agentId,
@@ -3597,11 +3616,13 @@ describe('Backroom MCP tools', () => {
     expect(response.isError).not.toBe(true)
     expect(readJsonResult(response)).toMatchObject({
       count: 1,
+      generation: 'active',
+      active_bench_version: 12,
       returned: 1,
       items: [{ agent_id: agentId, agent_name: 'lets_5.6', bench_version: 11 }],
     })
     expect(fetchMock).toHaveBeenLastCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/validator-assignments',
+      'https://platform-api.heyditto.ai/api/v1/admin/validator-assignments?generation=active',
       expect.objectContaining({ method: 'GET' }),
     )
 

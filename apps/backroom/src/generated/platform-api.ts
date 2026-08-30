@@ -418,7 +418,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get Confirmation Bundles */
+        /**
+         * Get Confirmation Bundles
+         * @description List current-era confirmation evidence unless history is requested.
+         *
+         *     Bundles are immutable evidence records, so a historical bundle remains
+         *     available by exact id for audit and manual retest.  The generic worklist
+         *     instead follows the benchmark currently in force (plus any newer rollout
+         *     work); ``generation=all`` is the explicit way to inspect the full lineage.
+         */
         get: operations["get_confirmation_bundles_api_v1_admin_confirmation_bundles_get"];
         put?: never;
         post?: never;
@@ -2391,7 +2399,14 @@ export interface paths {
         };
         /**
          * List Validator Assignments
-         * @description List live scoring leases for operator recovery tooling.
+         * @description List current-era live scoring leases unless history is requested.
+         *
+         *     An issued lease can survive a benchmark activation.  It is still useful
+         *     forensic evidence, but re-leasing it is not current recovery work, so the
+         *     default inventory excludes tickets below the active version.  A newer
+         *     ticket remains visible while its rollout is in progress.  ``generation``
+         *     is explicit rather than inferred from the agent's latest score because a
+         *     ticket is already the authoritative record of which benchmark it runs.
          */
         get: operations["list_validator_assignments_api_v1_admin_validator_assignments_get"];
         put?: never;
@@ -6112,9 +6127,16 @@ export interface components {
         };
         /** AdminConfirmationBundleListResponse */
         AdminConfirmationBundleListResponse: {
+            /** Active Bench Version */
+            active_bench_version: number;
             budget: components["schemas"]["ConfirmationDailyBudgetView"];
             /** Count */
             count: number;
+            /**
+             * Generation
+             * @enum {string}
+             */
+            generation: "active" | "all";
             /** Items */
             items: components["schemas"]["ConfirmationBundleView"][];
             shadow_calibration: components["schemas"]["ConfirmationShadowCalibrationView"];
@@ -9324,8 +9346,15 @@ export interface components {
         };
         /** AdminValidatorAssignmentList */
         AdminValidatorAssignmentList: {
+            /** Active Bench Version */
+            active_bench_version: number;
             /** Count */
             count: number;
+            /**
+             * Generation
+             * @enum {string}
+             */
+            generation: "active" | "all";
             /** Items */
             items: components["schemas"]["AdminValidatorAssignment"][];
         };
@@ -25053,6 +25082,7 @@ export interface operations {
         parameters: {
             query?: {
                 state?: components["schemas"]["ConfirmationBundleState"] | null;
+                generation?: "active" | "all";
                 limit?: number;
                 offset?: number;
             };
@@ -28756,7 +28786,9 @@ export interface operations {
     };
     list_validator_assignments_api_v1_admin_validator_assignments_get: {
         parameters: {
-            query?: never;
+            query?: {
+                generation?: "active" | "all";
+            };
             header?: {
                 authorization?: string | null;
             };
