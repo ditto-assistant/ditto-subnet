@@ -105,6 +105,22 @@ async def list_core_qualification_policies(
     )
 
 
+async def lock_core_qualification_bench(
+    session: AsyncSession, *, bench_version: int
+) -> None:
+    """Serialize policy writes with certification-lease issuance for one bench."""
+
+    if session.get_bind().dialect.name != "postgresql":
+        return
+    await session.execute(
+        select(
+            func.pg_advisory_xact_lock(
+                func.hashtextextended(f"ditto:core-qualification:{bench_version}", 0)
+            )
+        )
+    )
+
+
 async def insert_core_qualification_policy(
     session: AsyncSession,
     *,
@@ -113,6 +129,7 @@ async def insert_core_qualification_policy(
     reason: str,
     actor: str,
 ) -> CoreQualificationPolicyRevisionRow:
+    await lock_core_qualification_bench(session, bench_version=policy.bench_version)
     checksum = core_qualification_policy_checksum(policy)
     row = CoreQualificationPolicyRevisionRow(
         bench_version=policy.bench_version,
@@ -209,7 +226,7 @@ async def latest_core_qualification_observation(
     )
 
 
-async def _latest_complete_core_qualification_observation(
+async def latest_complete_core_qualification_observation(
     session: AsyncSession,
     *,
     agent_id: UUID,
@@ -329,7 +346,7 @@ async def observe_core_qualification(
         bench_version=bench_version,
         policy_revision=policy_row.revision,
     )
-    wave_baseline = await _latest_complete_core_qualification_observation(
+    wave_baseline = await latest_complete_core_qualification_observation(
         session,
         agent_id=agent_id,
         artifact_sha256=agent.sha256,

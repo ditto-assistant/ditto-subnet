@@ -859,6 +859,47 @@ CREATE TABLE public.coding_catalog_retirements (
 
 
 --
+-- Name: coding_certification_leases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_certification_leases (
+    lease_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    screened_image_sha256 text NOT NULL,
+    screened_image_id text NOT NULL,
+    screened_image_ref text NOT NULL,
+    screened_image_upload_id uuid NOT NULL,
+    validator_hotkey text NOT NULL,
+    bench_version integer NOT NULL,
+    coding_contract_version integer NOT NULL,
+    core_qualification_observation_id uuid NOT NULL,
+    core_qualification_policy_checksum text NOT NULL,
+    canary_manifest_sha256 text NOT NULL,
+    runner_plan_sha256 text NOT NULL,
+    grader_plan_sha256 text NOT NULL,
+    resource_profile_sha256 text NOT NULL,
+    inference_policy_sha256 text NOT NULL,
+    status text NOT NULL,
+    weight_eligible boolean NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    deadline timestamp with time zone NOT NULL,
+    claimed_at timestamp with time zone,
+    aborted_at timestamp with time zone,
+    authority jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_coding_certification_leases_coding_certification_lea_012f CHECK ((validator_hotkey ~ '^[1-9A-HJ-NP-Za-km-z]{47,48}$'::text)),
+    CONSTRAINT ck_coding_certification_leases_coding_certification_lea_066c CHECK (((issued_at < deadline) AND (deadline <= (issued_at + '00:30:00'::interval)))),
+    CONSTRAINT ck_coding_certification_leases_coding_certification_lea_5aab CHECK (((coding_contract_version = 1) AND (bench_version >= 7))),
+    CONSTRAINT ck_coding_certification_leases_coding_certification_lea_88ef CHECK ((((status = 'issued'::text) AND (claimed_at IS NULL) AND (aborted_at IS NULL)) OR ((status = 'claimed'::text) AND (claimed_at IS NOT NULL) AND (claimed_at >= issued_at) AND (claimed_at < deadline) AND (aborted_at IS NULL)) OR ((status = 'aborted'::text) AND (aborted_at IS NOT NULL) AND (aborted_at >= issued_at) AND (claimed_at IS NULL)) OR ((status = 'expired'::text) AND (claimed_at IS NULL) AND (aborted_at IS NULL)))),
+    CONSTRAINT ck_coding_certification_leases_coding_certification_lea_9708 CHECK ((((octet_length(screened_image_id) >= 1) AND (octet_length(screened_image_id) <= 256)) AND ((octet_length(screened_image_ref) >= 1) AND (octet_length(screened_image_ref) <= 512)) AND (screened_image_id !~ '[[:space:][:cntrl:]]'::text) AND (screened_image_ref !~ '[[:cntrl:]]'::text))),
+    CONSTRAINT ck_coding_certification_leases_coding_certification_lea_e585 CHECK ((weight_eligible = false)),
+    CONSTRAINT ck_coding_certification_leases_coding_certification_lea_e6b0 CHECK (((artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND (core_qualification_policy_checksum ~ '^[0-9a-f]{64}$'::text) AND (canary_manifest_sha256 ~ '^[0-9a-f]{64}$'::text) AND (runner_plan_sha256 ~ '^[0-9a-f]{64}$'::text) AND (grader_plan_sha256 ~ '^[0-9a-f]{64}$'::text) AND (resource_profile_sha256 ~ '^[0-9a-f]{64}$'::text) AND (inference_policy_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_coding_certification_leases_coding_certification_lea_fe07 CHECK ((status = ANY (ARRAY['issued'::text, 'claimed'::text, 'aborted'::text, 'expired'::text])))
+);
+
+
+--
 -- Name: coding_inference_grants; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4315,6 +4356,14 @@ ALTER TABLE ONLY public.burn_settings_revisions
 
 
 --
+-- Name: coding_certification_leases pk_coding_certification_leases; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_leases
+    ADD CONSTRAINT pk_coding_certification_leases PRIMARY KEY (lease_id);
+
+
+--
 -- Name: confirmation_budget_days pk_confirmation_budget_days; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5102,6 +5151,20 @@ CREATE INDEX coding_catalog_exposures_run_idx ON public.coding_catalog_exposures
 --
 
 CREATE INDEX coding_catalog_releases_created_idx ON public.coding_catalog_releases USING btree (created_at);
+
+
+--
+-- Name: coding_certification_leases_inflight_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX coding_certification_leases_inflight_idx ON public.coding_certification_leases USING btree (agent_id, artifact_sha256, screened_image_sha256, bench_version, coding_contract_version) WHERE (status = ANY (ARRAY['issued'::text, 'claimed'::text]));
+
+
+--
+-- Name: coding_certification_leases_validator_deadline_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_certification_leases_validator_deadline_idx ON public.coding_certification_leases USING btree (validator_hotkey, deadline);
 
 
 --
@@ -5956,6 +6019,22 @@ ALTER TABLE ONLY public.coding_catalog_exposures
 
 ALTER TABLE ONLY public.coding_catalog_retirements
     ADD CONSTRAINT coding_catalog_retirements_release_fkey FOREIGN KEY (release_row_id, expected_commitment_sha256) REFERENCES public.coding_catalog_releases(release_row_id, commitment_sha256) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_certification_leases coding_certification_leases_agent_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_leases
+    ADD CONSTRAINT coding_certification_leases_agent_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_certification_leases coding_certification_leases_observation_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_leases
+    ADD CONSTRAINT coding_certification_leases_observation_fkey FOREIGN KEY (core_qualification_observation_id) REFERENCES public.core_qualification_observations(observation_id) ON DELETE RESTRICT;
 
 
 --

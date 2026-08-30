@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unicodedata
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -83,6 +84,36 @@ class CodingCertificationLeaseAuthority(CodingCertificationLeaseModel):
         return self
 
 
+class CodingCertificationLeaseStatus(StrEnum):
+    ISSUED = "issued"
+    CLAIMED = "claimed"
+    ABORTED = "aborted"
+    EXPIRED = "expired"
+
+
+class CodingCertificationLeaseIssueRequest(CodingCertificationLeaseModel):
+    validator_hotkey: Annotated[str, Field(pattern=_SS58)]
+    agent_id: UUID
+    bench_version: Annotated[int, Field(strict=True, ge=7, le=1_000_000)]
+    coding_contract_version: Literal[1] = 1
+    nonce: UUID
+    requested_at: datetime
+    signature: Annotated[str, Field(pattern=r"^[0-9a-fA-F]{128}$")]
+
+    @field_validator("requested_at")
+    @classmethod
+    def request_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("coding certification lease timestamp must be aware")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def identifiers_are_nonzero(self) -> CodingCertificationLeaseIssueRequest:
+        if self.agent_id.int == 0 or self.nonce.int == 0:
+            raise ValueError("coding certification lease UUID is nil")
+        return self
+
+
 class CodingCertificationLeaseClaimRequest(CodingCertificationLeaseModel):
     validator_hotkey: Annotated[str, Field(pattern=_SS58)]
     lease_id: UUID
@@ -104,4 +135,90 @@ class CodingCertificationLeaseClaimRequest(CodingCertificationLeaseModel):
         return self
 
 
-__all__ = ["CodingCertificationLeaseAuthority", "CodingCertificationLeaseClaimRequest"]
+class CodingCertificationLeaseAbortRequest(CodingCertificationLeaseClaimRequest):
+    pass
+
+
+class CodingCertificationLeaseResponse(CodingCertificationLeaseModel):
+    authority: CodingCertificationLeaseAuthority
+    status: CodingCertificationLeaseStatus
+    claimed_at: datetime | None = None
+    aborted_at: datetime | None = None
+    weight_eligible: Literal[False] = False
+
+
+def _aware_iso(value: datetime) -> str:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("coding certification lease timestamp must be aware")
+    return value.astimezone(UTC).isoformat(timespec="microseconds")
+
+
+def coding_certification_lease_issue_signing_message(
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    bench_version: int,
+    coding_contract_version: int,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    return "\x00".join(
+        (
+            "dittobench-coding-certification-lease-issue:v1",
+            validator_hotkey,
+            str(agent_id),
+            str(bench_version),
+            str(coding_contract_version),
+            str(nonce),
+            _aware_iso(requested_at),
+        )
+    ).encode()
+
+
+def coding_certification_lease_claim_signing_message(
+    *,
+    validator_hotkey: str,
+    lease_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    return "\x00".join(
+        (
+            "dittobench-coding-certification-lease-claim:v1",
+            validator_hotkey,
+            str(lease_id),
+            str(nonce),
+            _aware_iso(requested_at),
+        )
+    ).encode()
+
+
+def coding_certification_lease_abort_signing_message(
+    *,
+    validator_hotkey: str,
+    lease_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    return "\x00".join(
+        (
+            "dittobench-coding-certification-lease-abort:v1",
+            validator_hotkey,
+            str(lease_id),
+            str(nonce),
+            _aware_iso(requested_at),
+        )
+    ).encode()
+
+
+__all__ = [
+    "CodingCertificationLeaseAbortRequest",
+    "CodingCertificationLeaseAuthority",
+    "CodingCertificationLeaseClaimRequest",
+    "CodingCertificationLeaseIssueRequest",
+    "CodingCertificationLeaseResponse",
+    "CodingCertificationLeaseStatus",
+    "coding_certification_lease_abort_signing_message",
+    "coding_certification_lease_claim_signing_message",
+    "coding_certification_lease_issue_signing_message",
+]

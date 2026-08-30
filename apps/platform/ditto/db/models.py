@@ -1059,6 +1059,132 @@ class CodingCapabilityCertification(Base):
     )
 
 
+class CodingCertificationLease(Base):
+    """One shadow public-canary lease minted from current core qualification."""
+
+    __tablename__ = "coding_certification_leases"
+
+    lease_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    screened_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    screened_image_id: Mapped[str] = mapped_column(Text, nullable=False)
+    screened_image_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    screened_image_upload_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    coding_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    core_qualification_observation_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    core_qualification_policy_checksum: Mapped[str] = mapped_column(
+        Text, nullable=False
+    )
+    canary_manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    runner_plan_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    grader_plan_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    resource_profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    inference_policy_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    deadline: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    aborted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    authority: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="coding_certification_leases_agent_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["core_qualification_observation_id"],
+            ["core_qualification_observations.observation_id"],
+            ondelete="RESTRICT",
+            name="coding_certification_leases_observation_fkey",
+        ),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND screened_image_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND core_qualification_policy_checksum ~ '^[0-9a-f]{64}$' "
+            "AND canary_manifest_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND runner_plan_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND grader_plan_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND resource_profile_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND inference_policy_sha256 ~ '^[0-9a-f]{64}$'",
+            name="coding_certification_leases_sha_check",
+        ),
+        CheckConstraint(
+            "validator_hotkey ~ '^[1-9A-HJ-NP-Za-km-z]{47,48}$'",
+            name="coding_certification_leases_hotkey_check",
+        ),
+        CheckConstraint(
+            "coding_contract_version = 1 AND bench_version >= 7",
+            name="coding_certification_leases_version_check",
+        ),
+        CheckConstraint(
+            "status IN ('issued', 'claimed', 'aborted', 'expired')",
+            name="coding_certification_leases_status_check",
+        ),
+        CheckConstraint(
+            "weight_eligible = false",
+            name="coding_certification_leases_weight_ineligible",
+        ),
+        CheckConstraint(
+            "issued_at < deadline AND deadline <= issued_at + interval '30 minutes'",
+            name="coding_certification_leases_deadline_check",
+        ),
+        CheckConstraint(
+            "octet_length(screened_image_id) BETWEEN 1 AND 256 "
+            "AND octet_length(screened_image_ref) BETWEEN 1 AND 512 "
+            "AND screened_image_id !~ '[[:space:][:cntrl:]]' "
+            "AND screened_image_ref !~ '[[:cntrl:]]'",
+            name="coding_certification_leases_image_identity_check",
+        ),
+        CheckConstraint(
+            "(status = 'issued' AND claimed_at IS NULL AND aborted_at IS NULL) "
+            "OR (status = 'claimed' AND claimed_at IS NOT NULL "
+            "AND claimed_at >= issued_at AND claimed_at < deadline "
+            "AND aborted_at IS NULL) "
+            "OR (status = 'aborted' AND aborted_at IS NOT NULL "
+            "AND aborted_at >= issued_at AND claimed_at IS NULL) "
+            "OR (status = 'expired' AND claimed_at IS NULL AND aborted_at IS NULL)",
+            name="coding_certification_leases_lifecycle_check",
+        ),
+        Index(
+            "coding_certification_leases_inflight_idx",
+            "agent_id",
+            "artifact_sha256",
+            "screened_image_sha256",
+            "bench_version",
+            "coding_contract_version",
+            unique=True,
+            postgresql_where=text("status IN ('issued', 'claimed')"),
+        ),
+        Index(
+            "coding_certification_leases_validator_deadline_idx",
+            "validator_hotkey",
+            "deadline",
+        ),
+    )
+
+
 class CoreQualificationPolicyRevision(Base):
     """Append-only, benchmark-scoped shadow core qualification policy."""
 

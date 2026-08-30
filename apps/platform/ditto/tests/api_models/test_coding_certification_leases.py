@@ -5,6 +5,7 @@ import pytest
 
 from ditto.api_models.coding_certification_leases import (
     CodingCertificationLeaseAuthority,
+    CodingCertificationLeaseIssueRequest,
 )
 
 
@@ -38,6 +39,20 @@ def test_qualified_certification_lease_wire_is_shadow_only() -> None:
     authority = CodingCertificationLeaseAuthority.model_validate(_authority())
     assert authority.weight_eligible is False
     assert authority.schema_name == "dittobench-coding-certification-lease-v1"
+
+
+def test_qualified_certification_lease_issue_rejects_nil_agent() -> None:
+    with pytest.raises(ValueError):
+        CodingCertificationLeaseIssueRequest.model_validate(
+            {
+                "validator_hotkey": "5" * 48,
+                "agent_id": "00000000-0000-0000-0000-000000000000",
+                "bench_version": 9,
+                "nonce": uuid4(),
+                "requested_at": datetime.now(UTC),
+                "signature": "ab" * 64,
+            }
+        )
 
 
 def test_qualified_certification_lease_rejects_weight_or_nil_authority() -> None:

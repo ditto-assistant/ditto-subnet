@@ -42,8 +42,15 @@ from ditto.api_models.coding_certification import (
     SubmitCodingCertificationResponse,
 )
 from ditto.api_models.coding_certification_leases import (
+    CodingCertificationLeaseAbortRequest,
     CodingCertificationLeaseAuthority,
     CodingCertificationLeaseClaimRequest,
+    CodingCertificationLeaseIssueRequest,
+    CodingCertificationLeaseResponse,
+    CodingCertificationLeaseStatus,
+    coding_certification_lease_abort_signing_message,
+    coding_certification_lease_claim_signing_message,
+    coding_certification_lease_issue_signing_message,
 )
 from ditto.api_models.coding_evaluation import (
     AgentCodingShadowEvaluationStatus,
@@ -283,8 +290,15 @@ __all__ = [
     "CodingCatalogCommitment",
     "CodingCatalogReleaseRecord",
     "CodingCatalogTaskExposure",
+    "CodingCertificationLeaseAbortRequest",
     "CodingCertificationLeaseAuthority",
     "CodingCertificationLeaseClaimRequest",
+    "CodingCertificationLeaseIssueRequest",
+    "CodingCertificationLeaseResponse",
+    "CodingCertificationLeaseStatus",
+    "coding_certification_lease_abort_signing_message",
+    "coding_certification_lease_claim_signing_message",
+    "coding_certification_lease_issue_signing_message",
     "CodingCertificationRecord",
     "CodingCertificationStage",
     "CodingCertificationStatus",
