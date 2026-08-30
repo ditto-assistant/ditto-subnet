@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.157.0 (2026-08-30)
+
+### Features
+
+- **coding**: Add Platform Luna upstream client
+  ([`e4725b7`](https://github.com/ditto-assistant/ditto-subnet/commit/e4725b79d11e4806ce7135ab8a698bb3084130ae))
+
+
 ## v0.156.0 (2026-08-30)
 
 ### Features
