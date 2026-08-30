@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.148.2 (2026-08-30)
+
+### Bug Fixes
+
+- **backroom**: Scope screening submissions to active bench
+  ([#1321](https://github.com/ditto-assistant/ditto-subnet/pull/1321),
+  [`a608b26`](https://github.com/ditto-assistant/ditto-subnet/commit/a608b265df5ff8df276956782ff9576d33d80e8c))
+
+
 ## v0.148.1 (2026-08-30)
 
 ### Bug Fixes
