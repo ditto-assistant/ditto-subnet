@@ -313,7 +313,7 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	// Step 16: cross-grant best-effort rails (deliberately unlocked; a burst
 	// may overshoot by at most the number of racers — do NOT add locks).
 	//
-	// PR #735: these rails COUNT the authoritative fresh request rows
+	// These rails count the authoritative fresh request rows
 	// (status='started', this lane, started_at >= the same recovery cutoff as
 	// step 9, joined to active grants) instead of summing the denormalized
 	// grant counters. A ghost *_active_requests value left behind on an

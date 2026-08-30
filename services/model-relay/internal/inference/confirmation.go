@@ -273,7 +273,7 @@ type beginConfirmationResult struct {
 //
 // Lock order: confirmation_bundle_tickets (rank 1) ->
 // confirmation_inference_grants (rank 2) -> confirmation_inference_requests
-// (rank 3, via the ON CONFLICT insert — no savepoint needed, PR #712).
+// (rank 3, via the ON CONFLICT insert — no savepoint needed).
 func beginConfirmationInferenceRequest(ctx context.Context, q *postgres.Queries, p beginConfirmationParams) (*beginConfirmationResult, *confirmationDecline, error) {
 	decline := func(d confirmationDecline) (*beginConfirmationResult, *confirmationDecline, error) {
 		return nil, &d, nil
@@ -577,7 +577,7 @@ type confirmationOutcome struct {
 
 // handleConfirmationChatCompletions is POST /api/v1/inference/confirmation/
 // chat/completions: one reader or judge call under its ticket-purpose
-// capability (PR #699). No route observation, no recovery phases — the route
+// capability. No route observation, no recovery phases — the route
 // is frozen by the grant.
 func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.Request) {
 	headers, ok := parseProxyHeaders(r)
