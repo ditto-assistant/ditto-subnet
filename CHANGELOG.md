@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.167.0 (2026-08-30)
+
+### Features
+
+- **coding**: Wire default-off shadow coding worker
+  ([`4abf5f7`](https://github.com/ditto-assistant/ditto-subnet/commit/4abf5f7e9e55ede7f3c391432515fb2b89a371df))
+
+
 ## v0.166.0 (2026-08-30)
 
 ### Bug Fixes
