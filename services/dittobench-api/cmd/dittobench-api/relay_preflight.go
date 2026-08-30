@@ -27,9 +27,9 @@ type relayHealthSnapshot struct {
 	Requests               uint64 `json:"requests"`
 	Successes              uint64 `json:"successes"`
 	InfrastructureFailures uint64 `json:"infrastructure_failures"`
-	// MinerRecoverableFailures counts strict structured-output generation
-	// failures returned to the miner. A successful later request can complete
-	// the run; the scorer does not relabel these as validator infrastructure.
+	// MinerRecoverableFailures counts exact response-generation failures returned
+	// to the miner. A successful later request can complete the run; the scorer
+	// does not relabel these as validator infrastructure.
 	MinerRecoverableFailures uint64 `json:"miner_recoverable_failures"`
 	// GrantDenials counts platform-side refusals to reserve capacity for this
 	// ticket's grant (revoked lease, rewritten/passed ticket deadline,

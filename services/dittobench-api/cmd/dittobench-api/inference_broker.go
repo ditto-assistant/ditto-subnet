@@ -41,13 +41,13 @@ import (
 )
 
 const (
-	minerRecoverableFailureHeader    = "X-Ditto-Inference-Failure-Class"
-	minerRecoverableStructuredOutput = "miner_recoverable_structured_output"
+	minerRecoverableFailureHeader = "X-Ditto-Inference-Failure-Class"
+	minerRecoverableGeneration    = "miner_recoverable_generation"
 )
 
 func minerRecoverablePlatformFailure(legacyGateway string, trustedChatHandler http.Handler, status int, class string) bool {
 	return legacyGateway == "" && trustedChatHandler == nil &&
-		status == http.StatusBadGateway && class == minerRecoverableStructuredOutput
+		status == http.StatusBadGateway && class == minerRecoverableGeneration
 }
 
 const (
