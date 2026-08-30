@@ -124,6 +124,7 @@ def test_private_coding_catalog_deploy_is_default_off_and_relay_blind() -> None:
 
     assert defaults["platform_coding_catalog_enabled"] is False
     assert "DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY=" in template
+    assert "platform_secrets.coding_catalog_secret_key | quote" in template
     assert "platform_coding_catalog_use_tls | bool" in template
     assert "platform_coding_catalog_enabled | bool" in tasks
     assert "platform_coding_catalog_bucket != platform_bucket" in tasks
