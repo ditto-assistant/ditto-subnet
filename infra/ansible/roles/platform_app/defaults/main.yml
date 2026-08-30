@@ -78,9 +78,9 @@ platform_api_port: 8000
 
 # --- Go request-plane pool (inference plus narrow upload admission) ----------
 # Local ports of the DITTO_ROLE=relay pm2 processes created by
-# ditto-platform#444. Must mirror RELAY_PORTS in that repo's
-# scripts/ecosystem.config.js (and the DITTO_RELAY_PORTS default in its
-# scripts/update.sh) — those define which ports the relays actually bind.
+# Must mirror RELAY_PORTS in apps/platform/scripts/ecosystem.config.js and the
+# DITTO_RELAY_PORTS default in apps/platform/scripts/update.sh; those define
+# which ports the relays actually bind.
 #
 # EMPTY LIST MEANS NO RELAY. The Caddyfile then renders a single bare
 # `reverse_proxy localhost:{{ platform_api_port }}`, byte-identical to the
@@ -237,19 +237,16 @@ platform_inference_global_rpm: 23040
 # reported by efficiency.V7CalibrationReadiness). Route admission still fails
 # closed if the binary reports a different digest or logical route identity.
 #
-# CHANGED by dittobench-api#98: the v7 manifest was re-derived (new baseline
-# ids, new starter_kit_revision 62223b02, added allowance_*/raw_reference_*
-# fields and the hosted-embedding block), so the digest moved
-#   c95408f9…  (at #76 / 37c027c9)  ->  b8c11eff…  (at #98 / 001d3aa2)
+# The v7 manifest was re-derived with new baseline ids, starter-kit revision,
+# allowance/raw-reference fields, and hosted-embedding metadata.
 # The logical route identity is UNCHANGED
 # (openrouter / openrouter-route-a471cd87ae7df5b9-v1 / openai/gpt-oss-20b).
 #
 # ORDERING: this value must match the dittobench-api build the VALIDATOR FLEET
 # actually runs, which is pinned by DITTOBENCH_BUILD_CONTEXT in
-# ditto-subnet/docker-compose.yml — not by this repo. Do not converge platform
-# hosts with this value until ditto-subnet has repinned to a build containing
-# #98 and the fleet has updated, or route admission will 409 against the
-# still-running older binary.
+# docker-compose.yml. Do not converge platform hosts with this value until the
+# validator fleet runs the matching build, or route admission will fail closed
+# against an older binary.
 platform_inference_reviewed_calibration_manifest_sha256: "b8c11eff829c4c85b4b1af4f95135e4b5c26da01c8b88f72f726dca26d03d9a7"
 
 # Platform-operated screener auth (per-env in host_vars; both empty = the
