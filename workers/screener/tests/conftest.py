@@ -21,6 +21,7 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "wallet_hotkey": None,
         "screener_mnemonic": "x " * 11 + "x",
         "node_id": None,
+        "instance_id": None,
         "node_provider": None,
         "node_provider_resource_id": None,
         "node_credential_file": None,

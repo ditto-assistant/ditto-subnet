@@ -10,6 +10,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
+
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.errors import PlatformError
 from ditto_screener.gate import BuiltImageArtifact, LeaseDeadline
@@ -252,6 +254,42 @@ def _worker(cfg: ScreenerConfig, platform, gate, **kwargs: Any) -> ScreenerWorke
         keypair=_FakeKeypair(),
         **kwargs,
     )
+
+
+async def test_configured_instance_id_distinguishes_local_worker_heartbeat(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    worker = _worker(
+        make_config(
+            node_id="subnet-screener-1",
+            instance_id="subnet-screener-1-worker-2",
+        ),
+        platform,
+        _FakeGate(_decision(ScreeningOutcome.PASS)),
+    )
+
+    await worker._report_heartbeat("polling", force=True)
+
+    assert platform.heartbeats[-1].instance_id == "subnet-screener-1-worker-2"
+
+
+def test_legacy_node_instance_id_derives_the_systemd_worker_index(
+    monkeypatch: pytest.MonkeyPatch,
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    monkeypatch.setattr(
+        "ditto_screener.worker.Path.read_text",
+        lambda *_args, **_kwargs: "0::/system.slice/ditto-screener-worker@2.service\n",
+    )
+
+    worker = _worker(
+        make_config(node_id="subnet-screener-1", instance_id="subnet-screener-1"),
+        _FakePlatform([]),
+        _FakeGate(_decision(ScreeningOutcome.PASS)),
+    )
+
+    assert worker._instance_id == "subnet-screener-1-worker-2"
 
 
 class _FakeReadiness:

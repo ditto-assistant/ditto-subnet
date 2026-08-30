@@ -10,6 +10,10 @@ User={{ screener_fleet_user }}
 Group={{ screener_fleet_group }}
 WorkingDirectory={{ screener_fleet_active_worker_dir }}
 EnvironmentFile={{ screener_fleet_env_file }}
+# The node credential is intentionally shared by its local workers, but their
+# signed heartbeat identities must remain distinct so concurrent jobs do not
+# overwrite each other in Platform telemetry.
+Environment=SCREENER_INSTANCE_ID={{ screener_fleet_node_id }}-worker-%i
 Environment=SCREENER_REVIEW_JOURNAL_FILE={{ screener_fleet_state_dir }}/workers/%i/review.jsonl
 Environment=SCREENER_REVIEW_SETTINGS_CACHE_FILE={{ screener_fleet_state_dir }}/workers/%i/review-settings.json
 Environment=SCREENER_L2_CACHE_DIR={{ screener_fleet_state_dir }}/workers/%i/l2-cache

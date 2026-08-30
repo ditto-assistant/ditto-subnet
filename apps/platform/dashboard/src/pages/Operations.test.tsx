@@ -755,6 +755,73 @@ describe("accessible benchmark progress (row 22)", () => {
     );
   });
 
+  it("keeps concurrent local screener workers visible as separate rows", async () => {
+    const screeners = {
+      screeners: [
+        {
+          screener_hotkey: "5ScreenerHotkey000000000000000000000000000000000",
+          instance_id: "subnet-screener-1-worker-1",
+          availability: "available",
+          health: "healthy",
+          state: "screening",
+          protocol_version: 6,
+          policy_version: 10,
+          reported_at: "2026-07-31T13:55:00Z",
+          seen_at: "2026-07-31T13:55:00Z",
+          active_agent_id: "agent-worker-1",
+          active_agent_name: "First",
+          screening_progress: { stage: "building", started_at: "2026-07-31T13:50:00Z" },
+        },
+        {
+          screener_hotkey: "5ScreenerHotkey000000000000000000000000000000000",
+          instance_id: "subnet-screener-1-worker-2",
+          availability: "available",
+          health: "healthy",
+          state: "screening",
+          protocol_version: 6,
+          policy_version: 10,
+          reported_at: "2026-07-31T13:55:00Z",
+          seen_at: "2026-07-31T13:55:00Z",
+          active_agent_id: "agent-worker-2",
+          active_agent_name: "Second",
+          screening_progress: { stage: "health_check", started_at: "2026-07-31T13:51:00Z" },
+        },
+      ],
+    };
+    restoreFetch?.();
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/public/screeners")) {
+        return Promise.resolve(new Response(JSON.stringify(screeners), { status: 200 }));
+      }
+      if (url.includes("/public/operations")) {
+        return Promise.resolve(new Response(JSON.stringify(operations), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ validators: [] }), { status: 200 }));
+    }) as typeof fetch;
+    render(() => <OperationsPage />);
+    await waitFor(() =>
+      expect(document.querySelector("#fleet-rows tr[data-entity-id]")).toBeTruthy(),
+    );
+    fireEvent.click(document.getElementById("operations-tab-screeners") as HTMLButtonElement);
+    await waitFor(() =>
+      expect(document.querySelectorAll("#fleet-rows tr[data-entity-kind='screener']")).toHaveLength(
+        2,
+      ),
+    );
+    expect(document.getElementById("fleet-summary")?.textContent).toContain(
+      "2 local workers reporting across 1 host",
+    );
+    expect(document.querySelector("#fleet-rows")?.textContent).toContain(
+      "subnet-screener-1-worker-1",
+    );
+    expect(document.querySelector("#fleet-rows")?.textContent).toContain(
+      "subnet-screener-1-worker-2",
+    );
+    expect(document.querySelector("#fleet-rows")?.textContent).toContain("Building image");
+    expect(document.querySelector("#fleet-rows")?.textContent).toContain("Checking health");
+  });
+
   it("announces screener hardware beside the load it is carrying", async () => {
     const screening = {
       screeners: [

@@ -192,6 +192,15 @@ def test_role_stops_workers_above_configured_capacity() -> None:
     assert task["when"] == "screener_fleet_runtime_enabled"
 
 
+def test_each_hetzner_worker_has_a_distinct_heartbeat_identity() -> None:
+    worker = (ROLE / "templates/ditto-screener-worker@.service.j2").read_text()
+
+    assert (
+        "Environment=SCREENER_INSTANCE_ID={{ screener_fleet_node_id }}-worker-%i"
+        in worker
+    )
+
+
 def test_self_updater_reconciles_stale_workers_when_canary_shrinks() -> None:
     """A pull release must not leave an old higher-index poller alive.
 

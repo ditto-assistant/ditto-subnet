@@ -64,6 +64,16 @@ const OPERATIONS_VIEW_LABELS: Record<OperationsView, string> = {
   builds: "Targon builds",
 };
 
+// Validators have one hotkey per row; screeners deliberately share a hotkey
+// across local processes, so the instance id must participate in their key or
+// one worker's heartbeat will visually replace another's work.
+function fleetKey(entry: FleetEntryExt, index: number): string {
+  if (entry.screener_hotkey) {
+    return entry.screener_hotkey + ":" + (entry.instance_id || "#" + index);
+  }
+  return String(entry.validator_hotkey || "#" + index);
+}
+
 export function OperationsPage(
   props: {
     operations?: ResourceState<OperationsPayload>;
@@ -188,13 +198,6 @@ export function OperationsPage(
     };
   });
 
-  // A fleet node's identity, for keeping its row across a poll. None of the
-  // three addressing fields is required by the wire type, so the key is
-  // derived rather than named; position is the last resort and is no worse
-  // than the positional identity <For> fell back to before.
-  const fleetKey = (entry: FleetEntryExt, index: number): string =>
-    String(entry.validator_hotkey || entry.screener_hotkey || entry.instance_id || "#" + index);
-
   // The operations snapshot re-reports the whole fleet every 5s with fresh
   // objects. Keyed by reference, <For> rebuilt every row on every tick, which
   // shut any open "inactive slots" disclosure and dropped focus and hover.
@@ -211,6 +214,19 @@ export function OperationsPage(
     if (view.unavailable) return view.Kind + " status unavailable";
     if (view.loading) return "Loading " + view.singular + " status…";
     if (!view.entries.length) return "No active " + view.kind + " reporting";
+    if (view.singular === "screener" && view.entries.length > 1) {
+      const hosts = new Set(
+        view.entries.map((entry) => entry.screener_hotkey || entry.instance_id || "unknown"),
+      ).size;
+      return (
+        String(view.entries.length) +
+        " local workers reporting across " +
+        String(hosts) +
+        " " +
+        (hosts === 1 ? "host" : "hosts") +
+        " · each row is an independent worker process"
+      );
+    }
     return "";
   });
 
