@@ -14,10 +14,6 @@ import json
 
 from ditto_screener.source_signals import find_benchmark_emulation_fingerprints
 
-# --------------------------------------------------------------------------- #
-# Emulator fixtures (trip fingerprints).                                       #
-# --------------------------------------------------------------------------- #
-
 _RUST_EMULATOR = """\
 // Ported from universe/world.go and the conversational.go generator so we
 // mirror the world-canary and world-injection-resistance families.
@@ -122,10 +118,6 @@ const FAMILIES = [
 ];
 """
 
-# --------------------------------------------------------------------------- #
-# Honest fixtures (trip nothing).                                              #
-# --------------------------------------------------------------------------- #
-
 _RUST_HONEST = """\
 use crate::model;
 
@@ -186,11 +178,6 @@ def _kinds(findings: list[dict[str, object]]) -> set[str]:
     return {str(finding["kind"]) for finding in findings}
 
 
-# --------------------------------------------------------------------------- #
-# The Rust emulator trips every fingerprint.                                   #
-# --------------------------------------------------------------------------- #
-
-
 def test_rust_emulator_trips_every_fingerprint() -> None:
     findings = find_benchmark_emulation_fingerprints([("src/agent.rs", _RUST_EMULATOR)])
     assert _kinds(findings) == {
@@ -230,11 +217,6 @@ def test_findings_never_leak_matched_source_text() -> None:
         "bench_version",
     ):
         assert secret not in encoded
-
-
-# --------------------------------------------------------------------------- #
-# Individual fingerprints on focused fixtures.                                 #
-# --------------------------------------------------------------------------- #
 
 
 def test_bench_version_gate_variants_across_languages() -> None:
@@ -406,11 +388,6 @@ def test_generator_source_citation_and_family_labels() -> None:
     assert "scored-family-label" in kinds
 
 
-# --------------------------------------------------------------------------- #
-# Honest agents trip nothing, in every language.                              #
-# --------------------------------------------------------------------------- #
-
-
 def test_honest_agents_trip_no_fingerprints() -> None:
     for path, source in (
         ("src/agent.rs", _RUST_HONEST),
@@ -441,16 +418,12 @@ def test_emulator_fixtures_fire_in_every_language() -> None:
 
 def test_tests_and_docs_are_not_scanned() -> None:
     # The same emulator body under a tests/ path is inert: fingerprints scan only
-    # served/executable source (issue #424 -- test modules can be stripped anyway).
+    # served/executable source; test modules can be stripped from an image.
     assert (
         find_benchmark_emulation_fingerprints([("tests/agent.rs", _RUST_EMULATOR)])
         == []
     )
 
-
-# --------------------------------------------------------------------------- #
-# Rev7 (2026-08-18) FAMILY COMPILER fixtures and fingerprints.                 #
-# --------------------------------------------------------------------------- #
 
 # A baked classifier routes each scored question into a closed DittoBench family,
 # then applies a hardcoded per-family recipe: it loads a compiled router table,
@@ -665,10 +638,6 @@ def test_do_not_recompute_directive_is_raw_scan() -> None:
         find_benchmark_emulation_fingerprints([("src/a.rs", source)])
     )
 
-
-# --------------------------------------------------------------------------- #
-# Rev8 (2026-08-21) remainder / formatter / shape-compiler fingerprints.       #
-# --------------------------------------------------------------------------- #
 
 _NEW_FAMILY_COMPILER_KINDS = {
     "required-money-formatter",
@@ -895,11 +864,6 @@ def test_rev8_findings_never_leak_matched_source_text() -> None:
         for location in finding["locations"]:
             assert set(location) == {"path", "line", "role"}
 
-
-# --------------------------------------------------------------------------- #
-# Rev9 (2026-08-27) worksheet-fallback / decline-gate fingerprints             #
-# (aceron_b12-v5 board reject; open-program avoidance reports).               #
-# --------------------------------------------------------------------------- #
 
 _RUST_WORKSHEET_FALLBACK_OVERWRITE = """\
 fn finish(result: &mut RunResult, worksheet: &str) {
