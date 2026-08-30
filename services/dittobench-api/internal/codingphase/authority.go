@@ -410,6 +410,7 @@ func parseGrant(
 	if err != nil || grant.Schema != "dittobench-coding-inference-exchange-v1" ||
 		grant.CodingContractVersion != codingcontract.ContractVersion || grant.WeightEligible || grant.Status != "active" ||
 		!canonicalUUID(grant.GrantID) || !canonicalUUID(grant.RunRowID) ||
+		grant.RunRowID != authority.harness.RunRowID ||
 		grant.TicketID != request.TicketID || grant.CaseID != authority.task.CaseID ||
 		grant.ProfileCapabilityID != authority.task.ProfileCapabilityID || grant.InferenceGrantSHA256 != policySHA ||
 		grant.InferenceGrantSHA256 != authority.manifest.InferenceGrantSHA256 || grant.Model != policy.Model ||

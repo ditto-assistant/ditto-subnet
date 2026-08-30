@@ -659,7 +659,9 @@ func validateBindingShape(binding Binding) error {
 		!validIdentifier(binding.ProfileCapabilityID, 256) || binding.Deadline.IsZero() {
 		return fmt.Errorf("%w: evidence binding is invalid", ErrInvalid)
 	}
-	shadowAuthority := lowerSHA256(binding.HarnessAuthoritySHA256) && lowerSHA256(binding.ScreenedImageSHA256)
+	legacyShadow := binding.HarnessAuthoritySHA256 == "" && binding.ScreenedImageSHA256 == ""
+	shadowAuthority := legacyShadow ||
+		(lowerSHA256(binding.HarnessAuthoritySHA256) && lowerSHA256(binding.ScreenedImageSHA256))
 	certificationAuthority := binding.HarnessAuthoritySHA256 == "" && binding.ScreenedImageSHA256 == ""
 	if (binding.Purpose == PurposeShadowAttempt && !shadowAuthority) ||
 		(binding.Purpose == PurposeCertification && !certificationAuthority) {
@@ -671,6 +673,10 @@ func validateBindingShape(binding Binding) error {
 func validateBindingFresh(binding Binding, now time.Time) error {
 	if !binding.Deadline.After(now) || binding.Deadline.After(now.Add(2*time.Hour)) {
 		return fmt.Errorf("%w: evidence binding lifetime is invalid", ErrInvalid)
+	}
+	if binding.Purpose == PurposeShadowAttempt &&
+		(!lowerSHA256(binding.HarnessAuthoritySHA256) || !lowerSHA256(binding.ScreenedImageSHA256)) {
+		return fmt.Errorf("%w: evidence harness authority is invalid", ErrInvalid)
 	}
 	return nil
 }
