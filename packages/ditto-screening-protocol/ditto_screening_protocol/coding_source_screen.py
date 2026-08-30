@@ -93,6 +93,11 @@ class CodingSourceScreenEvidence(BaseModel):
             raise ValueError("coding source quarantine requires quarantine evidence")
         if self.outcome is CodingSourceScreenOutcome.PASS and severities:
             raise ValueError("coding source pass cannot carry findings")
+        if self.outcome is CodingSourceScreenOutcome.ADVISORY and (
+            CodingSourceScreenSeverity.DENY in severities
+            or CodingSourceScreenSeverity.QUARANTINE in severities
+        ):
+            raise ValueError("coding source advisory result cannot carry deny evidence")
         if self.outcome is CodingSourceScreenOutcome.INFRASTRUCTURE and severities:
             raise ValueError(
                 "coding source infrastructure result cannot blame the miner"

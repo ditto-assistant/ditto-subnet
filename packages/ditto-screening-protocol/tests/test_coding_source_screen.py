@@ -50,3 +50,10 @@ def test_outcome_rules_fail_closed() -> None:
         _evidence(CodingSourceScreenOutcome.DENY, [advisory])
     with pytest.raises(ValueError):
         _evidence(CodingSourceScreenOutcome.PASS, [advisory])
+    deny = CodingSourceScreenFinding(
+        rule_id="docker-socket",
+        severity=CodingSourceScreenSeverity.DENY,
+        evidence_sha256="c" * 64,
+    )
+    with pytest.raises(ValueError, match="advisory"):
+        _evidence(CodingSourceScreenOutcome.ADVISORY, [deny])
