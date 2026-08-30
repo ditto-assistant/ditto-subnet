@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -32,6 +33,42 @@ func TestSanitizedEnvironmentStripsDisposableExitControl(t *testing.T) {
 	joined := strings.Join(sanitizedEnvironment(), "\n")
 	if strings.Contains(joined, "DITTO_BUILD_EXIT_AFTER_COMPLETE") {
 		t.Fatal("builder lifecycle control reached Kaniko")
+	}
+}
+
+func TestImageBuildCommandUsesBuildKitForFleetGuest(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "source.tar.gz")
+	if err := os.WriteFile(archive, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, output, closeInput, err := imageBuildCommand(
+		context.Background(),
+		"docker",
+		"ditto-screen/11111111-1111-4111-8111-111111111111-22222222-2222-4222-8222-222222222222:latest",
+		archive,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeInput()
+	if cmd.Path != "docker" && filepath.Base(cmd.Path) != "docker" {
+		t.Fatalf("unexpected builder: %s", cmd.Path)
+	}
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "buildx build") ||
+		!strings.Contains(joined, "--load") {
+		t.Fatalf("unexpected BuildKit command: %s", joined)
+	}
+	if output != "/workspace/image.tar" || cmd.Stdin == nil {
+		t.Fatalf("unexpected BuildKit archive contract: %s", output)
+	}
+}
+
+func TestImageBuildCommandRejectsUnknownEngine(t *testing.T) {
+	if _, _, _, err := imageBuildCommand(
+		context.Background(), "unknown", "image", "archive",
+	); err == nil {
+		t.Fatal("unknown build engine was accepted")
 	}
 }
 

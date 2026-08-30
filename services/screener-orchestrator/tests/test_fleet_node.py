@@ -249,6 +249,9 @@ def test_build_script_emits_only_safe_failure_marker_to_serial() -> None:
     assert 'cat "$output"' not in script
     assert "docker pull registry.invalid/ditto/builder@sha256:" in script
     assert "docker run --rm --pull never --network host" in script
+    assert "--tmpfs /tmp:rw,nosuid,nodev,noexec,size=128m" in script
+    assert "--volume /var/run/docker.sock:/var/run/docker.sock" in script
+    assert "DITTO_BUILD_ENGINE=docker" in script
 
 
 @pytest.mark.parametrize(
