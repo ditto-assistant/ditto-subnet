@@ -4873,9 +4873,7 @@ class TestQuarantineAdmin:
         assert active.json()["generation"] == "active"
         assert active.json()["active_bench_version"] == _TARGET_VERSION
         assert active.json()["count"] == 1
-        assert [item["agent_id"] for item in active.json()["items"]] == [
-            str(current)
-        ]
+        assert [item["agent_id"] for item in active.json()["items"]] == [str(current)]
         assert all_generations.status_code == 200, all_generations.text
         assert all_generations.json()["generation"] == "all"
         assert all_generations.json()["active_bench_version"] == _TARGET_VERSION
