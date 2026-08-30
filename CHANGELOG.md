@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.147.1 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Preserve preflight evidence through L4
+  ([#1316](https://github.com/ditto-assistant/ditto-subnet/pull/1316),
+  [`bf60b9b`](https://github.com/ditto-assistant/ditto-subnet/commit/bf60b9b36ffbf92e4d0b4a592b33f87a607aa5d5))
+
+
 ## v0.147.0 (2026-08-29)
 
 ### Features
