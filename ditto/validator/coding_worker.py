@@ -215,6 +215,7 @@ class CodingShadowWorker:
             raise ValueError("coding shadow worker clock is invalid")
         self._last_now = self._last_now.astimezone(UTC)
         self.busy = False
+        self._drain_requested: asyncio.Event | None = None
         self._durable = DurableCodingAttemptPlatform(platform, publication)
         self._coordinator = CodingAttemptCoordinator(
             platform=self._durable,
@@ -228,6 +229,7 @@ class CodingShadowWorker:
         *,
         drain_requested: asyncio.Event,
     ) -> None:
+        self._drain_requested = drain_requested
         while not stop.is_set():
             if drain_requested.is_set() and not self.busy:
                 await _wait_or_stop(stop, self._poll_seconds)
@@ -252,6 +254,8 @@ class CodingShadowWorker:
         # Prove the scorer-side outbox/supervisor host exists before taking any
         # Platform work. The host constructs both services atomically.
         await self._publication.pending(limit=1)
+        if self._drain_requested is not None and self._drain_requested.is_set():
+            return False
         claim = await self._platform.claim_next_coding_ticket(self._instance_id)
         if claim is None:
             return False
