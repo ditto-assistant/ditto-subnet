@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.155.3 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Make adjudication time-bound
+  ([#1346](https://github.com/ditto-assistant/ditto-subnet/pull/1346),
+  [`107d09e`](https://github.com/ditto-assistant/ditto-subnet/commit/107d09e1ca6071c2323ae721a601252200f8e522))
+
+
 ## v0.155.2 (2026-08-30)
 
 ### Bug Fixes
