@@ -6127,6 +6127,128 @@ class TestQuarantineAdmin:
         assert claimed.status_code == 200, claimed.text
         assert claimed.json()["items"][0]["agent_id"] == str(agent_id)
 
+    async def test_operator_retry_canary_binds_immutable_adjudicator_posture(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING_FAILED,
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        attempt_id = uuid4()
+        now = datetime.now(UTC)
+        canary_settings = ScreenerReviewSettings(
+            mode="enforce", l3_enabled=True, adjudicator_mode="enforce"
+        )
+        canary_checksum = _review_settings_checksum(canary_settings)
+        off_settings = ScreenerReviewSettings(mode="off", l3_enabled=False)
+        off_checksum = _review_settings_checksum(off_settings)
+        async with session_maker() as session, session.begin():
+            canary_revision = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=canary_settings.model_dump(mode="json"),
+                checksum=canary_checksum,
+                reason="immutable exact adjudicator canary",
+                actor="test",
+            )
+            session.add(canary_revision)
+            await session.flush()
+            session.add(
+                ScreenerReviewSettingsRevision(
+                    parent_revision=canary_revision.revision,
+                    scope="*",
+                    settings=off_settings.model_dump(mode="json"),
+                    checksum=off_checksum,
+                    reason="return ordinary screening to review off",
+                    actor="test",
+                )
+            )
+            await session.flush()
+            off_revision_id = await session.scalar(
+                select(func.max(ScreenerReviewSettingsRevision.revision))
+            )
+            assert off_revision_id is not None
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="failed",
+                    started_at=now - timedelta(minutes=10),
+                    deadline=now + timedelta(minutes=50),
+                    finished_at=now,
+                    public_reason="Screening was interrupted; manual retry required",
+                    reason_code="source-review-retryable-infra",
+                )
+            )
+            canary_revision_id = canary_revision.revision
+        _install_db(app, session_maker)
+
+        authorized = await client.post(
+            f"/api/v1/admin/screening-submissions/{agent_id}/retry-now",
+            headers={
+                "Authorization": "Bearer test-admin-token-at-least-32-characters",
+                "X-Admin-Actor": "backroom:test-user",
+            },
+            json={
+                "reason": "Run one immutable adjudicator canary after the outage",
+                "expected_sha256": _SHA256,
+                "expected_score_count": 0,
+                "expected_attempt_id": str(attempt_id),
+                "force_full_review": True,
+                "review_settings_revision": canary_revision_id,
+                "confirmation": "FORCE ONE FULL SCREENING REVIEW WITH ADJUDICATOR",
+            },
+        )
+        assert authorized.status_code == 200, authorized.text
+        assert authorized.json()["review_settings_revision"] == canary_revision_id
+
+        revision = await client.get(
+            f"/api/v1/screener/review-settings/revisions/{canary_revision_id}"
+        )
+        assert revision.status_code == 200, revision.text
+        assert revision.json()["checksum"] == canary_checksum
+
+        claimed = await client.post(
+            "/api/v1/screener/claim",
+            params={
+                "policy_version": SCREENING_POLICY_VERSION,
+                "review_settings_revision": off_revision_id,
+                "review_settings_instance_id": "ditto-screener-fleet-test",
+                "review_settings_scope": "*",
+                "review_settings_checksum": off_checksum,
+            },
+        )
+        assert claimed.status_code == 200, claimed.text
+        item = claimed.json()["items"][0]
+        assert item["agent_id"] == str(agent_id)
+        assert item["build_only"] is False
+        assert item["review_settings_override"] == {
+            "revision": canary_revision_id,
+            "scope": "*",
+            "checksum": canary_checksum,
+        }
+
+        async with session_maker() as session:
+            new_attempt = await session.scalar(
+                select(ScreeningAttempt)
+                .where(ScreeningAttempt.agent_id == agent_id)
+                .order_by(ScreeningAttempt.started_at.desc())
+                .limit(1)
+            )
+        assert new_attempt is not None
+        assert new_attempt.review_settings_revision == canary_revision_id
+        assert new_attempt.review_settings_checksum == canary_checksum
+
     async def test_operator_expires_running_screening_attempt(
         self,
         app: FastAPI,

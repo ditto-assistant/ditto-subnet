@@ -1739,6 +1739,7 @@ export async function retryFailedScreeningNow(rawInput: unknown, actor: string) 
         expected_score_count: input.expectedScoreCount,
         expected_attempt_id: input.expectedAttemptId,
         force_full_review: input.forceFullReview,
+        review_settings_revision: input.reviewSettingsRevision,
         confirmation: input.confirmation,
       },
     },

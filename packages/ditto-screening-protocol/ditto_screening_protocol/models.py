@@ -250,6 +250,21 @@ class ScreenedImageUploadAbortResponse(BaseModel):
     aborted: bool
 
 
+class ScreenerReviewSettingsOverride(BaseModel):
+    """Immutable review posture selected for one exact claimed attempt.
+
+    This is an operator-only canary channel.  The worker fetches the immutable
+    settings revision before it begins the item, and its signed verdict binds
+    all three values back to the claimed attempt.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    revision: Annotated[int, Field(ge=1)]
+    scope: Annotated[str, Field(pattern=r"^(?:\*|[a-zA-Z0-9._-]{1,63})$")]
+    checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
 class ScreenerQueueItem(BaseModel):
     """One agent awaiting screening."""
 
@@ -329,6 +344,16 @@ class ScreenerQueueItem(BaseModel):
             )
         ),
     ] = False
+    review_settings_override: Annotated[
+        ScreenerReviewSettingsOverride | None,
+        Field(
+            description=(
+                "Immutable review posture selected only for this claimed "
+                "operator canary. Null uses the worker's normal effective "
+                "review settings."
+            )
+        ),
+    ] = None
 
     @model_validator(mode="after")
     def validate_precheck(self) -> ScreenerQueueItem:
@@ -336,6 +361,8 @@ class ScreenerQueueItem(BaseModel):
             raise ValueError("precheck reason and duplicate reference must be paired")
         if self.deferred_source_review and not self.build_only:
             raise ValueError("deferred source review requires the mechanical lane")
+        if self.review_settings_override is not None and self.build_only:
+            raise ValueError("review settings override requires a full review")
         return self
 
 

@@ -13,6 +13,7 @@ from sqlalchemy.sql.selectable import ScalarSelect
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contracts
+from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.db.models import (
     Agent,
     AthReview,
@@ -23,6 +24,7 @@ from ditto.db.models import (
     OwnerAttestation,
     Score,
     ScreenerHeartbeat,
+    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningRetryOverride,
@@ -1059,13 +1061,48 @@ async def claim_screening_attempts(
             )
             .limit(1)
         )
-        force_full_review = bool(
-            await session.scalar(
-                select(ScreeningRetryOverride.force_full_review).where(
-                    ScreeningRetryOverride.attempt_id == latest_agent_attempt_id
-                )
+        retry_override = await session.scalar(
+            select(ScreeningRetryOverride).where(
+                ScreeningRetryOverride.attempt_id == latest_agent_attempt_id
             )
         )
+        force_full_review = bool(
+            retry_override is not None and retry_override.force_full_review
+        )
+        attempt_review_settings_binding = review_settings_binding
+        if (
+            retry_override is not None
+            and retry_override.review_settings_revision is not None
+        ):
+            # A canary may reuse an immutable, previously-audited enforce
+            # revision for exactly this retry. Never infer the posture from
+            # the live global revision: that would turn a one-attempt canary
+            # into a fleet-wide toggle between the claim and the verdict.
+            if review_settings_binding is None:
+                continue
+            canary_settings = await session.get(
+                ScreenerReviewSettingsRevision,
+                retry_override.review_settings_revision,
+            )
+            if canary_settings is None:
+                continue
+            parsed_canary_settings = ScreenerReviewSettings.model_validate(
+                canary_settings.settings
+            )
+            instance_id = review_settings_binding[1]
+            if (
+                canary_settings.scope not in {"*", instance_id}
+                or parsed_canary_settings.mode != "enforce"
+                or not parsed_canary_settings.l3_enabled
+                or parsed_canary_settings.adjudicator_mode != "enforce"
+            ):
+                continue
+            attempt_review_settings_binding = (
+                canary_settings.revision,
+                instance_id,
+                canary_settings.scope,
+                canary_settings.checksum,
+            )
         # ``enforce`` defers the deep review to the submissions that qualify;
         # ``bypass`` never runs it at all. Both admit on the same cheap
         # build-only pass, so the pre-score depth is one predicate over the two.
@@ -1121,23 +1158,23 @@ async def claim_screening_attempts(
             duplicate_of=duplicate_of,
             build_only=build_only,
             review_settings_revision=(
-                review_settings_binding[0]
-                if review_settings_binding is not None
+                attempt_review_settings_binding[0]
+                if attempt_review_settings_binding is not None
                 else None
             ),
             review_settings_instance_id=(
-                review_settings_binding[1]
-                if review_settings_binding is not None
+                attempt_review_settings_binding[1]
+                if attempt_review_settings_binding is not None
                 else None
             ),
             review_settings_scope=(
-                review_settings_binding[2]
-                if review_settings_binding is not None
+                attempt_review_settings_binding[2]
+                if attempt_review_settings_binding is not None
                 else None
             ),
             review_settings_checksum=(
-                review_settings_binding[3]
-                if review_settings_binding is not None
+                attempt_review_settings_binding[3]
+                if attempt_review_settings_binding is not None
                 else None
             ),
         )

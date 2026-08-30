@@ -38,7 +38,16 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+)
 from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,6 +82,7 @@ from ditto.api_models import (
     ScreenerNodeStatusRequest,
     ScreenerQueueItem,
     ScreenerQueueResponse,
+    ScreenerReviewSettingsOverride,
     ScreenResultRequest,
     ScreenResultResponse,
     SubmissionImageBuildRequest,
@@ -3564,6 +3574,32 @@ async def effective_review_settings(
     return result
 
 
+@router.get(
+    "/review-settings/revisions/{revision}",
+    response_model=EffectiveScreenerReviewSettings,
+)
+async def review_settings_revision(
+    revision: Annotated[int, Path(ge=1)],
+    response: Response,
+    _screener_hotkey: ScreenerDep,
+    session: SessionDep,
+) -> EffectiveScreenerReviewSettings:
+    """Return one immutable review posture bound into a claimed canary."""
+    row = await session.get(ScreenerReviewSettingsRevision, revision)
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail="review settings revision not found"
+        )
+    response.headers["Cache-Control"] = "private, immutable"
+    response.headers["ETag"] = f'"{row.revision}-{row.checksum}"'
+    return EffectiveScreenerReviewSettings(
+        revision=row.revision,
+        scope=row.scope,
+        settings=ScreenerReviewSettings.model_validate(row.settings),
+        checksum=row.checksum,
+    )
+
+
 @router.post(
     "/agent/{agent_id}/shadow-review",
     response_model=ShadowReviewObservationResponse,
@@ -4227,6 +4263,31 @@ async def claim(
             policy_only=attempt.reason_code == POLICY_ONLY_RESCREEN_REASON,
             deferred_source_review=(
                 attempt.build_only and attempt.reason_code == DEFERRED_MECHANICAL_REASON
+            ),
+            review_settings_override=(
+                ScreenerReviewSettingsOverride(
+                    revision=attempt.review_settings_revision,
+                    scope=attempt.review_settings_scope,
+                    checksum=attempt.review_settings_checksum,
+                )
+                if all(
+                    value is not None
+                    for value in (
+                        attempt.review_settings_revision,
+                        attempt.review_settings_scope,
+                        attempt.review_settings_checksum,
+                    )
+                )
+                and (
+                    binding is None
+                    or (
+                        attempt.review_settings_revision,
+                        attempt.review_settings_scope,
+                        attempt.review_settings_checksum,
+                    )
+                    != (binding[0], binding[2], binding[3])
+                )
+                else None
             ),
         )
         for agent, attempt, duplicate_of in claimed

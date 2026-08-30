@@ -295,6 +295,34 @@ class PlatformClient:
             self._review_settings_fetched_at = now
             return bootstrap
 
+    async def get_review_settings_revision(
+        self, revision: int
+    ) -> EffectiveReviewSettings:
+        """Fetch one immutable review posture attached to a claimed canary.
+
+        Unlike the normal pre-claim settings, this must never fall back to the
+        cache or bootstrap: an exact canary either executes the posture Platform
+        bound into its lease or it fails closed.
+        """
+        url = f"{self._base}{_PREFIX}/review-settings/revisions/{revision}"
+        try:
+            response = await self._client.get(url, headers=await self._auth_headers())
+        except httpx.HTTPError as error:
+            raise PlatformError(
+                f"review settings revision fetch failed: {error}"
+            ) from error
+        if response.status_code != 200:
+            raise PlatformError(
+                "review settings revision rejected "
+                f"({response.status_code}): {response.text[:200]}"
+            )
+        try:
+            return EffectiveReviewSettings.model_validate_json(response.text)
+        except ValueError as error:
+            raise PlatformError(
+                "review settings revision response is invalid"
+            ) from error
+
     async def submit_heartbeat(
         self, request: ScreenerHeartbeatRequest
     ) -> ScreenerHeartbeatResponse:

@@ -4047,10 +4047,31 @@ export const retryFailedScreeningNowInputSchema = z
     expectedScoreCount: z.number().int().nonnegative(),
     expectedAttemptId: z.string().uuid(),
     forceFullReview: z.boolean().optional().default(false),
-    confirmation: z.literal('FORCE ONE FULL SCREENING REVIEW').optional(),
+    reviewSettingsRevision: z.number().int().positive().optional(),
+    confirmation: z
+      .enum([
+        'FORCE ONE FULL SCREENING REVIEW',
+        'FORCE ONE FULL SCREENING REVIEW WITH ADJUDICATOR',
+      ])
+      .optional(),
   })
   .superRefine((value, context) => {
-    if (value.forceFullReview && value.confirmation === undefined) {
+    if (value.reviewSettingsRevision !== undefined) {
+      if (
+        !value.forceFullReview ||
+        value.confirmation !== 'FORCE ONE FULL SCREENING REVIEW WITH ADJUDICATOR'
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['confirmation'],
+          message:
+            'adjudicator retry requires FORCE ONE FULL SCREENING REVIEW WITH ADJUDICATOR',
+        })
+      }
+    } else if (
+      value.forceFullReview &&
+      value.confirmation !== 'FORCE ONE FULL SCREENING REVIEW'
+    ) {
       context.addIssue({
         code: 'custom',
         path: ['confirmation'],
@@ -4074,6 +4095,7 @@ export const retryFailedScreeningNowResponseSchema = z.object({
   backoff_deadline: z.string(),
   created_at: z.string(),
   force_full_review: z.boolean().optional().default(false),
+  review_settings_revision: z.number().int().positive().nullable().optional(),
   idempotent: z.boolean(),
 })
 

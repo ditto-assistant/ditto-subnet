@@ -108,6 +108,45 @@ async def test_platform_settings_are_cached_and_apply_every_budget(
     assert ReviewSettingsCache(config.review_settings_cache_file).load() is not None
 
 
+@pytest.mark.asyncio
+async def test_platform_fetches_exact_immutable_review_revision(
+    make_config, tmp_path
+) -> None:
+    config = make_config(review_settings_cache_file=str(tmp_path / "settings.json"))
+    baseline = bootstrap_review_settings(config)
+    body = baseline.model_copy(
+        update={
+            "revision": 41,
+            "scope": "*",
+            "settings": baseline.settings.model_copy(
+                update={
+                    "mode": "enforce",
+                    "l3_enabled": True,
+                    "adjudicator_mode": "enforce",
+                }
+            ),
+        }
+    )
+    checksum = hashlib.sha256(
+        json.dumps(
+            body.settings.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    body = body.model_copy(update={"checksum": checksum})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/review-settings/revisions/41")
+        return httpx.Response(200, json=body.model_dump(mode="json"))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = PlatformClient(config, http)
+        received = await client.get_review_settings_revision(41)
+
+    assert received == body
+
+
 def _introduced_from(name: str) -> tuple[str, ...]:
     """Every control introduced at or after ``name``, newest included.
 

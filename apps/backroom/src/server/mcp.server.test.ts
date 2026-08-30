@@ -4989,6 +4989,68 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  it('binds an adjudicator canary retry to one immutable review revision', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '8aa44aaf-776f-4759-a011-f2bc1e8d42ab'
+    const attemptId = 'dbcbcf04-cf4d-42a0-a93c-93c93c8663c8'
+    const overrideId = '51ec1620-939b-447b-9dc2-32214af72a3c'
+    const expectedSha256 = 'cd'.repeat(32)
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        override_id: overrideId,
+        agent_id: agentId,
+        attempt_id: attemptId,
+        agent_status: 'screening_failed',
+        backoff_deadline: '2026-08-02T16:54:16.324536Z',
+        created_at: '2026-08-02T16:25:00Z',
+        force_full_review: true,
+        review_settings_revision: 62,
+        idempotent: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+    const response = await client.callTool({
+      name: 'retry_failed_screening_now',
+      arguments: {
+        agentId,
+        reason: 'Exercise terminal adjudication on one immutable canary',
+        expectedSha256,
+        expectedScoreCount: 0,
+        expectedAttemptId: attemptId,
+        forceFullReview: true,
+        reviewSettingsRevision: 62,
+        confirmation: 'FORCE ONE FULL SCREENING REVIEW WITH ADJUDICATOR',
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      override_id: overrideId,
+      review_settings_revision: 62,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/retry-now`,
+      expect.objectContaining({
+        body: JSON.stringify({
+          reason: 'Exercise terminal adjudication on one immutable canary',
+          expected_sha256: expectedSha256,
+          expected_score_count: 0,
+          expected_attempt_id: attemptId,
+          force_full_review: true,
+          review_settings_revision: 62,
+          confirmation: 'FORCE ONE FULL SCREENING REVIEW WITH ADJUDICATOR',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
   it('rejects a screening submission with explicit guards and confirmation', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const agentId = 'd47bd70b-f0d4-46ad-a5ec-6f2fc392c406'

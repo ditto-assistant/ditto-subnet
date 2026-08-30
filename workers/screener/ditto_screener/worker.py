@@ -43,6 +43,7 @@ from ditto_screener.policy import (
     core_decision,
 )
 from ditto_screener.review_settings import (
+    EffectiveReviewSettings,
     ShadowReviewObservationRequest,
     ShadowReviewUsage,
     bootstrap_review_settings,
@@ -369,12 +370,20 @@ class ScreenerWorker:
         for item in queue.items:
             if stop.is_set():
                 break
-            await self._screen_one(item, policy_version=screen_version)
+            await self._screen_one(
+                item,
+                policy_version=screen_version,
+                normal_review_settings=review_settings,
+            )
             done += 1
         return done
 
     async def _screen_one(
-        self, item: ScreenerQueueItem, *, policy_version: int
+        self,
+        item: ScreenerQueueItem,
+        *,
+        policy_version: int,
+        normal_review_settings: EffectiveReviewSettings | None = None,
     ) -> None:
         """Gate one agent and post its signed verdict. Never raises."""
         agent_id = item.agent_id
@@ -390,7 +399,27 @@ class ScreenerWorker:
         heartbeat_task = asyncio.create_task(
             self._heartbeat_while_active(heartbeat_stop)
         )
+        normal_review_settings = normal_review_settings or bootstrap_review_settings(
+            self._config
+        )
+        applied_canary_settings = False
+        effective_review_settings = normal_review_settings
         try:
+            if item.review_settings_override is not None:
+                override = await self._platform.get_review_settings_revision(
+                    item.review_settings_override.revision
+                )
+                if (
+                    override.revision != item.review_settings_override.revision
+                    or override.scope != item.review_settings_override.scope
+                    or override.checksum != item.review_settings_override.checksum
+                ):
+                    raise PlatformError(
+                        "claimed review settings override does not match Platform"
+                    )
+                self._gate.apply_review_settings(override)
+                effective_review_settings = override
+                applied_canary_settings = True
             screened_image: BuiltImageArtifact | None = None
             screened_image_upload_id: UUID | None = None
 
@@ -638,23 +667,23 @@ class ScreenerWorker:
                 deferred_source_review=item.deferred_source_review,
                 policy_only=item.policy_only,
                 review_settings_revision=(
-                    self._review_settings_status.revision
-                    if self._review_settings_status.revision >= 1
+                    effective_review_settings.revision
+                    if effective_review_settings.revision >= 1
                     else None
                 ),
                 review_settings_instance_id=(
                     self._instance_id
-                    if self._review_settings_status.revision >= 1
+                    if effective_review_settings.revision >= 1
                     else None
                 ),
                 review_settings_scope=(
-                    self._review_settings_status.scope
-                    if self._review_settings_status.revision >= 1
+                    effective_review_settings.scope
+                    if effective_review_settings.revision >= 1
                     else None
                 ),
                 review_settings_checksum=(
-                    self._review_settings_status.checksum
-                    if self._review_settings_status.revision >= 1
+                    effective_review_settings.checksum
+                    if effective_review_settings.revision >= 1
                     else None
                 ),
                 reason_code=reason_code,
@@ -677,23 +706,23 @@ class ScreenerWorker:
                 review_audit_digest=review_audit_digest,
                 adjudication_digest=adjudication_digest,
                 review_settings_revision=(
-                    self._review_settings_status.revision
-                    if self._review_settings_status.revision >= 1
+                    effective_review_settings.revision
+                    if effective_review_settings.revision >= 1
                     else None
                 ),
                 review_settings_instance_id=(
                     self._instance_id
-                    if self._review_settings_status.revision >= 1
+                    if effective_review_settings.revision >= 1
                     else None
                 ),
                 review_settings_scope=(
-                    self._review_settings_status.scope
-                    if self._review_settings_status.revision >= 1
+                    effective_review_settings.scope
+                    if effective_review_settings.revision >= 1
                     else None
                 ),
                 review_settings_checksum=(
-                    self._review_settings_status.checksum
-                    if self._review_settings_status.revision >= 1
+                    effective_review_settings.checksum
+                    if effective_review_settings.revision >= 1
                     else None
                 ),
                 reason_code=reason_code,
@@ -739,6 +768,8 @@ class ScreenerWorker:
             self._active_progress_stage = None
             self._active_lease_deadline = None
             self._job_started_at = None
+            if applied_canary_settings:
+                self._gate.apply_review_settings(normal_review_settings)
             await self._report_heartbeat("polling", force=True)
 
     async def _submit_shadow_review(

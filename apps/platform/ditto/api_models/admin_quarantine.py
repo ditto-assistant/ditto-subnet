@@ -249,13 +249,26 @@ class AdminScreeningRetryNowRequest(BaseModel):
     expected_score_count: Annotated[int, Field(ge=0)]
     expected_attempt_id: UUID
     force_full_review: bool = False
+    review_settings_revision: Annotated[int | None, Field(ge=1)] = None
     confirmation: str | None = None
 
     @model_validator(mode="after")
     def validate_full_review_confirmation(self) -> AdminScreeningRetryNowRequest:
-        expected = "FORCE ONE FULL SCREENING REVIEW"
-        if self.force_full_review and self.confirmation != expected:
-            raise ValueError(f'full review retry requires confirmation "{expected}"')
+        full_review_confirmation = "FORCE ONE FULL SCREENING REVIEW"
+        adjudicator_confirmation = "FORCE ONE FULL SCREENING REVIEW WITH ADJUDICATOR"
+        if self.review_settings_revision is not None:
+            if (
+                not self.force_full_review
+                or self.confirmation != adjudicator_confirmation
+            ):
+                raise ValueError(
+                    "adjudicator retry requires confirmation "
+                    f'"{adjudicator_confirmation}"'
+                )
+        elif self.force_full_review and self.confirmation != full_review_confirmation:
+            raise ValueError(
+                f'full review retry requires confirmation "{full_review_confirmation}"'
+            )
         if not self.force_full_review and self.confirmation is not None:
             raise ValueError("confirmation is only valid for a full review retry")
         return self
@@ -269,6 +282,7 @@ class AdminScreeningRetryNowResponse(BaseModel):
     backoff_deadline: datetime
     created_at: datetime
     force_full_review: bool = False
+    review_settings_revision: int | None = None
     idempotent: bool = False
 
 
