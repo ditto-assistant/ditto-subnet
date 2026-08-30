@@ -127,6 +127,16 @@ def test_private_coding_catalog_deploy_is_default_off_and_relay_blind() -> None:
     assert "platform_coding_catalog_enabled | bool" in tasks
     assert "platform_coding_catalog_bucket != platform_bucket" in tasks
     assert "platform_coding_catalog_bucket != (platform_hippius_bucket" in tasks
+    assert "secret_coding_catalog_access_key != secret_hippius_access_key_id" in tasks
+    assert (
+        "platform_coding_catalog_access_key_read.stdout | default('') | length > 0"
+        in tasks
+    )
+    assert (
+        "platform_coding_catalog_access_key_read.stdout != "
+        "(platform_secrets.hippius_access_key_id | default(''))"
+        in tasks
+    )
     for secret in (
         "platform-coding-catalog-access-key",
         "platform-coding-catalog-secret-key",
