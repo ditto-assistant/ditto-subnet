@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.153.0 (2026-08-30)
+
+### Features
+
+- **coding**: Add ticket-bound Luna relay core
+  ([`31df063`](https://github.com/ditto-assistant/ditto-subnet/commit/31df0633d4d401f12337c3478db246f5fdd43699))
+
+
 ## v0.152.0 (2026-08-30)
 
 ### Bug Fixes
