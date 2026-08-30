@@ -15,13 +15,34 @@ Every request fixes:
 - one bounded lease object when the operation requires it;
 - the complete authoring outcome only for grading.
 
-`prepare` asks the future trusted backend to generate and retain one Ed25519
+`prepare` asks the trusted process-local session backend to generate and retain one Ed25519
 broker key and returns only its public key plus an opaque session UUID. Python
 uses that public key to request/exchange the exact ticket-bound Platform grant.
 Only `author` carries the active exchange object; the broker private key never
 leaves the Go backend and the provider credential never enters either process.
 Python revokes the exact active (or still-pending) grant generation in a
 terminal `finally` path before it accepts the authoring outcome.
+
+`SessionBackend` binds that preparation to the exact ticket/run, canonical
+authoring lease object, and deadline. It lends a deep-owned private-key buffer
+to the injected phase runner exactly once and zeros both the runner-visible
+alias and its retained copy immediately after the call, including failure and
+cancellation paths. A successful authoring or grading outcome is deep-owned
+and cached, so response-loss retries return the exact evidence under the new
+operation UUID without rerunning candidate code or pristine grading. A failed
+phase is terminal and cannot receive a clean retry. Abort is idempotent for a
+known session and zeros any key before delegating cleanup.
+
+The production constructor always uses operating-system cryptographic entropy
+for both key and session identity generation; entropy hooks exist only in the
+package-private test constructor. Duplicate session IDs or public keys fail
+closed without creating a second session.
+
+The session table is bounded. It keeps terminal tombstones for the lifetime of
+the process rather than evicting them into a possible clean retry. Close fails
+while a phase is active and otherwise zeros retained private and evidence
+buffers. Recovery only delegates to the future durable phase runner; it never
+calls authoring or grading.
 
 The handler accepts only fixed `POST` paths, unencoded `application/json`, no
 query string, a single exact bearer, bounded duplicate-free JSON, and coherent
@@ -49,16 +70,19 @@ lease before forwarding the active exchange.
 
 ## Current boundary
 
-The handler has an injected `Backend` port. No composition root supplies that
-backend or mounts `Handler`; no worker constructs `CodingSupervisorRuntime`.
-This PR therefore cannot fetch leases, open artifact capabilities, start a
-harness, invoke Luna, grade a repository, publish evidence, claim work, or
-affect scores and weights.
+The handler now has a concrete `SessionBackend`, but that backend still requires
+an injected `PhaseRunner`. No composition root constructs either backend or
+mounts `Handler`; no worker constructs `CodingSupervisorRuntime`. The session
+state is deliberately process-local and is not a substitute for the durable
+evidence outbox. This PR therefore cannot fetch leases, open artifact
+capabilities, start a harness, invoke Luna, grade a repository, publish
+evidence, claim work, or affect scores and weights.
 
-The next review must implement the prepared-session and authoring backend from `codingattempt`,
+The next review must implement the injected phase runner from `codingattempt`,
 `codinggateway`, `codingoutbox`, harness/publisher adapters, and the host
-sweeper. Worker registration remains a separate disabled-shadow PR after that
-backend is complete.
+sweeper. Its durable activation marker must commit before any candidate call so
+a process restart cannot grant a clean rerun. Worker registration remains a
+separate disabled-shadow PR after that composition is complete.
 
 Validation:
 
