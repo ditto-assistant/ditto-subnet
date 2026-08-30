@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.175.1 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Bind adjudicator canaries to attempts
+  ([#1387](https://github.com/ditto-assistant/ditto-subnet/pull/1387),
+  [`61eb343`](https://github.com/ditto-assistant/ditto-subnet/commit/61eb343420ab498dd3e97889320bf8c76c794a85))
+
+
 ## v0.175.0 (2026-08-30)
 
 ### Bug Fixes
