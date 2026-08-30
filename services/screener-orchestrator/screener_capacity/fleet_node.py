@@ -37,6 +37,11 @@ _TERMINAL = {"succeeded", "fallback_required", "canceled", "consumed"}
 _JOB_ID = re.compile(r"^[0-9a-f-]{36}$")
 _IMAGE = re.compile(r"^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 _RUNTIME_MARKER = "DITTO_FLEET_RUNTIME_OK"
+_BUILD_FAILURE_MARKER = re.compile(
+    r"(?:^|\n)DITTO_SUBMISSION_BUILD_FAILED="
+    r"(SOURCE|KANIKO|ARCHIVE|UPLOAD|COMPLETE|CONTRACT)(?:\r?$)",
+    re.MULTILINE,
+)
 _GUEST_OSINFO = "debian12"
 _LIBVIRT_URI = "qemu:///system"
 _SERIAL_CAPTURE_LIMIT = 64_000
@@ -454,6 +459,23 @@ exit 1
 """
 
 
+def _build_failure_code(*, ok: bool, console: str) -> str:
+    """Return only the builder's public-safe failure classification.
+
+    Guest console output can contain submitted build output, so it must never be
+    forwarded or logged. The builder emits this allow-listed marker expressly
+    for provider-independent failure reporting.
+    """
+    markers = _BUILD_FAILURE_MARKER.findall(console)
+    if markers:
+        return f"FLEET_SUBMISSION_{markers[-1]}_FAILED"
+    return (
+        "FLEET_SUBMISSION_BUILD_VM_EXITED"
+        if ok
+        else "FLEET_SUBMISSION_BUILD_VM_FAILED"
+    )
+
+
 class KVMRunner:
     def __init__(
         self,
@@ -625,7 +647,7 @@ class FleetNode:
         build_id = str(build["build_id"])
         domain = f"ditto-build-{build_id.replace('-', '')[:16]}"
         self.control.update("build", build_id, status="running", resource_id=domain)
-        ok, _console = self.runner.run(
+        ok, console = self.runner.run(
             name=domain,
             script=_build_script(
                 platform_url=self.settings.platform_url,
@@ -637,16 +659,17 @@ class FleetNode:
         )
         status = self.control.status("build", build_id)
         if status not in _TERMINAL:
+            error_code = _build_failure_code(ok=ok, console=console)
+            print(
+                f"fleet build job failed: build_id={build_id} "
+                f"error_code={error_code}"
+            )
             self.control.update(
                 "build",
                 build_id,
                 status="fallback_required",
                 resource_id=domain,
-                error_code=(
-                    "FLEET_SUBMISSION_BUILD_VM_EXITED"
-                    if ok
-                    else "FLEET_SUBMISSION_BUILD_VM_FAILED"
-                ),
+                error_code=error_code,
             )
 
     def _run_runtime(self, artifact: dict[str, Any]) -> None:
