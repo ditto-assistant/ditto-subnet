@@ -1170,6 +1170,7 @@ class PlatformClient:
         run_row_id: UUID,
         ticket_id: UUID,
         freeze_id: UUID,
+        claim_instance_id: str,
         authoring_evidence_sha256: str,
         expected_frozen_patch_sha256: str,
     ) -> CodingGradingLeaseResponse:
@@ -1183,6 +1184,7 @@ class PlatformClient:
             run_row_id=run_row_id,
             ticket_id=ticket_id,
             freeze_id=freeze_id,
+            claim_instance_id=claim_instance_id,
             authoring_evidence_sha256=authoring_evidence_sha256,
             nonce=nonce,
             requested_at=requested_at,
@@ -1193,6 +1195,7 @@ class PlatformClient:
                 run_row_id=run_row_id,
                 ticket_id=ticket_id,
                 freeze_id=freeze_id,
+                claim_instance_id=claim_instance_id,
                 authoring_evidence_sha256=authoring_evidence_sha256,
                 nonce=nonce,
                 requested_at=requested_at,

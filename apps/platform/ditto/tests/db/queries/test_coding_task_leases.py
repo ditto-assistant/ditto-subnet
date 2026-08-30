@@ -454,6 +454,7 @@ async def test_grading_authorization_requires_complete_immutable_freeze() -> Non
         ticket_id=fixture.ticket.ticket_id,
         freeze_id=fixture.freeze.freeze_id,
         authoring_evidence_sha256=fixture.freeze.authoring_evidence_sha256,
+        claim_instance_id=fixture.ticket.claim_instance_id,
     )
     assert authority == CodingShadowGradingAuthority(
         agent_id=fixture.run.agent_id,
@@ -518,6 +519,7 @@ async def test_grading_authorization_rejects_ungradeable_freeze(drift: str) -> N
             ticket_id=fixture.ticket.ticket_id,
             freeze_id=fixture.freeze.freeze_id,
             authoring_evidence_sha256=requested_digest,
+            claim_instance_id=fixture.ticket.claim_instance_id,
         )
 
 
@@ -542,6 +544,7 @@ async def test_grading_authorization_hides_wrong_owner_or_expired_ticket() -> No
                 ticket_id=fixture.ticket.ticket_id,
                 freeze_id=fixture.freeze.freeze_id,
                 authoring_evidence_sha256=fixture.freeze.authoring_evidence_sha256,
+                claim_instance_id=fixture.ticket.claim_instance_id,
             )
 
     fixture = _fixture()
@@ -555,6 +558,7 @@ async def test_grading_authorization_hides_wrong_owner_or_expired_ticket() -> No
             ticket_id=fixture.ticket.ticket_id,
             freeze_id=fixture.freeze.freeze_id,
             authoring_evidence_sha256=fixture.freeze.authoring_evidence_sha256,
+            claim_instance_id=fixture.ticket.claim_instance_id,
         )
 
 
@@ -577,6 +581,7 @@ async def test_grading_authorization_rechecks_artifact_certification(
             ticket_id=fixture.ticket.ticket_id,
             freeze_id=fixture.freeze.freeze_id,
             authoring_evidence_sha256=fixture.freeze.authoring_evidence_sha256,
+            claim_instance_id=fixture.ticket.claim_instance_id,
         )
 
 

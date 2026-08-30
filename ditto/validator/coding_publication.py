@@ -131,6 +131,7 @@ class CodingPublicationClient:
                 character.isspace() or ord(character) < 32
                 for character in self.control_token
             )
+            or getattr(self.client, "trust_env", True)
         ):
             raise ValueError("coding publication client configuration is invalid")
 

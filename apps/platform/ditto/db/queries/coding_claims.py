@@ -212,6 +212,7 @@ async def _update_claim(
         or ticket.claim_heartbeat_at is None
         or ticket.claim_expires_at is None
         or ticket.deadline <= now
+        or ticket.claim_expires_at <= now
         or await _has_terminal_result(session, ticket_id)
     ):
         raise CodingClaimNotAvailableError("coding ticket claim is unavailable")

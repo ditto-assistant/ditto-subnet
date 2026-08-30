@@ -619,6 +619,7 @@ async def test_coding_grading_client_posts_signed_request_and_parses_lease() -> 
             run_row_id=payload.run_row_id,
             ticket_id=payload.ticket_id,
             freeze_id=payload.freeze_id,
+            claim_instance_id=payload.claim_instance_id,
             authoring_evidence_sha256=payload.authoring_evidence_sha256,
             nonce=payload.nonce,
             requested_at=payload.requested_at,
@@ -640,6 +641,7 @@ async def test_coding_grading_client_posts_signed_request_and_parses_lease() -> 
             run_row_id=UUID(raw_request["run_row_id"]),
             ticket_id=UUID(raw_request["ticket_id"]),
             freeze_id=UUID(raw_request["freeze_id"]),
+            claim_instance_id=raw_request["claim_instance_id"],
             authoring_evidence_sha256=raw_request["authoring_evidence_sha256"],
             expected_frozen_patch_sha256=response_body["frozen_patch_sha256"],
         )
@@ -669,6 +671,7 @@ async def test_coding_grading_client_bounds_and_refuses_redirects() -> None:
             run_row_id=UUID(raw["run_row_id"]),
             ticket_id=UUID(raw["ticket_id"]),
             freeze_id=UUID(raw["freeze_id"]),
+            claim_instance_id=raw["claim_instance_id"],
             authoring_evidence_sha256=raw["authoring_evidence_sha256"],
             expected_frozen_patch_sha256=vector["response"]["frozen_patch_sha256"],
         )
@@ -735,6 +738,7 @@ async def test_coding_grading_client_rejects_identity_drift_without_url_leak() -
                 run_row_id=UUID(raw["run_row_id"]),
                 ticket_id=UUID(raw["ticket_id"]),
                 freeze_id=UUID(raw["freeze_id"]),
+                claim_instance_id=raw["claim_instance_id"],
                 authoring_evidence_sha256=raw["authoring_evidence_sha256"],
                 expected_frozen_patch_sha256=vector["response"]["frozen_patch_sha256"],
             )
@@ -768,6 +772,7 @@ async def test_coding_grading_client_rejects_frozen_patch_drift() -> None:
                 run_row_id=UUID(raw["run_row_id"]),
                 ticket_id=UUID(raw["ticket_id"]),
                 freeze_id=UUID(raw["freeze_id"]),
+                claim_instance_id=raw["claim_instance_id"],
                 authoring_evidence_sha256=raw["authoring_evidence_sha256"],
                 expected_frozen_patch_sha256=expected_patch_sha256,
             )

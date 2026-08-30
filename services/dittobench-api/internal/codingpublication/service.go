@@ -30,7 +30,7 @@ const (
 	commandSchema        = "dittobench-coding-publication-command-v1"
 	responseSchema       = "dittobench-coding-publication-result-v1"
 	maximumCommandBytes  = 6 << 20
-	maximumResponseBytes = 6 << 20
+	maximumResponseBytes = 32 << 20
 )
 
 var (
@@ -141,7 +141,19 @@ func (service *Service) Handler() http.Handler {
 			return
 		}
 		encoded, err := json.Marshal(value)
-		if err != nil || len(encoded)+1 > maximumResponseBytes {
+		if err != nil {
+			writeError(response, http.StatusBadGateway, "response_invalid")
+			return
+		}
+		for value.Operation == "pending" && len(encoded)+1 > maximumResponseBytes && len(value.Pending) > 1 {
+			value.Pending = value.Pending[:len(value.Pending)/2]
+			encoded, err = json.Marshal(value)
+			if err != nil {
+				writeError(response, http.StatusBadGateway, "response_invalid")
+				return
+			}
+		}
+		if len(encoded)+1 > maximumResponseBytes {
 			writeError(response, http.StatusBadGateway, "response_invalid")
 			return
 		}

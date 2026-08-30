@@ -65,6 +65,7 @@ async def _authorize(
             ticket_id=payload.ticket_id,
             freeze_id=payload.freeze_id,
             authoring_evidence_sha256=payload.authoring_evidence_sha256,
+            claim_instance_id=payload.claim_instance_id,
         )
     except CodingTaskLeaseNotAvailableError:
         raise HTTPException(
@@ -104,6 +105,7 @@ async def request_coding_grading_lease(
         run_row_id=payload.run_row_id,
         ticket_id=payload.ticket_id,
         freeze_id=payload.freeze_id,
+        claim_instance_id=payload.claim_instance_id,
         authoring_evidence_sha256=payload.authoring_evidence_sha256,
         nonce=payload.nonce,
         requested_at=payload.requested_at,

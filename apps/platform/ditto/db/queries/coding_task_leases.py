@@ -222,6 +222,7 @@ async def authorize_coding_shadow_grading_delivery(
     ticket_id: UUID,
     freeze_id: UUID,
     authoring_evidence_sha256: str,
+    claim_instance_id: str,
 ) -> CodingShadowGradingAuthority:
     """Authorize grader delivery only from one complete immutable freeze."""
 
@@ -252,6 +253,7 @@ async def authorize_coding_shadow_grading_delivery(
         or freeze.ticket_id != ticket.ticket_id
         or freeze.run_row_id != run.run_row_id
         or ticket.claim_instance_id is None
+        or ticket.claim_instance_id != claim_instance_id
         or ticket.claim_started_at is None
         or ticket.claim_expires_at is None
         or _aware(ticket.claim_expires_at) <= _aware(database_now)
@@ -482,6 +484,10 @@ async def build_coding_shadow_task_lease(
         assignment_row is None
         or certification is None
         or agent is None
+        or ticket.claim_instance_id is None
+        or ticket.claim_started_at is None
+        or ticket.claim_expires_at is None
+        or _aware(ticket.claim_expires_at) <= _aware(database_now)
         or not _ticket_certification_is_active(
             ticket=ticket,
             run=run,

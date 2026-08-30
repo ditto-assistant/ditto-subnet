@@ -323,6 +323,7 @@ class CodingGradingLeaseRequest(BaseModel):
     run_row_id: UUID
     ticket_id: UUID
     freeze_id: UUID
+    claim_instance_id: Annotated[str, Field(min_length=1, max_length=128)]
     authoring_evidence_sha256: Sha256
     nonce: UUID
     requested_at: datetime
@@ -480,6 +481,7 @@ def coding_grading_lease_signing_message(
     run_row_id: UUID,
     ticket_id: UUID,
     freeze_id: UUID,
+    claim_instance_id: str,
     authoring_evidence_sha256: str,
     nonce: UUID,
     requested_at: datetime,
@@ -497,6 +499,7 @@ def coding_grading_lease_signing_message(
             str(run_row_id),
             str(ticket_id),
             str(freeze_id),
+            claim_instance_id,
             authoring_evidence_sha256,
             str(nonce),
             timestamp,

@@ -79,7 +79,9 @@ async def test_publication_client_preserves_exact_request_and_acknowledgement() 
             json=base,
         )
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), trust_env=False
+    ) as http:
         client = CodingPublicationClient(
             base_url="http://127.0.0.1:18081",
             control_token=_TOKEN,
@@ -138,7 +140,9 @@ async def test_publication_client_rejects_redirects_bad_identity_and_secret_leak
             },
         )
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), trust_env=False
+    ) as http:
         client = CodingPublicationClient(
             base_url="http://127.0.0.1:18081",
             control_token=_TOKEN,

@@ -315,6 +315,7 @@ def test_grading_lease_vector_matches_platform_contract() -> None:
         run_row_id=request.run_row_id,
         ticket_id=request.ticket_id,
         freeze_id=request.freeze_id,
+        claim_instance_id=request.claim_instance_id,
         authoring_evidence_sha256=request.authoring_evidence_sha256,
         nonce=request.nonce,
         requested_at=request.requested_at,
