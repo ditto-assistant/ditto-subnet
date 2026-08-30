@@ -45,7 +45,7 @@ SCRATCH_DB="model_relay_schema_$$"
 log() { echo "[gen-schema] $*" >&2; }
 
 psql_admin() {
-  docker exec -i "${CONTAINER_NAME}" psql -v ON_ERROR_STOP=1 \
+  docker exec -e PGPASSWORD="${ADMIN_PASSWORD}" -i "${CONTAINER_NAME}" psql -v ON_ERROR_STOP=1 \
     -h "${ADMIN_HOST}" -U "${ADMIN_USER}" -d "${ADMIN_DB}" -qAt -c "$1"
 }
 
@@ -73,8 +73,8 @@ fi
 # then reports "after 120s" on a ~few-second cold start).
 postgres_ready=0
 for i in $(seq 1 120); do
-  if docker exec "${CONTAINER_NAME}" pg_isready -h "${ADMIN_HOST}" -U "${ADMIN_USER}" -d "${ADMIN_DB}" >/dev/null 2>&1; then
-    if docker exec -i "${CONTAINER_NAME}" psql -v ON_ERROR_STOP=1 \
+  if docker exec -e PGPASSWORD="${ADMIN_PASSWORD}" "${CONTAINER_NAME}" pg_isready -h "${ADMIN_HOST}" -U "${ADMIN_USER}" -d "${ADMIN_DB}" >/dev/null 2>&1; then
+    if docker exec -e PGPASSWORD="${ADMIN_PASSWORD}" -i "${CONTAINER_NAME}" psql -v ON_ERROR_STOP=1 \
       -h "${ADMIN_HOST}" -U "${ADMIN_USER}" -d "${ADMIN_DB}" -qAt -c "SELECT 1" >/dev/null 2>&1; then
       postgres_ready=1
       break

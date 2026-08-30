@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.coding_inference import (
@@ -26,6 +27,7 @@ from ditto.db.queries.coding_inference_grants import (
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _IDENTIFIER_RE = re.compile(r"^[^\s\x00-\x1f\x7f]{1,256}$")
 _MAX_SETTLEMENT_JSON_BYTES = 65_536
+_POSTGRES_BIGINT_MAX = (1 << 63) - 1
 _UNSETTLED_REASONS = frozenset(
     {
         "provider_settlement_unavailable",
@@ -238,6 +240,25 @@ def _grant_budget_exhausted(grant: CodingInferenceGrant) -> bool:
     return bool(
         grant.request_count >= grant.request_budget
         or _grant_usage_budget_exhausted(grant)
+    )
+
+
+def _fits_postgres_bigint(current: int, delta: int) -> bool:
+    return (
+        0 <= current <= _POSTGRES_BIGINT_MAX
+        and 0 <= delta <= _POSTGRES_BIGINT_MAX
+        and current <= _POSTGRES_BIGINT_MAX - delta
+    )
+
+
+def _usage_fits_postgres_bigint(
+    grant: CodingInferenceGrant,
+    settlement: CodingInferenceProviderSettlement,
+) -> bool:
+    return (
+        _fits_postgres_bigint(grant.prompt_tokens, settlement.prompt_tokens)
+        and _fits_postgres_bigint(grant.completion_tokens, settlement.completion_tokens)
+        and _fits_postgres_bigint(grant.cost_usd_micros, settlement.cost_usd_micros)
     )
 
 
@@ -529,6 +550,21 @@ async def settle_coding_inference_request(
             "coding inference provider settlement identity was reused"
         )
 
+    if not _usage_fits_postgres_bigint(grant, settlement):
+        request.status = "unsettled"
+        request.provider_settlement_sha256 = None
+        request.provider_generation_id = None
+        request.provider_settlement_json = None
+        request.unsettled_reason = "invalid_provider_settlement"
+        request.settled_at = now
+        if grant.status == "active":
+            _revoke_grant(grant, now)
+        else:
+            grant.active_requests = 0
+            grant.updated_at = now
+        await session.flush()
+        return CodingInferenceRequestResult(request=request, idempotent=False)
+
     request.status = settlement.outcome.value
     request.provider_settlement_sha256 = settlement_sha256
     request.provider_generation_id = settlement.provider_generation_id
@@ -552,7 +588,12 @@ async def settle_coding_inference_request(
             and _grant_budget_exhausted(grant)
         ) or _grant_usage_budget_exhausted(grant):
             _exhaust_grant(grant, now)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError as error:
+        raise CodingInferenceRequestIntegrityError(
+            "coding inference provider settlement identity was reused"
+        ) from error
     return CodingInferenceRequestResult(request=request, idempotent=False)
 
 

@@ -18,6 +18,9 @@ func TestSchemaGeneratorNeverAdmitsBootstrapSocketServer(t *testing.T) {
 	if count := strings.Count(script, `-h "${ADMIN_HOST}"`); count != 3 {
 		t.Fatalf("TCP-pinned readiness/admin commands = %d, want 3", count)
 	}
+	if strings.Count(script, `PGPASSWORD="${ADMIN_PASSWORD}"`) < 3 {
+		t.Fatal("TCP-pinned postgres commands lack PGPASSWORD")
+	}
 	if strings.Contains(script, `pg_isready -U`) || strings.Contains(script, `psql -v ON_ERROR_STOP=1 \
     -U`) {
 		t.Fatal("schema generator can still connect to the temporary socket postmaster")

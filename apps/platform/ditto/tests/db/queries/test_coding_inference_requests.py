@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import Table
+from sqlalchemy.exc import IntegrityError
 
 from ditto.api_models.coding_inference import (
     CodingInferencePolicy,
@@ -321,6 +322,50 @@ async def test_real_spend_is_booked_even_when_it_crosses_remaining_budget() -> N
         complete.completion_tokens,
         complete.cost_usd_micros,
     )
+
+
+async def test_unaccountable_bigint_settlement_is_unsettled_and_revokes() -> None:
+    policy, settlements = _vector()
+    complete = settlements["complete"][0]
+    grant = _grant(policy, complete)
+    authority = _authority(complete, sequence=1)
+    request = await _begin(grant, authority)
+    grant.prompt_tokens = (1 << 63) - 1
+    result = await settle_coding_inference_request(
+        _Session([grant, request, _NOW + timedelta(seconds=1), None]),  # type: ignore[arg-type]
+        authority=authority,
+        settlement=complete,
+        policy=policy,
+    )
+    assert result.idempotent is False
+    assert request.status == "unsettled"
+    assert request.unsettled_reason == "invalid_provider_settlement"
+    assert request.provider_settlement_json is None
+    assert grant.status == "revoked"
+    assert grant.prompt_tokens == (1 << 63) - 1
+    assert grant.active_requests == 0
+
+
+async def test_concurrent_settlement_identity_reuse_is_integrity_error() -> None:
+    policy, settlements = _vector()
+    complete = settlements["complete"][0]
+    grant = _grant(policy, complete)
+    authority = _authority(complete, sequence=1)
+    request = await _begin(grant, authority)
+
+    class _ConflictSession(_Session):
+        async def flush(self) -> None:
+            raise IntegrityError("UNIQUE", {}, Exception("duplicate"))
+
+    with pytest.raises(
+        CodingInferenceRequestIntegrityError, match="identity was reused"
+    ):
+        await settle_coding_inference_request(
+            _ConflictSession([grant, request, _NOW + timedelta(seconds=1), None]),  # type: ignore[arg-type]
+            authority=authority,
+            settlement=complete,
+            policy=policy,
+        )
 
 
 async def test_provider_failure_is_durably_accounted_and_revokes_grant() -> None:
