@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v0.175.0 (2026-08-30)
+
+### Bug Fixes
+
+- **platform**: Stage relay artifacts through a direct GCS insert
+  ([#1386](https://github.com/ditto-assistant/ditto-subnet/pull/1386),
+  [`0f12227`](https://github.com/ditto-assistant/ditto-subnet/commit/0f1222742bee0cf0aea3af3a88f2444ea07b1f8c))
+
+- **screener**: Fence legacy GCP claims behind controller
+  ([#1384](https://github.com/ditto-assistant/ditto-subnet/pull/1384),
+  [`7ddc554`](https://github.com/ditto-assistant/ditto-subnet/commit/7ddc5544d344aeb6c0d4b434e02f876c05beca4f))
+
+### Features
+
+- **dittobench**: Observe public-canary inference via the coding relay
+  ([`c3af669`](https://github.com/ditto-assistant/ditto-subnet/commit/c3af6691ec5d28df3f2574b53978f6414a55394b))
+
+
 ## v0.174.4 (2026-08-30)
 
 ### Bug Fixes
