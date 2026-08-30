@@ -319,6 +319,46 @@ func TestClientDeepOwnsGrantSecrets(t *testing.T) {
 	}
 }
 
+func TestClientAcceptsCaseInsensitiveJSONContentType(t *testing.T) {
+	fixture := newPlatformFixture(t)
+	transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		result := response(http.StatusOK, fixture.responseBody(t, fixture.settlement, fixture.normalized, nil))
+		result.Header.Set("Content-Type", "Application/JSON")
+		return result, nil
+	})
+	client, err := New(fixture.config(transport))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Complete(t.Context(), fixture.request); err != nil {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestNowCallbackDoesNotDeadlockClose(t *testing.T) {
+	fixture := newPlatformFixture(t)
+	client, err := New(fixture.config(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return response(http.StatusOK, fixture.responseBody(t, fixture.settlement, fixture.normalized, nil)), nil
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan struct{})
+	client.now = func() time.Time {
+		go func() {
+			_ = client.Close()
+			close(closed)
+		}()
+		return fixture.now
+	}
+	_, _ = client.Complete(t.Context(), fixture.request)
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close blocked behind Now while prepare held the mutex")
+	}
+}
+
 func TestSecretsCannotBeFormattedSerializedOrLogged(t *testing.T) {
 	fixture := newPlatformFixture(t)
 	client, err := New(fixture.config(roundTripFunc(func(*http.Request) (*http.Response, error) {

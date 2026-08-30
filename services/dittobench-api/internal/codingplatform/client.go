@@ -304,12 +304,13 @@ func (prepared *preparedRequest) clear() {
 }
 
 func (client *Client) prepare(request codingrelay.UpstreamRequest) (preparedRequest, error) {
+	now := client.now().UTC()
+	nonce := client.newNonce()
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if client.closed {
 		return preparedRequest{}, ErrCapabilityClosed
 	}
-	now := client.now().UTC()
 	if now.Before(client.lastNow) {
 		client.closeLocked()
 		return preparedRequest{}, ErrClockRollback
@@ -322,7 +323,6 @@ func (client *Client) prepare(request codingrelay.UpstreamRequest) (preparedRequ
 	if err := validateUpstreamRequest(request, client.policy, client.binding); err != nil {
 		return preparedRequest{}, err
 	}
-	nonce := client.newNonce()
 	if !canonicalUUID(nonce) {
 		client.closeLocked()
 		return preparedRequest{}, ErrInvalidConfig
@@ -422,7 +422,7 @@ func isoformatMicro(value time.Time) string {
 
 func isJSON(value string) bool {
 	mediaType, _, err := mime.ParseMediaType(value)
-	return err == nil && mediaType == "application/json"
+	return err == nil && strings.EqualFold(mediaType, "application/json")
 }
 
 func hasNoStore(values []string) bool {
