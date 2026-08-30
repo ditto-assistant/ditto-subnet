@@ -4849,6 +4849,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/coding-certification-leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue Lease
+         * @description Issue one public-canary lease after current core qualification.
+         */
+        post: operations["issue_lease_api_v1_validator_coding_certification_leases_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/coding-certification-leases/{lease_id}/abort": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Abort Lease */
+        post: operations["abort_lease_api_v1_validator_coding_certification_leases__lease_id__abort_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/coding-certification-leases/{lease_id}/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim Lease */
+        post: operations["claim_lease_api_v1_validator_coding_certification_leases__lease_id__claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/coding-shadow/authoring-freeze": {
         parameters: {
             query?: never;
@@ -10928,6 +10982,166 @@ export interface components {
             /** Test Command Ids */
             test_command_ids: string[];
         };
+        /** CodingCertificationLeaseAbortRequest */
+        CodingCertificationLeaseAbortRequest: {
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * CodingCertificationLeaseAuthority
+         * @description Immutable authority minted only from a current core qualification.
+         */
+        CodingCertificationLeaseAuthority: {
+            /** Agent Artifact Sha256 */
+            agent_artifact_sha256: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Canary Manifest Sha256 */
+            canary_manifest_sha256: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /**
+             * Core Qualification Observation Id
+             * Format: uuid
+             */
+            core_qualification_observation_id: string;
+            /** Core Qualification Policy Checksum */
+            core_qualification_policy_checksum: string;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /** Grader Plan Sha256 */
+            grader_plan_sha256: string;
+            /** Inference Policy Sha256 */
+            inference_policy_sha256: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /** Resource Profile Sha256 */
+            resource_profile_sha256: string;
+            /** Runner Plan Sha256 */
+            runner_plan_sha256: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-certification-lease-v1";
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** CodingCertificationLeaseClaimRequest */
+        CodingCertificationLeaseClaimRequest: {
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** CodingCertificationLeaseIssueRequest */
+        CodingCertificationLeaseIssueRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Coding Contract Version
+             * @default 1
+             * @constant
+             */
+            coding_contract_version: 1;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** CodingCertificationLeaseResponse */
+        CodingCertificationLeaseResponse: {
+            /** Aborted At */
+            aborted_at?: string | null;
+            authority: components["schemas"]["CodingCertificationLeaseAuthority"];
+            /** Claimed At */
+            claimed_at?: string | null;
+            status: components["schemas"]["CodingCertificationLeaseStatus"];
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * CodingCertificationLeaseStatus
+         * @enum {string}
+         */
+        CodingCertificationLeaseStatus: "issued" | "claimed" | "aborted" | "expired";
         /** CodingCertificationModelEvidence */
         CodingCertificationModelEvidence: {
             /** Completion Tokens */
@@ -32900,6 +33114,137 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmitTranscriptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    issue_lease_api_v1_validator_coding_certification_leases_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingCertificationLeaseIssueRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingCertificationLeaseResponse"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Agent is not currently eligible. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Replay or in-flight lease conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Public canary identity unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    abort_lease_api_v1_validator_coding_certification_leases__lease_id__abort_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lease_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingCertificationLeaseAbortRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingCertificationLeaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_lease_api_v1_validator_coding_certification_leases__lease_id__claim_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lease_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingCertificationLeaseClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingCertificationLeaseResponse"];
                 };
             };
             /** @description Validation Error */
