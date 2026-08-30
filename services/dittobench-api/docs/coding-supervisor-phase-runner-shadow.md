@@ -11,7 +11,8 @@ in a production composition root yet.
 One successful authoring call follows this order:
 
 1. Parse the authoring lease, run manifest, runner plan, model-visible issue,
-   runtime policy, budgets, and exactly three authoring capabilities.
+   runtime policy, budgets, exactly three authoring capabilities, and the
+   separately ticket-bound screened-harness launch authority.
 2. Acquire a dormant harness handle. `Acquire` is forbidden from executing
    candidate code; the handle has a separate `Activate` transition.
 3. Reserve the evidence outbox and commit `BeginTranscript`. This is the
@@ -22,7 +23,7 @@ One successful authoring call follows this order:
    from the authoring lease and model context.
 5. Activate the harness, verify coding-v1 health, and deliver the exact scoped
    memory projection.
-6. Validate the exchanged grant against the locked Luna policy, task identity,
+6. Validate the exchanged grant and revocation-only capability against the locked Luna policy, task identity,
    effective lease budgets, broker keypair, expiry, and exact Platform proxy
    route. The relay binding's issue time is the trusted local activation time;
    its deadline is the active grant expiry.

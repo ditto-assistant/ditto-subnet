@@ -68,6 +68,23 @@ func TestConfigFailsClosedOnAuthorityAndTransportDrift(t *testing.T) {
 	}
 }
 
+func TestRevocationCapabilityCannotLeakThroughDiagnostics(t *testing.T) {
+	capability := RevocationCapability{
+		GrantID: "grant", TicketID: "ticket", Bearer: "private-revoke-bearer",
+		URL: "https://platform.invalid/revoke",
+	}
+	if _, err := json.Marshal(capability); !errors.Is(err, ErrSecretSerialization) {
+		t.Fatalf("marshal err=%v", err)
+	}
+	for _, output := range []string{
+		capability.String(), capability.GoString(), capability.LogValue().String(),
+	} {
+		if strings.Contains(output, capability.Bearer) || strings.Contains(output, capability.URL) {
+			t.Fatalf("revocation capability leaked: %q", output)
+		}
+	}
+}
+
 func TestDefaultTransportIsPrivateBoundedAndNoRedirect(t *testing.T) {
 	fixture := newPlatformFixture(t)
 	client, err := New(fixture.config(nil))

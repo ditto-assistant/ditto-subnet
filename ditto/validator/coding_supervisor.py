@@ -20,6 +20,7 @@ from ditto.api_models.coding import (
     CodingGradingLeaseResponse,
     CodingTaskEvidence,
 )
+from ditto.api_models.coding_harness import CodingHarnessLaunchResponse
 from ditto.api_models.coding_inference_grants import (
     CodingInferenceExchangeResponse,
     CodingInferenceGrantOffer,
@@ -222,7 +223,17 @@ class CodingSupervisorRuntime:
     async def author(
         self,
         lease: CodingAuthoringLeaseResponse,
+        harness: CodingHarnessLaunchResponse,
     ) -> CodingAuthoringOutcome:
+        if (
+            harness.ticket_id != lease.ticket_id
+            or harness.ticket_deadline != lease.ticket_deadline
+            or str(harness.agent_id) != lease.run_manifest.agent_id
+            or harness.agent_artifact_sha256 != lease.run_manifest.agent_artifact_sha256
+        ):
+            raise CodingAttemptIntegrityError(
+                "coding supervisor harness authority disagrees with lease"
+            )
         prepared = await self._call(
             operation="prepare",
             ticket_id=lease.ticket_id,
@@ -231,6 +242,7 @@ class CodingSupervisorRuntime:
             lease=lease.model_dump(mode="json", by_alias=True),
             authoring=None,
             grant=None,
+            harness=None,
         )
         if prepared.preparation is None:
             raise CodingAttemptIntegrityError("coding supervisor omitted preparation")
@@ -255,6 +267,7 @@ class CodingSupervisorRuntime:
                 lease=lease.model_dump(mode="json", by_alias=True),
                 authoring=None,
                 grant=exchange.model_dump(mode="json", by_alias=True),
+                harness=harness.model_dump(mode="json", by_alias=True),
             )
         except BaseException as error:
             primary_error = error
@@ -317,6 +330,7 @@ class CodingSupervisorRuntime:
             lease=lease.model_dump(mode="json", by_alias=True),
             authoring=_authoring_payload(authoring),
             grant=None,
+            harness=None,
         )
         if response.grading is None:
             raise CodingAttemptIntegrityError("coding supervisor omitted grading")
@@ -358,6 +372,7 @@ class CodingSupervisorRuntime:
             lease=lease.model_dump(mode="json", by_alias=True),
             authoring=None,
             grant=None,
+            harness=None,
         )
         if not response.aborted:
             raise CodingAttemptIntegrityError(
@@ -373,6 +388,7 @@ class CodingSupervisorRuntime:
             lease=lease.model_dump(mode="json", by_alias=True),
             authoring=None,
             grant=None,
+            harness=None,
         )
         if not response.aborted:
             raise CodingAttemptIntegrityError("coding supervisor did not abort grading")
@@ -392,6 +408,7 @@ class CodingSupervisorRuntime:
             lease=None,
             authoring=None,
             grant=None,
+            harness=None,
         )
         if response.recovery is None:
             raise CodingAttemptIntegrityError("coding supervisor omitted recovery")
@@ -407,6 +424,7 @@ class CodingSupervisorRuntime:
         lease: dict[str, Any] | None,
         authoring: dict[str, Any] | None,
         grant: dict[str, Any] | None,
+        harness: dict[str, Any] | None,
     ) -> _SupervisorResponse:
         if (
             ticket_id.int == 0
@@ -433,6 +451,7 @@ class CodingSupervisorRuntime:
             "lease": lease,
             "authoring": authoring,
             "grant": grant,
+            "harness": harness,
         }
         try:
             body = json.dumps(

@@ -39,6 +39,7 @@ from ditto.api_models.coding import (
     coding_grading_lease_signing_message,
     coding_shadow_result_signing_message,
 )
+from ditto.api_models.coding_harness import coding_harness_launch_signing_message
 from ditto.api_models.coding_inference_grants import (
     coding_inference_exchange_signing_message,
     coding_inference_grant_signing_message,
@@ -247,6 +248,27 @@ def sign_coding_inference_grant(
 
     signature: bytes = keypair.sign(
         coding_inference_grant_signing_message(
+            validator_hotkey=validator_hotkey,
+            ticket_id=ticket_id,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
+def sign_coding_harness_launch(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    ticket_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    """Sign one private screened-harness launch request."""
+
+    signature: bytes = keypair.sign(
+        coding_harness_launch_signing_message(
             validator_hotkey=validator_hotkey,
             ticket_id=ticket_id,
             nonce=nonce,

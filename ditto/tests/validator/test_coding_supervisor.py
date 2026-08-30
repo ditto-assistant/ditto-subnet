@@ -17,6 +17,7 @@ from ditto.api_models.coding import (
     CodingGradingLeaseResponse,
     CodingRunManifest,
 )
+from ditto.api_models.coding_harness import CodingHarnessLaunchResponse
 from ditto.api_models.coding_inference_grants import (
     CodingInferenceExchangeResponse,
     CodingInferenceGrantOffer,
@@ -72,12 +73,29 @@ def _lease(model: type[Any], *, grading: bool = False) -> Any:
     else:
         manifest = CodingRunManifest.model_validate_json(
             json.dumps(_CONTRACT["manifest"])
-        ).model_copy(update={"coding_run_id": request["coding_run_id"]})
+        ).model_copy(
+            update={
+                "coding_run_id": request["coding_run_id"],
+                "agent_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            }
+        )
         budgets = CodingBudgets.model_validate_json(
             json.dumps(_CONTRACT["run_request"]["budgets"])
         )
         values.update(run_manifest=manifest, budgets=budgets)
     return model.model_construct(**values)
+
+
+def _harness(lease: CodingAuthoringLeaseResponse) -> CodingHarnessLaunchResponse:
+    return CodingHarnessLaunchResponse.model_validate(
+        {
+            **_SUPERVISOR["requests"]["author"]["harness"],
+            "agent_id": lease.run_manifest.agent_id,
+            "ticket_id": str(lease.ticket_id),
+            "ticket_deadline": lease.ticket_deadline,
+            "agent_artifact_sha256": lease.run_manifest.agent_artifact_sha256,
+        }
+    )
 
 
 class _Platform:
@@ -120,6 +138,8 @@ class _Platform:
             generation=1,
             bearer="synthetic-coding-bearer-0000000000000000",
             proxy_url="https://relay.invalid/api/v1/inference/coding/chat/completions",
+            revoke_bearer="synthetic-revoke-bearer-0000000000000000",
+            revoke_url="https://platform.invalid/api/v1/validator/coding-shadow/inference-revoke-capability",
             **common,
         )
         self.broker_public_key: str | None = None
@@ -214,7 +234,7 @@ async def test_runtime_author_grade_abort_and_recover() -> None:
         runtime = CodingSupervisorRuntime(_config(), client, platform)
         runtime_port: CodingAttemptRuntime = runtime
         assert runtime_port is runtime
-        authoring = await runtime.author(authoring_lease)
+        authoring = await runtime.author(authoring_lease, _harness(authoring_lease))
         assert authoring.capabilities_revoked is True
         assert authoring.authoring_environment_destroyed is True
 
@@ -264,7 +284,7 @@ async def test_runtime_rejects_redirect_error_oversize_and_identity_drift() -> N
                 _config(), client, _Platform(authoring_lease)
             )
             with pytest.raises(Exception) as captured:
-                await runtime.author(authoring_lease)
+                await runtime.author(authoring_lease, _harness(authoring_lease))
             return captured.value
 
     assert isinstance(
@@ -302,14 +322,32 @@ async def test_authoring_rejects_grant_drift_and_requires_terminal_revocation() 
         drifted.exchange = drifted.exchange.model_copy(update={"case_id": "case-other"})
         runtime = CodingSupervisorRuntime(_config(), client, drifted)
         with pytest.raises(CodingAttemptIntegrityError):
-            await runtime.author(lease)
+            await runtime.author(lease, _harness(lease))
         assert observed == ["prepare"]
         assert drifted.revoked == [(drifted.exchange.grant_id, 1)]
 
         failing = _FailingRevocationPlatform(lease)
         runtime = CodingSupervisorRuntime(_config(), client, failing)
         with pytest.raises(ValidatorInfrastructureError):
-            await runtime.author(lease)
+            await runtime.author(lease, _harness(lease))
+
+
+async def test_authoring_rejects_harness_drift_before_prepare() -> None:
+    lease = _lease(CodingAuthoringLeaseResponse)
+    observed: list[httpx.Request] = []
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return _dynamic_response(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        runtime = CodingSupervisorRuntime(_config(), client, _Platform(lease))
+        harness = _harness(lease).model_copy(
+            update={"agent_artifact_sha256": "ff" * 32}
+        )
+        with pytest.raises(CodingAttemptIntegrityError, match="harness authority"):
+            await runtime.author(lease, harness)
+    assert observed == []
 
 
 @pytest.mark.asyncio
@@ -327,7 +365,7 @@ async def test_authoring_cancellation_still_revokes_active_grant() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         runtime = CodingSupervisorRuntime(_config(), client, platform)
-        task = asyncio.create_task(runtime.author(lease))
+        task = asyncio.create_task(runtime.author(lease, _harness(lease)))
         await entered.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):

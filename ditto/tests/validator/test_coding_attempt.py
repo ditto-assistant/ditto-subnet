@@ -21,6 +21,7 @@ from ditto.api_models.coding import (
     coding_authoring_evidence_digest,
     validate_run_evidence_against_manifest,
 )
+from ditto.api_models.coding_harness import CodingHarnessLaunchResponse
 from ditto.validator.coding_attempt import (
     CodingAttemptCoordinator,
     CodingAttemptExpiredError,
@@ -166,6 +167,28 @@ def _ticket() -> CodingAttemptTicket:
     )
 
 
+def _harness_launch() -> CodingHarnessLaunchResponse:
+    ticket = _ticket()
+    return CodingHarnessLaunchResponse(
+        schema="dittobench-coding-harness-launch-v1",
+        coding_contract_version=1,
+        weight_eligible=False,
+        agent_id=ticket.agent_id,
+        run_row_id=ticket.run_row_id,
+        ticket_id=ticket.ticket_id,
+        ticket_deadline=ticket.ticket_deadline,
+        bench_version=ticket.bench_version,
+        agent_artifact_sha256=ticket.agent_artifact_sha256,
+        screened_image_sha256=ticket.screened_image_sha256,
+        screened_image_size_bytes=1024,
+        screened_image_id="sha256:" + "77" * 32,
+        screened_image_ref="ditto-screened/test:latest",
+        screening_policy_version=9,
+        image_url="https://storage.invalid/screened.tar?signature=test",
+        expires_at=datetime(2026, 8, 21, 12, 5, tzinfo=UTC),
+    )
+
+
 class _Platform:
     def __init__(self, events: list[str]) -> None:
         self.events = events
@@ -174,6 +197,7 @@ class _Platform:
         self.freeze_response = _freeze_response(_ticket(), self.authoring_outcome)
         self.grading_lease = _grading_lease(self.authoring_outcome)
         self.result_response = _result_response()
+        self.harness_launch = _harness_launch()
 
     async def request_coding_authoring_lease(
         self,
@@ -182,6 +206,14 @@ class _Platform:
         assert ticket_id == _ticket().ticket_id
         self.events.append("request_authoring")
         return self.authoring_lease
+
+    async def request_coding_harness_launch(
+        self,
+        ticket_id: UUID,
+    ) -> CodingHarnessLaunchResponse:
+        assert ticket_id == _ticket().ticket_id
+        self.events.append("request_harness")
+        return self.harness_launch
 
     async def submit_coding_authoring_freeze(
         self,
@@ -231,8 +263,10 @@ class _Runtime:
     async def author(
         self,
         lease: CodingAuthoringLeaseResponse,
+        harness: CodingHarnessLaunchResponse,
     ) -> CodingAuthoringOutcome:
         assert lease == self.platform.authoring_lease
+        assert harness == self.platform.harness_launch
         self.events.append("author")
         return self.platform.authoring_outcome
 
@@ -270,11 +304,12 @@ class _FailingRuntime(_Runtime):
     async def author(
         self,
         lease: CodingAuthoringLeaseResponse,
+        harness: CodingHarnessLaunchResponse,
     ) -> CodingAuthoringOutcome:
         if self.failure_phase == "authoring":
             self.events.append("author")
             raise RuntimeError("synthetic authoring failure")
-        return await super().author(lease)
+        return await super().author(lease, harness)
 
     async def grade(
         self,
@@ -309,6 +344,7 @@ async def test_coordinator_enforces_freeze_before_grader_and_result() -> None:
     assert accepted == platform.result_response
     assert events == [
         "request_authoring",
+        "request_harness",
         "author",
         "submit_freeze",
         "request_grading",
@@ -336,7 +372,7 @@ async def test_ticket_expiring_after_authoring_still_freezes_before_stopping() -
     coordinator, _platform, events = _coordinator(clock=lambda: next(times))
     with pytest.raises(CodingAttemptExpiredError, match="grading"):
         await coordinator.execute(_ticket())
-    assert events == ["request_authoring", "author", "submit_freeze"]
+    assert events == ["request_authoring", "request_harness", "author", "submit_freeze"]
 
 
 async def test_authoring_lease_identity_drift_reaches_no_runtime() -> None:
@@ -352,6 +388,18 @@ async def test_authoring_lease_identity_drift_reaches_no_runtime() -> None:
     with pytest.raises(CodingAttemptIntegrityError, match="authoring lease"):
         await coordinator.execute(_ticket())
     assert events == ["request_authoring"]
+
+
+async def test_harness_launch_identity_drift_reaches_no_runtime() -> None:
+    coordinator, platform, events = _coordinator(
+        clock=lambda: datetime(2026, 8, 21, 12, tzinfo=UTC)
+    )
+    platform.harness_launch = platform.harness_launch.model_copy(
+        update={"screened_image_sha256": "ff" * 32}
+    )
+    with pytest.raises(CodingAttemptIntegrityError, match="harness launch"):
+        await coordinator.execute(_ticket())
+    assert events == ["request_authoring", "request_harness"]
 
 
 @pytest.mark.parametrize("drift", ["freeze", "patch"])
@@ -372,6 +420,7 @@ async def test_grading_lease_drift_reaches_no_grader(drift: str) -> None:
         await coordinator.execute(_ticket())
     assert events == [
         "request_authoring",
+        "request_harness",
         "author",
         "submit_freeze",
         "request_grading",
@@ -381,11 +430,15 @@ async def test_grading_lease_drift_reaches_no_grader(drift: str) -> None:
 @pytest.mark.parametrize(
     ("phase", "expected"),
     [
-        ("authoring", ["request_authoring", "author", "abort_authoring"]),
+        (
+            "authoring",
+            ["request_authoring", "request_harness", "author", "abort_authoring"],
+        ),
         (
             "grading",
             [
                 "request_authoring",
+                "request_harness",
                 "author",
                 "submit_freeze",
                 "request_grading",

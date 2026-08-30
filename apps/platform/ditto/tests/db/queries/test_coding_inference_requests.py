@@ -80,6 +80,7 @@ def _grant(
         reasoning_effort=policy.reasoning_effort,
         status="active",
         bearer_digest=coding_inference_bearer_digest(_BEARER),
+        revoke_bearer_digest="dd" * 32,
         broker_public_key="A" * 43,
         generation=settlement.generation,
         request_budget=166,

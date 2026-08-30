@@ -4906,6 +4906,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/coding-shadow/harness-launch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Coding Harness Launch
+         * @description Return one short-lived screened image capability for an open ticket.
+         */
+        post: operations["request_coding_harness_launch_api_v1_validator_coding_shadow_harness_launch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/coding-shadow/inference-exchange": {
         parameters: {
             query?: never;
@@ -4960,6 +4980,26 @@ export interface paths {
          * @description Durably revoke exactly the validator's observed grant generation.
          */
         post: operations["revoke_coding_inference_grant_endpoint_api_v1_validator_coding_shadow_inference_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/coding-shadow/inference-revoke-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Coding Inference Grant Capability Endpoint
+         * @description Revoke one active generation through its revocation-only bearer.
+         */
+        post: operations["revoke_coding_inference_grant_capability_endpoint_api_v1_validator_coding_shadow_inference_revoke_capability_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11052,6 +11092,105 @@ export interface components {
              */
             weight_eligible: false;
         };
+        /** CodingHarnessLaunchRequest */
+        CodingHarnessLaunchRequest: {
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** CodingHarnessLaunchResponse */
+        CodingHarnessLaunchResponse: {
+            /** Agent Artifact Sha256 */
+            agent_artifact_sha256: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Image Url */
+            image_url: string;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-harness-launch-v1";
+            /** Screened Image Id */
+            screened_image_id: string;
+            /** Screened Image Ref */
+            screened_image_ref: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Screened Image Size Bytes */
+            screened_image_size_bytes: number;
+            /** Screening Policy Version */
+            screening_policy_version: number;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * CodingInferenceCapabilityRevokeRequest
+         * @description One revocation-only bearer request owned by the trusted Go gateway.
+         */
+        CodingInferenceCapabilityRevokeRequest: {
+            /** Generation */
+            generation: number;
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+        };
         /**
          * CodingInferenceExchangeRequest
          * @description Rotate one live grant onto a validator-authorized broker key.
@@ -11152,6 +11291,10 @@ export interface components {
             receipt_provider: string;
             /** Request Budget */
             request_budget: number;
+            /** Revoke Bearer */
+            revoke_bearer: string;
+            /** Revoke Url */
+            revoke_url: string;
             /**
              * Run Row Id
              * Format: uuid
@@ -32753,6 +32896,60 @@ export interface operations {
             };
         };
     };
+    request_coding_harness_launch_api_v1_validator_coding_shadow_harness_launch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingHarnessLaunchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingHarnessLaunchResponse"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Coding screened harness unavailable. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Replay, expiry, or immutable authority conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     exchange_coding_inference_grant_api_v1_validator_coding_shadow_inference_exchange_post: {
         parameters: {
             query?: never;
@@ -32919,6 +33116,69 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    revoke_coding_inference_grant_capability_endpoint_api_v1_validator_coding_shadow_inference_revoke_capability_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingInferenceCapabilityRevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingInferenceRevokeResponse"];
+                };
+            };
+            /** @description Revocation capability is missing or invalid. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Coding inference grant unavailable. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Grant generation or state conflicts. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Coding inference transport unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

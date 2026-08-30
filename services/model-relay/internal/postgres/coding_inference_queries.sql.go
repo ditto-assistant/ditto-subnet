@@ -145,7 +145,7 @@ func (q *Queries) GetCodingDatabaseNow(ctx context.Context) (pgtype.Timestamptz,
 
 const getCodingInferenceGrant = `-- name: GetCodingInferenceGrant :one
 
-SELECT grant_id, ticket_id, run_row_id, task_count, validator_hotkey, case_id, profile_capability_id, inference_grant_sha256, model, provider_api, provider_route, receipt_provider, provider_route_profile, provider_account_guardrail, provider_pipeline_policy, provider_cache_policy, reasoning_effort, status, bearer_digest, broker_public_key, generation, request_budget, prompt_token_budget, completion_token_budget, cost_budget_usd_micros, request_count, prompt_tokens, completion_tokens, cost_usd_micros, active_requests, expires_at, revoked_at, weight_eligible, created_at, updated_at FROM coding_inference_grants
+SELECT grant_id, ticket_id, run_row_id, task_count, validator_hotkey, case_id, profile_capability_id, inference_grant_sha256, model, provider_api, provider_route, receipt_provider, provider_route_profile, provider_account_guardrail, provider_pipeline_policy, provider_cache_policy, reasoning_effort, status, bearer_digest, broker_public_key, generation, request_budget, prompt_token_budget, completion_token_budget, cost_budget_usd_micros, request_count, prompt_tokens, completion_tokens, cost_usd_micros, active_requests, expires_at, revoked_at, weight_eligible, created_at, updated_at, revoke_bearer_digest FROM coding_inference_grants
 WHERE grant_id = $1::uuid
 `
 
@@ -194,12 +194,13 @@ func (q *Queries) GetCodingInferenceGrant(ctx context.Context, grantID pgtype.UU
 		&i.WeightEligible,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RevokeBearerDigest,
 	)
 	return i, err
 }
 
 const getCodingInferenceGrantForUpdate = `-- name: GetCodingInferenceGrantForUpdate :one
-SELECT grant_id, ticket_id, run_row_id, task_count, validator_hotkey, case_id, profile_capability_id, inference_grant_sha256, model, provider_api, provider_route, receipt_provider, provider_route_profile, provider_account_guardrail, provider_pipeline_policy, provider_cache_policy, reasoning_effort, status, bearer_digest, broker_public_key, generation, request_budget, prompt_token_budget, completion_token_budget, cost_budget_usd_micros, request_count, prompt_tokens, completion_tokens, cost_usd_micros, active_requests, expires_at, revoked_at, weight_eligible, created_at, updated_at FROM coding_inference_grants
+SELECT grant_id, ticket_id, run_row_id, task_count, validator_hotkey, case_id, profile_capability_id, inference_grant_sha256, model, provider_api, provider_route, receipt_provider, provider_route_profile, provider_account_guardrail, provider_pipeline_policy, provider_cache_policy, reasoning_effort, status, bearer_digest, broker_public_key, generation, request_budget, prompt_token_budget, completion_token_budget, cost_budget_usd_micros, request_count, prompt_tokens, completion_tokens, cost_usd_micros, active_requests, expires_at, revoked_at, weight_eligible, created_at, updated_at, revoke_bearer_digest FROM coding_inference_grants
 WHERE grant_id = $1::uuid
 FOR UPDATE
 `
@@ -243,6 +244,7 @@ func (q *Queries) GetCodingInferenceGrantForUpdate(ctx context.Context, grantID 
 		&i.WeightEligible,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RevokeBearerDigest,
 	)
 	return i, err
 }

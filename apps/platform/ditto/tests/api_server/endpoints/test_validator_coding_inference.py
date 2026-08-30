@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.coding_inference import CodingInferencePolicy, policy_digest
 from ditto.api_models.coding_inference_grants import (
+    CodingInferenceCapabilityRevokeRequest,
     CodingInferenceExchangeRequest,
     CodingInferenceGrantRequest,
     CodingInferenceRevokeRequest,
@@ -39,6 +40,7 @@ from ditto.coding_selection import (
     CodingSelectionCatalogUnavailableError,
 )
 from ditto.db.queries.coding_inference_grants import (
+    CodingInferenceGrantActivation,
     CodingInferenceGrantResult,
     CodingInferenceGrantRevocation,
 )
@@ -144,6 +146,7 @@ def _install(
         policy=policy,
         exchange_url=("https://test/api/v1/validator/coding-shadow/inference-exchange"),
         proxy_url="https://relay.invalid/api/v1/inference/coding/chat/completions",
+        revoke_url="https://test/api/v1/validator/coding-shadow/inference-revoke-capability",
     )
     mocks = SimpleNamespace(
         consume_nonce=AsyncMock(return_value=None),
@@ -157,6 +160,7 @@ def _install(
         ),
         activate=AsyncMock(),
         revoke=AsyncMock(),
+        capability_revoke=AsyncMock(),
         lease=lease,
         grant=grant,
         policy=policy,
@@ -180,6 +184,11 @@ def _install(
         endpoint_module, "activate_coding_inference_grant", mocks.activate
     )
     monkeypatch.setattr(endpoint_module, "revoke_coding_inference_grant", mocks.revoke)
+    monkeypatch.setattr(
+        endpoint_module,
+        "revoke_coding_inference_grant_by_capability",
+        mocks.capability_revoke,
+    )
     return mocks
 
 
@@ -224,7 +233,11 @@ async def test_signed_offer_exchange_and_revoke_are_no_store_and_shadow_only(
 
     mocks.grant.status = "active"
     mocks.grant.generation = 1
-    mocks.activate.return_value = (mocks.grant, "b" * 43)
+    mocks.activate.return_value = CodingInferenceGrantActivation(
+        grant=mocks.grant,
+        bearer="b" * 43,
+        revoke_bearer="r" * 43,
+    )
     exchange_nonce = uuid4()
     exchange_at = datetime.now(UTC)
     broker = "A" * 43
@@ -251,6 +264,7 @@ async def test_signed_offer_exchange_and_revoke_are_no_store_and_shadow_only(
     assert exchanged.status_code == 200, exchanged.text
     assert exchanged.headers["Cache-Control"] == "no-store"
     assert exchanged.json()["bearer"] == "b" * 43
+    assert exchanged.json()["revoke_bearer"] == "r" * 43
     assert (
         "api_key" not in exchanged.text and "provider_credential" not in exchanged.text
     )
@@ -286,6 +300,30 @@ async def test_signed_offer_exchange_and_revoke_are_no_store_and_shadow_only(
     assert revoked.headers["Cache-Control"] == "no-store"
     assert revoked.json()["status"] == "revoked"
 
+    mocks.capability_revoke.return_value = CodingInferenceGrantRevocation(
+        grant=mocks.grant,
+        idempotent=True,
+    )
+    capability = CodingInferenceCapabilityRevokeRequest(
+        grant_id=_GRANT_ID,
+        ticket_id=mocks.lease.ticket_id,
+        generation=1,
+    )
+    capability_revoked = await client.post(
+        "/api/v1/validator/coding-shadow/inference-revoke-capability",
+        headers={"Authorization": "Bearer " + "r" * 43},
+        json=capability.model_dump(mode="json"),
+    )
+    assert capability_revoked.status_code == 200, capability_revoked.text
+    assert capability_revoked.json()["idempotent"] is True
+    assert mocks.capability_revoke.await_count == 1
+    assert mocks.capability_revoke.await_args.kwargs == {
+        "grant_id": _GRANT_ID,
+        "ticket_id": mocks.lease.ticket_id,
+        "generation": 1,
+        "revoke_bearer": "r" * 43,
+    }
+
 
 async def test_coding_inference_endpoints_reject_disabled_forged_and_replayed(
     app: FastAPI,
@@ -305,6 +343,7 @@ async def test_coding_inference_endpoints_reject_disabled_forged_and_replayed(
         policy=mocks.policy,
         exchange_url=("https://test/api/v1/validator/coding-shadow/inference-exchange"),
         proxy_url="https://relay.invalid/api/v1/inference/coding/chat/completions",
+        revoke_url="https://test/api/v1/validator/coding-shadow/inference-revoke-capability",
     )
     forged = _grant_payload(mocks.lease)
     forged["signature"] = "00" * 64

@@ -31,10 +31,12 @@ from ditto.db.queries import coding_inference_grants
 from ditto.db.queries.coding_inference_grants import (
     CodingInferenceGrantConflictError,
     CodingInferenceGrantIntegrityError,
+    CodingInferenceGrantNotAvailableError,
     activate_coding_inference_grant,
     coding_inference_bearer_digest,
     ensure_coding_inference_grant,
     revoke_coding_inference_grant,
+    revoke_coding_inference_grant_by_capability,
     revoke_ticket_coding_inference,
 )
 from ditto.db.queries.coding_task_leases import CodingShadowTaskLeaseCore
@@ -203,7 +205,11 @@ async def test_grant_creation_and_replay_bind_exact_task_policy_and_budgets(
     assert grant.prompt_token_budget == fixture.lease.budgets.model_input_tokens
     assert grant.completion_token_budget == fixture.lease.budgets.model_output_tokens
     assert grant.status == "pending" and grant.generation == 0
-    assert grant.bearer_digest is None and grant.broker_public_key is None
+    assert (
+        grant.bearer_digest is None
+        and grant.revoke_bearer_digest is None
+        and grant.broker_public_key is None
+    )
     assert grant.weight_eligible is False
 
     replay_session = _Session(
@@ -229,15 +235,19 @@ async def test_exchange_rotates_bearer_digest_and_revocation_is_exact(
         scalars=[grant, _NOW, None, None],
         grant=grant,
     )
-    active, bearer = await activate_coding_inference_grant(
+    activated = await activate_coding_inference_grant(
         activation,  # type: ignore[arg-type]
         grant_id=grant.grant_id,
         validator_hotkey=_VALIDATOR,
         broker_public_key="A" * 43 + "=",
         policy=fixture.policy,
     )
+    active, bearer = activated.grant, activated.bearer
     assert active.status == "active" and active.generation == 1
     assert active.bearer_digest == coding_inference_bearer_digest(bearer)
+    assert active.revoke_bearer_digest == coding_inference_bearer_digest(
+        activated.revoke_bearer
+    )
     assert bearer not in active.bearer_digest
     assert active.broker_public_key == "A" * 43
 
@@ -255,6 +265,9 @@ async def test_exchange_rotates_bearer_digest_and_revocation_is_exact(
     assert revoked.idempotent is False
     assert active.status == "revoked"
     assert active.bearer_digest is None and active.broker_public_key is None
+    assert active.revoke_bearer_digest == coding_inference_bearer_digest(
+        activated.revoke_bearer
+    )
     assert active.revoked_at == _NOW
 
     replay_session = _Session(
@@ -276,6 +289,58 @@ async def test_exchange_rotates_bearer_digest_and_revocation_is_exact(
             validator_hotkey=_VALIDATOR,
             generation=0,
         )
+
+
+async def test_revocation_capability_is_exact_and_idempotent(monkeypatch) -> None:
+    fixture, grant = await _create(monkeypatch)
+    activated = await activate_coding_inference_grant(
+        _Session(
+            fixture,
+            scalars=[grant, _NOW, None, None],
+            grant=grant,
+        ),  # type: ignore[arg-type]
+        grant_id=grant.grant_id,
+        validator_hotkey=_VALIDATOR,
+        broker_public_key="A" * 43,
+        policy=fixture.policy,
+    )
+    wrong_session = _Session(fixture, scalars=[grant, _NOW], grant=grant)
+    with pytest.raises(CodingInferenceGrantNotAvailableError):
+        await revoke_coding_inference_grant_by_capability(
+            wrong_session,  # type: ignore[arg-type]
+            grant_id=grant.grant_id,
+            ticket_id=grant.ticket_id,
+            generation=grant.generation,
+            revoke_bearer="wrong-revoke-bearer-000000000000000000",
+        )
+    assert wrong_session.values == [grant, _NOW]
+    assert grant.status == "active"
+    grant.active_requests = 1
+    with pytest.raises(CodingInferenceGrantConflictError):
+        await revoke_coding_inference_grant_by_capability(
+            _Session(fixture, scalars=[grant, _NOW], grant=grant),  # type: ignore[arg-type]
+            grant_id=grant.grant_id,
+            ticket_id=grant.ticket_id,
+            generation=grant.generation,
+            revoke_bearer=activated.revoke_bearer,
+        )
+    grant.active_requests = 0
+    revoked = await revoke_coding_inference_grant_by_capability(
+        _Session(fixture, scalars=[grant, _NOW], grant=grant),  # type: ignore[arg-type]
+        grant_id=grant.grant_id,
+        ticket_id=grant.ticket_id,
+        generation=grant.generation,
+        revoke_bearer=activated.revoke_bearer,
+    )
+    assert revoked.idempotent is False and grant.status == "revoked"
+    replay = await revoke_coding_inference_grant_by_capability(
+        _Session(fixture, scalars=[grant, _NOW], grant=grant),  # type: ignore[arg-type]
+        grant_id=grant.grant_id,
+        ticket_id=grant.ticket_id,
+        generation=grant.generation,
+        revoke_bearer=activated.revoke_bearer,
+    )
+    assert replay.idempotent is True
 
 
 async def test_existing_authority_drift_is_revoked_and_fails_closed(

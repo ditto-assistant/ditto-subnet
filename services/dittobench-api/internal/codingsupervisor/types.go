@@ -56,6 +56,7 @@ type Request struct {
 	Lease       json.RawMessage `json:"lease"`
 	Authoring   json.RawMessage `json:"authoring"`
 	Grant       json.RawMessage `json:"grant"`
+	Harness     json.RawMessage `json:"harness"`
 }
 
 type PreparationOutcome struct {

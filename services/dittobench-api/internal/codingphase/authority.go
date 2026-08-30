@@ -110,6 +110,27 @@ type grantWire struct {
 	Generation               uint32    `json:"generation"`
 	Bearer                   string    `json:"bearer"`
 	ProxyURL                 string    `json:"proxy_url"`
+	RevokeBearer             string    `json:"revoke_bearer"`
+	RevokeURL                string    `json:"revoke_url"`
+}
+
+type harnessWire struct {
+	Schema                 string    `json:"schema"`
+	CodingContractVersion  int       `json:"coding_contract_version"`
+	WeightEligible         bool      `json:"weight_eligible"`
+	AgentID                string    `json:"agent_id"`
+	RunRowID               string    `json:"run_row_id"`
+	TicketID               string    `json:"ticket_id"`
+	TicketDeadline         time.Time `json:"ticket_deadline"`
+	BenchVersion           int       `json:"bench_version"`
+	AgentArtifactSHA256    string    `json:"agent_artifact_sha256"`
+	ScreenedImageSHA256    string    `json:"screened_image_sha256"`
+	ScreenedImageSizeBytes int64     `json:"screened_image_size_bytes"`
+	ScreenedImageID        string    `json:"screened_image_id"`
+	ScreenedImageRef       string    `json:"screened_image_ref"`
+	ScreeningPolicyVersion int       `json:"screening_policy_version"`
+	ImageURL               string    `json:"image_url"`
+	ExpiresAt              time.Time `json:"expires_at"`
 }
 
 type authoringAuthority struct {
@@ -121,6 +142,8 @@ type authoringAuthority struct {
 	visible        codingartifacts.Capability
 	memory         codingartifacts.Capability
 	resource       codingartifacts.Capability
+	harness        harnessWire
+	harnessSHA256  string
 }
 
 type gradingAuthority struct {
@@ -135,6 +158,11 @@ type gradingAuthority struct {
 	resource     codingartifacts.Capability
 	grader       codingartifacts.Capability
 	spec         codingattempt.GradingSpec
+}
+
+type parsedGrant struct {
+	capability codingplatform.GrantCapability
+	revocation codingplatform.RevocationCapability
 }
 
 func parseAuthoringAuthority(
@@ -201,10 +229,53 @@ func parseAuthoringAuthority(
 		capabilities[1].SHA256 != task.MemoryBundleSHA256 || capabilities[2].SHA256 != task.ResourceProfileSHA256 {
 		return zero, fmt.Errorf("%w: authoring artifact capabilities", ErrInvalid)
 	}
+	harness, harnessSHA256, err := parseHarnessAuthority(request.Harness, request, manifest, now)
+	if err != nil {
+		return zero, err
+	}
 	return authoringAuthority{
 		lease: lease, manifest: manifest, task: task, runnerPlan: plan, runnerManifest: runnerManifest,
 		visible: capabilities[0], memory: capabilities[1], resource: capabilities[2],
+		harness: harness, harnessSHA256: harnessSHA256,
 	}, nil
+}
+
+func parseHarnessAuthority(
+	body json.RawMessage,
+	request codingsupervisor.Request,
+	manifest codingcontract.RunManifest,
+	now time.Time,
+) (harnessWire, string, error) {
+	var harness harnessWire
+	if err := parseRequiredObject(body, &harness, []string{
+		"schema", "coding_contract_version", "weight_eligible", "agent_id", "run_row_id",
+		"ticket_id", "ticket_deadline", "bench_version", "agent_artifact_sha256",
+		"screened_image_sha256", "screened_image_size_bytes", "screened_image_id",
+		"screened_image_ref", "screening_policy_version", "image_url", "expires_at",
+	}); err != nil {
+		return harnessWire{}, "", fmt.Errorf("%w: harness launch", ErrInvalid)
+	}
+	if harness.Schema != "dittobench-coding-harness-launch-v1" ||
+		harness.CodingContractVersion != codingcontract.ContractVersion || harness.WeightEligible ||
+		!canonicalUUID(harness.AgentID) || !canonicalUUID(harness.RunRowID) ||
+		harness.AgentID != manifest.AgentID || harness.TicketID != request.TicketID ||
+		!harness.TicketDeadline.Equal(request.Deadline) || harness.BenchVersion < 7 ||
+		harness.BenchVersion > 1_000_000 || harness.AgentArtifactSHA256 != manifest.AgentArtifactSHA256 ||
+		!lowerSHA256(harness.ScreenedImageSHA256) || harness.ScreenedImageSizeBytes <= 0 ||
+		harness.ScreenedImageSizeBytes > 8<<30 ||
+		!strings.HasPrefix(harness.ScreenedImageID, "sha256:") ||
+		!lowerSHA256(strings.TrimPrefix(harness.ScreenedImageID, "sha256:")) ||
+		!validIdentifier(harness.ScreenedImageRef, 512) || harness.ScreeningPolicyVersion < 9 ||
+		harness.ScreeningPolicyVersion > 1_000_000 || !validImageURL(harness.ImageURL) ||
+		!harness.ExpiresAt.After(now) || harness.ExpiresAt.After(request.Deadline) {
+		return harnessWire{}, "", fmt.Errorf("%w: harness launch authority", ErrInvalid)
+	}
+	encoded, err := json.Marshal(harness)
+	if err != nil {
+		return harnessWire{}, "", fmt.Errorf("%w: harness launch digest", ErrInvalid)
+	}
+	digest := sha256.Sum256(encoded)
+	return harness, hex.EncodeToString(digest[:]), nil
 }
 
 func parseGradingAuthority(
@@ -320,8 +391,8 @@ func parseGrant(
 	brokerPublicKey string,
 	brokerPrivateKey []byte,
 	now time.Time,
-) (codingplatform.GrantCapability, error) {
-	var zero codingplatform.GrantCapability
+) (parsedGrant, error) {
+	var zero parsedGrant
 	var grant grantWire
 	if err := parseRequiredObject(body, &grant, []string{
 		"schema", "coding_contract_version", "weight_eligible", "status", "grant_id", "ticket_id",
@@ -330,6 +401,7 @@ func parseGrant(
 		"provider_account_guardrail", "provider_pipeline_policy", "provider_cache_policy",
 		"reasoning_effort", "request_budget", "prompt_token_budget", "completion_token_budget",
 		"cost_budget_usd_micros", "expires_at", "generation", "bearer", "proxy_url",
+		"revoke_bearer", "revoke_url",
 	}); err != nil {
 		return zero, fmt.Errorf("%w: inference grant", ErrInvalid)
 	}
@@ -338,6 +410,7 @@ func parseGrant(
 	if err != nil || grant.Schema != "dittobench-coding-inference-exchange-v1" ||
 		grant.CodingContractVersion != codingcontract.ContractVersion || grant.WeightEligible || grant.Status != "active" ||
 		!canonicalUUID(grant.GrantID) || !canonicalUUID(grant.RunRowID) ||
+		grant.RunRowID != authority.harness.RunRowID ||
 		grant.TicketID != request.TicketID || grant.CaseID != authority.task.CaseID ||
 		grant.ProfileCapabilityID != authority.task.ProfileCapabilityID || grant.InferenceGrantSHA256 != policySHA ||
 		grant.InferenceGrantSHA256 != authority.manifest.InferenceGrantSHA256 || grant.Model != policy.Model ||
@@ -355,7 +428,8 @@ func parseGrant(
 		!grant.ExpiresAt.After(now) || grant.ExpiresAt.After(request.Deadline) ||
 		!validIdentifier(harnessInstanceID, 256) || !validIdentifier(attemptID, 256) ||
 		!validBearer(grant.Bearer) || !validBrokerPair(brokerPublicKey, brokerPrivateKey) ||
-		!validProxyURL(grant.ProxyURL) {
+		!validProxyURL(grant.ProxyURL) || !validBearer(grant.RevokeBearer) || grant.RevokeBearer == grant.Bearer ||
+		!validRevokeURL(grant.RevokeURL) {
 		return zero, fmt.Errorf("%w: inference grant authority", ErrInvalid)
 	}
 	binding := codingrelay.Binding{
@@ -367,9 +441,16 @@ func parseGrant(
 		RequestBudget: grant.RequestBudget, PromptTokenBudget: grant.PromptTokenBudget,
 		CompletionTokenBudget: grant.CompletionTokenBudget, CostBudgetUSDMicros: grant.CostBudgetUSDMicros,
 	}
-	return codingplatform.GrantCapability{
-		Binding: binding, Bearer: grant.Bearer, BrokerPublicKey: brokerPublicKey,
-		BrokerPrivateKey: ed25519.PrivateKey(append([]byte(nil), brokerPrivateKey...)), ProxyURL: grant.ProxyURL,
+	return parsedGrant{
+		capability: codingplatform.GrantCapability{
+			Binding: binding, Bearer: grant.Bearer, BrokerPublicKey: brokerPublicKey,
+			BrokerPrivateKey: ed25519.PrivateKey(append([]byte(nil), brokerPrivateKey...)), ProxyURL: grant.ProxyURL,
+		},
+		revocation: codingplatform.RevocationCapability{
+			GrantID: grant.GrantID, TicketID: grant.TicketID, Generation: grant.Generation,
+			InferenceGrantSHA256: grant.InferenceGrantSHA256, Deadline: grant.ExpiresAt,
+			Bearer: grant.RevokeBearer, URL: grant.RevokeURL,
+		},
 	}, nil
 }
 
@@ -489,10 +570,45 @@ func validBrokerPair(public string, private []byte) bool {
 }
 
 func validProxyURL(value string) bool {
+	if len(value) == 0 || len(value) > 2_048 {
+		return false
+	}
 	parsed, err := url.ParseRequestURI(value)
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil ||
 		parsed.RawQuery != "" || parsed.Fragment != "" ||
 		parsed.Path != "/api/v1/inference/coding/chat/completions" ||
+		(parsed.Port() != "" && parsed.Port() != "443") {
+		return false
+	}
+	return true
+}
+
+func validRevokeURL(value string) bool {
+	if len(value) == 0 || len(value) > 2_048 {
+		return false
+	}
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.Fragment != "" ||
+		!strings.HasSuffix(parsed.Path, "/api/v1/validator/coding-shadow/inference-revoke-capability") ||
+		(parsed.Port() != "" && parsed.Port() != "443") {
+		return false
+	}
+	return true
+}
+
+func validImageURL(value string) bool {
+	if len(value) == 0 || len(value) > 16<<10 {
+		return false
+	}
+	for _, character := range value {
+		if character < 32 || character > 126 {
+			return false
+		}
+	}
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil ||
+		parsed.RawQuery == "" || parsed.Fragment != "" ||
 		(parsed.Port() != "" && parsed.Port() != "443") {
 		return false
 	}

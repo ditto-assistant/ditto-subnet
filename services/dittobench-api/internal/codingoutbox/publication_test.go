@@ -33,6 +33,8 @@ func newPublicationFixture(t *testing.T, suffix string) publicationFixture {
 	binding := fixtureBinding(clock, suffix)
 	binding.Purpose = PurposeShadowAttempt
 	binding.ExecutionID = "shadow-attempt-" + suffix
+	binding.HarnessAuthoritySHA256 = strings.Repeat("e", 64)
+	binding.ScreenedImageSHA256 = strings.Repeat("d", 64)
 	limits := codingrunner.DefaultLimits()
 	attempt, err := store.Reserve(t.Context(), binding, limits)
 	if err != nil {
@@ -479,6 +481,8 @@ func TestTerminalWithoutPatchPublishesWithoutAuthoringFreeze(t *testing.T) {
 	binding := fixtureBinding(clock, "9")
 	binding.Purpose = PurposeShadowAttempt
 	binding.ExecutionID = "shadow-attempt-9"
+	binding.HarnessAuthoritySHA256 = strings.Repeat("e", 64)
+	binding.ScreenedImageSHA256 = strings.Repeat("d", 64)
 	limits := codingrunner.DefaultLimits()
 	attempt, err := store.Reserve(t.Context(), binding, limits)
 	if err != nil {
@@ -597,9 +601,11 @@ func TestPlatformPublicationVectorsMatchJournalBoundary(t *testing.T) {
 	authoringRecord := &Record{
 		Binding: Binding{
 			Purpose: PurposeShadowAttempt, TicketID: authoringRequest.TicketID,
-			AgentArtifactSHA256: authoringRequest.AgentArtifactSHA256,
-			AuthoritySHA256:     authoringRequest.RunManifestSHA256,
-			Deadline:            authoringRequest.TicketDeadline,
+			AgentArtifactSHA256:    authoringRequest.AgentArtifactSHA256,
+			AuthoritySHA256:        authoringRequest.RunManifestSHA256,
+			HarnessAuthoritySHA256: strings.Repeat("e", 64),
+			ScreenedImageSHA256:    authoringRequest.ScreenedImageSHA256,
+			Deadline:               authoringRequest.TicketDeadline,
 		},
 		State: StateReady,
 		Transcript: &TranscriptArtifact{
@@ -641,9 +647,11 @@ func TestPlatformPublicationVectorsMatchJournalBoundary(t *testing.T) {
 	}
 	terminalRecord := &Record{Binding: Binding{
 		Purpose: PurposeShadowAttempt, TicketID: terminalRequest.TicketID,
-		AgentArtifactSHA256: terminalRequest.AgentArtifactSHA256,
-		AuthoritySHA256:     terminalRequest.Evidence.RunManifestSHA256,
-		Deadline:            terminalRequest.TicketDeadline,
+		AgentArtifactSHA256:    terminalRequest.AgentArtifactSHA256,
+		AuthoritySHA256:        terminalRequest.Evidence.RunManifestSHA256,
+		HarnessAuthoritySHA256: strings.Repeat("e", 64),
+		ScreenedImageSHA256:    terminalRequest.ScreenedImageSHA256,
+		Deadline:               terminalRequest.TicketDeadline,
 	}, State: StateTerminalWithoutPatch}
 	terminalAuthority := PublicationAuthority{
 		AgentID: terminal.AgentID, BenchVersion: terminalRequest.BenchVersion,

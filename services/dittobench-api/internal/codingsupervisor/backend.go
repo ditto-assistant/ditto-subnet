@@ -342,6 +342,7 @@ func (backend *SessionBackend) runAuthor(ctx context.Context, input AuthoringInp
 		zero(input.Request.Lease)
 		zero(input.Request.Authoring)
 		zero(input.Request.Grant)
+		zero(input.Request.Harness)
 	}()
 	return backend.runner.Author(ctx, input)
 }
@@ -626,6 +627,7 @@ func zeroRequest(request *Request) {
 	zero(request.Lease)
 	zero(request.Authoring)
 	zero(request.Grant)
+	zero(request.Harness)
 }
 
 func zeroAuthoringOutcome(outcome *AuthoringOutcome) {

@@ -35,6 +35,10 @@ from ditto.api_models.coding import (
     coding_authoring_evidence_digest,
     run_evidence_digest,
 )
+from ditto.api_models.coding_harness import (
+    CodingHarnessLaunchRequest,
+    CodingHarnessLaunchResponse,
+)
 from ditto.api_models.coding_inference_grants import (
     CodingInferenceExchangeRequest,
     CodingInferenceExchangeResponse,
@@ -80,6 +84,7 @@ from ditto.validator.signing import (
     sign_coding_authoring_freeze,
     sign_coding_authoring_lease,
     sign_coding_grading_lease,
+    sign_coding_harness_launch,
     sign_coding_inference_exchange,
     sign_coding_inference_grant,
     sign_coding_inference_revoke,
@@ -124,6 +129,7 @@ _CODING_AUTHORING_FREEZE_MAX_BYTES = 64 << 10
 _CODING_GRADING_LEASE_MAX_BYTES = 2 << 20
 _CODING_SHADOW_RESULT_MAX_BYTES = 64 << 10
 _CODING_INFERENCE_GRANT_MAX_BYTES = 64 << 10
+_CODING_HARNESS_LAUNCH_MAX_BYTES = 64 << 10
 
 
 def _coding_grant_authority(value: object) -> tuple[object, ...]:
@@ -338,6 +344,70 @@ class PlatformClient:
                 "coding authoring lease response identity is invalid"
             )
         return lease
+
+    async def request_coding_harness_launch(
+        self,
+        ticket_id: UUID,
+    ) -> CodingHarnessLaunchResponse:
+        """Fetch one ticket-bound screened-image launch capability."""
+
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingHarnessLaunchRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            ticket_id=ticket_id,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_harness_launch(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                ticket_id=ticket_id,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        body = bytearray()
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base}{_PREFIX}/coding-shadow/harness-launch",
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            ) as response:
+                if response.status_code == 503:
+                    raise PlatformInfrastructureError(
+                        "coding harness launch is temporarily unavailable"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        f"coding harness launch rejected ({response.status_code})"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=16 << 10):
+                    if len(body) + len(chunk) > _CODING_HARNESS_LAUNCH_MAX_BYTES:
+                        raise PlatformInfrastructureError(
+                            "coding harness launch response size is invalid"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding harness launch request failed"
+            ) from error
+        if not body:
+            raise PlatformInfrastructureError(
+                "coding harness launch response size is invalid"
+            )
+        try:
+            launch = CodingHarnessLaunchResponse.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding harness launch response is invalid"
+            ) from None
+        if launch.ticket_id != ticket_id:
+            raise PlatformInfrastructureError(
+                "coding harness launch response identity is invalid"
+            )
+        return launch
 
     async def request_coding_inference_grant(
         self,

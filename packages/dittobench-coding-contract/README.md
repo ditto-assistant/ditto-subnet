@@ -47,11 +47,12 @@ no repository, patch, transcript, memory, grader, or private task bytes.
 
 `coding_attempt_supervisor_v1.json` freezes the synthetic private control wire
 shared by the Go supervisor handler and Python runtime client. It covers broker
-preparation, an active synthetic grant handoff, authoring, grading, both abort
-operations, and restart recovery. Its lease and
+preparation, a revocation-capable synthetic grant handoff, ticket-bound
+screened-harness launch authority, authoring, grading, both abort operations,
+and restart recovery. Its lease and
 evidence objects are deliberately synthetic placeholders: the vector proves
 outer operation/identity/nullability compatibility and contains no artifact
-task, patch, transcript, provider credential, control token, broker private
+task, patch, transcript, provider credential, live control token, broker private
 key, or usable capability. All URLs use reserved `.invalid` hosts and all
 bearer/key material is visibly synthetic.
 

@@ -140,7 +140,7 @@ func newCodingPGFixture(t *testing.T, cfg *config.Config) *codingPGFixture {
 		  model, provider_api, provider_route, receipt_provider,
 		  provider_route_profile, provider_account_guardrail,
 		  provider_pipeline_policy, provider_cache_policy, reasoning_effort,
-		  status, bearer_digest, broker_public_key, generation,
+		  status, bearer_digest, revoke_bearer_digest, broker_public_key, generation,
 		  request_budget, prompt_token_budget, completion_token_budget,
 		  cost_budget_usd_micros, request_count, prompt_tokens,
 		  completion_tokens, cost_usd_micros, active_requests,
@@ -148,7 +148,7 @@ func newCodingPGFixture(t *testing.T, cfg *config.Config) *codingPGFixture {
 		) VALUES (
 		  $1, $2, $3, 1, $4, 'case-inference-001', 'profile-inference-001', $5,
 		  $6, $7, $8, $9, $10, $11, $12, $13, $14,
-		  'active', $15, $16, 1, 166, 200000, 30000, 10000000,
+		  'active', $15, repeat('d', 64), $16, 1, 166, 200000, 30000, 10000000,
 		  0, 0, 0, 0, 0, $17, NULL, false, $18, $18
 		)`,
 		f.grantID, f.ticketID, runID, pgTestHotkey, codingInferenceGrantSHA256,
@@ -230,7 +230,7 @@ func (f *codingPGFixture) seedActiveSibling(t *testing.T, validatorHotkey string
 		  model, provider_api, provider_route, receipt_provider,
 		  provider_route_profile, provider_account_guardrail,
 		  provider_pipeline_policy, provider_cache_policy, reasoning_effort,
-		  status, bearer_digest, broker_public_key, generation,
+		  status, bearer_digest, revoke_bearer_digest, broker_public_key, generation,
 		  request_budget, prompt_token_budget, completion_token_budget,
 		  cost_budget_usd_micros, request_count, prompt_tokens,
 		  completion_tokens, cost_usd_micros, active_requests,
@@ -240,7 +240,7 @@ func (f *codingPGFixture) seedActiveSibling(t *testing.T, validatorHotkey string
 		  inference_grant_sha256, model, provider_api, provider_route,
 		  receipt_provider, provider_route_profile, provider_account_guardrail,
 		  provider_pipeline_policy, provider_cache_policy, reasoning_effort,
-		  'active', bearer_digest, broker_public_key, generation,
+		  'active', bearer_digest, revoke_bearer_digest, broker_public_key, generation,
 		  request_budget, prompt_token_budget, completion_token_budget,
 		  cost_budget_usd_micros, 1, 0, 0, 0, 1,
 		  $5, NULL, false, $6, $6

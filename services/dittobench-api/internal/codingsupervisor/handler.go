@@ -230,7 +230,7 @@ func parseRequest(body []byte, operation Operation, now time.Time) (Request, err
 	if err := decoder.Decode(&shape); err != nil {
 		return zero, ErrInvalid
 	}
-	for _, field := range []string{"schema", "operation", "operation_id", "ticket_id", "coding_run_id", "deadline", "lease", "authoring", "grant"} {
+	for _, field := range []string{"schema", "operation", "operation_id", "ticket_id", "coding_run_id", "deadline", "lease", "authoring", "grant", "harness"} {
 		if _, ok := shape[field]; !ok {
 			return zero, ErrInvalid
 		}
@@ -253,26 +253,31 @@ func parseRequest(body []byte, operation Operation, now time.Time) (Request, err
 	leaseObject := rawObject(request.Lease, maximumLeaseBytes)
 	authoringObject := rawObject(request.Authoring, maximumOutcomeBytes)
 	grantObject := rawObject(request.Grant, maximumLeaseBytes)
+	harnessObject := rawObject(request.Harness, maximumLeaseBytes)
 	switch operation {
 	case OperationPrepare:
-		if !leaseObject || authoringObject || grantObject || !rawNull(request.Authoring) || !rawNull(request.Grant) {
+		if !leaseObject || authoringObject || grantObject || harnessObject || !rawNull(request.Authoring) ||
+			!rawNull(request.Grant) || !rawNull(request.Harness) {
 			return zero, ErrInvalid
 		}
 	case OperationAuthor:
-		if !leaseObject || authoringObject || !grantObject || !rawNull(request.Authoring) ||
-			validateGrant(request.Grant, request, now) != nil {
+		if !leaseObject || authoringObject || !grantObject || !harnessObject || !rawNull(request.Authoring) ||
+			validateGrant(request.Grant, request, now) != nil || validateHarness(request.Harness, request, now) != nil {
 			return zero, ErrInvalid
 		}
 	case OperationAbortAuthoring, OperationAbortGrading:
-		if !leaseObject || authoringObject || grantObject || !rawNull(request.Authoring) || !rawNull(request.Grant) {
+		if !leaseObject || authoringObject || grantObject || harnessObject || !rawNull(request.Authoring) ||
+			!rawNull(request.Grant) || !rawNull(request.Harness) {
 			return zero, ErrInvalid
 		}
 	case OperationGrade:
-		if !leaseObject || !authoringObject || grantObject || !rawNull(request.Grant) {
+		if !leaseObject || !authoringObject || grantObject || harnessObject || !rawNull(request.Grant) ||
+			!rawNull(request.Harness) {
 			return zero, ErrInvalid
 		}
 	case OperationRecover:
-		if !rawNull(request.Lease) || !rawNull(request.Authoring) || !rawNull(request.Grant) {
+		if !rawNull(request.Lease) || !rawNull(request.Authoring) || !rawNull(request.Grant) ||
+			!rawNull(request.Harness) {
 			return zero, ErrInvalid
 		}
 	default:
@@ -281,6 +286,7 @@ func parseRequest(body []byte, operation Operation, now time.Time) (Request, err
 	request.Lease = append(json.RawMessage(nil), request.Lease...)
 	request.Authoring = append(json.RawMessage(nil), request.Authoring...)
 	request.Grant = append(json.RawMessage(nil), request.Grant...)
+	request.Harness = append(json.RawMessage(nil), request.Harness...)
 	return request, nil
 }
 
@@ -397,6 +403,7 @@ func cloneRequest(request Request) Request {
 	request.Lease = append(json.RawMessage(nil), request.Lease...)
 	request.Authoring = append(json.RawMessage(nil), request.Authoring...)
 	request.Grant = append(json.RawMessage(nil), request.Grant...)
+	request.Harness = append(json.RawMessage(nil), request.Harness...)
 	return request
 }
 
@@ -449,11 +456,15 @@ type exchangedGrant struct {
 	CompletionTokenBudget uint64    `json:"completion_token_budget"`
 	Bearer                string    `json:"bearer"`
 	ProxyURL              string    `json:"proxy_url"`
+	RevokeBearer          string    `json:"revoke_bearer"`
+	RevokeURL             string    `json:"revoke_url"`
 	ExpiresAt             time.Time `json:"expires_at"`
 }
 
 type leaseGrantAuthority struct {
 	RunManifest struct {
+		AgentID              string `json:"agent_id"`
+		AgentArtifactSHA256  string `json:"agent_artifact_sha256"`
 		InferenceGrantSHA256 string `json:"inference_grant_sha256"`
 		Tasks                []struct {
 			CaseID              string `json:"case_id"`
@@ -465,6 +476,48 @@ type leaseGrantAuthority struct {
 		ModelOutputTokens  uint64 `json:"model_output_tokens"`
 		WorkspaceToolCalls uint32 `json:"workspace_tool_calls"`
 	} `json:"budgets"`
+}
+
+type screenedHarness struct {
+	Schema                 string    `json:"schema"`
+	CodingContractVersion  int       `json:"coding_contract_version"`
+	WeightEligible         *bool     `json:"weight_eligible"`
+	AgentID                string    `json:"agent_id"`
+	RunRowID               string    `json:"run_row_id"`
+	TicketID               string    `json:"ticket_id"`
+	TicketDeadline         time.Time `json:"ticket_deadline"`
+	BenchVersion           int       `json:"bench_version"`
+	AgentArtifactSHA256    string    `json:"agent_artifact_sha256"`
+	ScreenedImageSHA256    string    `json:"screened_image_sha256"`
+	ScreenedImageSizeBytes int64     `json:"screened_image_size_bytes"`
+	ScreenedImageID        string    `json:"screened_image_id"`
+	ScreenedImageRef       string    `json:"screened_image_ref"`
+	ScreeningPolicyVersion int       `json:"screening_policy_version"`
+	ImageURL               string    `json:"image_url"`
+	ExpiresAt              time.Time `json:"expires_at"`
+}
+
+func validateHarness(body json.RawMessage, request Request, now time.Time) error {
+	var harness screenedHarness
+	var lease leaseGrantAuthority
+	if err := json.Unmarshal(body, &harness); err != nil || json.Unmarshal(request.Lease, &lease) != nil {
+		return ErrInvalid
+	}
+	if harness.Schema != "dittobench-coding-harness-launch-v1" || harness.CodingContractVersion != 1 ||
+		harness.WeightEligible == nil || *harness.WeightEligible || !canonicalUUID(harness.AgentID) ||
+		!canonicalUUID(harness.RunRowID) || harness.AgentID != lease.RunManifest.AgentID ||
+		harness.AgentArtifactSHA256 != lease.RunManifest.AgentArtifactSHA256 ||
+		harness.TicketID != request.TicketID || !harness.TicketDeadline.Equal(request.Deadline) ||
+		harness.BenchVersion < 7 || harness.BenchVersion > 1_000_000 ||
+		!lowerSHA256(harness.ScreenedImageSHA256) || harness.ScreenedImageSizeBytes <= 0 ||
+		harness.ScreenedImageSizeBytes > 8<<30 || !strings.HasPrefix(harness.ScreenedImageID, "sha256:") ||
+		!lowerSHA256(strings.TrimPrefix(harness.ScreenedImageID, "sha256:")) ||
+		!validIdentifier(harness.ScreenedImageRef, 512) || harness.ScreeningPolicyVersion < 9 ||
+		harness.ScreeningPolicyVersion > 1_000_000 || !validImageURL(harness.ImageURL) ||
+		harness.ExpiresAt.IsZero() || !harness.ExpiresAt.After(now) || harness.ExpiresAt.After(request.Deadline) {
+		return ErrInvalid
+	}
+	return nil
 }
 
 func validateGrant(body json.RawMessage, request Request, now time.Time) error {
@@ -490,6 +543,7 @@ func validateGrant(body json.RawMessage, request Request, now time.Time) error {
 		grant.PromptTokenBudget == 0 || grant.PromptTokenBudget > lease.Budgets.ModelInputTokens ||
 		grant.CompletionTokenBudget == 0 || grant.CompletionTokenBudget > lease.Budgets.ModelOutputTokens ||
 		!validBearer(grant.Bearer) || !validProxyURL(grant.ProxyURL) ||
+		!validBearer(grant.RevokeBearer) || grant.RevokeBearer == grant.Bearer || !validRevokeURL(grant.RevokeURL) ||
 		grant.ExpiresAt.IsZero() || !grant.ExpiresAt.After(now) || grant.ExpiresAt.After(request.Deadline) {
 		return ErrInvalid
 	}
@@ -515,6 +569,9 @@ func validBearer(value string) bool {
 }
 
 func validProxyURL(value string) bool {
+	if len(value) == 0 || len(value) > 2_048 {
+		return false
+	}
 	parsed, err := url.ParseRequestURI(value)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
 		parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -523,6 +580,38 @@ func validProxyURL(value string) bool {
 	port := parsed.Port()
 	return parsed.Hostname() != "" && (port == "" || port == "443") &&
 		strings.HasSuffix(parsed.Path, "/api/v1/inference/coding/chat/completions")
+}
+
+func validRevokeURL(value string) bool {
+	if len(value) == 0 || len(value) > 2_048 {
+		return false
+	}
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	port := parsed.Port()
+	return parsed.Hostname() != "" && (port == "" || port == "443") &&
+		strings.HasSuffix(parsed.Path, "/api/v1/validator/coding-shadow/inference-revoke-capability")
+}
+
+func validImageURL(value string) bool {
+	if len(value) == 0 || len(value) > 16<<10 {
+		return false
+	}
+	for _, character := range value {
+		if character < 32 || character > 126 {
+			return false
+		}
+	}
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		parsed.RawQuery == "" || parsed.Fragment != "" {
+		return false
+	}
+	port := parsed.Port()
+	return parsed.Hostname() != "" && (port == "" || port == "443")
 }
 
 func rawObject(value json.RawMessage, maximum int) bool {
