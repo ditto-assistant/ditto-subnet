@@ -137,10 +137,16 @@ func (bundle Bundle) LogValue() slog.Value {
 	return slog.StringValue("coding-execution-plan-bundle-private")
 }
 
+const maximumCommandTimeoutMilliseconds = 600_000
+
 func (command Command) runner() codingrunner.CommandSpec {
+	timeout := time.Duration(0)
+	if command.TimeoutMilliseconds > 0 && command.TimeoutMilliseconds <= maximumCommandTimeoutMilliseconds {
+		timeout = time.Duration(command.TimeoutMilliseconds) * time.Millisecond
+	}
 	return codingrunner.CommandSpec{
 		ID: command.ID, Argv: append([]string(nil), command.Argv...),
-		Timeout: time.Duration(command.TimeoutMilliseconds) * time.Millisecond,
+		Timeout: timeout,
 	}
 }
 

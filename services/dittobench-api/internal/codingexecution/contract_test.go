@@ -197,6 +197,12 @@ func TestExecutionPlanRejectsDriftAndUnsafeAuthority(t *testing.T) {
 	}, time.Now()); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("ticket binding err=%v", err)
 	}
+	overflow := cloneRunnerPlan(runner)
+	overflow.TestCommands[0].TimeoutMilliseconds = 288230376151711745
+	overflowBody, _ := json.Marshal(overflow)
+	if _, err := ParseRunnerPlan(overflowBody); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("overflow timeout err=%v", err)
+	}
 }
 
 func TestExecutionPlanDiagnosticsDoNotExposeCommands(t *testing.T) {
