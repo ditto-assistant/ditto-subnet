@@ -2216,16 +2216,52 @@ async def get_submission_source_review(
     screener_hotkey: ScreenerDep,
     session: SessionDep,
 ) -> SubmissionSourceReviewResponse:
-    row = await session.get(SubmissionSourceReview, review_id)
-    attempt = await session.get(ScreeningAttempt, attempt_id)
-    if row is None or row.agent_id != agent_id or row.attempt_id != attempt_id:
-        raise HTTPException(
-            status_code=404, detail="submission source review not found"
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await session.scalar(
+            select(SubmissionSourceReview)
+            .where(SubmissionSourceReview.review_id == review_id)
+            .with_for_update()
         )
-    if attempt is None or attempt.screener_hotkey != screener_hotkey:
-        raise AgentNotScreenableError(
-            "remote source review does not match screener lease"
+        attempt = await session.scalar(
+            select(ScreeningAttempt)
+            .where(ScreeningAttempt.attempt_id == attempt_id)
+            .with_for_update()
         )
+        if row is None or row.agent_id != agent_id or row.attempt_id != attempt_id:
+            raise HTTPException(
+                status_code=404, detail="submission source review not found"
+            )
+        if attempt is None or attempt.screener_hotkey != screener_hotkey:
+            raise AgentNotScreenableError(
+                "remote source review does not match screener lease"
+            )
+
+        # The decomposed source-review lane can legitimately run longer than
+        # one short parent screening lease. Its own non-renewable lease is the
+        # cost/progress bound, while this authenticated poll proves the parent
+        # worker is still waiting for that exact child. Renew only near expiry
+        # and never beyond the child's deadline, so a stuck or abandoned review
+        # cannot keep a screening attempt alive indefinitely.
+        attempt_deadline = attempt.deadline
+        review_deadline = row.lease_expires_at
+        if attempt_deadline.tzinfo is None:
+            attempt_deadline = attempt_deadline.replace(tzinfo=UTC)
+        if review_deadline is not None and review_deadline.tzinfo is None:
+            review_deadline = review_deadline.replace(tzinfo=UTC)
+        if (
+            attempt.status == "running"
+            and attempt_deadline > now
+            and row.status in {"leased", "running"}
+            and review_deadline is not None
+            and review_deadline > now
+            and attempt_deadline <= now + (_RENEWABLE_SCREENING_LEASE_TTL / 2)
+        ):
+            renewed_deadline = min(
+                now + _RENEWABLE_SCREENING_LEASE_TTL, review_deadline
+            )
+            if renewed_deadline > attempt_deadline:
+                attempt.deadline = renewed_deadline
     return _source_review_view(row)
 
 

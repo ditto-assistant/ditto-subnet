@@ -885,6 +885,33 @@ class TestFederatedScreenerNodes:
             },
         )
         assert running.status_code == 204, running.text
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            attempt = await session.get(
+                ScreeningAttempt, UUID(attempt_id), with_for_update=True
+            )
+            review = await session.get(
+                SubmissionSourceReview, UUID(review_id), with_for_update=True
+            )
+            assert attempt is not None
+            assert review is not None
+            attempt.deadline = now + timedelta(minutes=1)
+            review.lease_expires_at = now + timedelta(minutes=20)
+        waiting = await client.get(
+            f"/api/v1/screener/agent/{agent_id}/submission-source-reviews/{review_id}",
+            headers=_AUTH_HEADER,
+            params={"attempt_id": attempt_id},
+        )
+        assert waiting.status_code == 200, waiting.text
+        assert waiting.json()["status"] == "running"
+        async with session_maker() as session:
+            attempt = await session.get(ScreeningAttempt, UUID(attempt_id))
+            review = await session.get(SubmissionSourceReview, UUID(review_id))
+            assert attempt is not None
+            assert review is not None
+            assert review.lease_expires_at is not None
+            assert attempt.deadline > now + timedelta(minutes=9)
+            assert attempt.deadline <= review.lease_expires_at
         job_headers = {"Authorization": f"Bearer {job['job_token']}"}
         source = await client.get(
             f"/api/v1/screener/submission-source-reviews/{review_id}/source",
