@@ -18,6 +18,7 @@ from screener_capacity.fleet_node import (
     FleetNode,
     KVMRunner,
     Settings,
+    _build_failure_code,
     _build_script,
     _cloud_config,
     _load_credential,
@@ -228,6 +229,37 @@ def test_build_script_shell_quotes_platform_url() -> None:
         in script
     )
 
+
+@pytest.mark.parametrize(
+    ("stage", "expected"),
+    [
+        ("SOURCE", "FLEET_SUBMISSION_SOURCE_FAILED"),
+        ("KANIKO", "FLEET_SUBMISSION_KANIKO_FAILED"),
+        ("ARCHIVE", "FLEET_SUBMISSION_ARCHIVE_FAILED"),
+        ("UPLOAD", "FLEET_SUBMISSION_UPLOAD_FAILED"),
+        ("COMPLETE", "FLEET_SUBMISSION_COMPLETE_FAILED"),
+        ("CONTRACT", "FLEET_SUBMISSION_CONTRACT_FAILED"),
+    ],
+)
+def test_build_failure_code_preserves_safe_builder_stage(
+    stage: str, expected: str
+) -> None:
+    console = f"private submitted output\nDITTO_SUBMISSION_BUILD_FAILED={stage}\r\n"
+
+    assert _build_failure_code(ok=True, console=console) == expected
+
+
+def test_build_failure_code_does_not_forward_unrecognized_console() -> None:
+    assert (
+        _build_failure_code(
+            ok=True,
+            console="DITTO_SUBMISSION_BUILD_FAILED=PRIVATE_SECRET\n",
+        )
+        == "FLEET_SUBMISSION_BUILD_VM_EXITED"
+    )
+    assert _build_failure_code(ok=False, console="token=private") == (
+        "FLEET_SUBMISSION_BUILD_VM_FAILED"
+    )
 
 class _Control:
     def __init__(self) -> None:
