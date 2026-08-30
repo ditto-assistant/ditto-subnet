@@ -614,7 +614,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         not config.coding_shadow_instance_id
         or len(config.coding_shadow_instance_id.encode()) > 128
         or any(
-            character.isspace() or ord(character) < 32
+            character.isspace() or not character.isprintable()
             for character in config.coding_shadow_instance_id
         )
         or not 32 <= len(config.dittobench_control_token.encode()) <= 256

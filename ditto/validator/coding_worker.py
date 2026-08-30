@@ -198,7 +198,8 @@ class CodingShadowWorker:
             not instance_id
             or len(instance_id.encode()) > 128
             or any(
-                character.isspace() or ord(character) < 32 for character in instance_id
+                character.isspace() or not character.isprintable()
+                for character in instance_id
             )
             or not 1 <= poll_seconds <= 300
         ):
@@ -213,6 +214,7 @@ class CodingShadowWorker:
         if self._last_now.tzinfo is None or self._last_now.utcoffset() is None:
             raise ValueError("coding shadow worker clock is invalid")
         self._last_now = self._last_now.astimezone(UTC)
+        self.busy = False
         self._durable = DurableCodingAttemptPlatform(platform, publication)
         self._coordinator = CodingAttemptCoordinator(
             platform=self._durable,
@@ -227,9 +229,10 @@ class CodingShadowWorker:
         drain_requested: asyncio.Event,
     ) -> None:
         while not stop.is_set():
-            if drain_requested.is_set():
+            if drain_requested.is_set() and not self.busy:
                 await _wait_or_stop(stop, self._poll_seconds)
                 continue
+            self.busy = True
             try:
                 worked = await self.run_once()
             except asyncio.CancelledError:
@@ -240,6 +243,8 @@ class CodingShadowWorker:
                     type(error).__name__,
                 )
                 worked = False
+            finally:
+                self.busy = False
             if not worked:
                 await _wait_or_stop(stop, self._poll_seconds)
 
@@ -281,12 +286,20 @@ class CodingShadowWorker:
                     "coding preflight grant policy or lifetime is invalid"
                 )
             claim = await self._platform.start_coding_ticket_claim(claim)
+            started_now = self._now()
             _validate_claim(
                 claim,
                 self._instance_id,
                 started=True,
-                now=self._now(),
+                now=started_now,
             )
+            if harness.expires_at <= started_now or any(
+                capability.expires_at <= started_now
+                for capability in authoring_lease.capabilities
+            ) or offer.expires_at <= started_now:
+                raise CodingAttemptIntegrityError(
+                    "coding claim started after preflight authority expired"
+                )
             await self._with_heartbeat(
                 claim,
                 lambda: self._execute_new(

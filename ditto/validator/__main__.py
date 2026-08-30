@@ -162,6 +162,11 @@ async def _amain() -> int:
                         bootstrap_resume=(
                             mark_bootstrap_resumed if bootstrap_drain_pending else None
                         ),
+                        extra_busy=(
+                            (lambda: coding_worker.busy)
+                            if coding_worker is not None
+                            else None
+                        ),
                     )
 
                 try:

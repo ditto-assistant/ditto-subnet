@@ -488,43 +488,50 @@ class CodingSupervisorRuntime:
         endpoint = operation.replace("_", "-")
         received = bytearray()
         try:
-            async with self._client.stream(
-                "POST",
-                f"{self._base}/v1/coding/supervisor/{endpoint}",
-                headers={
-                    "Authorization": f"Bearer {self._token}",
-                    "Content-Type": "application/json",
-                    "Cache-Control": "no-store",
-                },
-                content=body,
-                follow_redirects=False,
-                timeout=timeout,
-            ) as response:
-                if response.status_code != 200:
-                    if response.status_code in {400, 409}:
-                        raise CodingAttemptIntegrityError(
-                            f"coding supervisor rejected {operation}"
-                        )
-                    raise ValidatorInfrastructureError(
-                        f"coding supervisor unavailable for {operation}"
-                    )
-                if response.headers.get("cache-control") != "no-store":
-                    raise ValidatorInfrastructureError(
-                        "coding supervisor response cache policy is invalid"
-                    )
-                media_type = response.headers.get("content-type", "").split(";", 1)[0]
-                if media_type != "application/json" or response.headers.get(
-                    "content-encoding"
-                ):
-                    raise ValidatorInfrastructureError(
-                        "coding supervisor response encoding is invalid"
-                    )
-                async for chunk in response.aiter_bytes(chunk_size=64 << 10):
-                    if len(received) + len(chunk) > _MAX_BODY_BYTES:
+            async with asyncio.timeout(remaining):
+                async with self._client.stream(
+                    "POST",
+                    f"{self._base}/v1/coding/supervisor/{endpoint}",
+                    headers={
+                        "Authorization": f"Bearer {self._token}",
+                        "Content-Type": "application/json",
+                        "Cache-Control": "no-store",
+                    },
+                    content=body,
+                    follow_redirects=False,
+                    timeout=timeout,
+                ) as response:
+                    if response.status_code != 200:
+                        if response.status_code in {400, 409}:
+                            raise CodingAttemptIntegrityError(
+                                f"coding supervisor rejected {operation}"
+                            )
                         raise ValidatorInfrastructureError(
-                            "coding supervisor response is too large"
+                            f"coding supervisor unavailable for {operation}"
                         )
-                    received.extend(chunk)
+                    if response.headers.get("cache-control") != "no-store":
+                        raise ValidatorInfrastructureError(
+                            "coding supervisor response cache policy is invalid"
+                        )
+                    media_type = response.headers.get("content-type", "").split(";", 1)[
+                        0
+                    ]
+                    if media_type != "application/json" or response.headers.get(
+                        "content-encoding"
+                    ):
+                        raise ValidatorInfrastructureError(
+                            "coding supervisor response encoding is invalid"
+                        )
+                    async for chunk in response.aiter_bytes(chunk_size=64 << 10):
+                        if len(received) + len(chunk) > _MAX_BODY_BYTES:
+                            raise ValidatorInfrastructureError(
+                                "coding supervisor response is too large"
+                            )
+                        received.extend(chunk)
+        except TimeoutError as error:
+            raise ValidatorInfrastructureError(
+                f"coding supervisor deadline exceeded for {operation}"
+            ) from error
         except httpx.HTTPError as error:
             raise ValidatorInfrastructureError(
                 f"coding supervisor transport failed for {operation}"
