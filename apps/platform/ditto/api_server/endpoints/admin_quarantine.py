@@ -1701,23 +1701,30 @@ async def list_screening_submissions(
 async def summarize_screening_failures(
     _admin: AdminDep,
     session: SessionDep,
+    generation: Annotated[Literal["active", "all"], Query()] = "active",
     example_limit: Annotated[int, Query(ge=1, le=10)] = 3,
 ) -> AdminScreeningFailureSummary:
-    """Group currently screening / screening_failed agents by reason_code."""
-    agents = (
-        (
-            await session.execute(
-                select(Agent)
-                .where(
-                    Agent.status.in_(
-                        (AgentStatus.SCREENING, AgentStatus.SCREENING_FAILED)
-                    )
-                )
-                .order_by(Agent.created_at.desc(), Agent.agent_id.desc())
-            )
+    """Group live screening failures in the current era unless history is requested."""
+    active_version = await active_bench_version(session)
+    where: list[ColumnElement[bool]] = [
+        Agent.status.in_((AgentStatus.SCREENING, AgentStatus.SCREENING_FAILED))
+    ]
+    if generation == "active":
+        rollout = await admission_rollout_for_active_version(
+            session, bench_version=active_version
         )
-        .scalars()
-        .all()
+        if rollout is not None:
+            where.append(
+                benchmark_admission_predicate(
+                    rollout=rollout, bench_version=active_version
+                )
+            )
+    agents = list(
+        await session.scalars(
+            select(Agent)
+            .where(*where)
+            .order_by(Agent.created_at.desc(), Agent.agent_id.desc())
+        )
     )
     grouped: dict[tuple[str, str | None], list[Agent]] = defaultdict(list)
     screening = 0
@@ -1751,6 +1758,8 @@ async def summarize_screening_failures(
     ]
     return AdminScreeningFailureSummary(
         generated_at=datetime.now(UTC),
+        generation=generation,
+        active_bench_version=active_version,
         screening=screening,
         screening_failed=screening_failed,
         groups=groups,

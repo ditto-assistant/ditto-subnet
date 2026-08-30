@@ -646,6 +646,8 @@ describe('screening submission admin service', () => {
       .mockResolvedValueOnce(
         Response.json({
           generated_at: '2026-08-19T14:00:00Z',
+          generation: 'all',
+          active_bench_version: 12,
           screening: 1,
           screening_failed: 2,
           groups: [],
@@ -655,7 +657,7 @@ describe('screening submission admin service', () => {
 
     await fetchScreeningSubmissions(50, 100)
     await fetchScreeningDisputes('pending', 50, 50)
-    await fetchScreeningFailureSummary({ exampleLimit: 2 })
+    await fetchScreeningFailureSummary({ generation: 'all', exampleLimit: 2 })
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -669,7 +671,7 @@ describe('screening submission admin service', () => {
     )
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
-      'https://platform-api.heyditto.ai/api/v1/admin/screening-failures?example_limit=2',
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-failures?generation=all&example_limit=2',
       expect.objectContaining({ method: 'GET' }),
     )
   })

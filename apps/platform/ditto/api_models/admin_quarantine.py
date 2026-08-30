@@ -217,6 +217,10 @@ class AdminScreeningFailureSummary(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     generated_at: datetime
+    generation: Literal["active", "all"]
+    """Whether this is the current-work view or an explicit historical audit."""
+    active_bench_version: int = Field(ge=1)
+    """The benchmark version currently holding Platform authority."""
     screening: int
     screening_failed: int
     groups: list[AdminScreeningFailureGroup]

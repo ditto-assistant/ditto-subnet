@@ -3919,14 +3919,18 @@ describe('why a validator ticket ended', () => {
     })
   })
 
-  it('defaults stuck-submission triage to a small server page', () => {
+  it('defaults stuck-submission triage to the active benchmark and a small server page', () => {
     expect(listStuckSubmissionsInputSchema.parse({})).toEqual({
+      generation: 'active',
       limit: 10,
       offset: 0,
     })
     expect(
       listStuckSubmissionsInputSchema.parse({ limit: 200, offset: 10 }),
     ).toMatchObject({ limit: 200, offset: 10 })
+    expect(listStuckSubmissionsInputSchema.parse({ generation: 'all' })).toMatchObject({
+      generation: 'all',
+    })
     expect(() => listStuckSubmissionsInputSchema.parse({ limit: 201 })).toThrow()
     expect(() => listStuckSubmissionsInputSchema.parse({ offset: -1 })).toThrow()
   })

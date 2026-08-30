@@ -2962,6 +2962,37 @@ async def test_list_classifies_every_retry_state(
     assert body["quorum"] == 3
 
 
+async def test_list_defaults_to_current_generation_but_can_audit_history(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    current = await _seed(retry_maker, ticket_count=3)
+    historical = await _seed(
+        retry_maker,
+        bench_version=_BENCH_VERSION - 1,
+        ticket_count=3,
+    )
+    _install(app, retry_maker)
+
+    active = await client.get("/api/v1/admin/validation-retries", headers=_HEADERS)
+    all_generations = await client.get(
+        "/api/v1/admin/validation-retries?generation=all", headers=_HEADERS
+    )
+
+    assert active.status_code == 200, active.text
+    assert active.json()["generation"] == "active"
+    assert active.json()["active_bench_version"] == _BENCH_VERSION
+    assert {row["agent_id"] for row in active.json()["submissions"]} == {str(current)}
+    assert all_generations.status_code == 200, all_generations.text
+    assert all_generations.json()["generation"] == "all"
+    assert all_generations.json()["active_bench_version"] == _BENCH_VERSION
+    assert {row["agent_id"] for row in all_generations.json()["submissions"]} == {
+        str(current),
+        str(historical),
+    }
+
+
 async def test_list_excludes_agents_at_quorum(
     app: FastAPI,
     client: httpx.AsyncClient,

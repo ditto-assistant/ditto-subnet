@@ -3992,6 +3992,9 @@ export const screeningSubmissionListSchema = z.object({
 })
 
 export const summarizeScreeningFailuresInputSchema = z.object({
+  // Operator worklists default to the active benchmark era. `all` is the
+  // explicit audit opt-in for a previous generation.
+  generation: z.enum(['active', 'all']).default('active'),
   exampleLimit: z.number().int().min(1).max(10).default(3),
 })
 
@@ -4012,6 +4015,8 @@ export const screeningFailureGroupSchema = z.object({
 
 export const screeningFailureSummarySchema = z.object({
   generated_at: z.string(),
+  generation: z.enum(['active', 'all']),
+  active_bench_version: z.number().int().positive(),
   screening: z.number().int().nonnegative(),
   screening_failed: z.number().int().nonnegative(),
   groups: z.array(screeningFailureGroupSchema),
@@ -4709,6 +4714,9 @@ export const stuckSubmissionStateSchema = z.enum([
 ])
 
 export const listStuckSubmissionsInputSchema = z.object({
+  // Keep default operator triage on current work. `all` is a deliberate
+  // cross-benchmark audit, not an accidental retry surface.
+  generation: z.enum(['active', 'all']).default('active'),
   state: z.array(stuckSubmissionStateSchema).nonempty().optional(),
   limit: z.number().int().min(1).max(200).default(10),
   offset: z.number().int().min(0).default(0),
@@ -4747,6 +4755,8 @@ export const stuckSubmissionSchema = z.object({
 
 export const stuckSubmissionsListSchema = z.object({
   generated_at: z.string(),
+  generation: z.enum(['active', 'all']),
+  active_bench_version: z.number().int().positive(),
   quorum: z.number().int().positive(),
   // Keyed by retry state; the platform may omit states with a zero count, so
   // the key type stays a plain string rather than an exhaustive enum record.
