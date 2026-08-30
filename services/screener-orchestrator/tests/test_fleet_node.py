@@ -14,6 +14,7 @@ from screener_capacity.fleet_node import (
     _GUEST_OSINFO,
     _LIBVIRT_URI,
     _SERIAL_CAPTURE_LIMIT,
+    _SOURCE_REVIEW_PROCESS_GRACE_SECONDS,
     ChannelSettings,
     FleetNode,
     KVMRunner,
@@ -332,6 +333,7 @@ def test_source_review_uses_image_project_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     commands: list[list[str]] = []
+    timeouts: list[object] = []
 
     class Control:
         def update(self, *_args: object, **_kwargs: object) -> None:
@@ -340,8 +342,9 @@ def test_source_review_uses_image_project_environment(
         def status(self, *_args: object) -> str:
             return "succeeded"
 
-    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         commands.append(command)
+        timeouts.append(kwargs.get("timeout"))
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     node = FleetNode(_settings(tmp_path))
@@ -362,6 +365,10 @@ def test_source_review_uses_image_project_environment(
         "/app/workers/screener/.venv/bin/python",
         "-m",
         "ditto_screener.source_review_job",
+    ]
+    assert timeouts == [
+        node.settings.source_review_timeout_seconds
+        + _SOURCE_REVIEW_PROCESS_GRACE_SECONDS
     ]
     user_index = commands[0].index("--user")
     assert commands[0][user_index + 1] == f"{os.getuid()}:{os.getgid()}"

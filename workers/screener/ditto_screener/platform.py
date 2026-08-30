@@ -76,6 +76,21 @@ logger = logging.getLogger(__name__)
 _PREFIX = "/api/v1/screener"
 _IMAGE_REQUEST_TIMEOUT = httpx.Timeout(300.0, connect=30.0, pool=30.0)
 _REMOTE_BUILD_POLL_SECONDS = 5.0
+_REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS = 120.0
+
+
+def _remote_source_review_poll_deadline(*, now: float, timeout: float) -> float:
+    """Keep polling long enough for the remote court to commit its verdict.
+
+    The remote review receives ``timeout`` as its evidence-and-adjudication
+    deadline. At that boundary it still needs a short tail to turn an exhausted
+    model call into the mandatory terminal decision and POST the persisted
+    notes. Ending the client poll at the same instant races that commit and the
+    cleanup DELETE cancels an otherwise healthy job.
+    """
+    return now + max(1.0, timeout) + _REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS
+
+
 _TRANSIENT_PLATFORM_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
 
 
@@ -563,7 +578,9 @@ class PlatformClient:
                 )
                 return None
             review = SubmissionSourceReviewResponse.model_validate(response.json())
-            deadline = asyncio.get_running_loop().time() + max(1.0, timeout)
+            deadline = _remote_source_review_poll_deadline(
+                now=asyncio.get_running_loop().time(), timeout=timeout
+            )
             while asyncio.get_running_loop().time() < deadline:
                 if review.status == "succeeded":
                     observation = review.observation

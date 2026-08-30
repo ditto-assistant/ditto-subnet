@@ -44,6 +44,7 @@ _BUILD_FAILURE_MARKER = re.compile(
 _GUEST_OSINFO = "debian12"
 _LIBVIRT_URI = "qemu:///system"
 _SERIAL_CAPTURE_LIMIT = 64_000
+_SOURCE_REVIEW_PROCESS_GRACE_SECONDS = 180
 
 
 class _SerialCapture:
@@ -799,7 +800,13 @@ class FleetNode:
             command,
             env=environment,
             capture_output=True,
-            timeout=self.settings.source_review_timeout_seconds + 120,
+            # Leave a larger trusted-host tail than the worker's 120-second
+            # poll grace so a deadline-exhausted L4 can commit and exit before
+            # the host kills the container.
+            timeout=(
+                self.settings.source_review_timeout_seconds
+                + _SOURCE_REVIEW_PROCESS_GRACE_SECONDS
+            ),
             check=False,
         )
         status = self.control.status("source_review", review_id)
