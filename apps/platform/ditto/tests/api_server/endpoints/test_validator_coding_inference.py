@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -41,8 +42,13 @@ from ditto.coding_selection import (
     CodingSelectionCatalogIntegrityError,
     CodingSelectionCatalogUnavailableError,
 )
+from ditto.db.models import CodingCertificationInferenceGrant
+from ditto.db.queries.coding_certification_inference_grants import (
+    CodingCertificationInferenceGrantRevocation,
+)
 from ditto.db.queries.coding_inference_grants import (
     CodingInferenceGrantActivation,
+    CodingInferenceGrantNotAvailableError,
     CodingInferenceGrantResult,
     CodingInferenceGrantRevocation,
 )
@@ -356,6 +362,56 @@ async def test_signed_offer_exchange_and_revoke_are_no_store_and_shadow_only(
     assert mocks.capability_revoke.await_args.kwargs == {
         "grant_id": _GRANT_ID,
         "ticket_id": mocks.lease.ticket_id,
+        "generation": 1,
+        "revoke_bearer": "r" * 43,
+    }
+
+
+async def test_capability_revoke_falls_back_to_certification_lease_grant(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    mocks = _install(app, session_maker, monkeypatch)
+    mocks.capability_revoke.side_effect = CodingInferenceGrantNotAvailableError(
+        "ticket grant missing"
+    )
+    lease_id = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    canary = SimpleNamespace(
+        grant_id=_GRANT_ID,
+        lease_id=lease_id,
+        generation=1,
+        revoked_at=datetime.now(UTC),
+    )
+    fallback = AsyncMock(
+        return_value=CodingCertificationInferenceGrantRevocation(
+            grant=cast(CodingCertificationInferenceGrant, canary),
+            idempotent=True,
+        )
+    )
+    monkeypatch.setattr(
+        endpoint_module,
+        "revoke_coding_certification_inference_grant_by_capability",
+        fallback,
+    )
+    revoked = await client.post(
+        "/api/v1/validator/coding-shadow/inference-revoke-capability",
+        headers={"Authorization": "Bearer " + "r" * 43},
+        json=CodingInferenceCapabilityRevokeRequest(
+            grant_id=_GRANT_ID,
+            ticket_id=lease_id,
+            generation=1,
+        ).model_dump(mode="json"),
+    )
+    assert revoked.status_code == 200, revoked.text
+    assert revoked.json()["ticket_id"] == str(lease_id)
+    assert revoked.json()["idempotent"] is True
+    fallback.assert_awaited_once()
+    assert fallback.await_args is not None
+    assert fallback.await_args.kwargs == {
+        "grant_id": _GRANT_ID,
+        "lease_id": lease_id,
         "generation": 1,
         "revoke_bearer": "r" * 43,
     }

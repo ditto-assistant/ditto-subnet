@@ -43,11 +43,16 @@ from ditto.coding_selection import (
     CodingSelectionCatalogIntegrityError,
     CodingSelectionCatalogUnavailableError,
 )
-from ditto.db.models import CodingInferenceGrant
+from ditto.db.models import CodingCertificationInferenceGrant, CodingInferenceGrant
+from ditto.db.queries.coding_certification_inference_grants import (
+    CodingCertificationInferenceGrantRevocation,
+    revoke_coding_certification_inference_grant_by_capability,
+)
 from ditto.db.queries.coding_inference_grants import (
     CodingInferenceGrantConflictError,
     CodingInferenceGrantIntegrityError,
     CodingInferenceGrantNotAvailableError,
+    CodingInferenceGrantRevocation,
     activate_coding_inference_grant,
     ensure_coding_inference_grant,
     revoke_coding_inference_grant,
@@ -211,6 +216,18 @@ async def _consume_nonce(
             status_code=409,
             detail="coding inference request nonce has already been used",
         ) from None
+
+
+def _capability_revoke_binding_id(
+    grant: CodingInferenceGrant | CodingCertificationInferenceGrant,
+) -> UUID:
+    ticket_id = getattr(grant, "ticket_id", None)
+    if isinstance(ticket_id, UUID):
+        return ticket_id
+    lease_id = getattr(grant, "lease_id", None)
+    if isinstance(lease_id, UUID):
+        return lease_id
+    raise TypeError("coding inference revoke binding is missing")
 
 
 def _authority(grant: CodingInferenceGrant) -> dict[str, object]:
@@ -494,7 +511,11 @@ async def revoke_coding_inference_grant_capability_endpoint(
     bearer = authorization.removeprefix("Bearer ")
     if not bearer or bearer != bearer.strip():
         raise HTTPException(status_code=401, detail="revoke capability is invalid")
-    revoked = None
+    revoked: (
+        CodingInferenceGrantRevocation
+        | CodingCertificationInferenceGrantRevocation
+        | None
+    ) = None
     grant_error: Exception | None = None
     async with session.begin():
         try:
@@ -505,10 +526,27 @@ async def revoke_coding_inference_grant_capability_endpoint(
                 generation=payload.generation,
                 revoke_bearer=bearer,
             )
-        except (
-            CodingInferenceGrantNotAvailableError,
-            CodingInferenceGrantConflictError,
-        ) as error:
+        except CodingInferenceGrantNotAvailableError:
+            try:
+                canary = (
+                    await revoke_coding_certification_inference_grant_by_capability(
+                        session,
+                        grant_id=payload.grant_id,
+                        lease_id=payload.ticket_id,
+                        generation=payload.generation,
+                        revoke_bearer=bearer,
+                    )
+                )
+            except CodingInferenceGrantConflictError as error:
+                grant_error = error
+            else:
+                if canary is None:
+                    grant_error = CodingInferenceGrantNotAvailableError(
+                        "coding inference revoke capability is unavailable"
+                    )
+                else:
+                    revoked = canary
+        except CodingInferenceGrantConflictError as error:
             grant_error = error
     if isinstance(grant_error, CodingInferenceGrantNotAvailableError):
         raise HTTPException(
@@ -525,12 +563,13 @@ async def revoke_coding_inference_grant_capability_endpoint(
             status_code=503,
             detail="coding inference revocation result is unavailable",
         )
+    binding_id = _capability_revoke_binding_id(revoked.grant)
     return CodingInferenceRevokeResponse(
         schema="dittobench-coding-inference-revocation-v1",
         coding_contract_version=1,
         weight_eligible=False,
         grant_id=revoked.grant.grant_id,
-        ticket_id=revoked.grant.ticket_id,
+        ticket_id=binding_id,
         status="revoked",
         generation=revoked.grant.generation,
         revoked_at=revoked.grant.revoked_at,

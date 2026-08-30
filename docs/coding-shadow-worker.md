@@ -29,8 +29,10 @@ and Luna routes, relay journal, attempt supervisor, publication service, and a
 bounded outbox sweep loop. The public-canary handler is attached only when
 `DITTOBENCH_CODING_CANARY_ENABLED=true` and
 `DITTOBENCH_CODING_CERTIFICATION_ROOT` contains the pinned `certification/v1`
-pack; a canary-enabled host without that pack fails closed. The canary path
-does not claim private tickets or set weights.
+pack; a canary-enabled host without that pack fails closed. The default-off
+canary worker claims a lease, exchanges a lease-bound inference grant, posts
+the exchanged grant into the canary control plane, and always revokes the
+grant. The canary path does not claim private tickets or set weights.
 The relay-journal root has a durable directory-cardinality ceiling equal to the
 host attempt bound; an unexpected entry or exhausted root fails closed instead
 of allocating unbounded restart residue.

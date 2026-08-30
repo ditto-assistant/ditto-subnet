@@ -20,6 +20,11 @@ from ditto.api_models.coding_certification_leases import (
     CodingCertificationLeaseResponse,
     CodingCertificationLeaseStatus,
 )
+from ditto.api_models.coding_inference_grants import (
+    CodingCertificationInferenceExchangeResponse,
+    CodingCertificationInferenceGrantOffer,
+    CodingCertificationInferenceRevokeResponse,
+)
 from ditto.validator.coding_canary import CodingCanaryOutcome, CodingCanaryWorker
 from ditto.validator.coding_canary_runtime import CodingCanaryRuntime
 from ditto.validator.errors import (
@@ -115,12 +120,76 @@ def _receipt() -> CodingCapabilityCertificationReceipt:
     )
 
 
+def _grant_offer() -> CodingCertificationInferenceGrantOffer:
+    return CodingCertificationInferenceGrantOffer.model_validate(
+        {
+            "schema": "dittobench-coding-certification-inference-grant-offer-v1",
+            "coding_contract_version": 1,
+            "weight_eligible": False,
+            "grant_id": UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"),
+            "lease_id": _LEASE,
+            "case_id": "PRACTICE-LEDGER-001",
+            "profile_capability_id": "public-certification-v1",
+            "inference_grant_sha256": "33" * 32,
+            "model": "openai/gpt-5.6-luna",
+            "provider_api": "openrouter",
+            "provider_route": "azure/eu",
+            "receipt_provider": "Azure",
+            "provider_route_profile": "luna-azure-eu-zdr-v1",
+            "provider_account_guardrail": "openrouter_private_account_v1",
+            "provider_pipeline_policy": "no_plugins_no_transforms_v1",
+            "provider_cache_policy": "disabled_v1",
+            "reasoning_effort": "medium",
+            "request_budget": 32,
+            "prompt_token_budget": 10_000,
+            "completion_token_budget": 2_000,
+            "cost_budget_usd_micros": 1_000_000,
+            "expires_at": _NOW + timedelta(minutes=20),
+            "status": "pending",
+            "generation": 0,
+            "exchange_url": (
+                "https://platform.invalid/api/v1/validator/"
+                "coding-certification-leases/inference-exchange"
+            ),
+        }
+    )
+
+
+def _grant_exchange() -> CodingCertificationInferenceExchangeResponse:
+    return CodingCertificationInferenceExchangeResponse.model_validate(
+        {
+            **{
+                key: value
+                for key, value in _grant_offer()
+                .model_dump(mode="json", by_alias=True)
+                .items()
+                if key != "exchange_url"
+            },
+            "schema": "dittobench-coding-certification-inference-exchange-v1",
+            "status": "active",
+            "generation": 1,
+            "bearer": "b" * 43,
+            "proxy_url": (
+                "https://relay.invalid/api/v1/inference/coding/chat/completions"
+            ),
+            "revoke_bearer": "r" * 43,
+            "revoke_url": (
+                "https://platform.invalid/api/v1/validator/"
+                "coding-shadow/inference-revoke-capability"
+            ),
+        }
+    )
+
+
 class _Platform:
     def __init__(self) -> None:
         self.issues = 0
         self.claims = 0
         self.aborts = 0
         self.launches = 0
+        self.grants = 0
+        self.exchanges = 0
+        self.revokes = 0
         self.submits = 0
         self.issued = _lease()
         self.claimed = _lease(status=CodingCertificationLeaseStatus.CLAIMED)
@@ -159,6 +228,45 @@ class _Platform:
         self.launches += 1
         assert lease_id == _LEASE
         return _harness()
+
+    async def request_coding_certification_inference_grant(
+        self, lease_id: UUID
+    ) -> CodingCertificationInferenceGrantOffer:
+        self.grants += 1
+        assert lease_id == _LEASE
+        return _grant_offer()
+
+    async def exchange_coding_certification_inference_grant(
+        self,
+        offer: CodingCertificationInferenceGrantOffer,
+        *,
+        broker_public_key: str,
+    ) -> CodingCertificationInferenceExchangeResponse:
+        self.exchanges += 1
+        assert offer.lease_id == _LEASE
+        assert len(broker_public_key) == 43
+        return _grant_exchange()
+
+    async def revoke_coding_certification_inference_grant(
+        self,
+        *,
+        grant_id: UUID,
+        generation: int,
+    ) -> CodingCertificationInferenceRevokeResponse:
+        self.revokes += 1
+        assert grant_id == UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+        assert generation == 1
+        return CodingCertificationInferenceRevokeResponse(
+            schema="dittobench-coding-certification-inference-revocation-v1",
+            coding_contract_version=1,
+            weight_eligible=False,
+            grant_id=grant_id,
+            lease_id=_LEASE,
+            status="revoked",
+            generation=generation,
+            revoked_at=_NOW,
+            idempotent=False,
+        )
 
     async def submit_coding_certification(
         self,
@@ -202,9 +310,17 @@ class _Runtime:
         self,
         lease: CodingCertificationLeaseResponse,
         harness: CodingCertificationHarnessLaunchResponse,
+        grant: CodingCertificationInferenceExchangeResponse,
+        *,
+        broker_public_key: str,
+        broker_private_key: str,
     ) -> CodingCanaryOutcome:
         self.certified.append(lease)
         assert harness.lease_id == lease.authority.lease_id
+        assert grant.lease_id == lease.authority.lease_id
+        assert grant.status == "active"
+        assert len(broker_public_key) == 43
+        assert len(broker_private_key) == 86
         return CodingCanaryOutcome(
             authority=lease.authority,
             receipt=_receipt(),
@@ -228,6 +344,9 @@ async def test_canary_worker_claims_issued_lease_then_runs_certifier() -> None:
     assert platform.issues == 1
     assert platform.claims == 1
     assert platform.launches == 1
+    assert platform.grants == 1
+    assert platform.exchanges == 1
+    assert platform.revokes == 1
     assert platform.submits == 1
     assert len(runtime.certified) == 1
     assert runtime.certified[0].status is CodingCertificationLeaseStatus.CLAIMED
@@ -350,6 +469,11 @@ async def test_canary_runtime_certify_accepts_private_json() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Cache-Control"] == "no-store"
         assert request.headers["Authorization"] == f"Bearer {_TOKEN}"
+        body = json.loads(request.content)
+        assert body["grant"]["lease_id"] == str(_LEASE)
+        assert body["grant"]["schema"].endswith("inference-exchange-v1")
+        assert body["grant"]["broker_public_key"] == "A" * 43
+        assert body["grant"]["broker_private_key"] == "B" * 86
         return httpx.Response(
             200,
             headers={"Content-Type": "application/json", "Cache-Control": "no-store"},
@@ -363,6 +487,9 @@ async def test_canary_runtime_certify_accepts_private_json() -> None:
         outcome = await runtime.certify(
             _lease(status=CodingCertificationLeaseStatus.CLAIMED),
             _harness(),
+            _grant_exchange(),
+            broker_public_key="A" * 43,
+            broker_private_key="B" * 86,
         )
     assert outcome.receipt.weight_eligible is False
     assert outcome.capabilities_revoked is True
@@ -389,6 +516,9 @@ async def test_canary_runtime_rejects_missing_no_store() -> None:
             await runtime.certify(
                 _lease(status=CodingCertificationLeaseStatus.CLAIMED),
                 _harness(),
+                _grant_exchange(),
+                broker_public_key="A" * 43,
+                broker_private_key="B" * 86,
             )
 
 

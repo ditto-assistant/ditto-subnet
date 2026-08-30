@@ -4884,6 +4884,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/coding-certification-leases/inference-exchange": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exchange Coding Certification Inference Grant
+         * @description Rotate a live canary grant onto one validator broker key.
+         */
+        post: operations["exchange_coding_certification_inference_grant_api_v1_validator_coding_certification_leases_inference_exchange_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/coding-certification-leases/inference-revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Coding Certification Inference Grant Endpoint
+         * @description Durably revoke exactly the validator's observed canary grant generation.
+         */
+        post: operations["revoke_coding_certification_inference_grant_endpoint_api_v1_validator_coding_certification_leases_inference_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/coding-certification-leases/{lease_id}/abort": {
         parameters: {
             query?: never;
@@ -4932,6 +4972,26 @@ export interface paths {
          * @description Return one short-lived screened image capability for a claimed lease.
          */
         post: operations["request_coding_certification_harness_launch_api_v1_validator_coding_certification_leases__lease_id__harness_launch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/coding-certification-leases/{lease_id}/inference-grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Coding Certification Inference Grant
+         * @description Mint or replay the one pending/active grant for a claimed canary lease.
+         */
+        post: operations["request_coding_certification_inference_grant_api_v1_validator_coding_certification_leases__lease_id__inference_grant_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11101,6 +11161,263 @@ export interface components {
             screened_image_size_bytes: number;
             /** Screening Policy Version */
             screening_policy_version: number;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** CodingCertificationInferenceExchangeResponse */
+        CodingCertificationInferenceExchangeResponse: {
+            /** Bearer */
+            bearer: string;
+            /** Case Id */
+            case_id: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Completion Token Budget */
+            completion_token_budget: number;
+            /** Cost Budget Usd Micros */
+            cost_budget_usd_micros: number;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Generation */
+            generation: number;
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /** Inference Grant Sha256 */
+            inference_grant_sha256: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Model
+             * @constant
+             */
+            model: "openai/gpt-5.6-luna";
+            /** Profile Capability Id */
+            profile_capability_id: string;
+            /** Prompt Token Budget */
+            prompt_token_budget: number;
+            /**
+             * Provider Account Guardrail
+             * @constant
+             */
+            provider_account_guardrail: "openrouter_private_account_v1";
+            /**
+             * Provider Api
+             * @constant
+             */
+            provider_api: "openrouter";
+            /**
+             * Provider Cache Policy
+             * @constant
+             */
+            provider_cache_policy: "disabled_v1";
+            /**
+             * Provider Pipeline Policy
+             * @constant
+             */
+            provider_pipeline_policy: "no_plugins_no_transforms_v1";
+            /** Provider Route */
+            provider_route: string;
+            /** Provider Route Profile */
+            provider_route_profile: string;
+            /** Proxy Url */
+            proxy_url: string;
+            /**
+             * Reasoning Effort
+             * @constant
+             */
+            reasoning_effort: "medium";
+            /** Receipt Provider */
+            receipt_provider: string;
+            /** Request Budget */
+            request_budget: number;
+            /** Revoke Bearer */
+            revoke_bearer: string;
+            /** Revoke Url */
+            revoke_url: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-certification-inference-exchange-v1";
+            /**
+             * Status
+             * @constant
+             */
+            status: "active";
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** CodingCertificationInferenceGrantOffer */
+        CodingCertificationInferenceGrantOffer: {
+            /** Case Id */
+            case_id: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Completion Token Budget */
+            completion_token_budget: number;
+            /** Cost Budget Usd Micros */
+            cost_budget_usd_micros: number;
+            /** Exchange Url */
+            exchange_url: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Generation */
+            generation: number;
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /** Inference Grant Sha256 */
+            inference_grant_sha256: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Model
+             * @constant
+             */
+            model: "openai/gpt-5.6-luna";
+            /** Profile Capability Id */
+            profile_capability_id: string;
+            /** Prompt Token Budget */
+            prompt_token_budget: number;
+            /**
+             * Provider Account Guardrail
+             * @constant
+             */
+            provider_account_guardrail: "openrouter_private_account_v1";
+            /**
+             * Provider Api
+             * @constant
+             */
+            provider_api: "openrouter";
+            /**
+             * Provider Cache Policy
+             * @constant
+             */
+            provider_cache_policy: "disabled_v1";
+            /**
+             * Provider Pipeline Policy
+             * @constant
+             */
+            provider_pipeline_policy: "no_plugins_no_transforms_v1";
+            /** Provider Route */
+            provider_route: string;
+            /** Provider Route Profile */
+            provider_route_profile: string;
+            /**
+             * Reasoning Effort
+             * @constant
+             */
+            reasoning_effort: "medium";
+            /** Receipt Provider */
+            receipt_provider: string;
+            /** Request Budget */
+            request_budget: number;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-certification-inference-grant-offer-v1";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "active";
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * CodingCertificationInferenceGrantRequest
+         * @description Signed request for the one grant bound to a claimed certification lease.
+         */
+        CodingCertificationInferenceGrantRequest: {
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** CodingCertificationInferenceRevokeResponse */
+        CodingCertificationInferenceRevokeResponse: {
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Generation */
+            generation: number;
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /** Idempotent */
+            idempotent: boolean;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Revoked At
+             * Format: date-time
+             */
+            revoked_at: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-certification-inference-revocation-v1";
+            /**
+             * Status
+             * @constant
+             */
+            status: "revoked";
             /**
              * Weight Eligible
              * @constant
@@ -33327,6 +33644,72 @@ export interface operations {
             };
         };
     };
+    exchange_coding_certification_inference_grant_api_v1_validator_coding_certification_leases_inference_exchange_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingInferenceExchangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingCertificationInferenceExchangeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_coding_certification_inference_grant_endpoint_api_v1_validator_coding_certification_leases_inference_revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingInferenceRevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingCertificationInferenceRevokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     abort_lease_api_v1_validator_coding_certification_leases__lease_id__abort_post: {
         parameters: {
             query?: never;
@@ -33441,6 +33824,41 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_coding_certification_inference_grant_api_v1_validator_coding_certification_leases__lease_id__inference_grant_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lease_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingCertificationInferenceGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingCertificationInferenceGrantOffer"];
+                };
             };
             /** @description Validation Error */
             422: {

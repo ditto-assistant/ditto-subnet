@@ -241,7 +241,8 @@ func parseRequest(body []byte, now time.Time) (Request, error) {
 		request.BenchVersion < 7 || request.BenchVersion > 1_000_000 ||
 		!validImageURL(request.ImageURL) || !request.Deadline.After(now) ||
 		request.Deadline.After(now.Add(2*time.Hour)) || !request.ImageExpiresAt.After(now) ||
-		request.ImageExpiresAt.After(request.Deadline) || request.ImageExpiresAt.After(now.Add(6*time.Minute)) {
+		request.ImageExpiresAt.After(request.Deadline) || request.ImageExpiresAt.After(now.Add(6*time.Minute)) ||
+		!validGrant(request.Grant, request, now) {
 		return Request{}, ErrInvalid
 	}
 	return request, nil

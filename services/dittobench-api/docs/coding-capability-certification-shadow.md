@@ -97,15 +97,16 @@ submission plus a trusted inference-evidence source; test fixtures cannot be
 used by production adapters.
 
 `internal/codingcanary` is the default-off host adapter. It loads the pinned
-`certification/v1` pack, acquires a lease-shaped screened harness, runs this
-certifier, and always revokes the workspace route and destroys the harness.
-The lease pack hash is the public-canary identity; the receipt
+`certification/v1` pack, acquires a lease-shaped screened harness, activates
+the existing source-bound inference gateway from an exchanged claimed-lease
+grant, runs this certifier, and always revokes the gateway, workspace route,
+and harness. The lease pack hash is the public-canary identity; the receipt
 `canary_manifest_sha256` is this package's execution digest. They are not
 required to be equal. Certified receipts still require observed inference
-evidence; this adapter may persist a failed receipt when inference is not
-observed. The host constructs the adapter only when
-`DITTOBENCH_CODING_CANARY_ENABLED` is set and the certification pack root is
-present. Flags stay false until a separately reviewed activation.
+evidence; unused inference still yields a persistable failed receipt. The host
+constructs the adapter only when `DITTOBENCH_CODING_CANARY_ENABLED` is set and
+the certification pack root is present. Flags stay false until a separately
+reviewed activation.
 
 Coding contract v1 remains permanently shadow-only. A separately reviewed
 contract v2, calibration result, and owner-approved emissions policy are

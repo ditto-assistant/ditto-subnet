@@ -51,6 +51,7 @@ from ditto.api_models.coding_claims import (
 )
 from ditto.api_models.coding_harness import coding_harness_launch_signing_message
 from ditto.api_models.coding_inference_grants import (
+    coding_certification_inference_grant_signing_message,
     coding_inference_exchange_signing_message,
     coding_inference_grant_signing_message,
     coding_inference_revoke_signing_message,
@@ -260,6 +261,27 @@ def sign_coding_inference_grant(
         coding_inference_grant_signing_message(
             validator_hotkey=validator_hotkey,
             ticket_id=ticket_id,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
+def sign_coding_certification_inference_grant(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    lease_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    """Sign one claimed-lease public-canary inference grant request."""
+
+    signature: bytes = keypair.sign(
+        coding_certification_inference_grant_signing_message(
+            validator_hotkey=validator_hotkey,
+            lease_id=lease_id,
             nonce=nonce,
             requested_at=requested_at,
         )
