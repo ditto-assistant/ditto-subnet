@@ -22,13 +22,24 @@ from ditto_screener.enrollment import (
 )
 from ditto_screener.errors import PlatformError
 from ditto_screener.heartbeat import ScreenerHeartbeatRequest
-from ditto_screener.platform import PlatformClient, RemoteSubmissionBuildRejected
+from ditto_screener.platform import (
+    _REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS,
+    PlatformClient,
+    RemoteSubmissionBuildRejected,
+    _remote_source_review_poll_deadline,
+)
 from ditto_screener.review_settings import bootstrap_review_settings
 from ditto_screening_protocol import SCREENING_POLICY_VERSION, ScreenResultOutcome
 
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _TOKEN = "test-screener-token-at-least-32-characters"
+
+
+def test_remote_source_review_poll_reserves_terminal_commit_grace() -> None:
+    assert _remote_source_review_poll_deadline(now=10.0, timeout=1_800.0) == (
+        10.0 + 1_800.0 + _REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS
+    )
 
 
 def _assert_auth(request: httpx.Request) -> None:
