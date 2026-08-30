@@ -133,6 +133,12 @@ class ScreenerWorker:
         self._last_heartbeat_timestamp = 0
         self._last_heartbeat_monotonic = float("-inf")
         self._last_heartbeat_state: ScreenerRuntimeState | None = None
+        # Heartbeats describe the policy this worker is ready to claim now,
+        # not merely the newest policy compiled into the binary. A release can
+        # intentionally support a rollback range while Platform requires the
+        # floor policy; advertising only the ceiling makes a capable dedicated
+        # node look unavailable to the capacity controller.
+        self._heartbeat_policy_version = SCREENING_POLICY_VERSION
         self._progress_heartbeat_tasks: set[asyncio.Task[None]] = set()
         bootstrap = bootstrap_review_settings(config)
         bootstrap_manifest = builtin_policy_manifest(
@@ -238,12 +244,13 @@ class ScreenerWorker:
                 if host_specs is not None
                 else _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS
             )
+            policy_version = self._heartbeat_policy_version
             signature = sign_heartbeat(
                 self._keypair,
                 screener_hotkey=self._config.screener_hotkey,
                 software_version=__version__,
                 protocol_version=protocol_version,
-                policy_version=SCREENING_POLICY_VERSION,
+                policy_version=policy_version,
                 state=state,
                 active_agent_id=self._active_agent_id,
                 instance_id=self._instance_id,
@@ -257,7 +264,7 @@ class ScreenerWorker:
                 screener_hotkey=self._config.screener_hotkey,
                 software_version=__version__,
                 protocol_version=protocol_version,
-                policy_version=SCREENING_POLICY_VERSION,
+                policy_version=policy_version,
                 state=state,
                 active_agent_id=self._active_agent_id,
                 instance_id=self._instance_id,
@@ -340,6 +347,11 @@ class ScreenerWorker:
         # A mixed-fleet platform may require the older policy during a
         # scheduled activation window; screen under exactly what it requires.
         screen_version = min(required_policy, SCREENING_POLICY_VERSION)
+        if screen_version != self._heartbeat_policy_version:
+            self._heartbeat_policy_version = screen_version
+            # Correct the startup/previous-policy heartbeat before claiming so
+            # the capacity controller can admit this node during a rollback.
+            await self._report_heartbeat("polling", force=True)
         queue = await self._platform.claim_next(
             policy_version=screen_version,
             review_settings=review_settings,

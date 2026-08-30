@@ -815,6 +815,28 @@ async def test_floor_policy_claims_and_signs_floor_policy(
     assert platform.claimed_policy_versions == [SCREENING_FLOOR_POLICY_VERSION]
     assert gate.policy_versions == [SCREENING_FLOOR_POLICY_VERSION]
     assert platform.verdicts[0]["policy_version"] == SCREENING_FLOOR_POLICY_VERSION
+    assert platform.heartbeats
+    assert all(
+        heartbeat.policy_version == SCREENING_FLOOR_POLICY_VERSION
+        for heartbeat in platform.heartbeats
+    )
+
+
+async def test_floor_policy_corrects_idle_heartbeat_before_claim(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([[]])
+    platform.required_policy_version = SCREENING_FLOOR_POLICY_VERSION
+    worker = _worker(
+        make_config(), platform, _FakeGate(_decision(ScreeningOutcome.PASS))
+    )
+
+    assert await worker._sweep(asyncio.Event()) == 0
+    assert platform.claimed_policy_versions == [SCREENING_FLOOR_POLICY_VERSION]
+    assert [heartbeat.state for heartbeat in platform.heartbeats] == ["polling"]
+    assert [heartbeat.policy_version for heartbeat in platform.heartbeats] == [
+        SCREENING_FLOOR_POLICY_VERSION
+    ]
 
 
 async def test_current_policy_claims_and_signs_current_policy(
