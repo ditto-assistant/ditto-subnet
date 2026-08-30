@@ -24,12 +24,9 @@ class TestConfirmPayment:
     def test_y_answer_returns_none(self, monkeypatch, capsys) -> None:
         monkeypatch.setattr(builtins, "input", lambda _: "y")
 
-        # confirm_payment returns None on success; here we just need to
-        # know it did not raise (PaymentCancelledError).
         confirm_payment(**self._kwargs())
 
         out = capsys.readouterr().out
-        # Preview is on stdout for user-facing display.
         assert "1.5 TAO" in out
         assert "1500000000 rao" in out
 
@@ -70,7 +67,6 @@ class TestConfirmPayment:
 
         confirm_payment(**self._kwargs(skip=True))
 
-        # Preview still printed so the miner sees what they paid.
         assert "1.5 TAO" in capsys.readouterr().out
 
 
@@ -104,14 +100,11 @@ class TestConfirmRegistration:
         out = capsys.readouterr().out
         assert "burned, not transferred" in out
         assert "cannot be refunded" in out
-        # And that it is not the eval fee, which is confirmed separately.
         assert "does NOT pay the evaluation fee" in out
 
     def test_y_answer_is_accepted(self, monkeypatch) -> None:
         monkeypatch.setattr(builtins, "input", lambda _: "y")
 
-        # confirm_registration returns None on success; here we just need to
-        # know it did not raise (RegistrationCancelledError).
         confirm_registration(quote=self._quote(), skip=False)
 
     def test_n_answer_raises_cancelled(self, monkeypatch) -> None:
@@ -143,5 +136,4 @@ class TestConfirmRegistration:
 
         confirm_registration(quote=self._quote(), skip=True)
 
-        # The miner still sees what was recycled on their behalf.
         assert "0.0005 TAO" in capsys.readouterr().out

@@ -27,7 +27,6 @@ class TestMain:
     def test_unknown_network_rejected_by_argparse(self) -> None:
         with pytest.raises(SystemExit) as ex:
             main(["--network", "staging-canary", "verify", "--path", "/tmp/x.tar.gz"])
-        # argparse exits 2 on invalid choices.
         assert ex.value.code == 2
 
     def test_verify_subcommand_dispatches_to_run(

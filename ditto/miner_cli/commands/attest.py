@@ -236,7 +236,7 @@ def run(args: argparse.Namespace) -> int:
 def _run_attest(
     args: argparse.Namespace, *, network_api_url: str, emit_result: bool = True
 ) -> int:
-    # Step 1: load both wallets. The link is symmetric, so "this" and "other"
+    # The link is symmetric, so "this" and "other"
     # name only which flags carried them; neither side is privileged.
     this_handle, this_wallet = load_wallet(
         coldkey_name=args.coldkey_name, hotkey_name=args.hotkey_name
@@ -251,7 +251,7 @@ def _run_attest(
             f"({this_handle.hotkey_ss58}); a hotkey cannot be linked to itself"
         )
 
-    # Step 2: canonical order decides which side each wallet signs for. The
+    # Canonical order decides which side each wallet signs for. The
     # server sorts the same way and binds each proof to the side its hotkey
     # landed on, so a mislabelled half simply fails to verify.
     hotkey_lo, hotkey_hi = canonical_pair(
@@ -262,12 +262,12 @@ def _run_attest(
     this_key_kind = cast("KeyKind", args.key_kind)
     other_key_kind = cast("KeyKind", args.other_key_kind)
 
-    # Step 3: mint the shared tuple. Both halves must bind the identical
+    # Both halves must bind the identical
     # nonce and issued_at or the platform rejects the pair.
     nonce = uuid4()
     issued_at = datetime.now(UTC)
 
-    # Step 4: sign each half with its own wallet and its own key kind. No
+    # Sign each half with its own wallet and its own key kind. No
     # extrinsic is built here; a coldkey kind only decrypts a key to sign.
     this_signature = sign_link_half(
         live_wallet=this_wallet,
@@ -309,7 +309,7 @@ def _run_attest(
         proof_b=other_proof,
     )
 
-    # Step 5: --print-only stops here. Nothing is sent, so no confirmation is
+    # --print-only stops here. Nothing is sent, so no confirmation is
     # asked for: the only side effect is bytes on stdout.
     if args.print_only:
         print(json.dumps(body.model_dump(mode="json"), indent=2))
@@ -321,7 +321,6 @@ def _run_attest(
         )
         return 0
 
-    # Step 6: confirm, then submit.
     lo_proof, hi_proof = (
         (this_proof, other_proof) if this_side == "lo" else (other_proof, this_proof)
     )
@@ -340,7 +339,6 @@ def _run_attest(
     with ApiClient(base_url=network_api_url) as client:
         result = client.post_owner_link(body)
 
-    # Step 7: attestation_id to stdout, everything else to stderr.
     if emit_result:
         print(result.attestation_id)
         print(
