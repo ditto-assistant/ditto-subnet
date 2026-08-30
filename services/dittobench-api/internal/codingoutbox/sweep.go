@@ -77,8 +77,9 @@ func (store *Store) Sweep(ctx context.Context) (SweepReport, error) {
 		if record.Frozen != nil {
 			references[record.Frozen.Artifact.FrozenPatchSHA256] = struct{}{}
 		}
+		addPublicationReferences(references, record)
 	}
-	physicalLimit := store.config.MaxAttempts*4 + 1024
+	physicalLimit := store.config.MaxAttempts*8 + 1024
 	deletedStaging, err := sweepStaging(ctx, store.dirs.staging, activeStaging, now, store.config.OrphanGrace, physicalLimit)
 	if err != nil {
 		return report, err

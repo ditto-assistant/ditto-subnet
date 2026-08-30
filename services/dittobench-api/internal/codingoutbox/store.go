@@ -82,7 +82,7 @@ func (store *Store) Reserve(
 	if err != nil {
 		return nil, err
 	}
-	reservation := reservationForLimits(limits)
+	reservation := reservationForPurpose(binding.Purpose, limits)
 	if reservation <= 0 || reservation > store.config.MaxTotalBytes {
 		return nil, ErrCapacity
 	}
@@ -199,6 +199,14 @@ func (store *Store) Release(ctx context.Context, id, terminalEvidenceSHA256 stri
 	}
 	if record.State != StateReady && record.State != StateTerminalWithoutPatch {
 		return ErrState
+	}
+	if record.Binding.Purpose == PurposeShadowAttempt {
+		if record.TerminalPublication == nil || record.TerminalPublication.Acknowledgement == nil {
+			return ErrState
+		}
+		if record.TerminalPublication.Authority.EvidenceSHA256 != terminalEvidenceSHA256 {
+			return ErrConflict
+		}
 	}
 	updated := cloneRecord(record)
 	updated.Generation++
@@ -337,6 +345,9 @@ func (store *Store) loadRecords() error {
 				return err
 			}
 		}
+		if err := store.verifyPublicationReferences(record); err != nil {
+			return err
+		}
 		store.records[record.ID] = cloneRecord(record)
 		if record.ReservedBytes > store.config.MaxTotalBytes-store.reserved {
 			return ErrCapacity
@@ -467,7 +478,7 @@ func recordBytes(record *Record) ([]byte, error) {
 func validateRecord(record *Record, expectedID string) error {
 	if record.Schema != recordSchema || record.Generation == 0 || record.ID != expectedID ||
 		!lowerSHA256(record.BindingSHA256) || !lowerSHA256(record.ChecksumSHA256) ||
-		record.ReservedBytes != reservationForLimits(record.Limits.runner()) ||
+		record.ReservedBytes != reservationForPurpose(record.Binding.Purpose, record.Limits.runner()) ||
 		record.ReservedBytes <= 0 || record.CreatedAtUnixNano <= 0 || record.UpdatedAtUnixNano < record.CreatedAtUnixNano {
 		return fmt.Errorf("%w: record known fields disagree", ErrCorrupt)
 	}
@@ -552,6 +563,9 @@ func validateRecord(record *Record, expectedID string) error {
 		record.Failure.AuthoringTranscriptSHA256 != record.Transcript.SHA256 ||
 		record.Failure.AuthoringTranscriptBytes != record.Transcript.SizeBytes) {
 		return fmt.Errorf("%w: terminal failure reference disagrees", ErrCorrupt)
+	}
+	if err := validatePublicationRecords(record); err != nil {
+		return err
 	}
 	return nil
 }
@@ -652,5 +666,7 @@ func cloneRecord(record *Record) *Record {
 		value := *record.Failure
 		copy.Failure = &value
 	}
+	copy.AuthoringPublication = clonePublication(record.AuthoringPublication)
+	copy.TerminalPublication = clonePublication(record.TerminalPublication)
 	return &copy
 }

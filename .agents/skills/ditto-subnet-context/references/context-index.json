@@ -321,6 +321,18 @@
       "related": ["coding-platform-upstream", "coding-model-relay", "coding-inference-requests", "coding-inference-grants", "coding-relay-journal", "coding-repair-research", "dittobench-scoring"]
     },
     {
+      "id": "coding-publication-journal",
+      "title": "Durable shadow coding publication journal",
+      "keywords": ["coding publication journal", "signed coding envelope", "authoring freeze replay", "terminal result replay", "publication acknowledgement", "terminal acknowledgement"],
+      "summary": "Persist exact signed authoring-freeze and terminal-result request bytes plus verified acknowledgements, and prevent shadow evidence release before terminal Platform acceptance.",
+      "owns": ["services/dittobench-api/internal/codingoutbox/publication.go", "services/dittobench-api/internal/codingoutbox/publication_test.go", "services/dittobench-api/docs/coding-evidence-outbox-shadow.md"],
+      "read": ["services/dittobench-api/docs/coding-evidence-outbox-shadow.md", "services/dittobench-api/docs/coding-inference-capability-gateway-shadow.md", "docs/coding-shadow-attempt-coordinator.md", "apps/platform/docs/coding-authoring-freeze-ledger.md", "apps/platform/docs/coding-shadow-result-submission.md"],
+      "search": ["rg -n 'PrepareAuthoringPublication|AcknowledgeAuthoringPublication|PrepareTerminalPublication|AcknowledgeTerminalPublication|PendingPublications' services/dittobench-api/internal/codingoutbox", "rg -n 'submit_coding_authoring_freeze|submit_coding_shadow_result' ditto/validator apps/platform/ditto"],
+      "validate": ["cd services/dittobench-api && go test -race ./internal/codingoutbox ./internal/codinggateway ./internal/codingattempt", "cd services/dittobench-api && go vet ./internal/codingoutbox ./internal/codinggateway ./internal/codingattempt", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
+      "invariants": ["Exact signed request and acknowledgement bytes are content addressed, bounded, and replayable after restart.", "An authoring-freeze acknowledgement is a midpoint and never releases evidence retention.", "A shadow attempt cannot release until its terminal acknowledgement and terminal evidence digest are durable and exact.", "The journal remains transport-unwired and weight_eligible=false until separate supervisor, worker, and activation reviews."],
+      "related": ["coding-inference-gateway", "coding-repair-research", "coding-inference-requests", "dittobench-scoring"]
+    },
+    {
       "id": "coding-model-relay",
       "title": "Shadow coding model-relay handler",
       "keywords": ["coding model relay", "coding Luna handler", "coding inference provider settlement", "coding DPoP admission", "coding OpenRouter route"],
