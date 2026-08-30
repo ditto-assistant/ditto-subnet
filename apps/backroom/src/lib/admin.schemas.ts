@@ -1681,7 +1681,7 @@ const queuePolicySettingsBaseSchema = z.object({
     .min(OWNER_CONCURRENT_SUBMISSION_MIN)
     .max(OWNER_CONCURRENT_SUBMISSION_MAX)
     .default(OWNER_CONCURRENT_SUBMISSION_DEFAULT),
-  // Platform #532 stores this block whole. Keep read defaults for additive
+  // The platform stores this block whole. Keep read defaults for additive
   // client-first deployment, but require every nested field on writes so an
   // older Backroom cannot silently reset a live threshold.
   similarity_budget: similarityBudgetSchema.default(SIMILARITY_BUDGET_DEFAULT),
@@ -1839,16 +1839,8 @@ export type QueuePolicySettingsControl = z.infer<typeof queuePolicySettingsContr
 // SN118 hosted inference admission policy.
 //
 // The two per-grant chat allowances plus both three-level hosted concurrency
-// hierarchies, stored by ditto-platform as one append-only revision and
-// refreshed into the admission path every five seconds. This is the board an operator
-// reaches for *while watching* a benchmark run -- and it is the board that was
-// unreachable from here until now: the platform shipped it in #477 and backroom
-// had no schema, no service call, no MCP tool and no page, so the only way to
-// move `chat_token_budget` was a curl with an admin bearer.
-//
-// That matters because `chat_token_budget` is the value that ended the runs
-// #473 tried to save. Raising the request budget alone left the heaviest agents
-// failing in the same place; the token budget was the binding allowance.
+// hierarchies are stored by the platform as one append-only revision and
+// refreshed into the admission path every five seconds.
 //
 // Both budgets are stamped onto a grant when the grant is MINTED and read from
 // the grant's own row thereafter, so a revision governs the next lease and can
@@ -4428,8 +4420,8 @@ export const validationRetryLookupInputSchema = z.object({
 
 export const validationRetryTicketSchema = z.object({
   validator_hotkey: z.string(),
-  // Which of the validator's slots held this lease. Present from
-  // ditto-platform #515, so nullish-tolerant against an older deployment.
+  // Which of the validator's slots held this lease. Nullish-tolerant against
+  // older deployments.
   slot_id: z.string().nullish().default(null),
   status: z.enum(['issued', 'scored', 'expired']),
   issued_at: z.string(),
@@ -4437,8 +4429,7 @@ export const validationRetryTicketSchema = z.object({
   bench_version: z.number().int().positive(),
   attempt_count: z.number().int().positive(),
   manual_retry_grants: z.number().int().nonnegative(),
-  // Required, not nullish: the platform has returned this since
-  // ditto-platform #264 and it is the field that distinguishes a submission
+  // Required, not nullish: this field distinguishes a submission
   // being re-leased forever from one that is genuinely stalled. On 2026-07-27
   // an agent family reported fail_job(reason="infrastructure") on every
   // attempt; because `infrastructure` is the platform's no-fault class, each
@@ -4486,8 +4477,7 @@ export const validationRetryTicketSchema = z.object({
   // it is attached to. A reported failure and a silent expiry are otherwise
   // byte-identical in the ledger — both land as status=expired with a
   // rewritten deadline — so this is the only field that tells them apart.
-  // Nullish because ditto-platform #515 is still unmerged: `null` means "this
-  // deployment cannot tell you", which is a different claim from `false`,
+  // Null means "this deployment cannot tell you", which is a different claim from `false`,
   // "this expiry came with a reported reason".
   silently_expired: z.boolean().nullish().default(null),
   purpose: z
@@ -4521,8 +4511,8 @@ export const validationQueueWithdrawalSchema = z.object({
   // ordinary withdrawal, `[]` is an eviction that found nothing live left to
   // revoke, and a list names the leases it took. Collapsing the first two would
   // make an eviction that arrived a minute too late indistinguishable from
-  // routine cleanup. `nullish` tolerates a platform that predates ditto-platform
-  // #515, where the field is absent rather than null.
+  // routine cleanup. `nullish` tolerates an older platform where the field is
+  // absent rather than null.
   evicted_validator_hotkeys: z.array(z.string()).nullish().default(null),
   created_at: z.string(),
   // Set once an eviction has been reversed (ditto-platform reinstatement). A
@@ -4583,9 +4573,8 @@ export const validationRetryDetailSchema = z.object({
   dominant_failure_code: z.string().nullish().default(null),
   withdrawal_allowed: z.boolean(),
   withdrawal_blocking_reason: z.string().nullable(),
-  // Eviction reporting from ditto-platform #515. All three are nullish-tolerant
-  // because Backroom and the platform deploy separately: against a platform
-  // build that predates #515 they read `null`, which says "this deployment
+  // Eviction reporting is nullish-tolerant because Backroom and the platform
+  // deploy separately: against an older platform they read `null`, which says "this deployment
   // cannot tell you", not "eviction is blocked".
   eviction_allowed: z.boolean().nullish().default(null),
   eviction_blocking_reason: z.string().nullish().default(null),
@@ -4746,9 +4735,8 @@ export const stuckSubmissionSchema = z.object({
   // `silently_expired`). A submission whose count climbs while `score_count`
   // stays at zero is hanging, not merely slow — the distinction the fleet
   // triage feed could not make on 2026-07-27. Survives the compact list because
-  // it is a submission field, not a ticket-history field. Nullish while
-  // ditto-platform #515 is unmerged: `null` is "this deployment cannot tell
-  // you", not "zero silent expiries".
+  // it is a submission field, not a ticket-history field. `null` is "this
+  // deployment cannot tell you", not "zero silent expiries".
   silent_expiry_count: z.number().int().nonnegative().nullish().default(null),
   snapshot: z.string().regex(/^[0-9a-f]{64}$/),
   ticket_states: z.partialRecord(
@@ -4771,7 +4759,7 @@ export const stuckSubmissionsListSchema = z.object({
   submissions: z.array(stuckSubmissionSchema),
 })
 
-// Platform-initiated lease revocations, from ditto-platform #498's
+// Platform-initiated lease revocations from
 // `GET /api/v1/admin/lease-revocations` over the `validator_lease_audit` table.
 // `agent_id` and `validator_hotkey` are the two indexed columns and the two
 // questions an incident actually asks: "why did this submission lose its run"
@@ -4861,7 +4849,7 @@ export const batchRetryValidationResponseSchema = z.object({
 
 // Scoring readiness explains why a submission is or is not leaseable for
 // scoring (missing dataset, unbuilt screened image, stale policy, not
-// evaluating). Backed by ditto-platform #275; 404s until that ships.
+// evaluating).
 export const agentScoringReadinessInputSchema = z.object({
   agentId: z.string().uuid(),
 })
@@ -5917,7 +5905,7 @@ export const copyReviewOriginalSchema = z.object({
   ),
   reference_provenance: z.string(),
   backfilled: z.boolean(),
-  // Identity of the matched submission (platform #162). Nullish defaults keep
+  // Identity of the matched submission. Nullish defaults keep
   // the console working against a platform that predates the identity fields.
   duplicate_of_name: z.string().nullish().default(null),
   duplicate_of_version: z.number().int().nullish().default(null),
@@ -6104,7 +6092,6 @@ export const openAthReviewResponseSchema = z.object({
   reopened: z.boolean().default(false),
 })
 
-// --- Copy-review source diff (platform #170) ------------------------------
 // Per-file diff between a held agent and the agent it was matched against, so
 // an operator can see which files were copied verbatim vs. altered inline.
 

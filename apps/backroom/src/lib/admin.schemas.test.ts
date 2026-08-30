@@ -2334,8 +2334,8 @@ describe('queue policy settings schemas', () => {
   // The drift guard. `z.object` silently drops keys it does not declare, so a
   // field the platform requires but this schema omits is invisible here and a
   // 422 there -- that is how `require_desired_era_drained` was lost, and how
-  // `owner_concurrent_submission_limit` broke every queue-policy write after
-  // ditto-platform#476 shipped it. Enumerating the contract makes the next
+  // `owner_concurrent_submission_limit` broke every queue-policy write when it
+  // was added. Enumerating the contract makes the next
   // platform-side addition fail loudly in CI instead of silently in prod.
   it('declares exactly the platform-owned policy field set', () => {
     expect(Object.keys(queuePolicySettingsSchema.parse({})).sort()).toEqual([
@@ -3861,18 +3861,17 @@ describe('why a validator ticket ended', () => {
   })
 
   it('keeps infra_retry_grants required, because a missing one is a contract break', () => {
-    // The platform has returned it since ditto-platform #264, so absence is not
-    // an old deployment; it is a response Backroom must not quietly accept and
+    // Absence is a response Backroom must not quietly accept and
     // then render as a submission with no no-fault grants at all.
     const { infra_retry_grants: _dropped, ...withoutGrants } = ticket
     expect(() => validationRetryTicketSchema.parse(withoutGrants)).toThrow()
   })
 
-  it('reads null, not false, for the fields ditto-platform #515 has not shipped', () => {
+  it('reads null, not false, for fields an older platform may omit', () => {
     const parsed = validationRetryTicketSchema.parse(ticket)
 
-    // #515 is still an unmerged draft. `false` for silently_expired would claim
-    // "this expiry came with a reported reason", which is exactly the wrong
+    // `false` for silently_expired would claim "this expiry came with a
+    // reported reason", which is exactly the wrong
     // conclusion to hand an operator mid-incident.
     expect(parsed.silently_expired).toBeNull()
     expect(parsed.failure_reason).toBeNull()
@@ -4124,9 +4123,7 @@ describe('public leaderboard rows that do not rank', () => {
   })
 
   it('accepts every rank the generated Platform type can send', () => {
-    // The drift this guards: Platform declared `rank: int | None` in PR #583
-    // while this schema kept PR #350's required `rank`, and nothing failed
-    // until a real null reached production.
+    // Platform permits a null rank, so this schema must not require one.
     expectTypeOf<
       PlatformComponents['schemas']['PublicLeaderboardEntry']['rank']
     >().toMatchTypeOf<
