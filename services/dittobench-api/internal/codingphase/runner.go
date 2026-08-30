@@ -366,8 +366,11 @@ func (runner *Runner) Recover(
 	if record.Binding.TicketID != request.TicketID || !record.Binding.Deadline.Equal(request.Deadline) {
 		return codingsupervisor.RecoveryOutcome{}, ErrInvalid
 	}
-	if err := runner.revokeLiveGateway(ctx, request.TicketID); err != nil {
-		return codingsupervisor.RecoveryOutcome{}, errors.Join(ErrLifecycle, err)
+	cleanupContext, cancel := runner.cleanupContext(ctx)
+	revokeErr := runner.revokeLiveGateway(cleanupContext, request.TicketID)
+	cancel()
+	if revokeErr != nil {
+		return codingsupervisor.RecoveryOutcome{}, errors.Join(ErrLifecycle, revokeErr)
 	}
 	switch record.State {
 	case codingoutbox.StateReserved:
@@ -417,11 +420,15 @@ func validateModelEvidence(
 	binding codingrelay.Binding,
 	evidence codingcontract.ModelEvidence,
 ) error {
+	costBudget := binding.CostBudgetUSDMicros
+	if costBudget == 0 {
+		costBudget = policy.MaxCostUSDMicros
+	}
 	if _, err := codingcontract.InferenceModelEvidenceSHA256(policy, evidence); err != nil ||
 		evidence.Requests > uint64(binding.RequestBudget) ||
 		evidence.PromptTokens > binding.PromptTokenBudget ||
 		evidence.CompletionTokens > binding.CompletionTokenBudget ||
-		evidence.CostUSDMicros > binding.CostBudgetUSDMicros {
+		evidence.CostUSDMicros > costBudget {
 		return ErrInvalid
 	}
 	return nil

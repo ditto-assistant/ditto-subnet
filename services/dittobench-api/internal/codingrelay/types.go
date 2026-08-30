@@ -51,7 +51,7 @@ type Binding struct {
 	RequestBudget         uint32
 	PromptTokenBudget     uint64
 	CompletionTokenBudget uint64
-	CostBudgetUSDMicros   uint64
+	CostBudgetUSDMicros   uint64 `json:"CostBudgetUSDMicros,omitempty"`
 }
 
 // EvidenceBinding is the caller-supplied source identity checked at evidence

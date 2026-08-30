@@ -62,7 +62,7 @@ func validateBinding(policy codingcontract.InferencePolicy, binding Binding, now
 		binding.RequestBudget > policy.MaxRequests || binding.PromptTokenBudget == 0 ||
 		binding.PromptTokenBudget > policy.MaxPromptTokens || binding.CompletionTokenBudget == 0 ||
 		binding.CompletionTokenBudget > policy.MaxCompletionTokens ||
-		binding.CostBudgetUSDMicros == 0 || binding.CostBudgetUSDMicros > policy.MaxCostUSDMicros {
+		binding.CostBudgetUSDMicros > policy.MaxCostUSDMicros {
 		return ErrInvalidConfig
 	}
 	return nil

@@ -173,7 +173,7 @@ func (relay *Relay) admit(
 	requests, prompt, completion, cost, ok := relay.accounting()
 	if !ok || requests >= uint64(relay.binding.RequestBudget) ||
 		prompt >= relay.binding.PromptTokenBudget || completion >= relay.binding.CompletionTokenBudget ||
-		cost >= relay.binding.CostBudgetUSDMicros {
+		cost >= relay.costBudget() {
 		return DispatchRecord{}, nil, nil, ErrBudgetExhausted
 	}
 	remainingCompletion := relay.binding.CompletionTokenBudget - completion
@@ -578,7 +578,14 @@ func (relay *Relay) withinBudgets(entries []JournalEntry) bool {
 	requests, prompt, completion, cost, ok := accountingFor(entries)
 	return ok && requests <= uint64(relay.binding.RequestBudget) &&
 		prompt <= relay.binding.PromptTokenBudget && completion <= relay.binding.CompletionTokenBudget &&
-		cost <= relay.binding.CostBudgetUSDMicros
+		cost <= relay.costBudget()
+}
+
+func (relay *Relay) costBudget() uint64 {
+	if relay.binding.CostBudgetUSDMicros == 0 {
+		return relay.policy.MaxCostUSDMicros
+	}
+	return relay.binding.CostBudgetUSDMicros
 }
 
 func (relay *Relay) accounting() (uint64, uint64, uint64, uint64, bool) {
