@@ -787,7 +787,7 @@ async def test_shadow_records_l2_but_preserves_l1_quarantine() -> None:
     assert l2.calls == 1
 
 
-async def test_l2_failure_cannot_silently_release_or_reject() -> None:
+async def test_l2_failure_preserves_the_l1_finding_as_a_hold() -> None:
     failure = SourceReviewObservation(
         ok=False,
         risk_level=None,
@@ -805,7 +805,8 @@ async def test_l2_failure_cannot_silently_release_or_reject() -> None:
     )
 
     assert not result.ok
-    assert result.failure_disposition == "retryable_infra"
+    assert result.failure_disposition == "inconclusive"
+    assert result.finding_digest is not None
 
 
 def _clearance_candidate(*, confidence: float = 0.99) -> L2RunResult:
@@ -4272,11 +4273,13 @@ class _FakeAdjudicator:
     def __init__(self, decision: str = "clear") -> None:
         self.calls = 0
         self.seen_notes: tuple[Any, ...] = ()
+        self.seen_finding: Any = None
         self._decision = decision
 
     async def adjudicate(self, _archive: str, **kwargs: Any) -> Any:
         self.calls += 1
         self.seen_notes = tuple(kwargs.get("notes") or ())
+        self.seen_finding = kwargs.get("finding")
         return SourceReviewAdjudication(
             decision=self._decision,
             reason="the model authors the served reply at src/main.rs:6",
@@ -4408,6 +4411,37 @@ async def test_an_evidence_bearing_failure_is_finally_adjudicated() -> None:
 
     assert court.calls == 1
     assert court.seen_notes == notes
+    assert result.adjudication is not None
+    assert result.adjudication["decision"] == "clear"
+
+
+async def test_a_preflight_finding_survives_an_empty_l2_provider_failure() -> None:
+    """The deterministic L1 finding is enough evidence for terminal L4."""
+    l1 = _l1("high")
+    interrupted = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="l2-model-timeout",
+        failure_disposition="retryable_infra",
+    )
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(l1),
+        l2=_FakeL2(_model_result(interrupted)),
+        mode="enforce",
+        adjudicator=court,  # type: ignore[arg-type]
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert court.calls == 1
+    assert court.seen_finding == l1.finding
+    assert result.failure_disposition == "inconclusive"
+    assert result.finding_digest == l1.finding_digest
     assert result.adjudication is not None
     assert result.adjudication["decision"] == "clear"
 
