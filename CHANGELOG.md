@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.160.0 (2026-08-30)
+
+### Features
+
+- **coding**: Add private shadow attempt supervisor
+  ([`d0746bd`](https://github.com/ditto-assistant/ditto-subnet/commit/d0746bdff0543e206834f9b3b63638770e2bd33e))
+
+
 ## v0.159.0 (2026-08-30)
 
 ### Features
