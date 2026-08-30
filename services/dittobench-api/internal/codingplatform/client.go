@@ -35,7 +35,8 @@ var bearerPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32,128}$`)
 
 // Client is one secret-owning validator-side adapter for codingrelay.Upstream.
 type Client struct {
-	mu sync.Mutex
+	mu      sync.Mutex
+	clockMu sync.Mutex
 
 	policy     codingcontract.InferencePolicy
 	binding    codingrelay.Binding
@@ -304,18 +305,17 @@ func (prepared *preparedRequest) clear() {
 }
 
 func (client *Client) prepare(request codingrelay.UpstreamRequest) (preparedRequest, error) {
-	now := client.now().UTC()
 	nonce := client.newNonce()
+	now, clockErr := client.trustedNow()
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if client.closed {
 		return preparedRequest{}, ErrCapabilityClosed
 	}
-	if now.Before(client.lastNow) {
+	if clockErr != nil {
 		client.closeLocked()
-		return preparedRequest{}, ErrClockRollback
+		return preparedRequest{}, clockErr
 	}
-	client.lastNow = now
 	if !client.binding.Deadline.After(now) {
 		client.closeLocked()
 		return preparedRequest{}, ErrCapabilityExpired
@@ -507,6 +507,17 @@ func responseProjectionMatches(
 
 // Close revokes this local client capability and zeroes its retained secret
 // buffers. It does not revoke the durable Platform grant.
+func (client *Client) trustedNow() (time.Time, error) {
+	client.clockMu.Lock()
+	defer client.clockMu.Unlock()
+	now := client.now().UTC()
+	if now.IsZero() || now.Before(client.lastNow) {
+		return time.Time{}, ErrClockRollback
+	}
+	client.lastNow = now
+	return now, nil
+}
+
 func (client *Client) Close() error {
 	if client == nil {
 		return nil
