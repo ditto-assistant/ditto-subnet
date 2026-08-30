@@ -54,8 +54,11 @@ func (activator *GatewayActivator) Activate(
 	ctx context.Context,
 	activation InferenceActivation,
 ) (InferenceGateway, error) {
-	if activator == nil || ctx == nil || ctx.Err() != nil || nilLike(activation.Authorizer) {
+	if activator == nil {
 		return nil, ErrInvalidConfig
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	revoker, err := codinggrantrevoke.New(codinggrantrevoke.Config{
 		Capability: activation.Revocation, Binding: activation.Capability.Binding,
@@ -64,6 +67,9 @@ func (activator *GatewayActivator) Activate(
 	})
 	if err != nil {
 		return nil, errors.Join(ErrLifecycle, err)
+	}
+	if ctx.Err() != nil || nilLike(activation.Authorizer) {
+		return nil, activator.failBeforeGateway(ctx, revoker, activation.Capability.Binding, ErrInvalidConfig)
 	}
 	journalRoot := filepath.Join(activator.config.JournalRoot, journalLeaf(activation.Capability.Binding))
 	if err := ensureJournalDirectory(activator.config.JournalRoot, filepath.Base(journalRoot)); err != nil {

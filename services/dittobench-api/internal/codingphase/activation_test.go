@@ -207,4 +207,40 @@ func TestGatewayActivatorRevokesBeforeRejectingInsufficientJournalCapacity(t *te
 	}
 }
 
+func TestGatewayActivatorRevokesWhenActivationContextIsCanceled(t *testing.T) {
+	fixture, grant := parsedActivationFixture(t)
+	revokeCalls := 0
+	transport := activationRoundTrip(func(*http.Request) (*http.Response, error) {
+		revokeCalls++
+		body := `{"schema":"dittobench-coding-inference-revocation-v1","coding_contract_version":1,"weight_eligible":false,"grant_id":"` +
+			grant.revocation.GrantID + `","ticket_id":"` + grant.revocation.TicketID +
+			`","status":"revoked","generation":1,"revoked_at":"` + fixture.now.Format(time.RFC3339) + `","idempotent":false}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}, "Cache-Control": {"no-store"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})
+	journalRoot := t.TempDir()
+	if err := os.Chmod(journalRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	activator, err := NewGatewayActivator(GatewayActivatorConfig{
+		JournalRoot: journalRoot, JournalMaxTotalBytes: 1 << 30, JournalMaxEntries: 8,
+		Publisher: &activationPublisher{}, Transport: transport, Now: func() time.Time { return fixture.now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = activator.Activate(canceled, InferenceActivation{
+		Policy: fixture.policy, Capability: grant.capability,
+		Revocation: grant.revocation, Authorizer: &activationAuthorizer{},
+	})
+	if !errors.Is(err, ErrLifecycle) || revokeCalls != 1 {
+		t.Fatalf("err/revoke=%v/%d", err, revokeCalls)
+	}
+}
+
 var _ codingsupervisor.PhaseRunner = (*Runner)(nil)
