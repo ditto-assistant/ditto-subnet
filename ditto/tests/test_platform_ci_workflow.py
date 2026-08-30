@@ -119,10 +119,19 @@ def test_shared_verification_shards_the_complete_suite_without_deselection() -> 
             "ditto/tests/api_server/endpoints/test_validator.py",
             False,
         ),
+        "screener-inference-endpoints": (
+            "ditto/tests/api_server/endpoints/test_screener.py "
+            "ditto/tests/api_server/endpoints/test_inference.py",
+            False,
+        ),
+        # Every file split into its own shard above must be ignored here, so
+        # the union stays complete and no test runs twice.
         "other-endpoints": (
             "ditto/tests/api_server/endpoints "
             "--ignore=ditto/tests/api_server/endpoints/test_public.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_validator.py",
+            "--ignore=ditto/tests/api_server/endpoints/test_validator.py "
+            "--ignore=ditto/tests/api_server/endpoints/test_screener.py "
+            "--ignore=ditto/tests/api_server/endpoints/test_inference.py",
             False,
         ),
         "api-server": (
