@@ -697,7 +697,8 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     # Both native validator children, the sandbox daemon, both native scorer
     # children, patched Pylon, the frozen-updater relay shim, the signed
     # validator stack descriptor, and the signed screener fleet descriptor are
-    # independently built and published.
+    # independently built and published; the two cached starter-kit verify
+    # gates build without publishing.
     build_action_count = sum(
         workflow.count(action)
         for action in (
@@ -705,7 +706,7 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
             "useblacksmith/build-push-action@",
         )
     )
-    assert build_action_count == 9
+    assert build_action_count == 11
     for repository in (
         "ghcr.io/ditto-assistant/ditto-subnet-validator",
         "ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker",

@@ -57,7 +57,17 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-coding-starter-kit-${{ hashFiles('miners/dittobench-coding-starter-kit/Cargo.lock', 'miners/dittobench-starter-kit/Cargo.lock', 'miners/dittobench-unified-starter-kit/Cargo.lock') }}
+            miners/dittobench-coding-starter-kit/target
+            miners/dittobench-unified-starter-kit/target
+          # The `-target-` key name retires the registry-only cache entries: an
+          # exact hit on the old key would skip the save and leave target/
+          # uncached forever.
+          key: ${{ runner.os }}-coding-starter-kit-target-${{ hashFiles('miners/dittobench-coding-starter-kit/Cargo.lock', 'miners/dittobench-starter-kit/Cargo.lock', 'miners/dittobench-unified-starter-kit/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-coding-starter-kit-
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Verify format, lint, and tests
         run: |
@@ -69,8 +79,16 @@ jobs:
         working-directory: .
         run: bash scripts/test-coding-starter-practice-e2e.sh
 
+      # Layer cache shared with the release gate: on the common run where the
+      # miner trees are untouched, the whole build resolves from cache.
       - name: Build the shadow harness image
-        run: docker build --tag dittobench-coding-starter-kit:ci .
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: miners/dittobench-coding-starter-kit
+          tags: dittobench-coding-starter-kit:ci
+          push: false
+          cache-from: type=gha,scope=coding-starter-kit
+          cache-to: type=gha,mode=max,scope=coding-starter-kit
 
       - name: Verify the unified normal and coding starter
         working-directory: miners/dittobench-unified-starter-kit
@@ -83,13 +101,17 @@ jobs:
           uv run ditto verify \
             --path miners/dittobench-unified-starter-kit/dittobench-submission.tgz
 
+      # load: the route probe below runs this tag from the local daemon.
       - name: Build the unified starter image
-        working-directory: miners
-        run: >-
-          docker build
-          --file dittobench-unified-starter-kit/Dockerfile
-          --tag dittobench-unified-miner:ci
-          .
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: miners
+          file: miners/dittobench-unified-starter-kit/Dockerfile
+          tags: dittobench-unified-miner:ci
+          push: false
+          load: true
+          cache-from: type=gha,scope=unified-starter-kit
+          cache-to: type=gha,mode=max,scope=unified-starter-kit
 
       - name: Probe unified starter image routes
         working-directory: .
