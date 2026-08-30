@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"reflect"
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
@@ -22,6 +23,36 @@ func Grade(
 	graderBundle io.Reader,
 	executor Executor,
 ) (result Result) {
+	return GradeWithProtectedOpener(
+		ctx,
+		manifest,
+		submission,
+		visibleBundle,
+		func(context.Context) (io.ReadCloser, error) {
+			if graderBundle == nil {
+				return nil, errors.New("grader bundle reader is required")
+			}
+			return io.NopCloser(graderBundle), nil
+		},
+		executor,
+	)
+}
+
+// ProtectedBundleOpener delays protected grader transport until after the
+// frozen submission has replayed into a pristine candidate workspace. The
+// opener must bind transport to the supplied grader lease context.
+type ProtectedBundleOpener func(context.Context) (io.ReadCloser, error)
+
+// GradeWithProtectedOpener is the phase-safe entry point used by the trusted
+// attempt runtime.
+func GradeWithProtectedOpener(
+	ctx context.Context,
+	manifest Manifest,
+	submission codingrunner.FrozenSubmission,
+	visibleBundle io.Reader,
+	openProtected ProtectedBundleOpener,
+	executor Executor,
+) (result Result) {
 	if ctx == nil {
 		return failure(codingcontract.DomainValidatorInfrastructure, "grader_context_missing")
 	}
@@ -35,6 +66,9 @@ func Grade(
 	}
 	if executor == nil {
 		return failure(codingcontract.DomainValidatorInfrastructure, "grader_executor_unavailable")
+	}
+	if openProtected == nil {
+		return failure(codingcontract.DomainValidatorInfrastructure, "grader_bundle_unavailable")
 	}
 	leaseContext, leaseCancel := context.WithDeadline(ctx, manifest.Deadline)
 	defer leaseCancel()
@@ -69,6 +103,21 @@ func Grade(
 		}
 		return failure(codingcontract.DomainControlPlaneIntegrity, "replayed_tree_invalid")
 	}
+	graderBundle, err := openProtected(leaseContext)
+	if err != nil {
+		if !nilReadCloser(graderBundle) {
+			_ = graderBundle.Close()
+		}
+		return failure(codingcontract.DomainValidatorInfrastructure, "grader_bundle_unavailable")
+	}
+	if nilReadCloser(graderBundle) {
+		return failure(codingcontract.DomainValidatorInfrastructure, "grader_bundle_unavailable")
+	}
+	defer func() {
+		if err := graderBundle.Close(); err != nil {
+			result = failure(codingcontract.DomainValidatorInfrastructure, "grader_cleanup")
+		}
+	}()
 	protectedBundle, err := workspace.MaterializeProtectedBundle(
 		leaseContext, manifest.GraderBundleSHA256, graderBundle, manifest.ResourcePolicy.ProtectedLimits,
 	)
@@ -264,6 +313,19 @@ func Grade(
 		result.RepairScoreMicros = codingcontract.ResolvedRepairScoreMicros
 	}
 	return result
+}
+
+func nilReadCloser(reader io.ReadCloser) bool {
+	if reader == nil {
+		return true
+	}
+	value := reflect.ValueOf(reader)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func cloneManifest(manifest Manifest) Manifest {
