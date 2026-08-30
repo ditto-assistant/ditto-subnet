@@ -227,6 +227,25 @@ async def test_signed_grading_lease_returns_no_memory_and_no_store(
     mocks.minter.mint_grading.assert_awaited_once_with(lease)
 
 
+async def test_grading_lease_retains_future_nonce_for_full_freshness_window(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    lease = _lease()
+    mocks = _install(app, session_maker, monkeypatch, lease)
+    requested_at = datetime.now(UTC) + timedelta(minutes=4, seconds=30)
+    response = await client.post(
+        "/api/v1/validator/coding-shadow/grading-lease",
+        json=_payload(lease, requested_at=requested_at),
+    )
+    assert response.status_code == 200, response.text
+    consumed = mocks.consume_nonce.await_args.kwargs
+    assert consumed["expires_at"] == requested_at + timedelta(minutes=5)
+    assert consumed["expires_at"] - consumed["now"] > timedelta(minutes=5)
+
+
 async def test_grading_lease_rejects_forgery_replay_stale_and_unconfigured(
     app: FastAPI,
     client: httpx.AsyncClient,

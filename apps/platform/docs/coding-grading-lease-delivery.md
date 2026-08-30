@@ -8,9 +8,10 @@ POST /api/v1/validator/coding-shadow/grading-lease
 
 The request binds the validator, agent, run, ticket, immutable authoring freeze,
 canonical authoring-evidence digest, one-use nonce, and fresh UTC timestamp.
-Platform verifies the signature and current chain permission, consumes the
-nonce, and authorizes the exact stored freeze before reading the private
-catalog or signing any object URL.
+Platform verifies the signature and current chain permission, retains the
+nonce until the signed timestamp leaves the five-minute freshness window,
+and authorizes the exact stored freeze before reading the private catalog
+or signing any object URL.
 
 A freeze is gradeable only when its ticket is active, no terminal result exists,
 the run and freeze are coding contract v1 and shadow-only, the authoritative

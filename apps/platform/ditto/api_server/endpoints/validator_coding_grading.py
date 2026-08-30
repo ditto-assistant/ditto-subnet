@@ -115,7 +115,8 @@ async def request_coding_grading_lease(
     ):
         raise ValidatorAuthError("coding grading lease signature did not verify")
     now = datetime.now(UTC)
-    if abs(now - payload.requested_at.astimezone(UTC)) > _REQUEST_MAX_AGE:
+    requested_at = payload.requested_at.astimezone(UTC)
+    if abs(now - requested_at) > _REQUEST_MAX_AGE:
         raise HTTPException(
             status_code=409,
             detail="coding grading lease request timestamp is stale",
@@ -146,7 +147,7 @@ async def request_coding_grading_lease(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _REQUEST_MAX_AGE,
+                expires_at=requested_at + _REQUEST_MAX_AGE,
             )
         except ValidatorRequestReplayError:
             raise HTTPException(
