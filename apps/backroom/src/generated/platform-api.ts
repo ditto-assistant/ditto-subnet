@@ -11274,6 +11274,8 @@ export interface components {
              * Format: date-time
              */
             issued_at: string;
+            /** Lease Id */
+            lease_id?: string | null;
             /** Screened Image Sha256 */
             screened_image_sha256: string;
             /**
@@ -22615,16 +22617,16 @@ export interface components {
         SubmitCodingCertificationRequest: {
             /** Bench Version */
             bench_version: number;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
             receipt: components["schemas"]["CodingCapabilityCertificationReceipt"];
             /** Screened Image Sha256 */
             screened_image_sha256: string;
             /** Signature */
             signature: string;
-            /**
-             * Ticket Deadline
-             * Format: date-time
-             */
-            ticket_deadline: string;
             /** Validator Hotkey */
             validator_hotkey: string;
         };
@@ -32943,7 +32945,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Artifact, ticket, receipt, or replay conflict. */
+            /** @description Artifact, lease, receipt, or replay conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;

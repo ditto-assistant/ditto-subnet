@@ -10,18 +10,19 @@ Coding contract v1 remains permanently `weight_eligible=false`.
 receipt only when all of these match:
 
 - a permitted validator hotkey and valid sr25519 signature;
-- an open canonical scoring ticket for the same agent, validator, benchmark
-  version, and exact lease deadline;
-- a representable receipt timestamp no earlier than the ticket issuance (with
+- a claimed certification lease for the same validator, agent, artifact,
+  screened image, benchmark version, canary manifest, and grader plan;
+- a representable receipt timestamp no earlier than the lease issuance (with
   five minutes of clock skew), no later than its deadline, and not expired;
 - the agent's immutable source-artifact SHA-256;
 - the agent's current screened-image SHA-256;
 - the receipt's known-field canonical digest.
 
-The signature binds the validator, agent, benchmark version, lease deadline,
+The signature binds the validator, agent, benchmark version, lease ID,
 screened image, and receipt digest. Exact retries are idempotent. Reusing the
-same `(agent, validator, coding_contract_version, certification_id)` for
-different evidence returns `409`.
+same `(agent, validator, coding_contract_version, certification_id)` or the
+same lease for different evidence returns `409`. A scoring ticket is not
+authority for this write.
 
 ## Storage and invalidation
 
@@ -49,9 +50,8 @@ Backroom exposes the same read through `get_agent_coding_certifications` under
 
 ## Activation boundary
 
-This persistence is evidence only. No ordinary scoring or lease path reads it.
-Shadow core qualification is recorded separately. The separate shadow coding
-ledger may bind a future validator-specific coding lease to this exact receipt,
-but it has no production issuer and remains permanently weight-ineligible.
-Coding emissions still require a new contract version, calibration, and owner
-approval.
+This persistence is evidence only. No ordinary scoring or weight path reads it.
+Shadow core qualification is recorded separately. New receipts bind a claimed
+certification lease for the same artifact and remain permanently
+weight-ineligible. Coding emissions still require a new contract version,
+calibration, and owner approval.

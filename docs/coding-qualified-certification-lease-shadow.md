@@ -119,10 +119,10 @@ The implementation must be split after this contract:
    tests. See `apps/platform/docs/coding-certification-lease.md`.
 2. Validator integration that claims one lease, launches the screened image in
    the existing hardened sandbox, runs `codingcertifier`, and revokes every
-   route. Receipt publication that verifies the lease binding remains the next
-   reviewed layer.
-3. Platform receipt acceptance that verifies the lease binding and exposes
-   operator-only certification state.
+   route.
+3. Platform receipt acceptance that verifies the claimed-lease binding and
+   exposes operator-only certification state. The validator submits the
+   terminal receipt against that lease.
 4. A separate default-off coding-assignment integration. It may admit only a
    currently core-qualified artifact with a current certified receipt.
 

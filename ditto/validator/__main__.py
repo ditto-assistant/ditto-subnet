@@ -17,6 +17,10 @@ from typing import Protocol
 
 import httpx
 
+from ditto.api_models.coding import CodingCapabilityCertificationReceipt
+from ditto.api_models.coding_certification_leases import (
+    CodingCertificationLeaseResponse,
+)
 from ditto.chain import ChainConfig, create_chain_client
 from ditto.system_health import SystemMetricsCollector
 from ditto.validator.coding_canary import CodingCanaryWorker
@@ -27,7 +31,7 @@ from ditto.validator.coding_worker import CodingShadowWorker
 from ditto.validator.config import parse_validator_config_from_env
 from ditto.validator.dittobench import DittobenchClient
 from ditto.validator.platform import PlatformClient
-from ditto.validator.signing import load_validator_keypair
+from ditto.validator.signing import load_validator_keypair, sign_coding_certification
 from ditto.validator.stack_health import StackHealthCollector
 from ditto.validator.telemetry import (
     build_telemetry,
@@ -129,9 +133,25 @@ async def _amain() -> int:
             async with create_chain_client(chain_config) as chain:
                 coding_canary: CodingCanaryWorker | None = None
                 if config.coding_canary_enabled:
+
+                    def _sign_canary_receipt(
+                        lease: CodingCertificationLeaseResponse,
+                        receipt: CodingCapabilityCertificationReceipt,
+                    ) -> str:
+                        return sign_coding_certification(
+                            keypair,
+                            validator_hotkey=config.validator_hotkey,
+                            agent_id=lease.authority.agent_id,
+                            bench_version=lease.authority.bench_version,
+                            lease_id=lease.authority.lease_id,
+                            screened_image_sha256=lease.authority.screened_image_sha256,
+                            receipt=receipt,
+                        )
+
                     coding_canary = CodingCanaryWorker(
                         platform=platform,
                         runtime=CodingCanaryRuntime(config, http),
+                        sign_receipt=_sign_canary_receipt,
                         poll_seconds=config.coding_canary_poll_seconds,
                     )
                     logger.info("coding canary worker enabled")

@@ -148,27 +148,27 @@ def test_coding_certification_vector_matches_canonical_receipt_and_signature() -
         validator_hotkey=expected["validator_hotkey"],
         agent_id=UUID(expected["agent_id"]),
         bench_version=expected["bench_version"],
-        ticket_deadline=datetime.fromisoformat(expected["ticket_deadline"]),
+        lease_id=UUID(expected["lease_id"]),
         screened_image_sha256=expected["screened_image_sha256"],
         certification_sha256=receipt.certification_sha256,
     )
     assert hashlib.sha256(message).hexdigest() == expected["signing_message_sha256"]
 
 
-def test_coding_certification_envelope_requires_aware_ticket_deadline() -> None:
+def test_coding_certification_envelope_requires_nonzero_lease_id() -> None:
     vector = json.loads(_CERTIFICATION_VECTOR_PATH.read_text(encoding="utf-8"))
     expected = vector["expected"]
     payload = {
         "validator_hotkey": expected["validator_hotkey"],
         "bench_version": expected["bench_version"],
-        "ticket_deadline": expected["ticket_deadline"],
+        "lease_id": expected["lease_id"],
         "screened_image_sha256": expected["screened_image_sha256"],
         "receipt": vector["receipt"],
         "signature": "00" * 64,
     }
     SubmitCodingCertificationRequest.model_validate_json(json.dumps(payload))
-    payload["ticket_deadline"] = "2026-08-20T16:30:00"
-    with pytest.raises(ValidationError, match="timezone-aware"):
+    payload["lease_id"] = "00000000-0000-0000-0000-000000000000"
+    with pytest.raises(ValidationError, match="nil"):
         SubmitCodingCertificationRequest.model_validate_json(json.dumps(payload))
 
 

@@ -145,7 +145,7 @@ def test_coding_certification_signature_matches_shared_message() -> None:
         validator_hotkey=keypair.ss58_address,
         agent_id=UUID(expected["agent_id"]),
         bench_version=expected["bench_version"],
-        ticket_deadline=datetime.fromisoformat(expected["ticket_deadline"]),
+        lease_id=UUID(expected["lease_id"]),
         screened_image_sha256=expected["screened_image_sha256"],
         receipt=receipt,
     )
@@ -153,7 +153,7 @@ def test_coding_certification_signature_matches_shared_message() -> None:
         validator_hotkey=keypair.ss58_address,
         agent_id=UUID(expected["agent_id"]),
         bench_version=expected["bench_version"],
-        ticket_deadline=datetime.fromisoformat(expected["ticket_deadline"]),
+        lease_id=UUID(expected["lease_id"]),
         screened_image_sha256=expected["screened_image_sha256"],
         certification_sha256=receipt.certification_sha256,
     )

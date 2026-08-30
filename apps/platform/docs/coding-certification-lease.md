@@ -44,8 +44,8 @@ contract v1 stays `weight_eligible=false`.
 
 ## Activation boundary
 
-The validator public-canary worker claims this lease and drives
-`codingcertifier` through the scorer control plane. Platform receipt
-acceptance that binds the terminal receipt to this lease, and private-task
-admission, remain later reviewed steps. Ordinary Tool + Memory scoring,
-weights, and emissions do not read this table.
+The validator public-canary worker claims this lease, drives
+`codingcertifier` through the scorer control plane, and submits the terminal
+receipt against the claimed lease. Private-task admission remains a later
+reviewed step. Ordinary Tool + Memory scoring, weights, and emissions do not
+read this table.

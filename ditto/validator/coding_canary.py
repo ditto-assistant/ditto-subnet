@@ -10,7 +10,10 @@ from datetime import UTC, datetime
 from typing import Literal, Protocol
 from uuid import UUID
 
-from ditto.api_models.coding import CodingCapabilityCertificationReceipt
+from ditto.api_models.coding import (
+    CodingCapabilityCertificationReceipt,
+    SubmitCodingCertificationResponse,
+)
 from ditto.api_models.coding_certification_leases import (
     CodingCertificationLeaseAuthority,
     CodingCertificationLeaseResponse,
@@ -51,6 +54,17 @@ class CodingCanaryPlatform(Protocol):
         self, lease_id: UUID
     ) -> CodingCertificationLeaseResponse: ...
 
+    async def submit_coding_certification(
+        self,
+        agent_id: UUID,
+        *,
+        bench_version: int,
+        lease_id: UUID,
+        screened_image_sha256: str,
+        receipt: CodingCapabilityCertificationReceipt,
+        signature: str,
+    ) -> SubmitCodingCertificationResponse: ...
+
 
 class CodingCanaryWorker:
     """Claim one public-canary lease and run codingcertifier. Default off."""
@@ -60,6 +74,13 @@ class CodingCanaryWorker:
         *,
         platform: CodingCanaryPlatform,
         runtime: CodingCanaryRuntime,
+        sign_receipt: Callable[
+            [
+                CodingCertificationLeaseResponse,
+                CodingCapabilityCertificationReceipt,
+            ],
+            str,
+        ],
         poll_seconds: float = 10.0,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -67,6 +88,7 @@ class CodingCanaryWorker:
             raise ValueError("coding canary worker configuration is invalid")
         self._platform = platform
         self._runtime = runtime
+        self._sign_receipt = sign_receipt
         self._poll_seconds = poll_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
         now = self._clock()
@@ -159,6 +181,18 @@ class CodingCanaryWorker:
         ):
             raise PlatformInfrastructureError(
                 "coding canary outcome authority is invalid"
+            )
+        submitted = await self._platform.submit_coding_certification(
+            claimed.authority.agent_id,
+            bench_version=claimed.authority.bench_version,
+            lease_id=claimed.authority.lease_id,
+            screened_image_sha256=claimed.authority.screened_image_sha256,
+            receipt=outcome.receipt,
+            signature=self._sign_receipt(claimed, outcome.receipt),
+        )
+        if not submitted.accepted or submitted.status != outcome.receipt.status:
+            raise PlatformInfrastructureError(
+                "coding certification receipt was not accepted"
             )
         logger.info(
             "coding canary finished lease=%s status=%s",

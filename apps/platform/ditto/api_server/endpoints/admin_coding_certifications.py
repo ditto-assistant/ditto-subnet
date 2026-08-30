@@ -64,6 +64,7 @@ async def agent_coding_certifications(
                 certification_row_id=row.certification_row_id,
                 validator_hotkey=row.validator_hotkey,
                 bench_version=row.bench_version,
+                lease_id=row.lease_id,
                 ticket_deadline=row.ticket_deadline,
                 coding_contract_version=row.coding_contract_version,
                 certification_id=row.certification_id,
