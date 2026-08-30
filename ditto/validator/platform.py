@@ -1035,6 +1035,7 @@ class PlatformClient:
                 if (
                     authoring_accepted.agent_id != prepared.agent_id
                     or authoring_accepted.ticket_id != prepared.ticket_id
+                    or authoring_accepted.run_row_id != prepared.authority.run_row_id
                     or authoring_accepted.authoring_evidence_sha256
                     != prepared.authority.evidence_sha256
                 ):
@@ -1047,6 +1048,7 @@ class PlatformClient:
                 if (
                     terminal_accepted.agent_id != prepared.agent_id
                     or terminal_accepted.ticket_id != prepared.ticket_id
+                    or terminal_accepted.run_row_id != prepared.authority.run_row_id
                     or terminal_accepted.coding_run_id
                     != prepared.authority.coding_run_id
                 ):
