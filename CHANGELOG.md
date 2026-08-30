@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.148.0 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Bound leases to real progress
+  ([#1317](https://github.com/ditto-assistant/ditto-subnet/pull/1317),
+  [`33967ef`](https://github.com/ditto-assistant/ditto-subnet/commit/33967efc670e6627a9a7a3404455df7ceeac1ff7))
+
+### Features
+
+- **coding**: Define artifact delivery contract
+  ([`ab7efe5`](https://github.com/ditto-assistant/ditto-subnet/commit/ab7efe5b2f5a9b5ef71a371f0ac733b4a0592fe0))
+
+
 ## v0.147.1 (2026-08-30)
 
 ### Bug Fixes
