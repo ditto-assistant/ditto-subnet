@@ -28,9 +28,9 @@ const (
 	pplxEmbedContractModel = "perplexity/pplx-embed-v1-0.6b"
 	pplxEmbedResponseModel = "pplx-embed-v1-0.6b"
 
-	structuredOutputInvalidCode      = "structured_output_invalid"
-	minerRecoverableFailureHeader    = "X-Ditto-Inference-Failure-Class"
-	minerRecoverableStructuredOutput = "miner_recoverable_structured_output"
+	providerGenerationInvalidCode = "provider_generation_invalid"
+	minerRecoverableFailureHeader = "X-Ditto-Inference-Failure-Class"
+	minerRecoverableGeneration    = "miner_recoverable_generation"
 )
 
 func isProviderRetryStatus(status int) bool {
@@ -750,22 +750,51 @@ func providerErrorEnvelope(payload map[string]any) (int64, string, bool) {
 	return code, message, true
 }
 
-// structuredOutputProviderError is intentionally narrower than a generic
-// provider 502. The request must have asked for strict JSON Schema output and
-// OpenRouter must have returned the exact body-level validation failure shape.
-// That makes this a response the miner can handle, while transport failures and
-// unrelated provider outages remain validator infrastructure failures.
-func structuredOutputProviderError(request, response map[string]any) bool {
-	responseFormat, ok := request["response_format"].(map[string]any)
-	if !ok || responseFormat["type"] != "json_schema" {
-		return false
-	}
-	jsonSchema, ok := responseFormat["json_schema"].(map[string]any)
-	if !ok || jsonSchema["strict"] != true {
-		return false
-	}
+// minerRecoverableProviderError is intentionally narrower than a generic
+// provider 502. It recognizes only exact response-generation failures that a
+// later miner-issued call can repair; transport failures and unrelated provider
+// outages remain validator infrastructure failures.
+func minerRecoverableProviderError(request, response map[string]any) bool {
 	code, message, ok := providerErrorEnvelope(response)
-	return ok && code == http.StatusBadGateway && strings.Contains(message, "Failed to validate JSON")
+	if !ok || code != http.StatusBadGateway {
+		return false
+	}
+	if strings.Contains(message, "Failed to validate JSON") {
+		responseFormat, ok := request["response_format"].(map[string]any)
+		if !ok || responseFormat["type"] != "json_schema" {
+			return false
+		}
+		jsonSchema, ok := responseFormat["json_schema"].(map[string]any)
+		return ok && jsonSchema["strict"] == true
+	}
+	if strings.Contains(message, "Tool choice is none, but model called a tool") {
+		toolChoice, choicePresent := request["tool_choice"]
+		tools, toolsPresent := request["tools"].([]any)
+		return (!choicePresent || toolChoice == nil || toolChoice == "none") && (!toolsPresent || len(tools) == 0)
+	}
+	const undeclaredToolPrefix = "attempted to call tool '"
+	const undeclaredToolSuffix = "' which was not in request.tools"
+	if start := strings.Index(message, undeclaredToolPrefix); start >= 0 {
+		nameStart := start + len(undeclaredToolPrefix)
+		nameEnd := strings.Index(message[nameStart:], undeclaredToolSuffix)
+		if nameEnd <= 0 {
+			return false
+		}
+		undeclaredName := message[nameStart : nameStart+nameEnd]
+		tools, _ := request["tools"].([]any)
+		for _, rawTool := range tools {
+			tool, ok := rawTool.(map[string]any)
+			if !ok {
+				continue
+			}
+			function, ok := tool["function"].(map[string]any)
+			if ok && function["name"] == undeclaredName {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func providerRejectionIsRouteObservable(status int) bool {
@@ -1079,8 +1108,8 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 			traced = append(traced, trace)
 			continue
 		}
-		if structuredOutputProviderError(spec.payload, decodedMap) {
-			lastCode = structuredOutputInvalidCode
+		if minerRecoverableProviderError(spec.payload, decodedMap) {
+			lastCode = providerGenerationInvalidCode
 			trace.errorCode = lastCode
 			traced = append(traced, trace)
 			continue

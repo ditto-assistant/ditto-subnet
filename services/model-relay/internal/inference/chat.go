@@ -430,12 +430,12 @@ func chatProviderFailure(exhausted *chatProviderExhausted) *httpError {
 		return httpErrorf(504, "inference provider timed out")
 	}
 	failure := httpErrorf(502, "inference provider unavailable")
-	if exhausted.terminalErrorCode == structuredOutputInvalidCode {
+	if exhausted.terminalErrorCode == providerGenerationInvalidCode {
 		// Keep the public failure contract unchanged. The authenticated scorer
 		// broker uses this private classification to leave response-level repair
 		// to the miner instead of discarding the whole ticket.
 		failure.headers = map[string]string{
-			minerRecoverableFailureHeader: minerRecoverableStructuredOutput,
+			minerRecoverableFailureHeader: minerRecoverableGeneration,
 		}
 	}
 	return failure

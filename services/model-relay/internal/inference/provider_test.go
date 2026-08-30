@@ -282,6 +282,8 @@ func TestPublicProviderResponseKeepsEmptyToolCallsArray(t *testing.T) {
 }
 
 const structuredOutputFailureBody = `{"error":{"message":"Upstream error from Groq: Failed to validate JSON. Please adjust your prompt. See 'failed_generation' for more details.","code":502}}`
+const unexpectedToolFailureBody = `{"error":{"message":"Upstream error from Groq: Tool choice is none, but model called a tool","code":502}}`
+const undeclaredToolFailureBody = `{"error":{"message":"Upstream error from Groq: Tool call validation failed: tool call validation failed: attempted to call tool 'calendar_search_events' which was not in request.tools","code":502}}`
 
 func aggregateChatConfig(upstreamURL string) config.InferenceProxyConfig {
 	return config.InferenceProxyConfig{
@@ -326,10 +328,10 @@ func TestProviderErrorEnvelopePrecedesIdentityValidation(t *testing.T) {
 	if calls != 1 || exhausted.upstreamAttempts != 1 || exhausted.fallbackPhase != 0 {
 		t.Fatalf("calls/attempts/phase=%d/%d/%d", calls, exhausted.upstreamAttempts, exhausted.fallbackPhase)
 	}
-	if exhausted.terminalErrorCode != structuredOutputInvalidCode {
-		t.Fatalf("terminal code=%q want %s", exhausted.terminalErrorCode, structuredOutputInvalidCode)
+	if exhausted.terminalErrorCode != providerGenerationInvalidCode {
+		t.Fatalf("terminal code=%q want %s", exhausted.terminalErrorCode, providerGenerationInvalidCode)
 	}
-	if len(exhausted.phases) != 1 || exhausted.phases[0].errorCode != structuredOutputInvalidCode {
+	if len(exhausted.phases) != 1 || exhausted.phases[0].errorCode != providerGenerationInvalidCode {
 		t.Fatalf("phase trace=%+v", exhausted.phases)
 	}
 }
@@ -349,20 +351,62 @@ func TestStructuredOutputProviderErrorRequiresStrictSchema(t *testing.T) {
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if structuredOutputProviderError(request, response) {
+			if minerRecoverableProviderError(request, response) {
 				t.Fatal("classified a non-strict request as miner-recoverable")
 			}
 		})
 	}
 }
 
-func TestChatProviderFailureMarksOnlyStructuredOutput(t *testing.T) {
-	recoverable := chatProviderFailure(&chatProviderExhausted{terminalErrorCode: structuredOutputInvalidCode})
+func TestUnexpectedToolProviderErrorRequiresToolChoiceNone(t *testing.T) {
+	var response map[string]any
+	decoder := json.NewDecoder(strings.NewReader(unexpectedToolFailureBody))
+	decoder.UseNumber()
+	if err := decoder.Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if !minerRecoverableProviderError(map[string]any{"messages": []any{}}, response) {
+		t.Fatal("exact no-tools generation failure was not miner-recoverable")
+	}
+	if !minerRecoverableProviderError(map[string]any{"tool_choice": nil}, response) {
+		t.Fatal("null tool choice was not treated as omitted")
+	}
+	for name, request := range map[string]map[string]any{
+		"required tool":  {"tool_choice": "required"},
+		"declared tools": {"tools": []any{map[string]any{"type": "function"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if minerRecoverableProviderError(request, response) {
+				t.Fatal("tool-enabled request was marked miner-recoverable")
+			}
+		})
+	}
+}
+
+func TestUndeclaredToolProviderErrorRequiresToolAbsentFromRequest(t *testing.T) {
+	var response map[string]any
+	decoder := json.NewDecoder(strings.NewReader(undeclaredToolFailureBody))
+	decoder.UseNumber()
+	if err := decoder.Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	otherTool := map[string]any{"type": "function", "function": map[string]any{"name": "gmail_send"}}
+	if !minerRecoverableProviderError(map[string]any{"tools": []any{otherTool}}, response) {
+		t.Fatal("hallucinated undeclared tool was not miner-recoverable")
+	}
+	declaredTool := map[string]any{"type": "function", "function": map[string]any{"name": "calendar_search_events"}}
+	if minerRecoverableProviderError(map[string]any{"tools": []any{declaredTool}}, response) {
+		t.Fatal("provider rejection of a declared tool was marked miner-recoverable")
+	}
+}
+
+func TestChatProviderFailureMarksOnlyRecoverableGenerationErrors(t *testing.T) {
+	recoverable := chatProviderFailure(&chatProviderExhausted{terminalErrorCode: providerGenerationInvalidCode})
 	if recoverable.status != http.StatusBadGateway || recoverable.message != "inference provider unavailable" {
 		t.Fatalf("public failure changed: %+v", recoverable)
 	}
-	if got := recoverable.headers[minerRecoverableFailureHeader]; got != minerRecoverableStructuredOutput {
-		t.Fatalf("failure class=%q want %q", got, minerRecoverableStructuredOutput)
+	if got := recoverable.headers[minerRecoverableFailureHeader]; got != minerRecoverableGeneration {
+		t.Fatalf("failure class=%q want %q", got, minerRecoverableGeneration)
 	}
 
 	ordinary := chatProviderFailure(&chatProviderExhausted{terminalErrorCode: "provider_unavailable"})

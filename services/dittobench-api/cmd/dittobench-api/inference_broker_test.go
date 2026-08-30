@@ -2073,7 +2073,7 @@ func TestV7InferenceBrokerLeavesStructuredOutputRepairToMiner(t *testing.T) {
 	var calls atomic.Int64
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if calls.Add(1) == 1 {
-			w.Header().Set(minerRecoverableFailureHeader, minerRecoverableStructuredOutput)
+			w.Header().Set(minerRecoverableFailureHeader, minerRecoverableGeneration)
 			http.Error(w, "inference provider unavailable", http.StatusBadGateway)
 			return
 		}
@@ -2137,16 +2137,16 @@ func TestV7InferenceBrokerLeavesStructuredOutputRepairToMiner(t *testing.T) {
 }
 
 func TestMinerRecoverableFailureClassRequiresAuthenticatedPlatformRoute(t *testing.T) {
-	if !minerRecoverablePlatformFailure("", nil, http.StatusBadGateway, minerRecoverableStructuredOutput) {
+	if !minerRecoverablePlatformFailure("", nil, http.StatusBadGateway, minerRecoverableGeneration) {
 		t.Fatal("authenticated Platform classification was rejected")
 	}
-	if minerRecoverablePlatformFailure("https://legacy.invalid", nil, http.StatusBadGateway, minerRecoverableStructuredOutput) {
+	if minerRecoverablePlatformFailure("https://legacy.invalid", nil, http.StatusBadGateway, minerRecoverableGeneration) {
 		t.Fatal("legacy gateway spoofed miner-recoverable classification")
 	}
-	if minerRecoverablePlatformFailure("", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), http.StatusBadGateway, minerRecoverableStructuredOutput) {
+	if minerRecoverablePlatformFailure("", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), http.StatusBadGateway, minerRecoverableGeneration) {
 		t.Fatal("in-process reader spoofed miner-recoverable classification")
 	}
-	if minerRecoverablePlatformFailure("", nil, http.StatusServiceUnavailable, minerRecoverableStructuredOutput) {
+	if minerRecoverablePlatformFailure("", nil, http.StatusServiceUnavailable, minerRecoverableGeneration) {
 		t.Fatal("non-502 provider failure was marked miner-recoverable")
 	}
 }
