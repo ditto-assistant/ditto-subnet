@@ -10,6 +10,7 @@ CI_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/ci.yml"
 CODING_STARTER_CI_PATH = (
     Path(__file__).parents[2] / ".github/workflows/coding-starter-kit-ci.yml"
 )
+ROOT_VERIFY_PATH = Path(__file__).parents[2] / ".github/workflows/root-verify.yml"
 WORKFLOW_DIR = RELEASE_WORKFLOW_PATH.parent
 PYPROJECT_PATH = Path(__file__).parents[2] / "pyproject.toml"
 ROOT_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
@@ -430,18 +431,12 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     # publication cannot race ahead of the exact merged source gate.
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]
-    root_static = jobs["verify-root-static"]
-    root_tests = jobs["verify-root-tests"]
-    root_contract = jobs["verify-root-contract"]
-    for root_job in (root_static, root_tests, root_contract):
-        verify_checkout = _step(
-            root_job["steps"], "Check out the exact merge commit before release"
-        )
-        assert verify_checkout["with"]["fetch-depth"] == 1
-        assert verify_checkout["with"]["ref"] == "${{ github.sha }}"
-    for root_job in (root_static, root_tests):
-        assert "needs.plan.outputs.root_verification == 'full'" in root_job["if"]
-    assert "needs.plan.outputs.root_verification == 'contract'" in root_contract["if"]
+    root_run = jobs["verify-root-run"]
+    assert root_run["uses"] == "./.github/workflows/root-verify.yml"
+    assert root_run["with"]["ref"] == "${{ github.sha }}"
+    assert root_run["with"]["mode"] == ("${{ needs.plan.outputs.root_verification }}")
+    assert "needs.plan.outputs.root_verification == 'full'" in root_run["if"]
+    assert "needs.plan.outputs.root_verification == 'contract'" in root_run["if"]
     platform_verify = jobs["verify-platform"]
     assert platform_verify["uses"] == "./.github/workflows/platform-verify.yml"
     assert platform_verify["with"]["ref"] == "${{ github.sha }}"
@@ -451,9 +446,45 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert platform_verify["with"]["dashboard"] == (
         "${{ needs.plan.outputs.platform_dashboard == 'true' }}"
     )
+
+    verifier = yaml.safe_load(ROOT_VERIFY_PATH.read_text())
+    # yaml parses the `on:` trigger key as boolean True.
+    assert verifier[True] == {
+        "workflow_call": {
+            "inputs": {
+                "ref": {
+                    "description": "Exact Git commit to verify",
+                    "required": True,
+                    "type": "string",
+                },
+                "mode": {
+                    "description": "Verification depth (full or contract)",
+                    "required": False,
+                    "default": "full",
+                    "type": "string",
+                },
+            }
+        }
+    }
+    verifier_jobs = verifier["jobs"]
+    root_static = verifier_jobs["static"]
+    root_tests = verifier_jobs["tests"]
+    root_contract = verifier_jobs["contract"]
+    for root_job in (root_static, root_tests, root_contract):
+        verify_checkout = root_job["steps"][0]
+        assert verify_checkout["with"]["fetch-depth"] == 1
+        assert verify_checkout["with"]["ref"] == "${{ inputs.ref }}"
+        assert verify_checkout["with"]["persist-credentials"] is False
+    for root_job in (root_static, root_tests):
+        assert root_job["if"] == "inputs.mode == 'full'"
+    assert root_contract["if"] == "inputs.mode == 'contract'"
+    mode_gate = _step(
+        verifier_jobs["validate"]["steps"], "Require a known verification mode"
+    )
+    assert "invalid root verification mode" in mode_gate["run"]
     verification = _step(
         root_static["steps"],
-        "Gate root static and integration checks on exact merge source",
+        "Root static and integration checks from the exact source",
     )
     assert "uv sync --locked --group dev" in verification["run"].splitlines()
     assert "uv run ruff format --check ." in verification["run"]
@@ -465,7 +496,7 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
         "fail-fast": False,
         "matrix": {"shard": [0, 1, 2]},
     }
-    shard = _step(root_tests["steps"], "Gate root test shard on exact merge source")
+    shard = _step(root_tests["steps"], "Root test shard from the exact source")
     assert shard["env"] == {"SHARD": "${{ matrix.shard }}", "SHARD_COUNT": 3}
     assert "uv run pytest --collect-only -q --color=no" in shard["run"]
     assert 'ditto/tests/*::*) test_nodeids+=("$test_nodeid")' in shard["run"]
@@ -474,7 +505,7 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
 
     contract = _step(
         root_contract["steps"],
-        "Gate the focused release contract on exact merge source",
+        "Focused release contract from the exact source",
     )
     for test_path in (
         "ditto/tests/test_release_plan.py",
@@ -492,18 +523,16 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert set(root_aggregate["needs"]) == {
         "plan",
         "admit-current",
-        "verify-root-static",
-        "verify-root-tests",
-        "verify-root-contract",
+        "verify-root-run",
     }
     root_gate = _step(root_aggregate["steps"], "Require every root exact-source lane")
     assert root_gate["env"]["ROOT_VERIFICATION"] == (
         "${{ needs.plan.outputs.root_verification }}"
     )
+    assert root_gate["env"]["RUN_RESULT"] == "${{ needs.verify-root-run.result }}"
     assert 'case "$ROOT_VERIFICATION" in' in root_gate["run"]
-    assert 'test "$STATIC_RESULT" = success' in root_gate["run"]
-    assert 'test "$TESTS_RESULT" = success' in root_gate["run"]
-    assert 'test "$CONTRACT_RESULT" = success' in root_gate["run"]
+    assert 'test "$RUN_RESULT" = success' in root_gate["run"]
+    assert 'test "$RUN_RESULT" = skipped' in root_gate["run"]
     assert "invalid root verification mode" in root_gate["run"]
     assert workflow["jobs"]["release"]["needs"] == [
         "plan",
@@ -621,9 +650,7 @@ def test_superseded_candidate_skips_expensive_source_verification_early() -> Non
     )
 
     for job_name in (
-        "verify-root-static",
-        "verify-root-tests",
-        "verify-root-contract",
+        "verify-root-run",
         "verify-starter-kit",
         "verify-dittobench-coding-starter-kit",
         "verify-platform",
@@ -719,13 +746,10 @@ def test_release_uses_the_root_projects_minimum_python() -> None:
     assert project["requires-python"] == ">=3.12,<3.14"
 
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    verifier = yaml.safe_load(ROOT_VERIFY_PATH.read_text())
     verify_setups = [
-        _step(workflow["jobs"][job_name]["steps"], "Set up Python 3.12")
-        for job_name in (
-            "verify-root-static",
-            "verify-root-tests",
-            "verify-root-contract",
-        )
+        _step(verifier["jobs"][job_name]["steps"], "Set up Python 3.12")
+        for job_name in ("static", "tests", "contract")
     ]
     assemble_setup = _step(
         workflow["jobs"]["assemble-stack"]["steps"], "Set up Python 3.12"
@@ -798,16 +822,24 @@ def test_public_screener_dependency_needs_no_private_authentication() -> None:
     release_steps = release_workflow["jobs"]["release"]["steps"]
     release = _step(release_steps, "Version, tag, and create the GitHub release")
     ci_workflow = yaml.safe_load(CI_WORKFLOW_PATH.read_text())
-    install = _step(
-        ci_workflow["jobs"]["lint-and-test"]["steps"], "Install dependencies"
-    )
+    verifier = yaml.safe_load(ROOT_VERIFY_PATH.read_text())
 
-    assert install == {
-        "name": "Install dependencies",
-        "run": "uv sync --locked --group dev",
+    # Pull-request CI runs the shared root verifier, whose dependency sync
+    # must need no private authentication.
+    assert ci_workflow["jobs"]["lint-and-test"]["uses"] == (
+        "./.github/workflows/root-verify.yml"
+    )
+    assert ci_workflow["jobs"]["lint-and-test"]["with"] == {
+        "ref": "${{ github.sha }}",
+        "mode": "full",
     }
+    static_gate = _step(
+        verifier["jobs"]["static"]["steps"],
+        "Root static and integration checks from the exact source",
+    )
+    assert "uv sync --locked --group dev" in static_gate["run"].splitlines()
     assert release["env"]["GH_TOKEN"] == "${{ secrets.RELEASE_TOKEN }}"
-    for workflow_path in (CI_WORKFLOW_PATH, RELEASE_WORKFLOW_PATH):
+    for workflow_path in (CI_WORKFLOW_PATH, RELEASE_WORKFLOW_PATH, ROOT_VERIFY_PATH):
         text = workflow_path.read_text()
         assert "DITTO_SCREENER_PROTOCOL_READ_KEY" not in text
         assert "GIT_SSH_COMMAND" not in text

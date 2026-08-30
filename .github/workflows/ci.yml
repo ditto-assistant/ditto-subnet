@@ -78,41 +78,12 @@ jobs:
         run: ./scripts/test-validator-stack-auto-update-e2e.sh
 
   lint-and-test:
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12"]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-        with:
-          persist-credentials: false
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
-        with:
-          enable-cache: true
-
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: uv sync --locked --group dev
-
-      - name: ruff format check
-        run: uv run ruff format --check .
-
-      - name: ruff check
-        run: uv run ruff check .
-
-      - name: mypy
-        run: uv run mypy ditto/
-
-      - name: pytest
-        run: uv run pytest
-
-      - name: Compose wrapper and stack updater integration tests
-        run: |
-          uv run pytest -m integration \
-            ditto/tests/test_validator_compose.py \
-            ditto/tests/test_validator_stack_auto_update.py
+    # Same sharded exact-source verifier as the release gate, so the two
+    # surfaces cannot drift and the pull request answers ~2x faster than the
+    # previous single serial job.
+    uses: ./.github/workflows/root-verify.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ github.sha }}
+      mode: full

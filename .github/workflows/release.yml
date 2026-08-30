@@ -283,125 +283,20 @@ jobs:
   # release, first-party image builds fan out from the immutable release commit.
   # ---------------------------------------------------------------------------
 
-  verify-root-static:
+  verify-root-run:
     needs: [plan, admit-current]
     if: >-
       needs.admit-current.outputs.current == 'true' &&
-      needs.plan.outputs.root_verification == 'full'
-    runs-on: ubuntu-24.04
+      (needs.plan.outputs.root_verification == 'full' ||
+       needs.plan.outputs.root_verification == 'contract')
+    # Same exact-source verifier as pull-request CI without polling another
+    # run, mirroring verify-platform.
+    uses: ./.github/workflows/root-verify.yml
     permissions:
       contents: read
-    steps:
-      - name: Check out the exact merge commit before release
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-        with:
-          fetch-depth: 1
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
-        with:
-          enable-cache: true
-
-      - name: Set up Python 3.12
-        run: uv python install 3.12
-
-      - name: Gate root static and integration checks on exact merge source
-        run: |
-          uv sync --locked --group dev
-          uv run ruff format --check .
-          uv run ruff check .
-          uv run mypy ditto/
-          uv run pytest -m integration \
-            ditto/tests/test_validator_compose.py \
-            ditto/tests/test_validator_stack_auto_update.py
-
-  verify-root-tests:
-    needs: [plan, admit-current]
-    if: >-
-      needs.admit-current.outputs.current == 'true' &&
-      needs.plan.outputs.root_verification == 'full'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2]
-    steps:
-      - name: Check out the exact merge commit before release
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-        with:
-          fetch-depth: 1
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
-        with:
-          enable-cache: true
-
-      - name: Set up Python 3.12
-        run: uv python install 3.12
-
-      - name: Gate root test shard on exact merge source
-        env:
-          SHARD: ${{ matrix.shard }}
-          SHARD_COUNT: 3
-        run: |
-          uv sync --locked --group dev
-          uv run pytest --collect-only -q --color=no > "$RUNNER_TEMP/root-nodeids.txt"
-          test_nodeids=()
-          while IFS= read -r test_nodeid; do
-            case "$test_nodeid" in
-              ditto/tests/*::*) test_nodeids+=("$test_nodeid") ;;
-            esac
-          done < "$RUNNER_TEMP/root-nodeids.txt"
-          shard_nodeids=()
-          for index in "${!test_nodeids[@]}"; do
-            if (( index % SHARD_COUNT == SHARD )); then
-              shard_nodeids+=("${test_nodeids[$index]}")
-            fi
-          done
-          test "${#shard_nodeids[@]}" -gt 0
-          uv run pytest "${shard_nodeids[@]}"
-
-  verify-root-contract:
-    needs: [plan, admit-current]
-    if: >-
-      needs.admit-current.outputs.current == 'true' &&
-      needs.plan.outputs.root_verification == 'contract'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - name: Check out the exact merge commit before release
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-        with:
-          fetch-depth: 1
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
-        with:
-          enable-cache: true
-
-      - name: Set up Python 3.12
-        run: uv python install 3.12
-
-      - name: Gate the focused release contract on exact merge source
-        run: |
-          uv sync --locked --group dev
-          uv run pytest -q \
-            ditto/tests/test_release_plan.py \
-            ditto/tests/test_release_workflow.py \
-            ditto/tests/test_workflow_security.py \
-            ditto/tests/test_compose_stack.py
-          uv run pytest -q -m integration \
-            ditto/tests/test_validator_compose.py \
-            ditto/tests/test_validator_stack_auto_update.py
+    with:
+      ref: ${{ github.sha }}
+      mode: ${{ needs.plan.outputs.root_verification }}
 
   # Keep the stable root gate consumed by verify-source. Exactly one verifier
   # mode is accepted, and every unexpected result or mode fails closed.
@@ -409,9 +304,7 @@ jobs:
     needs:
       - plan
       - admit-current
-      - verify-root-static
-      - verify-root-tests
-      - verify-root-contract
+      - verify-root-run
     if: always()
     runs-on: ubuntu-24.04
     permissions:
@@ -421,9 +314,7 @@ jobs:
         env:
           CURRENT: ${{ needs.admit-current.outputs.current }}
           ROOT_VERIFICATION: ${{ needs.plan.outputs.root_verification }}
-          STATIC_RESULT: ${{ needs.verify-root-static.result }}
-          TESTS_RESULT: ${{ needs.verify-root-tests.result }}
-          CONTRACT_RESULT: ${{ needs.verify-root-contract.result }}
+          RUN_RESULT: ${{ needs.verify-root-run.result }}
         run: |
           set -euo pipefail
           if [ "$CURRENT" != true ]; then
@@ -431,20 +322,11 @@ jobs:
             exit 0
           fi
           case "$ROOT_VERIFICATION" in
-            full)
-              test "$STATIC_RESULT" = success
-              test "$TESTS_RESULT" = success
-              test "$CONTRACT_RESULT" = skipped
-              ;;
-            contract)
-              test "$STATIC_RESULT" = skipped
-              test "$TESTS_RESULT" = skipped
-              test "$CONTRACT_RESULT" = success
+            full|contract)
+              test "$RUN_RESULT" = success
               ;;
             none)
-              test "$STATIC_RESULT" = skipped
-              test "$TESTS_RESULT" = skipped
-              test "$CONTRACT_RESULT" = skipped
+              test "$RUN_RESULT" = skipped
               ;;
             *)
               echo "invalid root verification mode: $ROOT_VERIFICATION" >&2

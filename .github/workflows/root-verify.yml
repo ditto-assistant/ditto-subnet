@@ -1,0 +1,141 @@
+# Single root verifier shared by pull-request CI and the release gate, so the
+# two surfaces run the same static checks and the same sharded test suite from
+# one definition and cannot drift.
+name: Root verification
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact Git commit to verify
+        required: true
+        type: string
+      mode:
+        description: Verification depth (full or contract)
+        required: false
+        default: full
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require a known verification mode
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          case "$MODE" in
+            full|contract) ;;
+            *)
+              echo "invalid root verification mode: $MODE" >&2
+              exit 1
+              ;;
+          esac
+
+  static:
+    needs: validate
+    if: inputs.mode == 'full'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Root static and integration checks from the exact source
+        run: |
+          uv sync --locked --group dev
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy ditto/
+          uv run pytest -m integration \
+            ditto/tests/test_validator_compose.py \
+            ditto/tests/test_validator_stack_auto_update.py
+
+  tests:
+    needs: validate
+    if: inputs.mode == 'full'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Root test shard from the exact source
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARD_COUNT: 3
+        run: |
+          uv sync --locked --group dev
+          uv run pytest --collect-only -q --color=no > "$RUNNER_TEMP/root-nodeids.txt"
+          test_nodeids=()
+          while IFS= read -r test_nodeid; do
+            case "$test_nodeid" in
+              ditto/tests/*::*) test_nodeids+=("$test_nodeid") ;;
+            esac
+          done < "$RUNNER_TEMP/root-nodeids.txt"
+          shard_nodeids=()
+          for index in "${!test_nodeids[@]}"; do
+            if (( index % SHARD_COUNT == SHARD )); then
+              shard_nodeids+=("${test_nodeids[$index]}")
+            fi
+          done
+          test "${#shard_nodeids[@]}" -gt 0
+          uv run pytest "${shard_nodeids[@]}"
+
+  contract:
+    needs: validate
+    if: inputs.mode == 'contract'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Focused release contract from the exact source
+        run: |
+          uv sync --locked --group dev
+          uv run pytest -q \
+            ditto/tests/test_release_plan.py \
+            ditto/tests/test_release_workflow.py \
+            ditto/tests/test_workflow_security.py \
+            ditto/tests/test_compose_stack.py
+          uv run pytest -q -m integration \
+            ditto/tests/test_validator_compose.py \
+            ditto/tests/test_validator_stack_auto_update.py
