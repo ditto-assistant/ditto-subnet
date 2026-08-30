@@ -10,7 +10,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
 _SHA256 = r"^[0-9a-f]{64}$"
 _RULE = r"^[a-z][a-z0-9-]{0,63}$"
 _SS58 = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
@@ -85,13 +84,19 @@ class CodingSourceScreenEvidence(BaseModel):
             raise ValueError("coding source deny requires deterministic deny evidence")
         if (
             self.outcome is CodingSourceScreenOutcome.QUARANTINE
-            and not {CodingSourceScreenSeverity.QUARANTINE, CodingSourceScreenSeverity.DENY} & severities
+            and not {
+                CodingSourceScreenSeverity.QUARANTINE,
+                CodingSourceScreenSeverity.DENY,
+            }
+            & severities
         ):
             raise ValueError("coding source quarantine requires quarantine evidence")
         if self.outcome is CodingSourceScreenOutcome.PASS and severities:
             raise ValueError("coding source pass cannot carry findings")
         if self.outcome is CodingSourceScreenOutcome.INFRASTRUCTURE and severities:
-            raise ValueError("coding source infrastructure result cannot blame the miner")
+            raise ValueError(
+                "coding source infrastructure result cannot blame the miner"
+            )
         if self.evidence_sha256 != coding_source_screen_digest(self):
             raise ValueError("coding source screen evidence digest mismatch")
         return self
@@ -102,8 +107,9 @@ def coding_source_screen_digest(evidence: CodingSourceScreenEvidence) -> str:
         mode="json", by_alias=True, exclude={"evidence_sha256"}
     )
     body = (
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-        .encode()
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode()
         + b"\n"
     )
     return hashlib.sha256(body).hexdigest()

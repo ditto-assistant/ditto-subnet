@@ -1,5 +1,3 @@
-from dataclasses import replace
-
 import pytest
 
 from ditto_screening_protocol.coding_source_screen import (
@@ -11,12 +9,20 @@ from ditto_screening_protocol.coding_source_screen import (
 )
 
 
-def _evidence(outcome: CodingSourceScreenOutcome, findings: list[CodingSourceScreenFinding]) -> CodingSourceScreenEvidence:
+def _evidence(
+    outcome: CodingSourceScreenOutcome, findings: list[CodingSourceScreenFinding]
+) -> CodingSourceScreenEvidence:
     raw = {
-        "schema": "dittobench-coding-source-screen-v1", "coding_contract_version": 1,
-        "weight_eligible": False, "agent_artifact_sha256": "a" * 64,
-        "screened_image_sha256": "b" * 64, "analyzer_version": "coding-source-v1",
-        "policy_version": 1, "outcome": outcome, "findings": findings, "evidence_sha256": "0" * 64,
+        "schema": "dittobench-coding-source-screen-v1",
+        "coding_contract_version": 1,
+        "weight_eligible": False,
+        "agent_artifact_sha256": "a" * 64,
+        "screened_image_sha256": "b" * 64,
+        "analyzer_version": "coding-source-v1",
+        "policy_version": 1,
+        "outcome": outcome,
+        "findings": findings,
+        "evidence_sha256": "0" * 64,
     }
     provisional = CodingSourceScreenEvidence.model_construct(**raw)
     raw["evidence_sha256"] = coding_source_screen_digest(provisional)
@@ -24,14 +30,22 @@ def _evidence(outcome: CodingSourceScreenOutcome, findings: list[CodingSourceScr
 
 
 def test_deny_evidence_is_content_addressed() -> None:
-    finding = CodingSourceScreenFinding(rule_id="docker-socket", severity=CodingSourceScreenSeverity.DENY, evidence_sha256="c" * 64)
+    finding = CodingSourceScreenFinding(
+        rule_id="docker-socket",
+        severity=CodingSourceScreenSeverity.DENY,
+        evidence_sha256="c" * 64,
+    )
     evidence = _evidence(CodingSourceScreenOutcome.DENY, [finding])
     assert evidence.weight_eligible is False
     assert evidence.evidence_sha256 == coding_source_screen_digest(evidence)
 
 
 def test_outcome_rules_fail_closed() -> None:
-    advisory = CodingSourceScreenFinding(rule_id="dead-code", severity=CodingSourceScreenSeverity.ADVISORY, evidence_sha256="c" * 64)
+    advisory = CodingSourceScreenFinding(
+        rule_id="dead-code",
+        severity=CodingSourceScreenSeverity.ADVISORY,
+        evidence_sha256="c" * 64,
+    )
     with pytest.raises(ValueError):
         _evidence(CodingSourceScreenOutcome.DENY, [advisory])
     with pytest.raises(ValueError):

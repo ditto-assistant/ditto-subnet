@@ -1,11 +1,5 @@
 """Canonical, dependency-light protocol shared by Ditto screeners and platform."""
 
-from ditto_screening_protocol.confirmation_progress import (
-    MAX_CONFIRMATION_SLOTS,
-    ConfirmationProgress,
-    ConfirmationProgressStage,
-    confirmation_progress_signing_token,
-)
 from ditto_screening_protocol.coding_source_screen import (
     CodingSourceScreenEvidence,
     CodingSourceScreenFinding,
@@ -13,6 +7,12 @@ from ditto_screening_protocol.coding_source_screen import (
     CodingSourceScreenSeverity,
     coding_source_screen_digest,
     coding_source_screen_signing_message,
+)
+from ditto_screening_protocol.confirmation_progress import (
+    MAX_CONFIRMATION_SLOTS,
+    ConfirmationProgress,
+    ConfirmationProgressStage,
+    confirmation_progress_signing_token,
 )
 from ditto_screening_protocol.models import (
     SCREENING_FLOOR_POLICY_VERSION,
