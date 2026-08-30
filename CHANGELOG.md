@@ -2,6 +2,34 @@
 
 <!-- version list -->
 
+## v0.172.0 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Reconcile stale fleet workers on pull update
+  ([#1374](https://github.com/ditto-assistant/ditto-subnet/pull/1374),
+  [`3f99ac5`](https://github.com/ditto-assistant/ditto-subnet/commit/3f99ac5c9b9dc87c882c840f3c508bdccdb2118f))
+
+### Features
+
+- **validator**: Run public canary from certification lease
+  ([`6abd863`](https://github.com/ditto-assistant/ditto-subnet/commit/6abd86319218b075e17ec873e41d9e80e1014933))
+
+### Performance Improvements
+
+- **ci**: Share one sharded root verifier between PR CI and release
+  ([#1366](https://github.com/ditto-assistant/ditto-subnet/pull/1366),
+  [`d6d4b9c`](https://github.com/ditto-assistant/ditto-subnet/commit/d6d4b9c112d8961bc2af1c4a4f62017416acf317))
+
+- **coding-starter-kit**: Cache Rust builds across CI and release gates
+  ([#1365](https://github.com/ditto-assistant/ditto-subnet/pull/1365),
+  [`23f2858`](https://github.com/ditto-assistant/ditto-subnet/commit/23f28585362a955a0f1b0c9ed42162b693c8a58f))
+
+- **platform**: Split the heaviest endpoint tests into their own shard
+  ([#1367](https://github.com/ditto-assistant/ditto-subnet/pull/1367),
+  [`fb93c9a`](https://github.com/ditto-assistant/ditto-subnet/commit/fb93c9a72024143eadd25a9ad7078e2e6334ecb7))
+
+
 ## v0.171.1 (2026-08-30)
 
 ### Bug Fixes
