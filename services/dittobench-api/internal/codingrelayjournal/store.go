@@ -90,6 +90,55 @@ func (store *Store) Load(
 	return snapshot, nil
 }
 
+// Bind durably records one fresh gateway activation before the source-bound
+// relay route is published. Exact active replays are idempotent; a revoked or
+// cross-binding journal can never be rebound.
+func (store *Store) Bind(ctx context.Context, binding codingrelay.Binding) error {
+	if store == nil || ctx == nil || ctx.Err() != nil {
+		return ErrInvalid
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if ctx.Err() != nil || validateBinding(store.config.Policy, binding) != nil {
+		return ErrInvalid
+	}
+	if err := store.checkOpen(); err != nil {
+		return err
+	}
+	if store.state != nil {
+		if !bindingsEqual(*store.state.Binding, binding) {
+			return ErrConflict
+		}
+		if store.state.Revoked {
+			return ErrState
+		}
+		return nil
+	}
+	ownedBinding, err := cloneBinding(binding)
+	if err != nil {
+		return ErrInvalid
+	}
+	state := stateRecord{Schema: stateSchema, Generation: 1, Binding: &ownedBinding}
+	body, err := stateRecordBytes(&state)
+	if err != nil {
+		return err
+	}
+	// Publication is allowed only when the empty journal can reserve both a
+	// maximum dispatch marker and its maximum terminal replacement alongside
+	// the activation state. Later Begin calls repeat the exact-sized check.
+	required := int64(len(body)) + 2*maximumEntryBytes
+	if !store.hasCapacity(required) {
+		return ErrCapacity
+	}
+	committed, installErr := store.installRecord(store.dirs.root, "state.json", body, false)
+	if committed {
+		store.state = cloneStateRecord(&state)
+		store.stateBytes = int64(len(body))
+		store.physicalBytes += int64(len(body))
+	}
+	return installErr
+}
+
 // Begin durably records one exact dispatch before provider activity.
 func (store *Store) Begin(
 	ctx context.Context,

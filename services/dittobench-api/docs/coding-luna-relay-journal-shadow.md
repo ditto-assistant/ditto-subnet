@@ -55,22 +55,21 @@ file coexist. This
 prevents an admitted provider result from becoming unjournalable because an
 earlier request consumed the remaining local capacity.
 
-The journal is not a retention scheduler. The future gateway must create one
-private root per attempt, keep it through terminal evidence publication, and
-delete it only under the same durable release/retention authority as the coding
-evidence outbox. Host-volume encryption and backup policy remain deployment
-responsibilities.
+The journal is not a retention scheduler. The integrator must create one
+private root per attempt as an euid-owned mode-`0700` directory before
+activation; `internal/codinggateway` opens it and must keep it through terminal
+evidence publication, then delete it only under the same durable
+release/retention authority as the coding evidence outbox. Host-volume
+encryption and backup policy remain deployment responsibilities.
 
 ## Integration boundary
 
 This package stores no provider credential, bearer token, live Platform URL,
-hidden grader, score, or weight. The next integration layers remain:
-
-- the trusted model-relay handler and settlement producer consumed by the
-  unwired `internal/codingplatform` client;
-- a validator-local capability gateway that constructs the relay and journal;
-- shadow attempt orchestration and terminal publication;
-- calibration and a separately reviewed versioned activation proposal.
+hidden grader, score, or weight. The trusted model-relay handler, Platform
+client, and validator-local capability gateway now exist as disabled
+components. The remaining integration layers are shadow attempt orchestration
+and terminal publication, followed by calibration and a separately reviewed
+versioned activation proposal.
 
 Validation:
 

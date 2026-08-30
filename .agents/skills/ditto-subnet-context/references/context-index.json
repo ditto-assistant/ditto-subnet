@@ -309,6 +309,18 @@
       "related": ["coding-model-relay", "coding-inference-requests", "coding-inference-grants", "coding-relay-journal", "coding-repair-research", "dittobench-scoring"]
     },
     {
+      "id": "coding-inference-gateway",
+      "title": "Shadow coding inference capability gateway",
+      "keywords": ["coding inference capability gateway", "coding gateway", "source-bound Luna capability", "coding relay activation", "coding relay recovery"],
+      "summary": "Compose one exchanged coding grant, Platform upstream client, durable relay journal, source-bound capability, exact revocation, and restart-safe evidence without wiring a worker or deployment.",
+      "owns": ["services/dittobench-api/internal/codinggateway", "services/dittobench-api/docs/coding-inference-capability-gateway-shadow.md"],
+      "read": ["services/dittobench-api/docs/coding-platform-upstream-client-shadow.md", "services/dittobench-api/docs/coding-luna-relay-core-shadow.md", "services/dittobench-api/docs/coding-luna-relay-journal-shadow.md", "services/dittobench-api/docs/coding-evidence-outbox-shadow.md"],
+      "search": ["rg -n 'Activate|Recover|CapabilityPublisher|GrantRevoker|ErrAmbiguousRecovery' services/dittobench-api/internal/codinggateway", "rg -n 'Bind|Revoke|Evidence|ErrAmbiguousDispatch' services/dittobench-api/internal/codingrelay services/dittobench-api/internal/codingrelayjournal services/dittobench-api/internal/codingplatform"],
+      "validate": ["cd services/dittobench-api && go test -race ./internal/codinggateway ./internal/codingplatform ./internal/codingrelay ./internal/codingrelayjournal", "cd services/dittobench-api && go vet ./internal/codinggateway ./internal/codingplatform ./internal/codingrelay ./internal/codingrelayjournal", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
+      "invariants": ["A fresh activation durably binds its journal before publishing any miner-visible route.", "Restart recovery never republishes a used capability or retries an ambiguous dispatch.", "The outer route, local relay, and exact Platform grant are revoked before evidence is released.", "The gateway remains unwired and weight_eligible=false until separate attempt, deployment, and activation reviews."],
+      "related": ["coding-platform-upstream", "coding-model-relay", "coding-inference-requests", "coding-inference-grants", "coding-relay-journal", "coding-repair-research", "dittobench-scoring"]
+    },
+    {
       "id": "coding-model-relay",
       "title": "Shadow coding model-relay handler",
       "keywords": ["coding model relay", "coding Luna handler", "coding inference provider settlement", "coding DPoP admission", "coding OpenRouter route"],
