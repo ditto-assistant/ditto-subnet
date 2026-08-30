@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.166.0 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Finalize court within short leases
+  ([#1353](https://github.com/ditto-assistant/ditto-subnet/pull/1353),
+  [`ffb5bd0`](https://github.com/ditto-assistant/ditto-subnet/commit/ffb5bd02f9442c404571a4df159ff2c9cf48f3df))
+
+### Features
+
+- **coding**: Add shadow worker claim and publication handoff
+  ([`0d67019`](https://github.com/ditto-assistant/ditto-subnet/commit/0d67019935cbe4c332461e845153e3948850c54e))
+
+
 ## v0.165.0 (2026-08-30)
 
 ### Bug Fixes
