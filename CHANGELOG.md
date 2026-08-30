@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.173.1 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Defer Hetzner terminal results to worker
+  ([#1377](https://github.com/ditto-assistant/ditto-subnet/pull/1377),
+  [`915a83e`](https://github.com/ditto-assistant/ditto-subnet/commit/915a83efdb5c1bf7756885cd5271837f1408ed3c))
+
+
 ## v0.173.0 (2026-08-30)
 
 ### Features
