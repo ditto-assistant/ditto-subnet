@@ -41,6 +41,10 @@ from ditto.api_models.coding_certification import (
     SubmitCodingCertificationRequest,
     SubmitCodingCertificationResponse,
 )
+from ditto.api_models.coding_certification_leases import (
+    CodingCertificationLeaseAuthority,
+    CodingCertificationLeaseClaimRequest,
+)
 from ditto.api_models.coding_evaluation import (
     AgentCodingShadowEvaluationStatus,
     CodingRunEvidence,
@@ -279,6 +283,8 @@ __all__ = [
     "CodingCatalogCommitment",
     "CodingCatalogReleaseRecord",
     "CodingCatalogTaskExposure",
+    "CodingCertificationLeaseAuthority",
+    "CodingCertificationLeaseClaimRequest",
     "CodingCertificationRecord",
     "CodingCertificationStage",
     "CodingCertificationStatus",
