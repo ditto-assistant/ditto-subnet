@@ -12,6 +12,10 @@ import pytest
 
 from ditto.api_models.coding_canonical import coding_canonical_sha256
 from ditto.api_models.coding_catalog import CodingCatalogCommitment
+from ditto.api_models.coding_selection import (
+    CodingCatalogGraderPlan,
+    coding_catalog_grader_plan_digest,
+)
 from ditto.api_server.coding_private_catalog import (
     CodingPrivateCatalogConfig,
     CodingPrivateCatalogConfigurationError,
@@ -315,6 +319,23 @@ async def test_task_version_adapter_preserves_selector_contract() -> None:
         == vector["membership_proof"]["catalog_membership_proof_sha256"]
     )
     assert len(reader.calls) == 1
+
+
+async def test_source_rejects_grader_plan_task_identity_drift() -> None:
+    vector = _vector()
+    record = _record(vector)
+    record["grader_plan"]["variant_id"] = "other-variant"
+    record["task_version"]["payload"]["task"]["grader_plan_sha256"] = (
+        coding_catalog_grader_plan_digest(
+            CodingCatalogGraderPlan.model_validate(record["grader_plan"])
+        )
+    )
+    source, _reader = _source(_body(record))
+    with pytest.raises(CodingSelectionCatalogIntegrityError):
+        await source.get_task_material(
+            commitment=_commitment(vector),
+            catalog_index=4,
+        )
 
 
 @pytest.mark.parametrize(

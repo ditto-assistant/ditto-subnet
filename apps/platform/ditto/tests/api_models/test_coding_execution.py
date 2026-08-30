@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from ditto.api_models.coding_selection import (
+    CodingCatalogCommand,
     CodingCatalogGraderPlan,
     CodingCatalogResourceProfile,
     CodingCatalogRunnerPlan,
@@ -109,3 +110,10 @@ def test_platform_execution_plan_drift_fails_closed(mutation: str) -> None:
             grader_plan=CodingCatalogGraderPlan.model_validate(grader),
             resource_profile=CodingCatalogResourceProfile.model_validate(resource),
         )
+
+
+def test_platform_rejects_empty_command_executable() -> None:
+    command = deepcopy(_vector()["runner_plan"]["test_commands"][0])
+    command["argv"] = [""]
+    with pytest.raises(ValidationError):
+        CodingCatalogCommand.model_validate(command)

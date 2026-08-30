@@ -148,7 +148,8 @@ class CodingCatalogCommand(CodingEvaluationModel):
     def command_is_bounded(self) -> CodingCatalogCommand:
         executable = self.argv[0]
         if (
-            len(executable.encode()) > 128
+            not executable
+            or len(executable.encode()) > 128
             or "/" in executable
             or "\\" in executable
             or any(
@@ -417,6 +418,13 @@ class CodingPrivateCatalogRecord(CodingEvaluationModel):
             != task.payload.runner_plan_sha256
             or coding_catalog_grader_plan_digest(self.grader_plan)
             != task.payload.task.grader_plan_sha256
+            or self.grader_plan.variant_id != task.payload.task.variant_id
+            or self.grader_plan.grader_bundle_sha256
+            != task.payload.task.grader_bundle_sha256
+            or self.grader_plan.grader_image_digest
+            != task.payload.task.grader_image_digest
+            or self.grader_plan.test_manifest_sha256
+            != task.payload.task.test_manifest_sha256
             or coding_catalog_resource_profile_digest(self.grader_resource_profile)
             != task.payload.task.resource_profile_sha256
         ):
