@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.163.1 (2026-08-30)
+
+### Bug Fixes
+
+- **infra**: Isolate analyzer build output
+  ([#1351](https://github.com/ditto-assistant/ditto-subnet/pull/1351),
+  [`b9c446e`](https://github.com/ditto-assistant/ditto-subnet/commit/b9c446eed927d99665ff90b541b696084d89e0bd))
+
+
 ## v0.163.0 (2026-08-30)
 
 ### Features
