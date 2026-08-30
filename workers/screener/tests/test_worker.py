@@ -388,7 +388,6 @@ async def test_build_only_item_passes_build_only_to_gate_and_verdict(
 async def test_default_item_screens_full_pipeline(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    # An item without build_only (legacy / normal) gets the full pipeline.
     agent = uuid4()
     platform = _FakePlatform([])
     gate = _FakeGate(_decision(ScreeningOutcome.PASS))

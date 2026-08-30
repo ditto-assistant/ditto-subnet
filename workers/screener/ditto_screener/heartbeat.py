@@ -251,7 +251,7 @@ def source_review_progress_stage(
 
 
 def system_metrics_signing_token(metrics: SystemMetrics | None) -> str:
-    """Return the exact bounded token used by platform PR #74."""
+    """Return the exact bounded token accepted by the platform."""
     if metrics is None:
         return "-"
     docker = metrics.docker

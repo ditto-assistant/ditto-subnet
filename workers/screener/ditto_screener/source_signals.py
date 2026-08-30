@@ -996,11 +996,10 @@ _EMULATION_FINGERPRINTS = (
         ),
         scan="raw",
     ),
-    # --- Rev7 (2026-08-18) FAMILY COMPILER fingerprints -----------------------
-    # The now-dominant threat is a trained/baked classifier that routes a scored
+    # A trained or baked classifier can route a scored
     # bench question into a closed DittoBench family, then applies a hardcoded
     # per-family recipe. These fingerprints target the greppable seams the four
-    # Rev7 holds shared -- the baked router artifact, the "copy this value
+    # reviewed holds shared -- the baked router artifact, the "copy this value
     # exactly" directive, computed totals smuggled into the notes prompt, the
     # closed program/evidence markers, the reject-until-match copy loop, the
     # compacted context that replaces retrieved records, and the glossary /
@@ -1335,8 +1334,7 @@ _EMULATION_FINGERPRINTS = (
         ),
         scan="raw",
     ),
-    # --- Rev8 (2026-08-21) FAMILY COMPILER fingerprints -----------------------
-    # ATH first-pass review rubber-stamped "old identifiers gone" and missed
+    # Earlier first-pass reviews focused on old identifiers and missed
     # reachable compilers: records-free required_money formatters, LedgerEventKind
     # validators, world_shape_rule injection, and StoryArc remainder compilers.
     # Each stays a location-only review lead, never an auto-ban.
