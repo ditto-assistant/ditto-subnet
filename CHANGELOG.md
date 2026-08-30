@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.165.0 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Reserve time for final adjudication
+  ([#1352](https://github.com/ditto-assistant/ditto-subnet/pull/1352),
+  [`36157a9`](https://github.com/ditto-assistant/ditto-subnet/commit/36157a9f0b0525bb588b13d03cbbecb899a8f5f1))
+
+### Features
+
+- **coding**: Add private runtime capability adapters
+  ([`1f84cad`](https://github.com/ditto-assistant/ditto-subnet/commit/1f84cad84d4ce79bb3a1cb952a0d7b2ecea06a3c))
+
+
 ## v0.164.0 (2026-08-30)
 
 ### Features
