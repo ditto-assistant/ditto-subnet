@@ -583,6 +583,7 @@ func TestCertifierRequiresTheCompleteArtifactBoundCanary(t *testing.T) {
 	fixture.inference.mu.Unlock()
 	if inferenceBinding.InferenceGrantSHA256 != fixture.request.InferenceGrantSHA256 ||
 		inferenceBinding.ProfileCapabilityID != fixture.request.Seed.ProfileCapabilityID ||
+		!inferenceBinding.Deadline.Equal(fixture.request.RunnerManifest.Deadline) ||
 		inferenceBinding.Budgets != fixture.request.Budgets ||
 		inferenceBinding.RequestBudget != codingcontract.EffectiveInferenceRequestBudget(fixture.request.Budgets.WorkspaceToolCalls) {
 		t.Fatalf("inference binding=%#v", inferenceBinding)

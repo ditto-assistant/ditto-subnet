@@ -225,6 +225,7 @@ def test_validator_coding_inference_model_is_release_owned(
         "services/dittobench-api/internal/codingrunner/session.go",
         "services/dittobench-api/internal/codinggrader/grader.go",
         "services/dittobench-api/internal/codingexecutor/executor.go",
+        "services/dittobench-api/internal/codingrelay/relay.go",
     ],
 )
 def test_shadow_coding_execution_selects_only_scorer_stack(
