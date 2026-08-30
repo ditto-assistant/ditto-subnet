@@ -60,12 +60,13 @@ platform_coding_catalog_bucket: "<private-coding-catalog-bucket>"
 
 After Terraform has created the two empty Secret Manager containers, the
 operator adds the dedicated read-only key values out of band, converges the
-Platform app role, and explicitly restarts or reloads the Platform PM2 process
-so it reads the new `.env`. The role rejects empty catalog secret versions and
-rejects catalog identities or key material that reuse upload HMAC or avatar
-Hippius credentials. Leaving the flag false is the rollback; it omits every
-catalog variable from `.env` and leaves the source unavailable after the same
-restart or reload.
+Platform app role, and reruns `scripts/start.sh` or restarts/reloads the Platform
+PM2 process with `--update-env` so it receives the new `.env`. The role rejects
+empty catalog secret versions and rejects catalog identities or key material
+that reuse upload HMAC or avatar Hippius credentials. Leaving the flag false is
+the rollback; it omits every catalog variable from `.env` and leaves the source
+unavailable after rerunning `scripts/start.sh` or restarting/reloading with
+`--update-env`.
 
 ## Record contract
 
