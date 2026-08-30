@@ -1,15 +1,3 @@
-// Tests for the entity modal shell: opens from the routeStore's entityRoute,
-// overlay vs dedicated /agent/{id} page modes (role swap + body.entity-page,
-// showModal 5980–6004), close semantics via closeEntityRoute + Escape
-// (closeModal 6338–6367), focus moved into the dialog, and the three tenant
-// bodies (miner summary, validator summary, agent evidence skeleton).
-// Also guards the shell slice of assert-inventory row 26
-// (test_validator_names_remain_optional_untrusted_decoration): the validator
-// display name is optional untrusted decoration — rendered as text, never
-// markup — and the hotkey stays the anchor identity; and row 30's #648 slice:
-// a cold agent link resolves through /public/agent/{id}/summary (never the
-// activity feed), the loading state shows for overlay routes too, and the deep
-// history starts concurrently without blocking the summary paint.
 import { cleanup, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

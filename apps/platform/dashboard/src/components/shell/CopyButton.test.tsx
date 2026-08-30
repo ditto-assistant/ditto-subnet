@@ -1,8 +1,3 @@
-// Parity tests for the copy controls (assert-inventory row 24,
-// test_includes_copy_controls_for_operational_identifiers): clipboard copy
-// buttons for hotkeys / IDs / SHA-256s with live-region status
-// (#copy-status), keyboard activation (Enter and Space), and the
-// execCommand fallback path surfacing the manual-copy failure copy.
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

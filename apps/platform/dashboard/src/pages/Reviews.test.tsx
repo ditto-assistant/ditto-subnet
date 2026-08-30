@@ -1,11 +1,3 @@
-// Parity tests for the public ATH reviews page (assert-inventory row 9,
-// test_includes_public_miner_facing_ath_review_queue, plus weekend drift
-// #622). The old suite grepped the monolith's source; these render the
-// SolidJS port against the recorded fixtures (frozen clock
-// 2026-07-31T14:00Z, the golden renderer's instant) and assert the same
-// contracts on the DOM: the explainer copy, the live list with its
-// cached-snapshot fallback, the fan-out pagination over the public activity
-// endpoint — and that nothing admin/auth leaks onto the public page.
 import { cleanup, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

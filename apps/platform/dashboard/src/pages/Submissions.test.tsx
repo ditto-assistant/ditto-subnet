@@ -1,13 +1,3 @@
-// Parity tests for the submissions page (assert-inventory rows 10, 11, 12,
-// 13, 14, 21, 23, 25, and row 30's deferred-history slice from #648). The old
-// suite grepped the monolith's source; these
-// render the SolidJS port against the recorded fixtures (frozen clock
-// 2026-07-31T14:00Z, the golden renderer's instant) and assert the same
-// contracts on the DOM, the store, and the stylesheet. Each block keeps the
-// old test's docstring rationale as a comment. The pure vocabulary slices of
-// rows 10/11 (status whitelist, stage labels, score-floor attribution) live
-// beside their module in src/components/pipeline/status.test.ts; endpoint
-// path shapes live in src/lib/api.test.ts.
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { webcrypto } from "node:crypto";

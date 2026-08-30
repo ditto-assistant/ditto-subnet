@@ -1,7 +1,4 @@
-// Parity tests for the scoring formulas (assert-inventory rows 36–38).
-//
-// From the original TestDashboardScoringTransparency docstring: consensus
-// parameters (the incumbent margin, the champion share, the tail size, the
+// Consensus parameters (the incumbent margin, the champion share, the tail size, the
 // authority-switch threshold, the benchmark version) are served by the API
 // and can change without touching this code. A literal in the markup is a
 // claim that silently stops being true, which is worse than no claim at all:

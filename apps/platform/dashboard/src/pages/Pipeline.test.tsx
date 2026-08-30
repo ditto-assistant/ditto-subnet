@@ -1,8 +1,3 @@
-// Parity tests for the submission-pipeline page (the pipeline half of the
-// old operations page: monolith markup 2742–2862, the #623/#635 board
-// reshape, and the last-reconciled-snapshot rule). Rendered against the
-// recorded fixtures (frozen clock 2026-07-31T14:00Z, the golden renderer's
-// instant); the fleet half lives in Operations.test.tsx.
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
