@@ -262,7 +262,14 @@ def test_relay_artifact_is_extracted_as_the_deploy_user() -> None:
     assert gcs_stage in roll
     assert extract in roll
     assert launch in roll
-    assert f"{create} && $remote_fetch && {extract}" in roll
+    # Phase markers time the host-side fetch/extract/canary boundaries; the
+    # exact chain still proves nothing runs between staging and extraction.
+    fetch_start = 'echo \\"relay-phase fetch-start \\$(date -u +%T)\\"'
+    fetch_done = 'echo \\"relay-phase fetch-done \\$(date -u +%T)\\"'
+    assert (
+        f"{create} && {fetch_start} && $remote_fetch && {fetch_done} && {extract}"
+        in roll
+    )
     assert roll.index(extract) < roll.index(launch)
     assert "mkdir -p '$remote_artifact'" not in roll
     assert "sudo rm -rf -- '$remote_artifact' '$remote_artifact.tgz'" in roll

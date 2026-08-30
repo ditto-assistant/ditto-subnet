@@ -498,9 +498,16 @@ jobs:
             remote_fetch="sudo install -o deploy -g ditto -m 0640 '$remote_artifact.tgz' '$remote_artifact/relay-artifact.tgz'"
             remote_cleanup=true
           fi
+          # The relay-phase markers are the deploy's only visibility into the
+          # host-side timeline: on 2026-08-30 every roll spent ~10 opaque
+          # minutes between the SSH banner and the first script output, and
+          # nothing recorded whether the artifact fetch, the extract, or the
+          # canary owned them. Timestamps are emitted remotely so buffering
+          # cannot skew them.
+          echo "relay-phase ssh-start $(date -u +%T)"
           gcloud compute ssh "$target_vm" \
             --zone "$GCP_ZONE" --tunnel-through-iap --quiet \
-            --command "sudo install -d -o deploy -g ditto -m 0750 '$remote_artifact' && $remote_fetch && sudo -u deploy tar --extract --gzip --file '$remote_artifact/relay-artifact.tgz' --directory '$remote_artifact' && sudo -u deploy rm -- '$remote_artifact/relay-artifact.tgz' && sudo install -d -o deploy -g ditto /opt/ditto-platform-relay && sudo -iu deploy bash '$remote_artifact/deploy-relay-release.sh' '$remote_artifact' '$DEPLOY_REVISION'; code=\$?; $remote_cleanup; sudo rm -rf -- '$remote_artifact' '$remote_artifact.tgz'; exit \$code"
+            --command "echo \"relay-phase remote-shell \$(date -u +%T)\" && sudo install -d -o deploy -g ditto -m 0750 '$remote_artifact' && echo \"relay-phase fetch-start \$(date -u +%T)\" && $remote_fetch && echo \"relay-phase fetch-done \$(date -u +%T)\" && sudo -u deploy tar --extract --gzip --file '$remote_artifact/relay-artifact.tgz' --directory '$remote_artifact' && sudo -u deploy rm -- '$remote_artifact/relay-artifact.tgz' && sudo install -d -o deploy -g ditto /opt/ditto-platform-relay && echo \"relay-phase release-script-start \$(date -u +%T)\" && sudo -iu deploy bash '$remote_artifact/deploy-relay-release.sh' '$remote_artifact' '$DEPLOY_REVISION'; code=\$?; $remote_cleanup; sudo rm -rf -- '$remote_artifact' '$remote_artifact.tgz'; exit \$code"
 
       - name: Deregister release SSH key
         if: always()

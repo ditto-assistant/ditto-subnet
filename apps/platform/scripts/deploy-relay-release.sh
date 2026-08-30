@@ -126,7 +126,9 @@ wait_for_any_health() {
 }
 
 # Prove the artifact can boot, connect, and answer before either serving slot
-# is touched. The canary is never behind Caddy.
+# is touched. The canary is never behind Caddy. The marker separates canary
+# boot time from everything before it in the deploy log.
+echo "==> starting relay-canary (timeout ${start_timeout}s)"
 canary_log="$state_root/logs/canary-$source_commit.log"
 "$release_dir/model-relay" --port "$canary_port" \
   >"$canary_log" 2>&1 &
