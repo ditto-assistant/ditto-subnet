@@ -1167,6 +1167,30 @@ class PolicyEngine:
         self, observation: SourceReviewObservation
     ) -> ScreeningDecision:
         """Fail closed on an unresolved pre-execution lead without rejecting it."""
+        adjudication = observation.adjudication
+        if adjudication is not None:
+            # Static-source leads settle before the full module engine runs.
+            # Preserve the same L4 terminality contract as
+            # AgenticSourceReviewModule: a court timeout/escalation is an
+            # operator hold, never fall-through to the earlier L1/L2 error.
+            court_decision = adjudication.get("decision")
+            return self._decision(
+                (
+                    ScreeningOutcome.PASS
+                    if court_decision == "clear"
+                    else ScreeningOutcome.QUARANTINE
+                ),
+                (
+                    PolicyEvidence(
+                        "agentic-preexecution-review",
+                        "source-review-adjudicated",
+                        "final source-review adjudication completed",
+                    ),
+                ),
+                observation.finding,
+                review_audit=observation.review_audit,
+                adjudication=adjudication,
+            )
         if not observation.ok:
             retryable = observation.failure_disposition == "retryable_infra"
             pass_inconclusive = observation.failure_disposition == "pass_inconclusive"
