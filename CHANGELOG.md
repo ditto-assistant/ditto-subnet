@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.150.4 (2026-08-30)
+
+### Bug Fixes
+
+- **screener**: Stage mounted review credentials privately
+  ([#1338](https://github.com/ditto-assistant/ditto-subnet/pull/1338),
+  [`1380305`](https://github.com/ditto-assistant/ditto-subnet/commit/1380305ce799cd11b0c8af65a35960aa9d123db6))
+
+
 ## v0.150.3 (2026-08-30)
 
 ### Bug Fixes
