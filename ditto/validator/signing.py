@@ -36,6 +36,7 @@ from ditto.api_models.coding import (
     coding_authoring_freeze_signing_message,
     coding_authoring_lease_signing_message,
     coding_certification_signing_message,
+    coding_grading_lease_signing_message,
 )
 from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
@@ -267,6 +268,34 @@ def sign_coding_authoring_freeze(
         authoring_transcript_bytes=authoring_transcript_bytes,
         authoring_event_count=authoring_event_count,
         frozen_submission_object_key=frozen_submission_object_key,
+    )
+    signature: bytes = keypair.sign(message)
+    return signature.hex()
+
+
+def sign_coding_grading_lease(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    run_row_id: UUID,
+    ticket_id: UUID,
+    freeze_id: UUID,
+    authoring_evidence_sha256: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    """Sign one freeze-gated shadow grading-lease request."""
+
+    message = coding_grading_lease_signing_message(
+        validator_hotkey=validator_hotkey,
+        agent_id=agent_id,
+        run_row_id=run_row_id,
+        ticket_id=ticket_id,
+        freeze_id=freeze_id,
+        authoring_evidence_sha256=authoring_evidence_sha256,
+        nonce=nonce,
+        requested_at=requested_at,
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()

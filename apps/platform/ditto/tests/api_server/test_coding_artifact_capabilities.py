@@ -186,6 +186,20 @@ async def test_authoring_mint_never_heads_or_signs_grader_bundle() -> None:
     assert all("grader-bundle" not in key for key, _ttl in store.url_calls)
 
 
+async def test_grading_mint_never_heads_or_signs_memory_bundle() -> None:
+    store = _Store()
+    result = await _minter(store).mint_grading(_lease())
+    assert [capability.kind for capability in result.capabilities] == [
+        CodingArtifactKind.VISIBLE_BUNDLE,
+        CodingArtifactKind.RESOURCE_PROFILE,
+        CodingArtifactKind.GRADER_BUNDLE,
+    ]
+    assert len(store.head_calls) == 3
+    assert len(store.url_calls) == 3
+    assert all("memory-bundle" not in key for key in store.head_calls)
+    assert all("memory-bundle" not in key for key, _ttl in store.url_calls)
+
+
 async def test_projects_only_phase_appropriate_single_capabilities() -> None:
     result = await _minter(_Store()).mint(_lease())
     visible = project_coding_artifact_capability(

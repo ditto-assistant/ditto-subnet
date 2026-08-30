@@ -20,10 +20,12 @@ from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgress
 from ditto.api_models.coding import (
     CodingCapabilityCertificationReceipt,
+    CodingGradingLeaseRequest,
     SubmitCodingAuthoringFreezeRequest,
     coding_authoring_freeze_signing_message,
     coding_authoring_lease_signing_message,
     coding_certification_signing_message,
+    coding_grading_lease_signing_message,
 )
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.stack_health import (
@@ -49,6 +51,7 @@ from ditto.validator.signing import (
     sign_coding_authoring_freeze,
     sign_coding_authoring_lease,
     sign_coding_certification,
+    sign_coding_grading_lease,
     sign_heartbeat,
     sign_job_fail_request,
     sign_job_request,
@@ -74,6 +77,10 @@ _CODING_CERTIFICATION_VECTOR = (
 _CODING_AUTHORING_FREEZE_VECTOR = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json"
+)
+_CODING_GRADING_LEASE_VECTOR = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json"
 )
 
 
@@ -207,6 +214,36 @@ def test_coding_authoring_freeze_signature_binds_request() -> None:
         authoring_transcript_bytes=request.authoring_transcript_bytes,
         authoring_event_count=request.authoring_event_count,
         frozen_submission_object_key=request.frozen_submission_object_key,
+    )
+    assert keypair.verify(message, bytes.fromhex(signature))
+
+
+def test_coding_grading_lease_signature_matches_shared_message() -> None:
+    vector = json.loads(_CODING_GRADING_LEASE_VECTOR.read_text(encoding="utf-8"))
+    request = CodingGradingLeaseRequest.model_validate_json(
+        json.dumps(vector["request"])
+    )
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    signature = sign_coding_grading_lease(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        agent_id=request.agent_id,
+        run_row_id=request.run_row_id,
+        ticket_id=request.ticket_id,
+        freeze_id=request.freeze_id,
+        authoring_evidence_sha256=request.authoring_evidence_sha256,
+        nonce=request.nonce,
+        requested_at=request.requested_at,
+    )
+    message = coding_grading_lease_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        agent_id=request.agent_id,
+        run_row_id=request.run_row_id,
+        ticket_id=request.ticket_id,
+        freeze_id=request.freeze_id,
+        authoring_evidence_sha256=request.authoring_evidence_sha256,
+        nonce=request.nonce,
+        requested_at=request.requested_at,
     )
     assert keypair.verify(message, bytes.fromhex(signature))
 

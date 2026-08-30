@@ -11,6 +11,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.coding_catalog import CodingCatalogCommitment
+from ditto.api_models.coding_evaluation import (
+    CodingAuthoringEvidence,
+    CodingCertificationModelUsageStatus,
+    coding_authoring_evidence_digest,
+)
 from ditto.api_models.coding_selection import (
     CodingCatalogBudgets,
     CodingCatalogIssue,
@@ -26,6 +31,8 @@ from ditto.db.models import (
     CodingCapabilityCertification,
     CodingCatalogExposure,
     CodingSelectionAssignmentRow,
+    CodingShadowAuthoringFreeze,
+    CodingShadowResult,
     CodingShadowRun,
     CodingShadowRunIssuance,
     CodingShadowTicket,
@@ -74,6 +81,15 @@ class CodingShadowTaskLeaseCore:
     weight_eligible: Literal[False] = False
 
 
+@dataclass(frozen=True)
+class CodingShadowGradingAuthority:
+    agent_id: UUID
+    freeze_id: UUID
+    authoring_evidence_sha256: str
+    frozen_patch_sha256: str
+    frozen_submission_object_key: str
+
+
 async def authorize_coding_shadow_task_delivery(
     session: AsyncSession,
     *,
@@ -96,6 +112,104 @@ async def authorize_coding_shadow_task_delivery(
         )
 
 
+async def authorize_coding_shadow_grading_delivery(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    run_row_id: UUID,
+    ticket_id: UUID,
+    freeze_id: UUID,
+    authoring_evidence_sha256: str,
+) -> CodingShadowGradingAuthority:
+    """Authorize grader delivery only from one complete immutable freeze."""
+
+    ticket = await session.get(CodingShadowTicket, ticket_id)
+    run = await session.get(CodingShadowRun, run_row_id)
+    freeze = await session.get(CodingShadowAuthoringFreeze, freeze_id)
+    certification = (
+        await session.get(
+            CodingCapabilityCertification,
+            ticket.certification_row_id,
+        )
+        if ticket is not None
+        else None
+    )
+    agent = await session.get(Agent, run.agent_id) if run is not None else None
+    database_now = await session.scalar(select(func.clock_timestamp()))
+    if not isinstance(database_now, datetime):  # pragma: no cover - DB invariant
+        raise RuntimeError("database clock did not return a timestamp")
+    if (
+        ticket is None
+        or run is None
+        or freeze is None
+        or certification is None
+        or agent is None
+        or ticket.validator_hotkey != validator_hotkey
+        or ticket.run_row_id != run.run_row_id
+        or run.agent_id != agent_id
+        or freeze.ticket_id != ticket.ticket_id
+        or freeze.run_row_id != run.run_row_id
+        or not _ticket_certification_is_active(
+            ticket=ticket,
+            run=run,
+            certification=certification,
+            agent=agent,
+            database_now=database_now,
+        )
+    ):
+        raise CodingTaskLeaseNotAvailableError(
+            "coding grading authority is unavailable for this validator"
+        )
+    result_exists = await session.scalar(
+        select(CodingShadowResult.result_id).where(
+            CodingShadowResult.ticket_id == ticket.ticket_id
+        )
+    )
+    try:
+        evidence = CodingAuthoringEvidence.model_validate(freeze.evidence)
+    except ValueError:
+        raise CodingTaskLeaseIntegrityError(
+            "coding grading phase authority is not gradeable"
+        ) from None
+    if (
+        ticket.task_count != 1
+        or freeze.task_count != 1
+        or run.task_count != 1
+        or run.coding_contract_version != 1
+        or run.weight_eligible is not False
+        or freeze.weight_eligible is not False
+        or freeze.authoring_evidence_sha256 != authoring_evidence_sha256
+        or coding_authoring_evidence_digest(evidence)
+        != freeze.authoring_evidence_sha256
+        or evidence.authoring_event_root != freeze.authoring_event_root
+        or evidence.authoring_transcript_sha256 != freeze.authoring_transcript_sha256
+        or evidence.frozen_patch_sha256 != freeze.frozen_patch_sha256
+        or evidence.changed_path_root != freeze.changed_path_root
+        or evidence.final_tree_sha256 != freeze.final_tree_sha256
+        or evidence.changed_path_count != freeze.changed_path_count
+        or evidence.changed_bytes != freeze.changed_bytes
+        or evidence.protected_paths_intact != freeze.protected_paths_intact
+        or freeze.authoring_transcript_bytes <= 0
+        or freeze.authoring_event_count <= 0
+        or freeze.changed_path_count <= 0
+        or not freeze.protected_paths_intact
+        or evidence.model.usage_status
+        is not CodingCertificationModelUsageStatus.COMPLETE
+        or result_exists is not None
+    ):
+        raise CodingTaskLeaseIntegrityError(
+            "coding grading phase authority is not gradeable"
+        )
+    return CodingShadowGradingAuthority(
+        agent_id=run.agent_id,
+        freeze_id=freeze.freeze_id,
+        authoring_evidence_sha256=freeze.authoring_evidence_sha256,
+        frozen_patch_sha256=freeze.frozen_patch_sha256,
+        frozen_submission_object_key=freeze.frozen_submission_object_key,
+    )
+
+
 def _aware(value: datetime) -> datetime:
     return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
 
@@ -114,6 +228,36 @@ def _catalog_timeout_seconds(material_source: CodingTaskMaterialSource) -> float
     ):
         return _MAX_CATALOG_TIMEOUT_SECONDS
     return float(timeout_seconds)
+
+
+def _ticket_certification_is_active(
+    *,
+    ticket: CodingShadowTicket,
+    run: CodingShadowRun,
+    certification: CodingCapabilityCertification,
+    agent: Agent,
+    database_now: datetime,
+) -> bool:
+    """Keep task reconstruction and post-mint authorization in lockstep."""
+
+    return (
+        ticket.run_row_id == run.run_row_id
+        and _aware(ticket.deadline) > _aware(database_now)
+        and certification.validator_hotkey == ticket.validator_hotkey
+        and certification.agent_id == run.agent_id
+        and certification.artifact_sha256 == run.artifact_sha256
+        and certification.screened_image_sha256 == run.screened_image_sha256
+        and certification.bench_version == run.bench_version
+        and certification.coding_contract_version == run.coding_contract_version
+        and ticket.task_count == run.task_count
+        and _aware(certification.expires_at) > _aware(ticket.deadline)
+        and coding_certification_stale_reason(
+            certification,
+            agent,
+            now=database_now,
+        )
+        == "active"
+    )
 
 
 def _run_matches(run: CodingShadowRun, authority: object) -> bool:
@@ -233,19 +377,13 @@ async def build_coding_shadow_task_lease(
         assignment_row is None
         or certification is None
         or agent is None
-        or _aware(ticket.deadline) <= _aware(database_now)
-        or certification.validator_hotkey != ticket.validator_hotkey
-        or certification.agent_id != run.agent_id
-        or certification.bench_version != run.bench_version
-        or certification.coding_contract_version != run.coding_contract_version
-        or ticket.task_count != run.task_count
-        or _aware(certification.expires_at) <= _aware(ticket.deadline)
-        or coding_certification_stale_reason(
-            certification,
-            agent,
-            now=database_now,
+        or not _ticket_certification_is_active(
+            ticket=ticket,
+            run=run,
+            certification=certification,
+            agent=agent,
+            database_now=database_now,
         )
-        != "active"
     ):
         raise CodingTaskLeaseNotAvailableError(
             "coding ticket or artifact certification is no longer active"

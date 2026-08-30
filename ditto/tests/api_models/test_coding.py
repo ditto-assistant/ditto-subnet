@@ -20,6 +20,8 @@ from ditto.api_models.coding import (
     CodingGraderExecutionReceipt,
     CodingGraderPlan,
     CodingGraderResourceProfile,
+    CodingGradingLeaseRequest,
+    CodingGradingLeaseResponse,
     CodingIssue,
     CodingRunEvidence,
     CodingRunManifest,
@@ -38,6 +40,7 @@ from ditto.api_models.coding import (
     coding_budgets_digest,
     coding_certification_receipt_digest,
     coding_certification_signing_message,
+    coding_grading_lease_signing_message,
     coding_issue_digest,
     coding_runtime_policy_digest,
     grader_execution_receipt_root,
@@ -69,6 +72,10 @@ _ARTIFACT_VECTOR_PATH = (
 _AUTHORING_FREEZE_VECTOR_PATH = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json"
+)
+_GRADING_LEASE_VECTOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json"
 )
 
 
@@ -267,6 +274,36 @@ def test_authoring_evidence_rejects_solver_route_substitution() -> None:
         changed["model"][field] = value
         with pytest.raises(ValidationError):
             CodingAuthoringEvidence.model_validate(changed)
+
+
+def test_grading_lease_vector_matches_platform_contract() -> None:
+    vector = json.loads(_GRADING_LEASE_VECTOR_PATH.read_text(encoding="utf-8"))
+    request = CodingGradingLeaseRequest.model_validate_json(
+        json.dumps(vector["request"])
+    )
+    response = CodingGradingLeaseResponse.model_validate_json(
+        json.dumps(vector["response"])
+    )
+    message = coding_grading_lease_signing_message(
+        validator_hotkey=request.validator_hotkey,
+        agent_id=request.agent_id,
+        run_row_id=request.run_row_id,
+        ticket_id=request.ticket_id,
+        freeze_id=request.freeze_id,
+        authoring_evidence_sha256=request.authoring_evidence_sha256,
+        nonce=request.nonce,
+        requested_at=request.requested_at,
+    )
+    assert (
+        hashlib.sha256(message).hexdigest()
+        == vector["expected"]["signing_message_sha256"]
+    )
+    assert [capability.artifact_kind.value for capability in response.capabilities] == [
+        "visible-bundle",
+        "resource-profile",
+        "grader-bundle",
+    ]
+    assert "memory-bundle" not in response.model_dump_json()
 
 
 def test_evidence_golden_vectors_require_manifest_authority() -> None:
