@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.155.0 (2026-08-30)
+
+### Features
+
+- **platform**: Issue shadow coding inference grants
+  ([`36d5549`](https://github.com/ditto-assistant/ditto-subnet/commit/36d55495b47077263263234f4023bc263f511d69))
+
+
 ## v0.154.0 (2026-08-30)
 
 ### Bug Fixes
