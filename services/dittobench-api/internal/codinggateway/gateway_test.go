@@ -183,6 +183,7 @@ func newGatewayFixture(t *testing.T) *gatewayFixture {
 		GrantID: "20000000-0000-4000-8000-000000000002", Generation: 2,
 		InferenceGrantSHA256: digest, IssuedAt: now.Add(-time.Minute), Deadline: now.Add(time.Hour),
 		RequestBudget: 32, PromptTokenBudget: 200_000, CompletionTokenBudget: 30_000,
+		CostBudgetUSDMicros: policy.MaxCostUSDMicros,
 	}
 	root := filepath.Join(t.TempDir(), "relay")
 	if err := os.Mkdir(root, 0o700); err != nil {
@@ -236,6 +237,7 @@ func (fixture *gatewayFixture) evidenceBinding() codingrelay.EvidenceBinding {
 		Deadline:             fixture.binding.Deadline, RequestBudget: fixture.binding.RequestBudget,
 		PromptTokenBudget:     fixture.binding.PromptTokenBudget,
 		CompletionTokenBudget: fixture.binding.CompletionTokenBudget,
+		CostBudgetUSDMicros:   fixture.binding.CostBudgetUSDMicros,
 	}
 }
 

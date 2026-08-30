@@ -250,7 +250,7 @@ func newRelayFixture(t *testing.T) relayFixture {
 			GrantID:             "44444444-4444-4444-8444-444444444444", Generation: 1,
 			InferenceGrantSHA256: digest, IssuedAt: now, Deadline: now.Add(time.Hour),
 			RequestBudget: policy.MaxRequests, PromptTokenBudget: policy.MaxPromptTokens,
-			CompletionTokenBudget: policy.MaxCompletionTokens,
+			CompletionTokenBudget: policy.MaxCompletionTokens, CostBudgetUSDMicros: policy.MaxCostUSDMicros,
 		},
 		clock: &fixtureClock{now: now}, journal: &fakeJournal{}, requests: requests,
 		normalized: vector.NormalizedProviderResponses,
@@ -279,6 +279,7 @@ func (fixture relayFixture) evidenceBinding() EvidenceBinding {
 		RequestBudget:         fixture.binding.RequestBudget,
 		PromptTokenBudget:     fixture.binding.PromptTokenBudget,
 		CompletionTokenBudget: fixture.binding.CompletionTokenBudget,
+		CostBudgetUSDMicros:   fixture.binding.CostBudgetUSDMicros,
 	}
 }
 

@@ -1,7 +1,7 @@
 # Private coding execution-plan contract
 
-`internal/codingexecution` freezes the task-static authority that the future
-private supervisor phase runner needs. Platform now mirrors the contract,
+`internal/codingexecution` freezes the task-static authority consumed by the
+private supervisor phase runner. Platform now mirrors the contract,
 verifies complete plan bundles in the private catalog, and delivers only the
 correct phase projection. The Go package remains a contract and projector: it
 has no catalog reader, artifact credential, workspace, harness, listener,
@@ -50,9 +50,10 @@ The runner-plan digest is committed through `task_commitment_sha256`; authoring
 leases return only that runner plan. Protected grader/resource projections are
 returned only after Platform accepts and revalidates an immutable freeze.
 
-No validator runtime consumes the plans yet. The next PR composes the durable
-phase runner and must still reserve its evidence outbox and commit the
-non-rerunnable activation marker before any harness call.
+The unwired `internal/codingphase` runtime now consumes each phase projection,
+reserves its evidence outbox, and commits the non-rerunnable activation marker
+before harness activation. The next PR supplies only disabled composition-root
+adapters and worker registration.
 
 No production composition root imports this package. Coding contract v1 stays
 permanently `weight_eligible=false`.

@@ -135,6 +135,12 @@ func (health HealthResponse) supportsCodingV1() bool {
 	return true
 }
 
+// SupportsCodingV1 reports whether the validated health projection advertises
+// every additive coding-v1 capability required by a private attempt.
+func (health HealthResponse) SupportsCodingV1() bool {
+	return health.validate() == nil && health.supportsCodingV1()
+}
+
 // SeedResponse is the known-field /coding/seed response.
 type SeedResponse struct {
 	CaseID              string `json:"case_id"`
@@ -204,7 +210,8 @@ type CapabilityBinding struct {
 	ProfileCapabilityID string
 }
 
-// PublishedCapability is revoked before the workspace is frozen.
+// PublishedCapability is revoked before the workspace is frozen. Revoke must
+// be idempotent because the first successful commit can lose its response.
 type PublishedCapability interface {
 	URL() string
 	Revoke(ctx context.Context) error

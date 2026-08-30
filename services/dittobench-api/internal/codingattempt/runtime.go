@@ -60,7 +60,7 @@ func (runtime *Runtime) BeginAuthoring(ctx context.Context, spec AuthoringSpec) 
 	}
 	decoded, decodeErr := decodeResourceProfile(resource, spec.ResourceProfileSHA256)
 	resourceCloseErr := resource.Close()
-	if decodeErr != nil || resourceCloseErr != nil || decoded != spec.ResourcePolicy {
+	if decodeErr != nil || resourceCloseErr != nil || decoded.CandidateLimits != spec.CandidateLimits {
 		return nil, errors.Join(errors.New("verify coding authoring resource profile"), decodeErr, resourceCloseErr)
 	}
 	visible, err := openArtifact(ctx, runtime.artifacts, spec.VisibleBundle)
@@ -260,9 +260,8 @@ func validateAuthoringSpec(spec AuthoringSpec, now time.Time) error {
 	if err := spec.RunnerManifest.Validate(now); err != nil {
 		return fmt.Errorf("coding authoring runner manifest: %w", err)
 	}
-	resourceSHA, err := codinggrader.ResourceProfileSHA256(spec.ResourcePolicy)
-	if err != nil || spec.ResourcePolicy.Validate() != nil || resourceSHA != spec.ResourceProfileSHA256 ||
-		spec.RunnerManifest.Limits != spec.ResourcePolicy.CandidateLimits || !lowerSHA256(spec.MemoryBundleSHA256) {
+	if spec.CandidateLimits.Validate() != nil || !lowerSHA256(spec.ResourceProfileSHA256) ||
+		spec.RunnerManifest.Limits != spec.CandidateLimits || !lowerSHA256(spec.MemoryBundleSHA256) {
 		return errors.New("coding authoring resource authority is invalid")
 	}
 	if spec.RunnerManifest.TicketID != spec.Binding.TicketID || spec.RunnerManifest.CaseID != spec.Binding.CaseID ||

@@ -61,7 +61,8 @@ func validateBinding(policy codingcontract.InferencePolicy, binding Binding, now
 		binding.RequestBudget == 0 ||
 		binding.RequestBudget > policy.MaxRequests || binding.PromptTokenBudget == 0 ||
 		binding.PromptTokenBudget > policy.MaxPromptTokens || binding.CompletionTokenBudget == 0 ||
-		binding.CompletionTokenBudget > policy.MaxCompletionTokens {
+		binding.CompletionTokenBudget > policy.MaxCompletionTokens ||
+		binding.CostBudgetUSDMicros == 0 || binding.CostBudgetUSDMicros > policy.MaxCostUSDMicros {
 		return ErrInvalidConfig
 	}
 	return nil
@@ -77,7 +78,8 @@ func evidenceBindingMatches(binding Binding, observed EvidenceBinding) bool {
 		observed.Deadline.Equal(binding.Deadline) &&
 		observed.RequestBudget == binding.RequestBudget &&
 		observed.PromptTokenBudget == binding.PromptTokenBudget &&
-		observed.CompletionTokenBudget == binding.CompletionTokenBudget
+		observed.CompletionTokenBudget == binding.CompletionTokenBudget &&
+		observed.CostBudgetUSDMicros == binding.CostBudgetUSDMicros
 }
 
 func bindingMatches(left, right Binding) bool {
@@ -88,7 +90,8 @@ func bindingMatches(left, right Binding) bool {
 		left.InferenceGrantSHA256 == right.InferenceGrantSHA256 && left.IssuedAt.Equal(right.IssuedAt) &&
 		left.Deadline.Equal(right.Deadline) && left.RequestBudget == right.RequestBudget &&
 		left.PromptTokenBudget == right.PromptTokenBudget &&
-		left.CompletionTokenBudget == right.CompletionTokenBudget
+		left.CompletionTokenBudget == right.CompletionTokenBudget &&
+		left.CostBudgetUSDMicros == right.CostBudgetUSDMicros
 }
 
 func canonicalUUID(value string) bool {

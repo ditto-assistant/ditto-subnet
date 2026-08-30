@@ -866,6 +866,44 @@ func TestEmptyFileContentSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestLookupBindsOneExecutionIdentityAcrossRestart(t *testing.T) {
+	store, clock, root := newFixtureStore(t, 512<<20)
+	binding := fixtureBinding(clock, "9")
+	attempt, err := store.Reserve(t.Context(), binding, codingrunner.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, record, err := store.Lookup(t.Context(), binding.Purpose, binding.ExecutionID)
+	if err != nil || resolved.ID() != attempt.ID() || record.Binding != binding {
+		t.Fatalf("resolved=%v record=%#v err=%v", resolved, record, err)
+	}
+	record.Binding.CaseID = "caller-mutation"
+	_, fresh, err := store.Lookup(t.Context(), binding.Purpose, binding.ExecutionID)
+	if err != nil || fresh.Binding != binding {
+		t.Fatalf("lookup aliased caller state: %#v err=%v", fresh, err)
+	}
+	drift := binding
+	drift.HarnessInstanceID = "different-harness"
+	if _, err := store.Reserve(t.Context(), drift, codingrunner.DefaultLimits()); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate execution identity accepted: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(Config{
+		Root: root, MaxTotalBytes: 512 << 20, MaxAttempts: 64, FinalizationGrace: time.Minute,
+		OrphanGrace: time.Minute, ReleasedRetention: time.Minute, ExpiredRetention: time.Minute, Now: clock.Now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	resolved, fresh, err = reopened.Lookup(t.Context(), binding.Purpose, binding.ExecutionID)
+	if err != nil || resolved.ID() != attempt.ID() || fresh.Binding != binding {
+		t.Fatalf("restart lookup=%v record=%#v err=%v", resolved, fresh, err)
+	}
+}
+
 func callTool(t *testing.T, handler http.Handler, request codingrunner.ToolRequest) codingrunner.ToolResponse {
 	t.Helper()
 	body, err := json.Marshal(request)

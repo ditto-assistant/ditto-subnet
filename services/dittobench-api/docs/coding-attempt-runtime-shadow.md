@@ -64,11 +64,11 @@ retryable infrastructure without parsing error prose.
 
 ## Activation
 
-This package is unwired. The private supervisor wire and Python runtime client
-now exist, but the supervisor's injected backend must still compose this
-runtime with a source-bound capability publisher, the harness lifecycle, the
-ticket-scoped Luna gateway, durable evidence/publication outbox, and a host
-sweeper. No production composition root imports it. It cannot
+This package is unwired. `internal/codingphase` now composes it with the
+source-bound capability, harness lifecycle, ticket-scoped Luna gateway, and
+durable evidence outbox. The remaining disabled-shadow wiring review must
+construct those adapters and the host sweeper. No production composition root
+imports either package. They cannot
 claim jobs, start miners, submit scores, rank agents, set weights, or make coding
 contract v1 weight eligible.
 
@@ -76,11 +76,11 @@ contract v1 weight eligible.
 
 ```bash
 cd services/dittobench-api
-go test -race ./internal/codingattempt ./internal/codingseed ./internal/codingartifacts \
+go test -race ./internal/codingattempt ./internal/codingphase ./internal/codingseed ./internal/codingartifacts \
   ./internal/codingrelay ./internal/codingrunner ./internal/codinggrader \
   ./internal/codingexecutor \
   ./internal/codingcontract
-go vet ./internal/codingattempt ./internal/codingseed ./internal/codingartifacts \
+go vet ./internal/codingattempt ./internal/codingphase ./internal/codingseed ./internal/codingartifacts \
   ./internal/codingrelay ./internal/codingrunner ./internal/codinggrader \
   ./internal/codingexecutor \
   ./internal/codingcontract

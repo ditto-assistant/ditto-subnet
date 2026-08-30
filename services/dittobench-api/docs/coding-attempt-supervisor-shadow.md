@@ -41,7 +41,7 @@ closed without creating a second session.
 The session table is bounded. It keeps terminal tombstones for the lifetime of
 the process rather than evicting them into a possible clean retry. Close fails
 while a phase is active and otherwise zeros retained private and evidence
-buffers. Recovery only delegates to the future durable phase runner; it never
+buffers. Recovery only delegates to the durable phase runner; it never
 calls authoring or grading.
 
 The handler accepts only fixed `POST` paths, unencoded `application/json`, no
@@ -70,19 +70,17 @@ lease before forwarding the active exchange.
 
 ## Current boundary
 
-The handler now has a concrete `SessionBackend`, but that backend still requires
-an injected `PhaseRunner`. No composition root constructs either backend or
-mounts `Handler`; no worker constructs `CodingSupervisorRuntime`. The session
-state is deliberately process-local and is not a substitute for the durable
-evidence outbox. This PR therefore cannot fetch leases, open artifact
-capabilities, start a harness, invoke Luna, grade a repository, publish
-evidence, claim work, or affect scores and weights.
+`internal/codingphase` now implements the injected `PhaseRunner` and commits
+the durable activation marker before candidate execution. The runner itself is
+still unwired: no composition root constructs its dormant-harness or inference
+adapters, injects it into `SessionBackend`, mounts `Handler`, or constructs the
+Python `CodingSupervisorRuntime` worker. The session state remains deliberately
+process-local; authoritative transcript, patch, and publication bytes belong
+to the durable outbox and gateway journals.
 
-The next review must implement the injected phase runner from `codingattempt`,
-`codinggateway`, `codingoutbox`, harness/publisher adapters, and the host
-sweeper. Its durable activation marker must commit before any candidate call so
-a process restart cannot grant a clean rerun. Worker registration remains a
-separate disabled-shadow PR after that composition is complete.
+The next review is a separate disabled-shadow wiring PR. Until that lands this
+stack cannot claim work, call a live miner, publish Platform evidence, affect a
+score, or set weights.
 
 Validation:
 

@@ -98,6 +98,11 @@ func (store *Store) Reserve(
 		}
 		return &Attempt{store: store, id: id}, nil
 	}
+	for _, existing := range store.records {
+		if existing.Binding.Purpose == binding.Purpose && existing.Binding.ExecutionID == binding.ExecutionID {
+			return nil, ErrConflict
+		}
+	}
 	if err := validateBindingFresh(binding, now); err != nil {
 		return nil, err
 	}
@@ -121,6 +126,40 @@ func (store *Store) Reserve(
 	store.records[id] = cloneRecord(record)
 	store.reserved += reservation
 	return &Attempt{store: store, id: id}, nil
+}
+
+// Lookup returns the one durable attempt for a trusted purpose/execution
+// identity. Reserve enforces uniqueness so phase-separated callers never need
+// to persist or reconstruct the binding-derived record ID themselves.
+func (store *Store) Lookup(
+	ctx context.Context,
+	purpose Purpose,
+	executionID string,
+) (*Attempt, Record, error) {
+	if ctx == nil || ctx.Err() != nil ||
+		(purpose != PurposeCertification && purpose != PurposeShadowAttempt) ||
+		!validIdentifier(executionID, 256) {
+		return nil, Record{}, ErrInvalid
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.checkOpenAndClock(store.config.Now().UTC()); err != nil {
+		return nil, Record{}, err
+	}
+	var selected *Record
+	for _, record := range store.records {
+		if record.Binding.Purpose != purpose || record.Binding.ExecutionID != executionID {
+			continue
+		}
+		if selected != nil {
+			return nil, Record{}, ErrCorrupt
+		}
+		selected = record
+	}
+	if selected == nil {
+		return nil, Record{}, ErrInvalid
+	}
+	return &Attempt{store: store, id: selected.ID}, *cloneRecord(selected), nil
 }
 
 func (attempt *Attempt) ID() string {
@@ -297,6 +336,7 @@ func (store *Store) loadRecords() error {
 		return ErrCapacity
 	}
 	now := store.lastNow
+	executions := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasSuffix(name, ".json") || !lowerSHA256(strings.TrimSuffix(name, ".json")) {
@@ -348,6 +388,11 @@ func (store *Store) loadRecords() error {
 		if err := store.verifyPublicationReferences(record); err != nil {
 			return err
 		}
+		executionKey := string(record.Binding.Purpose) + "\x00" + record.Binding.ExecutionID
+		if _, duplicate := executions[executionKey]; duplicate {
+			return fmt.Errorf("%w: duplicate purpose/execution identity", ErrCorrupt)
+		}
+		executions[executionKey] = struct{}{}
 		store.records[record.ID] = cloneRecord(record)
 		if record.ReservedBytes > store.config.MaxTotalBytes-store.reserved {
 			return ErrCapacity

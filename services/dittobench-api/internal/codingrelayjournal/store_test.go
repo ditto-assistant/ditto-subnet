@@ -97,7 +97,7 @@ func newJournalFixture(t *testing.T) journalFixture {
 			GrantID: "44444444-4444-4444-8444-444444444444", Generation: 1,
 			InferenceGrantSHA256: policyDigest, IssuedAt: now, Deadline: now.Add(time.Hour),
 			RequestBudget: policy.MaxRequests, PromptTokenBudget: policy.MaxPromptTokens,
-			CompletionTokenBudget: policy.MaxCompletionTokens,
+			CompletionTokenBudget: policy.MaxCompletionTokens, CostBudgetUSDMicros: policy.MaxCostUSDMicros,
 		},
 		minerBody: minerBody,
 		dispatch: codingrelay.DispatchRecord{
@@ -432,6 +432,7 @@ func TestStoreSurvivesRestartAndReplaysExactMinerResponse(t *testing.T) {
 		InferenceGrantSHA256: fixture.binding.InferenceGrantSHA256, Deadline: fixture.binding.Deadline,
 		RequestBudget: fixture.binding.RequestBudget, PromptTokenBudget: fixture.binding.PromptTokenBudget,
 		CompletionTokenBudget: fixture.binding.CompletionTokenBudget,
+		CostBudgetUSDMicros: fixture.binding.CostBudgetUSDMicros,
 	})
 	if err != nil || evidence.UsageStatus != codingcontract.ModelUsageComplete {
 		t.Fatalf("evidence=%#v err=%v", evidence, err)
@@ -619,6 +620,7 @@ func TestStorePersistsRetryFailureAndNotInvokedStates(t *testing.T) {
 			InferenceGrantSHA256: fixture.binding.InferenceGrantSHA256, Deadline: fixture.binding.Deadline,
 			RequestBudget: fixture.binding.RequestBudget, PromptTokenBudget: fixture.binding.PromptTokenBudget,
 			CompletionTokenBudget: fixture.binding.CompletionTokenBudget,
+			CostBudgetUSDMicros: fixture.binding.CostBudgetUSDMicros,
 		})
 		if err != nil || evidence.UsageStatus != codingcontract.ModelUsageNotInvoked {
 			t.Fatalf("not-invoked evidence=%#v err=%v", evidence, err)

@@ -92,6 +92,7 @@ func newPlatformFixture(t *testing.T) *platformFixture {
 		GrantID: settlement.GrantID, Generation: settlement.Generation,
 		InferenceGrantSHA256: grantSHA256, IssuedAt: now.Add(-time.Minute), Deadline: now.Add(time.Hour),
 		RequestBudget: 166, PromptTokenBudget: 200_000, CompletionTokenBudget: 30_000,
+		CostBudgetUSDMicros: policy.MaxCostUSDMicros,
 	}
 	request := codingrelay.UpstreamRequest{
 		Sequence: 1, RequestSequence: settlement.RequestSequence, Attempt: settlement.Attempt,

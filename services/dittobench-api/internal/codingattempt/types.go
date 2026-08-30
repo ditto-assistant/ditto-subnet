@@ -56,7 +56,7 @@ type AuthoringSpec struct {
 	MemoryBundle          codingartifacts.Capability
 	ResourceProfile       codingartifacts.Capability
 	RunnerManifest        codingrunner.Manifest
-	ResourcePolicy        codinggrader.ResourcePolicy
+	CandidateLimits       codingrunner.Limits
 	MemoryBundleSHA256    string
 	ResourceProfileSHA256 string
 }
