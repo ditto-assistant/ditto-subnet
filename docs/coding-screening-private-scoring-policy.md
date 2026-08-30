@@ -73,8 +73,8 @@ path, process, mount, capability, grader, and evidence operations.
 
 ## Public certification canary
 
-After current normal qualification, the exact screened artifact runs the public
-certification canary:
+The public coding screener is this one canary. After current normal
+qualification, the exact screened artifact runs it:
 
 ```text
 /coding/health → repeated /coding/seed → /coding/run
@@ -88,24 +88,25 @@ does not prove private-task coding ability.
 
 ## Private scoring
 
-Private promoted releases contain three disjoint repository-level partitions:
+There is exactly one public coding screener: the public certification canary
+above. Coding does not copy the Tool + Memory `screener_1` / `screener_2`
+split. Private promoted releases contain one hidden validator partition:
 
 ```text
-coding_screener_1
-coding_screener_2
 coding_validator
 ```
 
-The first two are hidden advancement screens. They use binary solved credit:
-all required trusted tests pass, or the task is unsolved. Raw partial test
-results remain diagnostic. Maximum-possible-score bounds may prune unfinished
-tasks when advancement is impossible.
+Those tasks use binary solved credit: all required trusted tests pass, or the
+task is unsolved. Raw partial test results remain diagnostic. Maximum-possible-
+score bounds may prune unfinished tasks when a final score is already
+impossible.
 
 The validator partition determines the competitive score. Every scored task is
 run by the required validator quorum on the same immutable task authority. The
-final score is the median of validator-level solved-task means. Candidate
-failures count as unsolved; trusted infrastructure failures retry without
-penalizing the miner. A missing quorum leaves no final coding score.
+final score is `IntegrityGate` times the median of validator-level solved-task
+means. Candidate failures count as unsolved; trusted infrastructure failures
+retry without penalizing the miner. A missing quorum leaves no final coding
+score.
 
 All private tasks are content-addressed, assignment-scoped, digest-verified,
 and withheld from miners. Individual hidden task outcomes, grader logs, and
