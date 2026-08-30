@@ -33,6 +33,7 @@
 | Shadow grading-lease delivery | `apps/platform/ditto/api_server/endpoints/validator_coding_grading.py`, `ditto/validator/platform.py` |
 | Shadow result submission | `apps/platform/ditto/api_server/endpoints/validator_coding_evaluation.py`, `ditto/validator/platform.py` |
 | Shadow attempt coordinator | `ditto/validator/coding_attempt.py`, `docs/coding-shadow-attempt-coordinator.md` |
+| Shadow terminal evidence builder | `ditto/validator/coding_terminal.py`, `docs/coding-shadow-terminal-evidence.md` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Screening worker policy/gates | `workers/screener/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |
