@@ -15,6 +15,7 @@ import pytest
 from ditto_screener.adjudicator import (
     ADJUDICATOR_PROMPT_REVISION,
     SourceReviewAdjudicator,
+    _compacted_adjudicator_messages,
     build_adjudicator,
 )
 
@@ -96,6 +97,36 @@ def _adjudicator(key: Path, transport: httpx.MockTransport) -> SourceReviewAdjud
         max_steps=6,
         transport=transport,
     )
+
+
+def test_adjudicator_compacts_old_tool_turns_but_keeps_the_case_brief() -> None:
+    messages: list[dict[str, object]] = [
+        {"role": "system", "content": "court-policy"},
+        {"role": "user", "content": "case-brief"},
+    ]
+    for turn in range(6):
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [_call("search", {"query": f"needle-{turn}"})],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "search-1",
+                    "content": f"large-output-{turn}",
+                },
+            ]
+        )
+
+    compacted = _compacted_adjudicator_messages(messages)
+
+    assert compacted[:2] == messages[:2]
+    assert "Earlier inspection turns were compacted" in str(compacted[2]["content"])
+    assert "large-output-0" not in json.dumps(compacted)
+    assert "large-output-5" in json.dumps(compacted)
+    assert sum(row.get("role") == "assistant" for row in compacted) == 3
 
 
 async def test_request_uses_provider_supported_completion_parameter(

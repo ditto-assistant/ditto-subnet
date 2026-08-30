@@ -104,7 +104,7 @@ class ScreenerReviewSettings(BaseModel):
     # ``shadow`` records the decision and keeps holding.
     adjudicator_mode: Literal["off", "shadow", "enforce"] = "off"
     adjudicator_model: AdjudicatorModel = "z-ai/glm-5.3-flash"
-    adjudicator_max_steps: Annotated[int, Field(ge=1, le=64)] = 24
+    adjudicator_max_steps: Annotated[int, Field(ge=1, le=256)] = 128
     adjudicator_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 600
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)] = 604_800
     audit_retention_days: Annotated[int, Field(ge=1, le=365)] = 30

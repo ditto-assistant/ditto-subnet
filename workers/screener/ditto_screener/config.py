@@ -353,7 +353,7 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         adjudicator_model=os.environ.get(
             "SCREENER_ADJUDICATOR_MODEL", "z-ai/glm-5.3-flash"
         ),
-        adjudicator_max_steps=_parse_int("SCREENER_ADJUDICATOR_MAX_STEPS", "24"),
+        adjudicator_max_steps=_parse_int("SCREENER_ADJUDICATOR_MAX_STEPS", "128"),
         adjudicator_timeout_seconds=_parse_float(
             "SCREENER_ADJUDICATOR_TIMEOUT_SECONDS", "600"
         ),
@@ -462,9 +462,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_ADJUDICATOR_MODEL must be z-ai/glm-5.3-flash"
         )
-    if not 1 <= config.adjudicator_max_steps <= 64:
+    if not 1 <= config.adjudicator_max_steps <= 256:
         raise ScreenerConfigError(
-            "SCREENER_ADJUDICATOR_MAX_STEPS must be between 1 and 64"
+            "SCREENER_ADJUDICATOR_MAX_STEPS must be between 1 and 256"
         )
     if not 60 <= config.adjudicator_timeout_seconds <= 3_600:
         raise ScreenerConfigError(

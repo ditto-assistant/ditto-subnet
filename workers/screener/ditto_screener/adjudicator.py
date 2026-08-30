@@ -55,13 +55,14 @@ logger = logging.getLogger(__name__)
 
 ADJUDICATOR_PROMPT_REVISION = "adjudicator-v1-policy-v10"
 _DEFAULT_MODEL = "z-ai/glm-5.3-flash"
-_MAX_STEPS = 24
+_MAX_STEPS = 128
 _MAX_COMPLETION_TOKENS = 6_000
 # Bounded by the repository tools themselves; this only caps how many of
 # the served locations are remembered for citation checking.
 _MAX_RECORDED_READS = 2_048
 _MAX_NOTES_IN_PROMPT = 48
 _MAX_CITATIONS = 8
+_COMPACTED_TURNS_TO_KEEP = 3
 
 _SYSTEM_PROMPT = """
 You are the SN118 screening court's adjudicator. A bounded automated review
@@ -336,6 +337,37 @@ def _finding_brief(finding: Mapping[str, object] | None) -> str:
     return json.dumps(bounded, separators=(",", ":"))
 
 
+def _compacted_adjudicator_messages(
+    messages: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Bound court context while preserving the case brief and recent work.
+
+    Read locations remain tracked independently for host-side citation
+    verification. The model can re-read an older location if it still matters;
+    a growing transcript must not become the adjudicator's effective budget.
+    """
+    assistant_indices = [
+        index
+        for index, message in enumerate(messages)
+        if index >= 2 and message.get("role") == "assistant"
+    ]
+    if len(assistant_indices) <= _COMPACTED_TURNS_TO_KEEP:
+        return messages
+    cutoff = assistant_indices[-_COMPACTED_TURNS_TO_KEEP]
+    return [
+        *messages[:2],
+        {
+            "role": "user",
+            "content": (
+                "[Earlier inspection turns were compacted. The original case "
+                "brief above remains authoritative. Re-read any older source "
+                "location needed for the final decision.]"
+            ),
+        },
+        *messages[cutoff:],
+    ]
+
+
 class SourceReviewAdjudicator:
     """Small tool-using court with no shell, edit, execution, or web tools."""
 
@@ -541,7 +573,10 @@ class SourceReviewAdjudicator:
                         raise ValueError("adjudicator exceeded lease budget")
                     request_timeout = min(request_timeout, remaining)
                 message = await self._completion_message(
-                    client, api_key, messages, timeout=request_timeout
+                    client,
+                    api_key,
+                    _compacted_adjudicator_messages(messages),
+                    timeout=request_timeout,
                 )
                 messages.append(message)
                 tool_calls = message.get("tool_calls")

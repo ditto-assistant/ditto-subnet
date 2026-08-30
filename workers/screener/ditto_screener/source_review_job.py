@@ -241,7 +241,7 @@ def _build_reviewer(
             timeout_seconds=float(
                 os.environ.get("SCREENER_ADJUDICATOR_TIMEOUT_SECONDS", "600")
             ),
-            max_steps=int(os.environ.get("SCREENER_ADJUDICATOR_MAX_STEPS", "24")),
+            max_steps=int(os.environ.get("SCREENER_ADJUDICATOR_MAX_STEPS", "128")),
         )
     )
     return LayeredSourceReviewAgent(

@@ -20793,7 +20793,7 @@ export interface components {
         ScreenerReviewSettings: {
             /**
              * Adjudicator Max Steps
-             * @default 24
+             * @default 128
              */
             adjudicator_max_steps: number;
             /**
