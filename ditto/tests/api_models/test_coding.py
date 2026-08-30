@@ -25,6 +25,7 @@ from ditto.api_models.coding import (
     CodingIssue,
     CodingRunEvidence,
     CodingRunManifest,
+    CodingRunnerPlan,
     CodingRunRequest,
     CodingRuntimePolicy,
     CodingSeedRequest,
@@ -53,7 +54,9 @@ from ditto.api_models.coding import (
     memory_bundle_digest,
     parse_canonical_json,
     run_evidence_digest,
+    runner_plan_digest,
     task_evidence_digest,
+    validate_execution_plan_bundle,
     validate_run_evidence_against_manifest,
 )
 
@@ -87,6 +90,10 @@ _SHADOW_RESULT_VECTOR_PATH = (
     / "dittobench-coding-contract"
     / "testdata"
     / "coding_shadow_result_submission_v1.json"
+)
+_EXECUTION_PLAN_VECTOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json"
 )
 
 
@@ -420,6 +427,105 @@ def test_grader_plan_resource_and_receipt_vectors_are_independently_replayable()
     broken[1] = broken[1].model_copy(update={"previous_receipt_sha256": "f" * 64})
     with pytest.raises(ValueError, match="receipt chain"):
         grader_execution_receipt_root(plan, broken)
+
+
+def test_execution_plan_vector_binds_phase_separated_authority() -> None:
+    vector = json.loads(_EXECUTION_PLAN_VECTOR_PATH.read_text(encoding="utf-8"))
+    assert vector["schema"] == "dittobench-coding-execution-plan-vector-v1"
+    assert vector["coding_contract_version"] == 1
+    assert vector["weight_eligible"] is False
+    runner = parse_canonical_json(CodingRunnerPlan, _body(vector["runner_plan"]))
+    runtime = parse_canonical_json(CodingRuntimePolicy, _body(vector["runtime_policy"]))
+    grader = parse_canonical_json(CodingGraderPlan, _body(vector["grader_plan"]))
+    resource = parse_canonical_json(
+        CodingGraderResourceProfile, _body(vector["grader_resource_profile"])
+    )
+    assert runner_plan_digest(runner) == vector["expected"]["runner_plan_sha256"]
+    assert grader_plan_digest(grader) == vector["expected"]["grader_plan_sha256"]
+    assert (
+        grader_resource_profile_digest(resource)
+        == vector["expected"]["grader_resource_profile_sha256"]
+    )
+    validate_execution_plan_bundle(
+        runner_plan=runner,
+        runtime_policy=runtime,
+        grader_plan=grader,
+        resource_profile=resource,
+    )
+    assert "grader/adversarial.py" not in repr(grader)
+
+    extended = copy.deepcopy(vector["runner_plan"])
+    extended["future_diagnostic"] = {"ignored": True}
+    extended["test_commands"][0]["future_hint"] = "ignored"
+    parsed = parse_canonical_json(CodingRunnerPlan, _body(extended))
+    assert runner_plan_digest(parsed) == runner_plan_digest(runner)
+
+
+def test_execution_plan_rejects_authority_drift_and_unsafe_commands() -> None:
+    vector = json.loads(_EXECUTION_PLAN_VECTOR_PATH.read_text(encoding="utf-8"))
+    runner = parse_canonical_json(CodingRunnerPlan, _body(vector["runner_plan"]))
+    runtime = parse_canonical_json(CodingRuntimePolicy, _body(vector["runtime_policy"]))
+    grader = parse_canonical_json(CodingGraderPlan, _body(vector["grader_plan"]))
+    resource = parse_canonical_json(
+        CodingGraderResourceProfile, _body(vector["grader_resource_profile"])
+    )
+
+    for changed in {
+        "runtime paths": runtime.model_copy(update={"editable_paths": []}),
+        "runtime tests": runtime.model_copy(update={"test_command_ids": []}),
+        "runner limits": runner.model_copy(
+            update={
+                "limits": runner.limits.model_copy(
+                    update={"max_workspace_bytes": 2 << 30}
+                )
+            }
+        ),
+        "grader case": grader.model_copy(update={"case_id": "other-case"}),
+        "grader resource": grader.model_copy(
+            update={"resource_profile_sha256": "f" * 64}
+        ),
+    }.values():
+        kwargs = {
+            "runner_plan": runner,
+            "runtime_policy": runtime,
+            "grader_plan": grader,
+            "resource_profile": resource,
+        }
+        if isinstance(changed, CodingRunnerPlan):
+            kwargs["runner_plan"] = changed
+        elif isinstance(changed, CodingRuntimePolicy):
+            kwargs["runtime_policy"] = changed
+        else:
+            kwargs["grader_plan"] = changed
+        with pytest.raises((ValidationError, ValueError), match="plan|workspace"):
+            validate_execution_plan_bundle(**kwargs)  # type: ignore[arg-type]
+
+    unsafe = copy.deepcopy(vector["runner_plan"])
+    unsafe["test_commands"][0]["argv"] = ["sh", "-c", "pytest"]
+    with pytest.raises(ValidationError, match="executable"):
+        parse_canonical_json(CodingRunnerPlan, _body(unsafe))
+
+    overlapping = copy.deepcopy(vector["runner_plan"])
+    overlapping["creatable_paths"] = ["src/parser.py"]
+    with pytest.raises(ValidationError, match="path sets"):
+        parse_canonical_json(CodingRunnerPlan, _body(overlapping))
+
+
+def test_execution_plan_vector_is_validator_only_and_capability_free() -> None:
+    body = _EXECUTION_PLAN_VECTOR_PATH.read_text(encoding="utf-8")
+    for forbidden in (
+        '"ticket_id"',
+        '"memories"',
+        '"memory_bundle',
+        '"url"',
+        '"bearer"',
+        '"signature"',
+        "OPENROUTER_API_KEY",
+    ):
+        assert forbidden not in body
+    rust_root = Path(__file__).parents[3] / "miners/dittobench-coding-starter-kit"
+    for source in rust_root.rglob("*.rs"):
+        assert "coding_execution_plan_v1.json" not in source.read_text(encoding="utf-8")
 
 
 def test_unknown_fields_are_ignored_and_excluded_from_canonical_digest() -> None:
