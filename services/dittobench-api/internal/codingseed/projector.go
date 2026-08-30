@@ -53,6 +53,9 @@ func (projector *Projector) Project(reader io.Reader, binding Binding) (Projecti
 	if err := codingcontract.ValidateJSONDocument(body, int(projector.maximum)); err != nil {
 		return Projection{}, errors.New("coding memory artifact JSON is invalid")
 	}
+	if err := codingcontract.RequireExactCanonicalJSON(body); err != nil {
+		return Projection{}, errors.New("coding memory artifact JSON is not canonical")
+	}
 	if err := validateArtifactShape(body); err != nil {
 		return Projection{}, err
 	}

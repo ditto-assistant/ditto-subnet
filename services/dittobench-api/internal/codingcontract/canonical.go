@@ -181,6 +181,32 @@ func ValidateJSONDocument(body []byte, maximumBytes int) error {
 	return requireEOF(decoder)
 }
 
+// RequireExactCanonicalJSON rejects a document that is not the exact sorted-key
+// projection with one trailing newline produced by CanonicalJSON. Use it after
+// ValidateJSONDocument when the transport object itself must be canonical.
+func RequireExactCanonicalJSON(body []byte) error {
+	if len(body) == 0 || len(body) > MaxCanonicalJSONBytes {
+		return errors.New("coding JSON size is outside the canonical bound")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var projected any
+	if err := decoder.Decode(&projected); err != nil {
+		return err
+	}
+	if err := requireEOF(decoder); err != nil {
+		return err
+	}
+	canonical, err := canonicalJSONUnchecked(projected)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(body, canonical) {
+		return errors.New("coding JSON is not the canonical projection")
+	}
+	return nil
+}
+
 func parseCanonical[T parsedModel](
 	body []byte,
 	validateShape func(map[string]any) error,

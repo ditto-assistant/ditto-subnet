@@ -163,8 +163,21 @@ func TestProjectRejectsNoncanonicalAndInvalidMemorySemantics(t *testing.T) {
 		t.Fatal(err)
 	}
 	pretty.WriteByte('\n')
-	if _, err := projector.Project(bytes.NewReader(pretty.Bytes()), fixtureBinding(now, pretty.Bytes())); err == nil {
+	if err := projectNoncanonical(t, projector, now, pretty.Bytes()); err == nil {
 		t.Fatal("noncanonical artifact accepted")
+	}
+	raw, err := json.Marshal(struct {
+		Memories []codingcontract.VisibleMemory `json:"memories"`
+	}{Memories: memories})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsorted := append(append([]byte(nil), raw...), '\n')
+	if bytes.Equal(unsorted, body) {
+		t.Fatal("struct field order already matches canonical key order")
+	}
+	if err := projectNoncanonical(t, projector, now, unsorted); err == nil {
+		t.Fatal("unsorted object keys accepted")
 	}
 	duplicate := append(cloneMemories(memories), memories[0])
 	invalid := canonicalFixture(t, struct {
@@ -324,6 +337,15 @@ type nilSeedClient struct{}
 
 func (*nilSeedClient) Seed(context.Context, codingcontract.SeedRequest) (codingcertifier.SeedResponse, error) {
 	return codingcertifier.SeedResponse{}, errors.New("unreachable")
+}
+
+func projectNoncanonical(t *testing.T, projector *Projector, now time.Time, body []byte) error {
+	t.Helper()
+	_, err := projector.Project(bytes.NewReader(body), fixtureBinding(now, body))
+	if err != nil && !strings.Contains(err.Error(), "not canonical") {
+		t.Fatalf("noncanonical artifact error=%v", err)
+	}
+	return err
 }
 
 func canonicalFixture(t *testing.T, value any) []byte {

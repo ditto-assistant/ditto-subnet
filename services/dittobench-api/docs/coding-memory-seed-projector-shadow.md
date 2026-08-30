@@ -23,6 +23,7 @@ The projector independently checks:
 - a canonical nonzero ticket UUID and bounded case/profile identities;
 - an active deadline no more than two hours ahead;
 - an exact lowercase raw-object SHA-256;
+- the exact canonical JSON projection (sorted object keys and one trailing newline);
 - the shared 4 MiB JSON/wire bound, Unicode, nesting, duplicate-field, trailing
   content, and strict known-field artifact shape;
 - a present memory array (`[]` is valid V0; `null` is not);
