@@ -2,9 +2,22 @@ FROM rust:1-trixie@sha256:1bcff4befb740599103a2c7cb51058e14479b2e35e3a34a3f0dc4e
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 WORKDIR /app
 
+# Compile third-party dependencies against stub sources first, so this layer
+# is cached on Cargo.{toml,lock} alone and edits to src/ only rebuild the
+# crate itself instead of the whole dependency tree.
 COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src/bin \
+    && touch src/lib.rs \
+    && printf 'fn main() {}\n' > src/bin/dittobench-coding-miner.rs \
+    && cargo build --locked --release --bin dittobench-coding-miner \
+    && rm -rf src
+
 COPY src ./src
-RUN cargo build --locked --release --bin dittobench-coding-miner
+# touch: guarantee the real sources are newer than the stub fingerprints, so
+# cargo cannot treat the stub-built targets as fresh. find keeps this working
+# in forks that drop optional targets such as src/lib.rs.
+RUN find src -type f -name '*.rs' -exec touch {} + \
+    && cargo build --locked --release --bin dittobench-coding-miner
 
 FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS runtime
 RUN apt-get update \

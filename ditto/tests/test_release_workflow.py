@@ -66,15 +66,26 @@ def test_coding_starter_ci_tracks_the_public_contract_and_builds_the_image() -> 
         in (gate["run"])
     )
     assert "cargo test --locked --all-targets --all-features --verbose" in gate["run"]
+    cache = _step(verify["steps"], "Cache Cargo dependencies")
+    assert "miners/dittobench-coding-starter-kit/target" in cache["with"]["path"]
+    assert "miners/dittobench-unified-starter-kit/target" in cache["with"]["path"]
     image = _step(verify["steps"], "Build the shadow harness image")
-    assert "docker build" in image["run"]
+    assert str(image["uses"]).startswith("docker/build-push-action@")
+    assert image["with"]["context"] == "miners/dittobench-coding-starter-kit"
+    assert "scope=coding-starter-kit" in image["with"]["cache-from"]
+    assert "scope=coding-starter-kit" in image["with"]["cache-to"]
     unified = _step(verify["steps"], "Verify the unified normal and coding starter")
     assert unified["working-directory"] == "miners/dittobench-unified-starter-kit"
     assert "cargo run --locked -- submit" in unified["run"]
     assert "uv run ditto verify" in unified["run"]
     unified_image = _step(verify["steps"], "Build the unified starter image")
-    assert unified_image["working-directory"] == "miners"
-    assert "dittobench-unified-starter-kit/Dockerfile" in unified_image["run"]
+    assert str(unified_image["uses"]).startswith("docker/build-push-action@")
+    assert unified_image["with"]["context"] == "miners"
+    assert unified_image["with"]["file"] == (
+        "miners/dittobench-unified-starter-kit/Dockerfile"
+    )
+    # The route probe below runs the tag from the local daemon.
+    assert unified_image["with"]["load"] == "true"
     unified_probe = _step(verify["steps"], "Probe unified starter image routes")
     assert "test-image-health.sh" in unified_probe["run"]
     e2e = _step(verify["steps"], "Run the scripted Rust and Python practice E2E")
@@ -163,11 +174,20 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert coding_starter_gate["defaults"]["run"]["working-directory"] == (
         "miners/dittobench-coding-starter-kit"
     )
+    cache_gate = _step(
+        coding_starter_gate["steps"],
+        "Cache coding starter-kit Cargo dependencies",
+    )
+    assert "miners/dittobench-coding-starter-kit/target" in cache_gate["with"]["path"]
+    assert "miners/dittobench-unified-starter-kit/target" in cache_gate["with"]["path"]
     image_gate = _step(
         coding_starter_gate["steps"],
         "Build coding starter kit image from exact merge source",
     )
-    assert "docker build" in image_gate["run"]
+    assert str(image_gate["uses"]).startswith("docker/build-push-action@")
+    assert image_gate["with"]["context"] == "miners/dittobench-coding-starter-kit"
+    assert "scope=coding-starter-kit" in image_gate["with"]["cache-from"]
+    assert "scope=coding-starter-kit" in image_gate["with"]["cache-to"]
     unified_gate = _step(
         coding_starter_gate["steps"],
         "Verify unified starter kit from exact merge source",
@@ -178,8 +198,13 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         coding_starter_gate["steps"],
         "Build unified starter kit image from exact merge source",
     )
-    assert unified_image_gate["working-directory"] == "miners"
-    assert "dittobench-unified-starter-kit/Dockerfile" in unified_image_gate["run"]
+    assert str(unified_image_gate["uses"]).startswith("docker/build-push-action@")
+    assert unified_image_gate["with"]["context"] == "miners"
+    assert unified_image_gate["with"]["file"] == (
+        "miners/dittobench-unified-starter-kit/Dockerfile"
+    )
+    # The route probe below runs the tag from the local daemon.
+    assert unified_image_gate["with"]["load"] is True
     unified_probe_gate = _step(
         coding_starter_gate["steps"],
         "Probe unified starter kit routes from exact merge source",
@@ -1304,6 +1329,10 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
             writer_scopes.setdefault(job_name, []).append(writer)
 
     assert writer_scopes == {
+        "verify-dittobench-coding-starter-kit": [
+            "coding-starter-kit",
+            "unified-starter-kit",
+        ],
         "build-validator-amd64": ["validator-amd64"],
         "build-validator-arm64": ["validator-arm64"],
         "build-sandbox-docker": ["sandbox-docker"],
@@ -1324,5 +1353,5 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
     assert reader_scopes["build-validator-arm64"] == [["validator-arm64", "validator"]]
     assert (
         len({scope for job_scopes in writer_scopes.values() for scope in job_scopes})
-        == 9
+        == 11
     )
