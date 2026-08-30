@@ -21,7 +21,7 @@ def _evidence(
         "analyzer_version": "coding-source-v1",
         "policy_version": 1,
         "outcome": outcome,
-        "findings": findings,
+        "findings": tuple(findings),
         "evidence_sha256": "0" * 64,
     }
     provisional = CodingSourceScreenEvidence.model_construct(**raw)
