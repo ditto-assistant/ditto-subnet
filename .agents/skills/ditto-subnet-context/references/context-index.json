@@ -289,7 +289,7 @@
       "title": "Shadow coding inference request ledger",
       "keywords": ["coding inference request", "coding settlement ledger", "provider settlement", "Luna request reservation", "unsettled provider request"],
       "summary": "Reserve ordered coding-model dispatches and durably persist canonical trusted provider settlements without enabling a live provider route.",
-      "owns": ["apps/platform/ditto/db/queries/coding_inference_requests.py", "apps/platform/alembic/versions/2026_08_22_add_coding_inference_requests.py", "apps/platform/docs/coding-inference-request-ledger.md"],
+      "owns": ["apps/platform/ditto/db/queries/coding_inference_requests.py", "apps/platform/alembic/versions/2026_08_30_add_coding_inference_requests.py", "apps/platform/docs/coding-inference-request-ledger.md"],
       "read": ["apps/platform/docs/coding-inference-grant-authority.md", "services/dittobench-api/docs/coding-luna-relay-contract-shadow.md", "services/dittobench-api/docs/coding-luna-relay-journal-shadow.md"],
       "search": ["rg -n 'CodingInferenceRequest|begin_coding_inference_request|settle_coding_inference_request|provider_settlement' apps/platform/ditto", "rg -n 'coding_inference_requests' apps/platform/alembic services/model-relay/db/schema.sql"],
       "validate": ["cd apps/platform && python scripts/check_migration_order.py origin/main", "cd apps/platform && uv run pytest -q ditto/tests/db/queries/test_coding_inference_requests.py", "cd apps/platform && make lint lint-copy typecheck test", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
