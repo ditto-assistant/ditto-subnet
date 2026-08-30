@@ -83,6 +83,7 @@ from ditto.db.models import (
     ScoreAuditEntry,
     ScreenedImageUpload,
     ScreenerCapacityEvent,
+    ScreenerCapacitySnapshot,
     ScreenerHeartbeat,
     ScreenerProviderSettingsRevision,
     ScreenerReviewSettingsRevision,
@@ -3406,6 +3407,142 @@ class TestQueue:
 
 
 class TestClaim:
+    async def test_legacy_gcp_claim_waits_for_fenced_overflow_capacity(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The shared GCP principal must not outrun a healthy Hetzner primary."""
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreenerProviderSettingsRevision(
+                    environment="prod",
+                    parent_revision=0,
+                    settings={
+                        "runtime_provider_priority": ["hetzner", "gcp"],
+                        "source_review_provider_priority": ["hetzner", "gcp"],
+                        "build_provider_priority": ["hetzner", "gcp"],
+                        "gce_overflow_enabled": True,
+                        "primary_node_id": "subnet-screener-1",
+                    },
+                    reason="Exercise fenced GCP overflow claims",
+                    actor="test",
+                )
+            )
+            session.add(
+                ScreenerCapacitySnapshot(
+                    environment="prod",
+                    controller_epoch="prod:test",
+                    controller_source_sha="a" * 40,
+                    provider_settings_revision=1,
+                    provider_ready=True,
+                    controller_heartbeat_at=now,
+                    controller_lease_expires_at=now + timedelta(minutes=3),
+                    runnable_backlog=1,
+                    active_leases=0,
+                    desired_slots=1,
+                    global_cap=6,
+                    targon_capability="nogo",
+                    targon_available=0,
+                    targon_healthy=0,
+                    targon_pending=0,
+                    targon_draining=0,
+                    gce_target=0,
+                    gce_healthy=0,
+                    gce_pending=0,
+                    gce_draining=0,
+                )
+            )
+        _install_db(app, session_maker)
+
+        held = await client.post(_CLAIM_URL)
+
+        assert held.status_code == 200, held.text
+        assert held.json()["items"] == []
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.status == AgentStatus.UPLOADED
+
+        async with session_maker() as session, session.begin():
+            snapshot = await session.get(ScreenerCapacitySnapshot, "prod")
+            assert snapshot is not None
+            snapshot.gce_target = 1
+            snapshot.provider_settings_revision = 0
+
+        stale_routing = await client.post(_CLAIM_URL)
+
+        assert stale_routing.status_code == 200, stale_routing.text
+        assert stale_routing.json()["items"] == []
+
+        async with session_maker() as session, session.begin():
+            snapshot = await session.get(ScreenerCapacitySnapshot, "prod")
+            assert snapshot is not None
+            snapshot.provider_settings_revision = 1
+
+        admitted = await client.post(_CLAIM_URL)
+
+        assert admitted.status_code == 200, admitted.text
+        assert admitted.json()["items"][0]["agent_id"] == str(agent_id)
+
+    async def test_legacy_gcp_claim_fails_closed_after_controller_lease_expires(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreenerProviderSettingsRevision(
+                    environment="prod",
+                    parent_revision=0,
+                    settings={
+                        "runtime_provider_priority": ["hetzner", "gcp"],
+                        "source_review_provider_priority": ["hetzner", "gcp"],
+                        "build_provider_priority": ["hetzner", "gcp"],
+                        "gce_overflow_enabled": True,
+                        "primary_node_id": "subnet-screener-1",
+                    },
+                    reason="Exercise stale GCP overflow fence",
+                    actor="test",
+                )
+            )
+            session.add(
+                ScreenerCapacitySnapshot(
+                    environment="prod",
+                    controller_epoch="prod:expired",
+                    controller_source_sha="a" * 40,
+                    provider_settings_revision=1,
+                    provider_ready=True,
+                    controller_heartbeat_at=now - timedelta(minutes=4),
+                    controller_lease_expires_at=now - timedelta(seconds=1),
+                    runnable_backlog=1,
+                    active_leases=0,
+                    desired_slots=1,
+                    global_cap=6,
+                    targon_capability="nogo",
+                    targon_available=0,
+                    targon_healthy=0,
+                    targon_pending=0,
+                    targon_draining=0,
+                    gce_target=1,
+                    gce_healthy=1,
+                    gce_pending=0,
+                    gce_draining=0,
+                )
+            )
+        _install_db(app, session_maker)
+
+        response = await client.post(_CLAIM_URL)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["items"] == []
+
     async def test_mechanical_admission_claim_uses_its_dedicated_contract_fields(
         self,
         app: FastAPI,

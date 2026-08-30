@@ -244,6 +244,50 @@ async def _required_policy(
     return policy
 
 
+async def _legacy_gcp_claim_is_authorized(
+    session: AsyncSession, *, now: datetime
+) -> bool:
+    """Keep the shared GCP principal behind the fenced overflow decision.
+
+    Registered nodes carry a provider identity and are admitted by the
+    per-node channel limits below. The pre-node GCP fleet instead shares the
+    legacy principal, so it has no node identity to route. It remains the
+    dispatcher for GCP- and decomposed-Targon-first configurations, but must
+    wait behind every Hetzner-primary lane until the current controller
+    snapshot has requested GCP overflow. A stale, unready, or superseded
+    snapshot deliberately fails closed: existing leases can still complete,
+    but GCP cannot take new primary work away from Hetzner.
+    """
+    revision, settings = await resolve_screener_provider_settings(
+        session, environment="prod"
+    )
+    lanes = (
+        settings.build_provider_priority,
+        settings.runtime_provider_priority,
+        settings.source_review_provider_priority,
+    )
+    if all(lane[0] != "hetzner" for lane in lanes):
+        return True
+    if not settings.gce_overflow_enabled:
+        return False
+
+    snapshot = await session.scalar(
+        select(ScreenerCapacitySnapshot)
+        .where(ScreenerCapacitySnapshot.environment == "prod")
+        .with_for_update()
+    )
+    if snapshot is None or not snapshot.provider_ready:
+        return False
+    lease_expiry = snapshot.controller_lease_expires_at
+    if lease_expiry.tzinfo is None:
+        lease_expiry = lease_expiry.replace(tzinfo=UTC)
+    return (
+        snapshot.provider_settings_revision == revision
+        and now < lease_expiry
+        and snapshot.gce_target > 0
+    )
+
+
 # How long a pre-signed artifact URL stays valid (mirrors the validator's).
 _ARTIFACT_URL_TTL = timedelta(minutes=5)
 _SCREENED_IMAGE_UPLOAD_TTL = timedelta(minutes=15)
@@ -4051,7 +4095,18 @@ async def claim(
     if session.get_bind().dialect.name == "postgresql":
         async with session.begin():
             node_id = getattr(request.state, "screener_node_id", None)
-            if node_id is not None:
+            if node_id is None:
+                if not await _legacy_gcp_claim_is_authorized(session, now=now):
+                    logger.info(
+                        "legacy GCP screener=%s held behind primary capacity route",
+                        screener_hotkey,
+                    )
+                    return ScreenerQueueResponse(
+                        items=[],
+                        count=0,
+                        required_policy_version=required_policy,
+                    )
+            else:
                 node = await session.scalar(
                     select(ScreenerNode)
                     .where(ScreenerNode.node_id == node_id)
@@ -4099,7 +4154,18 @@ async def claim(
         # Postgres transaction-scoped lock used in production.
         async with _CLAIM_FALLBACK_LOCK, session.begin():
             node_id = getattr(request.state, "screener_node_id", None)
-            if node_id is not None:
+            if node_id is None:
+                if not await _legacy_gcp_claim_is_authorized(session, now=now):
+                    logger.info(
+                        "legacy GCP screener=%s held behind primary capacity route",
+                        screener_hotkey,
+                    )
+                    return ScreenerQueueResponse(
+                        items=[],
+                        count=0,
+                        required_policy_version=required_policy,
+                    )
+            else:
                 node = await session.get(ScreenerNode, node_id)
                 if node is None:
                     raise ScreenerAuthError("screener node is not authorized")

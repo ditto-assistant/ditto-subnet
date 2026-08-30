@@ -337,7 +337,6 @@ async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(
     from ditto.api_models.agent_status import AgentStatus
     from ditto.db.models import ScreeningAttempt, SubmissionImageBuild
     from ditto.tests.api_server.endpoints.test_screener import (
-        _AUTH_HEADER,
         _CLAIM_URL,
         _SCREENER_HOTKEY,
         _install_chain,
@@ -375,21 +374,44 @@ async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(
         ),
     )
     assert provider.status_code == 200, provider.text
-
-    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-    claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-    attempt_id = claim.json()["items"][0]["attempt_id"]
-    queued = await client.post(
-        f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
-        headers=_AUTH_HEADER,
-        json={"attempt_id": attempt_id},
-    )
-    assert queued.status_code == 200, queued.text
-    build_id = queued.json()["build_id"]
     node_headers = {
         "Authorization": f"Bearer {_NODE_TOKEN}",
         "X-Screener-Hotkey": _SCREENER_HOTKEY,
     }
+    limits_path = "/api/v1/admin/screener-nodes/subnet-screener-1/channel-settings"
+    screening_only = await client.post(
+        limits_path,
+        headers=_HEADERS,
+        json={
+            "environment": "prod",
+            "expected_revision": 0,
+            "settings": {
+                "screening_concurrency": 1,
+                "sandbox_slots": 0,
+                "build_concurrency": 0,
+                "runtime_concurrency": 0,
+                "source_review_concurrency": 0,
+            },
+            "reason": "Permit the enrolled node to claim its own screening lease",
+            "actor": "operator@example.com",
+            "confirmation": (
+                "APPLY SCREENER NODE subnet-screener-1 SCREENING=1 "
+                "SANDBOX=0 BUILD=0 RUNTIME=0 SOURCE_REVIEW=0"
+            ),
+        },
+    )
+    assert screening_only.status_code == 200, screening_only.text
+
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    claim = await client.post(_CLAIM_URL, headers=node_headers)
+    attempt_id = claim.json()["items"][0]["attempt_id"]
+    queued = await client.post(
+        f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
+        headers=node_headers,
+        json={"attempt_id": attempt_id},
+    )
+    assert queued.status_code == 200, queued.text
+    build_id = queued.json()["build_id"]
 
     disabled = await client.post(
         "/api/v1/screener/nodes/jobs/submission-image-builds/claim",
@@ -399,13 +421,12 @@ async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(
     assert disabled.status_code == 200, disabled.text
     assert disabled.json()["build"] is None
 
-    limits_path = "/api/v1/admin/screener-nodes/subnet-screener-1/channel-settings"
     enabled = await client.post(
         limits_path,
         headers=_HEADERS,
         json={
             "environment": "prod",
-            "expected_revision": 0,
+            "expected_revision": 1,
             "settings": {
                 "screening_concurrency": 2,
                 "sandbox_slots": 1,
@@ -490,7 +511,6 @@ async def test_hetzner_node_runtime_defers_terminal_verdict_to_screener_worker(
     from ditto.api_models.agent_status import AgentStatus
     from ditto.db.models import ScreeningAttempt, SubmissionImageBuild
     from ditto.tests.api_server.endpoints.test_screener import (
-        _AUTH_HEADER,
         _CLAIM_URL,
         _SCREENER_HOTKEY,
         _install_chain,
@@ -551,22 +571,22 @@ async def test_hetzner_node_runtime_defers_terminal_verdict_to_screener_worker(
         },
     )
     assert limits.status_code == 200, limits.text
-
-    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-    claimed = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-    assert claimed.status_code == 200, claimed.text
-    attempt_id = claimed.json()["items"][0]["attempt_id"]
-    queued = await client.post(
-        f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
-        headers=_AUTH_HEADER,
-        json={"attempt_id": attempt_id},
-    )
-    assert queued.status_code == 200, queued.text
-    build_id = queued.json()["build_id"]
     node_headers = {
         "Authorization": f"Bearer {_NODE_TOKEN}",
         "X-Screener-Hotkey": _SCREENER_HOTKEY,
     }
+
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    claimed = await client.post(_CLAIM_URL, headers=node_headers)
+    assert claimed.status_code == 200, claimed.text
+    attempt_id = claimed.json()["items"][0]["attempt_id"]
+    queued = await client.post(
+        f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
+        headers=node_headers,
+        json={"attempt_id": attempt_id},
+    )
+    assert queued.status_code == 200, queued.text
+    build_id = queued.json()["build_id"]
     build = await client.post(
         "/api/v1/screener/nodes/jobs/submission-image-builds/claim",
         headers=node_headers,
