@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -9,6 +10,14 @@ from ditto.api_models.coding_certification_leases import (
     CodingCertificationLeaseResponse,
     CodingCertificationLeaseStatus,
 )
+
+_ROOT = Path(__file__).resolve().parents[5]
+
+
+def test_validator_lease_contract_module_matches_platform_byte_for_byte() -> None:
+    validator = _ROOT / "ditto/api_models/coding_certification_leases.py"
+    platform = _ROOT / "apps/platform/ditto/api_models/coding_certification_leases.py"
+    assert platform.read_bytes() == validator.read_bytes()
 
 
 def _authority(**updates: object) -> dict[str, object]:
