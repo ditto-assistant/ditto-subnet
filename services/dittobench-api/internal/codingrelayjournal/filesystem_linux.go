@@ -211,6 +211,11 @@ func newStagingFile(directory *os.File, prefix string) (*os.File, string, uint64
 		if err != nil {
 			return nil, "", 0, 0, fmt.Errorf("create relay journal staging file: %w", err)
 		}
+		if err := unix.Fchmod(fd, 0o600); err != nil {
+			_ = unix.Close(fd)
+			_ = unix.Unlinkat(int(directory.Fd()), name, 0)
+			return nil, "", 0, 0, fmt.Errorf("set relay journal staging file mode: %w", err)
+		}
 		var stat unix.Stat_t
 		if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG ||
 			stat.Mode&0o777 != 0o600 || stat.Uid != uint32(os.Geteuid()) || stat.Nlink != 1 {

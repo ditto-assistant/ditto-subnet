@@ -158,7 +158,9 @@ func (store *Store) Begin(
 	}
 	// Reserve the maximum terminal record while the dispatch marker exists, so
 	// an admitted provider result cannot be stranded by local journal capacity.
-	required := int64(len(entryBody)) + maximumEntryBytes
+	// Also reserve remaining state.json headroom so Revoke can grow the binding
+	// record after entries have consumed the configured budget.
+	required := int64(len(entryBody)) + maximumEntryBytes + store.stateGrowthHeadroom(stateBody)
 	if stateBody != nil {
 		required += int64(len(stateBody))
 	}
@@ -245,7 +247,10 @@ func (store *Store) Complete(
 	if err != nil {
 		return ErrInvalid
 	}
-	if !store.hasCapacity(int64(len(body))) {
+	if err := validateCompletedUsage(store.config.Policy, binding, store.entries, &ownedEntry); err != nil {
+		return err
+	}
+	if !store.hasCapacity(replacementDelta(store.entryBytes[sequence-1], int64(len(body)))) {
 		return ErrCapacity
 	}
 	committed, installErr := store.installRecord(store.dirs.entries, entryName(sequence), body, true)
@@ -297,7 +302,7 @@ func (store *Store) Revoke(ctx context.Context, binding codingrelay.Binding) err
 	if err != nil {
 		return err
 	}
-	if !store.hasCapacity(int64(len(body))) {
+	if !store.hasCapacity(replacementDelta(store.stateBytes, int64(len(body)))) {
 		return ErrCapacity
 	}
 	committed, installErr := store.installRecord(store.dirs.root, "state.json", body, replace)
@@ -485,6 +490,11 @@ func (store *Store) loadEntries() error {
 		if err := validateDispatchTransition(store.entries, record.Entry.Dispatch); err != nil {
 			return fmt.Errorf("%w: journal request chain disagrees", ErrCorrupt)
 		}
+		if record.Entry.Completed {
+			if err := validateCompletedUsage(store.config.Policy, binding, store.entries, &record.Entry); err != nil {
+				return fmt.Errorf("%w: journal usage exceeds signed budgets", ErrCorrupt)
+			}
+		}
 		store.entries = append(store.entries, *record)
 		store.entryBytes = append(store.entryBytes, size)
 		if size > store.config.MaxTotalBytes-store.physicalBytes {
@@ -515,6 +525,24 @@ func (store *Store) checkOpen() error {
 func (store *Store) hasCapacity(stagingBytes int64) bool {
 	return stagingBytes >= 0 && store.physicalBytes <= store.config.MaxTotalBytes &&
 		stagingBytes <= store.config.MaxTotalBytes-store.physicalBytes
+}
+
+func replacementDelta(existing, next int64) int64 {
+	if next <= existing {
+		return 0
+	}
+	return next - existing
+}
+
+func (store *Store) stateGrowthHeadroom(pendingState []byte) int64 {
+	current := store.stateBytes
+	if pendingState != nil {
+		current = int64(len(pendingState))
+	}
+	if current >= maximumStateBytes {
+		return 0
+	}
+	return maximumStateBytes - current
 }
 
 func (store *Store) installRecord(
@@ -768,6 +796,45 @@ func validateDispatchAuthority(
 	expectedLocked, err := codingcontract.LockInferenceRequest(policy, effectiveMiner)
 	if err != nil || !reflect.DeepEqual(expectedLocked, dispatch.LockedRequest) {
 		return ErrConflict
+	}
+	return nil
+}
+
+func validateCompletedUsage(
+	policy codingcontract.InferencePolicy,
+	binding codingrelay.Binding,
+	entries []entryRecord,
+	next *codingrelay.JournalEntry,
+) error {
+	prompt, completion, cost := uint64(0), uint64(0), uint64(0)
+	add := func(entry codingrelay.JournalEntry) error {
+		if !entry.Completed {
+			return nil
+		}
+		if prompt > ^uint64(0)-entry.Receipt.PromptTokens ||
+			completion > ^uint64(0)-entry.Receipt.CompletionTokens ||
+			cost > ^uint64(0)-entry.Receipt.CostUSDMicros {
+			return ErrCapacity
+		}
+		prompt += entry.Receipt.PromptTokens
+		completion += entry.Receipt.CompletionTokens
+		cost += entry.Receipt.CostUSDMicros
+		return nil
+	}
+	for _, record := range entries {
+		if int(record.Sequence) == int(next.Dispatch.Sequence) {
+			continue
+		}
+		if err := add(record.Entry); err != nil {
+			return err
+		}
+	}
+	if err := add(*next); err != nil {
+		return err
+	}
+	if prompt > binding.PromptTokenBudget || completion > binding.CompletionTokenBudget ||
+		cost > policy.MaxCostUSDMicros {
+		return ErrCapacity
 	}
 	return nil
 }

@@ -261,6 +261,32 @@ func completedJournalEntry(t *testing.T, fixture journalFixture) codingrelay.Jou
 	return snapshot.Entries[0]
 }
 
+func TestCompletedUsageRejectsOverspend(t *testing.T) {
+	fixture := newJournalFixture(t)
+	binding := fixture.binding
+	binding.PromptTokenBudget = 10
+	previous := []entryRecord{{
+		Sequence: 1,
+		Entry: codingrelay.JournalEntry{
+			Completed: true,
+			Dispatch:  codingrelay.DispatchRecord{Sequence: 1},
+			Receipt:   codingcontract.InferenceReceipt{PromptTokens: 6},
+		},
+	}}
+	next := codingrelay.JournalEntry{
+		Completed: true,
+		Dispatch:  codingrelay.DispatchRecord{Sequence: 2},
+		Receipt:   codingcontract.InferenceReceipt{PromptTokens: 5},
+	}
+	if err := validateCompletedUsage(fixture.policy, binding, previous, &next); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("overspend err=%v", err)
+	}
+	next.Receipt.PromptTokens = 4
+	if err := validateCompletedUsage(fixture.policy, binding, previous, &next); err != nil {
+		t.Fatalf("exact budget err=%v", err)
+	}
+}
+
 func TestStoreCompleteWithoutBeginFailsClosed(t *testing.T) {
 	fixture := newJournalFixture(t)
 	store, err := Open(fixture.storeConfig(makeJournalRoot(t)))
