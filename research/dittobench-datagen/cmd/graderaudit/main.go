@@ -175,7 +175,7 @@ type robustnessCase struct {
 }
 
 // robustnessCasesV1 is synthetic by design: generated V9 currently does not
-// emit every answer kind affected by #501. These cases keep every kind under a
+// emit every affected answer kind. These cases keep every kind under a
 // stable gate instead of letting absent kinds disappear into the aggregate.
 var robustnessCasesV1 = []robustnessCase{
 	{Name: "chat", Question: "How is your afternoon going?", Case: protocol.MemoryCase{AnswerKind: protocol.AnswerChitchat, ForbiddenAnswer: "GAVOTU-8841"}, Positive: protocol.RunResponse{FinalText: "Good afternoon!"}},
