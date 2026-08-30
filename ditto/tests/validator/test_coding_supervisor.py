@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import httpx
@@ -12,14 +13,25 @@ import pytest
 
 from ditto.api_models.coding import (
     CodingAuthoringLeaseResponse,
+    CodingBudgets,
     CodingGradingLeaseResponse,
+    CodingRunManifest,
+)
+from ditto.api_models.coding_inference_grants import (
+    CodingInferenceExchangeResponse,
+    CodingInferenceGrantOffer,
+    CodingInferenceRevokeResponse,
 )
 from ditto.validator.coding_attempt import (
     CodingAttemptIntegrityError,
     CodingAttemptRuntime,
 )
-from ditto.validator.coding_supervisor import CodingSupervisorRuntime
+from ditto.validator.coding_supervisor import (
+    CodingInferencePlatform,
+    CodingSupervisorRuntime,
+)
 from ditto.validator.errors import ValidatorInfrastructureError
+from ditto.validator.platform import PlatformClient
 
 _ROOT = Path(__file__).resolve().parents[3]
 _TESTDATA = _ROOT / "packages/dittobench-coding-contract/testdata"
@@ -57,7 +69,98 @@ def _lease(model: type[Any], *, grading: bool = False) -> Any:
             agent_id=UUID("11111111-1111-4111-8111-111111111111"),
             run_row_id=UUID("22222222-2222-4222-8222-222222222222"),
         )
+    else:
+        manifest = CodingRunManifest.model_validate_json(
+            json.dumps(_CONTRACT["manifest"])
+        ).model_copy(update={"coding_run_id": request["coding_run_id"]})
+        budgets = CodingBudgets.model_validate_json(
+            json.dumps(_CONTRACT["run_request"]["budgets"])
+        )
+        values.update(run_manifest=manifest, budgets=budgets)
     return model.model_construct(**values)
+
+
+class _Platform:
+    def __init__(self, lease: CodingAuthoringLeaseResponse) -> None:
+        task = lease.run_manifest.tasks[0]
+        common: Any = {
+            "coding_contract_version": 1,
+            "weight_eligible": False,
+            "grant_id": UUID("88888888-8888-4888-8888-888888888888"),
+            "ticket_id": lease.ticket_id,
+            "run_row_id": UUID("99999999-9999-4999-8999-999999999999"),
+            "case_id": task.case_id,
+            "profile_capability_id": task.profile_capability_id,
+            "inference_grant_sha256": lease.run_manifest.inference_grant_sha256,
+            "model": "openai/gpt-5.6-luna",
+            "provider_api": "openrouter",
+            "provider_route": "azure/eu",
+            "receipt_provider": "Azure",
+            "provider_route_profile": "luna-azure-eu-zdr-v1",
+            "provider_account_guardrail": "openrouter_private_account_v1",
+            "provider_pipeline_policy": "no_plugins_no_transforms_v1",
+            "provider_cache_policy": "disabled_v1",
+            "reasoning_effort": "medium",
+            "request_budget": min(lease.budgets.workspace_tool_calls + 16, 256),
+            "prompt_token_budget": lease.budgets.model_input_tokens,
+            "completion_token_budget": lease.budgets.model_output_tokens,
+            "cost_budget_usd_micros": 100_000_000,
+            "expires_at": lease.ticket_deadline,
+        }
+        self.offer = CodingInferenceGrantOffer.model_construct(
+            schema_name="dittobench-coding-inference-grant-offer-v1",
+            status="pending",
+            generation=0,
+            exchange_url="https://platform.invalid/api/v1/validator/coding-shadow/inference-exchange",
+            **common,
+        )
+        self.exchange = CodingInferenceExchangeResponse.model_construct(
+            schema_name="dittobench-coding-inference-exchange-v1",
+            status="active",
+            generation=1,
+            bearer="synthetic-coding-bearer-0000000000000000",
+            proxy_url="https://relay.invalid/api/v1/inference/coding/chat/completions",
+            **common,
+        )
+        self.broker_public_key: str | None = None
+        self.revoked: list[tuple[UUID, int]] = []
+
+    async def request_coding_inference_grant(
+        self, ticket_id: UUID
+    ) -> CodingInferenceGrantOffer:
+        assert ticket_id == self.offer.ticket_id
+        return self.offer
+
+    async def exchange_coding_inference_grant(
+        self, offer: CodingInferenceGrantOffer, *, broker_public_key: str
+    ) -> CodingInferenceExchangeResponse:
+        assert offer is self.offer
+        self.broker_public_key = broker_public_key
+        return self.exchange
+
+    async def revoke_coding_inference_grant(
+        self, *, grant_id: UUID, generation: int
+    ) -> CodingInferenceRevokeResponse:
+        self.revoked.append((grant_id, generation))
+        return CodingInferenceRevokeResponse.model_construct(
+            schema_name="dittobench-coding-inference-revocation-v1",
+            coding_contract_version=1,
+            weight_eligible=False,
+            grant_id=grant_id,
+            ticket_id=self.offer.ticket_id,
+            status="revoked",
+            generation=generation,
+            revoked_at=datetime.now(UTC),
+            idempotent=False,
+        )
+
+
+class _FailingRevocationPlatform(_Platform):
+    async def revoke_coding_inference_grant(
+        self, *, grant_id: UUID, generation: int
+    ) -> CodingInferenceRevokeResponse:
+        del grant_id, generation
+        raise RuntimeError("injected revocation failure")
 
 
 def _dynamic_response(request: httpx.Request) -> httpx.Response:
@@ -106,10 +209,11 @@ async def test_runtime_author_grade_abort_and_recover() -> None:
         return _dynamic_response(request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
-        runtime = CodingSupervisorRuntime(_config(), client)
+        authoring_lease = _lease(CodingAuthoringLeaseResponse)
+        platform = _Platform(authoring_lease)
+        runtime = CodingSupervisorRuntime(_config(), client, platform)
         runtime_port: CodingAttemptRuntime = runtime
         assert runtime_port is runtime
-        authoring_lease = _lease(CodingAuthoringLeaseResponse)
         authoring = await runtime.author(authoring_lease)
         assert authoring.capabilities_revoked is True
         assert authoring.authoring_environment_destroyed is True
@@ -129,12 +233,18 @@ async def test_runtime_author_grade_abort_and_recover() -> None:
         assert recovery.state == "terminal_pending"
 
     assert [json.loads(request.content)["operation"] for request in observed] == [
+        "prepare",
         "author",
         "grade",
         "abort_authoring",
         "abort_grading",
         "recover",
     ]
+    assert (
+        platform.broker_public_key
+        == (_SUPERVISOR["responses"]["prepare"]["preparation"]["broker_public_key"])
+    )
+    assert platform.revoked == [(platform.exchange.grant_id, 1)]
     for request in observed:
         assert request.headers["authorization"].startswith("Bearer ")
         assert request.headers["cache-control"] == "no-store"
@@ -150,7 +260,9 @@ async def test_runtime_rejects_redirect_error_oversize_and_identity_drift() -> N
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(lambda _: response)
         ) as client:
-            runtime = CodingSupervisorRuntime(_config(), client)
+            runtime = CodingSupervisorRuntime(
+                _config(), client, _Platform(authoring_lease)
+            )
             with pytest.raises(Exception) as captured:
                 await runtime.author(authoring_lease)
             return captured.value
@@ -176,6 +288,53 @@ async def test_runtime_rejects_redirect_error_oversize_and_identity_drift() -> N
     assert isinstance(await run(huge), ValidatorInfrastructureError)
 
 
+@pytest.mark.asyncio
+async def test_authoring_rejects_grant_drift_and_requires_terminal_revocation() -> None:
+    lease = _lease(CodingAuthoringLeaseResponse)
+    observed: list[str] = []
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        observed.append(json.loads(request.content)["operation"])
+        return _dynamic_response(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        drifted = _Platform(lease)
+        drifted.exchange = drifted.exchange.model_copy(update={"case_id": "case-other"})
+        runtime = CodingSupervisorRuntime(_config(), client, drifted)
+        with pytest.raises(CodingAttemptIntegrityError):
+            await runtime.author(lease)
+        assert observed == ["prepare"]
+        assert drifted.revoked == [(drifted.exchange.grant_id, 1)]
+
+        failing = _FailingRevocationPlatform(lease)
+        runtime = CodingSupervisorRuntime(_config(), client, failing)
+        with pytest.raises(ValidatorInfrastructureError):
+            await runtime.author(lease)
+
+
+@pytest.mark.asyncio
+async def test_authoring_cancellation_still_revokes_active_grant() -> None:
+    lease = _lease(CodingAuthoringLeaseResponse)
+    platform = _Platform(lease)
+    entered = asyncio.Event()
+
+    async def transport(request: httpx.Request) -> httpx.Response:
+        operation = json.loads(request.content)["operation"]
+        if operation == "author":
+            entered.set()
+            await asyncio.Event().wait()
+        return _dynamic_response(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        runtime = CodingSupervisorRuntime(_config(), client, platform)
+        task = asyncio.create_task(runtime.author(lease))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert platform.revoked == [(platform.exchange.grant_id, 1)]
+
+
 def test_runtime_configuration_and_vector_shape() -> None:
     invalid: Any = SimpleNamespace(
         dittobench_api_url="https://user:password@example.com?x=1",
@@ -185,18 +344,27 @@ def test_runtime_configuration_and_vector_shape() -> None:
         CodingSupervisorRuntime(
             invalid,
             object(),  # type: ignore[arg-type]
+            object(),  # type: ignore[arg-type]
         )
     plaintext: Any = SimpleNamespace(
         dittobench_api_url="http://dittobench-api:8000",
         dittobench_control_token="coding-supervisor-control-token-000000000000",
     )
     with pytest.raises(ValueError):
-        CodingSupervisorRuntime(plaintext, object())  # type: ignore[arg-type]
+        CodingSupervisorRuntime(
+            plaintext,
+            object(),  # type: ignore[arg-type]
+            object(),  # type: ignore[arg-type]
+        )
     loopback: Any = SimpleNamespace(
         dittobench_api_url="http://127.0.0.1:8000",
         dittobench_control_token="coding-supervisor-control-token-000000000000",
     )
-    CodingSupervisorRuntime(loopback, object())  # type: ignore[arg-type]
+    CodingSupervisorRuntime(
+        loopback,
+        object(),  # type: ignore[arg-type]
+        object(),  # type: ignore[arg-type]
+    )
     for operation, request in _SUPERVISOR["requests"].items():
         assert request["schema"] == "dittobench-coding-attempt-supervisor-request-v1"
         assert request["operation"] == operation
@@ -205,6 +373,11 @@ def test_runtime_configuration_and_vector_shape() -> None:
             is not None
         )
     assert datetime.now(UTC).tzinfo is UTC
+
+    def accepts_platform(value: CodingInferencePlatform) -> None:
+        del value
+
+    accepts_platform(cast(PlatformClient, object()))
 
 
 def test_supervisor_remains_unmounted_and_unconstructed() -> None:

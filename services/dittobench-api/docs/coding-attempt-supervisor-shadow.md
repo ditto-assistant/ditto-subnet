@@ -9,11 +9,19 @@ implements the existing `CodingAttemptRuntime` protocol against that boundary.
 
 Every request fixes:
 
-- one operation: `author`, `grade`, `abort_authoring`, `abort_grading`, or
-  `recover`;
+- one operation: `prepare`, `author`, `grade`, `abort_authoring`,
+  `abort_grading`, or `recover`;
 - a canonical operation UUID, ticket UUID, coding-run ID, and deadline;
 - one bounded lease object when the operation requires it;
 - the complete authoring outcome only for grading.
+
+`prepare` asks the future trusted backend to generate and retain one Ed25519
+broker key and returns only its public key plus an opaque session UUID. Python
+uses that public key to request/exchange the exact ticket-bound Platform grant.
+Only `author` carries the active exchange object; the broker private key never
+leaves the Go backend and the provider credential never enters either process.
+Python revokes the exact active (or still-pending) grant generation in a
+terminal `finally` path before it accepts the authoring outcome.
 
 The handler accepts only fixed `POST` paths, unencoded `application/json`, no
 query string, a single exact bearer, bounded duplicate-free JSON, and coherent
@@ -35,6 +43,9 @@ local development. It disables redirects per request, bounds response bytes,
 requires `Cache-Control: no-store` and JSON, and independently validates the
 operation, operation UUID, ticket, run, and typed outcome before returning
 coordinator dataclasses.
+It independently checks the grant ticket, case/profile, policy digest,
+deadline, request budget, and prompt/completion budgets against the authoring
+lease before forwarding the active exchange.
 
 ## Current boundary
 
@@ -44,7 +55,7 @@ This PR therefore cannot fetch leases, open artifact capabilities, start a
 harness, invoke Luna, grade a repository, publish evidence, claim work, or
 affect scores and weights.
 
-The next review must implement the trusted backend from `codingattempt`,
+The next review must implement the prepared-session and authoring backend from `codingattempt`,
 `codinggateway`, `codingoutbox`, harness/publisher adapters, and the host
 sweeper. Worker registration remains a separate disabled-shadow PR after that
 backend is complete.

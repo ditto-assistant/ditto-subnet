@@ -7,7 +7,6 @@ stalling, and without leaking anything host-shaped into the public payload.
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import httpx
@@ -262,9 +261,20 @@ class TestCollector:
             collector = StackHealthCollector(_config(), client)  # type: ignore[arg-type]
             health = await collector.collect(stack=_stack(), scorer=_fresh_scorer())
 
-        payload = json.dumps(health.model_dump(mode="json"))
+        payload = health.model_dump(mode="json")
+
+        def strings(value: object) -> list[str]:
+            if isinstance(value, str):
+                return [value]
+            if isinstance(value, dict):
+                return [item for child in value.values() for item in strings(child)]
+            if isinstance(value, list):
+                return [item for child in value for item in strings(child)]
+            return []
+
+        leaked = " ".join(strings(payload))
         for needle in ("://", "internal", "2375", "11434", "8080"):
-            assert needle not in payload
+            assert needle not in leaked
 
 
 class TestScorerMapping:

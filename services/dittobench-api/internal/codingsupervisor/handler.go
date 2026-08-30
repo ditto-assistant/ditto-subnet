@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -24,6 +26,7 @@ import (
 )
 
 var operationPaths = map[string]Operation{
+	"/v1/coding/supervisor/prepare":         OperationPrepare,
 	"/v1/coding/supervisor/author":          OperationAuthor,
 	"/v1/coding/supervisor/grade":           OperationGrade,
 	"/v1/coding/supervisor/abort-authoring": OperationAbortAuthoring,
@@ -193,7 +196,7 @@ func (service *Service) operationContext(
 	now time.Time,
 ) (context.Context, context.CancelFunc) {
 	duration := service.timeout
-	if request.Operation == OperationAuthor || request.Operation == OperationGrade {
+	if request.Operation == OperationPrepare || request.Operation == OperationAuthor || request.Operation == OperationGrade {
 		remaining := request.Deadline.Sub(now)
 		if remaining < duration {
 			duration = remaining
@@ -227,7 +230,7 @@ func parseRequest(body []byte, operation Operation, now time.Time) (Request, err
 	if err := decoder.Decode(&shape); err != nil {
 		return zero, ErrInvalid
 	}
-	for _, field := range []string{"schema", "operation", "operation_id", "ticket_id", "coding_run_id", "deadline", "lease", "authoring"} {
+	for _, field := range []string{"schema", "operation", "operation_id", "ticket_id", "coding_run_id", "deadline", "lease", "authoring", "grant"} {
 		if _, ok := shape[field]; !ok {
 			return zero, ErrInvalid
 		}
@@ -239,33 +242,45 @@ func parseRequest(body []byte, operation Operation, now time.Time) (Request, err
 		request.Deadline.IsZero() {
 		return zero, ErrInvalid
 	}
+	if (operation == OperationPrepare || operation == OperationAuthor || operation == OperationGrade) &&
+		!request.Deadline.After(now) {
+		return zero, ErrDeadline
+	}
+	if (operation == OperationPrepare || operation == OperationAuthor || operation == OperationGrade) &&
+		request.Deadline.After(now.Add(maximumBindingLifetime)) {
+		return zero, ErrInvalid
+	}
 	leaseObject := rawObject(request.Lease, maximumLeaseBytes)
 	authoringObject := rawObject(request.Authoring, maximumOutcomeBytes)
+	grantObject := rawObject(request.Grant, maximumLeaseBytes)
 	switch operation {
-	case OperationAuthor, OperationAbortAuthoring, OperationAbortGrading:
-		if !leaseObject || authoringObject || !rawNull(request.Authoring) {
+	case OperationPrepare:
+		if !leaseObject || authoringObject || grantObject || !rawNull(request.Authoring) || !rawNull(request.Grant) {
+			return zero, ErrInvalid
+		}
+	case OperationAuthor:
+		if !leaseObject || authoringObject || !grantObject || !rawNull(request.Authoring) ||
+			validateGrant(request.Grant, request, now) != nil {
+			return zero, ErrInvalid
+		}
+	case OperationAbortAuthoring, OperationAbortGrading:
+		if !leaseObject || authoringObject || grantObject || !rawNull(request.Authoring) || !rawNull(request.Grant) {
 			return zero, ErrInvalid
 		}
 	case OperationGrade:
-		if !leaseObject || !authoringObject {
+		if !leaseObject || !authoringObject || grantObject || !rawNull(request.Grant) {
 			return zero, ErrInvalid
 		}
 	case OperationRecover:
-		if !rawNull(request.Lease) || !rawNull(request.Authoring) {
+		if !rawNull(request.Lease) || !rawNull(request.Authoring) || !rawNull(request.Grant) {
 			return zero, ErrInvalid
 		}
 	default:
 		return zero, ErrInvalid
 	}
-	if (operation == OperationAuthor || operation == OperationGrade) && !request.Deadline.After(now) {
-		return zero, ErrDeadline
-	}
-	if (operation == OperationAuthor || operation == OperationGrade) &&
-		request.Deadline.After(now.Add(maximumBindingLifetime)) {
-		return zero, ErrInvalid
-	}
 	request.Lease = append(json.RawMessage(nil), request.Lease...)
 	request.Authoring = append(json.RawMessage(nil), request.Authoring...)
+	request.Grant = append(json.RawMessage(nil), request.Grant...)
 	return request, nil
 }
 
@@ -276,26 +291,38 @@ func validateResponse(request Request, response Response) error {
 		return ErrConflict
 	}
 	switch request.Operation {
+	case OperationPrepare:
+		if response.Preparation == nil || response.Authoring != nil || response.Grading != nil ||
+			response.Recovery != nil || response.Aborted || validatePreparation(*response.Preparation) != nil {
+			return ErrConflict
+		}
 	case OperationAuthor:
-		if response.Authoring == nil || response.Grading != nil || response.Recovery != nil || response.Aborted ||
+		if response.Preparation != nil || response.Authoring == nil || response.Grading != nil || response.Recovery != nil || response.Aborted ||
 			validateAuthoring(*response.Authoring) != nil {
 			return ErrConflict
 		}
 	case OperationGrade:
-		if response.Authoring != nil || response.Grading == nil || response.Recovery != nil || response.Aborted ||
+		if response.Preparation != nil || response.Authoring != nil || response.Grading == nil || response.Recovery != nil || response.Aborted ||
 			validateGrading(*response.Grading, request.CodingRunID, request.TicketID) != nil {
 			return ErrConflict
 		}
 	case OperationAbortAuthoring, OperationAbortGrading:
-		if response.Authoring != nil || response.Grading != nil || response.Recovery != nil || !response.Aborted {
+		if response.Preparation != nil || response.Authoring != nil || response.Grading != nil || response.Recovery != nil || !response.Aborted {
 			return ErrConflict
 		}
 	case OperationRecover:
-		if response.Authoring != nil || response.Grading != nil || response.Recovery == nil || response.Aborted ||
+		if response.Preparation != nil || response.Authoring != nil || response.Grading != nil || response.Recovery == nil || response.Aborted ||
 			validateRecovery(*response.Recovery) != nil {
 			return ErrConflict
 		}
 	default:
+		return ErrConflict
+	}
+	return nil
+}
+
+func validatePreparation(outcome PreparationOutcome) error {
+	if !canonicalUUID(outcome.SessionID) || !validBrokerKey(outcome.BrokerPublicKey) {
 		return ErrConflict
 	}
 	return nil
@@ -369,10 +396,15 @@ func validateRecovery(outcome RecoveryOutcome) error {
 func cloneRequest(request Request) Request {
 	request.Lease = append(json.RawMessage(nil), request.Lease...)
 	request.Authoring = append(json.RawMessage(nil), request.Authoring...)
+	request.Grant = append(json.RawMessage(nil), request.Grant...)
 	return request
 }
 
 func cloneResponse(response Response) Response {
+	if response.Preparation != nil {
+		value := *response.Preparation
+		response.Preparation = &value
+	}
 	if response.Authoring != nil {
 		value := *response.Authoring
 		value.Evidence = append(json.RawMessage(nil), value.Evidence...)
@@ -399,6 +431,98 @@ func cloneResponse(response Response) Response {
 		response.Recovery = &value
 	}
 	return response
+}
+
+type exchangedGrant struct {
+	Schema                string    `json:"schema"`
+	CodingContractVersion int       `json:"coding_contract_version"`
+	WeightEligible        *bool     `json:"weight_eligible"`
+	Status                string    `json:"status"`
+	GrantID               string    `json:"grant_id"`
+	TicketID              string    `json:"ticket_id"`
+	CaseID                string    `json:"case_id"`
+	ProfileCapabilityID   string    `json:"profile_capability_id"`
+	InferenceGrantSHA256  string    `json:"inference_grant_sha256"`
+	Generation            uint32    `json:"generation"`
+	RequestBudget         uint32    `json:"request_budget"`
+	PromptTokenBudget     uint64    `json:"prompt_token_budget"`
+	CompletionTokenBudget uint64    `json:"completion_token_budget"`
+	Bearer                string    `json:"bearer"`
+	ProxyURL              string    `json:"proxy_url"`
+	ExpiresAt             time.Time `json:"expires_at"`
+}
+
+type leaseGrantAuthority struct {
+	RunManifest struct {
+		InferenceGrantSHA256 string `json:"inference_grant_sha256"`
+		Tasks                []struct {
+			CaseID              string `json:"case_id"`
+			ProfileCapabilityID string `json:"profile_capability_id"`
+		} `json:"tasks"`
+	} `json:"run_manifest"`
+	Budgets struct {
+		ModelInputTokens   uint64 `json:"model_input_tokens"`
+		ModelOutputTokens  uint64 `json:"model_output_tokens"`
+		WorkspaceToolCalls uint32 `json:"workspace_tool_calls"`
+	} `json:"budgets"`
+}
+
+func validateGrant(body json.RawMessage, request Request, now time.Time) error {
+	var grant exchangedGrant
+	var lease leaseGrantAuthority
+	if err := json.Unmarshal(request.Lease, &lease); err != nil || len(lease.RunManifest.Tasks) != 1 {
+		return ErrInvalid
+	}
+	task := lease.RunManifest.Tasks[0]
+	requestBudget := lease.Budgets.WorkspaceToolCalls + 16
+	if requestBudget > 256 || requestBudget < lease.Budgets.WorkspaceToolCalls {
+		requestBudget = 256
+	}
+	if err := json.Unmarshal(body, &grant); err != nil ||
+		grant.Schema != "dittobench-coding-inference-exchange-v1" || grant.CodingContractVersion != 1 ||
+		grant.WeightEligible == nil || *grant.WeightEligible || grant.Status != "active" ||
+		!canonicalUUID(grant.GrantID) ||
+		grant.TicketID != request.TicketID || grant.CaseID != task.CaseID ||
+		grant.ProfileCapabilityID != task.ProfileCapabilityID ||
+		grant.InferenceGrantSHA256 != lease.RunManifest.InferenceGrantSHA256 ||
+		grant.Generation == 0 || grant.Generation > 1<<31-1 ||
+		grant.RequestBudget == 0 || grant.RequestBudget > requestBudget ||
+		grant.PromptTokenBudget == 0 || grant.PromptTokenBudget > lease.Budgets.ModelInputTokens ||
+		grant.CompletionTokenBudget == 0 || grant.CompletionTokenBudget > lease.Budgets.ModelOutputTokens ||
+		!validBearer(grant.Bearer) || !validProxyURL(grant.ProxyURL) ||
+		grant.ExpiresAt.IsZero() || !grant.ExpiresAt.After(now) || grant.ExpiresAt.After(request.Deadline) {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func validBrokerKey(value string) bool {
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimSuffix(value, "="))
+	return err == nil && len(decoded) == 32 && len(value) >= 43 && len(value) <= 44
+}
+
+func validBearer(value string) bool {
+	if len(value) < 32 || len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if !(character >= 'a' && character <= 'z') && !(character >= 'A' && character <= 'Z') &&
+			!(character >= '0' && character <= '9') && character != '_' && character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func validProxyURL(value string) bool {
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	port := parsed.Port()
+	return parsed.Hostname() != "" && (port == "" || port == "443") &&
+		strings.HasSuffix(parsed.Path, "/api/v1/inference/coding/chat/completions")
 }
 
 func rawObject(value json.RawMessage, maximum int) bool {

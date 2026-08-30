@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import ipaddress
 import json
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -17,6 +19,11 @@ from ditto.api_models.coding import (
     CodingAuthoringLeaseResponse,
     CodingGradingLeaseResponse,
     CodingTaskEvidence,
+)
+from ditto.api_models.coding_inference_grants import (
+    CodingInferenceExchangeResponse,
+    CodingInferenceGrantOffer,
+    CodingInferenceRevokeResponse,
 )
 from ditto.validator.coding_attempt import (
     CodingAttemptIntegrityError,
@@ -31,8 +38,22 @@ _RESPONSE_SCHEMA = "dittobench-coding-attempt-supervisor-response-v1"
 _MAX_BODY_BYTES = 8 << 20
 
 type SupervisorOperation = Literal[
-    "author", "grade", "abort_authoring", "abort_grading", "recover"
+    "prepare", "author", "grade", "abort_authoring", "abort_grading", "recover"
 ]
+
+
+class CodingInferencePlatform(Protocol):
+    async def request_coding_inference_grant(
+        self, ticket_id: UUID
+    ) -> CodingInferenceGrantOffer: ...
+
+    async def exchange_coding_inference_grant(
+        self, offer: CodingInferenceGrantOffer, *, broker_public_key: str
+    ) -> CodingInferenceExchangeResponse: ...
+
+    async def revoke_coding_inference_grant(
+        self, *, grant_id: UUID, generation: int
+    ) -> CodingInferenceRevokeResponse: ...
 
 
 class _WireModel(BaseModel):
@@ -52,6 +73,23 @@ class _AuthoringWire(_WireModel):
 class _GradingWire(_WireModel):
     task_evidence: list[dict[str, Any]] = Field(min_length=1, max_length=100)
     grading_environment_destroyed: Literal[True]
+
+
+class _PreparationWire(_WireModel):
+    session_id: UUID
+    broker_public_key: str = Field(pattern=r"^[A-Za-z0-9_-]{43}=?$")
+
+    @model_validator(mode="after")
+    def key_is_coherent(self) -> _PreparationWire:
+        try:
+            decoded = base64.urlsafe_b64decode(
+                self.broker_public_key + "=" * (-len(self.broker_public_key) % 4)
+            )
+        except ValueError as error:
+            raise ValueError("coding supervisor broker key is invalid") from error
+        if self.session_id.int == 0 or len(decoded) != 32:
+            raise ValueError("coding supervisor preparation is invalid")
+        return self
 
 
 class CodingSupervisorRecovery(_WireModel):
@@ -100,6 +138,7 @@ class _SupervisorResponse(_WireModel):
     operation_id: UUID
     ticket_id: UUID
     coding_run_id: str = Field(min_length=1, max_length=256)
+    preparation: _PreparationWire | None
     authoring: _AuthoringWire | None
     grading: _GradingWire | None
     recovery: CodingSupervisorRecovery | None
@@ -108,30 +147,42 @@ class _SupervisorResponse(_WireModel):
     @model_validator(mode="after")
     def operation_shape_is_coherent(self) -> _SupervisorResponse:
         valid = False
-        if self.operation == "author":
+        if self.operation == "prepare":
             valid = (
-                self.authoring is not None
+                self.preparation is not None
+                and self.authoring is None
+                and self.grading is None
+                and self.recovery is None
+                and not self.aborted
+            )
+        elif self.operation == "author":
+            valid = (
+                self.preparation is None
+                and self.authoring is not None
                 and self.grading is None
                 and self.recovery is None
                 and not self.aborted
             )
         elif self.operation == "grade":
             valid = (
-                self.authoring is None
+                self.preparation is None
+                and self.authoring is None
                 and self.grading is not None
                 and self.recovery is None
                 and not self.aborted
             )
         elif self.operation in {"abort_authoring", "abort_grading"}:
             valid = (
-                self.authoring is None
+                self.preparation is None
+                and self.authoring is None
                 and self.grading is None
                 and self.recovery is None
                 and self.aborted
             )
         elif self.operation == "recover":
             valid = (
-                self.authoring is None
+                self.preparation is None
+                and self.authoring is None
                 and self.grading is None
                 and self.recovery is not None
                 and not self.aborted
@@ -144,7 +195,12 @@ class _SupervisorResponse(_WireModel):
 class CodingSupervisorRuntime:
     """Implement ``CodingAttemptRuntime`` through the protected scorer control plane."""
 
-    def __init__(self, config: ValidatorConfig, client: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        config: ValidatorConfig,
+        client: httpx.AsyncClient,
+        platform: CodingInferencePlatform,
+    ) -> None:
         parsed = urlsplit(config.dittobench_api_url)
         token = config.dittobench_control_token
         if (
@@ -161,19 +217,67 @@ class CodingSupervisorRuntime:
         self._base = config.dittobench_api_url.rstrip("/")
         self._token = token
         self._client = client
+        self._platform = platform
 
     async def author(
         self,
         lease: CodingAuthoringLeaseResponse,
     ) -> CodingAuthoringOutcome:
-        response = await self._call(
-            operation="author",
+        prepared = await self._call(
+            operation="prepare",
             ticket_id=lease.ticket_id,
             coding_run_id=lease.coding_run_id,
             deadline=lease.ticket_deadline,
             lease=lease.model_dump(mode="json", by_alias=True),
             authoring=None,
+            grant=None,
         )
+        if prepared.preparation is None:
+            raise CodingAttemptIntegrityError("coding supervisor omitted preparation")
+        offer: CodingInferenceGrantOffer | None = None
+        exchange: CodingInferenceExchangeResponse | None = None
+        response: _SupervisorResponse | None = None
+        primary_error: BaseException | None = None
+        revoke_error: BaseException | None = None
+        try:
+            offer = await self._platform.request_coding_inference_grant(lease.ticket_id)
+            _validate_grant_authority(lease, offer)
+            exchange = await self._platform.exchange_coding_inference_grant(
+                offer,
+                broker_public_key=prepared.preparation.broker_public_key,
+            )
+            _validate_grant_authority(lease, exchange)
+            response = await self._call(
+                operation="author",
+                ticket_id=lease.ticket_id,
+                coding_run_id=lease.coding_run_id,
+                deadline=lease.ticket_deadline,
+                lease=lease.model_dump(mode="json", by_alias=True),
+                authoring=None,
+                grant=exchange.model_dump(mode="json", by_alias=True),
+            )
+        except BaseException as error:
+            primary_error = error
+        finally:
+            authority = exchange or offer
+            if authority is not None:
+                try:
+                    await asyncio.shield(
+                        self._platform.revoke_coding_inference_grant(
+                            grant_id=authority.grant_id,
+                            generation=authority.generation,
+                        )
+                    )
+                except BaseException as error:
+                    revoke_error = error
+        if revoke_error is not None:
+            raise ValidatorInfrastructureError(
+                "coding inference grant revocation failed"
+            ) from revoke_error
+        if primary_error is not None:
+            raise primary_error
+        if response is None:
+            raise ValidatorInfrastructureError("coding supervisor authoring failed")
         if response.authoring is None:
             raise CodingAttemptIntegrityError("coding supervisor omitted authoring")
         try:
@@ -212,6 +316,7 @@ class CodingSupervisorRuntime:
             deadline=lease.ticket_deadline,
             lease=lease.model_dump(mode="json", by_alias=True),
             authoring=_authoring_payload(authoring),
+            grant=None,
         )
         if response.grading is None:
             raise CodingAttemptIntegrityError("coding supervisor omitted grading")
@@ -252,6 +357,7 @@ class CodingSupervisorRuntime:
             deadline=lease.ticket_deadline,
             lease=lease.model_dump(mode="json", by_alias=True),
             authoring=None,
+            grant=None,
         )
         if not response.aborted:
             raise CodingAttemptIntegrityError(
@@ -266,6 +372,7 @@ class CodingSupervisorRuntime:
             deadline=lease.ticket_deadline,
             lease=lease.model_dump(mode="json", by_alias=True),
             authoring=None,
+            grant=None,
         )
         if not response.aborted:
             raise CodingAttemptIntegrityError("coding supervisor did not abort grading")
@@ -284,6 +391,7 @@ class CodingSupervisorRuntime:
             deadline=deadline,
             lease=None,
             authoring=None,
+            grant=None,
         )
         if response.recovery is None:
             raise CodingAttemptIntegrityError("coding supervisor omitted recovery")
@@ -298,6 +406,7 @@ class CodingSupervisorRuntime:
         deadline: datetime,
         lease: dict[str, Any] | None,
         authoring: dict[str, Any] | None,
+        grant: dict[str, Any] | None,
     ) -> _SupervisorResponse:
         if (
             ticket_id.int == 0
@@ -323,6 +432,7 @@ class CodingSupervisorRuntime:
             "deadline": deadline.isoformat().replace("+00:00", "Z"),
             "lease": lease,
             "authoring": authoring,
+            "grant": grant,
         }
         try:
             body = json.dumps(
@@ -429,4 +539,29 @@ def _authoring_payload(authoring: CodingAuthoringOutcome) -> dict[str, Any]:
     }
 
 
-__all__ = ["CodingSupervisorRecovery", "CodingSupervisorRuntime"]
+def _validate_grant_authority(
+    lease: CodingAuthoringLeaseResponse,
+    authority: CodingInferenceGrantOffer | CodingInferenceExchangeResponse,
+) -> None:
+    task = lease.run_manifest.tasks[0]
+    request_budget = min(lease.budgets.workspace_tool_calls + 16, 256)
+    if (
+        authority.ticket_id != lease.ticket_id
+        or authority.case_id != task.case_id
+        or authority.profile_capability_id != task.profile_capability_id
+        or authority.inference_grant_sha256 != lease.run_manifest.inference_grant_sha256
+        or authority.expires_at > lease.ticket_deadline
+        or authority.request_budget > request_budget
+        or authority.prompt_token_budget > lease.budgets.model_input_tokens
+        or authority.completion_token_budget > lease.budgets.model_output_tokens
+    ):
+        raise CodingAttemptIntegrityError(
+            "coding inference grant authority disagrees with authoring lease"
+        )
+
+
+__all__ = [
+    "CodingInferencePlatform",
+    "CodingSupervisorRecovery",
+    "CodingSupervisorRuntime",
+]

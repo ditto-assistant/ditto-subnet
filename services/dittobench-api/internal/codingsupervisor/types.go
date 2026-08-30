@@ -38,6 +38,7 @@ var (
 type Operation string
 
 const (
+	OperationPrepare        Operation = "prepare"
 	OperationAuthor         Operation = "author"
 	OperationGrade          Operation = "grade"
 	OperationAbortAuthoring Operation = "abort_authoring"
@@ -54,6 +55,12 @@ type Request struct {
 	Deadline    time.Time       `json:"deadline"`
 	Lease       json.RawMessage `json:"lease"`
 	Authoring   json.RawMessage `json:"authoring"`
+	Grant       json.RawMessage `json:"grant"`
+}
+
+type PreparationOutcome struct {
+	SessionID       string `json:"session_id"`
+	BrokerPublicKey string `json:"broker_public_key"`
 }
 
 type AuthoringOutcome struct {
@@ -78,15 +85,16 @@ type RecoveryOutcome struct {
 }
 
 type Response struct {
-	Schema      string            `json:"schema"`
-	Operation   Operation         `json:"operation"`
-	OperationID string            `json:"operation_id"`
-	TicketID    string            `json:"ticket_id"`
-	CodingRunID string            `json:"coding_run_id"`
-	Authoring   *AuthoringOutcome `json:"authoring"`
-	Grading     *GradingOutcome   `json:"grading"`
-	Recovery    *RecoveryOutcome  `json:"recovery"`
-	Aborted     bool              `json:"aborted"`
+	Schema      string              `json:"schema"`
+	Operation   Operation           `json:"operation"`
+	OperationID string              `json:"operation_id"`
+	TicketID    string              `json:"ticket_id"`
+	CodingRunID string              `json:"coding_run_id"`
+	Preparation *PreparationOutcome `json:"preparation"`
+	Authoring   *AuthoringOutcome   `json:"authoring"`
+	Grading     *GradingOutcome     `json:"grading"`
+	Recovery    *RecoveryOutcome    `json:"recovery"`
+	Aborted     bool                `json:"aborted"`
 }
 
 func (response Response) String() string {

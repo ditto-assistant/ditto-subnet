@@ -138,6 +138,7 @@ func invoke(t *testing.T, handler http.Handler, path string, body []byte, token 
 func TestSupervisorVectorRoundTripsEveryOperation(t *testing.T) {
 	vector := loadFixtureVector(t)
 	paths := map[string]string{
+		"prepare":         "/v1/coding/supervisor/prepare",
 		"author":          "/v1/coding/supervisor/author",
 		"grade":           "/v1/coding/supervisor/grade",
 		"abort_authoring": "/v1/coding/supervisor/abort-authoring",
@@ -291,6 +292,37 @@ func TestSupervisorRejectsExpiredAndInvalidBackendOutcome(t *testing.T) {
 	response = invoke(t, service.Handler(), "/v1/coding/supervisor/author", vector.Requests["author"], fixtureToken)
 	if response.Code != http.StatusBadGateway {
 		t.Fatalf("invalid backend status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSupervisorRejectsGrantAndPreparationAuthorityDrift(t *testing.T) {
+	vector := loadFixtureVector(t)
+	calls := 0
+	service := fixtureService(t, backendFunc(func(_ context.Context, request Request) (Response, error) {
+		calls++
+		response := vectorResponse(t, vector, string(request.Operation))
+		if request.Operation == OperationPrepare {
+			response.Preparation.BrokerPublicKey = "invalid"
+		}
+		return response, nil
+	}))
+	var author map[string]any
+	if err := json.Unmarshal(vector.Requests["author"], &author); err != nil {
+		t.Fatal(err)
+	}
+	grant := author["grant"].(map[string]any)
+	grant["ticket_id"] = "99999999-9999-4999-8999-999999999999"
+	body, _ := json.Marshal(author)
+	response := invoke(t, service.Handler(), "/v1/coding/supervisor/author", body, fixtureToken)
+	if response.Code != http.StatusBadRequest || calls != 0 {
+		t.Fatalf("grant drift status=%d calls=%d body=%s", response.Code, calls, response.Body.String())
+	}
+	response = invoke(t, service.Handler(), "/v1/coding/supervisor/prepare", vector.Requests["prepare"], fixtureToken)
+	if response.Code != http.StatusBadGateway || calls != 1 {
+		t.Fatalf("preparation drift status=%d calls=%d body=%s", response.Code, calls, response.Body.String())
 	}
 	if err := service.Close(); err != nil {
 		t.Fatal(err)
