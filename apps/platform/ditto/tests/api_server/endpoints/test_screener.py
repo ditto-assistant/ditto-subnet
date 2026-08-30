@@ -909,6 +909,7 @@ class TestFederatedScreenerNodes:
             review = await session.get(SubmissionSourceReview, UUID(review_id))
             assert attempt is not None
             assert review is not None
+            assert review.lease_expires_at is not None
             assert attempt.deadline > now + timedelta(minutes=9)
             assert attempt.deadline <= review.lease_expires_at
         job_headers = {"Authorization": f"Bearer {job['job_token']}"}
