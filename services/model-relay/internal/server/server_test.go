@@ -71,6 +71,7 @@ func TestInferenceRoutesAbsentUntilRegistered(t *testing.T) {
 		"/api/v1/inference/exchange",
 		"/api/v1/inference/chat/completions",
 		"/api/v1/inference/embeddings",
+		"/api/v1/inference/coding/chat/completions",
 	} {
 		req := httptest.NewRequest(http.MethodPost, path, nil)
 		rec := httptest.NewRecorder()
@@ -161,6 +162,7 @@ func TestInferenceRoutesMountAtExactPaths(t *testing.T) {
 		Embeddings:                  mark("embeddings"),
 		ConfirmationChatCompletions: mark("confirmation-chat"),
 		ConfirmationEmbeddings:      mark("confirmation-embeddings"),
+		CodingChatCompletions:       mark("coding-chat"),
 	}))
 
 	for path, name := range map[string]string{
@@ -169,6 +171,7 @@ func TestInferenceRoutesMountAtExactPaths(t *testing.T) {
 		"/api/v1/inference/embeddings":                    "embeddings",
 		"/api/v1/inference/confirmation/chat/completions": "confirmation-chat",
 		"/api/v1/inference/confirmation/embeddings":       "confirmation-embeddings",
+		"/api/v1/inference/coding/chat/completions":       "coding-chat",
 	} {
 		req := httptest.NewRequest(http.MethodPost, path, nil)
 		rec := httptest.NewRecorder()

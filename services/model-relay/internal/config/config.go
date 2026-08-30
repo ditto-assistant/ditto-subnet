@@ -210,6 +210,15 @@ type InferenceProxyConfig struct {
 	TimeoutSeconds    int   // DITTO_INFERENCE_TIMEOUT_SECONDS, default 90, range [1,120]
 	MaxOutputTokens   int   // DITTO_INFERENCE_MAX_OUTPUT_TOKENS, default 32768, max 65536
 
+	// Coding inference is a separate, shadow-only capability. It never
+	// inherits ordinary aggregate routing merely because the normal proxy is
+	// enabled. Activation requires both this explicit gate and the reviewed
+	// private-account guardrail attestation.
+	CodingEnabled              bool
+	CodingAccountGuardrail     string
+	CodingValidatorConcurrency int
+	CodingGlobalConcurrency    int
+
 	EmbeddingModel      string // pinned, see PinnedEmbedding*
 	EmbeddingProfile    string
 	EmbeddingProvider   string
@@ -441,6 +450,14 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		TimeoutSeconds:    r.intval("DITTO_INFERENCE_TIMEOUT_SECONDS", 90),
 		MaxOutputTokens:   r.intval("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", 32768),
 
+		CodingEnabled: r.boolval("DITTO_CODING_INFERENCE_ENABLED", false),
+		CodingAccountGuardrail: r.str(
+			"DITTO_CODING_INFERENCE_ACCOUNT_GUARDRAIL",
+			"",
+		),
+		CodingValidatorConcurrency: r.intval("DITTO_CODING_INFERENCE_VALIDATOR_CONCURRENCY", 4),
+		CodingGlobalConcurrency:    r.intval("DITTO_CODING_INFERENCE_GLOBAL_CONCURRENCY", 16),
+
 		EmbeddingModel:      r.str("DITTO_EMBEDDING_MODEL", PinnedEmbeddingModel),
 		EmbeddingProfile:    r.str("DITTO_EMBEDDING_PROFILE", PinnedEmbeddingProfile),
 		EmbeddingProvider:   r.str("DITTO_EMBEDDING_PROVIDER", PinnedEmbeddingProvider),
@@ -478,12 +495,30 @@ func validateInferenceProxy(r *envReader, ip *InferenceProxyConfig) {
 	if ip.Required && !ip.Enabled {
 		r.fail("DITTO_INFERENCE_PROXY_REQUIRED requires DITTO_INFERENCE_PROXY_ENABLED")
 	}
+	if ip.CodingEnabled {
+		if ip.OpenRouterAPIKey == "" {
+			r.fail("OPENROUTER_API_KEY is required when DITTO_CODING_INFERENCE_ENABLED is true")
+		}
+		if ip.CodingAccountGuardrail != "openrouter_private_account_v1" {
+			r.fail("DITTO_CODING_INFERENCE_ACCOUNT_GUARDRAIL must attest openrouter_private_account_v1 when coding inference is enabled")
+		}
+	} else if ip.CodingAccountGuardrail != "" {
+		r.fail("DITTO_CODING_INFERENCE_ACCOUNT_GUARDRAIL requires DITTO_CODING_INFERENCE_ENABLED")
+	}
+	if ip.CodingValidatorConcurrency < 1 || ip.CodingValidatorConcurrency > 32 {
+		r.fail("DITTO_CODING_INFERENCE_VALIDATOR_CONCURRENCY out of range: %d (must be 1..32)", ip.CodingValidatorConcurrency)
+	}
+	if ip.CodingGlobalConcurrency < ip.CodingValidatorConcurrency || ip.CodingGlobalConcurrency > 64 {
+		r.fail("DITTO_CODING_INFERENCE_GLOBAL_CONCURRENCY out of range: %d (must be validator concurrency..64)", ip.CodingGlobalConcurrency)
+	}
 	if u, err := url.Parse(ip.PublicBaseURL); err != nil || !u.IsAbs() || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		r.fail("DITTO_INFERENCE_PUBLIC_BASE_URL must be an absolute http/https URL, got %q", ip.PublicBaseURL)
 	}
 	validateProviderURL := func(name, raw, host, path, description string) {
 		u, err := url.Parse(raw)
-		if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), host) || u.Path != path {
+		if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), host) ||
+			u.Path != path || u.EscapedPath() != path || u.User != nil || u.RawQuery != "" ||
+			u.Fragment != "" || (u.Port() != "" && u.Port() != "443") {
 			r.fail("%s must be %s, got %q", name, description, raw)
 		}
 	}

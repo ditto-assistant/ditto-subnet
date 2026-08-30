@@ -43,12 +43,12 @@ grader evidence. Every row remains `weight_eligible=false`.
 
 ## Current boundary
 
-This is a durable Platform primitive only. No HTTP provider route, OpenRouter
-credential adapter, validator gateway, coding task scheduler, scoring change,
-or weight activation consumes it yet. The next integration must reserve the
-row before dispatch, submit only the locked request through the dedicated Luna
-route, settle the exact row from trusted provider metadata, and use `unsettled`
-when a canonical settlement cannot be proven.
+The disabled-by-default model-relay coding route now consumes this ledger and
+produces canonical settlements, but no deployment config enables it and no
+validator gateway invokes it. Coding task scheduling, scoring and weight
+activation remain absent. The next integration must construct the local
+gateway and preserve the same reserve-before-dispatch, exact-settlement and
+terminal-`unsettled` rules.
 
 Validation:
 

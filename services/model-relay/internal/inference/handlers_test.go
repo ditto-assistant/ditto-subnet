@@ -74,6 +74,7 @@ func serve(deps *Deps, r *http.Request) *httptest.ResponseRecorder {
 	mux.Handle("POST /api/v1/inference/confirmation/chat/completions", handlers.ConfirmationChatCompletions)
 	mux.Handle("POST /api/v1/inference/confirmation/embeddings", handlers.ConfirmationEmbeddings)
 	mux.Handle("POST /api/v1/inference/source-review/provider-event", handlers.SourceReviewProviderEvent)
+	mux.Handle("POST /api/v1/inference/coding/chat/completions", handlers.CodingChatCompletions)
 	logger := slog.New(slog.NewTextHandler(nullWriter{}, nil))
 	h := relayhttp.RequestIDMiddleware(logger, relayhttp.RecoverMiddleware(logger, mux))
 	w := httptest.NewRecorder()

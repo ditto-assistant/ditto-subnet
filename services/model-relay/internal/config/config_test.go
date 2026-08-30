@@ -41,6 +41,12 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 	if ip.Enabled {
 		t.Error("proxy must default disabled")
 	}
+	if ip.CodingEnabled || ip.CodingAccountGuardrail != "" {
+		t.Error("coding proxy and guardrail must default disabled")
+	}
+	if ip.CodingValidatorConcurrency != 4 || ip.CodingGlobalConcurrency != 16 {
+		t.Fatalf("coding concurrency defaults=%d/%d", ip.CodingValidatorConcurrency, ip.CodingGlobalConcurrency)
+	}
 	if ip.RequestBudget != 16384 || ip.TokenBudget != 25_000_000 {
 		t.Errorf("budget defaults wrong: %d/%d", ip.RequestBudget, ip.TokenBudget)
 	}
@@ -70,6 +76,55 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 	}
 	if ip.RoutingMode != RoutingModeAggregateThroughput {
 		t.Errorf("routing mode default wrong: %s", ip.RoutingMode)
+	}
+}
+
+func TestCodingInferenceRequiresIndependentGateKeyAndGuardrail(t *testing.T) {
+	enabled := minimalEnv()
+	enabled["DITTO_CODING_INFERENCE_ENABLED"] = "1"
+	if _, err := Load(MapLookup(enabled)); err == nil || !strings.Contains(err.Error(), "OPENROUTER_API_KEY") {
+		t.Fatalf("coding without provider key err=%v", err)
+	}
+	enabled["OPENROUTER_API_KEY"] = "private-test-key"
+	if _, err := Load(MapLookup(enabled)); err == nil || !strings.Contains(err.Error(), "ACCOUNT_GUARDRAIL") {
+		t.Fatalf("coding without guardrail err=%v", err)
+	}
+	enabled["DITTO_CODING_INFERENCE_ACCOUNT_GUARDRAIL"] = "wrong-profile"
+	if _, err := Load(MapLookup(enabled)); err == nil {
+		t.Fatal("coding with wrong account guardrail must fail")
+	}
+	enabled["DITTO_CODING_INFERENCE_ACCOUNT_GUARDRAIL"] = "openrouter_private_account_v1"
+	cfg, err := Load(MapLookup(enabled))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Inference.CodingEnabled || cfg.Inference.Enabled {
+		t.Fatalf("coding gate must not enable ordinary inference: %+v", cfg.Inference)
+	}
+
+	disabled := minimalEnv()
+	disabled["DITTO_CODING_INFERENCE_ACCOUNT_GUARDRAIL"] = "openrouter_private_account_v1"
+	if _, err := Load(MapLookup(disabled)); err == nil {
+		t.Fatal("guardrail attestation without the coding gate must fail")
+	}
+	for name, values := range map[string]map[string]string{
+		"validator zero": {"DITTO_CODING_INFERENCE_VALIDATOR_CONCURRENCY": "0"},
+		"validator high": {"DITTO_CODING_INFERENCE_VALIDATOR_CONCURRENCY": "33"},
+		"global below validator": {
+			"DITTO_CODING_INFERENCE_VALIDATOR_CONCURRENCY": "8",
+			"DITTO_CODING_INFERENCE_GLOBAL_CONCURRENCY":    "7",
+		},
+		"global high": {"DITTO_CODING_INFERENCE_GLOBAL_CONCURRENCY": "65"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := minimalEnv()
+			for key, value := range values {
+				env[key] = value
+			}
+			if _, err := Load(MapLookup(env)); err == nil {
+				t.Fatal("invalid coding concurrency was accepted")
+			}
+		})
 	}
 }
 
@@ -304,6 +359,9 @@ func TestProviderURLsArePinnedCredentialBoundaries(t *testing.T) {
 		{name: "chat wrong host", key: "DITTO_INFERENCE_UPSTREAM_URL", value: "https://example.com/api/v1/chat/completions"},
 		{name: "chat plaintext", key: "DITTO_INFERENCE_UPSTREAM_URL", value: "http://openrouter.ai/api/v1/chat/completions"},
 		{name: "chat wrong path", key: "DITTO_INFERENCE_UPSTREAM_URL", value: "https://openrouter.ai/api/v1/embeddings"},
+		{name: "chat userinfo", key: "DITTO_INFERENCE_UPSTREAM_URL", value: "https://user@openrouter.ai/api/v1/chat/completions"},
+		{name: "chat query", key: "DITTO_INFERENCE_UPSTREAM_URL", value: "https://openrouter.ai/api/v1/chat/completions?target=other"},
+		{name: "chat alternate port", key: "DITTO_INFERENCE_UPSTREAM_URL", value: "https://openrouter.ai:444/api/v1/chat/completions"},
 		{name: "embedding wrong host", key: "DITTO_EMBEDDING_UPSTREAM_URL", value: "https://example.com/api/v1/embeddings"},
 		{name: "fallback wrong host", key: "DITTO_EMBEDDING_FALLBACK_URL", value: "https://example.com/v1/embeddings"},
 		{name: "fallback wrong path", key: "DITTO_EMBEDDING_FALLBACK_URL", value: "https://api.perplexity.ai/api/v1/embeddings"},

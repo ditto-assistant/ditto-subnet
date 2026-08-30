@@ -26,6 +26,7 @@
 | Shadow coding inference grant authority | `apps/platform/ditto/db/queries/coding_inference_grants.py`, `apps/platform/ditto/api_server/endpoints/validator_coding_inference.py`, `apps/platform/docs/coding-inference-grant-authority.md` |
 | Shadow coding inference request ledger | `apps/platform/ditto/db/queries/coding_inference_requests.py`, `apps/platform/docs/coding-inference-request-ledger.md` |
 | Shadow coding Platform upstream client | `services/dittobench-api/internal/codingplatform/`, `services/dittobench-api/docs/coding-platform-upstream-client-shadow.md` |
+| Shadow coding model-relay handler | `services/model-relay/internal/inference/coding*.go`, `services/model-relay/CODING-SHADOW.md` |
 | Shadow private catalog selector | `apps/platform/ditto/coding_selection.py` |
 | Shadow private catalog loader | `apps/platform/ditto/api_server/coding_private_catalog.py` |
 | Shadow private task inputs | `CodingPrivateCatalogRecord` in `apps/platform/ditto/api_models/coding_selection.py` |

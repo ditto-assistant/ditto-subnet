@@ -62,13 +62,13 @@ result types reject JSON diagnostics and provide redacted string/log values.
 
 ## Current activation boundary
 
-This package is not constructed by the validator and its target HTTP route does
-not exist yet. No provider request can be made by this layer. The next layer must
-implement the model-relay handler that verifies the proof, atomically reserves
-the Platform ledger, forwards only the locked request under the reviewed Luna
-provider policy, and returns a trusted canonical settlement. Validator gateway
-construction, attempt orchestration, scoring, deployment, and weights remain
-separate later reviews.
+This package is not constructed by the validator. Its model-relay target now
+exists but is independently disabled by default and has no deployment
+configuration. No production coding provider request can be made by the
+current stack. The next layer must construct a validator-local capability
+gateway that binds the grant exchange, relay, journal, upstream client and
+harness lifecycle. Attempt orchestration, deployment, scoring and weights
+remain separate later reviews.
 
 Validation:
 
