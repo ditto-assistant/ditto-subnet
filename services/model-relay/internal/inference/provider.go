@@ -780,19 +780,40 @@ func minerRecoverableProviderError(request, response map[string]any) bool {
 		if nameEnd <= 0 {
 			return false
 		}
-		undeclaredName := message[nameStart : nameStart+nameEnd]
-		tools, _ := request["tools"].([]any)
-		for _, rawTool := range tools {
-			tool, ok := rawTool.(map[string]any)
-			if !ok {
-				continue
-			}
-			function, ok := tool["function"].(map[string]any)
-			if ok && function["name"] == undeclaredName {
-				return false
-			}
+		return !requestDeclaresTool(request, message[nameStart:nameStart+nameEnd])
+	}
+	const invalidToolParametersPrefix = "Upstream error from Groq: Tool call validation failed: tool call validation failed: parameters for tool "
+	const invalidToolParametersSuffix = " did not match schema: errors:"
+	if start := strings.Index(message, invalidToolParametersPrefix); start >= 0 {
+		nameStart := start + len(invalidToolParametersPrefix)
+		nameEnd := strings.Index(message[nameStart:], invalidToolParametersSuffix)
+		if nameEnd <= 0 {
+			return false
 		}
-		return true
+		detailStart := nameStart + nameEnd + len(invalidToolParametersSuffix)
+		if strings.TrimSpace(message[detailStart:]) == "" {
+			return false
+		}
+		// This exact Groq error is emitted after generation when the model's
+		// arguments fail a declared tool's schema. Requiring that declaration
+		// distinguishes repairable generated arguments from an invalid or
+		// rejected tool definition, which remains infrastructure-owned.
+		return requestDeclaresTool(request, message[nameStart:nameStart+nameEnd])
+	}
+	return false
+}
+
+func requestDeclaresTool(request map[string]any, name string) bool {
+	tools, _ := request["tools"].([]any)
+	for _, rawTool := range tools {
+		tool, ok := rawTool.(map[string]any)
+		if !ok {
+			continue
+		}
+		function, ok := tool["function"].(map[string]any)
+		if ok && function["name"] == name {
+			return true
+		}
 	}
 	return false
 }
