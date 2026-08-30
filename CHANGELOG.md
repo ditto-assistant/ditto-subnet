@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.159.0 (2026-08-30)
+
+### Features
+
+- **coding**: Add durable shadow publication journal
+  ([`1d1d922`](https://github.com/ditto-assistant/ditto-subnet/commit/1d1d922b8f7dcf8818564388f2530560bd2d0513))
+
+
 ## v0.158.0 (2026-08-30)
 
 ### Bug Fixes
