@@ -717,7 +717,7 @@ func TestClientConstructionFailureRevokesDurableActivation(t *testing.T) {
 	}
 }
 
-func TestAuthorizerFailureRevokesDurableActivationBeforePublish(t *testing.T) {
+func TestAuthorizerFailureLeavesJournalUnusedForRetry(t *testing.T) {
 	fixture := newGatewayFixture(t)
 	fixture.authorizer.err = errors.New("outbox marker unavailable")
 	if _, err := Activate(t.Context(), fixture.config()); !errors.Is(err, ErrActivation) {
@@ -740,11 +740,15 @@ func TestAuthorizerFailureRevokesDurableActivationBeforePublish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Binding == nil || !snapshot.Revoked || len(snapshot.Entries) != 0 {
+	if snapshot.Binding != nil || snapshot.Revoked || len(snapshot.Entries) != 0 {
 		t.Fatalf("authorizer failure snapshot=%+v", snapshot)
 	}
 	if err := journal.Close(); err != nil {
 		t.Fatal(err)
+	}
+	fixture.authorizer.err = nil
+	if _, err := Activate(t.Context(), fixture.config()); err != nil {
+		t.Fatalf("retry after authorizer recovery err=%v", err)
 	}
 }
 

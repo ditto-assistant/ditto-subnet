@@ -50,12 +50,15 @@ func Activate(ctx context.Context, config Config) (*Gateway, error) {
 		}
 		return nil, ErrAlreadyUsed
 	}
-	if err := journal.Bind(ctx, binding); err != nil {
-		return nil, cleanupActivationFailure(
-			config.GrantRevoker, binding, cleanupTimeout, nil, nil, nil, journal, ErrActivation,
-		)
-	}
 	if err := config.Authorizer.Authorize(ctx, capabilityBinding(binding)); err != nil {
+		cleanupErr := revokeUnusedGrant(config.GrantRevoker, binding, cleanupTimeout)
+		closeErr := journal.Close()
+		if cleanupErr != nil || closeErr != nil {
+			return nil, ErrCleanup
+		}
+		return nil, ErrActivation
+	}
+	if err := journal.Bind(ctx, binding); err != nil {
 		return nil, cleanupActivationFailure(
 			config.GrantRevoker, binding, cleanupTimeout, nil, nil, nil, journal, ErrActivation,
 		)

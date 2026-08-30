@@ -8,12 +8,12 @@ without adding a listener, worker, scheduler, score, or deployment setting.
 ## Fresh activation
 
 `Activate` accepts one already-exchanged Platform grant and an empty private
-mode-`0700` journal directory. It opens and locks the journal, durably commits
-the attempt binding, requires a trusted authorizer to prove the outbox
-activation marker already committed, then constructs the secret-owning
-Platform client and relay before asking a trusted publisher to mount the
-handler behind one opaque, source-bound base URL. A journal with any prior
-binding is never republished.
+mode-`0700` journal directory that the integrator already created. It opens
+and locks the journal, requires a trusted authorizer to prove the outbox
+activation marker already committed, then durably commits the attempt binding
+and constructs the secret-owning Platform client and relay before asking a
+trusted publisher to mount the handler behind one opaque, source-bound base
+URL. A journal with any prior binding is never republished.
 
 The future attempt owner must reserve the durable evidence outbox and commit
 its non-rerunnable `BeginTranscript` activation marker before calling

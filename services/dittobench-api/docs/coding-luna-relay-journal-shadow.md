@@ -55,11 +55,12 @@ file coexist. This
 prevents an admitted provider result from becoming unjournalable because an
 earlier request consumed the remaining local capacity.
 
-The journal is not a retention scheduler. `internal/codinggateway` creates one
-private root per attempt and must keep it through terminal evidence
-publication, then delete it only under the same durable release/retention
-authority as the coding evidence outbox. Host-volume encryption and backup
-policy remain deployment responsibilities.
+The journal is not a retention scheduler. The integrator must create one
+private root per attempt as an euid-owned mode-`0700` directory before
+activation; `internal/codinggateway` opens it and must keep it through terminal
+evidence publication, then delete it only under the same durable
+release/retention authority as the coding evidence outbox. Host-volume
+encryption and backup policy remain deployment responsibilities.
 
 ## Integration boundary
 
