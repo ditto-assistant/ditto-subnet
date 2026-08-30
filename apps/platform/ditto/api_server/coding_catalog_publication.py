@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -198,13 +199,7 @@ def _load_canonical_model(
 ) -> tuple[ModelT, bytes]:
     if path.is_symlink() or not path.is_file():
         raise CodingCatalogPublicationError(f"{label} input is invalid")
-    try:
-        with path.open("rb") as stream:
-            body = stream.read(maximum_bytes + 1)
-    except OSError as error:
-        raise CodingCatalogPublicationError(f"{label} input is unreadable") from error
-    if not body or len(body) > maximum_bytes:
-        raise CodingCatalogPublicationError(f"{label} input exceeds bounds")
+    body = _read_bounded_regular_file(path, maximum_bytes=maximum_bytes, label=label)
     try:
         raw = json.loads(
             body,
@@ -233,6 +228,32 @@ def _load_canonical_model(
     if body != canonical:
         raise CodingCatalogPublicationError(f"{label} input is not canonical")
     return parsed, body
+
+
+def _read_bounded_regular_file(path: Path, *, maximum_bytes: int, label: str) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as error:
+        raise CodingCatalogPublicationError(f"{label} input is unreadable") from error
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise CodingCatalogPublicationError(f"{label} input is invalid")
+        if info.st_size < 1 or info.st_size > maximum_bytes:
+            raise CodingCatalogPublicationError(f"{label} input exceeds bounds")
+        body = os.read(fd, maximum_bytes + 1)
+    except CodingCatalogPublicationError:
+        raise
+    except OSError as error:
+        raise CodingCatalogPublicationError(f"{label} input is unreadable") from error
+    finally:
+        os.close(fd)
+    if not body or len(body) > maximum_bytes:
+        raise CodingCatalogPublicationError(f"{label} input exceeds bounds")
+    return body
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
