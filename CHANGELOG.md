@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.150.0 (2026-08-30)
+
+### Features
+
+- **coding**: Add durable shadow evidence outbox
+  ([`ef554aa`](https://github.com/ditto-assistant/ditto-subnet/commit/ef554aa7d04b44766b7e6d7ad939a102720ba688))
+
+
 ## v0.149.0 (2026-08-30)
 
 ### Bug Fixes
