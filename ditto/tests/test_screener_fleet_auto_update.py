@@ -192,6 +192,26 @@ def test_role_stops_workers_above_configured_capacity() -> None:
     assert task["when"] == "screener_fleet_runtime_enabled"
 
 
+def test_self_updater_reconciles_stale_workers_when_canary_shrinks() -> None:
+    """A pull release must not leave an old higher-index poller alive.
+
+    Ansible is not part of every release. The updater therefore enumerates the
+    currently loaded numeric worker instances, drains all of them, disables
+    the ones above the requested canary count, and re-enables only the desired
+    workers on the activated release.
+    """
+    updater = UPDATER.read_text()
+
+    assert "list-units --all --type=service --plain --no-legend" in updater
+    assert "ditto-screener-worker@*.service" in updater
+    assert "^ditto-screener-worker@[1-9][0-9]*\\\\.service$" in updater
+    assert '"$SYSTEMCTL" disable "ditto-screener-worker@$index.service"' in updater
+    assert '"$SYSTEMCTL" enable --now "ditto-screener-worker@$index.service"' in updater
+    stop = updater.index("stop_fleet()")
+    start = updater.index("start_fleet()")
+    assert stop < start
+
+
 def test_release_workflow_signs_before_advancing_discovery_channel() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text())
     job = workflow["jobs"]["assemble-screener-fleet-release"]
