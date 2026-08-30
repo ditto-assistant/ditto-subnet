@@ -106,20 +106,29 @@ def _admitted_on_coverage(
     return any(note.kind == "cleared" for note in observation.notes)
 
 
-async def _effective_adjudicator_mode(session: AsyncSession) -> str:
-    """Read the operator's adjudicator posture at decision time.
+async def _effective_adjudicator_mode(
+    session: AsyncSession, attempt: ScreeningAttempt
+) -> str:
+    """Resolve authority from the immutable settings bound at claim time.
 
-    The worker produces an adjudication in both shadow and enforce, so the
-    authority to ACT on one is resolved here rather than trusted from the
-    payload. A worker running a stale settings revision therefore cannot
-    release or reject anything the operator has not switched on.
+    Closing a one-attempt canary window must not revoke L4 halfway through the
+    already claimed review. Exact revision plus checksum prevents a stale or
+    forged worker payload from gaining authority. Legacy unbound attempts keep
+    the historical current-posture lookup.
     """
-    row = await session.scalar(
-        select(ScreenerReviewSettingsRevision)
-        .where(ScreenerReviewSettingsRevision.scope == "*")
-        .order_by(ScreenerReviewSettingsRevision.revision.desc())
-        .limit(1)
-    )
+    if attempt.review_settings_revision is not None:
+        row = await session.get(
+            ScreenerReviewSettingsRevision, attempt.review_settings_revision
+        )
+        if row is None or row.checksum != attempt.review_settings_checksum:
+            return "off"
+    else:
+        row = await session.scalar(
+            select(ScreenerReviewSettingsRevision)
+            .where(ScreenerReviewSettingsRevision.scope == "*")
+            .order_by(ScreenerReviewSettingsRevision.revision.desc())
+            .limit(1)
+        )
     if row is None:
         return "off"
     try:
@@ -447,22 +456,9 @@ async def maybe_finalize_targon_screen(
                 observation = None
         coverage_admitted = _admitted_on_coverage(observation)
         if not _certified_low_risk(observation) and not coverage_admitted:
-            if _review_failed_retryable(observation):
-                await _fail_retryable(
-                    session,
-                    attempt,
-                    reason="Agentic source review failed before reaching a verdict",
-                    code="source-review-retryable-infra",
-                    now=now,
-                )
-                return True
-            # An adjudicated hold is resolved here instead of waiting on an
-            # operator. Infrastructure failures above are settled first and on
-            # purpose: they are not miner conduct, so they are retried rather
-            # than judged.
             adjudication = _actionable_adjudication(observation)
             if adjudication is not None and (
-                await _effective_adjudicator_mode(session) == "enforce"
+                await _effective_adjudicator_mode(session, attempt) == "enforce"
             ):
                 if adjudication.decision == "reject":
                     await _reject_build(
@@ -474,7 +470,16 @@ async def maybe_finalize_targon_screen(
                     )
                     return True
                 coverage_admitted = True
-            else:
+            if not coverage_admitted and _review_failed_retryable(observation):
+                await _fail_retryable(
+                    session,
+                    attempt,
+                    reason="Agentic source review failed before reaching a verdict",
+                    code="source-review-retryable-infra",
+                    now=now,
+                )
+                return True
+            if not coverage_admitted:
                 await _quarantine(
                     session,
                     attempt=attempt,

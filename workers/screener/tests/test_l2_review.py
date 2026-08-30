@@ -4394,8 +4394,8 @@ async def test_a_clean_review_is_never_adjudicated() -> None:
     assert result.adjudication is None
 
 
-async def test_an_infrastructure_failure_is_never_adjudicated() -> None:
-    """A retryable fault has no evidence to weigh; it gets retried instead."""
+async def test_an_early_infrastructure_failure_is_finally_adjudicated() -> None:
+    """L4 can inspect the archive itself even before L1 records a note."""
     infra = SourceReviewObservation(
         ok=False,
         risk_level=None,
@@ -4416,8 +4416,10 @@ async def test_an_infrastructure_failure_is_never_adjudicated() -> None:
         "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
     )
 
-    assert court.calls == 0
-    assert result.adjudication is None
+    assert court.calls == 1
+    assert court.seen_notes == ()
+    assert result.adjudication is not None
+    assert result.adjudication["decision"] == "clear"
 
 
 async def test_an_evidence_bearing_failure_is_finally_adjudicated() -> None:

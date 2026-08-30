@@ -278,6 +278,7 @@ def _agent(
         timeout_seconds=10,
         max_steps=4,
         transport=transport,
+        transport_retry_delays=(0, 0),
     )
 
 
@@ -3322,7 +3323,9 @@ async def test_expired_lease_deadline_stops_review_before_first_call(
     assert observation.error_code == "source-review-lease-budget-exhausted"
 
 
-async def test_transient_openrouter_failure_is_single_shot(tmp_path: Path) -> None:
+async def test_transient_openrouter_failure_recovers_in_same_turn(
+    tmp_path: Path,
+) -> None:
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     os.chmod(key, 0o600)
@@ -3366,10 +3369,8 @@ async def test_transient_openrouter_failure_is_single_shot(tmp_path: Path) -> No
         artifact_sha256=_SHA,
     )
 
-    assert not observation.ok
-    assert observation.failure_disposition == "retryable_infra"
-    assert observation.error_code == "source-review-http-503"
-    assert calls == 1
+    assert observation.ok
+    assert calls == 2
 
 
 async def test_hallucinated_citations_are_dropped_before_digest_binding(
@@ -4268,7 +4269,7 @@ async def test_a_dropped_comment_does_not_reapply_the_two_location_bar(
     assert [item.line for item in parsed.evidence] == [4]
 
 
-async def test_provider_error_body_is_terminal_after_one_turn(
+async def test_provider_error_body_is_terminal_after_three_bounded_posts(
     tmp_path: Path,
 ) -> None:
     """A 200 whose body is an error object is a provider fault, not a verdict."""
@@ -4289,7 +4290,7 @@ async def test_provider_error_body_is_terminal_after_one_turn(
 
     assert not observation.ok
     assert observation.error_code == "source-review-model-response-invalid"
-    assert calls == 1
+    assert calls == 3
 
 
 async def test_toolless_prose_turn_gets_one_correction_then_is_terminal(
@@ -4365,7 +4366,7 @@ async def test_persistent_toolless_model_is_parked_after_one_correction(
     assert calls == 2
 
 
-async def test_relayed_rate_limit_error_body_parks_after_one_post(
+async def test_relayed_rate_limit_error_body_parks_after_three_bounded_posts(
     tmp_path: Path,
 ) -> None:
     """An HTTP-200 provider fault is evidence, not retry authority."""
@@ -4393,7 +4394,46 @@ async def test_relayed_rate_limit_error_body_parks_after_one_post(
     assert not observation.ok
     assert observation.error_code == "source-review-model-response-invalid"
     assert observation.failure_disposition == "retryable_infra"
-    assert calls == 1
+    assert calls == 3
+
+
+async def test_relayed_rate_limit_recovers_inside_the_same_model_turn(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    final = _with_policy_v10_invariants(_BENIGN_REVIEW)
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                200, json={"error": {"code": 429, "message": "Rate limited"}}
+            )
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [_tool("done", "submit_review", final)],
+                        }
+                    }
+                ]
+            },
+        )
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok
+    assert calls == 2
 
 
 async def test_string_error_body_and_free_text_rate_limit_are_classified() -> None:
@@ -4506,8 +4546,8 @@ async def test_non_json_body_parks_after_one_post(tmp_path: Path) -> None:
     assert calls == 1
 
 
-async def test_http_429_parks_after_one_post(tmp_path: Path) -> None:
-    """An HTTP 429 parks the attempt for a manual retry."""
+async def test_http_429_parks_after_three_bounded_posts(tmp_path: Path) -> None:
+    """A persistent HTTP 429 parks after the fixed same-turn retry grant."""
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     os.chmod(key, 0o600)
@@ -4526,7 +4566,7 @@ async def test_http_429_parks_after_one_post(tmp_path: Path) -> None:
     assert not observation.ok
     assert observation.error_code == "source-review-http-429"
     assert observation.failure_disposition == "retryable_infra"
-    assert calls == 1
+    assert calls == 3
 
 
 def _note_call(
