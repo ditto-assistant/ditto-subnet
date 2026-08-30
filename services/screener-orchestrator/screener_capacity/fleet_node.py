@@ -137,6 +137,66 @@ class Settings:
     once: bool
 
 
+def _source_review_settings_environment(review: dict[str, Any]) -> dict[str, str]:
+    """Translate the attempt-bound Platform policy into the local job env."""
+    settings = review.get("review_settings")
+    if not isinstance(settings, dict):
+        return {}
+
+    def scalar(key: str) -> str:
+        value = settings[key]
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    fallback_models = settings["l2_fallback_models"]
+    if not isinstance(fallback_models, list) or not all(
+        isinstance(value, str) for value in fallback_models
+    ):
+        raise ControllerError("source-review claim settings are invalid")
+    mapping = {
+        "SCREENER_L2_REVIEW_MODE": "mode",
+        "SCREENER_L2_REVIEW_MODEL": "l2_model",
+        "SCREENER_L3_REVIEW_ENABLED": "l3_enabled",
+        "SCREENER_L3_REVIEW_MODEL": "l3_model",
+        "SCREENER_L2_TIMEOUT_SECONDS": "timeout_seconds",
+        "SCREENER_L2_MAX_STEPS": "max_steps",
+        "SCREENER_SOURCE_REVIEW_MAX_STEPS": "source_review_max_steps",
+        "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES": "source_review_max_read_bytes",
+        "SCREENER_SOURCE_REVIEW_MAX_COMPLETION_TOKENS": (
+            "source_review_max_completion_tokens"
+        ),
+        "SCREENER_SOURCE_REVIEW_REASONING_EFFORT": ("source_review_reasoning_effort"),
+        "SCREENER_SOURCE_REVIEW_MODEL": "source_review_model",
+        "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS": "source_review_timeout_seconds",
+        "SCREENER_REVIEW_CONCERN_HOLD_COUNT": "concern_hold_count",
+        "SCREENER_REVIEW_CLEAR_MIN_NOTES": "clear_min_notes",
+        "SCREENER_ADJUDICATOR_MODE": "adjudicator_mode",
+        "SCREENER_ADJUDICATOR_MODEL": "adjudicator_model",
+        "SCREENER_ADJUDICATOR_MAX_STEPS": "adjudicator_max_steps",
+        "SCREENER_ADJUDICATOR_TIMEOUT_SECONDS": "adjudicator_timeout_seconds",
+        "SCREENER_L2_MAX_INPUT_TOKENS": "max_input_tokens",
+        "SCREENER_L2_MAX_OUTPUT_TOKENS": "max_output_tokens",
+        "SCREENER_L2_MAX_COMPLETION_TOKENS": "max_completion_tokens",
+        "SCREENER_L2_MAX_COST_USD": "max_cost_usd",
+        "SCREENER_L2_CRITIC_REASONING_EFFORT": "critic_reasoning_effort",
+        "SCREENER_L2_CACHE_TTL_SECONDS": "cache_ttl_seconds",
+        "SCREENER_L2_AUDIT_RETENTION_DAYS": "audit_retention_days",
+    }
+    try:
+        environment = {name: scalar(key) for name, key in mapping.items()}
+    except KeyError as error:
+        raise ControllerError("source-review claim settings are incomplete") from error
+    environment["SCREENER_L2_FALLBACK_MODELS"] = ",".join(fallback_models)
+    revision = review.get("review_settings_revision")
+    checksum = review.get("review_settings_checksum")
+    if isinstance(revision, int):
+        environment["SCREENER_REVIEW_SETTINGS_REVISION"] = str(revision)
+    if isinstance(checksum, str):
+        environment["SCREENER_REVIEW_SETTINGS_CHECKSUM"] = checksum
+    return environment
+
+
 def _load_credential(path: Path) -> NodeCredential:
     try:
         value = json.loads(path.read_text())
@@ -636,6 +696,8 @@ class FleetNode:
                 ),
             }
         )
+        bound_environment = _source_review_settings_environment(review)
+        environment.update(bound_environment)
         command = [
             "docker",
             "run",
@@ -676,6 +738,8 @@ class FleetNode:
             "--env",
             "SCREENER_STATIC_PREFLIGHT_V2_MODE",
         ]
+        for name in bound_environment:
+            command.extend(["--env", name])
         if self.settings.source_review_env_file is not None:
             command.extend(["--env-file", str(self.settings.source_review_env_file)])
         # The screener image installs its dependencies into uv's project virtual

@@ -23,6 +23,7 @@ def test_build_reviewer_runs_l1_l2_l3_in_process(
     monkeypatch.setenv("SCREENER_NODE_CREDENTIAL_FILE", str(tmp_path / "node.json"))
     monkeypatch.setenv("SCREENER_L2_REVIEW_MODE", "enforce")
     monkeypatch.setenv("SCREENER_L3_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("SCREENER_ADJUDICATOR_MODE", "enforce")
     reviewer = source_review_job._build_reviewer(
         key_file=str(key_path), timeout_seconds=60
     )
@@ -30,6 +31,7 @@ def test_build_reviewer_runs_l1_l2_l3_in_process(
     assert reviewer._mode == "enforce"
     assert reviewer._l2._l3_enabled is True
     assert isinstance(reviewer._l2._harness, InProcessAnalyzerHarness)
+    assert reviewer._adjudicator is not None
 
 
 def test_stage_source_review_secret_copies_group_readable_mount(

@@ -12,6 +12,7 @@ from ditto.api_models.screener_node_settings import (
     ScreenerNodeChannelSettingsControl,
 )
 from ditto.api_models.screener_provider_settings import ScreenerProviderSettingsControl
+from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_models.system_health import HostSpecs
 from ditto_screening_protocol import SourceReviewObservationPayload
 
@@ -478,6 +479,11 @@ class SubmissionSourceReviewClaimView(BaseModel):
     image_reference: Annotated[str, Field(pattern=_IMAGE_REFERENCE)]
     job_token: Annotated[str, Field(min_length=43, max_length=128)]
     job_token_expires_at: datetime
+    review_settings_revision: Annotated[int, Field(ge=1)] | None = None
+    review_settings_checksum: (
+        Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None
+    ) = None
+    review_settings: ScreenerReviewSettings | None = None
 
 
 class SubmissionSourceReviewClaimResponse(BaseModel):

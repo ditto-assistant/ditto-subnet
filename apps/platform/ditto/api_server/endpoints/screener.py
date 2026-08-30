@@ -2448,6 +2448,26 @@ async def claim_submission_source_review(
         )
         if row is None:
             return SubmissionSourceReviewClaimResponse(review=None)
+        attempt = await session.get(ScreeningAttempt, row.attempt_id)
+        review_settings: ScreenerReviewSettings | None = None
+        review_settings_revision: int | None = None
+        review_settings_checksum: str | None = None
+        if attempt is not None and attempt.review_settings_revision is not None:
+            revision = await session.get(
+                ScreenerReviewSettingsRevision, attempt.review_settings_revision
+            )
+            if (
+                revision is None
+                or revision.checksum != attempt.review_settings_checksum
+                or revision.scope != attempt.review_settings_scope
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="source review settings binding is unavailable",
+                )
+            review_settings = ScreenerReviewSettings.model_validate(revision.settings)
+            review_settings_revision = revision.revision
+            review_settings_checksum = revision.checksum
         image_build = await session.scalar(
             select(TrustedImageBuild)
             .where(
@@ -2498,6 +2518,9 @@ async def claim_submission_source_review(
             image_reference=image_reference,
             job_token=token,
             job_token_expires_at=token_expires_at,
+            review_settings_revision=review_settings_revision,
+            review_settings_checksum=review_settings_checksum,
+            review_settings=review_settings,
         )
     )
 
@@ -2995,6 +3018,26 @@ async def claim_node_submission_source_review(
         )
         if row is None:
             return SubmissionSourceReviewClaimResponse(review=None)
+        attempt = await session.get(ScreeningAttempt, row.attempt_id)
+        review_settings: ScreenerReviewSettings | None = None
+        review_settings_revision: int | None = None
+        review_settings_checksum: str | None = None
+        if attempt is not None and attempt.review_settings_revision is not None:
+            revision = await session.get(
+                ScreenerReviewSettingsRevision, attempt.review_settings_revision
+            )
+            if (
+                revision is None
+                or revision.checksum != attempt.review_settings_checksum
+                or revision.scope != attempt.review_settings_scope
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="source review settings binding is unavailable",
+                )
+            review_settings = ScreenerReviewSettings.model_validate(revision.settings)
+            review_settings_revision = revision.revision
+            review_settings_checksum = revision.checksum
         image_build = await session.scalar(
             select(TrustedImageBuild)
             .where(
@@ -3030,6 +3073,9 @@ async def claim_node_submission_source_review(
             image_reference=image_reference,
             job_token=token,
             job_token_expires_at=token_expires_at,
+            review_settings_revision=review_settings_revision,
+            review_settings_checksum=review_settings_checksum,
+            review_settings=review_settings,
         )
     )
 
