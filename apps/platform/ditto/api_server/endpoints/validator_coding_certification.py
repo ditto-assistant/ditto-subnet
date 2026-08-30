@@ -15,7 +15,9 @@ from ditto.api_models.coding_certification import (
     SubmitCodingCertificationResponse,
     coding_certification_signing_message,
 )
-from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.api_models.coding_certification_leases import (
+    CodingCertificationLeaseStatus,
+)
 from ditto.api_server.attestation import verify_signature
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.endpoints.validator import (
@@ -23,10 +25,12 @@ from ditto.api_server.endpoints.validator import (
     _assert_validator_permitted,
 )
 from ditto.chain import ChainClient
-from ditto.db.models import Agent, ValidatorTicket
+from ditto.db.models import Agent, CodingCertificationLease
 from ditto.db.queries.coding_certifications import (
     CodingCertificationConflictError,
+    coding_certification_lease_accepts_receipt,
     coding_certification_matches,
+    get_coding_certification_by_lease,
     get_coding_certification_identity,
     insert_coding_certification,
 )
@@ -48,7 +52,7 @@ def _aware(value: datetime) -> datetime:
     responses={
         401: {"description": "Signature invalid or validator not permitted."},
         404: {"description": "Agent not found."},
-        409: {"description": "Artifact, ticket, receipt, or replay conflict."},
+        409: {"description": "Artifact, lease, receipt, or replay conflict."},
     },
 )
 async def submit_coding_certification(
@@ -67,7 +71,7 @@ async def submit_coding_certification(
         validator_hotkey=payload.validator_hotkey,
         agent_id=agent_id,
         bench_version=payload.bench_version,
-        ticket_deadline=payload.ticket_deadline,
+        lease_id=payload.lease_id,
         screened_image_sha256=payload.screened_image_sha256,
         certification_sha256=receipt.certification_sha256,
     )
@@ -126,7 +130,8 @@ async def submit_coding_certification(
                 artifact_sha256=agent.sha256,
                 screened_image_sha256=payload.screened_image_sha256,
                 bench_version=payload.bench_version,
-                ticket_deadline=payload.ticket_deadline,
+                lease_id=payload.lease_id,
+                ticket_deadline=_aware(existing.ticket_deadline),
                 receipt=receipt,
             ):
                 raise HTTPException(
@@ -150,32 +155,52 @@ async def submit_coding_certification(
                 status_code=409,
                 detail="coding certification receipt is not currently active",
             )
-        ticket = await session.get(
-            ValidatorTicket,
-            (agent_id, payload.bench_version, payload.validator_hotkey),
-            with_for_update=True,
+        by_lease = await get_coding_certification_by_lease(
+            session, lease_id=payload.lease_id
         )
-        if (
-            ticket is None
-            or ticket.status != TicketStatus.ISSUED
-            or ticket.purpose != TicketPurpose.CANONICAL_QUORUM
-            or ticket.purpose_revision <= 0
-            or _aware(ticket.deadline) <= now
-            or _aware(ticket.deadline) != _aware(payload.ticket_deadline)
-        ):
+        if by_lease is not None:
             raise HTTPException(
                 status_code=409,
-                detail="no matching open canonical scoring ticket",
+                detail="coding certification identity names different evidence",
             )
-        ticket_issued_at = _aware(ticket.issued_at)
-        ticket_deadline = _aware(ticket.deadline)
+        lease = await session.get(
+            CodingCertificationLease, payload.lease_id, with_for_update=True
+        )
+        if lease is None or lease.validator_hotkey != payload.validator_hotkey:
+            raise HTTPException(
+                status_code=404, detail="coding certification lease is not available"
+            )
         if (
-            issued_at < ticket_issued_at - _MAX_ISSUED_AT_SKEW
-            or issued_at > ticket_deadline
+            lease.status == CodingCertificationLeaseStatus.ISSUED.value
+            and _aware(lease.deadline) <= now
+        ):
+            lease.status = CodingCertificationLeaseStatus.EXPIRED.value
+            await session.flush()
+            raise HTTPException(
+                status_code=404, detail="coding certification lease is not available"
+            )
+        if not coding_certification_lease_accepts_receipt(
+            lease,
+            validator_hotkey=payload.validator_hotkey,
+            agent_id=agent_id,
+            artifact_sha256=agent.sha256,
+            screened_image_sha256=payload.screened_image_sha256,
+            bench_version=payload.bench_version,
+            receipt=receipt,
         ):
             raise HTTPException(
                 status_code=409,
-                detail="coding certification receipt predates or postdates its ticket",
+                detail="no matching claimed certification lease",
+            )
+        lease_issued_at = _aware(lease.issued_at)
+        lease_deadline = _aware(lease.deadline)
+        if (
+            issued_at < lease_issued_at - _MAX_ISSUED_AT_SKEW
+            or issued_at > lease_deadline
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="coding certification receipt predates or postdates its lease",
             )
         try:
             result = await insert_coding_certification(
@@ -185,7 +210,8 @@ async def submit_coding_certification(
                 screened_image_sha256=payload.screened_image_sha256,
                 validator_hotkey=payload.validator_hotkey,
                 bench_version=payload.bench_version,
-                ticket_deadline=payload.ticket_deadline,
+                lease_id=payload.lease_id,
+                ticket_deadline=lease_deadline,
                 receipt=receipt,
                 signature=payload.signature,
             )

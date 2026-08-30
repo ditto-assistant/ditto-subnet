@@ -945,6 +945,7 @@ class CodingCapabilityCertification(Base):
     screened_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
     validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
     bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
     ticket_deadline: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
@@ -979,12 +980,24 @@ class CodingCapabilityCertification(Base):
             ondelete="CASCADE",
             name="coding_certifications_agent_id_fkey",
         ),
+        ForeignKeyConstraint(
+            ["lease_id"],
+            ["coding_certification_leases.lease_id"],
+            ondelete="RESTRICT",
+            name="coding_certifications_lease_fkey",
+        ),
         UniqueConstraint(
             "agent_id",
             "validator_hotkey",
             "coding_contract_version",
             "certification_id",
             name="coding_certifications_identity_key",
+        ),
+        Index(
+            "coding_certifications_lease_key",
+            "lease_id",
+            unique=True,
+            postgresql_where=text("lease_id IS NOT NULL"),
         ),
         CheckConstraint(
             "artifact_sha256 ~ '^[0-9a-f]{64}$'",

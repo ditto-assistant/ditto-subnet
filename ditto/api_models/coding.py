@@ -822,7 +822,7 @@ class CodingCapabilityCertificationReceipt(CodingContractModel):
     """Content-addressed shadow certification emitted by the trusted scorer.
 
     The digest is integrity-only. A validator submission separately signs the
-    agent, screened image, exact ticket lease, and this receipt digest.
+    agent, screened image, claimed certification lease, and this receipt digest.
     """
 
     schema_name: Literal["dittobench-coding-capability-certification-v1"] = Field(
@@ -970,19 +970,16 @@ class SubmitCodingCertificationRequest(BaseModel):
 
     validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     bench_version: Annotated[int, Field(ge=1)]
-    ticket_deadline: datetime
+    lease_id: UUID
     screened_image_sha256: Sha256
     receipt: CodingCapabilityCertificationReceipt
     signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
 
-    @field_validator("ticket_deadline")
-    @classmethod
-    def ticket_deadline_is_timezone_aware(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError(
-                "coding certification ticket deadline must be timezone-aware"
-            )
-        return value
+    @model_validator(mode="after")
+    def lease_id_is_nonzero(self) -> SubmitCodingCertificationRequest:
+        if self.lease_id.int == 0:
+            raise ValueError("coding certification lease UUID is nil")
+        return self
 
 
 class SubmitCodingCertificationResponse(BaseModel):
@@ -1729,21 +1726,20 @@ def coding_certification_signing_message(
     validator_hotkey: str,
     agent_id: UUID,
     bench_version: int,
-    ticket_deadline: datetime,
+    lease_id: UUID,
     screened_image_sha256: str,
     certification_sha256: str,
 ) -> bytes:
-    """Bind one receipt to the exact validator lease and screened image."""
+    """Bind one receipt to the exact claimed certification lease."""
 
-    if ticket_deadline.tzinfo is None:
-        raise ValueError("coding certification ticket deadline must be timezone-aware")
-    lease = ticket_deadline.astimezone(UTC).isoformat(timespec="microseconds")
+    if agent_id.int == 0 or lease_id.int == 0:
+        raise ValueError("coding certification UUID is nil")
     fields = (
-        "dittobench-coding-certification:v1",
+        "dittobench-coding-certification:v2",
         validator_hotkey,
         str(agent_id),
         str(bench_version),
-        lease,
+        str(lease_id),
         screened_image_sha256,
         certification_sha256,
     )

@@ -46,6 +46,9 @@ from ditto.api_models.coding_certification import (
     CodingCapabilityCertificationReceipt,
     coding_certification_signing_message,
 )
+from ditto.api_models.coding_certification_leases import (
+    CodingCertificationLeaseStatus,
+)
 from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
     confirmation_progress_signing_token,
@@ -113,12 +116,15 @@ from ditto.db.models import (
     BenchmarkRollout,
     BenchmarkRolloutMember,
     CodingCapabilityCertification,
+    CodingCertificationLease,
     ConfirmationBundle,
     ConfirmationBundleSettingsRevision,
     ConfirmationBundleSubject,
     ConfirmationBundleTicket,
     ConfirmationScore,
     ContinualRetestSettingsRevision,
+    CoreQualificationObservation,
+    CoreQualificationPolicyRevision,
     InferenceGrant,
     InferenceProviderRoute,
     InferenceRoutingPolicy,
@@ -13143,8 +13149,129 @@ def _coding_certification_receipt(
     return CodingCapabilityCertificationReceipt.model_validate_json(json.dumps(vector))
 
 
+async def _seed_claimed_certification_lease(
+    maker: async_sessionmaker[AsyncSession],
+    agent_id: UUID,
+    receipt: CodingCapabilityCertificationReceipt,
+    *,
+    screened_image_sha256: str = "12" * 32,
+    status: str = CodingCertificationLeaseStatus.CLAIMED.value,
+) -> UUID:
+    lease_id = uuid4()
+    now = datetime.now(UTC)
+    issued = now - timedelta(minutes=1)
+    deadline = now + timedelta(minutes=20)
+    async with maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        policy = await session.scalar(
+            select(CoreQualificationPolicyRevision).where(
+                CoreQualificationPolicyRevision.bench_version == _BENCH_VERSION
+            )
+        )
+        if policy is None:
+            policy = CoreQualificationPolicyRevision(
+                bench_version=_BENCH_VERSION,
+                parent_revision=0,
+                enter_composite=0.8,
+                enter_tool_mean=0.8,
+                enter_memory_mean=0.8,
+                exit_composite=0.7,
+                exit_tool_mean=0.7,
+                exit_memory_mean=0.7,
+                enter_observations=2,
+                exit_observations=2,
+                weight_eligible=False,
+                checksum="cc" * 32,
+                reason="start shadow qualification",
+                actor="test-admin",
+            )
+            session.add(policy)
+            await session.flush()
+        observation = CoreQualificationObservation(
+            observation_id=uuid4(),
+            agent_id=agent.agent_id,
+            artifact_sha256=agent.sha256,
+            screened_image_sha256=screened_image_sha256,
+            bench_version=_BENCH_VERSION,
+            policy_revision=policy.revision,
+            policy_checksum=policy.checksum,
+            score_evidence_sha256="11" * 32,
+            score_count=3,
+            full_size=True,
+            complete_wave=True,
+            score_evidence={"scores": []},
+            median_composite=0.9,
+            median_tool_mean=0.9,
+            median_memory_mean=0.9,
+            entry_passed=True,
+            retention_passed=True,
+            qualified=True,
+            enter_streak=2,
+            exit_streak=0,
+            decision="entered",
+            source="score_commit",
+            actor=None,
+            reason=None,
+            weight_eligible=False,
+            observed_at=issued,
+        )
+        session.add(observation)
+        await session.flush()
+        authority = {
+            "schema": "dittobench-coding-certification-lease-v1",
+            "coding_contract_version": 1,
+            "weight_eligible": False,
+            "lease_id": str(lease_id),
+            "validator_hotkey": _VALIDATOR_HOTKEY,
+            "agent_id": str(agent.agent_id),
+            "agent_artifact_sha256": agent.sha256,
+            "screened_image_sha256": screened_image_sha256,
+            "bench_version": _BENCH_VERSION,
+            "core_qualification_observation_id": str(observation.observation_id),
+            "core_qualification_policy_checksum": policy.checksum,
+            "canary_manifest_sha256": receipt.canary_manifest_sha256,
+            "runner_plan_sha256": "ee" * 32,
+            "grader_plan_sha256": receipt.grader_plan_sha256,
+            "resource_profile_sha256": "11" * 32,
+            "inference_policy_sha256": "22" * 32,
+            "issued_at": issued.isoformat(),
+            "deadline": deadline.isoformat(),
+        }
+        session.add(
+            CodingCertificationLease(
+                lease_id=lease_id,
+                agent_id=agent.agent_id,
+                artifact_sha256=agent.sha256,
+                screened_image_sha256=screened_image_sha256,
+                screened_image_id=agent.screened_image_id or "sha256:" + "34" * 32,
+                screened_image_ref=agent.screened_image_ref
+                or f"ditto-screen/{agent.agent_id}:latest",
+                screened_image_upload_id=agent.screened_image_upload_id or uuid4(),
+                validator_hotkey=_VALIDATOR_HOTKEY,
+                bench_version=_BENCH_VERSION,
+                coding_contract_version=1,
+                core_qualification_observation_id=observation.observation_id,
+                core_qualification_policy_checksum=policy.checksum,
+                canary_manifest_sha256=receipt.canary_manifest_sha256,
+                runner_plan_sha256="ee" * 32,
+                grader_plan_sha256=receipt.grader_plan_sha256,
+                resource_profile_sha256="11" * 32,
+                inference_policy_sha256="22" * 32,
+                status=status,
+                weight_eligible=False,
+                issued_at=issued,
+                deadline=deadline,
+                claimed_at=now if status == "claimed" else None,
+                authority=authority,
+            )
+        )
+    return lease_id
+
+
 def _coding_certification_payload(
     agent_id: UUID,
+    lease_id: UUID,
     *,
     receipt: CodingCapabilityCertificationReceipt | None = None,
     screened_image_sha256: str = "12" * 32,
@@ -13154,14 +13281,14 @@ def _coding_certification_payload(
         validator_hotkey=_VALIDATOR_HOTKEY,
         agent_id=agent_id,
         bench_version=_BENCH_VERSION,
-        ticket_deadline=_TICKET_DEADLINE,
+        lease_id=lease_id,
         screened_image_sha256=screened_image_sha256,
         certification_sha256=receipt.certification_sha256,
     )
     return {
         "validator_hotkey": _VALIDATOR_HOTKEY,
         "bench_version": _BENCH_VERSION,
-        "ticket_deadline": _TICKET_DEADLINE.isoformat(),
+        "lease_id": str(lease_id),
         "screened_image_sha256": screened_image_sha256,
         "receipt": receipt.model_dump(mode="json", by_alias=True),
         "signature": _KEYPAIR.sign(message).hex(),
@@ -13175,12 +13302,14 @@ async def test_shadow_coding_certification_is_append_only_idempotent_and_visible
 ) -> None:
     agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
     await _seed_ticket(session_maker, agent_id)
+    receipt = _coding_certification_receipt()
+    lease_id = await _seed_claimed_certification_lease(session_maker, agent_id, receipt)
     _install_db(app, session_maker)
     _install_chain(app)
     app.state.config = replace(
         app.state.config, admin_api_token="test-admin-token-at-least-32-characters"
     )
-    payload = _coding_certification_payload(agent_id)
+    payload = _coding_certification_payload(agent_id, lease_id, receipt=receipt)
     endpoint = f"/api/v1/validator/agent/{agent_id}/coding-certification"
 
     first = await client.post(endpoint, json=payload)
@@ -13212,27 +13341,7 @@ async def test_shadow_coding_certification_is_append_only_idempotent_and_visible
     assert admin.headers["cache-control"] == "no-store"
     assert admin.json()["coding_certified"] is True
     assert admin.json()["active_certification_count"] == 1
-
-    failed = _coding_certification_payload(
-        agent_id,
-        receipt=_coding_certification_receipt(
-            certification_id="cert-endpoint-002",
-            harness_instance_id="harness-endpoint-002",
-            failed=True,
-        ),
-    )
-    failed_response = await client.post(endpoint, json=failed)
-    assert failed_response.status_code == 200, failed_response.text
-    limited = await client.get(
-        f"/api/v1/admin/agents/{agent_id}/coding-certifications?limit=1",
-        headers={"Authorization": "Bearer test-admin-token-at-least-32-characters"},
-    )
-    assert limited.status_code == 200, limited.text
-    assert limited.json()["certifications"][0]["status"] == "failed"
-    assert limited.json()["coding_supported"] is True
-    assert limited.json()["coding_certified"] is True
-    assert limited.json()["active_certification_count"] == 1
-    assert limited.json()["total"] == 2
+    assert admin.json()["certifications"][0]["lease_id"] == str(lease_id)
 
     async with session_maker() as session, session.begin():
         agent = await session.get(Agent, agent_id, with_for_update=True)
@@ -13256,27 +13365,30 @@ async def test_shadow_coding_certification_rejects_conflict_image_and_signature(
 ) -> None:
     agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
     await _seed_ticket(session_maker, agent_id)
+    receipt = _coding_certification_receipt()
+    lease_id = await _seed_claimed_certification_lease(session_maker, agent_id, receipt)
     _install_db(app, session_maker)
     _install_chain(app)
     endpoint = f"/api/v1/validator/agent/{agent_id}/coding-certification"
-    original = _coding_certification_payload(agent_id)
+    original = _coding_certification_payload(agent_id, lease_id, receipt=receipt)
 
-    naive_deadline = dict(original)
-    naive_deadline["ticket_deadline"] = "2030-01-01T00:00:00"
-    naive = await client.post(endpoint, json=naive_deadline)
+    nil_lease = dict(original)
+    nil_lease["lease_id"] = "00000000-0000-0000-0000-000000000000"
+    naive = await client.post(endpoint, json=nil_lease)
     assert naive.status_code == 422
 
     assert (await client.post(endpoint, json=original)).status_code == 200
 
     changed = _coding_certification_payload(
         agent_id,
+        lease_id,
         receipt=_coding_certification_receipt(harness_instance_id="harness-changed"),
     )
     conflict = await client.post(endpoint, json=changed)
     assert conflict.status_code == 409
 
     stale_image = _coding_certification_payload(
-        agent_id, screened_image_sha256="13" * 32
+        agent_id, lease_id, screened_image_sha256="13" * 32
     )
     stale = await client.post(endpoint, json=stale_image)
     assert stale.status_code == 409
@@ -13286,20 +13398,9 @@ async def test_shadow_coding_certification_rejects_conflict_image_and_signature(
     rejected = await client.post(endpoint, json=bad_signature)
     assert rejected.status_code == 401
 
-    backdated = _coding_certification_payload(
-        agent_id,
-        receipt=_coding_certification_receipt(
-            certification_id="cert-backdated-001",
-            harness_instance_id="harness-backdated-001",
-            issued_at_unix=int((datetime.now(UTC) - timedelta(minutes=10)).timestamp()),
-        ),
-    )
-    rejected = await client.post(endpoint, json=backdated)
-    assert rejected.status_code == 409
-    assert "predates or postdates" in rejected.text
-
     out_of_range = _coding_certification_payload(
         agent_id,
+        lease_id,
         receipt=_coding_certification_receipt(
             certification_id="cert-out-of-range-001",
             harness_instance_id="harness-out-of-range-001",
@@ -13309,3 +13410,26 @@ async def test_shadow_coding_certification_rejects_conflict_image_and_signature(
     rejected = await client.post(endpoint, json=out_of_range)
     assert rejected.status_code == 409
     assert "outside supported bounds" in rejected.text
+
+
+async def test_shadow_coding_certification_rejects_unclaimed_lease(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    receipt = _coding_certification_receipt()
+    lease_id = await _seed_claimed_certification_lease(
+        session_maker,
+        agent_id,
+        receipt,
+        status=CodingCertificationLeaseStatus.ISSUED.value,
+    )
+    _install_db(app, session_maker)
+    _install_chain(app)
+    rejected = await client.post(
+        f"/api/v1/validator/agent/{agent_id}/coding-certification",
+        json=_coding_certification_payload(agent_id, lease_id, receipt=receipt),
+    )
+    assert rejected.status_code == 409
+    assert "claimed certification lease" in rejected.text

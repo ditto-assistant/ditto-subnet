@@ -2137,7 +2137,7 @@ class PlatformClient:
         agent_id: UUID,
         *,
         bench_version: int,
-        ticket_deadline: datetime,
+        lease_id: UUID,
         screened_image_sha256: str,
         receipt: CodingCapabilityCertificationReceipt,
         signature: str,
@@ -2148,7 +2148,7 @@ class PlatformClient:
         payload = SubmitCodingCertificationRequest(
             validator_hotkey=self._config.validator_hotkey,
             bench_version=bench_version,
-            ticket_deadline=ticket_deadline,
+            lease_id=lease_id,
             screened_image_sha256=screened_image_sha256,
             receipt=receipt,
             signature=signature,

@@ -762,6 +762,7 @@ CREATE TABLE public.coding_capability_certifications (
     receipt jsonb NOT NULL,
     signature text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    lease_id uuid,
     CONSTRAINT ck_coding_capability_certifications_coding_certificatio_072f CHECK (((coding_contract_version > 0) AND (bench_version > 0))),
     CONSTRAINT ck_coding_capability_certifications_coding_certificatio_1f19 CHECK (((transcript_object_key IS NULL) OR (transcript_object_key ~ '^sha256/[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_coding_capability_certifications_coding_certificatio_311a CHECK ((((status = 'certified'::text) AND (failure_stage IS NULL) AND (failure_code IS NULL)) OR ((status <> 'certified'::text) AND (failure_stage IS NOT NULL) AND (failure_code IS NOT NULL)))),
@@ -5182,6 +5183,13 @@ CREATE INDEX coding_certifications_agent_created_idx ON public.coding_capability
 
 
 --
+-- Name: coding_certifications_lease_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX coding_certifications_lease_key ON public.coding_capability_certifications USING btree (lease_id) WHERE (lease_id IS NOT NULL);
+
+
+--
 -- Name: coding_inference_grants_validator_expiry_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6043,6 +6051,14 @@ ALTER TABLE ONLY public.coding_certification_leases
 
 ALTER TABLE ONLY public.coding_capability_certifications
     ADD CONSTRAINT coding_certifications_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_capability_certifications coding_certifications_lease_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_capability_certifications
+    ADD CONSTRAINT coding_certifications_lease_fkey FOREIGN KEY (lease_id) REFERENCES public.coding_certification_leases(lease_id) ON DELETE RESTRICT;
 
 
 --

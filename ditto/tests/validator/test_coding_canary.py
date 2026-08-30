@@ -10,7 +10,10 @@ from uuid import UUID
 import httpx
 import pytest
 
-from ditto.api_models.coding import CodingCapabilityCertificationReceipt
+from ditto.api_models.coding import (
+    CodingCapabilityCertificationReceipt,
+    SubmitCodingCertificationResponse,
+)
 from ditto.api_models.coding_certification_leases import (
     CodingCertificationLeaseAuthority,
     CodingCertificationLeaseResponse,
@@ -94,6 +97,7 @@ class _Platform:
         self.issues = 0
         self.claims = 0
         self.aborts = 0
+        self.submits = 0
         self.issued = _lease()
         self.claimed = _lease(status=CodingCertificationLeaseStatus.CLAIMED)
         self.issue_error: Exception | None = None
@@ -125,6 +129,32 @@ class _Platform:
         assert lease_id == _LEASE
         return _lease(status=CodingCertificationLeaseStatus.ABORTED)
 
+    async def submit_coding_certification(
+        self,
+        agent_id: UUID,
+        *,
+        bench_version: int,
+        lease_id: UUID,
+        screened_image_sha256: str,
+        receipt: CodingCapabilityCertificationReceipt,
+        signature: str,
+    ) -> SubmitCodingCertificationResponse:
+        self.submits += 1
+        assert agent_id == _AGENT
+        assert bench_version == 12
+        assert lease_id == _LEASE
+        assert screened_image_sha256 == "1a" * 32
+        assert signature == "ab" * 64
+        assert receipt.weight_eligible is False
+        return SubmitCodingCertificationResponse(
+            agent_id=agent_id,
+            certification_id=receipt.certification_id,
+            status=receipt.status,
+            accepted=True,
+            idempotent=False,
+            active=receipt.status.value == "certified",
+        )
+
 
 class _Runtime:
     def __init__(self) -> None:
@@ -153,11 +183,17 @@ class _Runtime:
 async def test_canary_worker_claims_issued_lease_then_runs_certifier() -> None:
     platform = _Platform()
     runtime = _Runtime()
-    worker = CodingCanaryWorker(platform=platform, runtime=runtime, clock=lambda: _NOW)
+    worker = CodingCanaryWorker(
+        platform=platform,
+        runtime=runtime,
+        sign_receipt=lambda _lease, _receipt: "ab" * 64,
+        clock=lambda: _NOW,
+    )
     worker.offer(_AGENT, 12)
     assert await worker.run_once() is True
     assert platform.issues == 1
     assert platform.claims == 1
+    assert platform.submits == 1
     assert len(runtime.certified) == 1
     assert runtime.certified[0].status is CodingCertificationLeaseStatus.CLAIMED
     assert runtime.certified[0].authority.weight_eligible is False
@@ -167,7 +203,12 @@ async def test_canary_worker_claims_issued_lease_then_runs_certifier() -> None:
 async def test_canary_worker_skips_ineligible_or_conflicted_issue() -> None:
     platform = _Platform()
     runtime = _Runtime()
-    worker = CodingCanaryWorker(platform=platform, runtime=runtime, clock=lambda: _NOW)
+    worker = CodingCanaryWorker(
+        platform=platform,
+        runtime=runtime,
+        sign_receipt=lambda _lease, _receipt: "ab" * 64,
+        clock=lambda: _NOW,
+    )
 
     async def missing(*_args: object, **_kwargs: object) -> None:
         return None
@@ -191,7 +232,12 @@ async def test_canary_worker_does_not_claim_when_runtime_is_down() -> None:
     platform = _Platform()
     runtime = _Runtime()
     runtime.available = False
-    worker = CodingCanaryWorker(platform=platform, runtime=runtime, clock=lambda: _NOW)
+    worker = CodingCanaryWorker(
+        platform=platform,
+        runtime=runtime,
+        sign_receipt=lambda _lease, _receipt: "ab" * 64,
+        clock=lambda: _NOW,
+    )
     worker.offer(_AGENT, 12)
     assert await worker.run_once() is False
     assert platform.issues == 0
@@ -206,7 +252,12 @@ async def test_canary_worker_does_not_skip_issue_infrastructure_failure() -> Non
         "public certification canary is unavailable"
     )
     runtime = _Runtime()
-    worker = CodingCanaryWorker(platform=platform, runtime=runtime, clock=lambda: _NOW)
+    worker = CodingCanaryWorker(
+        platform=platform,
+        runtime=runtime,
+        sign_receipt=lambda _lease, _receipt: "ab" * 64,
+        clock=lambda: _NOW,
+    )
     worker.offer(_AGENT, 12)
     with pytest.raises(PlatformInfrastructureError, match="unavailable"):
         await worker.run_once()
@@ -227,7 +278,12 @@ async def test_canary_worker_aborts_issued_lease_if_claim_fails() -> None:
     platform = _Platform()
     platform.claim_error = PlatformInfrastructureError("claim failed")
     runtime = _Runtime()
-    worker = CodingCanaryWorker(platform=platform, runtime=runtime, clock=lambda: _NOW)
+    worker = CodingCanaryWorker(
+        platform=platform,
+        runtime=runtime,
+        sign_receipt=lambda _lease, _receipt: "ab" * 64,
+        clock=lambda: _NOW,
+    )
     worker.offer(_AGENT, 12)
     with pytest.raises(PlatformInfrastructureError, match="claim failed"):
         await worker.run_once()

@@ -207,17 +207,17 @@ def sign_coding_certification(
     validator_hotkey: str,
     agent_id: UUID,
     bench_version: int,
-    ticket_deadline: datetime,
+    lease_id: UUID,
     screened_image_sha256: str,
     receipt: CodingCapabilityCertificationReceipt,
 ) -> str:
-    """Sign one shadow coding receipt against the exact Platform lease."""
+    """Sign one shadow coding receipt against the claimed certification lease."""
 
     message = coding_certification_signing_message(
         validator_hotkey=validator_hotkey,
         agent_id=agent_id,
         bench_version=bench_version,
-        ticket_deadline=ticket_deadline,
+        lease_id=lease_id,
         screened_image_sha256=screened_image_sha256,
         certification_sha256=receipt.certification_sha256,
     )

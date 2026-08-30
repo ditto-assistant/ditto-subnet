@@ -14,7 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models.coding_certification import (
     CodingCapabilityCertificationReceipt,
 )
-from ditto.db.models import Agent, CodingCapabilityCertification
+from ditto.db.models import (
+    Agent,
+    CodingCapabilityCertification,
+    CodingCertificationLease,
+)
 
 
 class CodingCertificationConflictError(Exception):
@@ -66,6 +70,7 @@ def coding_certification_matches(
     artifact_sha256: str,
     screened_image_sha256: str,
     bench_version: int,
+    lease_id: UUID,
     ticket_deadline: datetime,
     receipt: CodingCapabilityCertificationReceipt,
 ) -> bool:
@@ -73,9 +78,47 @@ def coding_certification_matches(
         row.artifact_sha256 == artifact_sha256
         and row.screened_image_sha256 == screened_image_sha256
         and row.bench_version == bench_version
+        and row.lease_id == lease_id
         and _aware(row.ticket_deadline) == _aware(ticket_deadline)
         and row.certification_sha256 == receipt.certification_sha256
         and row.receipt == receipt.model_dump(mode="json", by_alias=True)
+    )
+
+
+async def get_coding_certification_by_lease(
+    session: AsyncSession,
+    *,
+    lease_id: UUID,
+) -> CodingCapabilityCertification | None:
+    return await session.scalar(
+        select(CodingCapabilityCertification).where(
+            CodingCapabilityCertification.lease_id == lease_id
+        )
+    )
+
+
+def coding_certification_lease_accepts_receipt(
+    lease: CodingCertificationLease,
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    artifact_sha256: str,
+    screened_image_sha256: str,
+    bench_version: int,
+    receipt: CodingCapabilityCertificationReceipt,
+) -> bool:
+    return (
+        lease.status == "claimed"
+        and lease.validator_hotkey == validator_hotkey
+        and lease.agent_id == agent_id
+        and lease.artifact_sha256 == artifact_sha256
+        and lease.screened_image_sha256 == screened_image_sha256
+        and lease.bench_version == bench_version
+        and lease.coding_contract_version == receipt.coding_contract_version
+        and lease.canary_manifest_sha256 == receipt.canary_manifest_sha256
+        and lease.grader_plan_sha256 == receipt.grader_plan_sha256
+        and not lease.weight_eligible
+        and not receipt.weight_eligible
     )
 
 
@@ -87,6 +130,7 @@ async def insert_coding_certification(
     screened_image_sha256: str,
     validator_hotkey: str,
     bench_version: int,
+    lease_id: UUID,
     ticket_deadline: datetime,
     receipt: CodingCapabilityCertificationReceipt,
     signature: str,
@@ -101,6 +145,7 @@ async def insert_coding_certification(
         "screened_image_sha256": screened_image_sha256,
         "validator_hotkey": validator_hotkey,
         "bench_version": bench_version,
+        "lease_id": lease_id,
         "ticket_deadline": ticket_deadline,
         "coding_contract_version": receipt.coding_contract_version,
         "certification_id": receipt.certification_id,
@@ -145,6 +190,7 @@ async def insert_coding_certification(
         artifact_sha256=artifact_sha256,
         screened_image_sha256=screened_image_sha256,
         bench_version=bench_version,
+        lease_id=lease_id,
         ticket_deadline=ticket_deadline,
         receipt=receipt,
     ):
