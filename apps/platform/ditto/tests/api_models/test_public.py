@@ -1,6 +1,7 @@
 """Focused validation for safe public score-progress models."""
 
 from datetime import UTC, datetime
+from uuid import UUID
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -9,7 +10,22 @@ from ditto.api_models.public import (
     PublicLeaderboardFamilyMember,
     PublicProvisionalScore,
     PublicSubmissionFamilyMember,
+    PublicSubmissionImageBuild,
 )
+
+
+def test_public_submission_build_accepts_hetzner_provider() -> None:
+    build = PublicSubmissionImageBuild(
+        agent_id=UUID("550e8400-e29b-41d4-a716-446655440000"),
+        agent_name="canary",
+        status="running",
+        provider="hetzner",
+        attempt_count=1,
+        created_at=datetime(2026, 8, 30, tzinfo=UTC),
+        updated_at=datetime(2026, 8, 30, tzinfo=UTC),
+    )
+
+    assert build.provider == "hetzner"
 
 
 def test_provisional_score_accepts_reproducible_safe_fields() -> None:
