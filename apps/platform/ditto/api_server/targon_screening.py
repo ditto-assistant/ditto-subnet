@@ -470,7 +470,11 @@ async def maybe_finalize_targon_screen(
                     )
                     return True
                 coverage_admitted = True
-            if not coverage_admitted and _review_failed_retryable(observation):
+            if (
+                not coverage_admitted
+                and (observation is None or observation.adjudication is None)
+                and _review_failed_retryable(observation)
+            ):
                 await _fail_retryable(
                     session,
                     attempt,
