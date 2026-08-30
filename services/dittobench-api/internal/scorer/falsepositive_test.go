@@ -342,8 +342,8 @@ func obsMemory(called ...string) protocol.CaseScore {
 // a write tool called during an ordinary recall question is still an over-call.
 //
 // Memory write tools are not globally exempt on every recall case. There is a
-// real argument on the other side -- an agent
-// that saves what it learns while answering is doing the product, not hedging --
+// real argument on the other side -- an agent that saves what it learns while
+// answering is doing the product, not hedging --
 // but that is a product decision about what the benchmark should reward, so it
 // is pinned here as intended behaviour rather than quietly reversed.
 func TestMemoryOverCallFactorTreatsWritesAsOverCallsOnRecall(t *testing.T) {

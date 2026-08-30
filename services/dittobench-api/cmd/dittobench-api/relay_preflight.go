@@ -741,8 +741,8 @@ func (s *server) handleRelayPreflight(w http.ResponseWriter, r *http.Request) {
 }
 
 // errAgentInferenceDeclined and errInferenceLaneSaturated are typed sentinels,
-// not message markers: the harness's own output and its own error strings flow through this
-// process, and a classification that can be produced by printing the right
+// not message markers: the harness's own output and its own error strings flow
+// through this process, and a classification that can be produced by printing the right
 // words is a classification a harness can forge. `errors.Is` cannot be forged
 // by any string a miner controls -- only code in this package can wrap these.
 //

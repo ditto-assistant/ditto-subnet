@@ -1,3 +1,5 @@
+// Tests for the miner drawer's Consensus block.
+//
 // The block escaped BOTH gates of the SPA port: #d-consensus is only filled
 // while the modal is open, so the per-page DOM goldens never contained it, and
 // the old Python suites did not assert it. What it is FOR is the plural — three

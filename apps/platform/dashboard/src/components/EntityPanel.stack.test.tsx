@@ -1,3 +1,6 @@
+// Tests for the validator modal's Capabilities, Stack identity, and Component
+// health sections.
+//
 // These sections escaped BOTH gates of the SPA port: the modal only opens on
 // interaction, so the per-page DOM goldens never contained it, and the old
 // Python suites barely asserted it. Nothing here is incidental — every row is

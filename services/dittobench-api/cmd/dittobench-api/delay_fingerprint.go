@@ -41,8 +41,8 @@ package main
 //     injection and its case-window counters below still run.
 //
 // What it deliberately does not do yet: change any score. The mode ladder
-// injects and records first, publishes the evidence,
-// and only gate once the honest-cohort distribution is measured. The evidence
+// injects and records first, publishes the evidence, and only gates once the
+// honest-cohort distribution is measured. The evidence
 // stays in the run transcript (runner.CaseExecution) and operator logs; the
 // signed v9 gate models are untouched, so no protocol version negotiation is
 // involved.

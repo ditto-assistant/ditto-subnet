@@ -77,8 +77,8 @@ platform_uv_tool_dir: /opt/uv-tools
 platform_api_port: 8000
 
 # --- Go request-plane pool (inference plus narrow upload admission) ----------
-# Local ports of the DITTO_ROLE=relay pm2 processes created by
-# Must mirror RELAY_PORTS in apps/platform/scripts/ecosystem.config.js and the
+# Local ports of the DITTO_ROLE=relay pm2 processes. Must mirror RELAY_PORTS
+# in apps/platform/scripts/ecosystem.config.js and the
 # DITTO_RELAY_PORTS default in apps/platform/scripts/update.sh; those define
 # which ports the relays actually bind.
 #

@@ -12,8 +12,8 @@ import (
 
 const (
 	// CleanedDatasetSHA256 and CleanedDatasetRevision are the exact public
-	// LongMemEval-S condition. They are recorded
-	// here for provenance; the runtime verifies the profile pin rather than a
+	// LongMemEval-S condition. They are recorded here for provenance; the
+	// runtime verifies the profile pin rather than a
 	// filename or download URL.
 	CleanedDatasetSHA256   = "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
 	CleanedDatasetRevision = "huggingface-98d7416c24c778c2fee6e6f3006e7a073259d48f-" +

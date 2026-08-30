@@ -364,8 +364,8 @@ func CanaryIntegrityFactor(perCase []protocol.CaseScore) float64 {
 }
 
 // MetamorphicConsistency returns the fraction of invariance twin groups whose
-// member cases the harness answered consistently — all correct or all incorrect
-// A phrasing-brittle harness that gets one twin right and its
+// member cases the harness answered consistently — all correct or all
+// incorrect. A phrasing-brittle harness that gets one twin right and its
 // reworded twin wrong scores below 1.0. Returns nil when no twin groups ran
 // (nothing to measure). The raw rate is advisory; the derived
 // MetamorphicConsistencyFactor is what folds into the composite.

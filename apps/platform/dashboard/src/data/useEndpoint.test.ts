@@ -1,6 +1,7 @@
-// An agent deep link is an entity-first surface. Pause the global board, fleet, search-corpus, and
-// timeline reads while its card is open; they are unrelated to the answer the
-// reader is waiting for. Closing the card hydrates the dashboard once.
+// An agent deep link is an entity-first surface. Pause the global board,
+// fleet, search-corpus, and timeline reads while its card is open; they are
+// unrelated to the answer the reader is waiting for. Closing the card hydrates
+// the dashboard once.
 import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

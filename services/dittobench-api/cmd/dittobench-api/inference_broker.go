@@ -3241,7 +3241,7 @@ func (b *inferenceBroker) handleEmbeddingWithLease(w http.ResponseWriter, r *htt
 	// embeddings fall through to the live platform lane below, unchanged.
 
 	// The model is a property of the ticket, not of the request -- the same
-	// same premise applied to the chat door, now applied to this one.
+	// premise applied to the chat door, now applied to this one.
 	//
 	// It is a stronger premise here than it is there. The chat door at least
 	// forwards the caller's body and has to rewrite the field out of it; this
@@ -3256,8 +3256,8 @@ func (b *inferenceBroker) handleEmbeddingWithLease(w http.ResponseWriter, r *htt
 	// act on.
 	//
 	// Substituting is not a relaxation of the lock: what the broker SENDS is
-	// unchanged, and the platform proxy re-locks the same value independently
-	// independently. A mismatch is logged exactly as chat logs it,
+	// unchanged, and the platform proxy re-locks the same value independently.
+	// A mismatch is logged exactly as chat logs it,
 	// because a harness that names a model it was not granted is a signal worth
 	// keeping even once it stops being an error.
 	//
@@ -3306,8 +3306,8 @@ func (b *inferenceBroker) handleEmbeddingWithLease(w http.ResponseWriter, r *htt
 	if err != nil {
 		if usesPlatformEmbedding(benchVersion) {
 			// A v7 embedding fault fails the run closed. What changes is only
-			// WHICH counter it lands in: a platform
-			// grant denial is recorded as a lost lease rather than as an
+			// WHICH counter it lands in: a platform grant denial is recorded
+			// as a lost lease rather than as an
 			// upstream provider failure. Embeddings are roughly two thirds of a
 			// v7 run's inference requests, so an evicted ticket is most likely
 			// to be discovered here first -- which is exactly how a platform

@@ -4477,8 +4477,8 @@ export const validationRetryTicketSchema = z.object({
   // it is attached to. A reported failure and a silent expiry are otherwise
   // byte-identical in the ledger — both land as status=expired with a
   // rewritten deadline — so this is the only field that tells them apart.
-  // Null means "this deployment cannot tell you", which is a different claim from `false`,
-  // "this expiry came with a reported reason".
+  // Null means "this deployment cannot tell you", which is a different claim
+  // from `false`, "this expiry came with a reported reason".
   silently_expired: z.boolean().nullish().default(null),
   purpose: z
     .enum(['legacy_unclassified', 'canonical_quorum', 'continual_retest'])
@@ -4574,8 +4574,8 @@ export const validationRetryDetailSchema = z.object({
   withdrawal_allowed: z.boolean(),
   withdrawal_blocking_reason: z.string().nullable(),
   // Eviction reporting is nullish-tolerant because Backroom and the platform
-  // deploy separately: against an older platform they read `null`, which says "this deployment
-  // cannot tell you", not "eviction is blocked".
+  // deploy separately: against an older platform they read `null`, which says
+  // "this deployment cannot tell you", not "eviction is blocked".
   eviction_allowed: z.boolean().nullish().default(null),
   eviction_blocking_reason: z.string().nullish().default(null),
   // Leases an eviction would revoke right now — the slots it would free.
