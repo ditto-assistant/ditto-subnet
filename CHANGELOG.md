@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.150.2 (2026-08-30)
+
+### Bug Fixes
+
+- **scoring**: Recover generated tool argument failures
+  ([#1327](https://github.com/ditto-assistant/ditto-subnet/pull/1327),
+  [`07b1f0a`](https://github.com/ditto-assistant/ditto-subnet/commit/07b1f0aab9952d36b7ce6bb819e34f9fd3f62b40))
+
+
 ## v0.150.1 (2026-08-30)
 
 ### Bug Fixes
