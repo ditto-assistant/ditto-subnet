@@ -42,9 +42,7 @@ use serde_json::{json, Value};
 
 use crate::baseline::{Baseline, USER_ID};
 
-// ---------------------------------------------------------------------------
 // Chat turn
-// ---------------------------------------------------------------------------
 
 /// One observed (fake) tool call.
 #[derive(Clone, Serialize)]
@@ -186,9 +184,7 @@ pub async fn playground_turn(
     })
 }
 
-// ---------------------------------------------------------------------------
 // HTTP server
-// ---------------------------------------------------------------------------
 
 type ChatHistory = HashMap<String, Vec<(String, String)>>;
 
@@ -324,9 +320,7 @@ async fn chat_handler(
     }
 }
 
-// ---------------------------------------------------------------------------
 // Scoring (live local evaluation)
-// ---------------------------------------------------------------------------
 
 /// One scored case, streamed as the run progresses.
 #[derive(Clone, Serialize)]
