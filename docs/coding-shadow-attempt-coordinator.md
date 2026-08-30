@@ -30,6 +30,10 @@ future worker must classify pre-authoritative, task-invalid, candidate-integrity
 and control-plane failures into canonical evidence without granting a clean
 retry or releasing grader material early.
 
+The separate typed failure classifier now defines those post-lease mappings and
+component-evidence requirements. It remains unwired; a future worker must decide
+when a trusted runtime stage occurred rather than classifying exception text.
+
 ## Activation
 
 No composition root imports or starts the coordinator. The runtime is a
