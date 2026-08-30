@@ -12,7 +12,9 @@ enable_validator_prod = true
 # window, then seals a teardown plan returning it to absent.
 validator_hotkey_admin_phase = "absent"
 enable_screener              = true
-enable_screener_prod         = true
+# The static ditto-screener-prod pet is retired. Hetzner is primary and the
+# independently managed GCE MIG remains the bounded overflow path.
+enable_screener_prod = false
 
 # The fleet and its secret/IAM phase already exist in production. The
 # Targon-first controller starts with its hostile-runtime capability pinned to

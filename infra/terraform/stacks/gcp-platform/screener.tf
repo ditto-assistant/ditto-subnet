@@ -123,7 +123,7 @@ output "screener_vm_internal_ip" {
 ###############################################################################
 
 variable "enable_screener_prod" {
-  description = "Create the prod SN118 screener VM + its finney hotkey secret. Off by default; turn on to stand up the prod screener."
+  description = "Create the legacy static prod SN118 screener VM. Its shared signing/API identity persists independently while the GCE fleet is enabled."
   type        = bool
   default     = false
 }
