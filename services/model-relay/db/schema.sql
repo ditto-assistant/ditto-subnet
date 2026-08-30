@@ -2925,6 +2925,8 @@ CREATE TABLE public.screening_retry_overrides (
     actor text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     force_full_review boolean DEFAULT false NOT NULL,
+    review_settings_revision integer,
+    CONSTRAINT ck_screening_retry_overrides_screening_retry_overrides__25ca CHECK (((review_settings_revision IS NULL) OR force_full_review)),
     CONSTRAINT screening_retry_overrides_actor_check CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
     CONSTRAINT screening_retry_overrides_reason_check CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
     CONSTRAINT screening_retry_overrides_score_count_check CHECK ((expected_score_count >= 0)),
@@ -6722,6 +6724,14 @@ ALTER TABLE ONLY public.screening_retry_overrides
 
 ALTER TABLE ONLY public.screening_retry_overrides
     ADD CONSTRAINT screening_retry_overrides_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screening_retry_overrides screening_retry_overrides_review_settings_revision_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_retry_overrides
+    ADD CONSTRAINT screening_retry_overrides_review_settings_revision_fkey FOREIGN KEY (review_settings_revision) REFERENCES public.screener_review_settings_revisions(revision) ON DELETE RESTRICT;
 
 
 --

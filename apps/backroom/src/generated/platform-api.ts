@@ -4546,6 +4546,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/screener/review-settings/revisions/{revision}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Review Settings Revision
+         * @description Return one immutable review posture bound into a claimed canary.
+         */
+        get: operations["review_settings_revision_api_v1_screener_review_settings_revisions__revision__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/screener/submission-image-builds/{build_id}/complete": {
         parameters: {
             query?: never;
@@ -8415,6 +8435,8 @@ export interface components {
             force_full_review: boolean;
             /** Reason */
             reason: string;
+            /** Review Settings Revision */
+            review_settings_revision?: number | null;
         };
         /** AdminScreeningRetryNowResponse */
         AdminScreeningRetryNowResponse: {
@@ -8455,6 +8477,8 @@ export interface components {
              * Format: uuid
              */
             override_id: string;
+            /** Review Settings Revision */
+            review_settings_revision?: number | null;
         };
         /** AdminScreeningSubmission */
         AdminScreeningSubmission: {
@@ -21891,6 +21915,8 @@ export interface components {
              * @description Platform-owned deterministic rejection discovered atomically while leasing. The worker must not download the artifact when set.
              */
             precheck_reason_code?: string | null;
+            /** @description Immutable review posture selected only for this claimed operator canary. Null uses the worker's normal effective review settings. */
+            review_settings_override?: components["schemas"]["ScreenerReviewSettingsOverride"] | null;
             /**
              * Sha256
              * @description SHA-256 of the uploaded tarball, lowercase hex.
@@ -22090,6 +22116,22 @@ export interface components {
              * @default 1200
              */
             timeout_seconds: number;
+        };
+        /**
+         * ScreenerReviewSettingsOverride
+         * @description Immutable review posture selected for one exact claimed attempt.
+         *
+         *     This is an operator-only canary channel.  The worker fetches the immutable
+         *     settings revision before it begins the item, and its signed verdict binds
+         *     all three values back to the claimed attempt.
+         */
+        ScreenerReviewSettingsOverride: {
+            /** Checksum */
+            checksum: string;
+            /** Revision */
+            revision: number;
+            /** Scope */
+            scope: string;
         };
         /** ScreenerReviewSettingsRevision */
         ScreenerReviewSettingsRevision: {
@@ -32971,6 +33013,40 @@ export interface operations {
                 authorization?: string | null;
             };
             path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EffectiveScreenerReviewSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_settings_revision_api_v1_screener_review_settings_revisions__revision__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                revision: number;
+            };
             cookie?: never;
         };
         requestBody?: never;

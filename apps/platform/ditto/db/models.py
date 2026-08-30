@@ -600,6 +600,7 @@ class ScreeningRetryOverride(Base):
     force_full_review: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    review_settings_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -611,6 +612,12 @@ class ScreeningRetryOverride(Base):
         ForeignKeyConstraint(
             ["attempt_id"], ["screening_attempts.attempt_id"], ondelete="CASCADE"
         ),
+        ForeignKeyConstraint(
+            ["review_settings_revision"],
+            ["screener_review_settings_revisions.revision"],
+            ondelete="RESTRICT",
+            name="screening_retry_overrides_review_settings_revision_fkey",
+        ),
         UniqueConstraint("attempt_id", name="screening_retry_overrides_attempt_key"),
         CheckConstraint(
             "length(artifact_sha256) = 64",
@@ -619,6 +626,10 @@ class ScreeningRetryOverride(Base):
         CheckConstraint(
             "expected_score_count >= 0",
             name="screening_retry_overrides_score_count_check",
+        ),
+        CheckConstraint(
+            "review_settings_revision IS NULL OR force_full_review",
+            name="screening_retry_overrides_review_settings_full_review_check",
         ),
         CheckConstraint(
             "length(trim(reason)) >= 8",

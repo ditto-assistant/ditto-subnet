@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -32,6 +34,7 @@ from ditto_screening_protocol import (
     ArtifactResponse,
     ScreenerQueueItem,
     ScreenerQueueResponse,
+    ScreenerReviewSettingsOverride,
     ScreenResultOutcome,
     ScreenReviewAudit,
     SourceReviewFinding,
@@ -78,8 +81,10 @@ class _FakeGate:
         self.deferred_source_review_calls: list[bool] = []
         self.policy_versions: list[int] = []
         self.shadow_result: Any = None
+        self.applied_review_settings: list[Any] = []
 
-    def apply_review_settings(self, _settings: Any) -> bool:
+    def apply_review_settings(self, settings: Any) -> bool:
+        self.applied_review_settings.append(settings)
         return False
 
     def pop_shadow_review(self, _attempt_id: UUID) -> Any:
@@ -142,6 +147,7 @@ class _FakePlatform:
         self.image_uploads: list[dict[str, Any]] = []
         self.review_settings_source = "bootstrap"
         self.review_settings: Any = None
+        self.review_settings_revisions: dict[int, Any] = {}
         self.shadow_reviews: list[dict[str, Any]] = []
 
     async def upload_screened_image(self, agent_id: UUID, **metadata: Any) -> UUID:
@@ -169,6 +175,9 @@ class _FakePlatform:
 
     async def get_review_settings(self, _instance_id: str):
         return self.review_settings
+
+    async def get_review_settings_revision(self, revision: int):
+        return self.review_settings_revisions[revision]
 
     async def claim_next(
         self, *, policy_version: int, review_settings: Any, instance_id: str
@@ -323,6 +332,58 @@ async def test_screen_one_pass_posts_signed_pass_verdict(
     assert platform.heartbeats[0].progress.stage == "preparing"
     assert platform.heartbeats[-1].state == "polling"
     assert platform.heartbeats[-1].progress is None
+
+
+async def test_attempt_bound_review_override_is_applied_then_restored(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    agent = uuid4()
+    platform = _FakePlatform([])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+    normal = platform.review_settings
+    canary = normal.model_copy(
+        update={
+            "revision": 41,
+            "scope": "*",
+            "settings": normal.settings.model_copy(
+                update={
+                    "mode": "enforce",
+                    "l3_enabled": True,
+                    "adjudicator_mode": "enforce",
+                }
+            ),
+        }
+    )
+    checksum = hashlib.sha256(
+        json.dumps(
+            canary.settings.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    canary = canary.model_copy(update={"checksum": checksum})
+    platform.review_settings_revisions[41] = canary
+    item = _item(
+        agent,
+        review_settings_override=ScreenerReviewSettingsOverride(
+            revision=41,
+            scope="*",
+            checksum=checksum,
+        ),
+    )
+
+    await worker._screen_one(
+        item,
+        policy_version=SCREENING_POLICY_VERSION,
+        normal_review_settings=normal,
+    )
+
+    assert [settings.revision for settings in gate.applied_review_settings] == [41, 0]
+    verdict = platform.verdicts[0]
+    assert verdict["review_settings_revision"] == 41
+    assert verdict["review_settings_scope"] == "*"
+    assert verdict["review_settings_checksum"] == checksum
 
 
 async def test_shadow_review_is_attempt_bound_and_does_not_change_verdict(

@@ -90,6 +90,7 @@ from ditto.api_models.screener import (
     ScreenReviewAudit,
     SourceReviewFinding,
 )
+from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_models.validator import ArtifactResponse
 from ditto.api_server.artifact_audit import client_ip, request_detail
@@ -134,6 +135,7 @@ from ditto.db.models import (
     BenchmarkRolloutMember,
     EvaluationPayment,
     Score,
+    ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
     ScreeningAttempt,
     ScreeningDispute,
@@ -1918,6 +1920,7 @@ async def _authorize_screening_retry(
     attempt_id: UUID,
     expected_score_count: int,
     force_full_review: bool = False,
+    review_settings_revision: int | None = None,
     reason: str,
     actor: str,
     now: datetime,
@@ -1937,6 +1940,7 @@ async def _authorize_screening_retry(
         artifact_sha256=agent.sha256,
         expected_score_count=expected_score_count,
         force_full_review=force_full_review,
+        review_settings_revision=review_settings_revision,
         reason=reason,
         actor=actor,
         created_at=now,
@@ -1944,6 +1948,32 @@ async def _authorize_screening_retry(
     session.add(override)
     await session.flush()
     return override
+
+
+async def _validate_adjudicator_canary_revision(
+    session: AsyncSession, revision: int | None
+) -> None:
+    """Refuse a retry canary unless its immutable posture invokes terminal L4."""
+    if revision is None:
+        return
+    row = await session.get(ScreenerReviewSettingsRevision, revision)
+    if row is None:
+        raise HTTPException(status_code=409, detail="review settings revision changed")
+    try:
+        settings = ScreenerReviewSettings.model_validate(row.settings)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=409, detail="review settings revision is invalid"
+        ) from error
+    if (
+        settings.mode != "enforce"
+        or not settings.l3_enabled
+        or settings.adjudicator_mode != "enforce"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="review settings revision is not an enforcing adjudicator posture",
+        )
 
 
 @router.post(
@@ -2001,6 +2031,9 @@ async def retry_failed_screening_now(
         )
         if latest_attempt_id != attempt.attempt_id:
             raise HTTPException(status_code=409, detail="screening attempt changed")
+        await _validate_adjudicator_canary_revision(
+            session, payload.review_settings_revision
+        )
         override = await session.scalar(
             select(ScreeningRetryOverride).where(
                 ScreeningRetryOverride.attempt_id == attempt.attempt_id
@@ -2010,6 +2043,10 @@ async def retry_failed_screening_now(
             if override.force_full_review != payload.force_full_review:
                 raise HTTPException(
                     status_code=409, detail="screening retry mode changed"
+                )
+            if override.review_settings_revision != payload.review_settings_revision:
+                raise HTTPException(
+                    status_code=409, detail="screening retry review posture changed"
                 )
             idempotent = True
         else:
@@ -2042,6 +2079,7 @@ async def retry_failed_screening_now(
                 attempt_id=attempt.attempt_id,
                 expected_score_count=score_count,
                 force_full_review=payload.force_full_review,
+                review_settings_revision=payload.review_settings_revision,
                 reason=payload.reason,
                 actor=x_admin_actor,
                 now=now,
@@ -2064,6 +2102,7 @@ async def retry_failed_screening_now(
         backoff_deadline=attempt.deadline,
         created_at=override.created_at,
         force_full_review=override.force_full_review,
+        review_settings_revision=override.review_settings_revision,
         idempotent=idempotent,
     )
 
