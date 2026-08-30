@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.151.0 (2026-08-30)
+
+### Features
+
+- **coding**: Add scoped memory seed projector
+  ([`6afb9b8`](https://github.com/ditto-assistant/ditto-subnet/commit/6afb9b864e75794b255748157022e8e8ad6973cd))
+
+
 ## v0.150.5 (2026-08-30)
 
 ### Bug Fixes
