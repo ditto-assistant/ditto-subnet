@@ -171,29 +171,38 @@ func (revoker *Revoker) Revoke(ctx context.Context, expected codinggateway.Grant
 		return err
 	}
 	revoker.mu.Lock()
-	defer revoker.mu.Unlock()
 	if revoker.closed || !revocationsMatch(expected, revoker.binding) {
+		revoker.mu.Unlock()
 		return ErrInvalid
 	}
 	if revoker.committed {
+		revoker.mu.Unlock()
 		return nil
 	}
+	capability := revoker.capability
+	binding := revoker.binding
+	bearer := append([]byte(nil), revoker.bearer...)
+	client := revoker.client
+	clock := revoker.now
+	revoker.mu.Unlock()
+	defer zero(bearer)
+
 	body, err := json.Marshal(capabilityRevokeRequest{
-		GrantID: revoker.capability.GrantID, TicketID: revoker.capability.TicketID,
-		Generation: revoker.capability.Generation,
+		GrantID: capability.GrantID, TicketID: capability.TicketID,
+		Generation: capability.Generation,
 	})
 	if err != nil {
 		return ErrInvalid
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, revoker.capability.URL, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, capability.URL, bytes.NewReader(body))
 	if err != nil {
 		return ErrInvalid
 	}
-	request.Header.Set("Authorization", "Bearer "+string(revoker.bearer))
+	request.Header.Set("Authorization", "Bearer "+string(bearer))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Cache-Control", "no-store")
-	response, err := revoker.client.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return ErrTransport
 	}
@@ -203,7 +212,7 @@ func (revoker *Revoker) Revoke(ctx context.Context, expected codinggateway.Grant
 		return ErrTransport
 	}
 	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
-	if err != nil || mediaType != "application/json" {
+	if err != nil || !strings.EqualFold(mediaType, "application/json") {
 		return ErrResponse
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumEnvelopeBytes+1))
@@ -232,14 +241,19 @@ func (revoker *Revoker) Revoke(ctx context.Context, expected codinggateway.Grant
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return ErrResponse
 	}
-	now := revoker.now().UTC()
+	now := clock().UTC()
 	if result.Schema != "dittobench-coding-inference-revocation-v1" ||
 		result.CodingContractVersion != codingcontract.ContractVersion || result.WeightEligible ||
-		result.GrantID != revoker.capability.GrantID || result.TicketID != revoker.capability.TicketID ||
-		result.Generation != revoker.capability.Generation || result.Status != "revoked" ||
-		result.RevokedAt.Before(revoker.binding.IssuedAt) || result.RevokedAt.After(now.Add(5*time.Minute)) ||
+		result.GrantID != capability.GrantID || result.TicketID != capability.TicketID ||
+		result.Generation != capability.Generation || result.Status != "revoked" ||
+		result.RevokedAt.Before(binding.IssuedAt) || result.RevokedAt.After(now.Add(5*time.Minute)) ||
 		result.Idempotent == nil {
 		return ErrResponse
+	}
+	revoker.mu.Lock()
+	defer revoker.mu.Unlock()
+	if revoker.committed {
+		return nil
 	}
 	revoker.committed = true
 	zero(revoker.bearer)
