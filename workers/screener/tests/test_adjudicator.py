@@ -263,7 +263,9 @@ async def test_reject_names_the_breached_invariant(tmp_path: Path) -> None:
     assert result.clear_clause is None
 
 
-async def test_a_citation_the_court_never_read_escalates(tmp_path: Path) -> None:
+async def test_a_citation_the_court_never_read_clears_without_proof(
+    tmp_path: Path,
+) -> None:
     """The strongest guard: a decision may only rest on lines it was shown."""
     transport = _transport(
         [
@@ -285,11 +287,11 @@ async def test_a_citation_the_court_never_read_escalates(tmp_path: Path) -> None
         _archive(tmp_path), notes=[_CONCERN]
     )
 
-    assert result.decision == "escalate"
-    assert result.escalation_code == "cited-unread-source"
+    assert result.decision == "clear"
+    assert result.clear_clause == "no_proven_breach_before_deadline"
 
 
-async def test_a_hallucinated_path_escalates(tmp_path: Path) -> None:
+async def test_a_hallucinated_path_clears_without_proof(tmp_path: Path) -> None:
     transport = _transport(
         [
             [
@@ -310,11 +312,11 @@ async def test_a_hallucinated_path_escalates(tmp_path: Path) -> None:
         _archive(tmp_path), notes=[_CONCERN]
     )
 
-    assert result.decision == "escalate"
-    assert result.escalation_code == "cited-unknown-member"
+    assert result.decision == "clear"
+    assert result.clear_clause == "no_proven_breach_before_deadline"
 
 
-async def test_a_line_past_the_end_of_the_file_escalates(tmp_path: Path) -> None:
+async def test_a_line_past_the_end_clears_without_proof(tmp_path: Path) -> None:
     """The tools only serve real lines, so this lands on the unread guard."""
     transport = _transport(
         [
@@ -342,11 +344,11 @@ async def test_a_line_past_the_end_of_the_file_escalates(tmp_path: Path) -> None
         _archive(tmp_path), notes=[_CONCERN]
     )
 
-    assert result.decision == "escalate"
-    assert result.escalation_code == "cited-unread-source"
+    assert result.decision == "clear"
+    assert result.clear_clause == "no_proven_breach_before_deadline"
 
 
-async def test_only_inert_citations_escalate(tmp_path: Path) -> None:
+async def test_only_inert_citations_clear_without_proof(tmp_path: Path) -> None:
     """A comment and an import cannot carry a behaviour, so they prove nothing."""
     transport = _transport(
         [
@@ -377,11 +379,13 @@ async def test_only_inert_citations_escalate(tmp_path: Path) -> None:
         _archive(tmp_path), notes=[_CONCERN]
     )
 
-    assert result.decision == "escalate"
-    assert result.escalation_code == "inadmissible-citations"
+    assert result.decision == "clear"
+    assert result.clear_clause == "no_proven_breach_before_deadline"
 
 
-async def test_a_decision_without_a_published_basis_escalates(tmp_path: Path) -> None:
+async def test_a_decision_without_a_published_basis_clears_without_proof(
+    tmp_path: Path,
+) -> None:
     transport = _transport(
         [
             [
@@ -407,11 +411,11 @@ async def test_a_decision_without_a_published_basis_escalates(tmp_path: Path) ->
         _archive(tmp_path), notes=[_CONCERN]
     )
 
-    assert result.decision == "escalate"
-    assert result.escalation_code == "verdict-contract-failed"
+    assert result.decision == "clear"
+    assert result.clear_clause == "no_proven_breach_before_deadline"
 
 
-async def test_an_uncited_decision_escalates(tmp_path: Path) -> None:
+async def test_an_uncited_decision_clears_without_proof(tmp_path: Path) -> None:
     transport = _transport(
         [
             [
@@ -438,12 +442,12 @@ async def test_an_uncited_decision_escalates(tmp_path: Path) -> None:
         _archive(tmp_path), notes=[_CONCERN]
     )
 
-    assert result.decision == "escalate"
-    assert result.escalation_code == "uncited-decision"
+    assert result.decision == "clear"
+    assert result.clear_clause == "no_proven_breach_before_deadline"
 
 
-async def test_an_exhausted_step_budget_escalates(tmp_path: Path) -> None:
-    """Running out of turns holds the submission; it never decides it."""
+async def test_an_exhausted_step_budget_clears_without_proof(tmp_path: Path) -> None:
+    """Running out of turns settles fairly instead of holding forever."""
 
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -474,8 +478,9 @@ async def test_an_exhausted_step_budget_escalates(tmp_path: Path) -> None:
         _key(tmp_path), httpx.MockTransport(handler)
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
 
-    assert result.decision == "escalate"
-    assert result.escalation_code == "adjudicator-failed"
+    assert result.decision == "clear"
+    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.notes_considered == 1
 
 
 async def test_a_search_hit_counts_as_reading_that_line(tmp_path: Path) -> None:
@@ -503,16 +508,18 @@ async def test_a_search_hit_counts_as_reading_that_line(tmp_path: Path) -> None:
     assert result.decision == "clear"
 
 
-async def test_a_missing_key_escalates_rather_than_raising(tmp_path: Path) -> None:
+async def test_a_missing_key_clears_rather_than_punishing_the_miner(
+    tmp_path: Path,
+) -> None:
     result = await SourceReviewAdjudicator(
         api_key_file=None, base_url="https://openrouter.test/api/v1"
     ).adjudicate(_archive(tmp_path), notes=[])
 
-    assert result.decision == "escalate"
-    assert result.escalation_code == "adjudicator-unavailable"
+    assert result.decision == "clear"
+    assert result.clear_clause == "no_proven_breach_before_deadline"
 
 
-async def test_a_wall_clock_timeout_escalates_rather_than_raising(
+async def test_a_wall_clock_timeout_clears_rather_than_holding(
     tmp_path: Path,
 ) -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
@@ -527,8 +534,8 @@ async def test_a_wall_clock_timeout_escalates_rather_than_raising(
         deadline=asyncio.get_running_loop().time() + 0.01,
     )
 
-    assert result.decision == "escalate"
-    assert result.escalation_code == "adjudicator-failed"
+    assert result.decision == "clear"
+    assert result.clear_clause == "no_proven_breach_before_deadline"
 
 
 @pytest.mark.parametrize("mode", ("off", "shadow", "enforce"))

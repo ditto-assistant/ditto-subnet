@@ -4335,7 +4335,7 @@ class _FakeAdjudicator:
             clear_clause="model_authors_graded_slot",
             citations=[SourceReviewCitation(path="src/main.rs", line=6)],
             model="z-ai/glm-5.3-flash",
-            prompt_revision="adjudicator-v1-policy-v10",
+            prompt_revision="adjudicator-v2-policy-v10",
         )
 
 
@@ -4351,13 +4351,36 @@ async def test_exploration_reserves_the_terminal_adjudicator_deadline() -> None:
         adjudicator_reserve_seconds=600,
     )
 
+    deadline = asyncio.get_running_loop().time() + 1800
     await layered.review(
-        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT, deadline=1800
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT, deadline=deadline
     )
 
-    assert l1.deadline == 1200
-    assert l2.deadline == 1200
-    assert court.deadline == 1800
+    assert l1.deadline == pytest.approx(deadline - 600, abs=0.1)
+    assert l2.deadline == pytest.approx(deadline - 600, abs=0.1)
+    assert court.deadline == deadline
+
+
+async def test_short_parent_lease_splits_time_with_the_terminal_court() -> None:
+    l1 = _FakeL1(_l1("medium"))
+    l2 = _FakeL2(_model_result(_safe()))
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=l1,
+        l2=l2,
+        mode="enforce",
+        adjudicator=court,  # type: ignore[arg-type]
+        adjudicator_reserve_seconds=900,
+    )
+    deadline = asyncio.get_running_loop().time() + 600
+
+    await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT, deadline=deadline
+    )
+
+    assert l1.deadline == pytest.approx(deadline - 300, abs=0.1)
+    assert l2.deadline == pytest.approx(deadline - 300, abs=0.1)
+    assert court.deadline == deadline
 
 
 async def test_l2_wall_clock_timeout_still_hands_off_to_l4(tmp_path: Path) -> None:

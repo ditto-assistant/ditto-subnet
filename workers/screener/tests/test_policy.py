@@ -908,7 +908,7 @@ def test_final_adjudication_settles_preexecution_source_lead(
         "decision": court_decision,
         "reason": "final court decision",
         "model": "z-ai/glm-5.3-flash",
-        "prompt_revision": "adjudicator-v1-policy-v10",
+        "prompt_revision": "adjudicator-v2-policy-v10",
         "notes_considered": 2,
     }
     observation = SourceReviewObservation(
@@ -984,7 +984,7 @@ async def test_final_adjudication_crosses_the_local_policy_boundary(
         "decision": court_decision,
         "reason": "final court decision",
         "model": "z-ai/glm-5.3-flash",
-        "prompt_revision": "adjudicator-v1-policy-v10",
+        "prompt_revision": "adjudicator-v2-policy-v10",
         "notes_considered": 1,
     }
 

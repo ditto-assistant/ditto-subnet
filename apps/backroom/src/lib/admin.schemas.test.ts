@@ -1799,7 +1799,7 @@ describe('screener review settings schemas', () => {
     }).adjudicator_max_steps).toBe(256)
     expect(() => screenerReviewSettingsSchema.parse({
       ...settings,
-      adjudicator_max_steps: 257,
+      adjudicator_max_steps: 1025,
     })).toThrow()
   })
 

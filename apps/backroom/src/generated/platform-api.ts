@@ -5553,7 +5553,7 @@ export interface components {
          *     against the same published list.
          * @enum {string}
          */
-        AdjudicationClearClause: "retrieval_ranking_not_family_engine" | "content_complete_memoization_cache" | "standard_broker_inference_client" | "unreported_tool_calls_executed" | "local_practice_harness_stub" | "intent_routing_or_precursor_pass" | "bench_version_branching_alone" | "single_success_duplicate_suppression" | "plain_answer_normalization" | "prior_pattern_removed" | "model_authors_graded_slot";
+        AdjudicationClearClause: "retrieval_ranking_not_family_engine" | "content_complete_memoization_cache" | "standard_broker_inference_client" | "unreported_tool_calls_executed" | "local_practice_harness_stub" | "intent_routing_or_precursor_pass" | "bench_version_branching_alone" | "single_success_duplicate_suppression" | "plain_answer_normalization" | "prior_pattern_removed" | "model_authors_graded_slot" | "no_proven_breach_before_deadline";
         /** AdminActiveContractRequest */
         AdminActiveContractRequest: {
             /**
@@ -21592,11 +21592,10 @@ export interface components {
          * @description Terminal clear/reject decision on a review that would otherwise hold.
          *
          *     ``escalate`` is never a model choice. The adjudicator is asked for clear
-         *     or reject; the host substitutes ``escalate`` when the returned decision
-         *     fails its contract (an uncited verdict, a citation the adjudicator never
-         *     read, a hallucinated path, a missing published basis). The hold then
-         *     stands and an operator sees it, so a malformed adjudication can only cost
-         *     latency -- never a wrong release or a wrong ban.
+         *     or reject; the host uses ``escalate`` internally when the returned
+         *     decision fails its contract. The terminal court wrapper converts that
+         *     refusal to the explicit no-proven-breach clear clause, so malformed or
+         *     exhausted automation cannot strand or reject a miner without proof.
          */
         SourceReviewAdjudication: {
             /** Citations */

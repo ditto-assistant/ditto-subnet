@@ -3903,6 +3903,17 @@ class LayeredSourceReviewAgent:
         self._adjudicator_reserve_seconds = max(0.0, float(adjudicator_reserve_seconds))
         self._shadow_results: dict[UUID, L2RunResult] = {}
 
+    def _exploration_deadline(self, deadline: float | None) -> float | None:
+        """Reserve court time without zeroing exploration on a short lease."""
+        if deadline is None or self._adjudicator is None:
+            return deadline
+        remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+        effective_reserve = min(
+            self._adjudicator_reserve_seconds,
+            remaining / 2.0,
+        )
+        return deadline - effective_reserve
+
     def pop_shadow_result(self, attempt_id: UUID) -> L2RunResult | None:
         """Consume non-authoritative shadow telemetry for one attempt."""
         return self._shadow_results.pop(attempt_id, None)
@@ -3977,11 +3988,7 @@ class LayeredSourceReviewAgent:
         # the configured court timeout; L4 receives the original deadline and
         # can therefore decide from whatever durable notes/finding exist when
         # L1/L2 run out of time.
-        review_deadline = (
-            None
-            if deadline is None or self._adjudicator is None
-            else deadline - self._adjudicator_reserve_seconds
-        )
+        review_deadline = self._exploration_deadline(deadline)
         l1 = await self._l1.review(
             archive_path,
             artifact_sha256=artifact_sha256,
@@ -4015,7 +4022,7 @@ class LayeredSourceReviewAgent:
         """Resolve a precomputed, artifact-bound L1 lead without rerunning L1."""
         l1 = l1_observation
         if review_deadline is None and deadline is not None and self._adjudicator:
-            review_deadline = deadline - self._adjudicator_reserve_seconds
+            review_deadline = self._exploration_deadline(deadline)
         always_escalate = os.environ.get(
             "SCREENER_L2_ALWAYS_ESCALATE", ""
         ).strip().lower() in {"1", "true", "yes", "on"}

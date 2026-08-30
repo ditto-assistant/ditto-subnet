@@ -1032,6 +1032,7 @@ class AdjudicationClearClause(StrEnum):
     ANSWER_NORMALIZATION = "plain_answer_normalization"
     PRIOR_PATTERN_REMOVED = "prior_pattern_removed"
     MODEL_AUTHORS_GRADED_SLOT = "model_authors_graded_slot"
+    NO_PROVEN_BREACH = "no_proven_breach_before_deadline"
 
 
 class SourceReviewCitation(BaseModel):
@@ -1047,11 +1048,10 @@ class SourceReviewAdjudication(BaseModel):
     """Terminal clear/reject decision on a review that would otherwise hold.
 
     ``escalate`` is never a model choice. The adjudicator is asked for clear
-    or reject; the host substitutes ``escalate`` when the returned decision
-    fails its contract (an uncited verdict, a citation the adjudicator never
-    read, a hallucinated path, a missing published basis). The hold then
-    stands and an operator sees it, so a malformed adjudication can only cost
-    latency -- never a wrong release or a wrong ban.
+    or reject; the host uses ``escalate`` internally when the returned
+    decision fails its contract. The terminal court wrapper converts that
+    refusal to the explicit no-proven-breach clear clause, so malformed or
+    exhausted automation cannot strand or reject a miner without proof.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -1090,7 +1090,10 @@ class SourceReviewAdjudication(BaseModel):
                 raise ValueError("a clear must name the published clause it relies on")
             if self.reject_invariant is not None:
                 raise ValueError("a clear cannot name a breached invariant")
-            if not self.citations:
+            if (
+                not self.citations
+                and self.clear_clause != AdjudicationClearClause.NO_PROVEN_BREACH
+            ):
                 raise ValueError("a clear requires at least one cited location")
         elif self.escalation_code is None:
             raise ValueError("an escalation must name why the decision was refused")
