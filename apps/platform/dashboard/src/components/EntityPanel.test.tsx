@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { rankEntries } from "../lib/scoring";
 import { queryClient } from "../data/queryClient";
-import { syncFromLocation } from "../stores/routeStore";
+import { currentPage, entityRoute, navigateToPage, syncFromLocation } from "../stores/routeStore";
 import { FIXTURE_TOP_AGENT_ID, installFixtureFetch, loadFixture } from "../test-fixtures";
 import type { OperationsPayload } from "../types/fleet";
 import type { LeaderboardPayload } from "../types/leaderboard";
@@ -26,6 +26,8 @@ const operations = loadFixture<OperationsPayload>("operations");
 const entries = rankEntries(leaderboard.entries ?? []);
 const topEntry = entries[0] as (typeof entries)[number];
 const validatorHotkey = String(operations.validators.validators?.[0]?.validator_hotkey);
+// Screeners ride a separate feed; a fleet row target only needs the hotkey.
+const screenerHotkey = "5EKvqERH4xCV2MuQwb8cenyCVayfvrfjHaoeDPb9RFXxbsND";
 
 let restoreFetch: (() => void) | null = null;
 
@@ -326,6 +328,30 @@ describe("EntityPanel validator tenant (row 26 shell slice)", () => {
       expect(location.pathname + location.search).toBe("/operations?validator=" + validatorHotkey),
     );
     expect(modal().classList.contains("open")).toBe(true);
+  });
+
+  // Sidebar navigation off a fleet deep link. The normalize-onto-operations
+  // rule reads the page and the entity route together, so an unbatched sync
+  // let it see the new page beside the previous URL's entity and rewrite the
+  // reader straight back onto /operations — every nav item dead until the
+  // query was hand-edited out of the address bar.
+  it("navigates away from a screener row target", () => {
+    renderPanel();
+    visit("/operations?screener=" + screenerHotkey);
+    navigateToPage("leaderboard");
+    expect(location.pathname + location.search).toBe("/leaderboard");
+    expect(currentPage()).toBe("leaderboard");
+    expect(entityRoute()).toBeNull();
+  });
+
+  it("navigates away from an open validator overlay", () => {
+    renderPanel();
+    visit("/operations?validator=" + validatorHotkey);
+    expect(modal().classList.contains("open")).toBe(true);
+    navigateToPage("benchmark");
+    expect(location.pathname + location.search).toBe("/benchmark");
+    expect(entityRoute()).toBeNull();
+    expect(modal().classList.contains("open")).toBe(false);
   });
 });
 

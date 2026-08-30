@@ -372,9 +372,11 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
     setFull(route.full);
     if (route.kind === "validator" || route.kind === "screener") {
       // Fleet-row targets live on the operations page only; normalize there.
-      // currentPage is deliberately tracked: the store updates the entity
-      // and page signals in sequence, so this effect may observe the entity
-      // before the page has caught up and must re-run when it does.
+      // currentPage is deliberately tracked so the rule re-applies when the
+      // page moves under a standing route. It is only safe to compare the
+      // two because syncFromLocation batches its writes: read a page from
+      // one URL beside an entity from the previous one and this branch
+      // rewrites the reader back onto /operations, trapping them there.
       if (currentPage() !== "operations") {
         const href = entityHref(route.kind, route.id, "operations");
         if (location.pathname + location.search + location.hash !== href) {

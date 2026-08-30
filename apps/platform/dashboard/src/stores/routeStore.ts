@@ -2,7 +2,7 @@
 // (opening drawers/modals, forcing the operations page) is App-level; this
 // store only keeps the signals in step with the URL and owns the history
 // mutations.
-import { createSignal } from "solid-js";
+import { batch, createSignal } from "solid-js";
 import type { Accessor } from "solid-js";
 import {
   ENTITY_PAGES,
@@ -71,10 +71,18 @@ const [entitySignal, setEntitySignal] = createSignal<EntityRoute | null>(readEnt
 export const currentPage: Accessor<PageName> = pageSignal;
 export const entityRoute: Accessor<EntityRoute | null> = entitySignal;
 
-// Recompute both signals from the current location.
+// Recompute both signals from the current location. Batched: the two writes
+// describe ONE location, and an unbatched page write flushes effects while
+// the entity signal still holds the previous URL's route. EntityPanel reads
+// both together to keep a fleet route on the operations page, so that torn
+// pair reads as "a screener overlay is open on the leaderboard" and rewrites
+// the URL straight back to `/operations?screener=…`, pinning the reader to
+// the fleet page until they hand-edit the query.
 export function syncFromLocation(): void {
-  setPageSignal((prev) => derivePage(prev));
-  setEntitySignal(readEntityRoute());
+  batch(() => {
+    setPageSignal((prev) => derivePage(prev));
+    setEntitySignal(readEntityRoute());
+  });
 }
 
 // Sidebar navigation: route through dashboardHref so an open overlay is
