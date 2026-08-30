@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.174.4 (2026-08-30)
+
+### Bug Fixes
+
+- **platform**: Time each relay release phase on the host
+  ([#1383](https://github.com/ditto-assistant/ditto-subnet/pull/1383),
+  [`cb72831`](https://github.com/ditto-assistant/ditto-subnet/commit/cb72831604e79d6244b0706a99e27a788c4f9e8c))
+
+
 ## v0.174.3 (2026-08-30)
 
 ### Performance Improvements
