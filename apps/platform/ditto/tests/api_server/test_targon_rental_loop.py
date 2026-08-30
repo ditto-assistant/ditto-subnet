@@ -1218,6 +1218,45 @@ async def test_tick_finalizes_running_attempt_after_smoke(
 
 
 @pytest.mark.asyncio
+async def test_tick_does_not_finalize_hetzner_worker_attempt(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The local worker, not TargonRentalLoop, owns the terminal verdict.
+
+    Previously this shared readiness query selected every succeeded runtime,
+    including a Hetzner node result.  Platform then passed the attempt just
+    before the worker posted its signature, fencing that valid verdict with a
+    misleading 409.
+    """
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    called: list[UUID] = []
+
+    async def complete_screen(attempt_id: UUID) -> None:
+        called.append(attempt_id)
+
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=_FakeTargon(),
+        screener_hotkey=_SCREENER_HOTKEY,
+        complete_screen=complete_screen,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        build.provider = "hetzner"
+        build.status = "succeeded"
+        build.runtime_status = "succeeded"
+        build.output_sha256 = "12" * 32
+        build.output_size_bytes = 123
+
+    assert await loop.tick() is False
+    assert called == []
+
+
+@pytest.mark.asyncio
 async def test_reaper_hands_dead_targon_kaniko_to_cloudrun(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
