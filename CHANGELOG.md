@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.177.17 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Fail fast when harness exits
+  ([`9e67739`](https://github.com/ditto-assistant/ditto-subnet/commit/9e677398ac48c9a75a249eebbc32fe4c1fbad6ee))
+
+
 ## v0.177.16 (2026-08-31)
 
 ### Bug Fixes
