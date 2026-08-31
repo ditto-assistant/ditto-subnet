@@ -20778,6 +20778,16 @@ export interface components {
              * @default 1
              */
             policy_version: number;
+            /**
+             * Private Failure Detail
+             * @description Bounded miner-owner diagnostic for a failed screening attempt. It is signed with the verdict and must never be exposed on a public submission surface.
+             */
+            private_failure_detail?: string | null;
+            /**
+             * Private Failure Log Tail
+             * @description Bounded miner-owner build or runtime log tail. It is signed with the verdict and persisted only after platform redaction.
+             */
+            private_failure_log_tail?: string | null;
             /** Reason Code */
             reason_code?: string | null;
             /** @description Public-safe, digest-bound budget accounting for a terminal pass-inconclusive review. */

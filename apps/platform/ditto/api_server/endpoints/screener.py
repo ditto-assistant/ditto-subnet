@@ -224,6 +224,11 @@ from ditto_screening_protocol import (
     SourceReviewObservationPayload,
     verdict_signing_message,
 )
+from ditto_screening_protocol.private_failure import (
+    PRIVATE_FAILURE_DETAIL_LIMIT,
+    PRIVATE_FAILURE_LOG_TAIL_LIMIT,
+    private_failure_text,
+)
 
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
@@ -5124,6 +5129,54 @@ async def _backfill_quarantine_payloads(
         quarantine.finding = finding_json
 
 
+def _backfill_private_failure_feedback(
+    attempt: ScreeningAttempt,
+    *,
+    payload: ScreenResultRequest,
+    provider: str,
+) -> None:
+    """Persist signed, miner-owner failure feedback without rewriting a record.
+
+    A retry after a rolling deploy can carry a field that the first Platform
+    receiver did not understand. Fill missing columns, but retain the first
+    accepted diagnostic if a later report conflicts.
+    """
+    detail = (
+        private_failure_text(
+            payload.private_failure_detail,
+            limit=PRIVATE_FAILURE_DETAIL_LIMIT,
+        )
+        if payload.private_failure_detail
+        else None
+    )
+    log_tail = (
+        private_failure_text(
+            payload.private_failure_log_tail,
+            limit=PRIVATE_FAILURE_LOG_TAIL_LIMIT,
+        )
+        if payload.private_failure_log_tail
+        else None
+    )
+    changed = False
+    if detail is not None and attempt.private_failure_detail is None:
+        attempt.private_failure_detail = detail
+        changed = True
+    if log_tail is not None and attempt.private_failure_log_tail is None:
+        attempt.private_failure_log_tail = log_tail
+        changed = True
+    if not changed:
+        return
+    if attempt.failure_provider is None:
+        attempt.failure_provider = provider
+    if attempt.failure_lane is None:
+        attempt.failure_lane = (
+            "buildkit"
+            if payload.reason_code in {"docker-build", "docker-build-infrastructure"}
+            else "screening"
+        )
+    attempt.failure_captured_at = datetime.now(UTC)
+
+
 @router.post(
     "/agent/{agent_id}/result",
     response_model=ScreenResultResponse,
@@ -5193,6 +5246,8 @@ async def submit_result(
             review_settings_scope=payload.review_settings_scope,
             review_settings_checksum=payload.review_settings_checksum,
             reason_code=payload.reason_code,
+            private_failure_detail=payload.private_failure_detail,
+            private_failure_log_tail=payload.private_failure_log_tail,
             image_sha256=payload.image_sha256,
             image_size_bytes=payload.image_size_bytes,
             image_id=payload.image_id,
@@ -5675,6 +5730,11 @@ async def submit_result(
                     await _backfill_quarantine_payloads(
                         session, attempt_id=attempt.attempt_id, payload=payload
                     )
+                _backfill_private_failure_feedback(
+                    attempt,
+                    payload=payload,
+                    provider=getattr(request.state, "screener_provider", "gcp"),
+                )
                 result_status = agent.status
                 return ScreenResultResponse(
                     agent_id=agent_id, status=result_status, accepted=True
@@ -5855,6 +5915,11 @@ async def submit_result(
             attempt.review_settings_instance_id = payload.review_settings_instance_id
             attempt.review_settings_scope = payload.review_settings_scope
             attempt.review_settings_checksum = payload.review_settings_checksum
+            _backfill_private_failure_feedback(
+                attempt,
+                payload=payload,
+                provider=getattr(request.state, "screener_provider", "gcp"),
+            )
         if target == AgentStatus.QUARANTINED or records_review_evidence:
             if attempt is None:
                 raise AgentNotScreenableError(

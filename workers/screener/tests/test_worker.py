@@ -721,6 +721,29 @@ async def test_screen_one_fail_forwards_detail(
     assert v["outcome"] == ScreenResultOutcome.DETERMINISTIC_REJECT
 
 
+async def test_local_build_failure_forwards_signed_private_miner_feedback(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    gate = _FakeGate(
+        core_decision(
+            ScreeningOutcome.DETERMINISTIC_REJECT,
+            code="docker-build",
+            summary="artifact Docker image did not build",
+            detail="build failed: token=secret-value\nerror: missing Cargo.toml",
+        )
+    )
+    worker = _worker(make_config(), platform, gate)
+
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+
+    verdict = platform.verdicts[0]
+    assert verdict["private_failure_detail"] is not None
+    assert verdict["private_failure_log_tail"] is not None
+    assert "secret-value" not in verdict["private_failure_detail"]
+    assert "[REDACTED]" in verdict["private_failure_log_tail"]
+
+
 async def test_exact_cross_miner_duplicate_skips_artifact_and_private_gate(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

@@ -32,6 +32,8 @@ def verdict_signing_message(
     review_settings_scope: str | None = None,
     review_settings_checksum: str | None = None,
     reason_code: str | None = None,
+    private_failure_detail: str | None = None,
+    private_failure_log_tail: str | None = None,
     image_sha256: str | None = None,
     image_size_bytes: int | None = None,
     image_id: str | None = None,
@@ -74,6 +76,13 @@ def verdict_signing_message(
             fields["adjudication_digest"] = adjudication_digest
         if review_notes_digest is not None:
             fields["review_notes_digest"] = review_notes_digest
+        # Optional private feedback is signed before Platform redacts and stores
+        # it. Omit absent fields so prior mixed-version verdicts retain their
+        # byte-for-byte v5 signing payload.
+        if private_failure_detail is not None:
+            fields["private_failure_detail"] = private_failure_detail
+        if private_failure_log_tail is not None:
+            fields["private_failure_log_tail"] = private_failure_log_tail
         # Omit the false default so mixed-version signatures remain byte-for-byte
         # compatible. A true deferred claim is explicitly bound against replay.
         if deferred_source_review:

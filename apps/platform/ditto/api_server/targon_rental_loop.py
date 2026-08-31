@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import re
 import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
@@ -56,6 +55,9 @@ from ditto.db.queries.provider_outages import (
 from ditto.db.queries.screener_provider_settings import (
     resolve_screener_provider_settings,
 )
+from ditto_screening_protocol.private_failure import (
+    private_failure_text as _private_failure_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,13 +75,6 @@ _TARGON_BUILD_FALLBACK_CODES = frozenset(
 _CANDIDATE_REGISTRY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-screening-candidates/miner"
 )
-_PRIVATE_FAILURE_LIMIT = 16_000
-_PRIVATE_SECRET = re.compile(
-    r"(?i)\b(api[_-]?key|authorization|password|secret|token)\b"
-    r"(\s*[:=]\s*)([^\s,;]+)"
-)
-_PRIVATE_BEARER = re.compile(r"(?i)\bBearer\s+[^\s,;]+")
-_PRIVATE_SIGNED_TOKEN = re.compile(r"\bsvt_[A-Za-z0-9._-]+")
 
 
 async def _default_health_probe(url: str) -> bool:
@@ -93,20 +88,6 @@ async def _default_health_probe(url: str) -> bool:
 
 PromoteArchive = Callable[[str, str, str], Awaitable[str]]
 MintToken = Callable[[str], Awaitable[str]]
-
-
-def _private_failure_text(value: str) -> str:
-    # PostgreSQL text values cannot contain U+0000. Provider log APIs may
-    # decode binary build output into a Python string that still carries NUL
-    # bytes, so escape them at the private-evidence boundary before either the
-    # database row or the trace artifact sees the value.
-    redacted = value.replace("\x00", r"\0")
-    redacted = _PRIVATE_BEARER.sub("Bearer [REDACTED]", redacted)
-    redacted = _PRIVATE_SIGNED_TOKEN.sub("[REDACTED]", redacted)
-    redacted = _PRIVATE_SECRET.sub(r"\1\2[REDACTED]", redacted)
-    if len(redacted) <= _PRIVATE_FAILURE_LIMIT:
-        return redacted
-    return f"[truncated]\n{redacted[-_PRIVATE_FAILURE_LIMIT:]}"
 
 
 def _source_review_layer_env(

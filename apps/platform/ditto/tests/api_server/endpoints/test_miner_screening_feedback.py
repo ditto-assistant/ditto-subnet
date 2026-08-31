@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -94,3 +95,69 @@ async def test_other_miner_cannot_read_screening_failure(
     )
 
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_owner_reads_private_screening_failure_through_miner_mcp(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The signed-in Miner MCP exposes the same owner-only failure record."""
+    miner = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = await _seed_agent(
+        session_maker,
+        status=AgentStatus.SCREENING_FAILED,
+        miner_hotkey=miner.ss58_address,
+    )
+    now = datetime.now(UTC)
+    attempt_id = uuid4()
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=miner.ss58_address,
+                policy_version=10,
+                status="rejected",
+                started_at=now - timedelta(minutes=1),
+                deadline=now,
+                finished_at=now,
+                public_reason="artifact Docker image did not build",
+                reason_code="docker-build",
+                failure_provider="hetzner",
+                failure_lane="buildkit",
+                private_failure_detail="missing vendor/harness/Cargo.toml",
+                private_failure_log_tail=(
+                    "error: No such file or directory (os error 2)"
+                ),
+                failure_captured_at=now,
+            )
+        )
+    _install_db(app, session_maker)
+    _install_chain(app)
+    token = await _login(client, keypair=miner)
+
+    response = await client.post(
+        "/mcp",
+        headers={"authorization": f"Bearer {token}"},
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "get_my_screening_feedback",
+                "arguments": {"agent_id": str(agent_id)},
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["isError"] is False
+    feedback = json.loads(result["content"][0]["text"])
+    failure = feedback["attempts"][0]
+    assert failure["attempt_id"] == str(attempt_id)
+    assert failure["provider"] == "hetzner"
+    assert failure["lane"] == "buildkit"
+    assert failure["detail"] == "missing vendor/harness/Cargo.toml"
