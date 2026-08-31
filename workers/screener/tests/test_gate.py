@@ -1596,6 +1596,55 @@ async def test_build_and_health_failures_are_deterministic(
     assert "never healthy" in result.detail
 
 
+async def test_exited_harness_fails_health_immediately_with_retained_logs(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """An exited ``--rm`` harness used to burn the full health deadline.
+
+    Keep the stopped container until the gate's normal teardown, so the first
+    failed sidecar probe can inspect the lifecycle state and attach its bounded
+    logs to the verdict.
+    """
+
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+    harness_name = (
+        "ditto-screen-550e8400-e29b-41d4-a716-446655440000-"
+        "7c5df3f9-3ea7-47ba-92d1-1bbcf4c5f300"
+    )
+
+    async def exited_harness(
+        args: list[str], *, stdin: Any = None, **_: Any
+    ) -> tuple[int, str]:
+        calls.append(args)
+        if args[0] == "build" and stdin is not None:
+            stdin.read()
+            _write_iidfile(args)
+        if args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
+            return 0, "sha256:" + "34" * 32
+        if args[0] == "exec" and any("http://harness:" in arg for arg in args):
+            return 1, "<urlopen error [Errno -3] Try again>"
+        if args[:4] == ["container", "inspect", "--format", "{{.State.Status}}"]:
+            return 0, "exited"
+        if args[:2] == ["logs", harness_name]:
+            return 0, "application exited: missing runtime dependency"
+        return 0, ""
+
+    gate = _gate_with(
+        make_config(run_timeout_seconds=60.0), exited_harness, tarball=tarball
+    )
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
+    assert "harness exited before its health endpoint became ready" in result.detail
+    assert "missing runtime dependency" in result.detail
+    assert not any(
+        call[0] == "run" and call[-1] == "sha256:" + "34" * 32 and "--rm" in call
+        for call in calls
+    )
+
+
 async def test_image_declared_volume_is_rejected_before_runtime(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

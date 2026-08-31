@@ -2264,7 +2264,6 @@ class BuildGate:
         run_args = [
             "run",
             "-d",
-            "--rm",
             "--init",
             "--name",
             container,
@@ -2337,7 +2336,9 @@ class BuildGate:
         if progress is not None:
             progress("health_check")
         healthy, detail = await self._wait_healthy(
-            harness_base, probe_container=gateway_container
+            harness_base,
+            probe_container=gateway_container,
+            harness_container=container,
         )
         if not healthy:
             return (
@@ -2448,7 +2449,11 @@ for port in (11434, 11435):
         return False, "fake gateway did not become ready"
 
     async def _wait_healthy(
-        self, harness_base: str, *, probe_container: str | None = None
+        self,
+        harness_base: str,
+        *,
+        probe_container: str | None = None,
+        harness_container: str | None = None,
     ) -> tuple[bool, str]:
         """Poll the submitted container's health endpoint until the deadline."""
         url = f"{harness_base}{self._config.health_path}"
@@ -2463,6 +2468,24 @@ for port in (11434, 11435):
                 if code == 0:
                     return True, ""
                 last = _log_tail(out) or "unreachable"
+                if harness_container is not None:
+                    inspect_code, lifecycle = await self._run(
+                        [
+                            "container",
+                            "inspect",
+                            "--format",
+                            "{{.State.Status}}",
+                            harness_container,
+                        ],
+                        timeout=5.0,
+                    )
+                    lifecycle = lifecycle.strip().lower()
+                    if inspect_code == 0 and lifecycle in {"dead", "exited"}:
+                        return (
+                            False,
+                            "harness exited before its health endpoint became ready "
+                            f"({last})",
+                        )
             else:
                 try:
                     resp = await self._client.get(url, timeout=5.0)
