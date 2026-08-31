@@ -50,6 +50,7 @@ _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 
 def _item(agent_id: UUID, **overrides: Any) -> ScreenerQueueItem:
     overrides.setdefault("lease_deadline", datetime.now(UTC) + timedelta(hours=1))
+    overrides.setdefault("policy_version", SCREENING_POLICY_VERSION)
     return ScreenerQueueItem(
         agent_id=agent_id,
         miner_hotkey=_MINER,
@@ -988,7 +989,9 @@ async def test_policy_newer_than_build_does_not_claim(
 async def test_floor_policy_claims_and_signs_floor_policy(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    platform = _FakePlatform([[_item(uuid4())]])
+    platform = _FakePlatform(
+        [[_item(uuid4(), policy_version=SCREENING_FLOOR_POLICY_VERSION)]]
+    )
     platform.required_policy_version = SCREENING_FLOOR_POLICY_VERSION
     gate = _FakeGate(_decision(ScreeningOutcome.PASS))
     worker = _worker(make_config(), platform, gate)
@@ -998,6 +1001,27 @@ async def test_floor_policy_claims_and_signs_floor_policy(
     assert gate.policy_versions == [SCREENING_FLOOR_POLICY_VERSION]
     assert platform.verdicts[0]["policy_version"] == SCREENING_FLOOR_POLICY_VERSION
     assert platform.heartbeats
+    assert all(
+        heartbeat.policy_version == SCREENING_FLOOR_POLICY_VERSION
+        for heartbeat in platform.heartbeats
+    )
+
+
+async def test_isolated_canary_uses_item_policy_without_changing_fleet_heartbeat(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A V11 canary stays claimable while the ordinary queue remains at V10."""
+    platform = _FakePlatform(
+        [[_item(uuid4(), policy_version=SCREENING_POLICY_VERSION)]]
+    )
+    platform.required_policy_version = SCREENING_FLOOR_POLICY_VERSION
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+
+    assert await worker._sweep(asyncio.Event()) == 1
+    assert platform.claimed_policy_versions == [SCREENING_FLOOR_POLICY_VERSION]
+    assert gate.policy_versions == [SCREENING_POLICY_VERSION]
+    assert platform.verdicts[0]["policy_version"] == SCREENING_POLICY_VERSION
     assert all(
         heartbeat.policy_version == SCREENING_FLOOR_POLICY_VERSION
         for heartbeat in platform.heartbeats

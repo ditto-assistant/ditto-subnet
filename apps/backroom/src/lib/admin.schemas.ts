@@ -7024,6 +7024,7 @@ export const scheduleScreenerPolicyActivationInputSchema = z.object({
   targetPolicyVersion: z.number().int().positive(),
   activateAt: z.string().datetime({ offset: true }),
   rescreenScored: z.boolean().default(true),
+  canaryOnly: z.boolean().default(false),
   reason: auditReasonSchema(8),
   confirmation: z.literal(SCREENER_POLICY_ACTIVATION_CONFIRMATION),
 })
@@ -7068,6 +7069,7 @@ export const scoredPolicyRescreenReleaseSchema = z.object({
   position: z.number().int().positive(),
   state: z.enum(['pending', 'running', 'paused', 'terminal']),
   attempt_id: z.string().uuid().nullable(),
+  review_settings_revision: z.number().int().positive().nullable().default(null),
 })
 
 export const scoredPolicyRescreenViewSchema = z.object({
@@ -7084,6 +7086,7 @@ export const advanceScoredPolicyRescreenInputSchema = z.object({
   expectedActivationRevision: z.number().int().positive(),
   expectedAgentId: z.string().uuid(),
   retryPaused: z.boolean().default(false),
+  reviewSettingsRevision: z.number().int().positive().nullable().default(null),
   reason: auditReasonSchema(8),
   confirmation: z.literal(ADVANCE_SCORED_POLICY_RESCREEN_CONFIRMATION),
 })

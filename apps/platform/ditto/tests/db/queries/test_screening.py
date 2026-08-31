@@ -32,6 +32,7 @@ from ditto.db.models import (
 from ditto.db.queries.screening import (
     _EXHAUSTED_REASON_CODE,
     MAX_SCREENING_EXPIRIES,
+    POLICY_ONLY_RESCREEN_REASON,
     claim_screening_attempts,
     expire_screening_attempts,
 )
@@ -290,6 +291,7 @@ async def _claim(
     limit: int = 10,
     deferred_review_mode: str = "off",
     now: datetime | None = None,
+    canary_policy_version: int | None = None,
 ) -> list:
     async with session.begin():
         return await claim_screening_attempts(
@@ -299,6 +301,7 @@ async def _claim(
             ttl=timedelta(minutes=45),
             limit=limit,
             deferred_review_mode=deferred_review_mode,
+            canary_policy_version=canary_policy_version,
         )
 
 
@@ -1992,6 +1995,25 @@ def _due_activation(*, rescreen_scored: bool):
         )
 
 
+@contextmanager
+def _due_canary_activation(
+    *, target_policy_version: int, activation_revision: int | None = None
+):
+    """Publish an isolated scored-rescreen target without raising the queue."""
+    update_effective_screener_policy(
+        SCREENING_FLOOR_POLICY_VERSION,
+        rescreen_scored=True,
+        scored_rescreen_policy_version=target_policy_version,
+        scored_rescreen_activation_revision=activation_revision,
+    )
+    try:
+        yield
+    finally:
+        update_effective_screener_policy(
+            SCREENING_FLOOR_POLICY_VERSION, rescreen_scored=False
+        )
+
+
 def _scored_agent(*, hotkey: str, name: str, created_at: datetime | None = None):
     agent = Agent(
         agent_id=uuid4(),
@@ -2080,6 +2102,53 @@ async def test_scheduled_rescreen_skips_scored_agent_when_flag_is_off(
         claimed = await _claim(session)
 
     assert agent.agent_id not in {a.agent_id for a, _, _ in claimed}
+
+
+async def test_isolated_rescreen_requires_canary_capability_and_attests_target(
+    session: AsyncSession,
+) -> None:
+    """A V11 release cannot be claimed by a V10-only worker or new arrivals."""
+    await _activate_current_era(session)
+    target = SCREENING_FLOOR_POLICY_VERSION + 1
+    agent = _scored_agent(hotkey="5HK-isolated-canary", name="isolated-canary")
+    async with session.begin():
+        activation = ScreenerPolicyActivation(
+            parent_revision=0,
+            target_policy_version=target,
+            activate_at=datetime.now(UTC) - timedelta(minutes=1),
+            rescreen_scored=True,
+            canary_only=True,
+            reason="release one isolated scored policy canary only",
+            actor="test",
+        )
+        session.add_all((agent, activation))
+        await session.flush()
+        session.add(
+            ScoredPolicyRescreenRelease(
+                release_id=uuid4(),
+                activation_revision=activation.revision,
+                target_policy_version=target,
+                agent_id=agent.agent_id,
+                position=1,
+                state="pending",
+                attempt_id=None,
+                actor="test",
+                reason="release one isolated scored policy canary only",
+            )
+        )
+
+    with _due_canary_activation(
+        target_policy_version=target,
+        activation_revision=activation.revision,
+    ):
+        assert await _claim(session) == []
+        claimed = await _claim(session, canary_policy_version=target)
+
+    attempt = next(
+        attempt for row, attempt, _ in claimed if row.agent_id == agent.agent_id
+    )
+    assert attempt.policy_version == target
+    assert attempt.reason_code == POLICY_ONLY_RESCREEN_REASON
 
 
 async def test_expired_scored_policy_release_pauses_without_removing_the_score(

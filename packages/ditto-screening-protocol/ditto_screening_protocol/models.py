@@ -298,6 +298,16 @@ class ScreenerQueueItem(BaseModel):
             ),
         ),
     ] = None
+    policy_version: Annotated[
+        int | None,
+        Field(
+            ge=1,
+            description=(
+                "Exact policy version bound to this claimed attempt. Null only "
+                "for the legacy read-only queue endpoint."
+            ),
+        ),
+    ] = None
     precheck_reason_code: Annotated[
         str | None,
         Field(
@@ -363,6 +373,8 @@ class ScreenerQueueItem(BaseModel):
             raise ValueError("deferred source review requires the mechanical lane")
         if self.review_settings_override is not None and self.build_only:
             raise ValueError("review settings override requires a full review")
+        if self.attempt_id is not None and self.policy_version is None:
+            raise ValueError("claimed screening work requires a policy version")
         return self
 
 
@@ -1480,7 +1492,10 @@ class ScreenResultRequest(BaseModel):
                 raise ValueError("review_notes require attempt_id")
             if self.manifest_digest is None:
                 raise ValueError("review_notes require manifest_digest")
-            if source_review_notes_digest(self.review_notes) != self.review_notes_digest:
+            if (
+                source_review_notes_digest(self.review_notes)
+                != self.review_notes_digest
+            ):
                 raise ValueError("review_notes do not match review_notes_digest")
         if self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
             if self.review_audit is None or self.review_audit_digest is None:

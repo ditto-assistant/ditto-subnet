@@ -1018,6 +1018,7 @@ export async function scheduleScreenerPolicyActivation(rawInput: unknown, actor:
       target_policy_version: input.targetPolicyVersion,
       activate_at: input.activateAt,
       rescreen_scored: input.rescreenScored,
+      ...(input.canaryOnly ? { canary_only: true } : {}),
       reason: input.reason,
       actor,
       confirmation: input.confirmation,
@@ -1042,6 +1043,9 @@ export async function advanceScoredPolicyRescreen(rawInput: unknown, actor: stri
         expected_activation_revision: input.expectedActivationRevision,
         expected_agent_id: input.expectedAgentId,
         retry_paused: input.retryPaused,
+        ...(input.reviewSettingsRevision === null
+          ? {}
+          : { review_settings_revision: input.reviewSettingsRevision }),
         reason: input.reason,
         actor,
         confirmation: input.confirmation,

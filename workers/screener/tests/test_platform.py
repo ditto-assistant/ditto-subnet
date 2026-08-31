@@ -64,6 +64,9 @@ async def test_claim_next_parses_leased_item(
         assert request.method == "POST"
         assert request.url.path == "/api/v1/screener/claim"
         assert request.url.params["policy_version"] == str(SCREENING_POLICY_VERSION)
+        assert request.url.params["canary_policy_version"] == str(
+            SCREENING_POLICY_VERSION
+        )
         assert request.url.params["renewable_lease"] == "true"
         assert request.url.params["review_settings_revision"] == "0"
         assert request.url.params["review_settings_instance_id"] == "worker-1"
@@ -83,6 +86,7 @@ async def test_claim_next_parses_leased_item(
                         "created_at": "2026-07-06T12:00:00Z",
                         "attempt_id": "550e8400-e29b-41d4-a716-446655440001",
                         "lease_deadline": "2026-07-06T12:30:00Z",
+                        "policy_version": SCREENING_POLICY_VERSION,
                     }
                 ],
                 "count": 1,

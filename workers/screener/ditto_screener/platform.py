@@ -43,6 +43,7 @@ from ditto_screener.review_settings import (
     bootstrap_review_settings,
 )
 from ditto_screening_protocol import (
+    SCREENING_POLICY_VERSION,
     ArtifactResponse,
     ScreenedImageCompletedPart,
     ScreenedImagePartUploadRequest,
@@ -390,6 +391,11 @@ class PlatformClient:
         params: dict[str, str | int] = {
             "limit": 1,
             "policy_version": policy_version,
+            # New workers advertise their highest implemented policy without
+            # changing the normal queue's required version. Platform uses this
+            # only to keep an isolated scored-policy canary away from an older
+            # worker that would not understand the item-bound target.
+            "canary_policy_version": SCREENING_POLICY_VERSION,
             "renewable_lease": "true",
             "review_settings_revision": review_settings.revision,
             "review_settings_instance_id": instance_id,

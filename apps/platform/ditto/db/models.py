@@ -28,6 +28,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     Text,
     UniqueConstraint,
+    false,
     func,
     text,
 )
@@ -6416,6 +6417,9 @@ class ScreenerPolicyActivation(Base):
         TIMESTAMP(timezone=True), nullable=False
     )
     rescreen_scored: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    canary_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -6466,6 +6470,7 @@ class ScoredPolicyRescreenRelease(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     state: Mapped[str] = mapped_column(Text, nullable=False)
     attempt_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    review_settings_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -6496,6 +6501,12 @@ class ScoredPolicyRescreenRelease(Base):
             ["screening_attempts.attempt_id"],
             ondelete="RESTRICT",
             name="scored_policy_rescreen_releases_attempt_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["review_settings_revision"],
+            ["screener_review_settings_revisions.revision"],
+            ondelete="RESTRICT",
+            name="scored_policy_rescreen_releases_review_settings_fkey",
         ),
         CheckConstraint(
             "target_policy_version >= 1 AND position >= 1",

@@ -73,6 +73,7 @@ async def insert_screener_policy_activation(
     target_policy_version: int,
     activate_at: datetime,
     rescreen_scored: bool,
+    canary_only: bool = False,
     reason: str,
     actor: str,
 ) -> ScreenerPolicyActivation:
@@ -87,6 +88,7 @@ async def insert_screener_policy_activation(
         target_policy_version=target_policy_version,
         activate_at=activate_at,
         rescreen_scored=rescreen_scored,
+        canary_only=canary_only,
         reason=reason,
         actor=actor,
     )

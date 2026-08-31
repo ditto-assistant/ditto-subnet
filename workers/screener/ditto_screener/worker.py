@@ -421,9 +421,19 @@ class ScreenerWorker:
         for item in queue.items:
             if stop.is_set():
                 break
+            item_policy_version = item.policy_version or screen_version
+            if not (
+                SCREENING_FLOOR_POLICY_VERSION
+                <= item_policy_version
+                <= SCREENING_POLICY_VERSION
+            ):
+                raise PlatformError(
+                    "claimed item policy is outside this worker's supported range: "
+                    f"{item_policy_version}"
+                )
             await self._screen_one(
                 item,
-                policy_version=screen_version,
+                policy_version=item_policy_version,
                 normal_review_settings=review_settings,
             )
             done += 1

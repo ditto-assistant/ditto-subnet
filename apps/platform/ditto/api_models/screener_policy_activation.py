@@ -44,6 +44,7 @@ class ScreenerPolicyActivationRevision(BaseModel):
     target_policy_version: int = Field(ge=1)
     activate_at: datetime
     rescreen_scored: bool
+    canary_only: bool = False
     reason: str
     actor: str
     created_at: datetime
@@ -64,6 +65,10 @@ class ScheduleScreenerPolicyActivationRequest(BaseModel):
     target_policy_version: int = Field(ge=1)
     activate_at: datetime
     rescreen_scored: bool = True
+    # Keep the ordinary queue at the floor version and allow only explicit
+    # scored-rollout releases to attest the target policy.  This is the safe
+    # way to exercise a new policy while source review is otherwise off.
+    canary_only: bool = False
     reason: str = Field(min_length=8)
     confirmation: str
     # Carried by Backroom MCP writes for the operator audit trail; the
@@ -97,6 +102,7 @@ class ScoredPolicyRescreenReleaseView(BaseModel):
     position: int = Field(ge=1)
     state: ScoredRescreenState
     attempt_id: UUID | None
+    review_settings_revision: int | None = None
 
 
 class ScoredPolicyRescreenView(BaseModel):
@@ -119,6 +125,7 @@ class AdvanceScoredPolicyRescreenRequest(BaseModel):
     expected_activation_revision: int = Field(ge=1)
     expected_agent_id: UUID
     retry_paused: bool = False
+    review_settings_revision: int | None = Field(default=None, ge=1)
     reason: str = Field(min_length=8)
     confirmation: str
     actor: str | None = Field(default=None, max_length=120)

@@ -8207,7 +8207,7 @@ class TestSubmitResult:
             assert release is not None
             assert release.state == "paused"
 
-    async def test_scored_policy_rescreen_pass_retains_score_and_stamps_new_policy(
+    async def test_isolated_scored_policy_rescreen_pass_retains_score_and_stamps_target(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -8229,6 +8229,7 @@ class TestSubmitResult:
                 target_policy_version=target_policy,
                 activate_at=now - timedelta(minutes=1),
                 rescreen_scored=True,
+                canary_only=True,
                 reason="release one scored v11 clear while retaining its v10 rank",
                 actor="test",
             )

@@ -81,6 +81,7 @@ def _payload(
     activate_at: str | None = None,
     target_policy_version: int | None = None,
     rescreen_scored: bool = True,
+    canary_only: bool = False,
 ) -> dict[str, object]:
     body: dict[str, object] = {
         "expected_revision": expected_revision,
@@ -91,6 +92,7 @@ def _payload(
         ),
         "activate_at": activate_at if activate_at is not None else _future(),
         "rescreen_scored": rescreen_scored,
+        "canary_only": canary_only,
         "reason": "scheduled v11 activation for the planner-forced I7 amendment",
         "actor": "backroom:test",
         "confirmation": confirmation,
@@ -149,6 +151,7 @@ class TestDefaultAndRoundTrip:
         assert body["latest"]["state"] == "pending"
         assert body["latest"]["revision"] == 1
         assert body["latest"]["target_policy_version"] == SCREENING_POLICY_VERSION
+        assert body["latest"]["canary_only"] is False
 
     async def test_past_activate_at_via_the_api_is_rejected_even_for_due_semantics(
         self,
@@ -357,6 +360,31 @@ class TestResolverDueActivation:
             policy = await resolve_screener_policy_activation(session)
             assert policy.required_policy_version == SCREENING_POLICY_VERSION
 
+    async def test_due_canary_keeps_ordinary_queue_at_the_floor(
+        self,
+        activation_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        from ditto.api_server.screener_policy_activation import (
+            resolve_screener_policy_activation,
+        )
+
+        async with activation_maker() as session:
+            await insert_screener_policy_activation(
+                session,
+                parent_revision=0,
+                target_policy_version=SCREENING_POLICY_VERSION,
+                activate_at=datetime.now(UTC) - timedelta(minutes=1),
+                rescreen_scored=True,
+                canary_only=True,
+                reason="test: isolate one scored v11 policy canary",
+                actor="test",
+            )
+            await session.commit()
+            policy = await resolve_screener_policy_activation(session)
+            assert policy.required_policy_version == SCREENING_FLOOR_POLICY_VERSION
+            assert policy.scored_rescreen_policy_version == SCREENING_POLICY_VERSION
+            assert policy.rescreen_stale_agents is True
+
 
 class TestRestoreScoredSnapshot:
     async def test_restores_exact_historical_pass_without_requeueing(
@@ -534,6 +562,41 @@ class TestRestoreScoredSnapshot:
 
 
 class TestScoredPolicyRescreenCheckpoint:
+    async def test_isolated_canary_requires_an_immutable_l4_enforce_revision(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        activation_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """No V11 canary may escape the global review-off posture unaudited."""
+        _install(app, activation_maker)
+        async with activation_maker() as session:
+            activation = await insert_screener_policy_activation(
+                session,
+                parent_revision=0,
+                target_policy_version=SCREENING_POLICY_VERSION,
+                activate_at=datetime.now(UTC) - timedelta(minutes=5),
+                rescreen_scored=True,
+                canary_only=True,
+                reason="test canary must bind immutable L4-enforce settings",
+                actor="test",
+            )
+            await session.commit()
+
+        response = await client.post(
+            f"{_URL}/advance-scored-rescreen",
+            headers=_HEADERS,
+            json={
+                "expected_activation_revision": activation.revision,
+                "expected_agent_id": str(uuid4()),
+                "reason": "do not release a canary without a fixed L4 posture",
+                "confirmation": _ADVANCE_CONFIRMATION,
+            },
+        )
+
+        assert response.status_code == 422
+        assert "immutable L4-enforce review settings" in response.json()["message"]
+
     async def test_releases_one_top_down_score_and_stops_until_terminal(
         self,
         app: FastAPI,
@@ -628,6 +691,7 @@ class TestScoredPolicyRescreenCheckpoint:
             "position": 1,
             "state": "pending",
             "attempt_id": None,
+            "review_settings_revision": None,
         }
         # A second call cannot turn a rollout checkpoint into a batch. The
         # original V10 score is still eligible while the new attestation waits.

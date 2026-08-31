@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, and_, case, exists, func, or_, select
+from sqlalchemy import ColumnElement, and_, case, exists, false, func, or_, select
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.selectable import ScalarSelect
 
@@ -40,6 +40,8 @@ from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollou
 from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.screener_policy_state import (
     effective_rescreen_scored,
+    effective_scored_rescreen_activation_revision,
+    effective_scored_rescreen_policy_version,
     effective_screening_policy_version,
 )
 
@@ -658,6 +660,7 @@ async def claim_screening_attempts(
     deferred_review_mode: str = "off",
     review_settings_binding: tuple[int, str, str, str] | None = None,
     review_settings_enrolled_node_id: str | None = None,
+    canary_policy_version: int | None = None,
 ) -> list[tuple[Agent, ScreeningAttempt, UUID | None]]:
     """Claim completion-lane contenders, then least-scored eligible work.
 
@@ -783,13 +786,36 @@ async def claim_screening_attempts(
             ),
         )
     )
-    released_scored_policy_rescreen = exists(
-        select(ScoredPolicyRescreenRelease.release_id).where(
-            ScoredPolicyRescreenRelease.agent_id == Agent.agent_id,
-            ScoredPolicyRescreenRelease.target_policy_version
-            == effective_screening_policy_version(),
-            ScoredPolicyRescreenRelease.state == "pending",
+    scored_rescreen_policy_version = effective_scored_rescreen_policy_version()
+    scored_rescreen_activation_revision = (
+        effective_scored_rescreen_activation_revision()
+    )
+    scored_release_criteria: list[ColumnElement[bool]] = [
+        ScoredPolicyRescreenRelease.target_policy_version
+        == scored_rescreen_policy_version,
+        ScoredPolicyRescreenRelease.state == "pending",
+    ]
+    if scored_rescreen_activation_revision is not None:
+        scored_release_criteria.append(
+            ScoredPolicyRescreenRelease.activation_revision
+            == scored_rescreen_activation_revision
         )
+    can_claim_scored_rescreen = scored_rescreen_policy_version is not None and (
+        scored_rescreen_policy_version == effective_screening_policy_version()
+        or (
+            canary_policy_version is not None
+            and canary_policy_version >= scored_rescreen_policy_version
+        )
+    )
+    released_scored_policy_rescreen = (
+        exists(
+            select(ScoredPolicyRescreenRelease.release_id).where(
+                ScoredPolicyRescreenRelease.agent_id == Agent.agent_id,
+                *scored_release_criteria,
+            )
+        )
+        if can_claim_scored_rescreen
+        else false()
     )
     # Deliberately NOT gated on ``deferred_review_mode``. An open deferred hold
     # is an obligation the queue already took on, and the only way it clears is
@@ -864,7 +890,7 @@ async def claim_screening_attempts(
         (
             Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE))
             & effective_rescreen_scored()
-            & (Agent.screening_policy_version < effective_screening_policy_version())
+            & (Agent.screening_policy_version < (scored_rescreen_policy_version or 0))
             & prerequisite_admitted
             & released_scored_policy_rescreen
         ),
@@ -1097,11 +1123,35 @@ async def claim_screening_attempts(
         force_full_review = bool(
             retry_override is not None and retry_override.force_full_review
         )
+        policy_rescreen_release = (
+            await session.scalar(
+                select(ScoredPolicyRescreenRelease)
+                .where(
+                    ScoredPolicyRescreenRelease.agent_id == agent.agent_id,
+                    *scored_release_criteria,
+                )
+                .with_for_update()
+            )
+            if can_claim_scored_rescreen
+            else None
+        )
+        attempt_policy_version = (
+            policy_rescreen_release.target_policy_version
+            if policy_rescreen_release is not None
+            else effective_screening_policy_version()
+        )
         attempt_review_settings_binding = review_settings_binding
-        if (
-            retry_override is not None
+        canary_review_settings_revision = (
+            retry_override.review_settings_revision
+            if retry_override is not None
             and retry_override.review_settings_revision is not None
-        ):
+            else (
+                policy_rescreen_release.review_settings_revision
+                if policy_rescreen_release is not None
+                else None
+            )
+        )
+        if canary_review_settings_revision is not None:
             # A canary may reuse an immutable, previously-audited enforce
             # revision for exactly this retry. Never infer the posture from
             # the live global revision: that would turn a one-attempt canary
@@ -1110,7 +1160,7 @@ async def claim_screening_attempts(
                 continue
             canary_settings = await session.get(
                 ScreenerReviewSettingsRevision,
-                retry_override.review_settings_revision,
+                canary_review_settings_revision,
             )
             if canary_settings is None:
                 continue
@@ -1159,13 +1209,12 @@ async def claim_screening_attempts(
             mechanical_first
             or (
                 agent.status == AgentStatus.EVALUATING
-                and agent.screening_policy_version
-                >= effective_screening_policy_version()
+                and agent.screening_policy_version >= attempt_policy_version
             )
         )
         policy_only = (
             not build_only
-            and agent.screening_policy_version < effective_screening_policy_version()
+            and agent.screening_policy_version < attempt_policy_version
             and all(
                 value is not None
                 for value in (
@@ -1178,21 +1227,11 @@ async def claim_screening_attempts(
                 )
             )
         )
-        policy_rescreen_release = await session.scalar(
-            select(ScoredPolicyRescreenRelease)
-            .where(
-                ScoredPolicyRescreenRelease.agent_id == agent.agent_id,
-                ScoredPolicyRescreenRelease.target_policy_version
-                == effective_screening_policy_version(),
-                ScoredPolicyRescreenRelease.state == "pending",
-            )
-            .with_for_update()
-        )
         attempt = ScreeningAttempt(
             attempt_id=uuid4(),
             agent_id=agent.agent_id,
             screener_hotkey=screener_hotkey,
-            policy_version=effective_screening_policy_version(),
+            policy_version=attempt_policy_version,
             status="running",
             started_at=now,
             deadline=now + ttl,
