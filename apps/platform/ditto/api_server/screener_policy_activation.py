@@ -41,9 +41,11 @@ DEFAULT_TTL_SECONDS = 5.0
 class EffectiveScreenerPolicy(NamedTuple):
     """The version the queue requires now, and what a due activation implies.
 
-    ``scored_rescreen_policy_version`` is set only for a due canary-only
-    activation. It lets an explicit rollout release attest the target without
-    raising the normal queue requirement for fresh submissions.
+    ``scored_rescreen_policy_version`` is set for every due activation that
+    opts scored rows into rescreening. It makes each stale score claimable only
+    after its explicit, top-down rollout release. Canary-only activations keep
+    the ordinary queue at the floor; full activations also require the target
+    policy for fresh submissions.
     """
 
     required_policy_version: int
@@ -156,7 +158,7 @@ class ScreenerPolicyActivationResolver:
                     rescreen_scored=governing.rescreen_scored,
                     scored_rescreen_policy_version=(
                         governing.target_policy_version
-                        if governing.canary_only and governing.rescreen_scored
+                        if governing.rescreen_scored
                         else None
                     ),
                     scored_rescreen_activation_revision=(
@@ -205,9 +207,7 @@ async def resolve_screener_policy_activation(
             governing_revision=governing.revision,
             rescreen_scored=governing.rescreen_scored,
             scored_rescreen_policy_version=(
-                governing.target_policy_version
-                if governing.canary_only and governing.rescreen_scored
-                else None
+                governing.target_policy_version if governing.rescreen_scored else None
             ),
             scored_rescreen_activation_revision=(
                 governing.revision if governing.rescreen_scored else None
