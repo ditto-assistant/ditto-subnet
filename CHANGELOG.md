@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.179.6 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Fail over bounded review completions
+  ([#1431](https://github.com/ditto-assistant/ditto-subnet/pull/1431),
+  [`6aa4cbf`](https://github.com/ditto-assistant/ditto-subnet/commit/6aa4cbf33fdf91ebdc8a629b338c9970fc13496f))
+
+
 ## v0.179.5 (2026-08-31)
 
 ### Bug Fixes
