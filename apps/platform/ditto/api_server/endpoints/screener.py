@@ -5114,6 +5114,7 @@ async def _backfill_quarantine_payloads(
 async def submit_result(
     agent_id: UUID,
     payload: ScreenResultRequest,
+    request: Request,
     screener_hotkey: ScreenerDep,
     response: Response,
     chain: ChainDep,
@@ -5530,10 +5531,20 @@ async def submit_result(
                         "verdict references an unknown reviewer settings revision"
                     )
                 settings = ScreenerReviewSettings.model_validate(revision.settings)
+                allowed_scopes = {"*", payload.review_settings_instance_id}
+                enrolled_node_id = getattr(request.state, "screener_node_id", None)
+                if (
+                    enrolled_node_id is not None
+                    and _is_enrolled_node_heartbeat_instance(
+                        node_id=enrolled_node_id,
+                        instance_id=payload.review_settings_instance_id,
+                    )
+                ):
+                    allowed_scopes.add(enrolled_node_id)
                 if (
                     revision.scope != payload.review_settings_scope
                     or revision.checksum != payload.review_settings_checksum
-                    or revision.scope not in {"*", payload.review_settings_instance_id}
+                    or revision.scope not in allowed_scopes
                 ):
                     raise AgentNotScreenableError(
                         "verdict reviewer settings binding does not match "
