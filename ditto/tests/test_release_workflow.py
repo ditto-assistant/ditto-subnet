@@ -341,6 +341,7 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
         "build-sandbox-docker",
         "build-pylon",
         "prepare-dittobench",
+        "build-coding-executor-scorer",
         "build-dittobench-amd64",
         "build-dittobench-arm64",
         "build-model-relay-compat",
@@ -1373,6 +1374,7 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
         "build-sandbox-docker": ["sandbox-docker"],
         "build-pylon": ["pylon"],
         "build-dittobench-amd64": ["dittobench-api-amd64"],
+        "build-coding-executor-scorer": ["coding-executor-scorer-amd64"],
         "build-dittobench-arm64": ["dittobench-api-arm64"],
         "build-model-relay-compat": ["model-relay-compat"],
         "assemble-stack": ["stack-release"],
@@ -1388,5 +1390,5 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
     assert reader_scopes["build-validator-arm64"] == [["validator-arm64", "validator"]]
     assert (
         len({scope for job_scopes in writer_scopes.values() for scope in job_scopes})
-        == 11
+        == 12
     )
