@@ -279,6 +279,16 @@ describe("screening cross-feed and policy labels", () => {
     expect(allActive.querySelector(".pipeline-lane-divider")).toBeNull();
   });
 
+  it("keeps counted active admission work visible while its row is delayed", () => {
+    const container = board([], { statusCounts: { screening: 1 } });
+    const notice = container.querySelector("#pipeline-admission .pipeline-unlisted-admission");
+    expect(notice?.textContent).toBe(
+      "1 active admission is in progress. Submission details are awaiting the next pipeline snapshot.",
+    );
+    expect(notice).toHaveAttribute("role", "status");
+    expect(container.querySelector("#pipeline-admission .pipeline-empty")).toBeNull();
+  });
+
   it("renders the admission step track per card state", () => {
     const screeners: FleetReport = {
       screeners: [
@@ -357,6 +367,12 @@ describe("screening cross-feed and policy labels", () => {
       "Source review stage 1 of 4: Broad source scan (L1)",
     );
     expect(ladder?.querySelectorAll(".review-rung")).toHaveLength(4);
+    const serialReview = card?.querySelector(".pipeline-serial-review");
+    expect(serialReview?.textContent).toBe("Manual review · one at a time");
+    expect(serialReview).toHaveAttribute(
+      "title",
+      "Source integrity reviews are deliberately processed one submission at a time.",
+    );
   });
 
   it("shows no review ladder for a card that is not in source review", () => {
@@ -376,6 +392,7 @@ describe("screening cross-feed and policy labels", () => {
     });
     const card = container.querySelector("#pipeline-admission .pipeline-item");
     expect(card?.querySelector(".review-ladder")).toBeNull();
+    expect(card?.querySelector(".pipeline-serial-review")).toBeNull();
     expect(card?.querySelector(".screener-progress-stage")?.textContent).toContain(
       "Building image",
     );
