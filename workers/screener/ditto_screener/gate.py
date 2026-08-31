@@ -443,7 +443,15 @@ def _prepare_gateway_state() -> tuple[str, str]:
     append access.  The containing directory is searchable but not writable, so
     the gateway cannot replace the counter with a file the worker cannot read.
     """
-    state_dir = tempfile.mkdtemp(prefix="ditto-gateway-state-")
+    # A systemd worker may use PrivateTmp, but rootless Docker runs outside that
+    # namespace. A bind mount from the private /tmp is therefore invisible to
+    # the daemon. The fleet gives us an explicit, per-worker host-visible root
+    # for this one ephemeral counter; local/test workers retain tempfile's
+    # default when it is not configured.
+    shared_root = os.environ.get("SCREENER_GATEWAY_STATE_ROOT")
+    if shared_root:
+        Path(shared_root).mkdir(mode=0o700, parents=True, exist_ok=True)
+    state_dir = tempfile.mkdtemp(prefix="ditto-gateway-state-", dir=shared_root)
     state_file = str(Path(state_dir) / "model-called")
     try:
         os.chmod(state_dir, 0o711)

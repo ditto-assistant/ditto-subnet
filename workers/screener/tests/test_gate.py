@@ -64,6 +64,20 @@ def test_gateway_state_is_owned_by_worker_and_appendable_by_rootless_uid() -> No
         shutil.rmtree(state_dir)
 
 
+def test_gateway_state_uses_the_configured_host_visible_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shared_root = tmp_path / "shared-gateway-state"
+    monkeypatch.setenv("SCREENER_GATEWAY_STATE_ROOT", str(shared_root))
+
+    state_dir, state_file = _prepare_gateway_state()
+    try:
+        assert Path(state_dir).parent == shared_root
+        assert Path(state_file).parent == Path(state_dir)
+    finally:
+        shutil.rmtree(state_dir)
+
+
 _URL = "https://storage.test/agent.tar.gz"
 
 
