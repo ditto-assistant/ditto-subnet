@@ -41,7 +41,12 @@ import { isFinalized, isOlderRun, rankEntries, rolloutSettledView } from "./lib/
 import { currentPage, initRouteListeners, syncFromLocation } from "./stores/routeStore";
 import type { BenchConfigPayload, GlossaryPayload, TimelinePayload } from "./types/bench";
 import type { FleetReport, HealthPayload, ValidatorNamesPayload } from "./types/fleet";
-import type { LeaderboardEntry, LeaderboardPayload, RolloutState } from "./types/leaderboard";
+import type {
+  EmissionRecipient,
+  LeaderboardEntry,
+  LeaderboardPayload,
+  RolloutState,
+} from "./types/leaderboard";
 import type { PipelineEntry } from "./types/pipeline";
 
 import { BenchmarkPage } from "./pages/BenchmarkPage";
@@ -194,12 +199,21 @@ export default function App(): JSX.Element {
 
   // Last-good board entries (kept across a failed tick so the search corpus
   // and the miner drilldown do not evaporate; the board itself renders its
-  // explicit unavailable state from the resource error).
+  // explicit unavailable state from the resource error). Each entry carries
+  // its emissions-fold standing (`_emission`) so the miner profile can name
+  // the crown holder without a second feed.
   const entries = createMemo<(LeaderboardEntry & { rank: number | null })[]>(
     (prev) => {
       const d = lb();
       if (!d) return prev;
-      return rankEntries(d.entries ?? [], settledView());
+      const emissionByAgent: Record<string, EmissionRecipient> = {};
+      (d.emissions?.recipients ?? []).forEach((recipient) => {
+        emissionByAgent[String(recipient.agent_id)] = recipient;
+      });
+      return rankEntries(d.entries ?? [], settledView()).map((entry) => ({
+        ...entry,
+        _emission: emissionByAgent[String(entry.agent_id)] ?? null,
+      }));
     },
     [] as (LeaderboardEntry & { rank: number | null })[],
   );

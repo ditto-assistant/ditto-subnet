@@ -500,6 +500,33 @@ body:not(.entity-page) .modal-actions .back-dashboard {
   border-color: color-mix(in oklab, var(--warn) 48%, transparent);
   background: color-mix(in oklab, var(--warn) 14%, transparent);
 }
+/* Miner-profile standing chip: the crown holder reads gold, matching the
+   board's emission badge; a miner with no board row reads neutral. */
+#d-bench.champion {
+  color: var(--gold);
+  border-color: color-mix(in oklab, var(--gold) 48%, transparent);
+  background: color-mix(in oklab, var(--gold) 12%, transparent);
+}
+#d-bench.plain {
+  color: var(--text-dim);
+  border-color: color-mix(in oklab, var(--border-strong) 80%, transparent);
+  background: transparent;
+}
+/* "Submission vN" beside the agent tenant's title: the header names which of
+   the miner's uploads the panel is about. */
+.d-version {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+/* One line under the profile's Standing rows pointing at where the run
+   evidence lives (the submission the row above links to). */
+.best-submission-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
 .stat-row {
   display: grid;
   grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
@@ -556,40 +583,8 @@ body:not(.entity-page) .modal-actions .back-dashboard {
 .vdetail .identity-note.warn {
   color: var(--warn, #b58900);
 }
-.split {
-  margin: 18px 0 0;
-}
 #d-stats {
   margin-top: 22px;
-}
-.split .seg {
-  display: flex;
-  height: 34px;
-  border-radius: 9px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-}
-.split .seg > div {
-  display: grid;
-  place-items: center;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--on-accent);
-}
-.split .legend {
-  display: flex;
-  gap: 16px;
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--text-dim);
-}
-.split .legend i {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  margin-right: 6px;
-  vertical-align: middle;
 }
 
 /* Spacing scale for the drawer's detail sections. Defined on #d-stats (not
@@ -662,7 +657,4 @@ body:not(.entity-page) .modal-actions .back-dashboard {
 .stat-head {
   color: var(--text);
   font-size: 17px;
-}
-.split .seg {
-  border-radius: 3px;
 }

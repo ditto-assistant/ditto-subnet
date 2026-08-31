@@ -1,6 +1,7 @@
 import { cleanup, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { shortKey } from "../lib/format";
 import { rankEntries } from "../lib/scoring";
 import { queryClient } from "../data/queryClient";
 import { currentPage, entityRoute, navigateToPage, syncFromLocation } from "../stores/routeStore";
@@ -114,8 +115,13 @@ describe("EntityPanel miner tenant", () => {
     expect(modal()).toHaveAttribute("aria-modal", "true");
     expect(modal()).toHaveAttribute("aria-hidden", "false");
     expect(document.getElementById("modal-back")?.classList.contains("open")).toBe(true);
-    expect(document.getElementById("d-title")).toHaveTextContent("Raw score rank #1");
-    // The hotkey is an entity anchor plus the copy control.
+    // The panel is titled with the miner's identity (elided hotkey with no
+    // reserved handle), not the run standing — that moved into the chip.
+    expect(document.getElementById("d-title")).toHaveTextContent(shortKey(topEntry.miner_hotkey));
+    expect(document.getElementById("d-bench")).toHaveTextContent("Rank #1");
+    // The hotkey is an entity anchor plus the copy control, labelled as the
+    // profile's key.
+    expect(document.querySelector(".dk-label")?.textContent).toBe("Miner profile");
     const anchor = document.querySelector('#d-hotkey a[data-entity-link="miner"]');
     expect(anchor).toHaveTextContent(topEntry.miner_hotkey);
     expect(document.getElementById("d-hotkey-copy")).toHaveAttribute(
@@ -126,15 +132,29 @@ describe("EntityPanel miner tenant", () => {
     expect(document.activeElement).toBe(document.getElementById("modal-close"));
   });
 
-  it("summarizes the run and links the full page", () => {
+  it("summarizes the standing and links the full page and the best submission", () => {
     renderPanel();
     visit("/#/overview?miner=" + topEntry.miner_hotkey);
-    expect(document.getElementById("d-bench")).toHaveTextContent("DittoBench v7");
-    expect(document.getElementById("d-stats")?.textContent).toContain("Best-scoring agent");
-    expect(document.getElementById("d-stats")?.textContent).toContain("Current leaderboard score");
+    const stats = document.getElementById("d-stats")?.textContent ?? "";
+    expect(stats).toContain("Standing");
+    expect(stats).toContain("Current leaderboard score");
+    // Bench provenance is a Standing row now, not the header chip.
+    expect(stats).toContain("DittoBench v7");
+    // The run evidence moved onto the submission; the profile links it.
+    const link = document.querySelector('#d-stats a[data-entity-link="agent"]');
+    expect(link).toHaveTextContent(topEntry.agent_name as string);
+    expect(link).toHaveAttribute("href", expect.stringContaining("agent=" + topEntry.agent_id));
+    expect(stats).toContain("per-case evidence live on the submission");
     const openFull = document.getElementById("d-open-full");
     expect(openFull).toHaveAttribute("href", "/miner/" + topEntry.miner_hotkey);
     expect(document.getElementById("d-stats")?.classList.contains("pipeline-mode")).toBe(false);
+  });
+
+  it("keeps the deep run evidence off the profile — no per-validator consensus block", () => {
+    renderPanel();
+    visit("/#/overview?miner=" + topEntry.miner_hotkey);
+    expect(document.getElementById("d-consensus")).toBeNull();
+    expect(document.getElementById("d-stats")?.textContent).not.toContain("Consensus (k=");
   });
 
   it("folds the composite derivation away without dropping it", () => {
@@ -166,6 +186,8 @@ describe("EntityPanel miner tenant", () => {
     await waitFor(() => {
       expect(document.getElementById("d-title")).toHaveTextContent("jupiter");
     });
+    // Off the current board, the chip says so instead of showing a rank.
+    expect(document.getElementById("d-bench")).toHaveTextContent("Not on the board");
     expect(document.getElementById("d-stats")?.textContent).toContain("X");
     expect(document.querySelector("#d-hotkey a")?.textContent).toContain(
       "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
@@ -173,11 +195,10 @@ describe("EntityPanel miner tenant", () => {
   });
 });
 
-// The miner's own profile — socials plus up to 25 recent submissions, most of
-// them re-uploads of one name — used to render above the run summary as one
-// unbounded list of raw status words. It is the follow-up question, not the
-// lede, so it now sits under the summary, folds behind a one-line digest, and
-// is scanned by status band rather than read end to end.
+// The miner panel is the profile: standing first (that is the board question
+// that opened it), then socials plus the submission history, open and scanned
+// by status band rather than read end to end. Run evidence lives on each
+// linked submission, not here.
 describe("EntityPanel miner profile card", () => {
   function profileCard(): HTMLDetailsElement {
     const el = document.querySelector("details.miner-profile-group");
@@ -197,7 +218,7 @@ describe("EntityPanel miner profile card", () => {
     return match;
   }
 
-  it("keeps the run summary above the profile and folds the profile shut", async () => {
+  it("keeps the standing above the profile and opens the profile", async () => {
     installProfileFetch(many());
     renderPanel();
     visit("/#/overview?miner=" + topEntry.miner_hotkey);
@@ -205,10 +226,11 @@ describe("EntityPanel miner profile card", () => {
       expect(document.querySelector("details.miner-profile-group")).not.toBeNull(),
     );
     const text = document.getElementById("d-stats")?.textContent ?? "";
-    expect(text.indexOf("Best-scoring agent")).toBeGreaterThanOrEqual(0);
-    expect(text.indexOf("Best-scoring agent")).toBeLessThan(text.indexOf("Public profile"));
-    // Folded, but the digest still says how much history is behind it.
-    expect(profileCard().open).toBe(false);
+    expect(text.indexOf("Standing")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("Standing")).toBeLessThan(text.indexOf("Public profile"));
+    // Open: the history is the profile's substance, and the digest still
+    // says how much of it there is.
+    expect(profileCard().open).toBe(true);
     expect(profileCard().querySelector(".cgsum")?.textContent).toContain("8 recent submissions");
     // The benchmark glossary stays the panel's last line, under both blocks.
     expect(text.indexOf("Public profile")).toBeLessThan(text.indexOf("What each category"));
@@ -259,15 +281,18 @@ describe("EntityPanel miner profile card", () => {
     await waitFor(() => expect(rows().length).toBe(5));
   });
 
-  it("says nothing under a scored summary when the profile is unavailable", async () => {
+  it("narrates a missing profile for a hotkey without calling the hotkey unknown", async () => {
+    // No profile stub installed: /public/miners/{hotkey} 404s. The profile
+    // is the panel's substance now, so its absence is stated — but a hotkey
+    // that simply published no profile is not an "unknown handle".
     renderPanel();
     visit("/#/overview?miner=" + topEntry.miner_hotkey);
     await waitFor(() =>
-      expect(document.getElementById("d-stats")?.textContent).toContain("Best-scoring agent"),
+      expect(document.getElementById("d-stats")?.textContent).toContain(
+        "No public profile yet for this miner.",
+      ),
     );
-    const text = document.getElementById("d-stats")?.textContent ?? "";
-    expect(text).not.toContain("Unknown miner handle");
-    expect(text).not.toContain("Could not load this miner profile");
+    expect(document.getElementById("d-stats")?.textContent).not.toContain("Unknown miner handle");
   });
 });
 
@@ -378,6 +403,20 @@ describe("EntityPanel agent tenant", () => {
     expect(document.querySelector("[data-agent-history]")?.tagName).toBe("SECTION");
     expect(document.body.textContent).not.toContain("Load details");
     spy.mockRestore();
+  });
+
+  it("reads as one submission with an uplink to the miner profile", async () => {
+    renderPanel();
+    visit("/#/submissions?agent=" + FIXTURE_TOP_AGENT_ID);
+    await waitFor(() =>
+      expect(document.getElementById("d-title")).toHaveTextContent("bolt-v7-top1"),
+    );
+    // The header names which upload this is…
+    expect(document.querySelector(".d-version")?.textContent).toBe("Submission v1");
+    // …and the key row is the uplink: the owning miner, opening the profile.
+    expect(document.querySelector(".dk-label")?.textContent).toBe("Submission by");
+    const anchor = document.querySelector('#d-hotkey a[data-entity-link="miner"]');
+    expect(anchor).toHaveTextContent("5EcmtyeSWeQKjSQLrPZk9v4a5wZTg4xzj4BQ6jn5Qh67bnqx");
   });
 
   it("does not mount per-question rows or restomp focus when a scored agent opens", async () => {

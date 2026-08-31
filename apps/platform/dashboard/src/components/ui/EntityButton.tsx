@@ -15,6 +15,9 @@ export interface EntityButtonProps {
   id: string | null | undefined;
   label?: string | null;
   class?: string | null;
+  /** Hover hint naming what the link opens (e.g. "Open the miner profile") —
+   * the two board click targets look alike and route differently. */
+  title?: string | null;
   /** Custom anchor content; defaults to the label (or the identifier). */
   children?: JSX.Element;
 }
@@ -45,6 +48,7 @@ export function EntityButton(props: EntityButtonProps): JSX.Element {
         <a
           class={a().class}
           href={a().href}
+          title={props.title ?? undefined}
           data-entity-link={a()["data-entity-link"]}
           onClick={onClick}
         >

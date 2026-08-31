@@ -402,20 +402,3 @@ export type WeightsSnapshot = ChainWeightsSnapshot & {
   stale?: boolean;
   age_seconds?: number | null;
 };
-
-// ── Consensus scores (/public/agent/{id}/scores) ─────────────
-
-export interface ConsensusScore {
-  validator_hotkey?: string;
-  composite: number;
-  bench_version?: number | null;
-  composite_breakdown?: CompositeBreakdown | null;
-  v9_base?: V9BaseEvidence | null;
-  case_results?: CaseResult[];
-}
-
-export interface ScoresPayload {
-  scores?: ConsensusScore[];
-  quorum?: number | null;
-  median_composite?: number | null;
-}
