@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.14 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Persist local private build diagnostics
+  ([#1406](https://github.com/ditto-assistant/ditto-subnet/pull/1406),
+  [`c6c65eb`](https://github.com/ditto-assistant/ditto-subnet/commit/c6c65eb823600c74564ad71629320af5ceb0f82f))
+
+
 ## v0.177.13 (2026-08-31)
 
 ### Bug Fixes
