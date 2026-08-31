@@ -265,6 +265,7 @@ paths = [
   "pyproject.toml",
   "release/components.toml",
   "scripts/build-stack-release.py",
+  "scripts/render-coding-executor-scorer-manifest.py",
   "scripts/publish-compat-runtime-index.sh",
   "scripts/release-plan.py",
   "scripts/test-validator-embedding-gateway.sh",
