@@ -598,6 +598,52 @@ class AdminCodingShadowReconciliationResponse(CodingEvaluationModel):
     weight_eligible: Literal[False] = False
 
 
+class AdminCodingShadowTicketSetRequest(BaseModel):
+    """One explicit, confirmed request for a fixed k=3 shadow ticket set."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    run_row_id: UUID
+    ticket_set_id: UUID
+    validator_hotkeys: Annotated[
+        tuple[Annotated[str, Field(pattern=_SS58_PATTERN)], ...],
+        Field(min_length=3, max_length=3),
+    ]
+    confirmation: Annotated[str, Field(min_length=1, max_length=1024)]
+
+    @model_validator(mode="after")
+    def authority_is_canonical(self) -> AdminCodingShadowTicketSetRequest:
+        validators = self.validator_hotkeys
+        if self.run_row_id.int == 0 or self.ticket_set_id.int == 0:
+            raise ValueError("coding shadow ticket-set UUID is nil")
+        if validators != tuple(sorted(validators)) or len(set(validators)) != 3:
+            raise ValueError(
+                "coding shadow ticket validators must be unique and sorted"
+            )
+        return self
+
+
+class AdminCodingShadowTicketRecord(CodingEvaluationModel):
+    ticket_id: UUID
+    validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    issued_at: datetime
+    deadline: datetime
+
+
+class AdminCodingShadowTicketSetResponse(CodingEvaluationModel):
+    """Redacted identities for one atomically issued shadow ticket set."""
+
+    run_row_id: UUID
+    ticket_set_id: UUID
+    tickets: tuple[
+        AdminCodingShadowTicketRecord,
+        AdminCodingShadowTicketRecord,
+        AdminCodingShadowTicketRecord,
+    ]
+    idempotent: bool
+    weight_eligible: Literal[False] = False
+
+
 def coding_run_evidence_digest(evidence: CodingRunEvidence) -> str:
     projection = evidence.model_dump(mode="json", by_alias=True)
     return coding_canonical_sha256(

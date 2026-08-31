@@ -413,6 +413,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/coding-shadow/ticket-sets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue Coding Shadow Tickets
+         * @description Issue one named k=3 set without selecting validators or running work.
+         */
+        post: operations["issue_coding_shadow_tickets_api_v1_admin_coding_shadow_ticket_sets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/confirmation-bundle-settings": {
         parameters: {
             query?: never;
@@ -6332,6 +6352,76 @@ export interface components {
              * @enum {string}
              */
             state: "waiting_finality" | "issued" | "already_issued";
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** AdminCodingShadowTicketRecord */
+        AdminCodingShadowTicketRecord: {
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * AdminCodingShadowTicketSetRequest
+         * @description One explicit, confirmed request for a fixed k=3 shadow ticket set.
+         */
+        AdminCodingShadowTicketSetRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
+            /**
+             * Ticket Set Id
+             * Format: uuid
+             */
+            ticket_set_id: string;
+            /** Validator Hotkeys */
+            validator_hotkeys: string[];
+        };
+        /**
+         * AdminCodingShadowTicketSetResponse
+         * @description Redacted identities for one atomically issued shadow ticket set.
+         */
+        AdminCodingShadowTicketSetResponse: {
+            /** Idempotent */
+            idempotent: boolean;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
+            /**
+             * Ticket Set Id
+             * Format: uuid
+             */
+            ticket_set_id: string;
+            /** Tickets */
+            tickets: [
+                components["schemas"]["AdminCodingShadowTicketRecord"],
+                components["schemas"]["AdminCodingShadowTicketRecord"],
+                components["schemas"]["AdminCodingShadowTicketRecord"]
+            ];
             /**
              * Weight Eligible
              * @default false
@@ -25758,6 +25848,62 @@ export interface operations {
                 };
             };
             /** @description Shadow reconciliation is disabled or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    issue_coding_shadow_tickets_api_v1_admin_coding_shadow_ticket_sets_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminCodingShadowTicketSetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingShadowTicketSetResponse"];
+                };
+            };
+            /** @description Admin authentication failed. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Run, validator, or immutable authority conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Ticket-set issuance is disabled or unavailable. */
             503: {
                 headers: {
                     [name: string]: unknown;
