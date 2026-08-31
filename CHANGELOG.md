@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.177.3 (2026-08-31)
+
+### Bug Fixes
+
+- **platform**: Bind active coding certifications to terminal settlements
+  ([`d94ccc3`](https://github.com/ditto-assistant/ditto-subnet/commit/d94ccc376bde002d332cc83e84670745f08d6a78))
+
+
 ## v0.177.2 (2026-08-31)
 
 ### Bug Fixes
