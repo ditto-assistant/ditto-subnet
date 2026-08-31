@@ -930,6 +930,7 @@ class SourceReviewAdjudicator:
                 # while allowing the router to fail over between compatible
                 # healthy providers instead of timing out behind one endpoint.
                 "allow_fallbacks": True,
+                "sort": "throughput",
                 "zdr": True,
                 "data_collection": "deny",
                 "require_parameters": True,
