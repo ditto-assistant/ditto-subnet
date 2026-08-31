@@ -53,6 +53,8 @@ from ditto.api_models.coding_certification_leases import (
     coding_certification_lease_issue_signing_message,
 )
 from ditto.api_models.coding_evaluation import (
+    AdminCodingShadowReconciliationRequest,
+    AdminCodingShadowReconciliationResponse,
     AgentCodingShadowEvaluationStatus,
     CodingRunEvidence,
     CodingSelectionAssignmentRecord,
@@ -277,6 +279,8 @@ __all__ = [
     "AdminCoreQualificationPolicyResponse",
     "AdminCoreQualificationRefreshRequest",
     "AdminCodingCatalogResponse",
+    "AdminCodingShadowReconciliationRequest",
+    "AdminCodingShadowReconciliationResponse",
     "AdminRegisterCodingCatalogRequest",
     "AdminRetireCodingCatalogRequest",
     "AgentCodingCertificationStatus",

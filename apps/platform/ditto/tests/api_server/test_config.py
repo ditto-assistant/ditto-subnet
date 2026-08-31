@@ -89,6 +89,31 @@ class TestParseApiServerConfigFromEnv:
         assert config.inference_proxy.global_concurrency == 96
         assert config.coding_catalog_curator_hotkeys == ()
         assert config.coding_private_catalog is None
+        assert config.coding_shadow_reconciliation_enabled is False
+        assert config.coding_shadow_reconciliation_selection_delay_blocks == 20
+
+    def test_shadow_reconciliation_requires_its_complete_activation_boundary(
+        self,
+    ) -> None:
+        base = make_api_server_config()
+        with pytest.raises(ApiServerConfigError, match="DITTO_ADMIN_API_TOKEN"):
+            check_config(replace(base, coding_shadow_reconciliation_enabled=True))
+
+        with pytest.raises(ApiServerConfigError, match="private coding catalog"):
+            check_config(
+                replace(
+                    base,
+                    admin_api_token="test-admin-token-at-least-32-characters",
+                    coding_shadow_reconciliation_enabled=True,
+                )
+            )
+        with pytest.raises(ApiServerConfigError, match="between 1 and 10000"):
+            check_config(
+                replace(
+                    base,
+                    coding_shadow_reconciliation_selection_delay_blocks=0,
+                )
+            )
 
     def test_private_coding_catalog_config_is_optional_and_separate(
         self, monkeypatch: pytest.MonkeyPatch

@@ -574,6 +574,30 @@ class AgentCodingShadowEvaluationStatus(CodingEvaluationModel):
     shadow_only: Literal[True] = True
 
 
+class AdminCodingShadowReconciliationRequest(BaseModel):
+    """One explicit, confirmed request to advance a shadow coding artifact."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    bench_version: Annotated[int, Field(ge=7)]
+    coding_run_id: OpaqueId
+    corpus_release_id: OpaqueId
+    confirmation: Annotated[str, Field(min_length=1, max_length=1024)]
+
+
+class AdminCodingShadowReconciliationResponse(CodingEvaluationModel):
+    """Redacted state of one operator-requested shadow reconciliation."""
+
+    state: Literal["waiting_finality", "issued", "already_issued"]
+    assignment_row_id: UUID
+    selection_block_number: Annotated[int, Field(ge=1)]
+    run_row_id: UUID | None
+    assignment_idempotent: bool
+    issuance_idempotent: bool | None
+    weight_eligible: Literal[False] = False
+
+
 def coding_run_evidence_digest(evidence: CodingRunEvidence) -> str:
     projection = evidence.model_dump(mode="json", by_alias=True)
     return coding_canonical_sha256(
