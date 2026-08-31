@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.2 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Claim node-scoped canaries
+  ([#1393](https://github.com/ditto-assistant/ditto-subnet/pull/1393),
+  [`c02adaa`](https://github.com/ditto-assistant/ditto-subnet/commit/c02adaa4ba0ea10ebea2514528007e7361edff02))
+
+
 ## v0.177.1 (2026-08-31)
 
 ### Bug Fixes
