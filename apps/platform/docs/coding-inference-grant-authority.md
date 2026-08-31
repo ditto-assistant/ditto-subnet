@@ -88,6 +88,25 @@ settle on `coding_certification_inference_requests`. No committed deployment
 enables those gates, so deploying this code alone cannot send a Luna request,
 run a coding task, affect an ordinary score, or affect weights.
 
+## Deployment profile
+
+The Platform Ansible role exposes one false-by-default
+`platform_coding_shadow_enabled` setting. When an operator explicitly enables
+it, the role enables both the Python grant transport and the local trusted
+model-relay coding handler, reads the existing server-only OpenRouter secret,
+requires the reviewed two-slot relay pool, verifies the exact checked-in locked
+policy file, and renders the three fixed HTTPS transport URLs. The relay
+receives only its dispatch gate, guardrail, and provider credential; the role clears catalog
+credentials, admin authority, and Platform grant/exchange settings from every
+relay slot. It also raises the relay's PM2 stop budget above the coding drain.
+
+The separate `platform_coding_shadow_reconciliation_enabled` and
+`platform_coding_shadow_ticket_set_enabled` settings remain false by default.
+They are caller-driven admin controls, not scheduler switches. Reconciliation
+requires the separately configured private catalog; both require the existing
+admin token and bounded Platform-owned timing. None of these deployment inputs
+enables a validator worker, scorer host, task issuance, or weights.
+
 See `coding-inference-request-ledger.md` and `docs/coding-shadow-worker.md` for
 the durable dispatch and coordinated activation boundaries.
 
