@@ -67,7 +67,10 @@ L3_PROVIDER = "openrouter"
 # A reviewer has several dependent model turns and the final court needs a
 # meaningful slice of the lease. Do not allow one stalled upstream turn to
 # consume the entire L2/L3 window before the terminal adjudicator can run.
-_MAX_COMPLETION_REQUEST_SECONDS = 75.0
+# Each L2/L3 turn is bounded by the selected completion budget (2.4k in the
+# production profile), so 45 seconds allows a healthy high-throughput provider
+# to finish while reserving room for one fresh connection after an outage.
+_MAX_COMPLETION_REQUEST_SECONDS = 45.0
 _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
 # Every policy version whose L2/L3 policy text this build carries. The
 # platform may require any one of them during a scheduled activation window.
