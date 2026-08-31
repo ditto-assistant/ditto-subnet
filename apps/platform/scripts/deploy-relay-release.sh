@@ -81,6 +81,29 @@ export POSTGRES_POOL_MIN_SIZE=5
 export POSTGRES_POOL_MAX_SIZE=12
 export DITTO_TAOSTATS_VALIDATOR_NAMES_URL=
 export DITTO_TAOSTATS_API_KEY=
+# The direct release canary does not pass through ecosystem.config.js, so it
+# must receive the same least-privilege scrub as each PM2 relay slot. Keep the
+# relay's own coding dispatch gate, guardrail, concurrency, and OpenRouter key
+# from .env; clear the Python Platform's catalog, admin, and grant-control
+# authority before this trusted binary starts.
+export DITTO_ADMIN_API_TOKEN=
+export DITTO_CODING_CATALOG_STORAGE_ENDPOINT_URL=
+export DITTO_CODING_CATALOG_STORAGE_BUCKET=
+export DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY=
+export DITTO_CODING_CATALOG_STORAGE_SECRET_KEY=
+export DITTO_CODING_CATALOG_STORAGE_REGION=
+export DITTO_CODING_CATALOG_STORAGE_USE_TLS=
+export DITTO_CODING_CATALOG_MAX_RECORD_BYTES=
+export DITTO_CODING_CATALOG_TIMEOUT_SECONDS=
+export DITTO_CODING_SHADOW_ENABLED=false
+export DITTO_CODING_SHADOW_RECONCILIATION_ENABLED=false
+export DITTO_CODING_SHADOW_SELECTION_DELAY_BLOCKS=
+export DITTO_CODING_SHADOW_TICKET_SET_ENABLED=false
+export DITTO_CODING_SHADOW_TICKET_LEASE_SECONDS=
+export DITTO_CODING_INFERENCE_POLICY_FILE=
+export DITTO_CODING_INFERENCE_EXCHANGE_URL=
+export DITTO_CODING_INFERENCE_PROXY_URL=
+export DITTO_CODING_INFERENCE_REVOKE_URL=
 
 json_commit() {
   python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit", ""))' 2>/dev/null
