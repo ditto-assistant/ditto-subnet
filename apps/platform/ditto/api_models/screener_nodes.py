@@ -13,7 +13,7 @@ from ditto.api_models.screener_node_settings import (
 )
 from ditto.api_models.screener_provider_settings import ScreenerProviderSettingsControl
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
-from ditto.api_models.system_health import HostSpecs
+from ditto.api_models.system_health import HostSpecs, SystemMetrics
 from ditto_screening_protocol import SourceReviewObservationPayload
 
 ScreenerProvider = Literal["gcp", "targon", "hetzner", "home", "test"]
@@ -196,6 +196,24 @@ class ScreenerCapacitySnapshotResponse(ScreenerCapacitySnapshotRequest):
     updated_at: datetime
 
 
+class ScreenerNodeWorkerView(BaseModel):
+    """One process heartbeat attributed to a persistent enrolled node."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    instance_id: str
+    seen_at: datetime
+    reported_at: datetime
+    software_version: str
+    protocol_version: int
+    policy_version: int
+    state: str
+    active_agent_id: UUID | None = None
+    current_phase: str | None = None
+    system_metrics: SystemMetrics | None = None
+    host_specs: HostSpecs | None = None
+
+
 class ScreenerNodeView(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -220,6 +238,10 @@ class ScreenerNodeView(BaseModel):
     # Hardware the worker announced in its own heartbeat (protocol v6+), not
     # what the provider was asked to allocate. Absent until it reports.
     host_specs: HostSpecs | None = None
+    # Every attributable local worker, newest heartbeat first. This remains
+    # separate from the summary fields above so operators can see concurrent
+    # work rather than treating a multi-process persistent host as one slot.
+    workers: list[ScreenerNodeWorkerView] = Field(default_factory=list)
 
 
 class ScreenerCapacityEventView(BaseModel):

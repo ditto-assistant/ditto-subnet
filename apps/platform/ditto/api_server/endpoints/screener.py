@@ -154,6 +154,7 @@ from ditto.api_server.endpoints.validator import (
 )
 from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
+from ditto.api_server.screener_node_identity import is_enrolled_node_heartbeat_instance
 from ditto.api_server.screener_policy_activation import (
     EffectiveScreenerPolicy,
     resolve_screener_policy_activation,
@@ -549,12 +550,7 @@ def _is_enrolled_node_heartbeat_instance(
     processes. This does not authorize another node or an arbitrary logical
     instance to report through the node's bearer token.
     """
-    if instance_id == node_id:
-        return True
-    if instance_id is None:
-        return False
-    worker_pattern = rf"{re.escape(node_id)}-worker-[1-9][0-9]*"
-    return re.fullmatch(worker_pattern, instance_id) is not None
+    return is_enrolled_node_heartbeat_instance(node_id=node_id, instance_id=instance_id)
 
 
 async def require_screener_controller(

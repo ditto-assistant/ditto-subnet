@@ -31,6 +31,7 @@ from ditto.api_models.screener_nodes import (
     ScreenerCapacityView,
     ScreenerNodeStatus,
     ScreenerNodeView,
+    ScreenerNodeWorkerView,
     ScreenerProvider,
     ScreenerProviderJobView,
     TrustedImageBuildCreateRequest,
@@ -48,9 +49,13 @@ from ditto.api_models.screener_provider_settings import (
 from ditto.api_models.screener_provider_settings import (
     ScreenerProviderSettingsRevision as ProviderSettingsRevisionModel,
 )
-from ditto.api_models.system_health import host_specs_from_heartbeat_envelope
+from ditto.api_models.system_health import (
+    SystemMetrics,
+    host_specs_from_heartbeat_envelope,
+)
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.screener_node_identity import is_enrolled_node_heartbeat_instance
 from ditto.db.models import (
     ScreenerCapacityEvent,
     ScreenerCapacitySnapshot,
@@ -90,6 +95,43 @@ def _aware(value: datetime | None) -> datetime | None:
 
 def _required_aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _heartbeat_system_metrics(row: ScreenerHeartbeat) -> SystemMetrics | None:
+    """Return the signed coarse sample from legacy or enveloped telemetry."""
+    raw = row.system_metrics
+    if isinstance(raw, dict) and "system_metrics" in raw:
+        raw = raw.get("system_metrics")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return SystemMetrics.model_validate(raw)
+    except Exception:  # noqa: BLE001 - malformed historical telemetry is unusable
+        return None
+
+
+def _heartbeat_phase(row: ScreenerHeartbeat) -> str | None:
+    raw = row.system_metrics
+    progress = raw.get("screening_progress") if isinstance(raw, dict) else None
+    if isinstance(progress, dict) and progress.get("stage"):
+        return str(progress["stage"])
+    return row.state
+
+
+def _worker_view(row: ScreenerHeartbeat) -> ScreenerNodeWorkerView:
+    return ScreenerNodeWorkerView(
+        instance_id=row.instance_id,
+        seen_at=_required_aware(row.seen_at),
+        reported_at=_required_aware(row.reported_at),
+        software_version=row.software_version,
+        protocol_version=row.protocol_version,
+        policy_version=row.policy_version,
+        state=row.state,
+        active_agent_id=row.active_agent_id,
+        current_phase=_heartbeat_phase(row),
+        system_metrics=_heartbeat_system_metrics(row),
+        host_specs=host_specs_from_heartbeat_envelope(row.system_metrics),
+    )
 
 
 def _build_view(row: TrustedImageBuild) -> TrustedImageBuildView:
@@ -748,17 +790,20 @@ async def screener_capacity(
         )
     nodes = []
     for node in node_rows:
-        heartbeat = heartbeats.get((node.screener_hotkey, node.node_id))
-        progress = (
-            heartbeat.system_metrics.get("screening_progress")
-            if heartbeat is not None and isinstance(heartbeat.system_metrics, dict)
-            else None
+        node_heartbeats = sorted(
+            (
+                row
+                for (hotkey, instance_id), row in heartbeats.items()
+                if hotkey == node.screener_hotkey
+                and is_enrolled_node_heartbeat_instance(
+                    node_id=node.node_id, instance_id=instance_id
+                )
+            ),
+            key=lambda row: row.seen_at,
+            reverse=True,
         )
-        phase = (
-            str(progress.get("stage"))
-            if isinstance(progress, dict) and progress.get("stage")
-            else (heartbeat.state if heartbeat is not None else None)
-        )
+        heartbeat = node_heartbeats[0] if node_heartbeats else None
+        phase = _heartbeat_phase(heartbeat) if heartbeat is not None else None
         host_specs = (
             host_specs_from_heartbeat_envelope(heartbeat.system_metrics)
             if heartbeat is not None
@@ -793,6 +838,7 @@ async def screener_capacity(
                 ),
                 current_phase=phase,
                 host_specs=host_specs,
+                workers=[_worker_view(row) for row in node_heartbeats],
             )
         )
     events = [
