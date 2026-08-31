@@ -13,6 +13,8 @@ from ditto_screening_protocol import (
     ScreenResultOutcome,
     ScreenResultRequest,
     SourceReviewFinding,
+    SourceReviewNote,
+    source_review_notes_digest,
 )
 
 _HOTKEY = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
@@ -97,6 +99,36 @@ def test_finding_digest_mismatch_is_rejected() -> None:
 def test_finding_without_digest_is_rejected() -> None:
     with pytest.raises(ValidationError, match="finding requires finding_digest"):
         _request(finding_digest=None)
+
+
+def test_review_notes_require_their_signed_canonical_digest() -> None:
+    notes = [
+        SourceReviewNote(
+            kind="cleared",
+            category="general_runtime",
+            path="src/lib.rs",
+            line=42,
+            summary="Reviewed the provider-bound execution path.",
+        )
+    ]
+    request = _request(
+        review_notes=notes,
+        review_notes_digest=source_review_notes_digest(notes),
+    )
+    assert request.review_notes == notes
+
+    with pytest.raises(ValidationError, match="do not match review_notes_digest"):
+        _request(review_notes=notes, review_notes_digest="ef" * 32)
+
+    with pytest.raises(ValidationError, match="must travel together"):
+        _request(review_notes=notes)
+
+    with pytest.raises(ValidationError, match="require manifest_digest"):
+        _pass_request(
+            review_notes=notes,
+            review_notes_digest=source_review_notes_digest(notes),
+            manifest_digest=None,
+        )
 
 
 def test_review_payloads_require_review_outcome() -> None:

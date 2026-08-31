@@ -108,6 +108,8 @@ from ditto_screening_protocol import (
     ScreenResultOutcome,
     ScreenReviewAudit,
     SourceReviewAdjudication,
+    SourceReviewNote,
+    source_review_notes_digest,
     verdict_signing_message,
 )
 
@@ -264,6 +266,9 @@ def _result_payload(
             else None,
             adjudication_digest=overrides.get("adjudication_digest")
             if isinstance(overrides.get("adjudication_digest"), str)
+            else None,
+            review_notes_digest=overrides.get("review_notes_digest")
+            if isinstance(overrides.get("review_notes_digest"), str)
             else None,
             deferred_source_review=bool(overrides.get("deferred_source_review", False)),
             review_settings_revision=overrides.get("review_settings_revision")
@@ -4654,6 +4659,16 @@ class TestClaim:
             session_maker, agent_id=agent_id, attempt_id=attempt_id
         )
         audit = _bounded_review_audit()
+        notes = [
+            SourceReviewNote(
+                kind="cleared",
+                category="general_runtime",
+                path="src/main.rs",
+                line=44,
+                summary="Observed the normal provider-bound execution path.",
+                stage="l1",
+            )
+        ]
 
         payload = _result_payload(
             agent_id,
@@ -4664,6 +4679,8 @@ class TestClaim:
             reason_code="source-review-inconclusive",
             review_audit_digest=audit.canonical_digest(),
             review_audit=audit.model_dump(mode="json"),
+            review_notes_digest=source_review_notes_digest(notes),
+            review_notes=[note.model_dump(mode="json") for note in notes],
         )
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result",
@@ -4696,6 +4713,44 @@ class TestClaim:
             assert len(attempts) == 1 and attempts[0].status == "passed"
             assert retained is not None and retained.status == "resolved"
             assert retained.review_audit_digest == audit.canonical_digest()
+            assert retained.review_notes_digest == source_review_notes_digest(notes)
+            assert retained.review_notes == [
+                note.model_dump(mode="json") for note in notes
+            ]
+            assert retained.resolution_reason == (
+                "Bounded source review exhausted; admitted for scoring"
+            )
+
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        listed = await client.get(
+            "/api/v1/admin/screening-quarantines?status=resolved",
+            headers={"Authorization": "Bearer test-admin-token-at-least-32-characters"},
+        )
+        assert listed.status_code == 200, listed.text
+        retained_item = listed.json()["items"][0]
+        assert retained_item["review_notes_digest"] == source_review_notes_digest(notes)
+        assert retained_item["review_notes"] == [
+            note.model_dump(mode="json") for note in notes
+        ]
+
+        tampered_notes = [
+            notes[0].model_copy(
+                update={"summary": "A different note cannot reuse this verdict."}
+            )
+        ]
+        tampered = {
+            **payload,
+            "review_notes": [note.model_dump(mode="json") for note in tampered_notes],
+            "review_notes_digest": source_review_notes_digest(tampered_notes),
+        }
+        rejected = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=tampered
+        )
+        assert rejected.status_code == 401
+        assert rejected.json()["error_code"] == ERROR_CODE_SCREENER_AUTH
 
     async def test_deferred_mechanical_admission_can_fail_closed_on_finding(
         self,

@@ -179,6 +179,7 @@ from ditto.db.queries.payments import (
 )
 from ditto.db.queries.tickets import RETRY_COOLDOWN, ticket_attempt_cap
 from ditto.screener_policy_state import effective_screening_policy_version
+from ditto_screening_protocol import SourceReviewNote, source_review_notes_digest
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +260,17 @@ def _item(
         else:
             if parsed_audit.canonical_digest() == row.review_audit_digest:
                 review_audit = parsed_audit
+    review_notes: list[SourceReviewNote] | None = None
+    if isinstance(row.review_notes, list) and row.review_notes_digest is not None:
+        try:
+            parsed_notes = [
+                SourceReviewNote.model_validate(note) for note in row.review_notes
+            ]
+        except ValueError:
+            pass
+        else:
+            if source_review_notes_digest(parsed_notes) == row.review_notes_digest:
+                review_notes = parsed_notes
     return AdminQuarantineItem(
         quarantine_id=row.quarantine_id,
         agent_id=row.agent_id,
@@ -276,6 +288,10 @@ def _item(
             row.review_audit_digest if review_audit is not None else None
         ),
         review_audit=review_audit,
+        review_notes_digest=(
+            row.review_notes_digest if review_notes is not None else None
+        ),
+        review_notes=review_notes,
         evidence=evidence,
         finding=finding,
         finding_verified=finding_verified,

@@ -59,6 +59,8 @@ from ditto_screening_protocol import (
     ScreenReviewAudit,
     SourceReviewAdjudication,
     SourceReviewFinding,
+    SourceReviewNote,
+    source_review_notes_digest,
 )
 
 if TYPE_CHECKING:
@@ -647,6 +649,8 @@ class ScreenerWorker:
                 ScreenResultOutcome.QUARANTINE,
                 ScreenResultOutcome.PASS_INCONCLUSIVE,
             }
+            has_review_notes = bool(result.review_notes)
+            has_persisted_review_evidence = is_audited_result or has_review_notes
             # The mechanical lane did not collect source-review evidence, so it
             # must never quarantine on that basis. The gate already guarantees
             # this; guard here too so a regression fails loudly.
@@ -701,6 +705,16 @@ class ScreenerWorker:
             adjudication_digest = (
                 adjudication.canonical_digest() if adjudication is not None else None
             )
+            review_notes = (
+                [SourceReviewNote.model_validate(note) for note in result.review_notes]
+                if result.review_notes
+                else None
+            )
+            review_notes_digest = (
+                source_review_notes_digest(review_notes)
+                if review_notes is not None
+                else None
+            )
             finding_digest = (
                 finding.canonical_digest()
                 if finding is not None
@@ -719,10 +733,13 @@ class ScreenerWorker:
                 policy_version=policy_version,
                 attempt_id=attempt_id,
                 outcome=typed_outcome,
-                manifest_digest=result.manifest_digest if is_audited_result else None,
+                manifest_digest=(
+                    result.manifest_digest if has_persisted_review_evidence else None
+                ),
                 finding_digest=finding_digest,
                 review_audit_digest=review_audit_digest,
                 adjudication_digest=adjudication_digest,
+                review_notes_digest=review_notes_digest,
                 deferred_source_review=item.deferred_source_review,
                 policy_only=item.policy_only,
                 review_settings_revision=(
@@ -760,10 +777,13 @@ class ScreenerWorker:
                 detail=result.detail,
                 attempt_id=attempt_id,
                 outcome=typed_outcome,
-                manifest_digest=result.manifest_digest if is_audited_result else None,
+                manifest_digest=(
+                    result.manifest_digest if has_persisted_review_evidence else None
+                ),
                 finding_digest=finding_digest,
                 review_audit_digest=review_audit_digest,
                 adjudication_digest=adjudication_digest,
+                review_notes_digest=review_notes_digest,
                 review_settings_revision=(
                     effective_review_settings.revision
                     if effective_review_settings.revision >= 1
@@ -789,6 +809,7 @@ class ScreenerWorker:
                 finding=finding,
                 review_audit=review_audit,
                 adjudication=adjudication,
+                review_notes=review_notes,
                 image_sha256=screened_image.sha256 if screened_image else None,
                 image_size_bytes=screened_image.size_bytes if screened_image else None,
                 image_id=screened_image.image_id if screened_image else None,

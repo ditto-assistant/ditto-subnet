@@ -1038,6 +1038,16 @@ class SourceReviewNote(BaseModel):
     stage: Literal["l1", "l2", "l3"] = "l1"
 
 
+def source_review_notes_digest(notes: list[SourceReviewNote]) -> str:
+    """Return the canonical digest for one bounded source-review ledger."""
+    payload = json.dumps(
+        [note.model_dump(mode="json") for note in notes],
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
 class AdjudicationClearClause(StrEnum):
     """Published court false positives an automated clear may cite.
 
@@ -1231,6 +1241,7 @@ class ScreenResultRequest(BaseModel):
     finding_digest: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
     review_audit_digest: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
     adjudication_digest: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
+    review_notes_digest: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
     review_settings_revision: Annotated[int | None, Field(ge=1)] = None
     review_settings_instance_id: Annotated[
         str | None, Field(pattern=r"^[a-zA-Z0-9._-]{1,63}$")
@@ -1278,6 +1289,17 @@ class ScreenResultRequest(BaseModel):
                 "Public-safe, digest-bound budget accounting for a terminal "
                 "pass-inconclusive review."
             )
+        ),
+    ] = None
+    review_notes: Annotated[
+        list[SourceReviewNote] | None,
+        Field(
+            min_length=1,
+            max_length=48,
+            description=(
+                "Bounded, public-safe source-review determinations. Their "
+                "canonical digest is signed with the verdict."
+            ),
         ),
     ] = None
     adjudication: SourceReviewAdjudication | None = None
@@ -1428,6 +1450,17 @@ class ScreenResultRequest(BaseModel):
                 raise ValueError("finding requires finding_digest")
             if self.finding.canonical_digest() != self.finding_digest:
                 raise ValueError("finding does not match finding_digest")
+        if (self.review_notes is None) != (self.review_notes_digest is None):
+            raise ValueError(
+                "review_notes and review_notes_digest must travel together"
+            )
+        if self.review_notes is not None:
+            if self.attempt_id is None:
+                raise ValueError("review_notes require attempt_id")
+            if self.manifest_digest is None:
+                raise ValueError("review_notes require manifest_digest")
+            if source_review_notes_digest(self.review_notes) != self.review_notes_digest:
+                raise ValueError("review_notes do not match review_notes_digest")
         if self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
             if self.review_audit is None or self.review_audit_digest is None:
                 raise ValueError("pass-inconclusive requires review audit")

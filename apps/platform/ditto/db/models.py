@@ -669,6 +669,14 @@ class ScreeningQuarantine(Base):
     )
     """Typed reviewer budget/accounting audit; never source or prompt content."""
 
+    review_notes_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Digest of the signed, bounded source-review note ledger."""
+
+    review_notes: Mapped[list | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Typed, public-safe source-review notes; never source or prompt content."""
+
     evidence: Mapped[list | None] = mapped_column(_JSON_VARIANT, nullable=True)
     """Bounded public-safe policy evidence trail (module, code, summary,
     digest) shipped by the screener on quarantine. Display data for the
@@ -724,6 +732,14 @@ class ScreeningQuarantine(Base):
         CheckConstraint(
             "(review_audit IS NULL) = (review_audit_digest IS NULL)",
             name="screening_quarantines_review_audit_pair_check",
+        ),
+        CheckConstraint(
+            "review_notes_digest IS NULL OR review_notes_digest ~ '^[0-9a-f]{64}$'",
+            name="screening_quarantines_review_notes_digest_check",
+        ),
+        CheckConstraint(
+            "(review_notes IS NULL) = (review_notes_digest IS NULL)",
+            name="screening_quarantines_review_notes_pair_check",
         ),
         CheckConstraint(
             "review_audit IS NULL OR reason_code IN "

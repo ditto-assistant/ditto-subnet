@@ -66,7 +66,7 @@ export function compactScreeningQuarantines(
 ) {
   const items = response.items.map((quarantine) => {
     if (detail === 'full') return quarantine as unknown as ResponseRow
-    const { evidence, finding, ...rest } = quarantine
+    const { evidence, finding, review_notes: reviewNotes, ...rest } = quarantine
     const findingSummary = finding
       ? (() => {
           const {
@@ -81,6 +81,8 @@ export function compactScreeningQuarantines(
       ...rest,
       evidence_count: evidence?.length ?? null,
       evidence_codes: evidence?.map((item) => item.code) ?? null,
+      review_notes_count: reviewNotes?.length ?? null,
+      review_note_kinds: reviewNotes?.map((note) => note.kind) ?? null,
       finding: findingSummary,
     } as ResponseRow
   })

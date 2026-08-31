@@ -14,6 +14,7 @@ from ditto.api_models.screener import (
     SourceReviewFinding,
 )
 from ditto.api_models.screener_review_settings import AdminShadowReviewObservation
+from ditto_screening_protocol import SourceReviewNote
 
 QuarantineResolution = Literal["release", "rescreen", "reject"]
 DisputeResolution = Literal["release", "uphold"]
@@ -49,6 +50,8 @@ class AdminQuarantineItem(BaseModel):
     reason_code: str
     review_audit_digest: str | None = None
     review_audit: ScreenReviewAudit | None = None
+    review_notes_digest: str | None = None
+    review_notes: list[SourceReviewNote] | None = None
     evidence: list[ScreenEvidenceItem] | None
     finding: SourceReviewFinding | None
     finding_verified: bool

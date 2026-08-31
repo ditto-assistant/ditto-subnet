@@ -159,6 +159,22 @@ def test_final_adjudication_digest_is_bound_into_typed_verdict() -> None:
     assert with_court != without_court
 
 
+def test_source_review_note_ledger_digest_is_bound_into_typed_verdict() -> None:
+    base = {
+        "screener_hotkey": _HOTKEY,
+        "agent_id": _AGENT,
+        "attempt_id": _ATTEMPT,
+        "passed": True,
+        "outcome": ScreenResultOutcome.PASS,
+    }
+    legacy = verdict_signing_message(**base)
+    with_notes = verdict_signing_message(**base, review_notes_digest="ab" * 32)
+
+    payload = json.loads(with_notes.removeprefix(b"ditto-screen-result:v5:").decode())
+    assert payload["review_notes_digest"] == "ab" * 32
+    assert with_notes != legacy
+
+
 @pytest.mark.parametrize("policy_version", [9, SCREENING_POLICY_VERSION])
 def test_policy_v9_and_later_signature_requires_typed_outcome(
     policy_version: int,
