@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.179.3 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Decide retained review evidence once
+  ([#1420](https://github.com/ditto-assistant/ditto-subnet/pull/1420),
+  [`ea22b14`](https://github.com/ditto-assistant/ditto-subnet/commit/ea22b145a8ffa401e5897b4cfeac3994ddc89951))
+
+
 ## v0.179.2 (2026-08-31)
 
 ### Bug Fixes
