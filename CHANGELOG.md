@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.179.4 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Preserve review failure evidence
+  ([#1425](https://github.com/ditto-assistant/ditto-subnet/pull/1425),
+  [`a2e80b2`](https://github.com/ditto-assistant/ditto-subnet/commit/a2e80b23bb05ae558f6daf618ecb30c011c4797e))
+
+
 ## v0.179.3 (2026-08-31)
 
 ### Bug Fixes
