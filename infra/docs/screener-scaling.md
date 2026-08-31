@@ -128,9 +128,11 @@ scripts/targon-smoke.sh sweep-oneshots
 scripts/targon-smoke.sh sweep-oneshots --apply
 ```
 
-The GCE autoscaler remains as an independent `ONLY_SCALE_OUT` watchdog on the
-group-level backlog metric. It cannot scale in or fight the controller. Its
-floor is zero; normal scale-in is controller-owned and lease-aware.
+The controller enables the GCE `ONLY_SCALE_OUT` metric watchdog only while its
+computed fallback target is nonzero. At zero target it disables that raw
+backlog watchdog, because the metric cannot see healthy Hetzner primary
+capacity or the bounded overflow threshold. Normal scale-in remains
+controller-owned and lease-aware.
 
 ## Identity boundaries
 

@@ -4254,6 +4254,7 @@ async def claim(
                 netuid=expected_netuid(),
                 deferred_review_mode=queue_settings.deferred_source_review.mode,
                 review_settings_binding=binding,
+                review_settings_enrolled_node_id=node_id,
             )
     else:
         # SQLite is used by local/test deployments and has no advisory locks.
@@ -4309,6 +4310,7 @@ async def claim(
                 netuid=expected_netuid(),
                 deferred_review_mode=queue_settings.deferred_source_review.mode,
                 review_settings_binding=binding,
+                review_settings_enrolled_node_id=node_id,
             )
     items = [
         ScreenerQueueItem(
