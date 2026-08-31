@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.179.8 (2026-08-31)
+
+### Bug Fixes
+
+- **platform**: Exclude terminal rejections from policy rescreens
+  ([#1437](https://github.com/ditto-assistant/ditto-subnet/pull/1437),
+  [`533c606`](https://github.com/ditto-assistant/ditto-subnet/commit/533c606bb4f61875eb3fdee287f6f3818f06811d))
+
+- **screener**: Finalize bounded review turns
+  ([#1438](https://github.com/ditto-assistant/ditto-subnet/pull/1438),
+  [`11f4a83`](https://github.com/ditto-assistant/ditto-subnet/commit/11f4a836184e587b2d1dbd3f1974d69b08613d4e))
+
+
 ## v0.179.7 (2026-08-31)
 
 ### Bug Fixes
