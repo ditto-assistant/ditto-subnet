@@ -2,6 +2,18 @@
 
 <!-- version list -->
 
+## v0.179.5 (2026-08-31)
+
+### Bug Fixes
+
+- **dashboard**: Show serialized manual reviews
+  ([#1423](https://github.com/ditto-assistant/ditto-subnet/pull/1423),
+  [`ffe1cdd`](https://github.com/ditto-assistant/ditto-subnet/commit/ffe1cdd612d7ecde5351cc9d80e995ff3212d8d4))
+
+- **platform**: Retain top-down rescoring after policy activation
+  ([`e3a001a`](https://github.com/ditto-assistant/ditto-subnet/commit/e3a001a8918deb6320673e48f483647eff2d9b4f))
+
+
 ## v0.179.4 (2026-08-31)
 
 ### Bug Fixes
