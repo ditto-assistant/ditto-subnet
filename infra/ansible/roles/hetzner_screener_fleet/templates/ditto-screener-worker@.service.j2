@@ -18,6 +18,7 @@ Environment=SCREENER_REVIEW_JOURNAL_FILE={{ screener_fleet_state_dir }}/workers/
 Environment=SCREENER_REVIEW_SETTINGS_CACHE_FILE={{ screener_fleet_state_dir }}/workers/%i/review-settings.json
 Environment=SCREENER_L2_CACHE_DIR={{ screener_fleet_state_dir }}/workers/%i/l2-cache
 Environment=SCREENER_L2_AUDIT_JOURNAL_FILE={{ screener_fleet_state_dir }}/workers/%i/l2-audit.jsonl
+Environment=SCREENER_L2_WORKSPACE_ROOT={{ screener_fleet_l2_workspace_root }}/%i
 ExecStart={{ screener_fleet_active_worker_venv }}/bin/ditto-screener
 Restart=always
 RestartSec=10
@@ -27,7 +28,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths={{ screener_fleet_state_dir }}/workers/%i {{ screener_fleet_config_dir }} {{ screener_fleet_bittensor_dir }}
+ReadWritePaths={{ screener_fleet_state_dir }}/workers/%i {{ screener_fleet_l2_workspace_root }}/%i {{ screener_fleet_config_dir }} {{ screener_fleet_bittensor_dir }}
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true

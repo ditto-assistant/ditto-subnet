@@ -169,6 +169,7 @@ class ScreenerConfig:
     l3_review_model: str
     l3_review_provider: str
     l2_analyzer_image: str
+    l2_workspace_root: str | None
     l2_cache_dir: str
     l2_audit_journal_file: str
     l2_timeout_seconds: float
@@ -385,6 +386,7 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         l2_analyzer_image=os.environ.get(
             "SCREENER_L2_ANALYZER_IMAGE", "ditto-screener-l2-analyzer:active"
         ),
+        l2_workspace_root=os.environ.get("SCREENER_L2_WORKSPACE_ROOT") or None,
         l2_cache_dir=os.environ.get(
             "SCREENER_L2_CACHE_DIR", "/opt/ditto/screener/state/l2-cache"
         ),
@@ -513,6 +515,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_ANALYZER_IMAGE must be ditto-screener-l2-analyzer:active"
         )
+    if config.l2_workspace_root is not None and not os.path.isabs(
+        config.l2_workspace_root
+    ):
+        raise ScreenerConfigError("SCREENER_L2_WORKSPACE_ROOT must be absolute")
     if not 1 <= config.l2_max_steps <= 20:
         raise ScreenerConfigError("SCREENER_L2_MAX_STEPS must be between 1 and 20")
     if not 30 <= config.l2_timeout_seconds <= 900:

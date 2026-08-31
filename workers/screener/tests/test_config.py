@@ -63,6 +63,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.l3_review_enabled is True
     assert cfg.l3_review_model == "openai/gpt-5.6-sol"
     assert cfg.l3_review_provider == "openrouter"
+    assert cfg.l2_workspace_root is None
     assert cfg.l2_max_steps == 18
     assert cfg.l2_timeout_seconds == 900
     assert cfg.l2_max_input_tokens == 425_000
@@ -153,6 +154,20 @@ def test_rootless_executor_config(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = parse_screener_config_from_env()
     assert cfg.docker_host == "unix:///run/user/1001/docker.sock"
     assert cfg.require_rootless_docker
+
+
+def test_rootless_analyzer_workspace_must_be_shared_at_an_absolute_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_L2_WORKSPACE_ROOT", "/var/tmp/ditto-screener-l2")
+    assert parse_screener_config_from_env().l2_workspace_root == (
+        "/var/tmp/ditto-screener-l2"
+    )
+
+    monkeypatch.setenv("SCREENER_L2_WORKSPACE_ROOT", "relative-workspace")
+    with pytest.raises(ScreenerConfigError, match="must be absolute"):
+        parse_screener_config_from_env()
 
 
 def test_smoke_env_bad_pair_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

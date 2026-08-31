@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+import ditto_screener.adjudicator as adjudicator_module
 from ditto_screener.adjudicator import (
     ADJUDICATOR_PROMPT_REVISION,
     SourceReviewAdjudicator,
@@ -534,6 +535,29 @@ async def test_a_wall_clock_timeout_clears_rather_than_holding(
         deadline=asyncio.get_running_loop().time() + 0.01,
     )
 
+    assert result.decision == "clear"
+    assert result.clear_clause == "no_proven_breach_before_deadline"
+
+
+async def test_a_stalled_completion_retries_once_then_clears(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hung model request cannot spend the entire screening lease."""
+    attempts = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        await asyncio.sleep(1)
+        return httpx.Response(200, json={})
+
+    monkeypatch.setattr(adjudicator_module, "_MAX_COMPLETION_REQUEST_SECONDS", 0.01)
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
+
+    assert attempts == 2
     assert result.decision == "clear"
     assert result.clear_clause == "no_proven_breach_before_deadline"
 

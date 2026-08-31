@@ -57,6 +57,12 @@ ADJUDICATOR_PROMPT_REVISION = "adjudicator-v2-policy-v10"
 _DEFAULT_MODEL = "z-ai/glm-5.3-flash"
 _MAX_STEPS = 128
 _MAX_COMPLETION_TOKENS = 6_000
+# A provider request must never consume an otherwise healthy screening lease.
+# The court can resume its compacted ledger on one transient retry; after that,
+# the published no-proven-breach rule settles the review rather than stranding
+# the miner behind an unresponsive model endpoint.
+_MAX_COMPLETION_REQUEST_SECONDS = 75.0
+_MAX_COMPLETION_REQUEST_ATTEMPTS = 2
 # Bounded by the repository tools themselves; this only caps how many of
 # the served locations are remembered for citation checking.
 _MAX_RECORDED_READS = 2_048
@@ -456,7 +462,13 @@ class SourceReviewAdjudicator:
                 error_code=error_code,
                 deadline=deadline,
             )
-        except (OSError, ValueError, httpx.HTTPError, json.JSONDecodeError) as error:
+        except (
+            OSError,
+            TimeoutError,
+            ValueError,
+            httpx.HTTPError,
+            json.JSONDecodeError,
+        ) as error:
             logger.warning(
                 "adjudication failed model=%s cause=%s: %s",
                 self._model,
@@ -677,17 +689,31 @@ class SourceReviewAdjudicator:
                 "require_parameters": True,
             },
         }
-        effective_timeout = timeout if timeout is not None else self._timeout_seconds
-        async with asyncio.timeout(effective_timeout):
-            response = await client.post(
-                f"{self._base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    **_OPENROUTER_ATTRIBUTION_HEADERS,
-                },
-                json=request,
-                timeout=effective_timeout,
-            )
+        effective_timeout = min(
+            timeout if timeout is not None else self._timeout_seconds,
+            _MAX_COMPLETION_REQUEST_SECONDS,
+        )
+        for attempt in range(_MAX_COMPLETION_REQUEST_ATTEMPTS):
+            try:
+                async with asyncio.timeout(effective_timeout):
+                    response = await client.post(
+                        f"{self._base_url}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            **_OPENROUTER_ATTRIBUTION_HEADERS,
+                        },
+                        json=request,
+                        timeout=effective_timeout,
+                    )
+            except (TimeoutError, httpx.TimeoutException):
+                if attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "adjudicator completion timed out; retrying once model=%s",
+                    self._model,
+                )
+                continue
+            break
         if response.status_code >= 400:
             response.raise_for_status()
         payload: object = response.json()

@@ -1954,11 +1954,13 @@ class KimiSolSourceReviewAgent:
         critic_provider: str | None = L3_PROVIDER,
         transport: httpx.AsyncBaseTransport | None = None,
         local_address: str | None = None,
+        workspace_root: str | None = None,
     ) -> None:
         del fallback_models  # Rolling config compatibility; failovers are disabled.
         self._api_key_file = api_key_file
         self._base_url = base_url.rstrip("/")
         self._harness = harness
+        self._workspace_root = Path(workspace_root) if workspace_root else None
         self._cache_dir = Path(cache_dir)
         self._audit = audit_journal
         self._timeout_seconds = timeout_seconds
@@ -2107,7 +2109,19 @@ class KimiSolSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         on_l3_start: Callable[[], None] | None = None,
     ) -> L2RunResult:
-        workspace = Path(tempfile.mkdtemp(prefix="ditto-l2-source-"))
+        if self._workspace_root is not None:
+            # A rootless analyzer daemon lives outside the worker service's
+            # PrivateTmp mount.  Its bind mount can therefore never resolve a
+            # source extracted under the service-private /tmp.  The fleet
+            # provisions this directory with execute-only access for the
+            # daemon group; each temporary workspace is tightened again just
+            # before it is passed to Docker.
+            self._workspace_root.mkdir(mode=0o770, parents=True, exist_ok=True)
+            workspace = Path(
+                tempfile.mkdtemp(prefix="ditto-l2-source-", dir=self._workspace_root)
+            )
+        else:
+            workspace = Path(tempfile.mkdtemp(prefix="ditto-l2-source-"))
         try:
             _extract_readonly_workspace(Path(archive_path), workspace)
             repository = TarSourceRepository(archive_path)
