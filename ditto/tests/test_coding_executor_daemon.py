@@ -22,6 +22,10 @@ TASKS = (ROLE / "tasks/main.yml").read_text()
 INSTALLER = (ROLE / "files/install-rootless-docker.sh").read_text()
 GUARD = (ROLE / "files/executor-egress-guard.sh").read_text()
 GUARD_UNIT = ROLE / "templates/ditto-coding-executor-egress-guard.service.j2"
+INGRESS_GUARD = (ROLE / "files/executor-capability-ingress-guard.sh").read_text()
+INGRESS_GUARD_UNIT = (
+    ROLE / "templates/ditto-coding-executor-capability-ingress-guard.service.j2"
+)
 DAEMON = (ROLE / "files/rootless-daemon.json").read_text()
 PLAYBOOK = (ROOT / "infra/ansible/playbooks/gcp-coding-executor.yml").read_text()
 WORKFLOW = (ROOT / ".github/workflows/infra-ci.yml").read_text()
@@ -166,6 +170,9 @@ def test_rootless_daemon_private_egress_guard_and_ci_coverage_are_present() -> N
     assert 'iptables -A "$replacement" -j REJECT' in GUARD
     assert "coding_executor_capability_egress_enabled" in DEFAULTS
     assert "coding_executor_capability_gateway" in GUARD_UNIT.read_text()
+    assert "coding_executor_capability_ingress_enabled" in DEFAULTS
+    assert 'chain="DCE-EXEC-INGRESS"' in INGRESS_GUARD
+    assert "coding_executor_capability_source_cidr" in INGRESS_GUARD_UNIT.read_text()
     assert "hosts: role_coding_executor" in PLAYBOOK
     assert "gcp-coding-executor.yml" in WORKFLOW
     assert "docker-ce-rootless-extras" in TASKS
@@ -235,6 +242,66 @@ def test_rootless_egress_guard_rejects_an_invalid_capability_gateway(
 
     assert result.returncode == 1
     assert "capability gateway is invalid" in result.stderr
+
+
+def test_rootless_ingress_guard_allows_only_the_reviewed_candidate_cidr(
+    tmp_path: Path,
+) -> None:
+    command_dir = tmp_path / "bin"
+    command_dir.mkdir()
+    log = tmp_path / "iptables.log"
+    iptables = command_dir / "iptables"
+    iptables.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1\" == '-D' ]]; then exit 1; fi\n"
+        'printf \'%s\\n\' "$*" >> "$IPTABLES_LOG"\n'
+    )
+    iptables.chmod(0o755)
+    environment = os.environ | {
+        "CODING_EXECUTOR_CAPABILITY_GATEWAY": "10.30.0.5",
+        "CODING_EXECUTOR_CAPABILITY_SOURCE_CIDR": "10.0.2.0/24",
+        "CODING_EXECUTOR_CAPABILITY_PORT": "11438",
+        "IPTABLES_LOG": str(log),
+        "PATH": str(command_dir) + ":" + os.environ["PATH"],
+    }
+
+    result = subprocess.run(
+        ["bash", str(ROLE / "files/executor-capability-ingress-guard.sh")],
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    commands = log.read_text()
+    assert "-p tcp -s 10.0.2.0/24 -d 10.30.0.5/32 --dport 11438 -j ACCEPT" in commands
+    assert "-A DCE-EXEC-INGRESS-" in commands
+    assert "-j REJECT" in commands
+
+
+def test_rootless_ingress_guard_rejects_a_public_candidate_cidr(
+    tmp_path: Path,
+) -> None:
+    command_dir = tmp_path / "bin"
+    command_dir.mkdir()
+    environment = os.environ | {
+        "CODING_EXECUTOR_CAPABILITY_GATEWAY": "10.30.0.5",
+        "CODING_EXECUTOR_CAPABILITY_SOURCE_CIDR": "203.0.113.0/24",
+        "CODING_EXECUTOR_CAPABILITY_PORT": "11438",
+        "PATH": str(command_dir) + ":" + os.environ["PATH"],
+    }
+
+    result = subprocess.run(
+        ["bash", str(ROLE / "files/executor-capability-ingress-guard.sh")],
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "capability ingress configuration is invalid" in result.stderr
 
 
 def _manifest(archive_sha256: str, *, fixture: bool = False) -> bytes:

@@ -59,6 +59,13 @@ The later scorer-service profile must bind its capability listener to this same
 gateway and prove the host-side inbound policy before it starts. A general
 proxy, inference route, or validator transport belongs to later reviewed work.
 
+`coding_executor_capability_ingress_enabled` is that host-side counterpart. It
+also defaults false, requires capability egress, and rejects TCP `11438` on the
+host unless the packet targets the same gateway from one reviewed private
+rootless candidate CIDR. Gateway, source CIDR, and port are validated before
+the systemd unit is rendered. The guard leaves no broad VPC, public, or
+peer-container capability path.
+
 ## Production runtime-bundle staging
 
 The public `Dockerfile.coding-supervisor` builds a synthetic certification
