@@ -49,7 +49,7 @@ def _payload(scope: str, mode: str, expected: int = 0) -> dict[str, object]:
         "expected_revision": expected,
         "settings": {
             "mode": mode,
-            "l2_model": "moonshotai/kimi-k3",
+            "l2_model": "openai/gpt-5.6-terra",
             "l2_fallback_models": ["z-ai/glm-5.2", "openai/gpt-5.6-sol"],
             "l3_enabled": True,
             "l3_model": "openai/gpt-5.6-sol",
@@ -251,8 +251,8 @@ async def test_stale_parent_and_duplicate_model_chain_are_rejected(
     invalid = _payload("*", "shadow")
     invalid["settings"] = {
         "mode": "shadow",
-        "l2_model": "moonshotai/kimi-k3",
-        "l2_fallback_models": ["moonshotai/kimi-k3"],
+        "l2_model": "openai/gpt-5.6-terra",
+        "l2_fallback_models": ["openai/gpt-5.6-terra"],
     }
     duplicate = await client.post(
         "/api/v1/admin/screener-review-settings",

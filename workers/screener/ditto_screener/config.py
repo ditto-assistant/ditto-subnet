@@ -372,7 +372,7 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         ),
         l2_review_mode=os.environ.get("SCREENER_L2_REVIEW_MODE", "off"),
         l2_review_model=os.environ.get(
-            "SCREENER_L2_REVIEW_MODEL", "moonshotai/kimi-k3"
+            "SCREENER_L2_REVIEW_MODEL", "openai/gpt-5.6-terra"
         ),
         l2_review_provider=os.environ.get("SCREENER_L2_REVIEW_PROVIDER", "openrouter"),
         l2_fallback_models=_parse_csv(
@@ -499,8 +499,14 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_REVIEW_MODE must be off, shadow, or enforce"
         )
-    if config.l2_review_model != "moonshotai/kimi-k3":
-        raise ScreenerConfigError("SCREENER_L2_REVIEW_MODEL must be moonshotai/kimi-k3")
+    if config.l2_review_model not in {
+        "openai/gpt-5.6-terra",
+        "moonshotai/kimi-k3",
+    }:
+        raise ScreenerConfigError(
+            "SCREENER_L2_REVIEW_MODEL must be openai/gpt-5.6-terra or "
+            "moonshotai/kimi-k3"
+        )
     if config.l2_review_provider != "openrouter":
         raise ScreenerConfigError("SCREENER_L2_REVIEW_PROVIDER must be openrouter")
     if config.l2_fallback_models != ("z-ai/glm-5.2", "openai/gpt-5.6-sol"):

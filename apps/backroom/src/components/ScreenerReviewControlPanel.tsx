@@ -16,7 +16,7 @@ import {
 
 const defaults: ScreenerReviewSettings = {
   mode: 'off',
-  l2_model: 'moonshotai/kimi-k3',
+  l2_model: 'openai/gpt-5.6-terra',
   l2_fallback_models: ['z-ai/glm-5.2', 'openai/gpt-5.6-sol'],
   l3_enabled: true,
   l3_model: 'openai/gpt-5.6-sol',
@@ -557,6 +557,7 @@ export function ScreenerReviewControlPanel({
                   }
                   className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
                 >
+                  <option value="openai/gpt-5.6-terra">GPT-5.6 Terra</option>
                   <option value="moonshotai/kimi-k3">Kimi K3</option>
                   <option value="z-ai/glm-5.2">GLM 5.2</option>
                   <option value="openai/gpt-5.6-sol">GPT-5.6 SOL</option>
@@ -574,6 +575,7 @@ export function ScreenerReviewControlPanel({
                     }}
                     className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
                   >
+                    <option value="openai/gpt-5.6-terra">GPT-5.6 Terra</option>
                     <option value="moonshotai/kimi-k3">Kimi K3</option>
                     <option value="z-ai/glm-5.2">GLM 5.2</option>
                     <option value="openai/gpt-5.6-sol">GPT-5.6 SOL</option>
@@ -659,7 +661,7 @@ export function ScreenerReviewControlPanel({
                 <p className="text-xs font-semibold">Independent L3 verification</p>
                 <p className="mt-1 max-w-[70ch] text-xs leading-5 text-[var(--muted)]">
                   {settings.l3_enabled
-                    ? 'GPT-5.6 SOL independently critiques or adjudicates the Kimi result. This adds paid model calls when L2 escalates.'
+                    ? 'GPT-5.6 SOL independently critiques or adjudicates the Terra result. This adds paid model calls when L2 escalates.'
                     : 'L3 is disabled. The L2 analyst becomes the final paid reviewer; L1 routing, L2 budgets, caching, and audit evidence stay active.'}
                 </p>
               </div>

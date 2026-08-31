@@ -1768,7 +1768,7 @@ describe('source review causal evidence schema', () => {
 describe('screener review settings schemas', () => {
   const settings = {
     mode: 'shadow',
-    l2_model: 'moonshotai/kimi-k3',
+    l2_model: 'openai/gpt-5.6-terra',
     l2_fallback_models: ['z-ai/glm-5.2', 'openai/gpt-5.6-sol'],
     l3_enabled: true,
     l3_model: 'openai/gpt-5.6-sol',
@@ -1841,7 +1841,7 @@ describe('screener review settings schemas', () => {
   it('rejects duplicate model chains and short audit reasons', () => {
     expect(() => applyScreenerReviewSettingsInputSchema.parse({
       scope: '*', expectedRevision: 0,
-      settings: { ...settings, l2_fallback_models: ['moonshotai/kimi-k3'] },
+      settings: { ...settings, l2_fallback_models: ['openai/gpt-5.6-terra'] },
       reason: 'short', confirmation: 'APPLY SCREENER REVIEW * SHADOW',
     })).toThrow()
   })

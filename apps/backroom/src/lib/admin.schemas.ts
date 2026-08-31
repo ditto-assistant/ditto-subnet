@@ -250,6 +250,7 @@ export const screeningDisputeResolutionSchema = z.enum(['release', 'uphold'])
 
 export const screenerReviewModeSchema = z.enum(['off', 'shadow', 'enforce', 'inherit'])
 export const screenerReviewModelSchema = z.enum([
+  'openai/gpt-5.6-terra',
   'moonshotai/kimi-k3',
   'z-ai/glm-5.2',
   'openai/gpt-5.6-sol',

@@ -277,10 +277,10 @@ def test_live_model_source_review_probe_pins_layered_env(monkeypatch, capsys) ->
                 return (
                     'SOURCE_REVIEW_COMPLETE={"categories": ["none"], '
                     '"clearance_certified": true, "ok": true, '
-                    '"prompt_revision": "l2-kimi-source-review-v33", '
+                    '"prompt_revision": "l2-terra-source-review-v37", '
                     '"risk_level": "low"}'
                 )
-            return "layered source review kimi-k3 gpt-5.6-sol"
+            return "layered source review gpt-5.6-terra gpt-5.6-sol"
 
     class Response:
         status = 200
@@ -325,15 +325,15 @@ def test_live_model_source_review_probe_pins_layered_env(monkeypatch, capsys) ->
     assert env["SCREENER_SOURCE_REVIEW_API_KEY"] == "probe-live-openrouter-key"
     assert env["SCREENER_SOURCE_REVIEW_BASE_URL"] == "https://openrouter.ai/api/v1"
     assert env["SCREENER_L2_REVIEW_MODE"] == "enforce"
-    assert env["SCREENER_L2_REVIEW_MODEL"] == "moonshotai/kimi-k3"
+    assert env["SCREENER_L2_REVIEW_MODEL"] == "openai/gpt-5.6-terra"
     assert env["SCREENER_L3_REVIEW_ENABLED"] == "true"
     assert env["SCREENER_L3_REVIEW_MODEL"] == "openai/gpt-5.6-sol"
     assert env["SCREENER_L2_ALWAYS_ESCALATE"] == "true"
     assert env["SCREENER_L2_MAX_COMPLETION_TOKENS"] == "8192"
     output = capsys.readouterr().out
     assert '"capability": "AVAILABLE"' in output
-    assert "l2-kimi-source-review-v33" in output
-    assert "kimi-k3" in output
+    assert "l2-terra-source-review-v37" in output
+    assert "gpt-5.6-terra" in output
 
 
 def test_starter_kit_source_review_mock_script_compiles() -> None:

@@ -30,6 +30,7 @@ from ditto_screener.l2_review import (
     _VIOLATION_CAUSE_DISAGREEMENT_TASK,
     _VIOLATION_CAUSE_TASK,
     L2_DOSSIER_REVISION,
+    L2_FALLBACK_MODELS,
     L2_HARNESS_REVISION,
     L2_MODEL,
     L2_STARTER_MANIFESTS,
@@ -202,8 +203,8 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 
 
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
-    assert l2_prompt_revision(11) == "l2-kimi-source-review-v36-policy-v11"
-    assert l2_prompt_revision(10) == "l2-kimi-source-review-v36-policy-v10"
+    assert l2_prompt_revision(11) == "l2-terra-source-review-v37-policy-v11"
+    assert l2_prompt_revision(10) == "l2-terra-source-review-v37-policy-v10"
     assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v10"
     assert l2_cause_prompt_revision(11) == "l3-sol-violation-cause-v27-policy-v11"
     assert l2_cause_tiebreaker_prompt_revision(11) == (
@@ -833,12 +834,12 @@ def _clearance_candidate(*, confidence: float = 0.99) -> L2RunResult:
         tools=("read_file",),
         usage=L2Usage(),
         cache_hit=False,
-        response_models=("moonshotai/kimi-k3-20260715",),
+        response_models=("openai/gpt-5.6-terra",),
         resolution_basis="authoritative_model_tool_path",
     )
 
 
-def test_complete_medium_primary_kimi_certificate_can_skip_l3() -> None:
+def test_complete_medium_primary_terra_certificate_can_skip_l3() -> None:
     assert _qualifies_for_direct_clear(_l1("medium"), _clearance_candidate())
 
 
@@ -1932,7 +1933,7 @@ async def test_scorer_attention_blocks_direct_clear_and_requires_sol(
         return _response(
             calls,
             model=(
-                "moonshotai/kimi-k3-20260715"
+                "openai/gpt-5.6-terra-20260709"
                 if len(requests) == 1
                 else "openai/gpt-5.6-sol-20260709"
             ),
@@ -2080,7 +2081,7 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
             cached_tokens=800 if len(requests) == 2 else 0,
             reasoning_tokens=40 if len(requests) == 1 else 80,
             model=(
-                "moonshotai/kimi-k3-20260715"
+                "openai/gpt-5.6-terra-20260709"
                 if len(requests) == 1
                 else "openai/gpt-5.6-sol-20260709"
             ),
@@ -2133,7 +2134,8 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
         "scorer_field_flow",
         "read_file",
     }
-    assert requests[0]["model"] == L2_MODEL
+    assert "model" not in requests[0]
+    assert requests[0]["models"] == [L2_MODEL, *L2_FALLBACK_MODELS]
     assert requests[0]["provider"] == {
         "allow_fallbacks": True,
         "sort": "throughput",
@@ -2141,7 +2143,6 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
         "zdr": True,
         "data_collection": "deny",
     }
-    assert "models" not in requests[0]
     assert "reasoning" not in requests[0]
     assert requests[1]["model"] == "openai/gpt-5.6-sol"
     assert requests[2]["model"] == "openai/gpt-5.6-sol"
@@ -2180,12 +2181,12 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
     assert first.observation.clearance_certified is True
     assert second.observation.clearance_certified is True
     assert first.response_models == (
-        "moonshotai/kimi-k3-20260715",
+        "openai/gpt-5.6-terra-20260709",
         "openai/gpt-5.6-sol-20260709",
         "openai/gpt-5.6-sol-20260709",
         "openai/gpt-5.6-sol-20260709",
     )
-    assert first.response_providers == ("Moonshot AI", "Azure", "Azure", "Azure")
+    assert first.response_providers == ("Azure", "Azure", "Azure", "Azure")
     assert first.usage.cached_input_tokens == 800
     assert first.usage.reasoning_tokens == 280
     assert first.usage.reported_cost_usd == pytest.approx(0.044)
@@ -2195,7 +2196,10 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
     assert {record["cache_hit"] for record in records} == {False, True}
     assert all(record["attempt_id"] == str(ATTEMPT) for record in records)
     assert all(record["analyst_model"] == L2_MODEL for record in records)
-    assert all(record["analyst_fallback_models"] == [] for record in records)
+    assert all(
+        record["analyst_fallback_models"] == list(L2_FALLBACK_MODELS)
+        for record in records
+    )
     assert all(record["critic_model"] == "openai/gpt-5.6-sol" for record in records)
     assert all(
         record["prompt_revision"] == l2_prompt_revision(SCREENING_POLICY_VERSION)
@@ -2295,7 +2299,7 @@ fn run() -> Answer {
         return _response(
             [_tool_call("1", "submit_l2_review", safe)],
             model=(
-                "moonshotai/kimi-k3-20260715"
+                "openai/gpt-5.6-terra-20260709"
                 if len(requests) == 1
                 else "openai/gpt-5.6-sol-20260709"
             ),
@@ -2311,7 +2315,8 @@ fn run() -> Answer {
     )
 
     assert len(requests) == 4
-    assert requests[0]["model"] == L2_MODEL
+    assert "model" not in requests[0]
+    assert requests[0]["models"] == [L2_MODEL, *L2_FALLBACK_MODELS]
     assert requests[1]["model"] == "openai/gpt-5.6-sol"
     assert result.observation.risk_level == "low"
     assert result.observation.clearance_certified is True
@@ -2357,7 +2362,7 @@ fn main() {
         return _response(
             [_tool_call(str(len(requests)), "submit_l2_review", safe)],
             model=(
-                "moonshotai/kimi-k3-20260715"
+                "openai/gpt-5.6-terra-20260709"
                 if len(requests) == 1
                 else "openai/gpt-5.6-sol-20260709"
             ),
@@ -2442,7 +2447,7 @@ fn run() -> Answer {
         requests.append(json.loads(request.content))
         result = safe if len(requests) == 1 else cause
         model = (
-            "moonshotai/kimi-k3-20260715"
+            "openai/gpt-5.6-terra-20260709"
             if len(requests) == 1
             else "openai/gpt-5.6-sol-20260709"
         )
@@ -2511,14 +2516,14 @@ async def test_reasoning_only_turn_is_single_shot_contract_failure(
         body = json.loads(request.content)
         requests.append(body)
         if len(requests) == 1:
-            return _response([], model="moonshotai/kimi-k3-20260715")
+            return _response([], model="openai/gpt-5.6-terra-20260709")
         if len(requests) == 4:
             return _response([_tool_call("4", "read_file", {"path": "src/main.rs"})])
         result = _clearance_certificate(submitted) if len(requests) == 5 else submitted
         return _response(
             [_tool_call(str(len(requests)), "submit_l2_review", result)],
             model=(
-                "moonshotai/kimi-k3-20260715"
+                "openai/gpt-5.6-terra-20260709"
                 if len(requests) == 2
                 else "openai/gpt-5.6-sol-20260709"
             ),
@@ -2543,7 +2548,7 @@ async def test_model_contract_failure_retains_usage_and_never_clears(
     archive, artifact_sha = _tar(tmp_path, "fn main() {}")
 
     def handler(_request: httpx.Request) -> httpx.Response:
-        return _response([], model="moonshotai/kimi-k3-20260715")
+        return _response([], model="openai/gpt-5.6-terra-20260709")
 
     result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
         str(archive),
@@ -2558,7 +2563,7 @@ async def test_model_contract_failure_retains_usage_and_never_clears(
     assert result.observation.error_code == "l2-model-tool-contract"
     assert result.usage.input_tokens == 1_000
     assert result.usage.output_tokens == 200
-    assert result.response_models == ("moonshotai/kimi-k3-20260715",)
+    assert result.response_models == ("openai/gpt-5.6-terra-20260709",)
 
 
 async def test_parallel_model_tool_calls_cannot_exceed_trajectory_cap(
@@ -2570,7 +2575,7 @@ async def test_parallel_model_tool_calls_cannot_exceed_trajectory_cap(
     result = await _sol_agent(
         tmp_path,
         _FakeHarness(),
-        lambda _request: _response(calls, model="moonshotai/kimi-k3-20260715"),
+        lambda _request: _response(calls, model="openai/gpt-5.6-terra-20260709"),
     ).review(
         str(archive),
         artifact_sha256=artifact_sha,
@@ -2584,7 +2589,7 @@ async def test_parallel_model_tool_calls_cannot_exceed_trajectory_cap(
     assert result.observation.failure_disposition == "pass_inconclusive"
     assert result.observation.review_audit is not None
     assert result.observation.review_audit["reason_code"] == "l2-model-tool-budget"
-    assert result.response_models == ("moonshotai/kimi-k3-20260715",)
+    assert result.response_models == ("openai/gpt-5.6-terra-20260709",)
 
 
 async def test_analyst_violation_stops_before_critic(tmp_path: Path) -> None:
@@ -2692,7 +2697,7 @@ async def test_mixed_benchmark_violation_gets_sol_cause_adjudication(
         payloads.append(json.loads(request.content))
         result = analyst if requests == 1 else adjudicated
         model = (
-            "moonshotai/kimi-k3-20260715"
+            "openai/gpt-5.6-terra-20260709"
             if requests == 1
             else "openai/gpt-5.6-sol-20260709"
         )
@@ -2843,7 +2848,7 @@ async def test_violation_adjudicator_retry_reuses_kimi_stage(tmp_path: Path) -> 
         return _response(
             [_tool_call(str(requests), "submit_l2_review", violation)],
             model=(
-                "moonshotai/kimi-k3-20260715"
+                "openai/gpt-5.6-terra-20260709"
                 if requests == 1
                 else "openai/gpt-5.6-sol-20260709"
             ),
@@ -3018,7 +3023,7 @@ async def test_partial_exploratory_tool_requires_correction_before_submission(
         return _response(
             output,
             model=(
-                "moonshotai/kimi-k3-20260715"
+                "openai/gpt-5.6-terra-20260709"
                 if requests == 1
                 else "openai/gpt-5.6-sol-20260709"
             ),
@@ -3192,7 +3197,7 @@ async def test_agreeing_safe_models_cannot_clear_original_scorer_lead(
         return _response(
             [_tool_call(str(requests), "submit_l2_review", result)],
             model=(
-                "moonshotai/kimi-k3-20260715"
+                "openai/gpt-5.6-terra-20260709"
                 if requests == 1
                 else "openai/gpt-5.6-sol-20260709"
             ),
@@ -3376,7 +3381,7 @@ async def test_critic_retry_reuses_sanitized_analyst_stage_cache(
     assert second.observation.risk_level == "low"
     assert second.analyst_cache_hit
     assert requests == 5, (
-        "the manual retry must resume at SOL instead of rerunning Kimi"
+        "the manual retry must resume at SOL instead of rerunning Terra"
     )
 
 
@@ -3521,7 +3526,7 @@ async def test_invalid_final_tool_result_is_correctable_in_same_trajectory(
         return _response(
             [_tool_call(str(len(requests)), "submit_l2_review", result)],
             model=(
-                "moonshotai/kimi-k3-20260715"
+                "openai/gpt-5.6-terra-20260709"
                 if len(requests) <= 2
                 else "openai/gpt-5.6-sol-20260709"
             ),
@@ -3574,7 +3579,7 @@ async def test_malformed_submit_arguments_are_correctable_in_same_trajectory(
                         "arguments": "{",
                     }
                 ],
-                model="moonshotai/kimi-k3-20260715",
+                model="openai/gpt-5.6-terra-20260709",
             )
         if len(requests) == 4:
             return _response(
@@ -3585,7 +3590,7 @@ async def test_malformed_submit_arguments_are_correctable_in_same_trajectory(
         return _response(
             [_tool_call(str(len(requests)), "submit_l2_review", result)],
             model=(
-                "moonshotai/kimi-k3-20260715"
+                "openai/gpt-5.6-terra-20260709"
                 if len(requests) <= 2
                 else "openai/gpt-5.6-sol-20260709"
             ),
@@ -3633,7 +3638,7 @@ async def test_submit_mixed_with_analyzer_call_is_correctable(
                     _tool_call("submit", "submit_l2_review", safe),
                     _tool_call("read", "read_file", {"path": "src/main.rs"}),
                 ],
-                model="moonshotai/kimi-k3-20260715",
+                model="openai/gpt-5.6-terra-20260709",
             )
         if len(requests) == 4:
             return _response(
@@ -3644,7 +3649,7 @@ async def test_submit_mixed_with_analyzer_call_is_correctable(
         return _response(
             [_tool_call(str(len(requests)), "submit_l2_review", result)],
             model=(
-                "moonshotai/kimi-k3-20260715"
+                "openai/gpt-5.6-terra-20260709"
                 if len(requests) <= 2
                 else "openai/gpt-5.6-sol-20260709"
             ),

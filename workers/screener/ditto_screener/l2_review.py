@@ -1,4 +1,4 @@
-"""Escalating Kimi/GLM/SOL review in an isolated, inert coding harness."""
+"""Escalating Terra/GLM/SOL review in an isolated, inert coding harness."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ from ditto_screening_protocol import (
 
 logger = logging.getLogger(__name__)
 
-L2_MODEL = "moonshotai/kimi-k3"
+L2_MODEL = "openai/gpt-5.6-terra"
 L2_FALLBACK_MODELS = ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
 L3_MODEL = "openai/gpt-5.6-sol"
 L3_PROVIDER = "openrouter"
@@ -81,7 +81,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
-    return f"l2-kimi-source-review-v36-policy-v{policy_version}"
+    return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
@@ -136,9 +136,7 @@ L2_CAUSE_MAX_STEPS = 8
 L2_CAUSE_TIEBREAKER_MAX_STEPS = 6
 L2_SAFETY_ADJUDICATOR_MAX_STEPS = 6
 L2_HARNESS_REVISION = "l2-isolated-coding-harness-v19"
-L2_PRICING_REVISION = (
-    "openrouter-catalog-2026-07-18-kimi-k3-glm-5-2-sol-reported-cost-v2"
-)
+L2_PRICING_REVISION = "openrouter-catalog-2026-08-31-terra-glm-5-2-sol-reported-cost-v3"
 L2_STARTER_MANIFESTS = tuple(
     sorted((Path(__file__).parent / "data").glob("starter-kit-provenance-*.json"))
 )
@@ -843,7 +841,7 @@ L1's suspicion has been resolved by a traced legitimate path; violation only
 with reachable causal evidence; inconclusive when bounded static analysis
 cannot decide. Never quote source or private values in the summary. An analyst
 safe result is a clearance candidate. A deterministic router may accept only a
-complete, very-high-confidence, medium-risk certificate from the primary Kimi
+complete, very-high-confidence, medium-risk certificate from the primary Terra
 analyst; high-risk, incomplete, ambiguous, or fallback-model safe results need
 an independent SOL adversarial critic. For a safe causal path, include request
 context, the authoritative model/tool decision, and the returned answer sink.
@@ -1082,7 +1080,7 @@ clear the case, but it also cannot convert a false surface match into proof.
 """
 
 _VIOLATION_CAUSE_DISAGREEMENT_TASK = """\
-This is a bounded disagreement round. The Kimi analyst and first SOL cause
+This is a bounded disagreement round. The Terra analyst and first SOL cause
 adjudicator already agree that the artifact violates policy but selected
 different primary causal bases. Neither label is authoritative. Compare both
 evidence-bound claims against the source and apply the causal taxonomy below.
@@ -1935,8 +1933,8 @@ class L2AuditJournal:
             os.close(fd)
 
 
-class KimiSolSourceReviewAgent:
-    """Kimi analyst plus independent SOL critic/adjudicator trajectories."""
+class TerraSolSourceReviewAgent:
+    """Terra analyst plus independent SOL critic/adjudicator trajectories."""
 
     def __init__(
         self,
@@ -1964,7 +1962,6 @@ class KimiSolSourceReviewAgent:
         local_address: str | None = None,
         workspace_root: str | None = None,
     ) -> None:
-        del fallback_models  # Rolling config compatibility; failovers are disabled.
         self._api_key_file = api_key_file
         self._base_url = base_url.rstrip("/")
         self._harness = harness
@@ -1979,15 +1976,16 @@ class KimiSolSourceReviewAgent:
         self._max_cost_usd = max_cost_usd
         self._cache_ttl_seconds = cache_ttl_seconds
         if analyst_reasoning_effort != "model_default":
-            raise ValueError("Kimi K3 analyst reasoning effort must be model_default")
+            raise ValueError("L2 analyst reasoning effort must be model_default")
         if critic_reasoning_effort not in {"low", "medium"}:
             raise ValueError("L2 critic reasoning effort must be low or medium")
         self._analyst_reasoning_effort = analyst_reasoning_effort
         self._critic_reasoning_effort = critic_reasoning_effort
         self._model = model
-        # A fallback model is another paid attempt. Keep accepting the rolling
-        # wire field, but execute and report only the selected primary model.
-        self._fallback_models: tuple[str, ...] = ()
+        # Ordered OpenRouter fallbacks are attempted only when the selected
+        # model cannot return a response. A successful model response never
+        # triggers another paid analyst attempt.
+        self._fallback_models = fallback_models
         self._l3_enabled = l3_enabled
         self._critic_model = critic_model
         self._critic_provider = critic_provider
@@ -2315,7 +2313,7 @@ class KimiSolSourceReviewAgent:
                         analyst_cache_hit=analyst_cache_hit,
                     )
                 # Broad lexical/static constellations are routing attention,
-                # never non-overturnable findings. A complete Kimi clearance
+                # never non-overturnable findings. A complete Terra clearance
                 # still receives independent SOL review, which may clear it.
                 integrity_attention = static_attention is not None
             if not self._l3_enabled:
@@ -3566,7 +3564,12 @@ class KimiSolSourceReviewAgent:
                 "data_collection": "deny",
             },
         }
-        del fallback_models
+        if fallback_models:
+            # The Responses API accepts an ordered model chain. The router
+            # advances only when the prior model returns a retryable routing
+            # failure; it does not run multiple successful completions.
+            request.pop("model")
+            request["models"] = [model, *fallback_models]
         if provider is not None:
             request["provider"]["only"] = [provider]  # type: ignore[index]
         if reasoning_effort != "model_default":
@@ -3657,9 +3660,9 @@ class KimiSolSourceReviewAgent:
         l1_observation: SourceReviewObservation,
         policy_version: int = SCREENING_POLICY_VERSION,
     ) -> str:
-        """Keep cause-only retries from rerunning Kimi or the critic."""
+        """Keep cause-only retries from rerunning Terra or the critic."""
         value = self._cache_key_value(artifact_sha256, l1_observation, policy_version)
-        # Preserve the pre-split stage key so already verified Kimi/critic
+        # Preserve the pre-split stage key so already verified Terra/critic
         # trajectories remain reusable when only adjudication changes.
         value["reasoning_efforts"] = {
             "analyst": self._analyst_reasoning_effort,
@@ -3924,7 +3927,7 @@ class LayeredSourceReviewAgent:
         self,
         *,
         l1: OpenRouterSourceReviewAgent,
-        l2: KimiSolSourceReviewAgent,
+        l2: TerraSolSourceReviewAgent,
         mode: str,
         concern_hold_count: int = 3,
         clear_min_notes: int = 3,
@@ -4238,7 +4241,7 @@ def _dossier_has_scorer_attention(dossier: Mapping[str, object]) -> bool:
 def _qualifies_for_direct_clear(
     l1_observation: SourceReviewObservation, analyst: L2RunResult
 ) -> bool:
-    """Accept only a complete primary-Kimi certificate for medium-risk leads."""
+    """Accept only a complete primary-Terra certificate for medium-risk leads."""
     finding = analyst.observation.finding
     if (
         l1_observation.risk_level != "medium"
@@ -4338,7 +4341,7 @@ def _has_mixed_causal_families(
         if l1_categories & family
     }
     # A wholly different causal finding may correctly replace a noisy L1 lead.
-    # Escalate when Kimi retained one L1 family but narrowed away another.
+    # Escalate when Terra retained one L1 family but narrowed away another.
     return (
         bool(analyst_families & l1_families) and len(analyst_families | l1_families) > 1
     )
@@ -5004,7 +5007,7 @@ def _cost(
     input_tokens: int, output_tokens: int, *, cached_input_tokens: int = 0
 ) -> float:
     # Conservative GPT-5.6 SOL upper bound from the OpenRouter 2026-07-18
-    # catalog. Kimi K3 and GLM 5.2 are cheaper, and every response's exact
+    # catalog. Terra and GLM 5.2 are cheaper, and every response's exact
     # OpenRouter-reported cost is preferred when present. SOL uses its higher
     # long-context tier when a single request reaches 272k prompt tokens.
     uncached = max(0, input_tokens - cached_input_tokens)
@@ -5189,7 +5192,7 @@ def _served_generator_hold(
 ) -> L2RunResult | None:
     """Keep a deterministic served-generator constellation from auto-clearing.
 
-    This is a quarantine recommendation, never a terminal rejection. The Kimi
+    This is a quarantine recommendation, never a terminal rejection. The Terra
     analyst still runs and contributes its evidence, but a model-only safe
     opinion cannot release an artifact whose served ``run`` path co-locates the
     generator-shaped request, retrieval, and answer-authority dimensions.
@@ -5384,7 +5387,7 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 response usage is invalid": "model-response-invalid",
     "L2 call graph has invalid collections": "call-graph-invalid",
     "L2 call graph is not an object": "call-graph-invalid",
-    "Kimi K3 analyst reasoning effort must be model_default": "config-invalid",
+    "L2 analyst reasoning effort must be model_default": "config-invalid",
     "L2 critic reasoning effort must be low or medium": "config-invalid",
     "at least one starter provenance manifest is required": "config-invalid",
     "invalid L2 mode": "config-invalid",
@@ -5678,9 +5681,10 @@ def _make_writable(workspace: Path) -> None:
             os.chmod(path, 0o700 if path.is_dir() else 0o600)
 
 
-# Compatibility for the unpublished v2 review branch; new code should use the
-# architecture-specific name above.
-SolL2SourceReviewAgent = KimiSolSourceReviewAgent
+# Compatibility aliases for unpublished review branches. New code should use
+# the architecture-specific Terra name above.
+KimiSolSourceReviewAgent = TerraSolSourceReviewAgent
+SolL2SourceReviewAgent = TerraSolSourceReviewAgent
 
 
 __all__ = [
@@ -5704,4 +5708,5 @@ __all__ = [
     "L3_PROVIDER",
     "LayeredSourceReviewAgent",
     "SolL2SourceReviewAgent",
+    "TerraSolSourceReviewAgent",
 ]

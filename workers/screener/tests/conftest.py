@@ -60,7 +60,7 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "static_preflight_v2_mode": "off",
         "static_preflight_audit_file": None,
         "l2_review_mode": "off",
-        "l2_review_model": "moonshotai/kimi-k3",
+        "l2_review_model": "openai/gpt-5.6-terra",
         "l2_review_provider": "openrouter",
         "l2_fallback_models": ("z-ai/glm-5.2", "openai/gpt-5.6-sol"),
         "l3_review_enabled": True,

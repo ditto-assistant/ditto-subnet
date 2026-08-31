@@ -321,7 +321,7 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
             ),
             "SCREENER_STATIC_PREFLIGHT_V2_MODE": "off",
             "SCREENER_L2_REVIEW_MODE": "enforce",
-            "SCREENER_L2_REVIEW_MODEL": "moonshotai/kimi-k3",
+            "SCREENER_L2_REVIEW_MODEL": "openai/gpt-5.6-terra",
             "SCREENER_L3_REVIEW_ENABLED": "true",
             "SCREENER_L3_REVIEW_MODEL": "openai/gpt-5.6-sol",
             "SCREENER_L2_ALWAYS_ESCALATE": "true",

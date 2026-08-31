@@ -20,7 +20,7 @@ vi.mock('../server/admin.functions', () => ({
 
 const settings = {
   mode: 'off' as const,
-  l2_model: 'moonshotai/kimi-k3' as const,
+  l2_model: 'openai/gpt-5.6-terra' as const,
   l2_fallback_models: ['z-ai/glm-5.2', 'openai/gpt-5.6-sol'] as const,
   l3_enabled: true,
   l3_model: 'openai/gpt-5.6-sol' as const,

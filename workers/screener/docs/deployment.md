@@ -81,10 +81,11 @@ the VM:
 - `SCREENER_SOURCE_REVIEW_API_KEY_FILE`: mode-0400 OpenRouter key file readable
   only by the screener service user. The default reviewer model is
   `openai/gpt-5.6-luna`; every request enforces ZDR and denies data collection.
-  Optional escalation uses exact `moonshotai/kimi-k3` for single-shot L2,
-  followed by exact `openai/gpt-5.6-sol` for the independent L3 clearance
-  critic. Provider and model fallbacks are disabled. They reuse the same
-  protected key file.
+  Optional escalation uses `openai/gpt-5.6-terra` for L2, followed by exact
+  `openai/gpt-5.6-sol` for the independent L3 clearance critic. L2 retains an
+  ordered GLM/SOL model-failover chain for upstream routing failures and all
+  layers allow OpenRouter provider failover, sorted for throughput. They reuse
+  the same protected key file.
 
 Never place any secret value, private challenge, private risk rule, or raw
 artifact evidence in source, workflow arguments, logs, or PR text.

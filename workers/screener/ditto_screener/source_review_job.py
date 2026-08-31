@@ -27,9 +27,9 @@ from ditto_screener.adjudicator import SourceReviewAdjudicator
 from ditto_screener.enrollment import _materialize_source_review_secret
 from ditto_screener.l2_review import (
     InProcessAnalyzerHarness,
-    KimiSolSourceReviewAgent,
     L2AuditJournal,
     LayeredSourceReviewAgent,
+    TerraSolSourceReviewAgent,
 )
 from ditto_screener.source_review import OpenRouterSourceReviewAgent
 from ditto_screening_protocol import (
@@ -188,7 +188,7 @@ def _build_reviewer(
         ),
         clear_min_notes=int(os.environ.get("SCREENER_REVIEW_CLEAR_MIN_NOTES", "3")),
     )
-    l2 = KimiSolSourceReviewAgent(
+    l2 = TerraSolSourceReviewAgent(
         api_key_file=key_file,
         base_url=os.environ.get(
             "SCREENER_SOURCE_REVIEW_BASE_URL",
@@ -219,7 +219,7 @@ def _build_reviewer(
         cache_ttl_seconds=float(
             os.environ.get("SCREENER_L2_CACHE_TTL_SECONDS", str(7 * 86_400))
         ),
-        model=os.environ.get("SCREENER_L2_REVIEW_MODEL", "moonshotai/kimi-k3"),
+        model=os.environ.get("SCREENER_L2_REVIEW_MODEL", "openai/gpt-5.6-terra"),
         fallback_models=_parse_csv(
             "SCREENER_L2_FALLBACK_MODELS", "z-ai/glm-5.2,openai/gpt-5.6-sol"
         ),

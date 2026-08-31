@@ -25,8 +25,8 @@ from ditto_screener.l2_review import (
     L2_STATIC_HOLD_REVISION,
     L3_MODEL,
     IsolatedCodingHarness,
-    KimiSolSourceReviewAgent,
     L2AuditJournal,
+    TerraSolSourceReviewAgent,
     l2_cause_prompt_revision,
     l2_cause_tiebreaker_prompt_revision,
     l2_critic_prompt_revision,
@@ -104,7 +104,7 @@ async def _main() -> None:
             raise SystemExit("no manifest item matched --artifact-sha256")
     cache_dir = args.cache_dir or args.results_file.parent / "cache"
     audit_file = args.audit_file or args.results_file.parent / "audit.jsonl"
-    agent = KimiSolSourceReviewAgent(
+    agent = TerraSolSourceReviewAgent(
         api_key_file=str(args.api_key_file),
         base_url="https://openrouter.ai/api/v1",
         harness=IsolatedCodingHarness(

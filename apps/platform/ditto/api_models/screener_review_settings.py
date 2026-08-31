@@ -14,6 +14,7 @@ from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 ReviewMode = Literal["off", "shadow", "enforce", "inherit"]
 ReviewModel = Literal[
+    "openai/gpt-5.6-terra",
     "moonshotai/kimi-k3",
     "z-ai/glm-5.2",
     "openai/gpt-5.6-sol",
@@ -30,7 +31,7 @@ _POLICY_MANIFEST_MODULES: dict[PolicyManifestProfile, list[dict[str, str]]] = {
         {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
     ],
     "l1_l2": [
-        {"kind": "agentic_source_review", "id": "luna-sol-source-review"},
+        {"kind": "agentic_source_review", "id": "luna-terra-sol-source-review"},
         {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
     ],
 }
@@ -54,7 +55,7 @@ class ScreenerReviewSettings(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     mode: ReviewMode = "off"
-    l2_model: ReviewModel = "moonshotai/kimi-k3"
+    l2_model: ReviewModel = "openai/gpt-5.6-terra"
     l2_fallback_models: tuple[ReviewModel, ...] = (
         "z-ai/glm-5.2",
         "openai/gpt-5.6-sol",
