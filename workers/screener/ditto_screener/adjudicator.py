@@ -82,7 +82,11 @@ _MAX_COMPLETION_TOKENS = 6_000
 # The court can resume its compacted ledger on one transient retry; after that,
 # the published no-proven-breach rule settles the review rather than stranding
 # the miner behind an unresponsive model endpoint.
-_MAX_COMPLETION_REQUEST_SECONDS = 75.0
+# The decision-only court emits one tool call over preloaded evidence.  Keep a
+# healthy completion responsive and reserve one equal slice for a new
+# connection; an unresponsive provider must settle from retained notes, not
+# spend 150 seconds of a miner's lease.
+_MAX_COMPLETION_REQUEST_SECONDS = 45.0
 _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
 # Bounded by the repository tools themselves; this only caps how many of
 # the served locations are remembered for citation checking.

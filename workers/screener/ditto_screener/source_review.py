@@ -227,9 +227,10 @@ _DEFAULT_MAX_COMPLETION_TOKENS = 8_000
 _MIN_MAX_COMPLETION_TOKENS = 2_000
 # A relayed 429/5xx body is not a model turn and carries no verdict. Retry it
 # inside the same lease and trajectory, but keep the grant deliberately tiny:
-# three total posts, with two short backoffs. This heals a transient provider
-# edge without turning an outage into an unbounded paid loop.
-_MODEL_TRANSPORT_RETRY_DELAYS_SECONDS = (1.0, 3.0)
+# one fresh connection after a short backoff. OpenRouter already fails over
+# among compatible providers, so a third slow post only burns another slice of
+# the lease without adding a distinct recovery path.
+_MODEL_TRANSPORT_RETRY_DELAYS_SECONDS = (1.0,)
 
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
@@ -342,8 +343,10 @@ _RETRYABLE_MODEL_ERROR_TYPES = frozenset(
 
 # A single upstream completion must not consume the whole L1 budget.  The
 # caller keeps the renewable lease deadline as the overall review budget, while
-# this cap leaves time for the bounded retry and OpenRouter's provider failover.
-_MAX_COMPLETION_REQUEST_SECONDS = 75.0
+# this cap leaves time for one fresh retry and OpenRouter's provider failover.
+# A source-review turn produces a tool call or compact verdict, not a long-form
+# answer; 45 seconds is already generous for the 4k operator output budget.
+_MAX_COMPLETION_REQUEST_SECONDS = 45.0
 
 
 def _retryable_model_error_type(payload: object) -> str | None:
@@ -3316,6 +3319,24 @@ class OpenRouterSourceReviewAgent:
                     or any(note.get("kind") == "concern" for note in notes)
                     or _step >= max(2, (self._max_steps * 3) // 4)
                 )
+                final_turn = _step + 1 == self._max_steps
+                if final_turn:
+                    # Do not discard a complete review merely because the
+                    # analyst kept exploring until its final allowed turn.
+                    # The final turn is a constrained settlement call: it has
+                    # the complete compacted ledger and only the published
+                    # structured verdict tool. If it cannot produce that
+                    # tool call, the retained notes still go to L4.
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "This is the final allowed review turn. Stop "
+                                "discovery and call submit_review now using the "
+                                "evidence and notes already recorded."
+                            ),
+                        }
+                    )
                 message = await self._completion_message(
                     client,
                     api_key,
@@ -3324,6 +3345,8 @@ class OpenRouterSourceReviewAgent:
                     reasoning_effort=_phase_reasoning_effort(
                         self._reasoning_effort, assessment=assessment_phase
                     ),
+                    tools=_FINAL_REVIEW_TOOLS if final_turn else _TOOLS,
+                    tool_choice="required" if final_turn else "auto",
                 )
                 messages.append(message)
                 tool_calls = message.get("tool_calls")
@@ -3454,6 +3477,8 @@ class OpenRouterSourceReviewAgent:
         *,
         timeout: float | None = None,
         reasoning_effort: str,
+        tools: Sequence[Mapping[str, object]] | None = None,
+        tool_choice: str = "auto",
     ) -> dict[str, object]:
         """Issue one model turn, healing only bounded transport-class faults."""
         started = asyncio.get_running_loop().time()
@@ -3476,6 +3501,8 @@ class OpenRouterSourceReviewAgent:
                     messages,
                     timeout=remaining_timeout,
                     reasoning_effort=reasoning_effort,
+                    tools=tools,
+                    tool_choice=tool_choice,
                 )
                 payload = response.json()
                 return _assistant_message(payload)
@@ -3537,12 +3564,14 @@ class OpenRouterSourceReviewAgent:
         *,
         timeout: float | None = None,
         reasoning_effort: str,
+        tools: Sequence[Mapping[str, object]] | None = None,
+        tool_choice: str = "auto",
     ) -> httpx.Response:
         request = {
             "model": self._model,
             "messages": messages,
-            "tools": _TOOLS,
-            "tool_choice": "auto",
+            "tools": list(_TOOLS if tools is None else tools),
+            "tool_choice": tool_choice,
             "max_completion_tokens": self._max_completion_tokens,
             "reasoning": {"effort": reasoning_effort},
             "prompt_cache_key": _l1_prompt_cache_key(messages),
@@ -4232,6 +4261,10 @@ _TOOLS: list[dict[str, object]] = [
         },
     },
 ]
+
+# The final source-review turn may only settle the evidence already retained;
+# it cannot begin another inspection loop at the step budget boundary.
+_FINAL_REVIEW_TOOLS: tuple[dict[str, object], ...] = (_TOOLS[-1],)
 
 
 __all__ = ["OpenRouterSourceReviewAgent", "TarSourceRepository"]

@@ -283,6 +283,48 @@ def _agent(
     )
 
 
+async def test_last_source_review_turn_requires_the_final_verdict_tool(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    final = _with_policy_v10_invariants(_BENIGN_REVIEW)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [_tool("submit", "submit_review", final)],
+                        }
+                    }
+                ]
+            },
+        )
+
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=10,
+        max_steps=1,
+        transport=httpx.MockTransport(handler),
+    )
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn main() {}")), artifact_sha256=_SHA
+    )
+
+    assert observation.ok
+    assert seen[0]["tool_choice"] == "required"
+    assert [tool["function"]["name"] for tool in seen[0]["tools"]] == ["submit_review"]
+
+
 def _archive_with(tmp_path: Path, extra: dict[str, bytes]) -> Path:
     path = tmp_path / "agent.tar.gz"
     with tarfile.open(path, "w:gz") as archive:
@@ -4421,6 +4463,10 @@ async def test_relayed_rate_limit_error_body_parks_after_three_bounded_posts(
     assert observation.error_code == "source-review-model-response-invalid"
     assert observation.failure_disposition == "retryable_infra"
     assert calls == 3
+
+
+def test_default_source_review_transport_budget_allows_one_fresh_connection() -> None:
+    assert source_review_module._MODEL_TRANSPORT_RETRY_DELAYS_SECONDS == (1.0,)
 
 
 async def test_relayed_rate_limit_recovers_inside_the_same_model_turn(
