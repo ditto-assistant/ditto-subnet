@@ -453,7 +453,7 @@ function BoardRow(props: {
     fxScore(displayComposite(e(), props.store.settledView())) +
     (emission() ? ", KOTH " + emission()?.role : "") +
     (aboveChampion() ? ", outscores the champion but has not cleared the dethrone band" : "") +
-    ". Activate for run detail.";
+    ". Activate for the miner profile.";
   // KOTH standing class first, then the chain-weight sync tint: gold when at
   // least one revealed vector crowns this miner its top choice, magenta when
   // vectors assign it weight without the crown. A ranked row with NEITHER is
@@ -544,7 +544,12 @@ function BoardRow(props: {
             <span class="winner-identity">
               <span class="winner-name">
                 <MinerAvatar url={e().avatar_url} />
-                <EntityButton kind="agent" id={e().agent_id} label={displayName()} />
+                <EntityButton
+                  kind="agent"
+                  id={e().agent_id}
+                  label={displayName()}
+                  title="Open this submission"
+                />
                 <HandleBadge handle={e().name_handle} />
                 <Show when={kind() === "zero"}>
                   <TipTarget
@@ -630,6 +635,7 @@ function BoardRow(props: {
                     kind="miner"
                     id={e().miner_hotkey}
                     label={shortKey(e().miner_hotkey)}
+                    title="Open the miner profile"
                   />
                 </span>
                 <CopyButton value={e().miner_hotkey} label="full hotkey" />

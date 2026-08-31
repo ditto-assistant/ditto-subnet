@@ -3,11 +3,8 @@
 // pipelineDisplayState 7137–7147, cohortProgressSummary 7172–7195). Scores
 // compare only within one benchmark version, so every drawer section groups
 // by cohort with the working / incomplete-upgrade cohort focused first.
-import { fx } from "../../lib/format";
-import { cohortMedian } from "../../lib/scoring";
 import { benchmarkVersionKey, retestAttemptCounts } from "../pipeline/status";
 import type { ActivityStatusEntry } from "../pipeline/status";
-import type { ConsensusScore } from "../../types/leaderboard";
 import type { AcceptedScore, PipelinePayload, ValidationAttempt } from "../../types/pipeline";
 
 export interface BenchmarkCohort {
@@ -118,54 +115,4 @@ export function cohortProgressSummary(cohort: BenchmarkCohort, quorum: unknown):
   if (retests.assigned) summary += " · " + retestState(retests.assigned, "assigned");
   if (retests.expired) summary += " · " + retestState(retests.expired, "expired");
   return summary;
-}
-
-// ── Consensus cohorts (renderConsensus's grouping, 6172–6196) ───────────────
-
-export interface ConsensusCohort {
-  key: string;
-  scores: ConsensusScore[];
-}
-
-/**
- * `/public/agent/{id}/scores` rows grouped per benchmark version (6172–6182).
- * A re-scored agent carries score rows from more than one benchmark version,
- * and composites compare only within a version, so the rows group under a
- * per-version heading — newest first, an unknown version last — instead of
- * one flat list where a v2 and a v3 number would read as comparable. Within a
- * cohort the strongest composite leads (6186).
- */
-export function consensusCohorts(scores: readonly ConsensusScore[]): ConsensusCohort[] {
-  const byVersion: Record<string, ConsensusScore[]> = {};
-  scores.forEach((score) => {
-    const key = benchmarkVersionKey(score.bench_version);
-    const bucket = byVersion[key] || (byVersion[key] = []);
-    bucket.push(score);
-  });
-  return Object.keys(byVersion)
-    .sort((a, b) => {
-      if (a === "unknown") return 1;
-      if (b === "unknown") return -1;
-      return Number(b) - Number(a);
-    })
-    .map((key) => ({
-      key,
-      scores: (byVersion[key] as ConsensusScore[])
-        .slice()
-        .sort((left, right) => Number(right.composite) - Number(left.composite)),
-    }));
-}
-
-/** One cohort's heading summary (6188–6189). Below quorum the median is
- * labelled preliminary: it is the median of what has landed so far, not the
- * number the platform will finalize on. */
-export function consensusCohortSummary(cohort: ConsensusCohort, quorum: number): string {
-  return (
-    cohort.scores.length +
-    " of " +
-    quorum +
-    " scores · " +
-    (cohort.scores.length >= quorum ? "median " : "preliminary median ") +
-    fx(cohortMedian(cohort.scores))
-  );
 }

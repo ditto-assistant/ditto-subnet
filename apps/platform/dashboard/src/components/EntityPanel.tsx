@@ -1,10 +1,12 @@
 // The entity modal shell (monolith 3013–3037) and its open/close/focus logic
 // (showModal 5980–6004, trapFocus 6008–6017, closeModal 6338–6367), driven by
 // the routeStore's entityRoute. Three tenants share the one dialog:
-//   miner   — leaderboard run summary (openModal 5845–5978, summarized);
+//   miner   — the miner profile: identity, board standing, socials, and the
+//             hotkey's submission history. Run evidence lives on each
+//             submission, one link away — the agent tenant, not this one;
 //   validator — signed heartbeat report (renderValidatorDetail 8687–8814,
 //               summarized; the operations port supplies the deep body);
-//   agent   — the submission drawer; the deep-evidence body is the
+//   agent   — one submission: the drawer whose deep-evidence body is the
 //             submissions/reviews port's AgentEvidence component.
 // Screener routes never open the modal: the monolith highlights the fleet
 // row on the operations page instead (resolveEntityRoute 9303–9399), which
@@ -36,6 +38,7 @@ import {
   publicDisplayName,
   relTime,
   relTimeUntil,
+  shortKey,
 } from "../lib/format";
 import { dashboardHref, entityHref } from "../lib/router";
 import type { EntityKind, EntityRoute } from "../lib/router";
@@ -66,7 +69,6 @@ import type { AgentSummaryPayload, BenchmarkProgress } from "../types/pipeline";
 import { activityStage } from "./pipeline/status";
 import { AgentEvidence } from "./evidence/AgentEvidence";
 import type { AgentEvidenceEntry, PipelineDetailPayload } from "./evidence/AgentEvidence";
-import { Consensus } from "./evidence/Consensus";
 // Pure fleet logic the validator body reads: the numeric slot order the
 // per-slot rows sort on, plus the stack-identity/component-health vocabulary.
 // (fleet.ts imports the status ladder back out of this module; both edges are
@@ -510,6 +512,9 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
     title: string;
     handle?: NameHandle | null;
     avatarUrl?: string | null;
+    /** "Submission vN" beside the title — agent tenant only, so the header
+     * itself says which of the miner's uploads this panel is about. */
+    version?: string;
     chip: { text: string; class: string; title: string };
     dkLabel: string;
     hotkey: string | null;
@@ -522,34 +527,31 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
     if (current.tenant === "miner-profile") {
       const loaded = minerProfile();
       return {
-        title: loaded?.name_handle?.stem || loaded?.miner_hotkey || "Miner profile",
+        title:
+          loaded?.name_handle?.stem || (loaded ? shortKey(loaded.miner_hotkey) : "Miner profile"),
         handle: loaded?.name_handle,
         avatarUrl: loaded?.avatar_url,
-        chip: { text: "profile", class: "", title: "Public miner profile" },
-        dkLabel: "Miner",
+        chip: {
+          text: "Not on the board",
+          class: "plain",
+          title: "No scored submission on the current leaderboard.",
+        },
+        dkLabel: "Miner profile",
         hotkey: loaded?.miner_hotkey || current.id,
         hotkeyKind: "miner",
       };
     }
     if (current.tenant === "miner") {
       const e = current.entry;
-      const title = isFinalized(e)
-        ? "Raw score rank #" +
-          e.rank +
-          (e._emission && e._emission.role === "champion" ? " · KOTH champion" : "")
-        : "Provisional rank P" +
-          e.rank +
-          " · " +
-          (e.score_count || 0) +
-          " of " +
-          (e.score_quorum || 3) +
-          " scores";
+      // The panel is the miner's profile, so the title is the miner — the
+      // reserved handle when one exists, the elided hotkey otherwise. The
+      // board standing that used to be the title becomes the chip.
       return {
-        title,
+        title: e.name_handle?.stem || shortKey(e.miner_hotkey),
         handle: e.name_handle,
         avatarUrl: e.avatar_url,
-        chip: minerBenchChip(e, props.currentBench()),
-        dkLabel: "Miner",
+        chip: minerStandingChip(e),
+        dkLabel: "Miner profile",
         hotkey: e.miner_hotkey,
         hotkeyKind: "miner",
       };
@@ -573,12 +575,15 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
         title: publicDisplayName(e.name, e.name_handle),
         handle: e.name_handle,
         avatarUrl: e.avatar_url,
+        version: agentVersionLabel(e.version),
         chip: {
           text: stage[0] as string,
           class: stage[1] as string,
           title: "Current submission stage",
         },
-        dkLabel: "Miner",
+        // The uplink: a submission belongs to a miner, and the hotkey below
+        // opens that miner's profile.
+        dkLabel: "Submission by",
         hotkey: e.miner_hotkey || null,
         hotkeyKind: "miner",
       };
@@ -589,7 +594,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
         current.state === "error"
           ? { text: "Unavailable", class: "error", title: "Submission unavailable" }
           : { text: "Loading", class: "loading", title: "Loading submission" },
-      dkLabel: "Miner",
+      dkLabel: "Submission by",
       hotkey: null,
       hotkeyKind: "miner",
     };
@@ -610,14 +615,6 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
   const agentStateView = () => {
     const current = view();
     return current && current.tenant === "agent-state" ? current : null;
-  };
-  const toolMean = () => minerEntry()?.tool_mean ?? 0;
-  const memoryMean = () => minerEntry()?.memory_mean ?? 0;
-  const toolShare = () => {
-    const e = minerEntry();
-    if (!e) return 50;
-    const sum = e.tool_mean + e.memory_mean || 1;
-    return (e.tool_mean / sum) * 100;
   };
 
   return (
@@ -670,6 +667,9 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
           <MinerAvatar url={header()?.avatarUrl} size="lg" />
           <h3 id="d-title">{header()?.title ?? "Miner"}</h3>
           <HandleBadge handle={header()?.handle} />
+          <Show when={header()?.version}>
+            {(version) => <span class="d-version">{version()}</span>}
+          </Show>
           <span id="d-bench" class={header()?.chip.class ?? ""} title={header()?.chip.title ?? ""}>
             {header()?.chip.text ?? ""}
           </span>
@@ -691,35 +691,6 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
             <CopyButton id="d-hotkey-copy" value={header()?.hotkey || null} label="miner hotkey" />
           </span>
         </div>
-        <div class="split" style={{ display: minerEntry() ? "" : "none" }}>
-          <div class="seg">
-            <div id="d-tool-seg" style={{ background: "var(--tool)", width: toolShare() + "%" }}>
-              {toolShare() > 14 ? fx(toolMean()) : ""}
-            </div>
-            <div
-              id="d-mem-seg"
-              style={{ background: "var(--memory)", width: 100 - toolShare() + "%" }}
-            >
-              {100 - toolShare() > 14 ? fx(memoryMean()) : ""}
-            </div>
-          </div>
-          <div class="legend">
-            <span>
-              <i style={{ background: "var(--tool)" }} />
-              Tool{" "}
-              <span id="d-tool-pct" class="muted">
-                {minerEntry() ? fx(toolMean()) : ""}
-              </span>
-            </span>
-            <span>
-              <i style={{ background: "var(--memory)" }} />
-              Memory{" "}
-              <span id="d-mem-pct" class="muted">
-                {minerEntry() ? fx(memoryMean()) : ""}
-              </span>
-            </span>
-          </div>
-        </div>
         <div id="d-stats" classList={{ "pipeline-mode": view()?.tenant !== "miner" }}>
           <Switch>
             <Match when={minerEntry()}>
@@ -728,6 +699,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
                   entry={entry()}
                   settled={settled()}
                   total={props.entries().filter(isEligible).length}
+                  currentBench={props.currentBench()}
                 />
               )}
             </Match>
@@ -758,11 +730,10 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
               )}
             </Match>
           </Switch>
-          {/* Below the summary deliberately: the panel opens on the question
-              "how did this miner score", and the profile — socials plus 25
-              recent submissions, most of them re-uploads of one name — is the
-              follow-up, not the lede. It stays folded while a leaderboard
-              summary is present. */}
+          {/* The standing block answers the board question first; the profile
+              — socials plus the miner's submission history — is the panel's
+              substance and stays open. Run evidence lives on each submission,
+              one link away. */}
           <Show when={entityRoute()?.kind === "miner" && entityRoute()?.id}>
             {(id) => (
               <MinerProfileCard
@@ -770,7 +741,6 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
                 profile={view()?.tenant === "miner-profile" ? minerProfile() : undefined}
                 error={view()?.tenant === "miner-profile" ? minerProfile.error : undefined}
                 loading={view()?.tenant === "miner-profile" ? minerProfile.loading : false}
-                collapsed={view()?.tenant === "miner"}
               />
             )}
           </Show>
@@ -786,6 +756,53 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
 }
 
 // ── Miner tenant summary ─────────────────────────────────────────────────────
+
+/** The profile header's standing chip: where this miner sits on the board
+ * right now. The bench provenance the chip used to carry is run truth and
+ * moved into the Standing rows; a KOTH crown outranks the raw number, so it
+ * leads when held. */
+function minerStandingChip(e: RankedEntry): { text: string; class: string; title: string } {
+  if (!isFinalized(e)) {
+    return {
+      text:
+        "P" + e.rank + " · " + (e.score_count || 0) + " of " + (e.score_quorum || 3) + " scores",
+      class: "prev",
+      title:
+        "Provisional: accepted score feedback so far. The rank is final at " +
+        (e.score_quorum || 3) +
+        " independent validator scores.",
+    };
+  }
+  const kind = unrankedKind(e);
+  if (kind === "zero") {
+    return {
+      text: "Unranked · scored 0.000",
+      class: "prev",
+      title: "The full run scored a composite of 0.000, so this miner holds no rank.",
+    };
+  }
+  if (kind === "provisional" || !isEligible(e)) {
+    return {
+      text: "Unranked",
+      class: "prev",
+      title: "Shown for transparency, but not ranked and not emission-eligible.",
+    };
+  }
+  const role = e._emission?.role;
+  if (role === "champion" || role === "joint_champion") {
+    return {
+      text: (role === "champion" ? "♛ Champion" : "♛ Joint crown") + " · rank #" + e.rank,
+      class: "champion",
+      title:
+        "Holds the KOTH crown. The crown moves only on the shared-seed head-to-head, not on raw rank.",
+    };
+  }
+  return {
+    text: "Rank #" + e.rank,
+    class: "",
+    title: "Canonical leaderboard rank, from the miner's best-scoring submission.",
+  };
+}
 
 function minerBenchChip(
   e: RankedEntry,
@@ -968,38 +985,43 @@ function MinerProfileCard(props: {
   profile?: PublicMinerProfile;
   error?: unknown;
   loading?: boolean;
-  /** Fold the card shut behind its summary line. True when a leaderboard
-   * summary is already answering the panel's main question. */
-  collapsed?: boolean;
 }): JSX.Element {
+  // A 404 is a real answer here (no published profile), not a resource
+  // error — resolving it to null keeps the resource readable while the
+  // narration below can still name the state.
   const [fetched] = createResource(
     () => (props.profile || props.loading || props.error ? undefined : props.id),
-    async (id) => {
+    async (id): Promise<PublicMinerProfile | null> => {
       try {
         return await getJSON<PublicMinerProfile>("/public/miners/" + encodeURIComponent(id));
       } catch (err) {
-        if (err instanceof HTTPError && err.status === 404) return undefined;
+        if (err instanceof HTTPError && err.status === 404) return null;
         throw err;
       }
     },
   );
-  const profile = () => props.profile ?? fetched();
+  const profile = () => props.profile ?? fetched() ?? undefined;
   const loading = () => Boolean(props.loading || fetched.loading);
   const error = () => props.error ?? fetched.error;
-  const unknown = () => error() instanceof HTTPError && (error() as HTTPError).status === 404;
-  // A profile that is loading, missing, or unreachable is the panel's whole
-  // content when the route resolved to a handle, and pure noise under a
-  // leaderboard summary that already answered the question. Say nothing there.
-  const narrateState = () => !props.collapsed;
+  const unknown = () =>
+    (error() instanceof HTTPError && (error() as HTTPError).status === 404) ||
+    (!fetched.loading && !fetched.error && fetched() === null);
+  // A 404 means two different things: a handle route that resolves to no
+  // miner, or a real hotkey that simply has no published profile. Hotkeys
+  // are ss58 strings; handles are short stems.
+  const unknownCopy = () =>
+    props.id.length > 40 ? "No public profile yet for this miner." : "Unknown miner handle.";
+  // The profile is the panel's substance now, so its states are always
+  // narrated — a quiet gap here would read as "this miner has no profile".
   return (
     <div class="miner-profile">
-      <Show when={narrateState() && loading()}>
+      <Show when={loading()}>
         <p class="muted">Loading profile…</p>
       </Show>
-      <Show when={narrateState() && !loading() && unknown()}>
-        <p class="muted">Unknown miner handle.</p>
+      <Show when={!loading() && unknown()}>
+        <p class="muted">{unknownCopy()}</p>
       </Show>
-      <Show when={narrateState() && !loading() && error() && !unknown()}>
+      <Show when={!loading() && error() && !unknown()}>
         <p class="muted">Could not load this miner profile.</p>
       </Show>
       <Show when={profile()}>
@@ -1017,7 +1039,7 @@ function MinerProfileCard(props: {
                 (submissions().length === 1 ? "" : "s")
               : "No public submissions yet";
           return (
-            <details class="cgroup miner-profile-group" open={!props.collapsed}>
+            <details class="cgroup miner-profile-group" open>
               <summary class="cgsum">
                 <span>Public profile</span>
                 <span class="muted miner-profile-digest">{digest()}</span>
@@ -1052,20 +1074,34 @@ function MinerProfileCard(props: {
   );
 }
 
-function MinerSummary(props: { entry: RankedEntry; settled: boolean; total: number }): JSX.Element {
+function MinerSummary(props: {
+  entry: RankedEntry;
+  settled: boolean;
+  total: number;
+  currentBench: number | null;
+}): JSX.Element {
   const e = () => props.entry;
   const agg = () => e() as RankedEntry & ContinualAggregate;
   const official = () => displayComposite(e(), props.settled);
   const rolling = () => agg().aggregate_method === "continual_mean";
   const kind = () => unrankedKind(e());
   const calcRows = () => compositeCalculationRows(e());
+  const bench = () => minerBenchChip(e(), props.currentBench);
   return (
     <>
       <div class="stat-cols">
         <div class="stat-group">
-          <div class="stat-head">Overview</div>
-          <Stat k="Best-scoring agent" v={agentName(e().agent_name)} />
-          <Stat k="Submission" v={agentVersionLabel(e().agent_version)} />
+          <div class="stat-head">Standing</div>
+          <Stat
+            k="Rank"
+            v={
+              isEligible(e())
+                ? "#" + e().rank + " of " + props.total
+                : kind() === "zero"
+                  ? "unranked (scored 0.000)"
+                  : "unranked (provisional)"
+            }
+          />
           <Stat
             k="Current leaderboard score"
             v={
@@ -1079,6 +1115,7 @@ function MinerSummary(props: { entry: RankedEntry; settled: boolean; total: numb
           />
           <Stat k="Tool mean" v={fx(e().tool_mean) + "  (" + pct(e().tool_mean) + ")"} />
           <Stat k="Memory mean" v={fx(e().memory_mean) + "  (" + pct(e().memory_mean) + ")"} />
+          <Stat k="Benchmark" v={<span title={bench().title}>{bench().text}</span>} />
           <Show when={foldArrival(e())}>
             {(seen) => <Stat k="Crown since" v={new Date(seen()).toLocaleString()} />}
           </Show>
@@ -1087,16 +1124,22 @@ function MinerSummary(props: { entry: RankedEntry; settled: boolean; total: numb
           >
             <Stat k="This upload" v={new Date(e().first_seen as string).toLocaleString()} />
           </Show>
+          {/* The bridge between the two panels: the profile carries the
+              miner's standing; the run evidence behind it — validator
+              scores, screening, per-case results — lives on the submission
+              this row opens. */}
           <Stat
-            k="Rank"
+            k="Best-scoring submission"
             v={
-              isEligible(e())
-                ? "#" + e().rank + " of " + props.total
-                : kind() === "zero"
-                  ? "unranked (scored 0.000)"
-                  : "unranked (provisional)"
+              <>
+                <EntityButton kind="agent" id={e().agent_id} label={agentName(e().agent_name)} /> ·{" "}
+                {agentVersionLabel(e().agent_version)}
+              </>
             }
           />
+          <p class="muted best-submission-note">
+            Validator-by-validator scores and per-case evidence live on the submission.
+          </p>
         </div>
         <Show when={calcRows()}>
           {(rows) => (
@@ -1114,9 +1157,6 @@ function MinerSummary(props: { entry: RankedEntry; settled: boolean; total: numb
             </div>
           )}
         </Show>
-      </div>
-      <div id="d-consensus">
-        <Show when={e().agent_id}>{(id) => <Consensus agentId={id()} />}</Show>
       </div>
     </>
   );
