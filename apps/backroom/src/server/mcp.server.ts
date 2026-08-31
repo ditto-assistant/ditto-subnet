@@ -1780,7 +1780,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get scored policy rescreen checkpoint',
       description:
-        'Read the one-at-a-time score-preserving policy rollout: its current release, or next top-down candidate. Existing scores remain visible; a pause blocks advancement. Requires backroom:read.',
+        'Read the bounded score-preserving policy rollout: every active release and the next top-down candidate. Existing scores remain visible; a pause blocks the window from widening. Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScoredPolicyRescreen()),
@@ -1791,7 +1791,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Advance scored policy rescreen',
       description:
-        'Release exactly one stale score, or retry its paused row. Match the checkpoint revision and agent; no next release until terminal. A canary-only activation requires reviewSettingsRevision for an immutable enforce-mode L3/L4 posture. Exact confirmation "ADVANCE SCORED POLICY RESCREEN" required. Requires backroom:write.',
+        'Fill up to maxActiveReleases (1–4) top-down stale-score slots, or retry one paused row. Existing V10 scores and ranks remain visible. A terminal verdict frees one slot; a pause prevents later positions from being released. A canary-only activation requires reviewSettingsRevision for an immutable enforce-mode L3/L4 posture. Exact confirmation "ADVANCE SCORED POLICY RESCREEN" required. Requires backroom:write.',
       inputSchema: advanceScoredPolicyRescreenInputSchema,
       annotations: toolAnnotations('write', true),
     },

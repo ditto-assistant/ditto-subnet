@@ -6454,11 +6454,11 @@ class ScoredPolicyRescreenRelease(Base):
     """One operator-released scored submission in a policy rollout.
 
     Policy activation changes what new work must attest; it must not erase the
-    currently earned board while that new policy is being tested.  A release is
-    therefore deliberately one submission wide.  ``pending`` is claimable,
-    ``running`` is attached to exactly one screening attempt, ``paused`` needs
-    an explicit retry, and only ``terminal`` lets the operator advance to the
-    next ranked submission.
+    currently earned board while that new policy is being tested. A bounded
+    release window holds at most four score-preserving rescreens: ``pending``
+    is claimable, ``running`` is attached to exactly one screening attempt,
+    ``paused`` needs an explicit retry and blocks the window from widening,
+    while ``terminal`` frees one slot for the next ranked submission.
     """
 
     __tablename__ = "scored_policy_rescreen_releases"

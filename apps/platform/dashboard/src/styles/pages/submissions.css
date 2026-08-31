@@ -1015,6 +1015,20 @@
 .attempt-list {
   margin-top: 0;
 }
+.screening-policy-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+.screening-policy-summary-label {
+  margin-right: 2px;
+  color: var(--text-faint);
+  font: 700 10.5px/1.35 var(--mono);
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
 .attempt {
   display: grid;
   grid-template-columns: 88px minmax(0, 1fr) auto;

@@ -75,6 +75,68 @@ export function screeningAttemptLabel(attempt: ScreeningAttempt): ChipState {
   return attemptLabel(attempt.status, "screener");
 }
 
+export interface ScreeningPolicySummary {
+  policyVersion: number;
+  label: string;
+  tone: ChipState[1];
+  title: string;
+}
+
+function screeningPolicyOutcome(
+  attempt: ScreeningAttempt,
+): Omit<ScreeningPolicySummary, "policyVersion"> {
+  if (attempt.status === "passed") {
+    return { label: "Passed", tone: "good", title: "passed" };
+  }
+  if (attempt.status === "rejected" || attempt.quarantine_resolution === "reject") {
+    return { label: "Rejected", tone: "bad", title: "rejected" };
+  }
+  if (attempt.status === "running" || attempt.quarantine_resolution === "rescreen") {
+    return { label: "Running", tone: "progress", title: "is running" };
+  }
+  if (attempt.status === "quarantined") {
+    return { label: "Under review", tone: "warn", title: "is under review" };
+  }
+  if (attempt.status === "failed" || attempt.status === "expired") {
+    return { label: "Incomplete", tone: "warn", title: "did not complete" };
+  }
+  return { label: "Incomplete", tone: "warn", title: "has an incomplete record" };
+}
+
+function screeningAttemptTime(attempt: ScreeningAttempt): number {
+  const value = attempt.finished_at || attempt.started_at;
+  const timestamp = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
+}
+
+/** One compact, latest-result badge per policy version. The full append-only
+ * history stays below it for audit; this gives miners and operators the answer
+ * they need before opening that history. */
+export function screeningPolicySummary(
+  attempts: readonly ScreeningAttempt[],
+): ScreeningPolicySummary[] {
+  const latest = new Map<number, ScreeningAttempt>();
+  for (const attempt of attempts) {
+    const policyVersion = Number(attempt.policy_version);
+    if (!Number.isInteger(policyVersion) || policyVersion < 1) continue;
+    const previous = latest.get(policyVersion);
+    if (!previous || screeningAttemptTime(attempt) > screeningAttemptTime(previous)) {
+      latest.set(policyVersion, attempt);
+    }
+  }
+  return Array.from(latest.entries())
+    .sort(([left], [right]) => right - left)
+    .map(([policyVersion, attempt]) => {
+      const outcome = screeningPolicyOutcome(attempt);
+      return {
+        policyVersion,
+        label: "V" + policyVersion + " " + outcome.label,
+        tone: outcome.tone,
+        title: "Policy v" + policyVersion + " " + outcome.title,
+      };
+    });
+}
+
 /** "policy_finding-x" → "Policy Finding X" (7030–7034). */
 export function screeningReviewCategoryLabel(value: unknown): string {
   return String(value || "policy finding")

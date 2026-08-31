@@ -92,7 +92,7 @@ ScoredRescreenState = Literal["pending", "running", "paused", "terminal"]
 
 
 class ScoredPolicyRescreenReleaseView(BaseModel):
-    """The one scored submission currently released under a policy rollout."""
+    """One scored submission currently released under a policy rollout."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -106,25 +106,32 @@ class ScoredPolicyRescreenReleaseView(BaseModel):
 
 
 class ScoredPolicyRescreenView(BaseModel):
-    """Read-only rollout checkpoint for the score-preserving rescreen lane."""
+    """Read-only checkpoint for the score-preserving rescreen lane.
+
+    ``current`` remains the oldest active release for older callers. ``active``
+    makes a bounded rollout window observable without asking an operator to
+    reconstruct it from individual screening attempts.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
     activation_revision: int | None
     target_policy_version: int | None
     current: ScoredPolicyRescreenReleaseView | None
+    active: list[ScoredPolicyRescreenReleaseView] = Field(default_factory=list)
     next_agent_id: UUID | None
     next_position: int | None
 
 
 class AdvanceScoredPolicyRescreenRequest(BaseModel):
-    """Release exactly one top-down scored policy rescreen, or retry its pause."""
+    """Fill a bounded top-down scored-rescreen window, or retry one pause."""
 
     model_config = ConfigDict(extra="ignore")
 
     expected_activation_revision: int = Field(ge=1)
     expected_agent_id: UUID
     retry_paused: bool = False
+    max_active_releases: int = Field(default=1, ge=1, le=4)
     review_settings_revision: int | None = Field(default=None, ge=1)
     reason: str = Field(min_length=8)
     confirmation: str

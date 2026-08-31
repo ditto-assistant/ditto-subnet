@@ -601,7 +601,7 @@ class TestScoredPolicyRescreenCheckpoint:
         assert response.status_code == 422
         assert "immutable L4-enforce review settings" in response.json()["message"]
 
-    async def test_releases_one_top_down_score_and_stops_until_terminal(
+    async def test_fills_a_bounded_top_down_window_without_changing_the_board(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -610,7 +610,7 @@ class TestScoredPolicyRescreenCheckpoint:
         """A V11 policy activation cannot de-list the V10 board as a batch."""
         _install(app, activation_maker)
         now = datetime.now(UTC)
-        first_id, second_id = uuid4(), uuid4()
+        first_id, second_id, third_id = uuid4(), uuid4(), uuid4()
         async with activation_maker() as session:
             activation = await insert_screener_policy_activation(
                 session,
@@ -635,6 +635,7 @@ class TestScoredPolicyRescreenCheckpoint:
             for agent_id, name, composite in (
                 (first_id, "first", 0.9),
                 (second_id, "second", 0.8),
+                (third_id, "third", 0.7),
             ):
                 session.add(
                     Agent(
@@ -672,6 +673,7 @@ class TestScoredPolicyRescreenCheckpoint:
             "activation_revision": activation.revision,
             "target_policy_version": SCREENING_POLICY_VERSION,
             "current": None,
+            "active": [],
             "next_agent_id": str(first_id),
             "next_position": 1,
         }
@@ -679,6 +681,7 @@ class TestScoredPolicyRescreenCheckpoint:
         first_release = {
             "expected_activation_revision": activation.revision,
             "expected_agent_id": str(first_id),
+            "max_active_releases": 2,
             "reason": "release the first v11 result for operator inspection",
             "confirmation": _ADVANCE_CONFIRMATION,
         }
@@ -697,8 +700,13 @@ class TestScoredPolicyRescreenCheckpoint:
             "attempt_id": None,
             "review_settings_revision": None,
         }
-        # A second call cannot turn a rollout checkpoint into a batch. The
-        # original V10 score is still eligible while the new attestation waits.
+        assert [row["agent_id"] for row in response.json()["active"]] == [
+            str(first_id),
+            str(second_id),
+        ]
+        # The rollout window is full. The original V10 scores remain eligible
+        # while the two V11 attestations wait, and no whole-board requeue can
+        # be smuggled through a second checkpoint call.
         blocked = await client.post(
             f"{_URL}/advance-scored-rescreen",
             headers=_HEADERS,
@@ -708,37 +716,10 @@ class TestScoredPolicyRescreenCheckpoint:
         async with activation_maker() as session:
             first = await session.get(Agent, first_id)
             second = await session.get(Agent, second_id)
+            third = await session.get(Agent, third_id)
             assert first is not None and first.status == AgentStatus.SCORED
             assert second is not None and second.status == AgentStatus.SCORED
-            release = await session.scalar(
-                select(ScoredPolicyRescreenRelease).where(
-                    ScoredPolicyRescreenRelease.agent_id == first_id
-                )
-            )
-            assert release is not None
-            release.state = "paused"
-            await session.commit()
-
-        # A non-verdict pause does not advance either. It may only retry the
-        # same row after an explicit operator choice.
-        paused = await client.post(
-            f"{_URL}/advance-scored-rescreen",
-            headers=_HEADERS,
-            json=first_release,
-        )
-        assert paused.status_code == 409
-        retry = await client.post(
-            f"{_URL}/advance-scored-rescreen",
-            headers=_HEADERS,
-            json={**first_release, "retry_paused": True},
-        )
-        assert retry.status_code == 200, retry.text
-        assert retry.json()["current"]["agent_id"] == str(first_id)
-        assert retry.json()["current"]["state"] == "pending"
-
-        # Simulate the terminal V11 clear. Only now may the next descending
-        # score be released; no untested score is ever automatically moved.
-        async with activation_maker() as session:
+            assert third is not None and third.status == AgentStatus.SCORED
             release = await session.scalar(
                 select(ScoredPolicyRescreenRelease).where(
                     ScoredPolicyRescreenRelease.agent_id == first_id
@@ -746,13 +727,62 @@ class TestScoredPolicyRescreenCheckpoint:
             )
             assert release is not None
             release.state = "terminal"
-            first = await session.get(Agent, first_id)
-            assert first is not None
             first.screening_policy_version = SCREENING_POLICY_VERSION
             await session.commit()
 
+        # A terminal verdict frees exactly one slot. The next explicit
+        # checkpoint backfills it with the next ranked agent, not every stale
+        # score on the board.
         next_checkpoint = await client.get(f"{_URL}/scored-rescreen", headers=_HEADERS)
         assert next_checkpoint.status_code == 200, next_checkpoint.text
-        assert next_checkpoint.json()["current"] is None
-        assert next_checkpoint.json()["next_agent_id"] == str(second_id)
-        assert next_checkpoint.json()["next_position"] == 2
+        assert next_checkpoint.json()["current"]["agent_id"] == str(second_id)
+        assert [row["agent_id"] for row in next_checkpoint.json()["active"]] == [
+            str(second_id)
+        ]
+        assert next_checkpoint.json()["next_agent_id"] == str(third_id)
+        assert next_checkpoint.json()["next_position"] == 3
+
+        refill = await client.post(
+            f"{_URL}/advance-scored-rescreen",
+            headers=_HEADERS,
+            json={
+                **first_release,
+                "expected_agent_id": str(third_id),
+            },
+        )
+        assert refill.status_code == 200, refill.text
+        assert [row["agent_id"] for row in refill.json()["active"]] == [
+            str(second_id),
+            str(third_id),
+        ]
+
+        # A non-verdict keeps the retained score on the board but stops any
+        # further window growth until an operator explicitly retries that row.
+        async with activation_maker() as session:
+            release = await session.scalar(
+                select(ScoredPolicyRescreenRelease).where(
+                    ScoredPolicyRescreenRelease.agent_id == second_id
+                )
+            )
+            assert release is not None
+            release.state = "paused"
+            await session.commit()
+
+        paused = await client.post(
+            f"{_URL}/advance-scored-rescreen",
+            headers=_HEADERS,
+            json={**first_release, "expected_agent_id": str(third_id)},
+        )
+        assert paused.status_code == 409
+        retry = await client.post(
+            f"{_URL}/advance-scored-rescreen",
+            headers=_HEADERS,
+            json={
+                **first_release,
+                "expected_agent_id": str(second_id),
+                "retry_paused": True,
+            },
+        )
+        assert retry.status_code == 200, retry.text
+        assert retry.json()["current"]["agent_id"] == str(second_id)
+        assert retry.json()["current"]["state"] == "pending"

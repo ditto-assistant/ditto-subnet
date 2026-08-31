@@ -87,6 +87,9 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 
 
+_MAX_SCORED_POLICY_RESCREEN_WINDOW = 4
+
+
 def _revision_view(
     row: ActivationRow, *, now: datetime
 ) -> ScreenerPolicyActivationRevision:
@@ -146,7 +149,7 @@ async def _next_scored_rescreen_candidate(
     session: AsyncSession,
     *,
     activation: ActivationRow,
-    terminal_agent_ids: set[UUID],
+    released_agent_ids: set[UUID],
 ) -> tuple[UUID, int] | None:
     """Choose the next current-board row, never an arbitrary stale score.
 
@@ -183,7 +186,7 @@ async def _next_scored_rescreen_candidate(
         )
     )
     for position, agent_id in enumerate(ordered_ids, start=1):
-        if agent_id in admitted_ids and agent_id not in terminal_agent_ids:
+        if agent_id in admitted_ids and agent_id not in released_agent_ids:
             return agent_id, position
     return None
 
@@ -202,6 +205,7 @@ async def _scored_rescreen_view(
             activation_revision=None,
             target_policy_version=None,
             current=None,
+            active=[],
             next_agent_id=None,
             next_position=None,
         )
@@ -211,6 +215,7 @@ async def _scored_rescreen_view(
             activation_revision=None,
             target_policy_version=None,
             current=None,
+            active=[],
             next_agent_id=None,
             next_position=None,
         )
@@ -223,18 +228,23 @@ async def _scored_rescreen_view(
             .order_by(ScoredPolicyRescreenRelease.position)
         )
     )
-    current = next((row for row in releases if row.state != "terminal"), None)
+    active = [row for row in releases if row.state != "terminal"]
+    current = active[0] if active else None
     next_candidate = None
-    if current is None:
+    # A non-verdict is an explicit stop condition. The existing active window
+    # can settle, but no later board position may be released until the paused
+    # row is retried or otherwise resolved by the operator.
+    if not any(row.state == "paused" for row in active):
         next_candidate = await _next_scored_rescreen_candidate(
             session,
             activation=activation,
-            terminal_agent_ids={row.agent_id for row in releases},
+            released_agent_ids={row.agent_id for row in releases},
         )
     return ScoredPolicyRescreenView(
         activation_revision=activation.revision,
         target_policy_version=activation.target_policy_version,
         current=_release_view(current) if current is not None else None,
+        active=[_release_view(row) for row in active],
         next_agent_id=next_candidate[0] if next_candidate is not None else None,
         next_position=next_candidate[1] if next_candidate is not None else None,
     )
@@ -255,7 +265,7 @@ async def get_activation(
 async def get_scored_rescreen(
     _admin: AdminDep, session: SessionDep
 ) -> ScoredPolicyRescreenView:
-    """Read the one-at-a-time, score-preserving policy rollout checkpoint."""
+    """Read the bounded, score-preserving policy rollout checkpoint."""
     return await _scored_rescreen_view(
         session, policy=await resolve_screener_policy_activation(session)
     )
@@ -267,18 +277,27 @@ async def advance_scored_rescreen(
     _admin: AdminDep,
     session: SessionDep,
 ) -> ScoredPolicyRescreenView:
-    """Release exactly one current-board row after an explicit checkpoint.
+    """Fill a bounded current-board window after an explicit checkpoint.
 
     The policy schedule establishes the rule.  It does *not* bulk-requeue
-    every existing score: a false V11 clear must be observable before the next
-    V10 score is touched.  A non-verdict leaves the released row paused; the
-    caller must explicitly choose to retry it rather than silently advancing.
+    every existing score: a false V11 clear remains observable before more than
+    the configured window of V10 scores is touched.  A non-verdict leaves its
+    row paused, prevents the window from widening, and requires an explicit
+    retry rather than silently advancing.
     """
     if payload.confirmation != ADVANCE_SCORED_RESCREEN_CONFIRMATION:
         raise HTTPException(
             status_code=409,
             detail=(
                 f"confirmation must be exactly {ADVANCE_SCORED_RESCREEN_CONFIRMATION}"
+            ),
+        )
+    if payload.max_active_releases > _MAX_SCORED_POLICY_RESCREEN_WINDOW:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "max_active_releases exceeds the four-slot scored policy "
+                "rescreen safety window"
             ),
         )
     actor = (payload.actor or "backroom").strip()
@@ -309,17 +328,22 @@ async def advance_scored_rescreen(
                 .with_for_update()
             )
         )
-        current = next((row for row in releases if row.state != "terminal"), None)
-        if current is not None:
-            if current.agent_id != payload.expected_agent_id:
+        active = [row for row in releases if row.state != "terminal"]
+        paused = [row for row in active if row.state == "paused"]
+        if paused:
+            current = next(
+                (row for row in paused if row.agent_id == payload.expected_agent_id),
+                None,
+            )
+            if current is None:
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        "scored policy rescreen checkpoint changed; refresh before "
-                        f"advancing (current {current.agent_id})"
+                        "scored policy rescreen is paused; refresh and retry the "
+                        f"paused row ({paused[0].agent_id})"
                     ),
                 )
-            if current.state == "paused" and payload.retry_paused:
+            if payload.retry_paused:
                 if (
                     payload.review_settings_revision is not None
                     and payload.review_settings_revision
@@ -340,8 +364,8 @@ async def advance_scored_rescreen(
                 raise HTTPException(
                     status_code=409,
                     detail=(
-                        "current scored policy rescreen is not terminal; use "
-                        "retry_paused only for a paused non-verdict"
+                        "scored policy rescreen is paused; use retry_paused only "
+                        "for that non-verdict"
                     ),
                 )
         else:
@@ -378,6 +402,19 @@ async def advance_scored_rescreen(
                             "mode with L3 and the adjudicator enforced"
                         ),
                     )
+                active_review_revisions = {
+                    row.review_settings_revision for row in active
+                }
+                if active_review_revisions and active_review_revisions != {
+                    review_settings_revision
+                }:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "active scored policy rescreens retain their immutable "
+                            "review settings revision"
+                        ),
+                    )
             elif review_settings_revision is not None:
                 raise HTTPException(
                     status_code=422,
@@ -386,17 +423,26 @@ async def advance_scored_rescreen(
                         "scored policy rescreen"
                     ),
                 )
+            slots = payload.max_active_releases - len(active)
+            if slots <= 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "scored policy rescreen window is full; wait for a terminal "
+                        "verdict before backfilling another slot"
+                    ),
+                )
             next_candidate = await _next_scored_rescreen_candidate(
                 session,
                 activation=activation,
-                terminal_agent_ids={row.agent_id for row in releases},
+                released_agent_ids={row.agent_id for row in releases},
             )
             if next_candidate is None:
                 raise HTTPException(
                     status_code=409,
                     detail="no eligible stale scored submission remains to rescreen",
                 )
-            agent_id, position = next_candidate
+            agent_id, _position = next_candidate
             if agent_id != payload.expected_agent_id:
                 raise HTTPException(
                     status_code=409,
@@ -405,20 +451,35 @@ async def advance_scored_rescreen(
                         f"advancing (next {agent_id})"
                     ),
                 )
-            session.add(
-                ScoredPolicyRescreenRelease(
-                    release_id=uuid4(),
-                    activation_revision=activation.revision,
-                    target_policy_version=activation.target_policy_version,
-                    agent_id=agent_id,
-                    position=position,
-                    state="pending",
-                    attempt_id=None,
-                    review_settings_revision=review_settings_revision,
-                    actor=actor,
-                    reason=payload.reason.strip(),
+            released_agent_ids = {row.agent_id for row in releases}
+            # ``max_active_releases`` is a capacity window, not a batch size:
+            # a later checkpoint backfills only the slots that reached a
+            # terminal verdict. That keeps the four Hetzner workers busy while
+            # never releasing a whole historical board into fallback capacity.
+            for _ in range(slots):
+                candidate = await _next_scored_rescreen_candidate(
+                    session,
+                    activation=activation,
+                    released_agent_ids=released_agent_ids,
                 )
-            )
+                if candidate is None:
+                    break
+                candidate_agent_id, candidate_position = candidate
+                session.add(
+                    ScoredPolicyRescreenRelease(
+                        release_id=uuid4(),
+                        activation_revision=activation.revision,
+                        target_policy_version=activation.target_policy_version,
+                        agent_id=candidate_agent_id,
+                        position=candidate_position,
+                        state="pending",
+                        attempt_id=None,
+                        review_settings_revision=review_settings_revision,
+                        actor=actor,
+                        reason=payload.reason.strip(),
+                    )
+                )
+                released_agent_ids.add(candidate_agent_id)
     return await _scored_rescreen_view(
         session, policy=await resolve_screener_policy_activation(session)
     )
