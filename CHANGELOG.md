@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.7 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Harden Hetzner local BuildKit
+  ([#1398](https://github.com/ditto-assistant/ditto-subnet/pull/1398),
+  [`db18465`](https://github.com/ditto-assistant/ditto-subnet/commit/db184652aecf3550835c6eb602c3f6312a792d95))
+
+
 ## v0.177.6 (2026-08-31)
 
 ### Bug Fixes
