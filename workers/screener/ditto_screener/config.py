@@ -47,6 +47,9 @@ class ScreenerConfig:
     node_id: str | None
     """Provider-neutral enrolled node identity, or null for legacy workers."""
 
+    instance_id: str | None
+    """Stable per-process heartbeat identity; distinct workers share one node."""
+
     node_provider: str | None
     """Capacity provider recorded during enrollment."""
 
@@ -282,6 +285,7 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         wallet_hotkey=os.environ.get("SCREENER_WALLET_HOTKEY") or None,
         screener_mnemonic=os.environ.get("SCREENER_MNEMONIC") or None,
         node_id=os.environ.get("SCREENER_NODE_ID") or None,
+        instance_id=os.environ.get("SCREENER_INSTANCE_ID") or None,
         node_provider=os.environ.get("SCREENER_NODE_PROVIDER") or None,
         node_provider_resource_id=(
             os.environ.get("SCREENER_NODE_PROVIDER_RESOURCE_ID") or None

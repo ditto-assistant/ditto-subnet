@@ -20,6 +20,7 @@ import socket
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from ditto_screener import __version__
@@ -78,6 +79,9 @@ EXACT_CROSS_MINER_DUPLICATE = "exact-cross-miner-duplicate"
 # its own hardware still reports at v5 rather than going dark.
 _HEARTBEAT_PROTOCOL_VERSION = 6
 _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS = 5
+_SYSTEMD_WORKER_CGROUP = re.compile(
+    r"(?:^|/)ditto-screener-worker@([1-9][0-9]*)\.service(?:/|$)"
+)
 
 
 def _resolve_instance_id() -> str:
@@ -92,8 +96,44 @@ def _resolve_instance_id() -> str:
     return cleaned or "screener"
 
 
+def _systemd_worker_index() -> str | None:
+    """Read this service instance's stable systemd worker index when present.
+
+    The pull updater changes worker code and restarts units without needing an
+    Ansible converge. Existing hosts therefore cannot depend solely on a newly
+    rendered ``Environment=`` line to distinguish their workers. The cgroup
+    name is assigned by systemd, not supplied by a miner or a queue payload.
+    """
+    try:
+        cgroups = Path("/proc/self/cgroup").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in cgroups.splitlines():
+        match = _SYSTEMD_WORKER_CGROUP.search(line)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def _configured_instance_id(config: ScreenerConfig) -> str:
+    """Resolve a per-process telemetry identity without changing node authority."""
+    # A specifically configured identity wins. The fleet's legacy env file
+    # intentionally carried the node id here, so that exact value means "use
+    # the node default" rather than a distinct local worker.
+    if config.instance_id and config.instance_id != config.node_id:
+        return config.instance_id
+    if config.node_id:
+        worker_index = _systemd_worker_index()
+        if worker_index is not None:
+            return f"{config.node_id}-worker-{worker_index}"
+    return config.instance_id or config.node_id or _resolve_instance_id()
+
+
 _HEARTBEAT_MIN_INTERVAL_SECONDS = 120.0
-_ACTIVE_HEARTBEAT_SECONDS = 120.0
+# Active jobs have a dedicated best-effort heartbeat task. Thirty seconds
+# keeps the Fleet view useful for operator triage without changing idle fleet
+# write volume (which remains throttled by _HEARTBEAT_MIN_INTERVAL_SECONDS).
+_ACTIVE_HEARTBEAT_SECONDS = 30.0
 # Slice of the lease reserved only for signing and POSTing the verdict. Export,
 # multipart upload, and full-byte platform verification are part of the gate and
 # must finish before its deadline; they do not consume this final response tail.
@@ -126,7 +166,11 @@ class ScreenerWorker:
         # every heartbeat, so the announced shape can never disagree with
         # itself between two reports from the same process.
         self._host_specs = host_specs_probe()
-        self._instance_id = config.node_id or _resolve_instance_id()
+        # A node can run multiple independent local workers. Their enrollment
+        # identity remains the shared ``node_id`` while every heartbeat must
+        # use its process identity, otherwise Platform overwrites concurrent
+        # work from sibling workers in one (hotkey, instance_id) row.
+        self._instance_id = _configured_instance_id(config)
         self._active_agent_id: UUID | None = None
         self._active_progress_stage: ScreenerProgressStage | None = None
         self._active_lease_deadline: LeaseDeadline | None = None
