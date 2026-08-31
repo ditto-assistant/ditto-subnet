@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.180.0 (2026-08-31)
+
+### Features
+
+- **screener**: Window scored policy rescreens
+  ([#1445](https://github.com/ditto-assistant/ditto-subnet/pull/1445),
+  [`fa2f0b6`](https://github.com/ditto-assistant/ditto-subnet/commit/fa2f0b6e1f022b3868991348591623def247664f))
+
+
 ## v0.179.9 (2026-08-31)
 
 ### Bug Fixes
