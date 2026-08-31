@@ -1,4 +1,13 @@
 ---
+- name: Reject runtime-bundle staging without the dedicated daemon
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_runtime_bundle_enabled | bool) or coding_executor_daemon_enabled | bool
+    fail_msg: >-
+      Runtime-bundle verification requires the dedicated rootless daemon to be
+      explicitly enabled in reviewed host configuration. It cannot be enabled
+      as a standalone image-staging path.
+
 - name: Report that the coding executor daemon is deliberately disabled
   ansible.builtin.debug:
     msg: >-
@@ -136,9 +145,57 @@
           - "'io.heyditto.dittobench.isolated=true' in coding_executor_daemon_info.stdout"
         fail_msg: Dedicated coding executor did not prove its rootless isolated daemon identity.
 
+    - name: Create the root-owned protected runtime-bundle staging directory
+      ansible.builtin.file:
+        path: "{{ coding_executor_runtime_staging_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Install the credential-free runtime-bundle staging helpers
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/usr/local/lib/ditto-coding-executor/{{ item }}"
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - stage-runtime-bundle.sh
+        - verify-runtime-bundle.py
+
+    - name: Verify a protected staged coding runtime bundle without loading it
+      when: coding_executor_runtime_bundle_enabled | bool
+      block:
+        - name: Require the fixed protected runtime-bundle staging profile
+          ansible.builtin.assert:
+            that:
+              - coding_executor_runtime_staging_dir == '/var/lib/ditto-coding-executor/staged'
+              - coding_executor_runtime_manifest_path == '/var/lib/ditto-coding-executor/staged/runtime-manifest.json'
+              - coding_executor_runtime_archive_path == '/var/lib/ditto-coding-executor/staged/supervisor.oci.tar'
+              - coding_executor_runtime_manifest_sha256 is match('^[0-9a-f]{64}$')
+            fail_msg: >-
+              Runtime-bundle staging requires the fixed root-owned paths and a
+              complete protected manifest SHA-256. Do not use a mutable
+              registry reference, an Ansible variable carrying bundle bytes, or
+              an unpinned manifest.
+
+        - name: Verify the staged runtime-bundle manifest and archive
+          ansible.builtin.command:
+            argv:
+              - /usr/local/lib/ditto-coding-executor/verify-runtime-bundle.py
+              - --manifest
+              - "{{ coding_executor_runtime_manifest_path }}"
+              - --archive
+              - "{{ coding_executor_runtime_archive_path }}"
+              - --expected-manifest-sha256
+              - "{{ coding_executor_runtime_manifest_sha256 }}"
+          changed_when: false
+
     - name: Report that scorer and worker activation remain disabled
       ansible.builtin.debug:
         msg: >-
           Dedicated rootless daemon is ready on {{ coding_executor_docker_host }},
+          and an optional staged bundle may be hash-verified without loading,
           but no scorer, validator, wallet, image, Platform control, ticket,
           or coding gate has been installed or enabled.
