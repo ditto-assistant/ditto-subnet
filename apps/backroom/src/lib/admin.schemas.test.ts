@@ -302,6 +302,22 @@ describe('admin API schemas', () => {
         revoked_at: null, status_reason: null, heartbeat_seen_at: null,
         software_version: null, protocol_version: null, policy_version: null,
         current_phase: null,
+        workers: [{
+          instance_id: 'subnet-screener-1-worker-1',
+          seen_at: '2026-08-02T00:00:00Z',
+          reported_at: '2026-08-02T00:00:00Z',
+          software_version: '0.21.2', protocol_version: 6, policy_version: 10,
+          state: 'polling', active_agent_id: null, current_phase: 'polling',
+          system_metrics: {
+            collected_at: 1_754_096_800, cpu_percent: 25, memory_percent: 15,
+            disk_percent: 0,
+            docker: { status: 'healthy', running_containers: 0, unhealthy_containers: 0 },
+          },
+          host_specs: {
+            cpu_count: 32, cpu_physical_cores: 24, memory_total_mib: 64_075,
+            disk_total_gib: 1_726, architecture: 'x86_64',
+          },
+        }],
       }],
       events: [],
       provider_jobs: [{
@@ -330,6 +346,11 @@ describe('admin API schemas', () => {
     })
     expect(parsed.snapshot?.gce_target).toBe(2)
     expect(parsed.nodes[0].provider_resource_id).toBe('wk-123456')
+    expect(parsed.nodes[0].workers).toMatchObject([{
+      instance_id: 'subnet-screener-1-worker-1',
+      system_metrics: { cpu_percent: 25, memory_percent: 15, disk_percent: 0 },
+      host_specs: { cpu_count: 32, memory_total_mib: 64_075 },
+    }])
     expect(parsed.builds).toEqual([])
     expect(parsed.provider_jobs[0].provider).toBe('gcp')
   })
