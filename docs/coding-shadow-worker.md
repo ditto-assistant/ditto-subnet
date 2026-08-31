@@ -84,6 +84,12 @@ All of the following must be configured together:
   `VALIDATOR_CODING_SHADOW_RUN_ID`, one stable instance ID, and the existing
   private scorer control token.
 
+The default-zero dedicated GCP executor cohort documented in
+`infra/docs/coding-executor-hosts.md` is the physical isolation foundation for
+the future k=3 canary. It creates neither a daemon nor a worker. A later
+reviewed role must install and prove the rootless isolated daemon before any of
+the activation settings above are eligible for operator use.
+
 Setting only a subset fails closed: no ticket is claimed, or startup rejects
 the incomplete runtime. The committed Compose values keep both worker gates
 false. This PR does not deploy the Platform transport configuration, change a
