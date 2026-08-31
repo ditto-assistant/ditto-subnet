@@ -178,6 +178,10 @@ def test_hetzner_workers_use_release_bound_rootless_analyzer() -> None:
     assert "Ensure rootless-analyzer workspace parents" in tasks
     assert 'group: "{{ screener_fleet_executor_group }}"' in tasks
     assert (
+        "Environment=DOCKER_CONFIG={{ screener_fleet_state_dir }}/workers/%i/docker"
+        in worker
+    )
+    assert (
         "SCREENER_L2_WORKSPACE_ROOT={{ screener_fleet_l2_workspace_root }}/%i" in worker
     )
     assert "{{ screener_fleet_l2_workspace_root }}/%i" in worker

@@ -19,6 +19,9 @@ Environment=SCREENER_REVIEW_SETTINGS_CACHE_FILE={{ screener_fleet_state_dir }}/w
 Environment=SCREENER_L2_CACHE_DIR={{ screener_fleet_state_dir }}/workers/%i/l2-cache
 Environment=SCREENER_L2_AUDIT_JOURNAL_FILE={{ screener_fleet_state_dir }}/workers/%i/l2-audit.jsonl
 Environment=SCREENER_L2_WORKSPACE_ROOT={{ screener_fleet_l2_workspace_root }}/%i
+# BuildKit persists its CLI state under DOCKER_CONFIG. Keep that state inside
+# the worker's allowed directory rather than the immutable release root.
+Environment=DOCKER_CONFIG={{ screener_fleet_state_dir }}/workers/%i/docker
 ExecStart={{ screener_fleet_active_worker_venv }}/bin/ditto-screener
 Restart=always
 RestartSec=10
