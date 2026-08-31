@@ -14,6 +14,8 @@ RELEASE_CHANNEL="${SCREENER_FLEET_RELEASE_CHANNEL:-$DESCRIPTOR_REPOSITORY:screen
 SERVICE_USER="${SCREENER_FLEET_USER:-ditto-screener}"
 SERVICE_GROUP="${SCREENER_FLEET_GROUP:-ditto-screener}"
 WORKER_PROCESSES="${SCREENER_FLEET_WORKER_PROCESSES:-8}"
+L2_WORKSPACE_ROOT="${SCREENER_FLEET_L2_WORKSPACE_ROOT:-/var/lib/ditto-screener-l2-workspaces}"
+EXECUTOR_GROUP="${SCREENER_FLEET_EXECUTOR_GROUP:-ditto-builder}"
 UV_BIN="${SCREENER_FLEET_UV_BIN:-/usr/local/bin/uv}"
 SYSTEMCTL="${SCREENER_FLEET_SYSTEMCTL:-systemctl}"
 EXPECTED_FORMAT_VERSION=1
@@ -203,8 +205,24 @@ stop_fleet() {
   done
 }
 
+ensure_worker_state() {
+  local index
+  # The updater itself owns release convergence. A later scale-up must not
+  # require an Ansible run merely to create paths systemd bind-mounts before
+  # it can exec a worker.
+  install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 "$STATE_DIR/workers"
+  install -d -o "$SERVICE_USER" -g "$EXECUTOR_GROUP" -m 0770 "$L2_WORKSPACE_ROOT"
+  for index in $(seq 1 "$WORKER_PROCESSES"); do
+    install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 \
+      "$STATE_DIR/workers/$index"
+    install -d -o "$SERVICE_USER" -g "$EXECUTOR_GROUP" -m 0770 \
+      "$L2_WORKSPACE_ROOT/$index"
+  done
+}
+
 start_fleet() {
   local index
+  ensure_worker_state
   "$SYSTEMCTL" start ditto-screener-fleet-agent.service
   for index in $(seq 1 "$WORKER_PROCESSES"); do
     # Re-enable the declared set too, so a previous smaller canary cannot
