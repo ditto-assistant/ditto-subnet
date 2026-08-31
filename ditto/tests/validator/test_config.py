@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 import pytest
 
 from ditto.validator.config import FINNEY_BURN_HOTKEY, parse_validator_config_from_env
@@ -163,6 +165,7 @@ class TestCodingShadowConfig:
         _base_env(monkeypatch)
         config = parse_validator_config_from_env()
         assert config.coding_shadow_enabled is False
+        assert config.coding_shadow_run_id is None
 
     def test_enable_requires_stable_identity_and_control_token(
         self, monkeypatch: pytest.MonkeyPatch
@@ -178,9 +181,28 @@ class TestCodingShadowConfig:
         monkeypatch.setenv(
             "VALIDATOR_CODING_SHADOW_INSTANCE_ID", "coding-shadow-primary"
         )
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_SHADOW_RUN_ID",
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        )
         config = parse_validator_config_from_env()
         assert config.coding_shadow_enabled is True
         assert config.coding_shadow_instance_id == "coding-shadow-primary"
+        assert config.coding_shadow_run_id == UUID(
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        )
+
+    @pytest.mark.parametrize(
+        "value",
+        ["not-a-uuid", "00000000-0000-0000-0000-000000000000"],
+    )
+    def test_rejects_invalid_run_fence(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_SHADOW_RUN_ID", value)
+        with pytest.raises(ValidatorConfigError, match="CODING_SHADOW_RUN_ID"):
+            parse_validator_config_from_env()
 
 
 class TestCodingCanaryConfig:

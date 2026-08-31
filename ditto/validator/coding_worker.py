@@ -191,6 +191,7 @@ class CodingShadowWorker:
         runtime: CodingWorkerRuntime,
         publication: CodingPublicationClient,
         instance_id: str,
+        run_row_id: UUID,
         poll_seconds: float = 10.0,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -201,6 +202,7 @@ class CodingShadowWorker:
                 character.isspace() or not character.isprintable()
                 for character in instance_id
             )
+            or run_row_id.int == 0
             or not 1 <= poll_seconds <= 300
         ):
             raise ValueError("coding shadow worker configuration is invalid")
@@ -208,6 +210,7 @@ class CodingShadowWorker:
         self._runtime = runtime
         self._publication = publication
         self._instance_id = instance_id
+        self._run_row_id = run_row_id
         self._poll_seconds = poll_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
         self._last_now = self._clock()
@@ -256,10 +259,12 @@ class CodingShadowWorker:
         await self._publication.pending(limit=1)
         if self._drain_requested is not None and self._drain_requested.is_set():
             return False
-        claim = await self._platform.claim_next_coding_ticket(self._instance_id)
+        claim = await self._platform.claim_next_coding_ticket(
+            self._instance_id, self._run_row_id
+        )
         if claim is None:
             return False
-        _validate_claim(claim, self._instance_id, now=self._now())
+        _validate_claim(claim, self._instance_id, self._run_row_id, now=self._now())
         if claim.claim_started_at is None:
             authoring_lease = await self._platform.request_coding_authoring_lease(
                 claim.ticket_id
@@ -294,6 +299,7 @@ class CodingShadowWorker:
             _validate_claim(
                 claim,
                 self._instance_id,
+                self._run_row_id,
                 started=True,
                 now=started_now,
             )
@@ -498,6 +504,7 @@ class CodingShadowWorker:
                     _validate_claim(
                         current,
                         self._instance_id,
+                        self._run_row_id,
                         started=True,
                         now=self._now(),
                     )
@@ -541,6 +548,7 @@ def _ticket(claim: CodingClaimResponse) -> CodingAttemptTicket:
 def _validate_claim(
     claim: CodingClaimResponse,
     instance_id: str,
+    run_row_id: UUID,
     *,
     started: bool | None = None,
     now: datetime,
@@ -550,6 +558,7 @@ def _validate_claim(
     now = now.astimezone(UTC)
     if (
         claim.instance_id != instance_id
+        or claim.run_row_id != run_row_id
         or claim.weight_eligible is not False
         or claim.claim_expires_at <= now
         or claim.ticket_deadline <= now

@@ -132,8 +132,11 @@ class _Platform:
         self.claim = claim
         self.events: list[str] = []
 
-    async def claim_next_coding_ticket(self, instance_id: str) -> CodingClaimResponse:
+    async def claim_next_coding_ticket(
+        self, instance_id: str, run_row_id: UUID
+    ) -> CodingClaimResponse:
         assert instance_id == _INSTANCE
+        assert run_row_id == _RUN
         self.events.append("claim")
         return self.claim
 
@@ -221,6 +224,7 @@ async def test_new_claim_starts_before_coordinator_and_executes_once() -> None:
         runtime=_Runtime("released"),  # type: ignore[arg-type]
         publication=publication,  # type: ignore[arg-type]
         instance_id=_INSTANCE,
+        run_row_id=_RUN,
         clock=lambda: _NOW,
     )
 
@@ -253,6 +257,7 @@ async def test_started_ambiguous_claim_never_reruns_candidate() -> None:
         runtime=runtime,  # type: ignore[arg-type]
         publication=_Publication(),  # type: ignore[arg-type]
         instance_id=_INSTANCE,
+        run_row_id=_RUN,
         clock=lambda: _NOW,
     )
     worker._coordinator = SimpleNamespace(  # type: ignore[assignment]
@@ -286,6 +291,7 @@ async def test_preflight_failure_leaves_claim_unstarted_and_transferable() -> No
         runtime=_Runtime("released"),  # type: ignore[arg-type]
         publication=_Publication(),  # type: ignore[arg-type]
         instance_id=_INSTANCE,
+        run_row_id=_RUN,
         clock=lambda: _NOW,
     )
     worker._coordinator = SimpleNamespace(  # type: ignore[assignment]
@@ -304,9 +310,29 @@ async def test_started_terminal_pending_replays_exact_bytes_only() -> None:
         runtime=_Runtime("terminal_pending"),  # type: ignore[arg-type]
         publication=publication,  # type: ignore[arg-type]
         instance_id=_INSTANCE,
+        run_row_id=_RUN,
         clock=lambda: _NOW,
     )
     assert await worker.run_once() is True
     assert platform.events == ["claim", "publish"]
     assert publication.acknowledged == 1
     assert publication.preflights == 1
+
+
+async def test_claim_from_another_run_is_rejected_before_execution() -> None:
+    platform = _Platform(
+        _claim(started=False).model_copy(
+            update={"run_row_id": UUID("cccccccc-cccc-4ccc-8ccc-cccccccccccc")}
+        )
+    )
+    worker = CodingShadowWorker(
+        platform=platform,
+        runtime=_Runtime("released"),  # type: ignore[arg-type]
+        publication=_Publication(),  # type: ignore[arg-type]
+        instance_id=_INSTANCE,
+        run_row_id=_RUN,
+        clock=lambda: _NOW,
+    )
+    with pytest.raises(CodingAttemptIntegrityError, match="authority"):
+        await worker.run_once()
+    assert platform.events == ["claim"]

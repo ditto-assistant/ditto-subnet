@@ -10,7 +10,7 @@ The validator runs a separate `CodingShadowWorker` beside the ordinary
 tool/memory scoring loop only when `VALIDATOR_CODING_SHADOW_ENABLED=true`.
 For one stable worker instance it:
 
-1. claims one Platform coding ticket;
+1. claims one Platform coding ticket from its configured exact run;
 2. proves the private scorer handoff and fetches the non-executing authoring,
    screened-harness, and Luna-grant authority while the claim is transferable;
 3. commits the Platform `start` boundary before invoking candidate code;
@@ -76,8 +76,9 @@ All of the following must be configured together:
   environment/grader digest preloaded on the dedicated daemon;
 - sandbox: a dedicated rootless daemon with the isolated-daemon label, the
   capability-only egress network, and an explicit allowlisting proxy;
-- validator: `VALIDATOR_CODING_SHADOW_ENABLED=true`, one stable instance ID,
-  and the existing private scorer control token.
+- validator: `VALIDATOR_CODING_SHADOW_ENABLED=true`, one exact
+  `VALIDATOR_CODING_SHADOW_RUN_ID`, one stable instance ID, and the existing
+  private scorer control token.
 
 Setting only a subset fails closed: no ticket is claimed, or startup rejects
 the incomplete runtime. The committed Compose values keep both worker gates

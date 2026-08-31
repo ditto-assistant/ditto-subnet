@@ -68,6 +68,7 @@ async def claim_next(
         message=coding_claim_next_signing_message(
             validator_hotkey=payload.validator_hotkey,
             instance_id=payload.instance_id,
+            run_row_id=payload.run_row_id,
             nonce=payload.nonce,
             requested_at=payload.requested_at,
         ),
@@ -78,6 +79,7 @@ async def claim_next(
                 session,
                 validator_hotkey=payload.validator_hotkey,
                 instance_id=payload.instance_id,
+                run_row_id=payload.run_row_id,
             )
     except CodingClaimConflictError:
         raise HTTPException(
@@ -166,6 +168,7 @@ async def _claim_action(
             action=action,
             validator_hotkey=payload.validator_hotkey,
             instance_id=payload.instance_id,
+            run_row_id=payload.run_row_id,
             ticket_id=ticket_id,
             claim_generation=payload.claim_generation,
             nonce=payload.nonce,
@@ -183,6 +186,7 @@ async def _claim_action(
                 session,
                 validator_hotkey=payload.validator_hotkey,
                 instance_id=payload.instance_id,
+                run_row_id=payload.run_row_id,
                 ticket_id=ticket_id,
                 claim_generation=payload.claim_generation,
             )

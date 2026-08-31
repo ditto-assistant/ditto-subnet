@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from ipaddress import ip_address
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from ditto.validator.errors import ValidatorConfigError
 from ditto.validator.resource_gate import (
@@ -385,6 +386,9 @@ class ValidatorConfig:
     coding_shadow_instance_id: str = ""
     """Stable, non-secret instance identity used by the exclusive claim ledger."""
 
+    coding_shadow_run_id: UUID | None = None
+    """Exact shadow run this worker instance is allowed to claim."""
+
     coding_shadow_poll_seconds: float = 10.0
     """Idle polling interval for the separate shadow coding queue."""
 
@@ -536,6 +540,19 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     coding_shadow_instance_id = os.environ.get(
         "VALIDATOR_CODING_SHADOW_INSTANCE_ID", ""
     ).strip()
+    coding_shadow_run_id_raw = os.environ.get(
+        "VALIDATOR_CODING_SHADOW_RUN_ID", ""
+    ).strip()
+    try:
+        coding_shadow_run_id = (
+            UUID(coding_shadow_run_id_raw) if coding_shadow_run_id_raw else None
+        )
+    except ValueError as error:
+        raise ValidatorConfigError(
+            "VALIDATOR_CODING_SHADOW_RUN_ID must be a UUID"
+        ) from error
+    if coding_shadow_run_id is not None and coding_shadow_run_id.int == 0:
+        raise ValidatorConfigError("VALIDATOR_CODING_SHADOW_RUN_ID must not be nil")
     coding_shadow_poll_seconds = (
         _parse_float("VALIDATOR_CODING_SHADOW_POLL_SECONDS", "10")
         if coding_shadow_enabled
@@ -609,6 +626,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         scorer_require_binary_provenance=scorer_require_binary_provenance,
         coding_shadow_enabled=coding_shadow_enabled,
         coding_shadow_instance_id=coding_shadow_instance_id,
+        coding_shadow_run_id=coding_shadow_run_id,
         coding_shadow_poll_seconds=coding_shadow_poll_seconds,
         coding_canary_enabled=coding_canary_enabled,
         coding_canary_poll_seconds=coding_canary_poll_seconds,
@@ -628,6 +646,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         )
     if config.coding_shadow_enabled and (
         not config.coding_shadow_instance_id
+        or config.coding_shadow_run_id is None
         or len(config.coding_shadow_instance_id.encode()) > 128
         or any(
             character.isspace() or not character.isprintable()
@@ -640,7 +659,8 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         )
     ):
         raise ValidatorConfigError(
-            "enabled shadow coding requires a stable instance ID and control token"
+            "enabled shadow coding requires an exact run ID, stable instance ID, "
+            "and control token"
         )
     if config.coding_shadow_enabled and (
         not math.isfinite(config.coding_shadow_poll_seconds)
