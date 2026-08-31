@@ -7,6 +7,10 @@ enable_datapipeline   = true
 enable_embedder       = true
 enable_validator      = true
 enable_validator_prod = true
+# Shadow coding remains physically absent until a separately reviewed protected
+# apply creates the complete three-host executor cohort. No worker, daemon, or
+# provider route is activated by this default.
+coding_executor_host_count = 0
 # The generator VM must never become persistent production intent. The
 # protected plan workflow overrides this only for a supervised bootstrap/armed
 # window, then seals a teardown plan returning it to absent.
