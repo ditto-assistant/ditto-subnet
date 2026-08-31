@@ -27,6 +27,8 @@ DOC = (ROOT / "infra/docs/coding-executor-hosts.md").read_text()
 RUNTIME_VERIFIER = ROLE / "files/verify-runtime-bundle.py"
 RUNTIME_STAGER = ROLE / "files/stage-runtime-bundle.sh"
 RUNTIME_LOADER = ROLE / "files/load-runtime-bundle.py"
+CLIENT_GUARD = ROLE / "files/coding-executor-client-guard.py"
+CLIENT_GUARD_UNIT = ROLE / "templates/ditto-coding-executor-client-guard.service.j2"
 _spec = importlib.util.spec_from_file_location(
     "verify_runtime_bundle", RUNTIME_VERIFIER
 )
@@ -41,6 +43,13 @@ assert _loader_spec is not None and _loader_spec.loader is not None
 LOADER = importlib.util.module_from_spec(_loader_spec)
 sys.modules[_loader_spec.name] = LOADER
 _loader_spec.loader.exec_module(LOADER)
+_guard_spec = importlib.util.spec_from_file_location(
+    "coding_executor_client_guard", CLIENT_GUARD
+)
+assert _guard_spec is not None and _guard_spec.loader is not None
+CLIENT_GUARD_MODULE = importlib.util.module_from_spec(_guard_spec)
+sys.modules[_guard_spec.name] = CLIENT_GUARD_MODULE
+_guard_spec.loader.exec_module(CLIENT_GUARD_MODULE)
 
 
 def test_coding_executor_daemon_is_default_off_and_has_no_client() -> None:
@@ -51,7 +60,7 @@ def test_coding_executor_daemon_is_default_off_and_has_no_client() -> None:
     assert "coding_executor_policy_files.changed" in TASKS
     assert "ditto-coding-executor" in DEFAULTS
     assert "ditto-coding-client" in DEFAULTS
-    assert "no scorer, validator, wallet, image" in TASKS
+    assert "task-serving scorer, validator, wallet" in TASKS
     assert "or coding gate has been installed or enabled" in TASKS
 
 
@@ -82,6 +91,32 @@ def test_runtime_bundle_staging_and_loading_are_separately_default_off() -> None
     assert "image load" in RUNTIME_LOADER.read_text()
     assert "image pull" not in RUNTIME_LOADER.read_text().lower()
     assert "container create" not in RUNTIME_LOADER.read_text().lower()
+
+
+def test_client_guard_is_default_off_and_cannot_execute_or_listen() -> None:
+    text = CLIENT_GUARD.read_text().lower()
+    assert "coding_executor_client_guard_enabled: false" in DEFAULTS
+    assert "when: coding_executor_client_guard_enabled | bool" in TASKS
+    assert (
+        "not (coding_executor_client_guard_enabled | bool) or "
+        "coding_executor_runtime_image_load_enabled | bool" in TASKS
+    )
+    assert "ditto-coding-scorer" in DEFAULTS
+    assert "coding-executor-client-guard.py" in TASKS
+    assert (
+        "supplementarygroups={{ coding_executor_client_group }}"
+        in CLIENT_GUARD_UNIT.read_text().lower()
+    )
+    assert "restrictaddressfamilies=af_unix" in CLIENT_GUARD_UNIT.read_text().lower()
+    for command in (
+        "image pull",
+        "image load",
+        "container create",
+        "container start",
+        "container run",
+        "image rm",
+    ):
+        assert command not in text
 
 
 def test_rootless_daemon_is_pinned_to_the_isolated_empty_identity() -> None:
@@ -355,6 +390,9 @@ def test_runtime_loader_requires_a_safe_exact_image_and_writes_attestation(
     )
     monkeypatch.setattr(LOADER.os, "geteuid", lambda: 0)
     monkeypatch.setattr(LOADER.os, "chown", lambda *_args: None)
+    monkeypatch.setattr(
+        LOADER.grp, "getgrnam", lambda _name: SimpleNamespace(gr_gid=123)
+    )
     monkeypatch.setattr(LOADER, "EXPECTED_MANIFEST_PATH", manifest_path)
     monkeypatch.setattr(LOADER, "EXPECTED_ARCHIVE_PATH", archive)
     monkeypatch.setattr(LOADER, "EXPECTED_ATTESTATION_PATH", attestation_path)
@@ -392,7 +430,7 @@ def test_runtime_loader_requires_a_safe_exact_image_and_writes_attestation(
     )
 
     attestation = json.loads(attestation_path.read_bytes())
-    assert attestation_path.stat().st_mode & 0o777 == 0o600
+    assert attestation_path.stat().st_mode & 0o777 == 0o640
     assert attestation == {
         "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         "image_id": "sha256:" + "3" * 64,
@@ -472,3 +510,119 @@ def test_runtime_loader_rejects_a_non_tar_archive_before_docker_load(
 
     with pytest.raises(LOADER.LoaderError, match="not a readable tar archive"):
         LOADER.validate_archive_layout(archive)
+
+
+def _guard_attestation() -> dict[str, str]:
+    return {
+        "archive_sha256": "1" * 64,
+        "image_id": "sha256:" + "3" * 64,
+        "image_reference": (
+            "registry.invalid/private/dittobench-coding-supervisor@sha256:" + "2" * 64
+        ),
+        "manifest_sha256": "4" * 64,
+        "platform": "linux/amd64",
+        "schema": "dittobench-coding-runtime-image-attestation-v1",
+        "source_revision": "a" * 40,
+        "supervisor_contract": "1",
+        "trusted_test_driver_digest": "sha256:" + "5" * 64,
+    }
+
+
+def _guard_image(attestation: dict[str, str]) -> dict[str, Any]:
+    return {
+        "Architecture": "amd64",
+        "Config": {
+            "Entrypoint": ["/usr/local/bin/dittobench-coding-supervisor"],
+            "Env": ["PATH=/"],
+            "Labels": {
+                "io.heyditto.dittobench.coding-supervisor-contract": "1",
+                "io.heyditto.dittobench.trusted-test-driver-sha256": attestation[
+                    "trusted_test_driver_digest"
+                ],
+                "io.heyditto.dittobench.trusted-test-driver-name": (
+                    "dittobench-test-driver"
+                ),
+                "org.opencontainers.image.revision": attestation["source_revision"],
+            },
+            "Volumes": None,
+        },
+        "Id": attestation["image_id"],
+        "Os": "linux",
+        "RepoDigests": [attestation["image_reference"]],
+    }
+
+
+def test_client_guard_revalidates_the_attested_image(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attestation_path = tmp_path / "runtime-image-attestation.json"
+    attestation = _guard_attestation()
+    attestation_path.write_text(json.dumps(attestation))
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        CLIENT_GUARD_MODULE, "EXPECTED_ATTESTATION_PATH", attestation_path
+    )
+    monkeypatch.setattr(
+        CLIENT_GUARD_MODULE.grp, "getgrnam", lambda _name: SimpleNamespace(gr_gid=123)
+    )
+    monkeypatch.setattr(CLIENT_GUARD_MODULE.os, "geteuid", lambda: 1001)
+    monkeypatch.setattr(CLIENT_GUARD_MODULE.os, "getgid", lambda: 1001)
+    monkeypatch.setattr(CLIENT_GUARD_MODULE.os, "getgroups", lambda: [123])
+    monkeypatch.setattr(
+        CLIENT_GUARD_MODULE,
+        "regular_client_attestation",
+        lambda _path: _root_owned_metadata(attestation_path, maximum=16 << 10),
+    )
+
+    def fake_docker_output(arguments: list[str]) -> bytes:
+        commands.append(arguments)
+        if arguments == ["info", "--format", "{{json .SecurityOptions}}"]:
+            return b'["name=rootless"]'
+        if arguments == ["info", "--format", "{{json .Labels}}"]:
+            return b'["io.heyditto.dittobench.isolated=true"]'
+        assert arguments == [
+            "image",
+            "inspect",
+            "--format",
+            "{{json .}}",
+            attestation["image_reference"],
+        ]
+        return json.dumps(_guard_image(attestation)).encode()
+
+    monkeypatch.setattr(CLIENT_GUARD_MODULE, "docker_output", fake_docker_output)
+    CLIENT_GUARD_MODULE.guard_once()
+
+    assert commands == [
+        ["info", "--format", "{{json .SecurityOptions}}"],
+        ["info", "--format", "{{json .Labels}}"],
+        [
+            "image",
+            "inspect",
+            "--format",
+            "{{json .}}",
+            attestation["image_reference"],
+        ],
+    ]
+
+
+def test_client_guard_rejects_fixture_or_image_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attestation = _guard_attestation()
+    image = _guard_image(attestation)
+    image["Config"]["Labels"]["io.heyditto.dittobench.coding-supervisor-fixture"] = (
+        "true"
+    )
+    monkeypatch.setattr(
+        CLIENT_GUARD_MODULE,
+        "docker_output",
+        lambda _arguments: json.dumps(image).encode(),
+    )
+
+    with pytest.raises(
+        CLIENT_GUARD_MODULE.GuardError,
+        match="public certification fixture",
+    ):
+        CLIENT_GUARD_MODULE.inspect_image(attestation)
