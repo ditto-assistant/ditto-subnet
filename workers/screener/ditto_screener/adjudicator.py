@@ -627,12 +627,17 @@ class SourceReviewAdjudicator:
                     if remaining <= 0:
                         raise ValueError("adjudicator exceeded lease budget")
                     request_timeout = min(request_timeout, remaining)
-                message = await self._completion_message(
-                    client,
-                    api_key,
-                    _compacted_adjudicator_messages(messages),
-                    timeout=request_timeout,
-                )
+                # ``_completion_message`` may make one transient retry.  The
+                # enclosing timeout keeps both requests inside the remaining
+                # court window rather than letting the retry report after the
+                # Platform lease is already gone.
+                async with asyncio.timeout(request_timeout):
+                    message = await self._completion_message(
+                        client,
+                        api_key,
+                        _compacted_adjudicator_messages(messages),
+                        timeout=request_timeout,
+                    )
                 messages.append(message)
                 tool_calls = message.get("tool_calls")
                 if not isinstance(tool_calls, list) or not tool_calls:

@@ -178,6 +178,26 @@ async def test_request_uses_provider_supported_completion_parameter(
     }
 
 
+async def test_deadline_bounds_a_completion_and_its_retry(tmp_path: Path) -> None:
+    """A slow provider cannot spend past the court's reserved lease window."""
+    requests = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        await asyncio.sleep(0.2)
+        return httpx.Response(200, json={})
+
+    deadline = asyncio.get_running_loop().time() + 0.03
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], deadline=deadline)
+
+    assert result.decision == "clear"
+    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert requests == 1
+
+
 _CONCERN = {
     "kind": "concern",
     "category": "benchmark_emulation",

@@ -4358,7 +4358,7 @@ async def test_exploration_reserves_the_terminal_adjudicator_deadline() -> None:
 
     assert l1.deadline == pytest.approx(deadline - 600, abs=0.1)
     assert l2.deadline == pytest.approx(deadline - 600, abs=0.1)
-    assert court.deadline == deadline
+    assert court.deadline == pytest.approx(deadline - 1_200, abs=0.1)
 
 
 async def test_short_parent_lease_splits_time_with_the_terminal_court() -> None:
@@ -4380,7 +4380,7 @@ async def test_short_parent_lease_splits_time_with_the_terminal_court() -> None:
 
     assert l1.deadline == pytest.approx(deadline - 300, abs=0.1)
     assert l2.deadline == pytest.approx(deadline - 300, abs=0.1)
-    assert court.deadline == deadline
+    assert court.deadline == pytest.approx(deadline - 300, abs=0.1)
 
 
 async def test_l2_wall_clock_timeout_still_hands_off_to_l4(tmp_path: Path) -> None:

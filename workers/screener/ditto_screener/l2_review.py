@@ -3928,6 +3928,26 @@ class LayeredSourceReviewAgent:
         )
         return deadline - effective_reserve
 
+    def _court_deadline(
+        self,
+        deadline: float | None,
+        review_deadline: float | None,
+    ) -> float | None:
+        """Give L4 its reserved window, never the remainder of the lease.
+
+        ``review_deadline`` partitions a short lease between the exploratory
+        layers and the court.  Handing the court the parent deadline again
+        erased that partition whenever L1/L2 finished quickly: a sequence of
+        slow but individually-bounded model turns could consume the build and
+        verdict-reporting time.  The court may still use its full reserved
+        duration from the moment it starts, but its timeout cannot grow into
+        the rest of the lease.
+        """
+        if deadline is None or review_deadline is None:
+            return deadline
+        reserve = max(0.0, deadline - review_deadline)
+        return min(deadline, asyncio.get_running_loop().time() + reserve)
+
     def pop_shadow_result(self, attempt_id: UUID) -> L2RunResult | None:
         """Consume non-authoritative shadow telemetry for one attempt."""
         return self._shadow_results.pop(attempt_id, None)
@@ -4037,6 +4057,7 @@ class LayeredSourceReviewAgent:
         l1 = l1_observation
         if review_deadline is None and deadline is not None and self._adjudicator:
             review_deadline = self._exploration_deadline(deadline)
+        court_deadline = self._court_deadline(deadline, review_deadline)
         always_escalate = os.environ.get(
             "SCREENER_L2_ALWAYS_ESCALATE", ""
         ).strip().lower() in {"1", "true", "yes", "on"}
@@ -4062,7 +4083,7 @@ class LayeredSourceReviewAgent:
         ) -> SourceReviewObservation:
             """Run L4 on an evidence-bearing review, then close the band."""
             adjudicated = await self._adjudicate(
-                observation, archive_path=archive_path, deadline=deadline
+                observation, archive_path=archive_path, deadline=court_deadline
             )
             report(10)
             return adjudicated
