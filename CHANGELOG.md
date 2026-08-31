@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.178.0 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Bind adjudication to review policy
+  ([`843f28f`](https://github.com/ditto-assistant/ditto-subnet/commit/843f28f30711fa60cdddee1b174854c54620adbc))
+
+### Features
+
+- **platform**: Add default-off shadow reconciliation
+  ([`2a975d4`](https://github.com/ditto-assistant/ditto-subnet/commit/2a975d4418fdda9f75cf5cc3e81d43fcdeb0c385))
+
+
 ## v0.177.19 (2026-08-31)
 
 ### Bug Fixes
