@@ -269,6 +269,38 @@ def test_self_updater_reconciles_stale_workers_when_canary_shrinks() -> None:
     assert stop < start
 
 
+def test_self_updater_provisions_worker_state_before_scale_up() -> None:
+    """Scale-up must create systemd bind-mount paths without an Ansible run."""
+    updater = UPDATER.read_text()
+    service = (
+        ROLE / "templates/ditto-screener-fleet-auto-update.service.j2"
+    ).read_text()
+    provisioning = updater[
+        updater.index("ensure_worker_state()") : updater.index("start_fleet()")
+    ]
+
+    assert 'L2_WORKSPACE_ROOT="${SCREENER_FLEET_L2_WORKSPACE_ROOT:-' in updater
+    assert 'EXECUTOR_GROUP="${SCREENER_FLEET_EXECUTOR_GROUP:-' in updater
+    assert 'install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700' in provisioning
+    assert '"$STATE_DIR/workers/$index"' in provisioning
+    assert 'install -d -o "$SERVICE_USER" -g "$EXECUTOR_GROUP" -m 0770' in provisioning
+    assert '"$L2_WORKSPACE_ROOT/$index"' in provisioning
+    start_fleet = updater[
+        updater.index("start_fleet()") : updater.index("activate_release()")
+    ]
+    assert start_fleet.index("ensure_worker_state") < start_fleet.index(
+        '"$SYSTEMCTL" start ditto-screener-fleet-agent.service'
+    )
+    assert (
+        "Environment=SCREENER_FLEET_L2_WORKSPACE_ROOT="
+        "{{ screener_fleet_l2_workspace_root }}" in service
+    )
+    assert (
+        "Environment=SCREENER_FLEET_EXECUTOR_GROUP="
+        "{{ screener_fleet_executor_group }}" in service
+    )
+
+
 def test_release_workflow_signs_before_advancing_discovery_channel() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text())
     job = workflow["jobs"]["assemble-screener-fleet-release"]
