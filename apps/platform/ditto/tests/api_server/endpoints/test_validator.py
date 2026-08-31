@@ -1161,6 +1161,7 @@ async def _seed_agent(
     agent_id: UUID | None = None,
     miner_hotkey: str = _MINER_HOTKEY,
     sha256: str = _SHA256,
+    content_fingerprint: dict | None = None,
     size_bytes: int = 524288,
     screening_policy_version: int = SCREENING_POLICY_VERSION,
     screened_image: bool = True,
@@ -1193,6 +1194,7 @@ async def _seed_agent(
                 miner_hotkey=miner_hotkey,
                 name=name,
                 sha256=sha256,
+                content_fingerprint=content_fingerprint,
                 size_bytes=size_bytes,
                 status=status,
                 screening_policy_version=screening_policy_version,
@@ -8950,6 +8952,67 @@ class TestAntiCopyGate:
             assert held.status == AgentStatus.ATH_PENDING_REVIEW
             assert held.duplicate_of == rejected
             assert "rejected artifact" in (held.review_reason or "")
+
+    async def test_lexical_descendant_of_rejected_artifact_stays_scored(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Only exact identity may reopen a rejected row as an ATH copy hold."""
+        _install_db(app, session_maker)
+        _install_chain(app)
+        rejected = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            sha256="d1" * 32,
+            content_fingerprint={
+                "v": 2,
+                "k": 256,
+                "card": 200,
+                "m": [f"h{i}" for i in range(200)],
+            },
+        )
+        await self._score(
+            client,
+            rejected,
+            maker=session_maker,
+            run_id="run_lexical_rej",
+            composite=0.80,
+        )
+        async with session_maker() as s, s.begin():
+            banned = await s.get(Agent, rejected)
+            assert banned is not None
+            banned.status = AgentStatus.BANNED
+
+        descendant = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            sha256="d2" * 32,
+            content_fingerprint={
+                "v": 2,
+                "k": 256,
+                "card": 200,
+                "m": [f"h{i}" for i in range(199)] + ["replacement"],
+            },
+        )
+        response = await self._score(
+            client,
+            descendant,
+            maker=session_maker,
+            run_id="run_lexical_descendant",
+            composite=0.80,
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == AgentStatus.SCORED
+        async with session_maker() as s:
+            agent = await s.get(Agent, descendant)
+            review = await s.scalar(
+                select(AthReview).where(AthReview.agent_id == descendant)
+            )
+            assert agent is not None
+            assert agent.status == AgentStatus.SCORED
+            assert review is None
 
     async def test_upload_predating_the_rejection_is_not_held(
         self,

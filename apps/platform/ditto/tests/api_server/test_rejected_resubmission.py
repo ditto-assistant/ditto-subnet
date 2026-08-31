@@ -118,7 +118,7 @@ def test_cross_owner_resubmission_names_the_other_hotkey() -> None:
     assert "Zeus_v11 v6" in decision.reason
 
 
-def test_lexical_near_duplicate_is_held() -> None:
+def test_lexical_near_duplicate_is_left_to_source_review() -> None:
     """A cosmetically-edited re-upload: one shingle differs out of ~200."""
     shared = {f"h{i}" for i in range(200)}
     decision = evaluate_rejected_resubmission(
@@ -129,9 +129,7 @@ def test_lexical_near_duplicate_is_held() -> None:
         content_fingerprint=_fp(shared | {"edit-a"}),
         rejected=[_rejected(content_fingerprint=_fp(shared | {"edit-b"}))],
     )
-    assert decision.held is True
-    assert decision.reason is not None
-    assert "near-duplicate" in decision.reason
+    assert decision.held is False
 
 
 def test_remediated_descendant_is_not_held() -> None:
@@ -195,7 +193,7 @@ def test_hogwarts_replacement_remediation_is_not_held() -> None:
     assert decision.held is False
 
 
-def test_padded_reupload_is_held_on_containment() -> None:
+def test_padded_lexical_resubmission_is_left_to_source_review() -> None:
     """Containment still catches the attack it exists for.
 
     Every shingle of the rejected artifact survives and junk is bolted on to
@@ -212,9 +210,7 @@ def test_padded_reupload_is_held_on_containment() -> None:
         content_fingerprint=_fp(rejected_shingles | padding),
         rejected=[_rejected(content_fingerprint=_fp(rejected_shingles))],
     )
-    assert decision.held is True
-    assert decision.reason is not None
-    assert "near-duplicate" in decision.reason
+    assert decision.held is False
 
 
 def test_containment_is_silent_when_direction_is_unknown() -> None:
