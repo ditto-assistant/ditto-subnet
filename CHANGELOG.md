@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.5 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Keep Hetzner fleet builds local
+  ([#1396](https://github.com/ditto-assistant/ditto-subnet/pull/1396),
+  [`83f3b10`](https://github.com/ditto-assistant/ditto-subnet/commit/83f3b10911718aefd4fe6a25f33538aa7839125c))
+
+
 ## v0.177.4 (2026-08-31)
 
 ### Bug Fixes
