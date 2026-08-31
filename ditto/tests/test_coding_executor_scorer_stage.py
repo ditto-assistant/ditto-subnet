@@ -16,7 +16,10 @@ SPEC.loader.exec_module(VERIFY)
 def test_scorer_stage_requires_cross_document_and_archive_identity() -> None:
     release = {
         "image_digest": "sha256:" + "1" * 64,
-        "image_reference": "registry.invalid/scorer@sha256:" + "1" * 64,
+        "image_reference": (
+            "ghcr.io/ditto-assistant/dittobench-coding-executor-scorer@sha256:"
+            + "1" * 64
+        ),
         "locked_policy_sha256": "2" * 64,
         "platform": "linux/amd64",
         "schema": "dittobench-coding-executor-scorer-release-v1",
@@ -28,6 +31,7 @@ def test_scorer_stage_requires_cross_document_and_archive_identity() -> None:
     bundle.update(
         {
             "archive_sha256": "3" * 64,
+            "image_id": "sha256:" + "5" * 64,
             "release_manifest_sha256": hashlib.sha256(release_raw).hexdigest(),
             "schema": "dittobench-coding-executor-scorer-bundle-v1",
         }

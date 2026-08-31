@@ -28,7 +28,7 @@ CHECK_INTERVAL_SECONDS = 60
 ATTESTATION_SCHEMA = "dittobench-coding-runtime-image-attestation-v1"
 EXPECTED_DOCKER_HOST = "unix:///run/ditto-coding-executor/docker.sock"
 EXPECTED_ATTESTATION_PATH = Path(
-    "/var/lib/ditto-coding-executor/staged/runtime-image-attestation.json"
+    "/var/lib/ditto-coding-executor/attestations/runtime-image-attestation.json"
 )
 EXPECTED_CLIENT_GROUP = "ditto-coding-client"
 ISOLATED_DAEMON_LABEL = "io.heyditto.dittobench.isolated=true"

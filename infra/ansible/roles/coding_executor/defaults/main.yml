@@ -37,7 +37,8 @@ coding_executor_runtime_manifest_sha256: ""
 # by default and only writes an attestation after Docker proves the loaded image
 # is the exact, non-fixture production image described by the staged manifest.
 coding_executor_runtime_image_load_enabled: false
-coding_executor_runtime_image_attestation_path: /var/lib/ditto-coding-executor/staged/runtime-image-attestation.json
+coding_executor_attestation_dir: /var/lib/ditto-coding-executor/attestations
+coding_executor_runtime_image_attestation_path: /var/lib/ditto-coding-executor/attestations/runtime-image-attestation.json
 
 # The first non-root socket client is a local attestation guard, not a scorer.
 # It can inspect only the already-attested image and exits on any drift. A
@@ -58,3 +59,10 @@ coding_executor_scorer_release_manifest_path: /var/lib/ditto-coding-executor/sco
 coding_executor_scorer_bundle_manifest_path: /var/lib/ditto-coding-executor/scorer-staged/scorer.bundle.json
 coding_executor_scorer_archive_path: /var/lib/ditto-coding-executor/scorer-staged/scorer.oci.tar
 coding_executor_scorer_bundle_manifest_sha256: ""
+
+# Loading the signed scorer archive is an independent, default-off authority
+# transition. It writes a client-readable attestation only after the rootless
+# daemon proves the exact release digest and immutable image configuration. It
+# never creates or starts a container.
+coding_executor_scorer_image_load_enabled: false
+coding_executor_scorer_image_attestation_path: /var/lib/ditto-coding-executor/attestations/scorer-image-attestation.json

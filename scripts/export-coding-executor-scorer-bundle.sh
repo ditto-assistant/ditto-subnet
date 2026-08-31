@@ -69,6 +69,11 @@ else:
     raise SystemExit("release manifest is not the exact verified scorer attestation predicate")
 PY
 docker pull "$image_reference" >/dev/null
+image_id="$(docker image inspect --format '{{.Id}}' "$image_reference")"
+[[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+  echo 'verified scorer image ID is invalid' >&2
+  exit 1
+}
 archive="$output_dir/coding-executor-scorer.oci.tar"
 bundle_manifest="$output_dir/coding-executor-scorer.bundle.json"
 [[ ! -e "$archive" && ! -e "$bundle_manifest" ]] || {
@@ -81,6 +86,7 @@ archive_sha256="$(sha256sum "$archive" | awk '{print $1}')"
 python3 scripts/render-coding-executor-scorer-bundle.py \
   --release-manifest "$release_manifest" \
   --archive-sha256 "$archive_sha256" \
+  --image-id "$image_id" \
   --output "$bundle_manifest"
 chmod 0600 "$archive" "$bundle_manifest"
 printf '%s\n' "$archive_sha256"

@@ -45,6 +45,8 @@ def test_bundle_manifest_binds_the_release_manifest_and_archive(tmp_path: Path) 
             str(release),
             "--archive-sha256",
             "3" * 64,
+            "--image-id",
+            "sha256:" + "4" * 64,
             "--output",
             str(output),
         ],
@@ -59,3 +61,4 @@ def test_bundle_manifest_binds_the_release_manifest_and_archive(tmp_path: Path) 
         == hashlib.sha256(release.read_bytes()).hexdigest()
     )
     assert bundle["archive_sha256"] == "3" * 64
+    assert bundle["image_id"] == "sha256:" + "4" * 64
