@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.179.1 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Start review in policy-only rescreens
+  ([#1417](https://github.com/ditto-assistant/ditto-subnet/pull/1417),
+  [`0c7e8e7`](https://github.com/ditto-assistant/ditto-subnet/commit/0c7e8e721f64b0684d9ff1c147fe10942e1c9cbd))
+
+
 ## v0.179.0 (2026-08-31)
 
 ### Bug Fixes
