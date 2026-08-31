@@ -4535,7 +4535,7 @@ export interface paths {
         };
         /**
          * Effective Review Settings
-         * @description Return the exact-instance override or global settings revision.
+         * @description Return a worker, node, or global settings revision in that order.
          */
         get: operations["effective_review_settings_api_v1_screener_review_settings_get"];
         put?: never;

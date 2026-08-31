@@ -2206,6 +2206,44 @@ class TestFederatedScreenerNodes:
         )
         assert readiness.json()["nodes"][0]["ready"] is True
 
+        node_settings = ScreenerReviewSettings(
+            mode="enforce", adjudicator_mode="enforce"
+        )
+        node_checksum = _review_settings_checksum(node_settings)
+        async with session_maker() as session, session.begin():
+            revision = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope=node_id,
+                settings=node_settings.model_dump(mode="json"),
+                checksum=node_checksum,
+                reason="one node-local adjudicator canary",
+                actor="test",
+            )
+            session.add(revision)
+            await session.flush()
+            node_revision = revision.revision
+        worker_settings = await client.get(
+            "/api/v1/screener/review-settings",
+            headers=node_headers,
+            params={"instance_id": worker_instance_id},
+        )
+        assert worker_settings.status_code == 200, worker_settings.text
+        assert worker_settings.json()["revision"] == node_revision
+        assert worker_settings.json()["scope"] == node_id
+
+        worker_claim = await client.post(
+            "/api/v1/screener/claim",
+            headers=node_headers,
+            params={
+                "policy_version": SCREENING_POLICY_VERSION,
+                "review_settings_revision": node_revision,
+                "review_settings_instance_id": worker_instance_id,
+                "review_settings_scope": node_id,
+                "review_settings_checksum": node_checksum,
+            },
+        )
+        assert worker_claim.status_code == 200, worker_claim.text
+
         # Only positive decimal worker suffixes belong to the enrolled node.
         invalid_instance_id = f"{node_id}-worker-0"
         invalid_message = (
