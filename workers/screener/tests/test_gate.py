@@ -189,7 +189,12 @@ def _write_iidfile(args: list[str]) -> None:
 
 
 async def _screen(  # type: ignore[no-untyped-def]
-    gate: BuildGate, sha256: str, *, progress=None, build_only=False
+    gate: BuildGate,
+    sha256: str,
+    *,
+    progress=None,
+    build_only=False,
+    policy_only=False,
 ):
     return await gate.screen(
         agent_id=_AGENT,
@@ -199,6 +204,7 @@ async def _screen(  # type: ignore[no-untyped-def]
         download_url=_URL,
         progress=progress,
         build_only=build_only,
+        policy_only=policy_only,
     )
 
 
@@ -1090,6 +1096,29 @@ async def test_source_review_starts_only_after_build_and_health(
     assert result.outcome == ScreeningOutcome.PASS
     assert events.index("build_finished") < events.index("review_started")
     assert events[-1] == "review_finished"
+
+
+async def test_policy_only_rescreen_starts_source_review_without_runtime(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A retained-image rescreen has no health phase to create its L1 task."""
+    events: list[str] = []
+    docker_calls: list[list[str]] = []
+    tarball = _valid_tar()
+    gate = _gate_with(make_config(), _ok_run(docker_calls), tarball=tarball)
+    gate._policy = _review_engine()
+    gate._source_reviewer = _StubReviewer(events)  # type: ignore[assignment]
+
+    async with gate._client:
+        result = await _screen(
+            gate,
+            hashlib.sha256(tarball).hexdigest(),
+            policy_only=True,
+        )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert events == ["review_started", "review_finished"]
+    assert not any(call[0] in {"build", "run", "exec"} for call in docker_calls)
 
 
 async def test_source_review_is_not_started_when_the_build_fails(
