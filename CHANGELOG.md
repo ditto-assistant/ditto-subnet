@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.178.1 (2026-08-31)
+
+### Bug Fixes
+
+- **platform**: Restrict policy canary prefix
+  ([`c818889`](https://github.com/ditto-assistant/ditto-subnet/commit/c8188897ce2c8dbaca8981b68a6f0c6a1e696e47))
+
+- **platform**: Retain scores during policy rescreen
+  ([`e31bb8a`](https://github.com/ditto-assistant/ditto-subnet/commit/e31bb8ade241a6331bc5b0521071a4a776357fa8))
+
+- **platform**: Stamp terminal policy rescreens
+  ([`b77a641`](https://github.com/ditto-assistant/ditto-subnet/commit/b77a641169bee63fe542d378bc9d7fbb4b7a6a62))
+
+
 ## v0.178.0 (2026-08-31)
 
 ### Bug Fixes
