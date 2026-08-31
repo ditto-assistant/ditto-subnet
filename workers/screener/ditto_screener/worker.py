@@ -683,10 +683,15 @@ class ScreenerWorker:
             )
             private_failure_detail: str | None = None
             private_failure_log_tail: str | None = None
-            if reason_code in {"docker-build", "docker-build-infrastructure"}:
+            if typed_outcome == ScreenResultOutcome.RETRYABLE_INFRA or reason_code in {
+                "docker-build",
+                "docker-build-infrastructure",
+            }:
                 # The public reason stays generic. Preserve the exact bounded
-                # BuildKit diagnostic for the submission owner, with the same
-                # sanitizer Platform applies before durable storage.
+                # infrastructure diagnostic for the submission owner, with the
+                # same sanitizer Platform applies before durable storage.
+                # This includes policy-only canaries: their retained V10 score
+                # must not come at the cost of losing the V11 worker failure.
                 private_failure_detail = private_failure_text(
                     result.detail, limit=PRIVATE_FAILURE_DETAIL_LIMIT
                 )

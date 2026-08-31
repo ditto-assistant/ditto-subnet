@@ -40,6 +40,13 @@ _MAX_ID = 64
 _MAX_CODE = 64
 _MAX_SUMMARY = 240
 _MAX_FINDING_BYTES = 8 * 1024
+# A review ledger is independently bounded by the shared 48-note protocol.
+# Those notes can each carry an executable path and a 300-character
+# reviewer-authored summary, so they legitimately exceed one finding's 8 KiB
+# display budget. Keep a distinct aggregate ceiling that admits every valid
+# protocol ledger while still preventing this internal boundary from becoming a
+# log sink.
+_MAX_REVIEW_NOTES_BYTES = 64 * 1024
 _SHA256_HEX = frozenset("0123456789abcdef")
 _PRIVATE_CHALLENGE_CATEGORIES = frozenset(
     {
@@ -164,7 +171,7 @@ class ScreeningDecision:
             raise ValueError("review notes exceed bounded size")
         if (
             len(json.dumps(self.review_notes, sort_keys=True, separators=(",", ":")))
-            > _MAX_FINDING_BYTES
+            > _MAX_REVIEW_NOTES_BYTES
         ):
             raise ValueError("review notes exceed bounded payload")
         if (
