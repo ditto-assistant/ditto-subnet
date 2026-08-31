@@ -172,7 +172,7 @@ def test_hetzner_workers_use_release_bound_rootless_analyzer() -> None:
     assert 'docker tag "$l2_candidate" "$L2_ANALYZER_ACTIVE"' in updater
     assert "rootless analyzer executor is unavailable" in updater
     assert (
-        "screener_fleet_l2_workspace_root: /var/tmp/ditto-screener-l2-workspaces"
+        "screener_fleet_l2_workspace_root: /var/lib/ditto-screener-l2-workspaces"
         in defaults
     )
     assert "Ensure rootless-analyzer workspace parents" in tasks
@@ -181,6 +181,7 @@ def test_hetzner_workers_use_release_bound_rootless_analyzer() -> None:
         "SCREENER_L2_WORKSPACE_ROOT={{ screener_fleet_l2_workspace_root }}/%i" in worker
     )
     assert "{{ screener_fleet_l2_workspace_root }}/%i" in worker
+    assert "PrivateTmp=true" in worker
 
 
 def test_role_stops_workers_above_configured_capacity() -> None:
