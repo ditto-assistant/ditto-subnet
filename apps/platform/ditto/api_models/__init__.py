@@ -234,6 +234,7 @@ from ditto.api_models.screener_nodes import (
     ScreenerNodeRegistrationRequest,
     ScreenerNodeRuntimeResultRequest,
     ScreenerNodeStatusRequest,
+    ScreenerNodeWorkerView,
     screener_bootstrap_grant_confirmation,
 )
 from ditto.api_models.screener_provider_settings import (
@@ -467,6 +468,7 @@ __all__ = [
     "ScreenerNodeJobUpdateRequest",
     "ScreenerNodeRuntimeResultRequest",
     "ScreenerNodeStatusRequest",
+    "ScreenerNodeWorkerView",
     "screener_bootstrap_grant_confirmation",
     "ScreenerNodeChannelSettings",
     "ScreenerNodeChannelSettingsControl",

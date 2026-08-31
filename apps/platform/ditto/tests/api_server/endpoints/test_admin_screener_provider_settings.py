@@ -16,6 +16,7 @@ from ditto.api_server.dependencies import get_session
 from ditto.db.models import (
     ScreenerCapacityEvent,
     ScreenerCapacitySnapshot,
+    ScreenerHeartbeat,
     ScreenerNode,
     ScreenerNodeBootstrapGrant,
     TrustedImageBuild,
@@ -327,6 +328,120 @@ async def test_node_channel_settings_default_disabled_and_cas_guarded(
     capacity = await client.get("/api/v1/admin/screener-capacity", headers=_HEADERS)
     assert capacity.status_code == 200, capacity.text
     assert capacity.json()["node_controls"][0]["current"]["settings"] == settings
+
+
+async def test_capacity_attributes_all_persistent_worker_heartbeats_to_node(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The capacity view must not hide suffixed workers behind a base node id."""
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    hotkey = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
+    node_id = "subnet-screener-1"
+    metrics = {
+        "system_metrics": {
+            "collected_at": int(now.timestamp()),
+            "cpu_percent": 25,
+            "memory_percent": 15,
+            "disk_percent": 0,
+            "docker": {
+                "status": "healthy",
+                "running_containers": 2,
+                "unhealthy_containers": 0,
+            },
+        },
+        "screening_progress": {"stage": "building", "started_at": int(now.timestamp())},
+        "host_specs": {
+            "cpu_count": 32,
+            "cpu_physical_cores": 24,
+            "memory_total_mib": 64075,
+            "disk_total_gib": 1726,
+            "architecture": "x86_64",
+        },
+    }
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id=node_id,
+                provider="hetzner",
+                provider_resource_id="3062657",
+                screener_hotkey=hotkey,
+                token_hash=hashlib.sha256(_NODE_TOKEN.encode()).hexdigest(),
+                token_expires_at=now + timedelta(hours=6),
+                status="active",
+                capacity=2,
+            )
+        )
+        session.add_all(
+            [
+                ScreenerHeartbeat(
+                    screener_hotkey=hotkey,
+                    instance_id=f"{node_id}-worker-1",
+                    software_version="0.21.2",
+                    protocol_version=6,
+                    policy_version=10,
+                    state="screening",
+                    first_seen_at=now - timedelta(minutes=1),
+                    reported_at=now - timedelta(seconds=4),
+                    seen_at=now - timedelta(seconds=4),
+                    signature="ab" * 64,
+                    system_metrics=metrics,
+                ),
+                ScreenerHeartbeat(
+                    screener_hotkey=hotkey,
+                    instance_id=f"{node_id}-worker-2",
+                    software_version="0.21.2",
+                    protocol_version=6,
+                    policy_version=10,
+                    state="polling",
+                    first_seen_at=now - timedelta(minutes=1),
+                    reported_at=now - timedelta(seconds=1),
+                    seen_at=now - timedelta(seconds=1),
+                    signature="cd" * 64,
+                    system_metrics=metrics,
+                ),
+                ScreenerHeartbeat(
+                    screener_hotkey=hotkey,
+                    instance_id="subnet-screener-10-worker-1",
+                    software_version="0.21.2",
+                    protocol_version=6,
+                    policy_version=10,
+                    state="polling",
+                    first_seen_at=now - timedelta(minutes=1),
+                    reported_at=now,
+                    seen_at=now,
+                    signature="ef" * 64,
+                    system_metrics=metrics,
+                ),
+            ]
+        )
+
+    capacity = await client.get("/api/v1/admin/screener-capacity", headers=_HEADERS)
+    assert capacity.status_code == 200, capacity.text
+    node = capacity.json()["nodes"][0]
+    assert node["heartbeat_seen_at"] == (
+        (now - timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+    )
+    assert node["current_phase"] == "building"
+    assert [worker["instance_id"] for worker in node["workers"]] == [
+        f"{node_id}-worker-2",
+        f"{node_id}-worker-1",
+    ]
+    assert node["workers"][0]["system_metrics"] == {
+        "collected_at": int(now.timestamp()),
+        "cpu_percent": 25,
+        "memory_percent": 15,
+        "disk_percent": 0,
+        "docker": {
+            "status": "healthy",
+            "running_containers": 2,
+            "unhealthy_containers": 0,
+        },
+    }
+    assert node["workers"][0]["host_specs"]["cpu_count"] == 32
 
 
 async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(

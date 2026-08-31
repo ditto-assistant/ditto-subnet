@@ -21650,6 +21650,40 @@ export interface components {
              * Format: date-time
              */
             token_expires_at: string;
+            /** Workers */
+            workers?: components["schemas"]["ScreenerNodeWorkerView"][];
+        };
+        /**
+         * ScreenerNodeWorkerView
+         * @description One process heartbeat attributed to a persistent enrolled node.
+         */
+        ScreenerNodeWorkerView: {
+            /** Active Agent Id */
+            active_agent_id?: string | null;
+            /** Current Phase */
+            current_phase?: string | null;
+            host_specs?: components["schemas"]["HostSpecs"] | null;
+            /** Instance Id */
+            instance_id: string;
+            /** Policy Version */
+            policy_version: number;
+            /** Protocol Version */
+            protocol_version: number;
+            /**
+             * Reported At
+             * Format: date-time
+             */
+            reported_at: string;
+            /**
+             * Seen At
+             * Format: date-time
+             */
+            seen_at: string;
+            /** Software Version */
+            software_version: string;
+            /** State */
+            state: string;
+            system_metrics?: components["schemas"]["SystemMetrics"] | null;
         };
         /**
          * ScreenerPolicyActivationRevision
