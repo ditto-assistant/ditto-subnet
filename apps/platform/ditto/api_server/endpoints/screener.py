@@ -3552,25 +3552,47 @@ def _review_settings_checksum(settings: ScreenerReviewSettings) -> str:
 
 
 async def _resolve_effective_review_settings(
-    session: AsyncSession, *, instance_id: str
+    session: AsyncSession,
+    *,
+    instance_id: str,
+    enrolled_node_id: str | None = None,
 ) -> EffectiveScreenerReviewSettings:
-    """Resolve one immutable settings snapshot for fetch and claim binding."""
+    """Resolve one immutable settings snapshot for fetch and claim binding.
+
+    A persistent node can have multiple local heartbeat identities while
+    keeping its credential and operator canary scope on the node. A worker's
+    own override remains most specific, followed by its enrolled node scope,
+    then the global posture.
+    """
+    scopes = [instance_id]
+    if (
+        enrolled_node_id is not None
+        and instance_id != enrolled_node_id
+        and _is_enrolled_node_heartbeat_instance(
+            node_id=enrolled_node_id, instance_id=instance_id
+        )
+    ):
+        scopes.append(enrolled_node_id)
+    scopes.append("*")
     rows = list(
         await session.scalars(
             select(ScreenerReviewSettingsRevision)
-            .where(ScreenerReviewSettingsRevision.scope.in_((instance_id, "*")))
+            .where(ScreenerReviewSettingsRevision.scope.in_(scopes))
             .order_by(ScreenerReviewSettingsRevision.revision.desc())
         )
     )
     latest_by_scope: dict[str, ScreenerReviewSettingsRevision] = {}
-    for candidate in rows:
-        latest_by_scope.setdefault(candidate.scope, candidate)
-    exact = latest_by_scope.get(instance_id)
-    row = (
-        exact
-        if exact is not None and exact.settings.get("mode") != "inherit"
-        else latest_by_scope.get("*")
-    )
+    for revision in rows:
+        latest_by_scope.setdefault(revision.scope, revision)
+    row: ScreenerReviewSettingsRevision | None = None
+    for scope in scopes:
+        scoped_revision = latest_by_scope.get(scope)
+        if (
+            scoped_revision is not None
+            and scoped_revision.settings.get("mode") != "inherit"
+        ):
+            row = scoped_revision
+            break
     if row is None:
         settings = ScreenerReviewSettings()
         return EffectiveScreenerReviewSettings(
@@ -3589,13 +3611,23 @@ async def _resolve_effective_review_settings(
 
 @router.get("/review-settings", response_model=EffectiveScreenerReviewSettings)
 async def effective_review_settings(
+    request: Request,
     response: Response,
     _screener_hotkey: ScreenerDep,
     session: SessionDep,
     instance_id: Annotated[str, Query(pattern=_INSTANCE_ID_PATTERN)],
 ) -> EffectiveScreenerReviewSettings:
-    """Return the exact-instance override or global settings revision."""
-    result = await _resolve_effective_review_settings(session, instance_id=instance_id)
+    """Return a worker, node, or global settings revision in that order."""
+    enrolled_node_id = getattr(request.state, "screener_node_id", None)
+    if enrolled_node_id is not None and not _is_enrolled_node_heartbeat_instance(
+        node_id=enrolled_node_id, instance_id=instance_id
+    ):
+        raise ScreenerAuthError("review settings instance does not match enrolled node")
+    result = await _resolve_effective_review_settings(
+        session,
+        instance_id=instance_id,
+        enrolled_node_id=enrolled_node_id,
+    )
     response.headers["Cache-Control"] = "private, no-cache"
     response.headers["ETag"] = f'"{result.revision}-{result.checksum}"'
     return result
@@ -4141,8 +4173,18 @@ async def claim(
         if not all(value is not None for value in supplied_binding):
             return None
         assert review_settings_instance_id is not None
+        enrolled_node_id = getattr(request.state, "screener_node_id", None)
+        if enrolled_node_id is not None and not _is_enrolled_node_heartbeat_instance(
+            node_id=enrolled_node_id,
+            instance_id=review_settings_instance_id,
+        ):
+            raise AgentNotScreenableError(
+                "review settings instance does not match enrolled node"
+            )
         effective = await _resolve_effective_review_settings(
-            session, instance_id=review_settings_instance_id
+            session,
+            instance_id=review_settings_instance_id,
+            enrolled_node_id=enrolled_node_id,
         )
         expected = (
             effective.revision,
