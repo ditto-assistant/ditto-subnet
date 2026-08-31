@@ -17,6 +17,7 @@ import os
 import re
 import stat
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,15 @@ EXPECTED_FIELDS = {
 
 class VerificationError(ValueError):
     """Raised for any malformed or untrusted staging input."""
+
+
+@dataclass(frozen=True)
+class VerifiedRuntimeBundle:
+    """The immutable manifest and archive identities proved by this verifier."""
+
+    manifest: dict[str, Any]
+    manifest_sha256: str
+    archive_sha256: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -167,7 +177,7 @@ def verify_runtime_bundle(
     manifest_path: Path,
     archive_path: Path,
     expected_manifest_sha256: str,
-) -> None:
+) -> VerifiedRuntimeBundle:
     if not SHA256_RE.fullmatch(expected_manifest_sha256):
         fail("expected manifest SHA-256 is not lowercase hexadecimal")
     manifest, manifest_sha256 = read_manifest(manifest_path)
@@ -175,6 +185,11 @@ def verify_runtime_bundle(
         fail("staged manifest SHA-256 does not match protected host configuration")
     archive_sha256 = sha256_file(archive_path, maximum=MAX_ARCHIVE_BYTES)
     validate_manifest(manifest, archive_sha256)
+    return VerifiedRuntimeBundle(
+        manifest=manifest,
+        manifest_sha256=manifest_sha256,
+        archive_sha256=archive_sha256,
+    )
 
 
 def main() -> int:

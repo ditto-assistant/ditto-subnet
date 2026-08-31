@@ -88,12 +88,36 @@ root-owned temporary directory, verifies the copied pair before it is
 published to the fixed paths, and never contacts a registry or Docker. It does
 not accept a caller-selected destination or manifest bytes through Ansible.
 
-Verification does **not** load the archive into Docker, inspect an image,
-install a scorer, add a socket consumer, or start any candidate process. A
-later separately reviewed slice must prove the loaded image's exact digest,
-platform, labels—including rejection of the certification fixture—and driver
-identity before the dedicated scorer client can receive socket access. All
-coding gates remain false through this staging step.
+Bundle verification alone does **not** load the archive into Docker, inspect an
+image, install a scorer, add a socket consumer, or start any candidate process.
+The separate optional load control below must prove the loaded image's exact
+digest, platform, labels—including rejection of the certification fixture—and
+driver identity before the dedicated scorer client can receive socket access.
+All coding gates remain false through these staging steps.
+
+## Runtime-image load attestation
+
+`coding_executor_runtime_image_load_enabled` is a second default-off control.
+It may be true only when the runtime-bundle control is also true. The loader
+re-verifies the staged files, contacts only the fixed rootless Unix socket, and
+checks the archive has only regular tar members with at most 16 GiB of unpacked
+content before `docker image load`. It does not run or create a container. It
+then requires exactly the manifest's `image_repository@image_digest`, an image
+ID, `linux/amd64`, no volumes or credential-shaped environment, the fixed
+supervisor entrypoint, and these labels:
+
+- `io.heyditto.dittobench.coding-supervisor-contract=1`
+- no `io.heyditto.dittobench.coding-supervisor-fixture=true`
+- `io.heyditto.dittobench.trusted-test-driver-sha256` matching the manifest
+- `io.heyditto.dittobench.trusted-test-driver-name=dittobench-test-driver`
+- `org.opencontainers.image.revision` matching the manifest source revision
+
+Only after all checks does it atomically write the root-owned `0600`
+`runtime-image-attestation.json` beside the staged inputs. A bundle that does
+not restore the exact repository digest fails closed; no fallback pull, local
+tag, registry credential, scorer, client-group member, or candidate process is
+introduced. The future scorer-client role must consume and revalidate this
+attestation, not treat mere image presence as authority.
 
 Destroying a created cohort is intentionally not a routine rollback: the shared
 compute module has deletion protection. Rollback during the shadow phase means

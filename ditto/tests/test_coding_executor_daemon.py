@@ -2,9 +2,11 @@
 
 import hashlib
 import importlib.util
+import io
 import json
 import subprocess
 import sys
+import tarfile
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,12 +26,21 @@ WORKFLOW = (ROOT / ".github/workflows/infra-ci.yml").read_text()
 DOC = (ROOT / "infra/docs/coding-executor-hosts.md").read_text()
 RUNTIME_VERIFIER = ROLE / "files/verify-runtime-bundle.py"
 RUNTIME_STAGER = ROLE / "files/stage-runtime-bundle.sh"
+RUNTIME_LOADER = ROLE / "files/load-runtime-bundle.py"
 _spec = importlib.util.spec_from_file_location(
     "verify_runtime_bundle", RUNTIME_VERIFIER
 )
 assert _spec is not None and _spec.loader is not None
 VERIFIER = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = VERIFIER
 _spec.loader.exec_module(VERIFIER)
+_loader_spec = importlib.util.spec_from_file_location(
+    "runtime_bundle_loader", RUNTIME_LOADER
+)
+assert _loader_spec is not None and _loader_spec.loader is not None
+LOADER = importlib.util.module_from_spec(_loader_spec)
+sys.modules[_loader_spec.name] = LOADER
+_loader_spec.loader.exec_module(LOADER)
 
 
 def test_coding_executor_daemon_is_default_off_and_has_no_client() -> None:
@@ -44,24 +55,33 @@ def test_coding_executor_daemon_is_default_off_and_has_no_client() -> None:
     assert "or coding gate has been installed or enabled" in TASKS
 
 
-def test_runtime_bundle_staging_is_default_off_and_cannot_load_an_image() -> None:
+def test_runtime_bundle_staging_and_loading_are_separately_default_off() -> None:
     assert "coding_executor_runtime_bundle_enabled: false" in DEFAULTS
+    assert "coding_executor_runtime_image_load_enabled: false" in DEFAULTS
     assert 'coding_executor_runtime_manifest_sha256: ""' in DEFAULTS
     assert "when: coding_executor_runtime_bundle_enabled | bool" in TASKS
+    assert "when: coding_executor_runtime_image_load_enabled | bool" in TASKS
     assert (
         "not (coding_executor_runtime_bundle_enabled | bool) or "
         "coding_executor_daemon_enabled | bool" in TASKS
+    )
+    assert (
+        "not (coding_executor_runtime_image_load_enabled | bool) or "
+        "coding_executor_runtime_bundle_enabled | bool" in TASKS
     )
     assert "/var/lib/ditto-coding-executor/staged" in DEFAULTS
     assert "complete protected manifest SHA-256" in TASKS
     assert "verify-runtime-bundle.py" in TASKS
     assert "stage-runtime-bundle.sh" in TASKS
-    assert "docker load" not in TASKS.lower()
+    assert "load-runtime-bundle.py" in TASKS
     assert "docker pull" not in TASKS.lower()
     assert "gcloud" not in RUNTIME_STAGER.read_text().lower()
     assert "docker load" not in RUNTIME_STAGER.read_text().lower()
     assert "docker pull" not in RUNTIME_STAGER.read_text().lower()
     assert "--expected-manifest-sha256" in RUNTIME_STAGER.read_text()
+    assert "image load" in RUNTIME_LOADER.read_text()
+    assert "image pull" not in RUNTIME_LOADER.read_text().lower()
+    assert "container create" not in RUNTIME_LOADER.read_text().lower()
 
 
 def test_rootless_daemon_is_pinned_to_the_isolated_empty_identity() -> None:
@@ -279,3 +299,176 @@ def test_runtime_bundle_stager_requires_root(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "must run as root" in result.stderr
+
+
+def _loaded_image(manifest: dict[str, Any], *, fixture: bool = False) -> dict[str, Any]:
+    labels = {
+        "io.heyditto.dittobench.coding-supervisor-contract": "1",
+        "io.heyditto.dittobench.trusted-test-driver-sha256": manifest[
+            "trusted_test_driver_digest"
+        ],
+        "io.heyditto.dittobench.trusted-test-driver-name": "dittobench-test-driver",
+        "org.opencontainers.image.revision": manifest["source_revision"],
+    }
+    if fixture:
+        labels["io.heyditto.dittobench.coding-supervisor-fixture"] = "true"
+    return {
+        "Architecture": "amd64",
+        "Config": {
+            "Entrypoint": ["/usr/local/bin/dittobench-coding-supervisor"],
+            "Env": ["PATH=/"],
+            "Labels": labels,
+            "Volumes": None,
+        },
+        "Id": "sha256:" + "3" * 64,
+        "Os": "linux",
+        "RepoDigests": [manifest["image_repository"] + "@" + manifest["image_digest"]],
+    }
+
+
+def _write_runtime_archive(path: Path) -> None:
+    with tarfile.open(path, "w") as archive:
+        body = b'{"synthetic":"runtime"}'
+        member = tarfile.TarInfo("manifest.json")
+        member.size = len(body)
+        archive.addfile(member, io.BytesIO(body))
+
+
+def test_runtime_loader_requires_a_safe_exact_image_and_writes_attestation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "supervisor.oci.tar"
+    _write_runtime_archive(archive)
+    archive.chmod(0o600)
+    manifest_path = tmp_path / "runtime-manifest.json"
+    manifest_path.write_bytes(
+        _manifest(hashlib.sha256(archive.read_bytes()).hexdigest())
+    )
+    manifest_path.chmod(0o600)
+    manifest = json.loads(manifest_path.read_bytes())
+    attestation_path = tmp_path / "runtime-image-attestation.json"
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        LOADER.BUNDLE_VERIFIER, "regular_root_owned_file", _root_owned_metadata
+    )
+    monkeypatch.setattr(LOADER.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(LOADER.os, "chown", lambda *_args: None)
+    monkeypatch.setattr(LOADER, "EXPECTED_MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(LOADER, "EXPECTED_ARCHIVE_PATH", archive)
+    monkeypatch.setattr(LOADER, "EXPECTED_ATTESTATION_PATH", attestation_path)
+    monkeypatch.setattr(LOADER, "secure_root_owned_directory", lambda _path: None)
+
+    def fake_docker_output(
+        docker_host: str,
+        arguments: list[str],
+        *,
+        timeout: int,
+    ) -> bytes:
+        assert docker_host == "unix:///run/ditto-coding-executor/docker.sock"
+        assert timeout > 0
+        commands.append(arguments)
+        if arguments == ["info", "--format", "{{json .SecurityOptions}}"]:
+            return b'["name=rootless"]'
+        if arguments == ["info", "--format", "{{json .Labels}}"]:
+            return b'["io.heyditto.dittobench.isolated=true"]'
+        if arguments == ["image", "load", "--input", str(archive)]:
+            return b"Loaded image\n"
+        assert arguments == [
+            "image",
+            "inspect",
+            manifest["image_repository"] + "@" + manifest["image_digest"],
+        ]
+        return json.dumps([_loaded_image(manifest)]).encode()
+
+    monkeypatch.setattr(LOADER, "docker_output", fake_docker_output)
+    LOADER.load_runtime_bundle(
+        manifest_path,
+        archive,
+        hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "unix:///run/ditto-coding-executor/docker.sock",
+        attestation_path,
+    )
+
+    attestation = json.loads(attestation_path.read_bytes())
+    assert attestation_path.stat().st_mode & 0o777 == 0o600
+    assert attestation == {
+        "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "image_id": "sha256:" + "3" * 64,
+        "image_reference": manifest["image_repository"]
+        + "@"
+        + manifest["image_digest"],
+        "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "platform": "linux/amd64",
+        "schema": "dittobench-coding-runtime-image-attestation-v1",
+        "source_revision": manifest["source_revision"],
+        "supervisor_contract": "1",
+        "trusted_test_driver_digest": manifest["trusted_test_driver_digest"],
+    }
+    assert commands == [
+        ["info", "--format", "{{json .SecurityOptions}}"],
+        ["info", "--format", "{{json .Labels}}"],
+        ["image", "load", "--input", str(archive)],
+        [
+            "image",
+            "inspect",
+            manifest["image_repository"] + "@" + manifest["image_digest"],
+        ],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        (
+            lambda image: image["RepoDigests"].clear(),
+            "exact manifest repository digest",
+        ),
+        (
+            lambda image: image["Config"]["Labels"].__setitem__(
+                "io.heyditto.dittobench.coding-supervisor-fixture", "true"
+            ),
+            "public certification fixture",
+        ),
+        (
+            lambda image: image["Config"]["Env"].append("API_TOKEN=not-allowed"),
+            "credential-shaped environment",
+        ),
+    ],
+)
+def test_runtime_loader_rejects_unsafe_loaded_image(
+    mutate: Callable[[dict[str, Any]], None],
+    error: str,
+) -> None:
+    manifest = json.loads(_manifest("0" * 64))
+    image = _loaded_image(manifest)
+    mutate(image)
+
+    with pytest.raises(LOADER.LoaderError, match=error):
+        LOADER.validate_loaded_image(image, manifest)
+
+
+def test_runtime_loader_rejects_any_socket_but_the_dedicated_daemon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(LOADER.os, "geteuid", lambda: 0)
+
+    with pytest.raises(LOADER.LoaderError, match="fixed dedicated Unix socket"):
+        LOADER.load_runtime_bundle(
+            Path("/not-used-manifest.json"),
+            Path("/not-used-supervisor.oci.tar"),
+            "0" * 64,
+            "unix:///var/run/docker.sock",
+            Path("/not-used-attestation.json"),
+        )
+
+
+def test_runtime_loader_rejects_a_non_tar_archive_before_docker_load(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "not-an-archive.tar"
+    archive.write_bytes(b"not a tar archive")
+
+    with pytest.raises(LOADER.LoaderError, match="not a readable tar archive"):
+        LOADER.validate_archive_layout(archive)

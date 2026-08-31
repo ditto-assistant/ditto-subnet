@@ -23,12 +23,18 @@ coding_executor_daemon_tasks_max: 8192
 coding_executor_docker_apt_arch: amd64
 
 # A repository-specific production supervisor and trusted test driver are a
-# separate private-artifact deliverable. This role can only verify a bundle that
-# an operator has already staged through the protected host path and pinned by
-# its complete manifest SHA-256 in reviewed host configuration. It never pulls,
-# loads, runs, or grants socket access to that bundle.
+# separate private-artifact deliverable. The staging control can only verify a
+# bundle that an operator has already staged through the protected host path and
+# pinned by its complete manifest SHA-256 in reviewed host configuration. It
+# never pulls, loads, runs, or grants socket access to that bundle.
 coding_executor_runtime_bundle_enabled: false
 coding_executor_runtime_staging_dir: /var/lib/ditto-coding-executor/staged
 coding_executor_runtime_manifest_path: /var/lib/ditto-coding-executor/staged/runtime-manifest.json
 coding_executor_runtime_archive_path: /var/lib/ditto-coding-executor/staged/supervisor.oci.tar
 coding_executor_runtime_manifest_sha256: ""
+
+# Loading is a separate authority transition from staging. It is still disabled
+# by default and only writes an attestation after Docker proves the loaded image
+# is the exact, non-fixture production image described by the staged manifest.
+coding_executor_runtime_image_load_enabled: false
+coding_executor_runtime_image_attestation_path: /var/lib/ditto-coding-executor/staged/runtime-image-attestation.json
