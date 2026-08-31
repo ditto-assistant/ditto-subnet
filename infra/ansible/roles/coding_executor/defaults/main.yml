@@ -21,3 +21,14 @@ coding_executor_egress_guard_unit: ditto-coding-executor-egress-guard
 coding_executor_daemon_memory_max: 24G
 coding_executor_daemon_tasks_max: 8192
 coding_executor_docker_apt_arch: amd64
+
+# A repository-specific production supervisor and trusted test driver are a
+# separate private-artifact deliverable. This role can only verify a bundle that
+# an operator has already staged through the protected host path and pinned by
+# its complete manifest SHA-256 in reviewed host configuration. It never pulls,
+# loads, runs, or grants socket access to that bundle.
+coding_executor_runtime_bundle_enabled: false
+coding_executor_runtime_staging_dir: /var/lib/ditto-coding-executor/staged
+coding_executor_runtime_manifest_path: /var/lib/ditto-coding-executor/staged/runtime-manifest.json
+coding_executor_runtime_archive_path: /var/lib/ditto-coding-executor/staged/supervisor.oci.tar
+coding_executor_runtime_manifest_sha256: ""
