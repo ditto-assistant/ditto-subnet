@@ -28,6 +28,7 @@ from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
 from ditto.db.models import (
     Agent,
     BenchmarkDataset,
+    ScoredPolicyRescreenRelease,
     ScreenedImageUpload,
     ScreenerReviewSettingsRevision,
     ScreeningAttempt,
@@ -70,6 +71,17 @@ _CLOUDRUN_RUNTIME_PROVISION_CODES = frozenset(
         "CLOUDRUN_PROVIDER_ERROR",
     }
 )
+
+
+async def _scored_policy_release(
+    session: AsyncSession, attempt: ScreeningAttempt
+) -> ScoredPolicyRescreenRelease | None:
+    """Lock the one-row policy canary associated with this attempt, if any."""
+    return await session.scalar(
+        select(ScoredPolicyRescreenRelease)
+        .where(ScoredPolicyRescreenRelease.attempt_id == attempt.attempt_id)
+        .with_for_update()
+    )
 
 
 def remote_lane_selected(providers: tuple[str, ...]) -> bool:
@@ -229,6 +241,11 @@ async def admit_targon_screening_work(
             agent.screening_reason_code = attempt.reason_code
             agent.duplicate_of = duplicate_of
             agent.screening_policy_version = effective_screening_policy_version()
+            release = await _scored_policy_release(session, attempt)
+            if release is not None:
+                # The platform duplicate precheck is a final rejection.  Do
+                # not leave the one-at-a-time policy checkpoint "running".
+                release.state = "terminal"
             continue
         await _queue_kaniko(
             session,
@@ -517,7 +534,15 @@ async def maybe_finalize_targon_screen(
             now=now,
         )
         return True
-    agent.status = AgentStatus.EVALUATING
+    release = await _scored_policy_release(session, attempt)
+    # A scored policy canary changes the policy attestation, not the earned
+    # V10 ledger entry.  The old Targon path unconditionally wrote EVALUATING
+    # here, which made every passing rescreen vanish from the board until a new
+    # validator quorum arrived.
+    if release is None:
+        agent.status = AgentStatus.EVALUATING
+    else:
+        release.state = "terminal"
     agent.screening_reason = None
     agent.screening_reason_code = None
     agent.duplicate_of = None
@@ -665,10 +690,13 @@ async def _reject_build(
     attempt.public_reason = reason
     attempt.reason_code = code
     if agent is not None:
+        release = await _scored_policy_release(session, attempt)
         agent.status = AgentStatus.REJECTED
         agent.screening_reason = reason
         agent.screening_reason_code = code
         agent.screening_policy_version = effective_screening_policy_version()
+        if release is not None:
+            release.state = "terminal"
 
 
 async def _fail_retryable(
@@ -685,7 +713,13 @@ async def _fail_retryable(
     attempt.public_reason = reason
     attempt.reason_code = code
     if agent is not None:
-        agent.status = AgentStatus.SCREENING_FAILED
+        release = await _scored_policy_release(session, attempt)
+        # A provider fault is not a V11 decision. Keep its V10 board row live
+        # and pause this exact checkpoint for a conscious retry.
+        if release is None:
+            agent.status = AgentStatus.SCREENING_FAILED
+        else:
+            release.state = "paused"
         agent.screening_reason = (
             "Screening failed and is parked; an operator may retry it in Backroom"
         )
@@ -703,6 +737,7 @@ async def _quarantine(
     agent = await session.get(Agent, attempt.agent_id, with_for_update=True)
     if agent is None:
         return
+    release = await _scored_policy_release(session, attempt)
     finding_digest = observation.finding_digest if observation is not None else None
     inconclusive_budget = bool(
         observation is not None
@@ -747,10 +782,16 @@ async def _quarantine(
                 "summary": adjudication.reason[:300],
             }
         )
-    agent.status = AgentStatus.QUARANTINED
+    if release is None:
+        agent.status = AgentStatus.QUARANTINED
     agent.screening_reason = public_reason
     agent.screening_reason_code = reason_code
-    agent.screening_policy_version = effective_screening_policy_version()
+    if release is None:
+        agent.screening_policy_version = effective_screening_policy_version()
+    else:
+        # L1/L3 holds are not the required final L4 clear/reject decision.
+        # Preserve the prior score and make the canary visibly paused.
+        release.state = "paused"
     attempt.status = "quarantined"
     attempt.finished_at = now
     attempt.public_reason = public_reason

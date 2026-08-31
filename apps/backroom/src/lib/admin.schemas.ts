@@ -30,6 +30,8 @@ type GeneratedAdminHotkeyBanControl = PlatformComponents['schemas']['AdminHotkey
 type GeneratedAdminHotkeyBanList = PlatformComponents['schemas']['AdminHotkeyBanList']
 type GeneratedAdminHotkeyUnbanResponse =
   PlatformComponents['schemas']['AdminHotkeyUnbanResponse']
+type GeneratedScoredPolicyRescreenView =
+  PlatformComponents['schemas']['ScoredPolicyRescreenView']
 
 // Every bench epoch that carries the signed confirmation evidence stack. One
 // definition, derived from the generated contract -- restating it per schema is
@@ -6984,6 +6986,8 @@ export const tracePeekResponseSchema = z.object({
 export const SCREENER_POLICY_ACTIVATION_CONFIRMATION = 'SCHEDULE SCREENER POLICY ACTIVATION'
 export const RESTORE_SCORED_SCREENING_SNAPSHOT_CONFIRMATION =
   'RESTORE SCORED SCREENING SNAPSHOT'
+export const ADVANCE_SCORED_POLICY_RESCREEN_CONFIRMATION =
+  'ADVANCE SCORED POLICY RESCREEN'
 export const MAX_SCREENER_POLICY_ACTIVATION_REVISIONS = 200
 
 export const screenerPolicyActivationRevisionSchema = z.object({
@@ -7052,6 +7056,36 @@ export const restoreScoredScreeningSnapshotResponseSchema = z.object({
       score_count: z.number().int().min(3),
     }),
   ),
+})
+
+// A scored-policy activation deliberately does not bulk-requeue the board.
+// Backroom exposes the one-item checkpoint so an operator sees a clear, reject,
+// or pause before the next V10 score is touched.
+export const scoredPolicyRescreenReleaseSchema = z.object({
+  activation_revision: z.number().int().positive(),
+  target_policy_version: z.number().int().positive(),
+  agent_id: z.string().uuid(),
+  position: z.number().int().positive(),
+  state: z.enum(['pending', 'running', 'paused', 'terminal']),
+  attempt_id: z.string().uuid().nullable(),
+})
+
+export const scoredPolicyRescreenViewSchema = z.object({
+  activation_revision: z.number().int().positive().nullable(),
+  target_policy_version: z.number().int().positive().nullable(),
+  current: scoredPolicyRescreenReleaseSchema.nullable(),
+  next_agent_id: z.string().uuid().nullable(),
+  next_position: z.number().int().positive().nullable(),
+})
+
+void (scoredPolicyRescreenViewSchema satisfies z.ZodType<GeneratedScoredPolicyRescreenView>)
+
+export const advanceScoredPolicyRescreenInputSchema = z.object({
+  expectedActivationRevision: z.number().int().positive(),
+  expectedAgentId: z.string().uuid(),
+  retryPaused: z.boolean().default(false),
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(ADVANCE_SCORED_POLICY_RESCREEN_CONFIRMATION),
 })
 
 export type ScreenerPolicyActivationView = z.infer<typeof screenerPolicyActivationViewSchema>

@@ -6396,9 +6396,10 @@ class ScreenerPolicyActivation(Base):
     text activates on a schedule instead of at deploy time. Until a scheduled
     activation is due, the platform requires ``SCREENING_FLOOR_POLICY_VERSION``
     and dual-text workers screen under that older version; when ``activate_at``
-    passes, the required version rises to ``target_policy_version`` and every
-    agent screened under a stale version re-enters the screening queue on the
-    same criteria.
+    passes, the required version rises to ``target_policy_version``. Fresh and
+    stale non-scored work re-enters on the usual criteria; existing board scores
+    need an explicit one-at-a-time rollout release, so activation cannot erase
+    the leaderboard while rescreens are pending.
 
     Each revision stores the whole schedule decision (never a diff), so the
     operator audit trail is complete and immutable. The newest revision whose
@@ -6441,6 +6442,92 @@ class ScreenerPolicyActivation(Base):
         UniqueConstraint(
             "parent_revision",
             name="screener_policy_activation_parent_key",
+        ),
+    )
+
+
+class ScoredPolicyRescreenRelease(Base):
+    """One operator-released scored submission in a policy rollout.
+
+    Policy activation changes what new work must attest; it must not erase the
+    currently earned board while that new policy is being tested.  A release is
+    therefore deliberately one submission wide.  ``pending`` is claimable,
+    ``running`` is attached to exactly one screening attempt, ``paused`` needs
+    an explicit retry, and only ``terminal`` lets the operator advance to the
+    next ranked submission.
+    """
+
+    __tablename__ = "scored_policy_rescreen_releases"
+
+    release_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    activation_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    attempt_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["activation_revision"],
+            ["screener_policy_activations.revision"],
+            ondelete="RESTRICT",
+            name="scored_policy_rescreen_releases_activation_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="scored_policy_rescreen_releases_agent_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+            name="scored_policy_rescreen_releases_attempt_fkey",
+        ),
+        CheckConstraint(
+            "target_policy_version >= 1 AND position >= 1",
+            name="scored_policy_rescreen_releases_position_check",
+        ),
+        CheckConstraint(
+            "state IN ('pending', 'running', 'paused', 'terminal')",
+            name="scored_policy_rescreen_releases_state_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="scored_policy_rescreen_releases_actor_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="scored_policy_rescreen_releases_reason_check",
+        ),
+        UniqueConstraint(
+            "activation_revision",
+            "agent_id",
+            name="scored_policy_rescreen_releases_activation_agent_key",
+        ),
+        UniqueConstraint(
+            "attempt_id",
+            name="scored_policy_rescreen_releases_attempt_key",
+        ),
+        Index(
+            "scored_policy_rescreen_releases_active_idx",
+            "activation_revision",
+            "target_policy_version",
+            "state",
+            "position",
         ),
     )
 

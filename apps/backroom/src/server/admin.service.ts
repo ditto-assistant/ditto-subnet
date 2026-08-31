@@ -153,6 +153,8 @@ import {
   runtimeProfileLookupInputSchema,
   setQueuePolicySettingsInputSchema,
   screenerPolicyActivationViewSchema,
+  scoredPolicyRescreenViewSchema,
+  advanceScoredPolicyRescreenInputSchema,
   restoreScoredScreeningSnapshotInputSchema,
   restoreScoredScreeningSnapshotResponseSchema,
   scheduleScreenerPolicyActivationInputSchema,
@@ -1022,6 +1024,31 @@ export async function scheduleScreenerPolicyActivation(rawInput: unknown, actor:
     },
   })
   return fetchScreenerPolicyActivation()
+}
+
+export async function fetchScoredPolicyRescreen() {
+  const payload = await platformAdminRequest(`${SCREENER_POLICY_ACTIVATION_PATH}/scored-rescreen`)
+  return scoredPolicyRescreenViewSchema.parse(payload)
+}
+
+export async function advanceScoredPolicyRescreen(rawInput: unknown, actor: string) {
+  const input = advanceScoredPolicyRescreenInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `${SCREENER_POLICY_ACTIVATION_PATH}/advance-scored-rescreen`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        expected_activation_revision: input.expectedActivationRevision,
+        expected_agent_id: input.expectedAgentId,
+        retry_paused: input.retryPaused,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    },
+  )
+  return scoredPolicyRescreenViewSchema.parse(payload)
 }
 
 export async function restoreScoredScreeningSnapshot(rawInput: unknown, actor: string) {

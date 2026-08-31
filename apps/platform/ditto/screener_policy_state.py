@@ -35,5 +35,5 @@ def effective_screening_policy_version() -> int:
 
 
 def effective_rescreen_scored() -> bool:
-    """Whether scored/live agents screened under a stale version re-enter the queue."""
+    """Whether stale scored/live rows may use an explicit rollout release."""
     return _rescreen_scored

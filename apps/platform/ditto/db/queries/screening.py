@@ -23,6 +23,7 @@ from ditto.db.models import (
     EvaluationPayment,
     OwnerAttestation,
     Score,
+    ScoredPolicyRescreenRelease,
     ScreenerHeartbeat,
     ScreenerReviewSettingsRevision,
     ScreeningAttempt,
@@ -151,9 +152,10 @@ def screening_last_served_at() -> ColumnElement[Any]:
 def screening_priority_order() -> tuple[ColumnElement[Any], ...]:
     """Prioritize finalists while interleaving bounded screening retries.
 
-    A policy bump can return the whole scored field to screening. Submissions
-    already one score from quorum should not lose their chance to finalize
-    behind the rescreen backlog. Within each lane, the least recently served
+    A policy bump can return stale non-scored work, while an existing board
+    score needs an explicit rollout release. Submissions already one score from
+    quorum should not lose their chance to finalize behind that limited queue.
+    Within each lane, the least recently served
     submission goes first: an expired lease moves an item behind the untouched
     backlog, but it remains ahead of submissions arriving later. This prevents
     either retries or fresh arrivals from monopolizing the worker while
@@ -332,6 +334,15 @@ async def expire_screening_attempts(session: AsyncSession, *, now: datetime) -> 
         attempt.status = "expired"
         attempt.finished_at = now
         attempt.public_reason = "Screening lease expired"
+        release = await session.scalar(
+            select(ScoredPolicyRescreenRelease)
+            .where(ScoredPolicyRescreenRelease.attempt_id == attempt.attempt_id)
+            .with_for_update()
+        )
+        if release is not None:
+            # No worker verdict is a non-verdict. Stop the one-row policy
+            # rollout until an operator explicitly retries this canary.
+            release.state = "paused"
         agent = await session.get(Agent, attempt.agent_id)
         if agent is not None and agent.status == AgentStatus.SCREENING:
             agent.status = AgentStatus.SCREENING_FAILED
@@ -430,6 +441,13 @@ async def fail_orphaned_screening_attempts(
         attempt.finished_at = now
         attempt.public_reason = _ORPHANED_ATTEMPT_REASON
         attempt.reason_code = _ORPHANED_ATTEMPT_REASON_CODE
+        release = await session.scalar(
+            select(ScoredPolicyRescreenRelease)
+            .where(ScoredPolicyRescreenRelease.attempt_id == attempt.attempt_id)
+            .with_for_update()
+        )
+        if release is not None:
+            release.state = "paused"
         agent = await session.get(Agent, attempt.agent_id)
         if agent is not None and agent.status == AgentStatus.SCREENING:
             agent.status = AgentStatus.SCREENING_FAILED
@@ -765,6 +783,14 @@ async def claim_screening_attempts(
             ),
         )
     )
+    released_scored_policy_rescreen = exists(
+        select(ScoredPolicyRescreenRelease.release_id).where(
+            ScoredPolicyRescreenRelease.agent_id == Agent.agent_id,
+            ScoredPolicyRescreenRelease.target_policy_version
+            == effective_screening_policy_version(),
+            ScoredPolicyRescreenRelease.state == "pending",
+        )
+    )
     # Deliberately NOT gated on ``deferred_review_mode``. An open deferred hold
     # is an obligation the queue already took on, and the only way it clears is
     # a screener re-claiming the agent for its deep pass. Gating this on
@@ -840,6 +866,7 @@ async def claim_screening_attempts(
             & effective_rescreen_scored()
             & (Agent.screening_policy_version < effective_screening_policy_version())
             & prerequisite_admitted
+            & released_scored_policy_rescreen
         ),
         (
             (Agent.status == AgentStatus.EVALUATING)
@@ -1151,6 +1178,16 @@ async def claim_screening_attempts(
                 )
             )
         )
+        policy_rescreen_release = await session.scalar(
+            select(ScoredPolicyRescreenRelease)
+            .where(
+                ScoredPolicyRescreenRelease.agent_id == agent.agent_id,
+                ScoredPolicyRescreenRelease.target_policy_version
+                == effective_screening_policy_version(),
+                ScoredPolicyRescreenRelease.state == "pending",
+            )
+            .with_for_update()
+        )
         attempt = ScreeningAttempt(
             attempt_id=uuid4(),
             agent_id=agent.agent_id,
@@ -1192,6 +1229,14 @@ async def claim_screening_attempts(
             ),
         )
         session.add(attempt)
+        if policy_rescreen_release is not None:
+            # The release FK is intentionally one-way (an attempt has no ORM
+            # collection of rollout releases), so flush the new attempt before
+            # attaching it. Otherwise SQLAlchemy may update the release ahead
+            # of inserting its referenced attempt.
+            await session.flush()
+            policy_rescreen_release.state = "running"
+            policy_rescreen_release.attempt_id = attempt.attempt_id
         if agent.status not in (
             AgentStatus.SCORED,
             AgentStatus.LIVE,

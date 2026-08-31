@@ -87,6 +87,7 @@ import {
   rotateScreenerPolicyManifestInputSchema,
   setQueuePolicySettingsInputSchema,
   scheduleScreenerPolicyActivationInputSchema,
+  advanceScoredPolicyRescreenInputSchema,
   restoreScoredScreeningSnapshotInputSchema,
   setValidatorSlotSettingsInputSchema,
   updateSubmissionSettingsInputSchema,
@@ -185,7 +186,9 @@ import {
   downloadRuntimeProfile,
   fetchQueuePolicySettings,
   fetchScreenerPolicyActivation,
+  fetchScoredPolicyRescreen,
   scheduleScreenerPolicyActivation,
+  advanceScoredPolicyRescreen,
   restoreScoredScreeningSnapshot,
   createScreenerBootstrapGrant,
   fetchScreenerCapacity,
@@ -1770,6 +1773,30 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => scheduleScreenerPolicyActivation(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_scored_policy_rescreen',
+    {
+      title: 'Get scored policy rescreen checkpoint',
+      description:
+        'Read the one-at-a-time score-preserving policy rollout: its current release, or next top-down candidate. Existing scores remain visible; a pause blocks advancement. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchScoredPolicyRescreen()),
+  )
+
+  registerTool(
+    'advance_scored_policy_rescreen',
+    {
+      title: 'Advance scored policy rescreen',
+      description:
+        'Release exactly one stale score, or retry its paused row. Match the checkpoint revision and agent; no next release until terminal. Exact confirmation "ADVANCE SCORED POLICY RESCREEN" required. Requires backroom:write.',
+      inputSchema: advanceScoredPolicyRescreenInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => advanceScoredPolicyRescreen(input, props.session.email)),
   )
 
   registerTool(

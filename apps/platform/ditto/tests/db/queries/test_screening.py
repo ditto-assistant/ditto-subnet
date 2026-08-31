@@ -21,7 +21,9 @@ from ditto.db.models import (
     BenchmarkDataset,
     BenchmarkRollout,
     BenchmarkRolloutMember,
+    ScoredPolicyRescreenRelease,
     ScreenerHeartbeat,
+    ScreenerPolicyActivation,
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningRetryOverride,
@@ -31,6 +33,7 @@ from ditto.db.queries.screening import (
     _EXHAUSTED_REASON_CODE,
     MAX_SCREENING_EXPIRIES,
     claim_screening_attempts,
+    expire_screening_attempts,
 )
 from ditto.screener_policy_state import update_effective_screener_policy
 from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
@@ -2003,14 +2006,47 @@ def _scored_agent(*, hotkey: str, name: str, created_at: datetime | None = None)
     return agent
 
 
-async def test_scheduled_rescreen_requeues_current_era_scored_agent(
+async def test_scheduled_rescreen_requires_one_operator_release_before_claiming(
     session: AsyncSession,
 ) -> None:
-    """``rescreen_scored`` returns a stale current-era scored row to the queue."""
+    """A due policy change cannot bulk-requeue the current leaderboard."""
     await _activate_current_era(session)
     agent = _scored_agent(hotkey="5HK-scored-current", name="scored-current")
     async with session.begin():
         session.add(agent)
+
+    with _due_activation(rescreen_scored=True):
+        claimed = await _claim(session)
+
+    assert agent.agent_id not in {row.agent_id for row, _, _ in claimed}
+
+    # The activation itself changes the required attestation, but only the
+    # operator-issued release makes one existing score claimable.  This keeps
+    # every other V10 row on the board while the first V11 verdict is audited.
+    async with session.begin():
+        activation = ScreenerPolicyActivation(
+            parent_revision=0,
+            target_policy_version=SCREENING_FLOOR_POLICY_VERSION + 1,
+            activate_at=datetime.now(UTC) - timedelta(minutes=1),
+            rescreen_scored=True,
+            reason="release the first scored policy rescreen only",
+            actor="test",
+        )
+        session.add(activation)
+        await session.flush()
+        session.add(
+            ScoredPolicyRescreenRelease(
+                release_id=uuid4(),
+                activation_revision=activation.revision,
+                target_policy_version=SCREENING_FLOOR_POLICY_VERSION + 1,
+                agent_id=agent.agent_id,
+                position=1,
+                state="pending",
+                attempt_id=None,
+                actor="test",
+                reason="release the first scored policy rescreen only",
+            )
+        )
 
     with _due_activation(rescreen_scored=True):
         claimed = await _claim(session)
@@ -2021,6 +2057,14 @@ async def test_scheduled_rescreen_requeues_current_era_scored_agent(
     )
     assert attempt.reason_code == "policy-only-rescreen"
     assert attempt.build_only is False
+    release = await session.scalar(
+        select(ScoredPolicyRescreenRelease).where(
+            ScoredPolicyRescreenRelease.agent_id == agent.agent_id
+        )
+    )
+    assert release is not None
+    assert release.state == "running"
+    assert release.attempt_id == attempt.attempt_id
 
 
 async def test_scheduled_rescreen_skips_scored_agent_when_flag_is_off(
@@ -2036,6 +2080,61 @@ async def test_scheduled_rescreen_skips_scored_agent_when_flag_is_off(
         claimed = await _claim(session)
 
     assert agent.agent_id not in {a.agent_id for a, _, _ in claimed}
+
+
+async def test_expired_scored_policy_release_pauses_without_removing_the_score(
+    session: AsyncSession,
+) -> None:
+    """An expired canary is a checkpoint pause, not a board-wide retry."""
+    now = datetime.now(UTC)
+    agent = _scored_agent(hotkey="5HK-scored-expired", name="scored-expired")
+    async with session.begin():
+        activation = ScreenerPolicyActivation(
+            parent_revision=0,
+            target_policy_version=SCREENING_FLOOR_POLICY_VERSION + 1,
+            activate_at=now - timedelta(minutes=2),
+            rescreen_scored=True,
+            reason="release one scored policy canary that will expire",
+            actor="test",
+        )
+        session.add_all((agent, activation))
+        await session.flush()
+        attempt = ScreeningAttempt(
+            attempt_id=uuid4(),
+            agent_id=agent.agent_id,
+            screener_hotkey=_SCREENER,
+            policy_version=SCREENING_FLOOR_POLICY_VERSION + 1,
+            status="running",
+            started_at=now - timedelta(minutes=50),
+            deadline=now - timedelta(minutes=5),
+        )
+        session.add(attempt)
+        await session.flush()
+        session.add(
+            ScoredPolicyRescreenRelease(
+                release_id=uuid4(),
+                activation_revision=activation.revision,
+                target_policy_version=SCREENING_FLOOR_POLICY_VERSION + 1,
+                agent_id=agent.agent_id,
+                position=1,
+                state="running",
+                attempt_id=attempt.attempt_id,
+                actor="test",
+                reason="release one scored policy canary that will expire",
+            )
+        )
+
+    async with session.begin():
+        assert await expire_screening_attempts(session, now=now) == 1
+
+    refreshed = await session.get(Agent, agent.agent_id)
+    assert refreshed is not None and refreshed.status == AgentStatus.SCORED
+    release = await session.scalar(
+        select(ScoredPolicyRescreenRelease).where(
+            ScoredPolicyRescreenRelease.agent_id == agent.agent_id
+        )
+    )
+    assert release is not None and release.state == "paused"
 
 
 async def test_scheduled_rescreen_does_not_requeue_unadmitted_historical_scored(
