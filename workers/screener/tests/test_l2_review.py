@@ -4322,6 +4322,7 @@ class _FakeAdjudicator:
         self.seen_notes: tuple[Any, ...] = ()
         self.seen_finding: Any = None
         self.deadline: float | None = None
+        self.policy_version: int | None = None
         self._decision = decision
 
     async def adjudicate(self, _archive: str, **kwargs: Any) -> Any:
@@ -4329,13 +4330,15 @@ class _FakeAdjudicator:
         self.seen_notes = tuple(kwargs.get("notes") or ())
         self.seen_finding = kwargs.get("finding")
         self.deadline = kwargs.get("deadline")
+        self.policy_version = kwargs.get("policy_version")
         return SourceReviewAdjudication(
             decision=self._decision,
             reason="the model authors the served reply at src/main.rs:6",
             clear_clause="model_authors_graded_slot",
             citations=[SourceReviewCitation(path="src/main.rs", line=6)],
             model="z-ai/glm-5.3-flash",
-            prompt_revision="adjudicator-v2-policy-v10",
+            prompt_revision=(f"adjudicator-v3-policy-v{self.policy_version or 11}"),
+            policy_version=self.policy_version or 11,
         )
 
 
@@ -4411,7 +4414,10 @@ async def test_l2_wall_clock_timeout_still_hands_off_to_l4(tmp_path: Path) -> No
     assert result.adjudication["decision"] == "clear"
 
 
-async def test_a_held_review_reaches_the_adjudicator_with_its_ledger() -> None:
+@pytest.mark.parametrize("policy_version", (10, 11))
+async def test_a_held_review_reaches_the_adjudicator_with_its_ledger(
+    policy_version: int,
+) -> None:
     notes = (
         {
             "kind": "concern",
@@ -4445,11 +4451,15 @@ async def test_a_held_review_reaches_the_adjudicator_with_its_ledger() -> None:
     )
 
     result = await layered.review(
-        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        policy_version=policy_version,
     )
 
     assert court.calls == 1
     assert court.seen_notes == notes
+    assert court.policy_version == policy_version
     assert result.adjudication is not None
     assert result.adjudication["decision"] == "clear"
 

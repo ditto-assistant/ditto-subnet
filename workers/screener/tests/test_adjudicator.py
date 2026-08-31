@@ -17,6 +17,8 @@ from ditto_screener.adjudicator import (
     ADJUDICATOR_PROMPT_REVISION,
     SourceReviewAdjudicator,
     _compacted_adjudicator_messages,
+    _system_prompt,
+    adjudicator_prompt_revision,
     build_adjudicator,
 )
 
@@ -207,6 +209,61 @@ _CONCERN = {
     "line": 10,
     "summary": "reranking looked like an answer-family engine",
 }
+
+
+def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
+    policy_v10 = _system_prompt(10)
+    assert "required_*tool" in policy_v10
+    assert "ForcedChoiceModel" in policy_v10
+    assert "forbidding every other tool" in policy_v10
+    assert adjudicator_prompt_revision(10) == "adjudicator-v3-policy-v10"
+    assert adjudicator_prompt_revision(11) == "adjudicator-v3-policy-v11"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v3-policy-v11"
+
+
+async def test_v11_court_request_and_signed_verdict_bind_policy_version(
+    tmp_path: Path,
+) -> None:
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                _call(
+                                    "submit_adjudication",
+                                    {
+                                        "decision": "clear",
+                                        "clear_clause": "model_authors_graded_slot",
+                                        "reason": "no executable source conclusion",
+                                        "citations": [],
+                                    },
+                                )
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], policy_version=11)
+
+    assert "Policy v11 additions" in str(requests[0]["messages"])
+    assert (
+        "planner authorship does not save a forced executor"
+        in str(requests[0]["messages"]).lower()
+    )
+    assert result.policy_version == 11
+    assert result.prompt_revision == "adjudicator-v3-policy-v11"
 
 
 async def test_clear_names_a_published_clause_and_read_lines(tmp_path: Path) -> None:

@@ -3958,6 +3958,7 @@ class LayeredSourceReviewAgent:
         *,
         archive_path: str,
         deadline: float | None = None,
+        policy_version: int = SCREENING_POLICY_VERSION,
     ) -> SourceReviewObservation:
         """Decide every outcome that lacks a certified low-risk verdict.
 
@@ -3974,6 +3975,7 @@ class LayeredSourceReviewAgent:
             finding=observation.finding,
             error_code=observation.error_code,
             deadline=deadline,
+            policy_version=policy_version,
         )
         return replace(observation, adjudication=adjudication.model_dump(mode="json"))
 
@@ -4083,7 +4085,10 @@ class LayeredSourceReviewAgent:
         ) -> SourceReviewObservation:
             """Run L4 on an evidence-bearing review, then close the band."""
             adjudicated = await self._adjudicate(
-                observation, archive_path=archive_path, deadline=court_deadline
+                observation,
+                archive_path=archive_path,
+                deadline=court_deadline,
+                policy_version=policy_version,
             )
             report(10)
             return adjudicated

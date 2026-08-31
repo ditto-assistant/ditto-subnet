@@ -1134,7 +1134,7 @@ _EMULATION_FINGERPRINTS = (
             _Role(
                 "host-selected-tool",
                 re.compile(
-                    r"\b(?:required_tool_names?|required_tool_name|pending_tool|"
+                    r"\b(?:required_tool_names?|required_catalog_tools?|pending_tool|"
                     r"selected_tool)\b",
                     re.IGNORECASE,
                 ),
@@ -1145,7 +1145,9 @@ _EMULATION_FINGERPRINTS = (
                     r"\btool_choice\b"
                     r"|\bnext_required\b"
                     r"|\bcall only\b.{0,80}\btool\b"
-                    r"|\btools?\b.{0,40}\b(?:only|single)\b",
+                    r"|\btools?\b.{0,40}\b(?:only|single)\b"
+                    r"|\bforcedchoicemodel\b"
+                    r"|\bdo not call any other tool\b",
                     re.IGNORECASE,
                 ),
             ),
