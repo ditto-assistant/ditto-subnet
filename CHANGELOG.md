@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.177.0 (2026-08-31)
+
+### Features
+
+- **dittobench**: Bind certified canary receipts to the settled Luna ledger
+  ([`e1394a9`](https://github.com/ditto-assistant/ditto-subnet/commit/e1394a984456514131f18cff74e257849164df16))
+
+
 ## v0.176.2 (2026-08-31)
 
 ### Bug Fixes
