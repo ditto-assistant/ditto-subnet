@@ -202,10 +202,20 @@ async def test_deadline_bounds_a_completion_and_its_retry(tmp_path: Path) -> Non
     assert requests == 1
 
 
-async def test_budget_terminated_ledger_uses_one_preloaded_final_turn(
+@pytest.mark.parametrize(
+    ("error_code", "ledger_final"),
+    [
+        ("source-review-lease-budget-exhausted", False),
+        ("source-review-inconsistent-verdict", False),
+        (None, True),
+    ],
+)
+async def test_evidence_bearing_ledger_uses_one_preloaded_final_turn(
     tmp_path: Path,
+    error_code: str | None,
+    ledger_final: bool,
 ) -> None:
-    """L4 decides retained L1 evidence instead of rediscovering the archive."""
+    """L4 decides retained evidence, regardless of why upstream stopped."""
     requests: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -250,7 +260,8 @@ async def test_budget_terminated_ledger_uses_one_preloaded_final_turn(
                 "summary": "review the served response assembly",
             }
         ],
-        error_code="source-review-lease-budget-exhausted",
+        error_code=error_code,
+        ledger_final=ledger_final,
     )
 
     assert result.decision == "clear"

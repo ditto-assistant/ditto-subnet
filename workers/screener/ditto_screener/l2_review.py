@@ -3976,6 +3976,7 @@ class LayeredSourceReviewAgent:
             error_code=observation.error_code,
             deadline=deadline,
             policy_version=policy_version,
+            ledger_final=True,
         )
         return replace(observation, adjudication=adjudication.model_dump(mode="json"))
 
