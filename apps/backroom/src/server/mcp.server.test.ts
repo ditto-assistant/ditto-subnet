@@ -3178,6 +3178,17 @@ describe('Backroom MCP tools', () => {
       attempt_id: '33333333-3333-4333-8333-333333333333',
       review_settings_revision: null,
     },
+    active: [
+      {
+        activation_revision: 3,
+        target_policy_version: 11,
+        agent_id: '22222222-2222-4222-8222-222222222222',
+        position: 1,
+        state: 'paused',
+        attempt_id: '33333333-3333-4333-8333-333333333333',
+        review_settings_revision: null,
+      },
+    ],
     next_agent_id: null,
     next_position: null,
   }
@@ -3231,6 +3242,7 @@ describe('Backroom MCP tools', () => {
     const resumed = {
       ...scoredPolicyRescreenView,
       current: { ...scoredPolicyRescreenView.current, state: 'pending', attempt_id: null },
+      active: [{ ...scoredPolicyRescreenView.current, state: 'pending', attempt_id: null }],
     }
     const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(resumed))
     vi.stubGlobal('fetch', fetchMock)
@@ -3257,6 +3269,7 @@ describe('Backroom MCP tools', () => {
       expected_activation_revision: 3,
       expected_agent_id: '22222222-2222-4222-8222-222222222222',
       retry_paused: true,
+      max_active_releases: 1,
       reason: 'retry the reviewed V11 canary after its infrastructure pause',
       actor: 'peyton@omniaura.ai',
       confirmation: 'ADVANCE SCORED POLICY RESCREEN',

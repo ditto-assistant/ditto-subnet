@@ -15,7 +15,7 @@ import {
   shellQuote,
 } from "../components/evidence/DisputeForm";
 import { ScreeningReview } from "../components/evidence/ScreeningReview";
-import { validationAttemptView } from "../components/evidence/labels";
+import { screeningPolicySummary, validationAttemptView } from "../components/evidence/labels";
 import { reviewPacket } from "../components/evidence/review-packet";
 import { createActivityStore } from "../components/pipeline/activity-store";
 import { syncFromLocation } from "../stores/routeStore";
@@ -658,6 +658,38 @@ describe("terminal screening review cards (row 23)", () => {
   });
 });
 
+describe("screening policy summary badges", () => {
+  it("shows one latest outcome per policy, newest policy first", () => {
+    const summary = screeningPolicySummary([
+      { policy_version: 10, status: "passed", finished_at: "2026-08-01T10:00:00Z" },
+      { policy_version: 11, status: "failed", finished_at: "2026-08-01T10:05:00Z" },
+      { policy_version: 11, status: "passed", finished_at: "2026-08-01T10:10:00Z" },
+      { policy_version: 12, status: "running", started_at: "2026-08-01T10:15:00Z" },
+    ]);
+
+    expect(summary).toEqual([
+      { policyVersion: 12, label: "V12 Running", tone: "progress", title: "Policy v12 is running" },
+      { policyVersion: 11, label: "V11 Passed", tone: "good", title: "Policy v11 passed" },
+      { policyVersion: 10, label: "V10 Passed", tone: "good", title: "Policy v10 passed" },
+    ]);
+  });
+
+  it("does not call an interrupted screening result a policy failure", () => {
+    expect(
+      screeningPolicySummary([
+        { policy_version: 11, status: "expired", finished_at: "2026-08-01T10:00:00Z" },
+      ]),
+    ).toEqual([
+      {
+        policyVersion: 11,
+        label: "V11 Incomplete",
+        tone: "warn",
+        title: "Policy v11 did not complete",
+      },
+    ]);
+  });
+});
+
 // ── Row 25: test_includes_miner_facing_review_details_copy ──────────────────
 // The one-click "review packet" text block miners paste when asking for a
 // review: agent id, name/version, hotkey, status, artifact SHA, canonical
@@ -836,6 +868,26 @@ describe("async agent evidence", () => {
     await waitFor(() => expect(document.getElementById("pipeline-validator-history")).toBeTruthy());
     expect(document.getElementById("pipeline-accepted-scores")).toBeTruthy();
     expect(pipelineRequests()).toHaveLength(1);
+  });
+
+  it("puts one compact pass-or-fail badge per screening policy above the full history", async () => {
+    stubPipelineFetch(() =>
+      Promise.resolve(
+        pipelineResponse({
+          screening_attempts: [
+            { policy_version: 10, status: "passed", finished_at: "2026-08-01T10:00:00Z" },
+            { policy_version: 11, status: "passed", finished_at: "2026-08-01T10:10:00Z" },
+          ],
+        }),
+      ),
+    );
+    render(() => <AgentEvidence entry={summary} />);
+    await waitFor(() => expect(document.querySelector(".screening-policy-summary")).toBeTruthy());
+    const badges = document.querySelector(".screening-policy-summary");
+    expect(badges?.textContent).toContain("Policy checks");
+    expect(badges?.textContent).toContain("V11 Passed");
+    expect(badges?.textContent).toContain("V10 Passed");
+    expect(SUBMISSIONS_CSS).toContain(".screening-policy-summary");
   });
 
   it("groups run cost, compresses allowance usage, and closes expired active grants", async () => {

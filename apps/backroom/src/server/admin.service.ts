@@ -1043,6 +1043,7 @@ export async function advanceScoredPolicyRescreen(rawInput: unknown, actor: stri
         expected_activation_revision: input.expectedActivationRevision,
         expected_agent_id: input.expectedAgentId,
         retry_paused: input.retryPaused,
+        max_active_releases: input.maxActiveReleases,
         ...(input.reviewSettingsRevision === null
           ? {}
           : { review_settings_revision: input.reviewSettingsRevision }),

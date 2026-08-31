@@ -7061,8 +7061,8 @@ export const restoreScoredScreeningSnapshotResponseSchema = z.object({
 })
 
 // A scored-policy activation deliberately does not bulk-requeue the board.
-// Backroom exposes the one-item checkpoint so an operator sees a clear, reject,
-// or pause before the next V10 score is touched.
+// Backroom exposes the bounded active window so an operator sees every clear,
+// reject, or pause before more than the next four V10 scores are touched.
 export const scoredPolicyRescreenReleaseSchema = z.object({
   activation_revision: z.number().int().positive(),
   target_policy_version: z.number().int().positive(),
@@ -7077,6 +7077,7 @@ export const scoredPolicyRescreenViewSchema = z.object({
   activation_revision: z.number().int().positive().nullable(),
   target_policy_version: z.number().int().positive().nullable(),
   current: scoredPolicyRescreenReleaseSchema.nullable(),
+  active: z.array(scoredPolicyRescreenReleaseSchema).default([]),
   next_agent_id: z.string().uuid().nullable(),
   next_position: z.number().int().positive().nullable(),
 })
@@ -7087,6 +7088,7 @@ export const advanceScoredPolicyRescreenInputSchema = z.object({
   expectedActivationRevision: z.number().int().positive(),
   expectedAgentId: z.string().uuid(),
   retryPaused: z.boolean().default(false),
+  maxActiveReleases: z.number().int().min(1).max(4).default(1),
   reviewSettingsRevision: z.number().int().positive().nullable().default(null),
   reason: auditReasonSchema(8),
   confirmation: z.literal(ADVANCE_SCORED_POLICY_RESCREEN_CONFIRMATION),

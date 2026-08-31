@@ -67,7 +67,7 @@ import {
   pipelineDisplayState,
 } from "./cohorts";
 import type { BenchmarkCohort } from "./cohorts";
-import { screeningAttemptLabel, validationAttemptView } from "./labels";
+import { screeningAttemptLabel, screeningPolicySummary, validationAttemptView } from "./labels";
 import { modelUseRows } from "./model-use";
 import type { ModelUse } from "./model-use";
 import { reviewPacket } from "./review-packet";
@@ -997,6 +997,7 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
     screeningAttempts().filter((a) => (Number(a.policy_version) || 0) === currentPolicy());
   const oldScreening = () =>
     screeningAttempts().filter((a) => (Number(a.policy_version) || 0) !== currentPolicy());
+  const screeningPolicies = () => screeningPolicySummary(screeningAttempts());
 
   const validationCohorts = createMemo(() => {
     const detail = loadedPipeline();
@@ -1180,6 +1181,20 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
                   <div class="pipeline-section-heading">
                     <h4 id="pipeline-screening-history">Screener result</h4>
                   </div>
+                  <Show when={screeningPolicies().length}>
+                    <div class="screening-policy-summary" aria-label="Screening policy results">
+                      <span class="screening-policy-summary-label">Policy checks</span>
+                      <For each={screeningPolicies()}>
+                        {(policy) => (
+                          <StatusChip
+                            label={policy.label}
+                            tone={policy.tone}
+                            title={policy.title}
+                          />
+                        )}
+                      </For>
+                    </div>
+                  </Show>
                   <div class="attempt-list">
                     <Show
                       when={currentScreening().length}

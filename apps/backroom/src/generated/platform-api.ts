@@ -1363,12 +1363,13 @@ export interface paths {
         put?: never;
         /**
          * Advance Scored Rescreen
-         * @description Release exactly one current-board row after an explicit checkpoint.
+         * @description Fill a bounded current-board window after an explicit checkpoint.
          *
          *     The policy schedule establishes the rule.  It does *not* bulk-requeue
-         *     every existing score: a false V11 clear must be observable before the next
-         *     V10 score is touched.  A non-verdict leaves the released row paused; the
-         *     caller must explicitly choose to retry it rather than silently advancing.
+         *     every existing score: a false V11 clear remains observable before more than
+         *     the configured window of V10 scores is touched.  A non-verdict leaves its
+         *     row paused, prevents the window from widening, and requires an explicit
+         *     retry rather than silently advancing.
          */
         post: operations["advance_scored_rescreen_api_v1_admin_screener_policy_activation_advance_scored_rescreen_post"];
         delete?: never;
@@ -1409,7 +1410,7 @@ export interface paths {
         };
         /**
          * Get Scored Rescreen
-         * @description Read the one-at-a-time, score-preserving policy rollout checkpoint.
+         * @description Read the bounded, score-preserving policy rollout checkpoint.
          */
         get: operations["get_scored_rescreen_api_v1_admin_screener_policy_activation_scored_rescreen_get"];
         put?: never;
@@ -9930,7 +9931,7 @@ export interface components {
         };
         /**
          * AdvanceScoredPolicyRescreenRequest
-         * @description Release exactly one top-down scored policy rescreen, or retry its pause.
+         * @description Fill a bounded top-down scored-rescreen window, or retry one pause.
          */
         AdvanceScoredPolicyRescreenRequest: {
             /** Actor */
@@ -9944,6 +9945,11 @@ export interface components {
              * Format: uuid
              */
             expected_agent_id: string;
+            /**
+             * Max Active Releases
+             * @default 1
+             */
+            max_active_releases: number;
             /** Reason */
             reason: string;
             /**
@@ -20845,7 +20851,7 @@ export interface components {
         };
         /**
          * ScoredPolicyRescreenReleaseView
-         * @description The one scored submission currently released under a policy rollout.
+         * @description One scored submission currently released under a policy rollout.
          */
         ScoredPolicyRescreenReleaseView: {
             /** Activation Revision */
@@ -20871,11 +20877,17 @@ export interface components {
         };
         /**
          * ScoredPolicyRescreenView
-         * @description Read-only rollout checkpoint for the score-preserving rescreen lane.
+         * @description Read-only checkpoint for the score-preserving rescreen lane.
+         *
+         *     ``current`` remains the oldest active release for older callers. ``active``
+         *     makes a bounded rollout window observable without asking an operator to
+         *     reconstruct it from individual screening attempts.
          */
         ScoredPolicyRescreenView: {
             /** Activation Revision */
             activation_revision: number | null;
+            /** Active */
+            active?: components["schemas"]["ScoredPolicyRescreenReleaseView"][];
             current: components["schemas"]["ScoredPolicyRescreenReleaseView"] | null;
             /** Next Agent Id */
             next_agent_id: string | null;
