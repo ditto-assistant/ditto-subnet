@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.179.0 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Isolate policy canaries
+  ([#1416](https://github.com/ditto-assistant/ditto-subnet/pull/1416),
+  [`07c5d7f`](https://github.com/ditto-assistant/ditto-subnet/commit/07c5d7f5f3dd6d1e2ab9a824c11ea24e78afa663))
+
+### Features
+
+- **platform**: Add default-off coding ticket sets
+  ([`14f96d4`](https://github.com/ditto-assistant/ditto-subnet/commit/14f96d4edc0b1b17a018762c1bcb7d2772eb277c))
+
+
 ## v0.178.1 (2026-08-31)
 
 ### Bug Fixes
