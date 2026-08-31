@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.179.9 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Format terra review config
+  ([#1443](https://github.com/ditto-assistant/ditto-subnet/pull/1443),
+  [`63b09ed`](https://github.com/ditto-assistant/ditto-subnet/commit/63b09ed32ff21e3998a9cae5ab49d81e87272e62))
+
+- **screener**: Use terra for l2 review
+  ([#1441](https://github.com/ditto-assistant/ditto-subnet/pull/1441),
+  [`23711dd`](https://github.com/ditto-assistant/ditto-subnet/commit/23711ddecc25610d804eb495f02a062fed081714))
+
+
 ## v0.179.8 (2026-08-31)
 
 ### Bug Fixes
