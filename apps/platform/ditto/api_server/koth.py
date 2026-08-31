@@ -49,10 +49,10 @@ BLOCKS_PER_TEMPO = 360
 
 # Continual retests gather enough shared-seed evidence to make the one-sided
 # 95% uncertainty half-width no wider than the fixed KOTH margin. Eight is the
-# minimum credible variance sample; 32 is the fleet-work hard stop when current
+# minimum credible variance sample; 15 is the fleet-work hard stop when current
 # variance would otherwise ask for an impractical number of runs.
 TOP5_MIN_CONFIRMATION_SEEDS = 8
-TOP5_MAX_CONFIRMATION_SEEDS = 32
+TOP5_MAX_CONFIRMATION_SEEDS = 15
 
 
 @dataclass(frozen=True)

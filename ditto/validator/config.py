@@ -58,10 +58,10 @@ KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided
 KOTH_STATISTICAL_BAND_CAP_MULTIPLE = 2.0
 KOTH_CONFIRMATION_SEEDS = 3  # CRN seeds a version-bump re-score dethrones on (median)
 # Continual evidence targets a one-sided 95% uncertainty half-width no wider
-# than KOTH_MARGIN. Eight is the minimum credible variance sample; 32 is the
+# than KOTH_MARGIN. Eight is the minimum credible variance sample; 15 is the
 # hard fleet-work stop when current variance would otherwise ask for more.
 TOP5_MIN_CONFIRMATION_SEEDS = 8
-TOP5_MAX_CONFIRMATION_SEEDS = 32
+TOP5_MAX_CONFIRMATION_SEEDS = 15
 TOP5_CATCH_UP_RATE = 2
 # Hard ceiling on the operator-requested continual retest cohort. Mirrors the
 # platform's own cap so the two agree on what an operator may ask for.

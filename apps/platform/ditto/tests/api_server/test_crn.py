@@ -21,7 +21,7 @@ def test_elastic_confirmation_seed_ceiling_is_bounded_by_variance() -> None:
                 second: dict.fromkeys(range(8), 0.85),
             }
         )
-        == 32
+        == 15
     )
 
 
