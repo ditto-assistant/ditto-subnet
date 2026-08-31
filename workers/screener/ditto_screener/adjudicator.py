@@ -45,6 +45,8 @@ from ditto_screener.source_review import (
     _retryable_model_error_type,
 )
 from ditto_screening_protocol import (
+    SCREENING_FLOOR_POLICY_VERSION,
+    SCREENING_POLICY_VERSION,
     AdjudicationClearClause,
     SourceReviewAdjudication,
     SourceReviewCitation,
@@ -53,7 +55,26 @@ from ditto_screening_protocol import (
 
 logger = logging.getLogger(__name__)
 
-ADJUDICATOR_PROMPT_REVISION = "adjudicator-v2-policy-v10"
+_SUPPORTED_POLICY_VERSIONS = tuple(
+    range(SCREENING_FLOOR_POLICY_VERSION, SCREENING_POLICY_VERSION + 1)
+)
+
+
+def adjudicator_prompt_revision(policy_version: int) -> str:
+    """Return the court prompt revision for an implemented policy version."""
+    if policy_version not in _SUPPORTED_POLICY_VERSIONS:
+        raise ValueError(
+            "adjudicator policy v"
+            f"{policy_version} is not implemented by this build "
+            f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
+        )
+    return f"adjudicator-v3-policy-v{policy_version}"
+
+
+# Kept as the current-policy compatibility export for callers that only need
+# the worker's default revision. Every actual court decision calls the
+# versioned helper, so an activated older policy cannot be stamped as current.
+ADJUDICATOR_PROMPT_REVISION = adjudicator_prompt_revision(SCREENING_POLICY_VERSION)
 _DEFAULT_MODEL = "z-ai/glm-5.3-flash"
 _MAX_STEPS = 128
 _MAX_COMPLETION_TOKENS = 6_000
@@ -112,6 +133,12 @@ Reject only when a reachable scored path does one of these:
   tool count, set, or order against a deciding turn that cannot deviate, skip,
   add, or reorder. Advisory intent signals, grammar routers, precursor passes
   and trimmed-but-complete catalogues pass.
+  A host-selected `required_*tool` passed through a `ForcedChoiceModel` (or an
+  equivalent exact provider choice) is enforced, not advisory. So is a
+  follow-up that checks whether the model called a named tool and then orders
+  it to call that tool once while forbidding every other tool. A broader
+  catalog on an earlier turn or an intent classifier that selected the plan
+  does not restore the deciding turn's freedom to deviate.
 
 Also reject on I1/I2/I6 when the served path never calls the model, withholds
 the current user's records from the deciding turn, or reports tool calls that
@@ -187,6 +214,37 @@ The reason field is shown to the miner. Make it specific and factual: what
 the served path does, at which file and line, and why that does or does not
 take authority over the graded answer.
 """.strip()
+
+_POLICY_V11_PROMPT_TAIL = """
+
+## Policy v11 additions
+
+Review the complete served path, including routing, tool dispatch, retries,
+and response assembly. Under I3, a selection model that drafts answer content
+or uses request meaning to select a candidate answer is substantive answer
+authorship, even if a later model writes the final string. Under I4, every
+scorer-visible value must remain visible to the deciding model; a hidden
+derived value used as a gate is a breach. Under I5, benchmark-specific prompt
+prose can be a family compiler just as executable code can.
+
+Under I7, planner authorship does not save a forced executor. A deciding turn
+must be able to choose a different valid tool, skip the proposed tool, add a
+valid tool, or reorder valid tools. If host code removes any of those options,
+the plan is enforced even if an earlier model or classifier selected it.
+""".strip()
+
+
+def _system_prompt(policy_version: int) -> str:
+    """Render the court doctrine bound to the submission's policy version."""
+    # Validate through the same canonical revision helper so a new Platform
+    # policy cannot silently reuse an older court doctrine.
+    adjudicator_prompt_revision(policy_version)
+    if policy_version == 10:
+        return _SYSTEM_PROMPT
+    if policy_version == 11:
+        return f"{_SYSTEM_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}"
+    raise AssertionError("validated policy was not rendered")
+
 
 _TOOLS: list[dict[str, object]] = [
     {
@@ -283,13 +341,19 @@ class _Verdict:
 
 
 def _escalate(
-    code: str, reason: str, *, model: str, notes: int
+    code: str,
+    reason: str,
+    *,
+    model: str,
+    notes: int,
+    policy_version: int,
 ) -> SourceReviewAdjudication:
     return SourceReviewAdjudication(
         decision="escalate",
         reason=reason,
         model=model,
-        prompt_revision=ADJUDICATOR_PROMPT_REVISION,
+        prompt_revision=adjudicator_prompt_revision(policy_version),
+        policy_version=policy_version,
         notes_considered=notes,
         escalation_code=code,
     )
@@ -300,6 +364,7 @@ def _settle_refusal(
     *,
     model: str,
     notes: int,
+    policy_version: int,
 ) -> SourceReviewAdjudication:
     """Turn a refused court output into the only fair terminal fallback.
 
@@ -321,7 +386,8 @@ def _settle_refusal(
         ),
         clear_clause=AdjudicationClearClause.NO_PROVEN_BREACH,
         model=model,
-        prompt_revision=ADJUDICATOR_PROMPT_REVISION,
+        prompt_revision=adjudicator_prompt_revision(policy_version),
+        policy_version=policy_version,
         notes_considered=notes,
         # This is a terminal clear, not an internal escalation, but retaining
         # the refusal code makes the signed private review evidence honest
@@ -439,6 +505,7 @@ class SourceReviewAdjudicator:
         finding: Mapping[str, object] | None = None,
         error_code: str | None = None,
         deadline: float | None = None,
+        policy_version: int = SCREENING_POLICY_VERSION,
     ) -> SourceReviewAdjudication:
         """Decide one held review. Never raises and always settles terminally."""
         note_count = len(notes)
@@ -453,9 +520,11 @@ class SourceReviewAdjudicator:
                     "Automated adjudication was unavailable",
                     model=self._model,
                     notes=note_count,
+                    policy_version=policy_version,
                 ),
                 model=self._model,
                 notes=note_count,
+                policy_version=policy_version,
             )
         try:
             verdict, read_locations = await self._run(
@@ -465,6 +534,7 @@ class SourceReviewAdjudicator:
                 finding=finding,
                 error_code=error_code,
                 deadline=deadline,
+                policy_version=policy_version,
             )
         except (
             OSError,
@@ -485,9 +555,11 @@ class SourceReviewAdjudicator:
                     "Automated adjudication did not complete",
                     model=self._model,
                     notes=note_count,
+                    policy_version=policy_version,
                 ),
                 model=self._model,
                 notes=note_count,
+                policy_version=policy_version,
             )
         return _settle_refusal(
             self._certify(
@@ -495,9 +567,11 @@ class SourceReviewAdjudicator:
                 repository=repository,
                 read_locations=read_locations,
                 notes=note_count,
+                policy_version=policy_version,
             ),
             model=self._model,
             notes=note_count,
+            policy_version=policy_version,
         )
 
     def _certify(
@@ -507,6 +581,7 @@ class SourceReviewAdjudicator:
         repository: TarSourceRepository,
         read_locations: set[tuple[str, int]],
         notes: int,
+        policy_version: int,
     ) -> SourceReviewAdjudication:
         """Refuse any decision the host cannot verify against the archive.
 
@@ -520,6 +595,7 @@ class SourceReviewAdjudicator:
                 "Automated adjudication cited no source; held for operator review",
                 model=self._model,
                 notes=notes,
+                policy_version=policy_version,
             )
         admissible: list[SourceReviewCitation] = []
         for path, line in verdict.citations:
@@ -531,6 +607,7 @@ class SourceReviewAdjudicator:
                     "held for operator review",
                     model=self._model,
                     notes=notes,
+                    policy_version=policy_version,
                 )
             if (normalized, line) not in read_locations:
                 # This subsumes a bounds check: the tools only ever serve real
@@ -542,6 +619,7 @@ class SourceReviewAdjudicator:
                     "for operator review",
                     model=self._model,
                     notes=notes,
+                    policy_version=policy_version,
                 )
             if citation_admissibility(
                 normalized, repository.member_text(normalized), line
@@ -556,6 +634,7 @@ class SourceReviewAdjudicator:
                 "operator review",
                 model=self._model,
                 notes=notes,
+                policy_version=policy_version,
             )
         try:
             return SourceReviewAdjudication(
@@ -574,7 +653,8 @@ class SourceReviewAdjudicator:
                 citations=admissible[:_MAX_CITATIONS],
                 notes_considered=notes,
                 model=self._model,
-                prompt_revision=ADJUDICATOR_PROMPT_REVISION,
+                prompt_revision=adjudicator_prompt_revision(policy_version),
+                policy_version=policy_version,
             )
         except ValueError as error:
             logger.warning("adjudication verdict was self-inconsistent: %s", error)
@@ -584,6 +664,7 @@ class SourceReviewAdjudicator:
                 "operator review",
                 model=self._model,
                 notes=notes,
+                policy_version=policy_version,
             )
 
     def _read_api_key(self) -> str:
@@ -606,9 +687,10 @@ class SourceReviewAdjudicator:
         finding: Mapping[str, object] | None,
         error_code: str | None,
         deadline: float | None,
+        policy_version: int,
     ) -> tuple[_Verdict, set[tuple[str, int]]]:
         messages: list[dict[str, object]] = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": _system_prompt(policy_version)},
             {
                 "role": "user",
                 "content": (

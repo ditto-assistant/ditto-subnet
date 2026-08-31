@@ -323,6 +323,21 @@ fn next(required_tool_name: &str) {
     )
 
 
+def test_policy_v10_required_catalog_forced_choice_is_an_i7_lead() -> None:
+    """Catch the served forced-executor shape, not only raw provider JSON."""
+    source = """
+fn run(tool_route: &Route, model: Arc<dyn Model>) {
+    if let Some(force) = tool_route.required_catalog_tool() {
+        let model = ForcedChoiceModel::wrap_with_hint(model, force);
+        follow_up("Call the required tool once. Do not call any other tool.");
+    }
+}
+"""
+    assert "forced-single-tool-turn" in _kinds(
+        find_benchmark_emulation_fingerprints([("src/baseline.rs", source)])
+    )
+
+
 def test_async_answer_with_model_call_does_not_trip_a1() -> None:
     rust = (
         "async fn solve_answer(r: &R) -> Answer {\n"
