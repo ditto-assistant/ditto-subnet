@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.176.0 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Expose concurrent fleet worker visibility
+  ([`71676bd`](https://github.com/ditto-assistant/ditto-subnet/commit/71676bdca564e58c5c9bef190de3759760a73b28))
+
+### Features
+
+- **dittobench**: Settle public-canary inference on the locked Luna route
+  ([`a71978f`](https://github.com/ditto-assistant/ditto-subnet/commit/a71978f30d5167c8b01f10171744ea42c5b2c980))
+
+
 ## v0.175.1 (2026-08-30)
 
 ### Bug Fixes
