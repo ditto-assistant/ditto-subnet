@@ -1,0 +1,144 @@
+---
+- name: Report that the coding executor daemon is deliberately disabled
+  ansible.builtin.debug:
+    msg: >-
+      Dedicated coding executor daemon is disabled on {{ inventory_hostname }}.
+      No Docker daemon, socket, scorer, worker, image, secret, ticket, or
+      coding gate is configured by this role until
+      coding_executor_daemon_enabled=true is set in reviewed host variables.
+  when: not (coding_executor_daemon_enabled | bool)
+
+- name: Provision the dedicated rootless coding executor daemon
+  when: coding_executor_daemon_enabled | bool
+  block:
+    - name: Require the dedicated coding executor host profile
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['architecture'] == 'x86_64'
+          - coding_executor_user == 'ditto-coding-executor'
+          - coding_executor_group == 'ditto-coding-executor'
+          - coding_executor_client_group == 'ditto-coding-client'
+          - coding_executor_home == '/var/lib/ditto-coding-executor'
+          - coding_executor_runtime_dir == '/run/ditto-coding-executor'
+          - coding_executor_docker_host == 'unix:///run/ditto-coding-executor/docker.sock'
+          - coding_executor_daemon_memory_max == '24G'
+          - coding_executor_daemon_tasks_max | int == 8192
+          - coding_executor_docker_apt_arch == 'amd64'
+        fail_msg: >-
+          Rootless coding execution is pinned to the dedicated empty identity,
+          socket, and bounded daemon profile. Do not repurpose a validator,
+          Platform, screener, or rootful Docker host for this role.
+
+    - name: Add Docker apt signing key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/debian/gpg
+        dest: /usr/share/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ coding_executor_docker_apt_arch }}
+          signed-by=/usr/share/keyrings/docker.asc]
+          https://download.docker.com/linux/debian
+          {{ ansible_facts['distribution_release'] }} stable
+        filename: docker
+        state: present
+
+    - name: Install rootless Docker daemon prerequisites
+      ansible.builtin.apt:
+        name:
+          - dbus-user-session
+          - docker-ce-cli
+          - docker-ce-rootless-extras
+          - iptables
+          - slirp4netns
+          - uidmap
+        state: present
+        update_cache: true
+
+    - name: Ensure the dedicated daemon policy directory
+      ansible.builtin.file:
+        path: /usr/local/lib/ditto-coding-executor
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Inspect the dedicated rootless daemon unit
+      ansible.builtin.stat:
+        path: "{{ coding_executor_home }}/.config/systemd/user/{{ coding_executor_unit }}.service"
+      register: coding_executor_user_unit
+
+    - name: Install the dedicated daemon policy files
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/usr/local/lib/ditto-coding-executor/{{ item }}"
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - executor-egress-guard.sh
+        - install-rootless-docker.sh
+      register: coding_executor_policy_files
+
+    - name: Install the dedicated daemon configuration
+      ansible.builtin.copy:
+        src: rootless-daemon.json
+        dest: /usr/local/lib/ditto-coding-executor/rootless-daemon.json
+        owner: root
+        group: root
+        mode: "0644"
+      register: coding_executor_daemon_config
+
+    - name: Install the rootless daemon egress-guard service
+      ansible.builtin.copy:
+        src: ditto-coding-executor-egress-guard.service
+        dest: "/etc/systemd/system/{{ coding_executor_egress_guard_unit }}.service"
+        owner: root
+        group: root
+        mode: "0644"
+      register: coding_executor_guard_unit
+
+    - name: Install and verify the dedicated rootless daemon
+      ansible.builtin.command:
+        cmd: /usr/local/lib/ditto-coding-executor/install-rootless-docker.sh
+      environment:
+        CODING_EXECUTOR_USER: "{{ coding_executor_user }}"
+        CODING_EXECUTOR_GROUP: "{{ coding_executor_group }}"
+        CODING_EXECUTOR_CLIENT_GROUP: "{{ coding_executor_client_group }}"
+        CODING_EXECUTOR_HOME: "{{ coding_executor_home }}"
+        CODING_EXECUTOR_RUNTIME_DIR: "{{ coding_executor_runtime_dir }}"
+        CODING_EXECUTOR_UNIT: "{{ coding_executor_unit }}"
+        CODING_EXECUTOR_EGRESS_GUARD_UNIT: "{{ coding_executor_egress_guard_unit }}"
+        CODING_EXECUTOR_DAEMON_MEMORY_MAX: "{{ coding_executor_daemon_memory_max }}"
+        CODING_EXECUTOR_DAEMON_TASKS_MAX: "{{ coding_executor_daemon_tasks_max }}"
+      register: coding_executor_rootless_install
+      changed_when: true
+      when: >-
+        not coding_executor_user_unit.stat.exists or
+        coding_executor_policy_files.changed or
+        coding_executor_daemon_config.changed or
+        coding_executor_guard_unit.changed
+
+    - name: Read the rootless daemon identity
+      ansible.builtin.command:
+        cmd: >-
+          runuser -u {{ coding_executor_user }} -- env
+          DOCKER_HOST={{ coding_executor_docker_host }} docker info
+      register: coding_executor_daemon_info
+      changed_when: false
+
+    - name: Assert the rootless daemon has the required identity
+      ansible.builtin.assert:
+        that:
+          - "'rootless' in coding_executor_daemon_info.stdout | lower"
+          - "'io.heyditto.dittobench.isolated=true' in coding_executor_daemon_info.stdout"
+        fail_msg: Dedicated coding executor did not prove its rootless isolated daemon identity.
+
+    - name: Report that scorer and worker activation remain disabled
+      ansible.builtin.debug:
+        msg: >-
+          Dedicated rootless daemon is ready on {{ coding_executor_docker_host }},
+          but no scorer, validator, wallet, image, Platform control, ticket,
+          or coding gate has been installed or enabled.

@@ -27,6 +27,24 @@ install the dedicated rootless daemon under an empty local identity, prove its
 isolated-daemon label and socket ownership, then keep the worker disabled until
 the full Platform/validator/scorer canary is explicitly approved.
 
+## Rootless daemon role
+
+`infra/ansible/playbooks/gcp-coding-executor.yml` targets only hosts labelled
+`role=coding_executor`. Its `coding_executor_daemon_enabled` default is false,
+so a normal converge is a no-op. When a protected host configuration explicitly
+sets it true, the role installs a rootless Docker daemon under the empty
+`ditto-coding-executor` local identity. It creates a socket owned by the empty
+future-client group `ditto-coding-client`, labels the daemon
+`io.heyditto.dittobench.isolated=true`, enforces bounded logs/GC, and blocks
+that daemon identity from private and metadata egress except DNS.
+
+The role intentionally installs neither a client service nor a candidate image.
+No user belongs to `ditto-coding-client` at this stage, so the rootless socket
+has no trusted scorer or worker consumer. A future slice must add the dedicated
+scorer process, join only that process to the client group, prove the complete
+candidate proxy policy, and retain every coding feature gate false until a
+reviewed canary activation.
+
 Destroying a created cohort is intentionally not a routine rollback: the shared
 compute module has deletion protection. Rollback during the shadow phase means
 leave the hosts present and disable the later daemon/worker configuration; any

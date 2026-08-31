@@ -90,6 +90,11 @@ the future k=3 canary. It creates neither a daemon nor a worker. A later
 reviewed role must install and prove the rootless isolated daemon before any of
 the activation settings above are eligible for operator use.
 
+That dedicated rootless-daemon role is itself false by default and has no
+scorer or worker consumer. It creates an empty daemon identity and an empty
+socket-client group only; enabling a future coding worker remains a separate
+reviewed operator action.
+
 Setting only a subset fails closed: no ticket is claimed, or startup rejects
 the incomplete runtime. The committed Compose values keep both worker gates
 false. This PR does not deploy the Platform transport configuration, change a
