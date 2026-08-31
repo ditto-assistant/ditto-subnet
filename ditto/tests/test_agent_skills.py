@@ -446,6 +446,13 @@ def test_public_canary_inference_settlement_routes_to_request_ledger() -> None:
     assert topic_ids[0] == "coding-inference-requests"
 
 
+def test_certified_canary_settlement_bind_routes_to_request_ledger() -> None:
+    topic_ids = [
+        str(topic["id"]) for topic in lookup("certified canary settlement bind")
+    ]
+    assert topic_ids[0] == "coding-inference-requests"
+
+
 def test_platform_api_review_does_not_select_ath_review() -> None:
     topic_ids = {str(topic["id"]) for topic in lookup("review the platform API change")}
     assert "platform-api" in topic_ids

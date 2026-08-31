@@ -50,11 +50,11 @@ grader evidence. Every row remains `weight_eligible=false`.
 The disabled-by-default model-relay coding route now admits a ticket grant
 first and, only on a missing ticket row, a claimed-lease certification grant.
 It reserves and settles on the matching ledger, and shared concurrency plus
-settlement-identity uniqueness count both started ledgers. No deployment
-config enables the route and no validator gateway invokes it. Coding task
-scheduling, scoring and weight activation remain absent. The next integration
-must construct the local gateway and preserve the same reserve-before-dispatch,
-exact-settlement and terminal-`unsettled` rules.
+settlement-identity uniqueness count both started ledgers. Platform accepts a
+`certified` canary receipt only when that lease's request ledger matches the
+receipt's invoked model evidence. Unused-inference failures still persist
+without a settlement. No deployment config enables the route. Coding task
+scheduling, scoring and weight activation remain absent.
 
 Validation:
 

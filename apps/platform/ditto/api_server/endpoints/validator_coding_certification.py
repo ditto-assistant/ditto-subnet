@@ -28,6 +28,7 @@ from ditto.chain import ChainClient
 from ditto.db.models import Agent, CodingCertificationLease
 from ditto.db.queries.coding_certifications import (
     CodingCertificationConflictError,
+    CodingCertificationSettlementError,
     coding_certification_lease_accepts_receipt,
     coding_certification_matches,
     get_coding_certification_by_lease,
@@ -215,7 +216,10 @@ async def submit_coding_certification(
                 receipt=receipt,
                 signature=payload.signature,
             )
-        except CodingCertificationConflictError as error:
+        except (
+            CodingCertificationConflictError,
+            CodingCertificationSettlementError,
+        ) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     return SubmitCodingCertificationResponse(
