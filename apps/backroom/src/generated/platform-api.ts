@@ -393,6 +393,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/coding-shadow/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Coding Shadow Artifact
+         * @description Advance one named artifact without scheduling or issuing tickets.
+         */
+        post: operations["reconcile_coding_shadow_artifact_api_v1_admin_coding_shadow_reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/confirmation-bundle-settings": {
         parameters: {
             query?: never;
@@ -6224,6 +6244,55 @@ export interface components {
             shadow_only: true;
             /** Total */
             total: number;
+        };
+        /**
+         * AdminCodingShadowReconciliationRequest
+         * @description One explicit, confirmed request to advance a shadow coding artifact.
+         */
+        AdminCodingShadowReconciliationRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Coding Run Id */
+            coding_run_id: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Corpus Release Id */
+            corpus_release_id: string;
+        };
+        /**
+         * AdminCodingShadowReconciliationResponse
+         * @description Redacted state of one operator-requested shadow reconciliation.
+         */
+        AdminCodingShadowReconciliationResponse: {
+            /** Assignment Idempotent */
+            assignment_idempotent: boolean;
+            /**
+             * Assignment Row Id
+             * Format: uuid
+             */
+            assignment_row_id: string;
+            /** Issuance Idempotent */
+            issuance_idempotent: boolean | null;
+            /** Run Row Id */
+            run_row_id: string | null;
+            /** Selection Block Number */
+            selection_block_number: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "waiting_finality" | "issued" | "already_issued";
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
         };
         /** AdminConfirmationBundleListResponse */
         AdminConfirmationBundleListResponse: {
@@ -25475,6 +25544,62 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    reconcile_coding_shadow_artifact_api_v1_admin_coding_shadow_reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminCodingShadowReconciliationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingShadowReconciliationResponse"];
+                };
+            };
+            /** @description Admin authentication failed. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The named artifact or its authority is unavailable. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Shadow reconciliation is disabled or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

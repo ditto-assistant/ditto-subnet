@@ -405,6 +405,21 @@ class ApiServerConfig:
     grants access to private corpus bytes by itself.
     """
 
+    coding_shadow_reconciliation_enabled: bool = False
+    """Permit one explicitly confirmed shadow coding reconciliation request.
+
+    ``DITTO_CODING_SHADOW_RECONCILIATION_ENABLED`` ships false. Enabling it
+    only exposes the single-artifact admin route; it never schedules a fleet,
+    issues validator tickets, dispatches a model, or affects weights.
+    """
+
+    coding_shadow_reconciliation_selection_delay_blocks: int = 20
+    """Finalized-block delay used by the one-shot shadow reconciler.
+
+    This is Platform-controlled rather than request-controlled so one operator
+    request cannot choose a different reveal boundary.
+    """
+
     dashboard_enabled: bool = True
     """Serve the public dashboard SPA (``dashboard/index.html``) at ``/``.
 
@@ -590,6 +605,20 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     dashboard_enabled = (
         os.environ.get("DITTO_DASHBOARD_ENABLED", "true").strip().lower() in _TRUTHY
     )
+    reconciliation_enabled = (
+        os.environ.get("DITTO_CODING_SHADOW_RECONCILIATION_ENABLED", "false")
+        .strip()
+        .lower()
+        in _TRUTHY
+    )
+    try:
+        reconciliation_selection_delay_blocks = int(
+            os.environ.get("DITTO_CODING_SHADOW_SELECTION_DELAY_BLOCKS", "20")
+        )
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "DITTO_CODING_SHADOW_SELECTION_DELAY_BLOCKS must be an integer"
+        ) from error
     dashboard_wandb_url = os.environ.get(
         "DITTO_DASHBOARD_WANDB_URL", "https://wandb.ai/"
     )
@@ -880,6 +909,10 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             if (value := item.strip())
         ),
         coding_private_catalog=parse_coding_private_catalog_config_from_env(),
+        coding_shadow_reconciliation_enabled=reconciliation_enabled,
+        coding_shadow_reconciliation_selection_delay_blocks=(
+            reconciliation_selection_delay_blocks
+        ),
         dashboard_enabled=dashboard_enabled,
         dashboard_wandb_url=dashboard_wandb_url,
         top5_backoff_base=top5_backoff_base,
@@ -940,6 +973,14 @@ def check_config(config: ApiServerConfig) -> None:
         raise ApiServerConfigError(
             "DITTO_ADMIN_API_TOKEN must be at least 32 characters"
         )
+    if not 1 <= config.coding_shadow_reconciliation_selection_delay_blocks <= 10_000:
+        raise ApiServerConfigError(
+            "DITTO_CODING_SHADOW_SELECTION_DELAY_BLOCKS must be between 1 and 10000"
+        )
+    if config.coding_shadow_reconciliation_enabled and config.admin_api_token is None:
+        raise ApiServerConfigError(
+            "coding shadow reconciliation requires DITTO_ADMIN_API_TOKEN"
+        )
     if len(set(config.coding_catalog_curator_hotkeys)) != len(
         config.coding_catalog_curator_hotkeys
     ):
@@ -970,6 +1011,10 @@ def check_config(config: ApiServerConfig) -> None:
             raise ApiServerConfigError(
                 "private coding catalog must use distinct least-privilege credentials"
             )
+    elif config.coding_shadow_reconciliation_enabled:
+        raise ApiServerConfigError(
+            "coding shadow reconciliation requires a private coding catalog"
+        )
     names = config.validator_names
     if (names.url is None) != (names.api_key is None):
         raise ApiServerConfigError(

@@ -23,6 +23,9 @@ from ditto.api_server.endpoints.admin_coding_certifications import (
 from ditto.api_server.endpoints.admin_coding_evaluations import (
     router as admin_coding_evaluations_router,
 )
+from ditto.api_server.endpoints.admin_coding_reconciliation import (
+    router as admin_coding_reconciliation_router,
+)
 from ditto.api_server.endpoints.admin_confirmation_bundles import (
     router as admin_confirmation_bundles_router,
 )
@@ -164,6 +167,7 @@ __all__ = [
     "admin_coding_certifications_router",
     "admin_coding_catalog_router",
     "admin_coding_evaluations_router",
+    "admin_coding_reconciliation_router",
     "admin_confirmation_bundles_router",
     "admin_continual_retest_settings_router",
     "admin_core_qualification_router",
