@@ -2207,10 +2207,14 @@ class TestFederatedScreenerNodes:
         )
         assert readiness.json()["nodes"][0]["ready"] is True
 
+        global_off_settings = ScreenerReviewSettings(mode="off")
+        global_off_checksum = _review_settings_checksum(global_off_settings)
         node_settings = ScreenerReviewSettings(
             mode="enforce", adjudicator_mode="enforce"
         )
         node_checksum = _review_settings_checksum(node_settings)
+        node_inherit_settings = ScreenerReviewSettings(mode="inherit")
+        node_inherit_checksum = _review_settings_checksum(node_inherit_settings)
         canary_agent_id = await _seed_agent(
             session_maker,
             status=AgentStatus.SCREENING_FAILED,
@@ -2219,6 +2223,16 @@ class TestFederatedScreenerNodes:
         failed_attempt_id = uuid4()
         now = datetime.now(UTC)
         async with session_maker() as session, session.begin():
+            global_off_revision = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=global_off_settings.model_dump(mode="json"),
+                checksum=global_off_checksum,
+                reason="ordinary screening remains review off",
+                actor="test",
+            )
+            session.add(global_off_revision)
+            await session.flush()
             revision = ScreenerReviewSettingsRevision(
                 parent_revision=0,
                 scope=node_id,
@@ -2230,6 +2244,18 @@ class TestFederatedScreenerNodes:
             session.add(revision)
             await session.flush()
             node_revision = revision.revision
+            # Returning the node to inherit must not strand the exact canary
+            # which remains bound to its prior node-scoped enforce revision.
+            session.add(
+                ScreenerReviewSettingsRevision(
+                    parent_revision=node_revision,
+                    scope=node_id,
+                    settings=node_inherit_settings.model_dump(mode="json"),
+                    checksum=node_inherit_checksum,
+                    reason="return persistent node to inherited review off",
+                    actor="test",
+                )
+            )
             session.add(
                 ScreeningAttempt(
                     attempt_id=failed_attempt_id,
@@ -2273,25 +2299,27 @@ class TestFederatedScreenerNodes:
             params={"instance_id": worker_instance_id},
         )
         assert worker_settings.status_code == 200, worker_settings.text
-        assert worker_settings.json()["revision"] == node_revision
-        assert worker_settings.json()["scope"] == node_id
+        assert worker_settings.json()["revision"] == global_off_revision.revision
+        assert worker_settings.json()["scope"] == "*"
 
         worker_claim = await client.post(
             "/api/v1/screener/claim",
             headers=node_headers,
             params={
                 "policy_version": SCREENING_POLICY_VERSION,
-                "review_settings_revision": node_revision,
+                "review_settings_revision": global_off_revision.revision,
                 "review_settings_instance_id": worker_instance_id,
-                "review_settings_scope": node_id,
-                "review_settings_checksum": node_checksum,
+                "review_settings_scope": "*",
+                "review_settings_checksum": global_off_checksum,
             },
         )
         assert worker_claim.status_code == 200, worker_claim.text
         assert worker_claim.json()["items"][0]["agent_id"] == str(canary_agent_id)
-        # The active node binding is already supplied with this claim; a queue
-        # item only carries an override when it differs from that binding.
-        assert worker_claim.json()["items"][0]["review_settings_override"] is None
+        assert worker_claim.json()["items"][0]["review_settings_override"] == {
+            "revision": node_revision,
+            "scope": node_id,
+            "checksum": node_checksum,
+        }
 
         # The node-scoped revision that Platform accepted at claim time must
         # also be accepted when this exact local worker terminalizes the lease.

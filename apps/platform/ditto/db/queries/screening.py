@@ -639,6 +639,7 @@ async def claim_screening_attempts(
     netuid: int = 118,
     deferred_review_mode: str = "off",
     review_settings_binding: tuple[int, str, str, str] | None = None,
+    review_settings_enrolled_node_id: str | None = None,
 ) -> list[tuple[Agent, ScreeningAttempt, UUID | None]]:
     """Claim completion-lane contenders, then least-scored eligible work.
 
@@ -1090,9 +1091,20 @@ async def claim_screening_attempts(
                 canary_settings.settings
             )
             instance_id = review_settings_binding[1]
+            allowed_canary_scopes = {
+                "*",
+                instance_id,
+                review_settings_binding[2],
+            }
+            # A persistent node owns multiple local worker heartbeat identities.
+            # Its live setting may intentionally inherit the global posture
+            # while one exact retry remains bound to an older, immutable
+            # node-scoped enforce revision. The endpoint supplies this value
+            # only after authenticating that the instance belongs to the node.
+            if review_settings_enrolled_node_id is not None:
+                allowed_canary_scopes.add(review_settings_enrolled_node_id)
             if (
-                canary_settings.scope
-                not in {"*", instance_id, review_settings_binding[2]}
+                canary_settings.scope not in allowed_canary_scopes
                 or parsed_canary_settings.mode != "enforce"
                 or not parsed_canary_settings.l3_enabled
                 or parsed_canary_settings.adjudicator_mode != "enforce"
