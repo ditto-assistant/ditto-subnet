@@ -926,6 +926,10 @@ class SourceReviewAdjudicator:
             # router returns a misleading 404.
             "max_tokens": self._max_completion_tokens,
             "provider": {
+                # Preserve the same model and strict privacy/tool contract,
+                # while allowing the router to fail over between compatible
+                # healthy providers instead of timing out behind one endpoint.
+                "allow_fallbacks": True,
                 "zdr": True,
                 "data_collection": "deny",
                 "require_parameters": True,

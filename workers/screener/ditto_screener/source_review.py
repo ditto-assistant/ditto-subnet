@@ -340,6 +340,11 @@ _RETRYABLE_MODEL_ERROR_TYPES = frozenset(
     }
 )
 
+# A single upstream completion must not consume the whole L1 budget.  The
+# caller keeps the renewable lease deadline as the overall review budget, while
+# this cap leaves time for the bounded retry and OpenRouter's provider failover.
+_MAX_COMPLETION_REQUEST_SECONDS = 75.0
+
 
 def _retryable_model_error_type(payload: object) -> str | None:
     """Name a transport-class model fault relayed inside an HTTP 200 body."""
@@ -3479,6 +3484,14 @@ class OpenRouterSourceReviewAgent:
                 fault = str(status) if status == 429 or status >= 500 else None
                 signature = f"http-status={status}"
                 caught: BaseException = error
+            except (TimeoutError, httpx.TimeoutException) as error:
+                # ``asyncio.timeout`` raises the built-in TimeoutError, which
+                # is not an httpx.RequestError. Treat both deadline sources as
+                # the same transient provider fault so the bounded retry and
+                # provider fallback actually run.
+                fault = "timeout"
+                signature = f"type={type(error).__name__}"
+                caught = error
             except httpx.RequestError as error:
                 fault = "transport-error"
                 signature = f"type={type(error).__name__}"
@@ -3534,13 +3547,20 @@ class OpenRouterSourceReviewAgent:
             "reasoning": {"effort": reasoning_effort},
             "prompt_cache_key": _l1_prompt_cache_key(messages),
             "provider": {
-                "allow_fallbacks": False,
+                # Keep the exact model and all privacy/tool constraints, but
+                # let OpenRouter route around an unhealthy compatible provider.
+                # Disabling this turned one provider outage into a terminal L1
+                # timeout even though a compliant provider was available.
+                "allow_fallbacks": True,
                 "zdr": True,
                 "data_collection": "deny",
                 "require_parameters": True,
             },
         }
-        effective_timeout = timeout if timeout is not None else self._timeout_seconds
+        effective_timeout = min(
+            timeout if timeout is not None else self._timeout_seconds,
+            _MAX_COMPLETION_REQUEST_SECONDS,
+        )
         async with asyncio.timeout(effective_timeout):
             response = await client.post(
                 f"{self._base_url}/chat/completions",
