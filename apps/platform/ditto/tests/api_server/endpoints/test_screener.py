@@ -286,6 +286,12 @@ def _result_payload(
             reason_code=overrides.get("reason_code")
             if isinstance(overrides.get("reason_code"), str)
             else None,
+            private_failure_detail=overrides.get("private_failure_detail")
+            if isinstance(overrides.get("private_failure_detail"), str)
+            else None,
+            private_failure_log_tail=overrides.get("private_failure_log_tail")
+            if isinstance(overrides.get("private_failure_log_tail"), str)
+            else None,
             image_sha256=overrides.get("image_sha256")
             if isinstance(overrides.get("image_sha256"), str)
             else None,
@@ -3916,6 +3922,58 @@ class TestClaim:
         assert first.status_code == 200
         assert replay.status_code == 200
         assert replay.json()["status"] == AgentStatus.EVALUATING
+
+    async def test_signed_local_build_feedback_is_private_and_persisted(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        claimed = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+        assert claimed.status_code == 200
+        attempt_id = UUID(claimed.json()["items"][0]["attempt_id"])
+        payload = _result_payload(
+            agent_id,
+            passed=False,
+            attempt_id=attempt_id,
+            outcome="deterministic_reject",
+            detail="build failed: Cargo dependency could not be read",
+            reason_code="docker-build",
+            private_failure_detail=(
+                "Cargo could not read vendor/harness/Cargo.toml; token=secret-value"
+            ),
+            private_failure_log_tail=(
+                "error: failed to read Cargo.toml\nBearer provider-secret"
+            ),
+        )
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            headers=_AUTH_HEADER,
+            json=payload,
+        )
+
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            agent = await session.get(Agent, agent_id)
+        assert attempt is not None
+        assert agent is not None
+        assert attempt.failure_provider == "gcp"
+        assert attempt.failure_lane == "buildkit"
+        assert attempt.private_failure_detail is not None
+        assert attempt.private_failure_log_tail is not None
+        assert "secret-value" not in attempt.private_failure_detail
+        assert "provider-secret" not in attempt.private_failure_log_tail
+        assert "[REDACTED]" in attempt.private_failure_detail
+        assert "[REDACTED]" in attempt.private_failure_log_tail
+        assert attempt.failure_captured_at is not None
+        assert agent.screening_reason is not None
+        assert "Cargo.toml" not in agent.screening_reason
 
     async def test_exact_duplicate_waits_for_usable_owner_then_rejects_before_screen(
         self,

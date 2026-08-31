@@ -1322,6 +1322,27 @@ class ScreenResultRequest(BaseModel):
             ),
         ),
     ]
+    private_failure_detail: Annotated[
+        str | None,
+        Field(
+            max_length=4_000,
+            description=(
+                "Bounded miner-owner diagnostic for a failed screening attempt. "
+                "It is signed with the verdict and must never be exposed on a "
+                "public submission surface."
+            ),
+        ),
+    ] = None
+    private_failure_log_tail: Annotated[
+        str | None,
+        Field(
+            max_length=16_000,
+            description=(
+                "Bounded miner-owner build or runtime log tail. It is signed "
+                "with the verdict and persisted only after platform redaction."
+            ),
+        ),
+    ] = None
     build_only: Annotated[
         bool,
         Field(
@@ -1502,6 +1523,25 @@ class ScreenResultRequest(BaseModel):
             and self.outcome == ScreenResultOutcome.QUARANTINE
         ):
             raise ValueError("build-only result cannot carry a quarantine outcome")
+        return self
+
+    @model_validator(mode="after")
+    def validate_private_failure_feedback(self) -> ScreenResultRequest:
+        if (
+            self.private_failure_detail is None
+            and self.private_failure_log_tail is None
+        ):
+            return self
+        if self.attempt_id is None:
+            raise ValueError("private failure feedback requires attempt_id")
+        if self.passed:
+            raise ValueError("passing result cannot carry private failure feedback")
+        if self.outcome not in {
+            ScreenResultOutcome.DETERMINISTIC_REJECT,
+            ScreenResultOutcome.RETRYABLE_INFRA,
+            ScreenResultOutcome.INCONCLUSIVE,
+        }:
+            raise ValueError("private failure feedback requires a failure outcome")
         return self
 
 

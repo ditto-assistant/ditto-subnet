@@ -62,6 +62,11 @@ from ditto_screening_protocol import (
     SourceReviewNote,
     source_review_notes_digest,
 )
+from ditto_screening_protocol.private_failure import (
+    PRIVATE_FAILURE_DETAIL_LIMIT,
+    PRIVATE_FAILURE_LOG_TAIL_LIMIT,
+    private_failure_text,
+)
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -666,6 +671,18 @@ class ScreenerWorker:
                 if result.evidence
                 else None
             )
+            private_failure_detail: str | None = None
+            private_failure_log_tail: str | None = None
+            if reason_code in {"docker-build", "docker-build-infrastructure"}:
+                # The public reason stays generic. Preserve the exact bounded
+                # BuildKit diagnostic for the submission owner, with the same
+                # sanitizer Platform applies before durable storage.
+                private_failure_detail = private_failure_text(
+                    result.detail, limit=PRIVATE_FAILURE_DETAIL_LIMIT
+                )
+                private_failure_log_tail = private_failure_text(
+                    result.detail, limit=PRIVATE_FAILURE_LOG_TAIL_LIMIT
+                )
             # The bounded review payloads ride along on quarantine so the
             # operator sees WHY, not just a digest. When a source-review
             # finding exists, the signed finding_digest binds that finding;
@@ -763,6 +780,8 @@ class ScreenerWorker:
                     else None
                 ),
                 reason_code=reason_code,
+                private_failure_detail=private_failure_detail,
+                private_failure_log_tail=private_failure_log_tail,
                 image_sha256=screened_image.sha256 if screened_image else None,
                 image_size_bytes=screened_image.size_bytes if screened_image else None,
                 image_id=screened_image.image_id if screened_image else None,
@@ -805,6 +824,8 @@ class ScreenerWorker:
                     else None
                 ),
                 reason_code=reason_code,
+                private_failure_detail=private_failure_detail,
+                private_failure_log_tail=private_failure_log_tail,
                 evidence=evidence,
                 finding=finding,
                 review_audit=review_audit,

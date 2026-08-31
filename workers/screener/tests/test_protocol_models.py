@@ -16,6 +16,7 @@ from ditto_screening_protocol import (
     SourceReviewNote,
     source_review_notes_digest,
 )
+from ditto_screening_protocol.private_failure import private_failure_text
 
 _HOTKEY = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 
@@ -259,6 +260,34 @@ def test_build_only_result_cannot_quarantine() -> None:
         ValidationError, match="build-only result cannot carry a quarantine"
     ):
         _request(build_only=True)
+
+
+def test_private_failure_feedback_is_bounded_to_a_failed_attempt() -> None:
+    request = _request(
+        outcome=ScreenResultOutcome.DETERMINISTIC_REJECT,
+        reason_code="docker-build",
+        manifest_digest=None,
+        finding_digest=None,
+        evidence=None,
+        finding=None,
+        private_failure_detail="Cargo could not read vendor/harness/Cargo.toml",
+        private_failure_log_tail="error: No such file or directory (os error 2)",
+    )
+    assert request.private_failure_detail is not None
+    assert request.private_failure_log_tail is not None
+
+    with pytest.raises(ValidationError, match="passing result cannot carry"):
+        _pass_request(private_failure_detail="should not be present")
+
+    with pytest.raises(ValidationError, match="requires attempt_id"):
+        _request(attempt_id=None, private_failure_detail="missing lease")
+
+
+def test_private_failure_text_stays_within_the_wire_limit() -> None:
+    value = private_failure_text("x" * 4_001, limit=4_000)
+
+    assert value.startswith("[truncated]\n")
+    assert len(value) == 4_000
 
 
 def test_deferred_mechanical_result_can_preserve_oracle_quarantine() -> None:

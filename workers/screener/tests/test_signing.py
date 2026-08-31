@@ -175,6 +175,28 @@ def test_source_review_note_ledger_digest_is_bound_into_typed_verdict() -> None:
     assert with_notes != legacy
 
 
+def test_private_failure_feedback_is_bound_into_typed_verdict() -> None:
+    base = {
+        "screener_hotkey": _HOTKEY,
+        "agent_id": _AGENT,
+        "attempt_id": _ATTEMPT,
+        "passed": False,
+        "outcome": ScreenResultOutcome.DETERMINISTIC_REJECT,
+        "reason_code": "docker-build",
+    }
+    legacy = verdict_signing_message(**base)
+    feedback = verdict_signing_message(
+        **base,
+        private_failure_detail="Cargo dependency is missing",
+        private_failure_log_tail="error: could not read vendor/harness/Cargo.toml",
+    )
+
+    payload = json.loads(feedback.removeprefix(b"ditto-screen-result:v5:").decode())
+    assert payload["private_failure_detail"] == "Cargo dependency is missing"
+    assert payload["private_failure_log_tail"].endswith("Cargo.toml")
+    assert feedback != legacy
+
+
 @pytest.mark.parametrize("policy_version", [9, SCREENING_POLICY_VERSION])
 def test_policy_v9_and_later_signature_requires_typed_outcome(
     policy_version: int,
