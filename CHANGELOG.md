@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.177.18 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Provision worker state during fleet scale-up
+  ([#1411](https://github.com/ditto-assistant/ditto-subnet/pull/1411),
+  [`07657f1`](https://github.com/ditto-assistant/ditto-subnet/commit/07657f1d32230974da1d748737524d5bf406c970))
+
+- **validator**: Reduce continual retest seed cap
+  ([#1410](https://github.com/ditto-assistant/ditto-subnet/pull/1410),
+  [`de8af68`](https://github.com/ditto-assistant/ditto-subnet/commit/de8af683ce1c77cc200529ebca198cbc7d642380))
+
+
 ## v0.177.17 (2026-08-31)
 
 ### Bug Fixes
