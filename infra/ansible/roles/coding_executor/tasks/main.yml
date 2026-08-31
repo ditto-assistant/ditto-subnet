@@ -94,6 +94,14 @@
       capability guards, and the temporary runtime-image client guard. It
       cannot be an independent socket or network authority.
 
+- name: Reject mTLS identity staging before scorer runtime materialization
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_mtls_identity_enabled | bool) or coding_executor_scorer_runtime_materialize_enabled | bool
+    fail_msg: >-
+      mTLS identity staging requires the materialized attested scorer runtime.
+      It cannot establish a transport identity for an unverified host binary.
+
 - name: Report that the coding executor daemon is deliberately disabled
   ansible.builtin.debug:
     msg: >-
@@ -588,6 +596,67 @@
             name: "{{ coding_executor_client_guard_unit }}.service"
             enabled: false
             state: stopped
+
+    - name: Stage the default-off scorer mTLS identity without listening
+      when: coding_executor_mtls_identity_enabled | bool
+      block:
+        - name: Require the fixed scorer mTLS identity profile
+          ansible.builtin.assert:
+            that:
+              - coding_executor_mtls_identity_directory == '/var/lib/ditto-coding-executor/mtls'
+              - coding_executor_mtls_ca_certificate_path == '/var/lib/ditto-coding-executor/mtls/validator-ca.pem'
+              - coding_executor_mtls_server_certificate_path == '/var/lib/ditto-coding-executor/mtls/scorer-server.pem'
+              - coding_executor_mtls_server_key_path == '/var/lib/ditto-coding-executor/mtls/scorer-server-key.pem'
+            fail_msg: >-
+              The mTLS identity paths are fixed and root-only. Do not make a
+              caller-selected certificate or key authoritative.
+
+        - name: Create the root-only scorer mTLS directory
+          ansible.builtin.file:
+            path: "{{ coding_executor_mtls_identity_directory }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: Inspect staged scorer mTLS files
+          ansible.builtin.stat:
+            path: "{{ item }}"
+            follow: false
+          loop:
+            - "{{ coding_executor_mtls_ca_certificate_path }}"
+            - "{{ coding_executor_mtls_server_certificate_path }}"
+            - "{{ coding_executor_mtls_server_key_path }}"
+          register: coding_executor_mtls_files
+
+        - name: Require root-only scorer mTLS files
+          ansible.builtin.assert:
+            that:
+              - item.stat.exists
+              - item.stat.isreg
+              - not item.stat.islnk
+              - item.stat.uid == 0
+              - item.stat.gid == 0
+              - item.stat.mode == '0400'
+              - item.stat.size | int > 0
+            fail_msg: >-
+              mTLS CA, server certificate, and server key must already be
+              root-only regular files. Ansible never copies their contents.
+          loop: "{{ coding_executor_mtls_files.results }}"
+
+        - name: Install the scorer mTLS identity verifier
+          ansible.builtin.copy:
+            src: verify-scorer-mtls-identity.sh
+            dest: /usr/local/lib/ditto-coding-executor/verify-scorer-mtls-identity.sh
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Verify scorer mTLS chain and private key match
+          ansible.builtin.command:
+            argv:
+              - /usr/local/lib/ditto-coding-executor/verify-scorer-mtls-identity.sh
+          changed_when: false
 
     - name: Report that task-serving scorer and worker activation remain disabled
       ansible.builtin.debug:
