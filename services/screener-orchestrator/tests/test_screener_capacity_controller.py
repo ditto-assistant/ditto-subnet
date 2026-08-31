@@ -100,6 +100,8 @@ class _GCE:
     def __init__(self, target: int = 0, operations: list[str] | None = None) -> None:
         self._target = target
         self.resized: list[int] = []
+        self.resize_watchdogs: list[bool] = []
+        self.watchdogs: list[bool] = []
         self.operations = operations
 
     def target(self) -> int:
@@ -108,11 +110,12 @@ class _GCE:
     def counts(self) -> ProviderCounts:
         return ProviderCounts(healthy=self._target)
 
-    def ensure_watchdog(self) -> None:
-        return None
+    def ensure_watchdog(self, *, enabled: bool) -> None:
+        self.watchdogs.append(enabled)
 
-    def resize(self, target: int) -> None:
+    def resize(self, target: int, *, watchdog_enabled: bool) -> None:
         self.resized.append(target)
+        self.resize_watchdogs.append(watchdog_enabled)
         if self.operations is not None:
             self.operations.append(f"gce:{target}")
         self._target = target
@@ -188,13 +191,13 @@ class CapacityDecisionTests(unittest.TestCase):
         self.assertEqual(reason, "HETZNER_PRIMARY_UNAVAILABLE")
 
     @patch("screener_capacity.controller.subprocess.run")
-    def test_gce_resize_pauses_and_restores_scale_out_watchdog(
+    def test_gce_resize_pauses_and_leaves_watchdog_disabled_at_zero(
         self, run: object
     ) -> None:
         run.return_value = SimpleNamespace(stdout="")  # type: ignore[attr-defined]
         fleet = GCEFleet(project="test", region="region", mig="fleet")
 
-        fleet.resize(0)
+        fleet.resize(0, watchdog_enabled=False)
 
         commands = [call.args[0] for call in run.call_args_list]  # type: ignore[attr-defined]
         self.assertIn("--mode", commands[0])
@@ -203,7 +206,7 @@ class CapacityDecisionTests(unittest.TestCase):
         self.assertIn("--size", commands[1])
         self.assertIn("0", commands[1])
         self.assertIn("--mode", commands[2])
-        self.assertIn("only-scale-out", commands[2])
+        self.assertIn("off", commands[2])
 
     @patch("screener_capacity.controller.subprocess.run")
     def test_gce_resize_restores_watchdog_after_resize_failure(
@@ -219,7 +222,7 @@ class CapacityDecisionTests(unittest.TestCase):
         fleet = GCEFleet(project="test", region="region", mig="fleet")
 
         with self.assertRaisesRegex(ControllerError, "managed-group operation"):
-            fleet.resize(1)
+            fleet.resize(1, watchdog_enabled=True)
 
         restore = run.call_args_list[-1].args[0]  # type: ignore[attr-defined]
         self.assertIn("only-scale-out", restore)
@@ -238,7 +241,7 @@ class CapacityDecisionTests(unittest.TestCase):
         fleet = GCEFleet(project="test", region="region", mig="fleet")
 
         with self.assertRaisesRegex(ControllerError, "watchdog restore failed"):
-            fleet.resize(0)
+            fleet.resize(0, watchdog_enabled=False)
 
         self.assertEqual(run.call_count, 3)  # type: ignore[attr-defined]
 
@@ -247,7 +250,7 @@ class CapacityDecisionTests(unittest.TestCase):
         run.side_effect = [SimpleNamespace(stdout="OFF\n"), SimpleNamespace(stdout="")]
         fleet = GCEFleet(project="test", region="region", mig="fleet")
 
-        fleet.ensure_watchdog()
+        fleet.ensure_watchdog(enabled=True)
 
         self.assertEqual(run.call_count, 2)  # type: ignore[attr-defined]
         self.assertIn("only-scale-out", run.call_args_list[-1].args[0])  # type: ignore[attr-defined]
@@ -257,7 +260,7 @@ class CapacityDecisionTests(unittest.TestCase):
         run.return_value = SimpleNamespace(stdout="ONLY_SCALE_OUT\n")  # type: ignore[attr-defined]
         fleet = GCEFleet(project="test", region="region", mig="fleet")
 
-        fleet.ensure_watchdog()
+        fleet.ensure_watchdog(enabled=True)
 
         self.assertEqual(run.call_count, 1)  # type: ignore[attr-defined]
 
@@ -267,7 +270,8 @@ class CapacityDecisionTests(unittest.TestCase):
             platform = _Platform(Demand(runnable=0, active=0, desired=0))
             gce = _GCE()
 
-            def fail_watchdog() -> None:
+            def fail_watchdog(*, enabled: bool) -> None:
+                del enabled
                 raise ControllerError("test watchdog failure")
 
             gce.ensure_watchdog = fail_watchdog  # type: ignore[method-assign]
@@ -286,6 +290,84 @@ class CapacityDecisionTests(unittest.TestCase):
                 platform.renewed[-1]["last_provider_error_code"],
                 "GCE_WATCHDOG_RESTORE_FAILED",
             )
+
+    def test_hetzner_base_load_disables_raw_queue_watchdog(self) -> None:
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            routing = ProviderRouting(
+                revision=1,
+                runtime_provider_priority=("hetzner", "gcp"),
+                source_review_provider_priority=("hetzner", "gcp"),
+                build_provider_priority=("hetzner", "gcp"),
+                overflow=OverflowPolicy(True, "subnet-screener-1", 3, 12, 6),
+            )
+            platform = SimpleNamespace(
+                demand=lambda **_kwargs: Demand(runnable=10, active=0, desired=5),
+                provider_routing=lambda: routing,
+                node_states=lambda: {
+                    "subnet-screener-1": {
+                        "status": "active",
+                        "ready": True,
+                        "screening_concurrency": 2,
+                    }
+                },
+                renew=lambda snapshot: snapshot,
+                fence=lambda **_kwargs: None,
+            )
+            gce = _GCE()
+
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+            ):
+                snapshot = reconcile(settings)
+
+            self.assertEqual(snapshot["gce_target"], 0)
+            self.assertEqual(
+                snapshot["fallback_reason"], "HETZNER_PRIMARY_HANDLING_BASE_LOAD"
+            )
+            self.assertEqual(gce.watchdogs, [False])
+            self.assertEqual(gce.resized, [])
+
+    def test_scale_down_to_zero_leaves_watchdog_disabled(self) -> None:
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            routing = ProviderRouting(
+                revision=1,
+                runtime_provider_priority=("hetzner", "gcp"),
+                source_review_provider_priority=("hetzner", "gcp"),
+                build_provider_priority=("hetzner", "gcp"),
+                overflow=OverflowPolicy(True, "subnet-screener-1", 3, 12, 6),
+            )
+            platform = SimpleNamespace(
+                demand=lambda **_kwargs: Demand(runnable=10, active=0, desired=5),
+                provider_routing=lambda: routing,
+                node_states=lambda: {
+                    "subnet-screener-1": {
+                        "status": "active",
+                        "ready": True,
+                        "screening_concurrency": 2,
+                    }
+                },
+                renew=lambda snapshot: snapshot,
+                fence=lambda **_kwargs: None,
+            )
+            gce = _GCE(target=2)
+
+            with (
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+            ):
+                reconcile(settings)
+
+            self.assertEqual(gce.resized, [0])
+            self.assertEqual(gce.resize_watchdogs, [False])
 
     def test_zero_idle_capacity_is_valid(self) -> None:
         self.assertEqual(desired_slots(runnable=0, active=0, jobs_per_slot=6, cap=6), 0)
@@ -337,8 +419,8 @@ class CapacityDecisionTests(unittest.TestCase):
             gce = SimpleNamespace(
                 target=lambda: 0,
                 counts=lambda: ProviderCounts(),
-                ensure_watchdog=lambda: None,
-                resize=resized.append,
+                ensure_watchdog=lambda **_kwargs: None,
+                resize=lambda target, **_kwargs: resized.append(target),
             )
             with (
                 patch(

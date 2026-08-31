@@ -489,15 +489,24 @@ class GCEFleet:
             mode,
         )
 
-    def ensure_watchdog(self) -> None:
-        """Recover the independent scale-out watchdog after an interrupted resize."""
-        if self._autoscaler_mode() != self.WATCHDOG_MODE:
-            self._set_autoscaler_mode("only-scale-out")
+    def ensure_watchdog(self, *, enabled: bool) -> None:
+        """Align the raw-queue watchdog with the controller's bounded target.
 
-    def resize(self, target: int) -> None:
+        The Google autoscaler sees only queue depth; it cannot prove that the
+        primary Hetzner node is ready or apply the overflow threshold.  It must
+        therefore stay off while this controller has selected zero GCE slots.
+        """
+        desired_mode = self.WATCHDOG_MODE if enabled else "OFF"
+        if self._autoscaler_mode() != desired_mode:
+            self._set_autoscaler_mode("only-scale-out" if enabled else "off")
+
+    def resize(self, target: int, *, watchdog_enabled: bool) -> None:
         # Compute rejects manual resize while any autoscaler mode is active,
         # including ONLY_SCALE_OUT. Keep the emergency policy configured, pause
-        # it only around the fenced mutation, and restore it even on failure.
+        # it only around the fenced mutation. Restore it only when the bounded
+        # controller target is nonzero; otherwise the raw queue-depth signal
+        # would immediately recreate GCE workers that Hetzner is meant to
+        # handle.
         resize_error: ControllerError | None = None
         try:
             self._set_autoscaler_mode("off")
@@ -515,7 +524,7 @@ class GCEFleet:
         except ControllerError as error:
             resize_error = error
         try:
-            self._set_autoscaler_mode("only-scale-out")
+            self._set_autoscaler_mode("only-scale-out" if watchdog_enabled else "off")
         except ControllerError as restore_error:
             raise ControllerError(
                 "GCE autoscaler watchdog restore failed"
@@ -829,23 +838,25 @@ def reconcile(settings: Settings) -> dict[str, Any]:
     # Lease acquisition/renewal fences every mutation below.  A concurrent
     # epoch receives 409 while the existing lease remains live.
     platform.renew(snapshot)
-    try:
-        platform.fence(epoch=settings.epoch)
-        gce_fleet.ensure_watchdog()
-    except ControllerError:
-        _record_provider_failure(
-            platform,
-            snapshot,
-            state_file=settings.state_file,
-            code="GCE_WATCHDOG_RESTORE_FAILED",
-            detail="GCE emergency autoscaler restore failed",
-        )
-        raise
+    watchdog_enabled = target > 0
+    if target == current_target:
+        try:
+            platform.fence(epoch=settings.epoch)
+            gce_fleet.ensure_watchdog(enabled=watchdog_enabled)
+        except ControllerError:
+            _record_provider_failure(
+                platform,
+                snapshot,
+                state_file=settings.state_file,
+                code="GCE_WATCHDOG_RESTORE_FAILED",
+                detail="GCE emergency autoscaler restore failed",
+            )
+            raise
     if target > current_target:
         # Bring fallback capacity up before any later reconciliation work.
         try:
             platform.fence(epoch=settings.epoch)
-            gce_fleet.resize(target)
+            gce_fleet.resize(target, watchdog_enabled=watchdog_enabled)
             current_target = target
         except ControllerError:
             _record_provider_failure(
@@ -861,7 +872,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         # fallen to zero because desired_slots includes every active lease.
         try:
             platform.fence(epoch=settings.epoch)
-            gce_fleet.resize(target)
+            gce_fleet.resize(target, watchdog_enabled=watchdog_enabled)
         except ControllerError:
             _record_provider_failure(
                 platform,
