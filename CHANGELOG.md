@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.19 (2026-08-31)
+
+### Bug Fixes
+
+- **platform**: Defer lexical resubmissions to source review
+  ([#1412](https://github.com/ditto-assistant/ditto-subnet/pull/1412),
+  [`f566bc4`](https://github.com/ditto-assistant/ditto-subnet/commit/f566bc4672106a9b8e5b967220e78d8a4db531cb))
+
+
 ## v0.177.18 (2026-08-31)
 
 ### Bug Fixes
