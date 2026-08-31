@@ -58,12 +58,16 @@ async def test_live_l2_analyst_and_sol_critic_clear_canonical_starter(
         pytest.skip(
             "DITTO_STARTER_KIT_DIR and DITTO_L2_LIVE_OPENROUTER_KEY_FILE required"
         )
-    analyst_model = os.environ.get("DITTO_L2_LIVE_ANALYST_MODEL", "moonshotai/kimi-k3")
-    assert analyst_model in {"moonshotai/kimi-k3", "z-ai/glm-5.2"}
-    fallback_models = (
-        L2_FALLBACK_MODELS
-        if analyst_model == "moonshotai/kimi-k3"
-        else ("openai/gpt-5.6-sol",)
+    analyst_model = os.environ.get(
+        "DITTO_L2_LIVE_ANALYST_MODEL", "openai/gpt-5.6-terra"
+    )
+    assert analyst_model in {
+        "openai/gpt-5.6-terra",
+        "moonshotai/kimi-k3",
+        "z-ai/glm-5.2",
+    }
+    fallback_models = tuple(
+        candidate for candidate in L2_FALLBACK_MODELS if candidate != analyst_model
     )
     timeout_seconds = float(os.environ.get("DITTO_L2_LIVE_TIMEOUT_SECONDS", "600"))
     max_input_tokens = int(os.environ.get("DITTO_L2_LIVE_MAX_INPUT_TOKENS", "425000"))

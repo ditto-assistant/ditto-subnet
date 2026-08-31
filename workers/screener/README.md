@@ -7,10 +7,11 @@ downloads and verifies its tarball, enforces safe language-neutral Docker
 rules, builds the Docker image, starts it with resource caps and an internal fake
 gateway, waits for `/health`, then performs a bounded, read-only Luna source
 review before submitting a lease-bound sr25519 result. An optional, default-off
-Kimi K3 level-2 reviewer can resolve only medium/high L1 leads with an
-isolated, no-network coding-analysis harness. Its exact model is single-shot;
-OpenRouter fallbacks are disabled. A complete, very-high-confidence medium-risk
-certificate from primary Kimi may clear directly; every static/high-risk,
+GPT-5.6 Terra level-2 reviewer can resolve only medium/high L1 leads with an
+isolated, no-network coding-analysis harness. Terra is primary; OpenRouter may
+fall back to the configured GLM/SOL models only after an upstream model error.
+A complete, very-high-confidence medium-risk certificate from primary Terra may
+clear directly; every static/high-risk,
 incomplete or lower-confidence safe result requires the
 independent GPT-5.6 SOL level-3 critic. A SOL challenge is decided by a second,
 low-reasoning SOL adjudicator rather than becoming an automatic violation.
@@ -148,11 +149,13 @@ Required values are supplied through the production host's protected
   for the private read-only source reviewer. The default model is
   `openai/gpt-5.6-luna`.
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
-- `SCREENER_L2_REVIEW_MODEL`: locked to `moonshotai/kimi-k3`. The rolling
-  `SCREENER_L2_FALLBACK_MODELS` field is still parsed for configuration
-  compatibility but is never dispatched; model failover is disabled.
+- `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-5.6-terra`; legacy
+  `moonshotai/kimi-k3` remains accepted only for a deliberate rollback.
+  `SCREENER_L2_FALLBACK_MODELS` is the ordered OpenRouter model-failover chain
+  (`z-ai/glm-5.2`, then `openai/gpt-5.6-sol`). A fallback is used only after a
+  model/routing error, never after a valid analyst response.
 - `SCREENER_L3_REVIEW_ENABLED`: `true` (default) runs the independent SOL
-  critic/adjudicator after L2. `false` keeps L1 routing and the Kimi L2 analyst
+  critic/adjudicator after L2. `false` keeps L1 routing and the Terra L2 analyst
   active while making the L2 result authoritative. Platform review-settings
   revisions can change this between leases without a worker restart.
 - `SCREENER_L3_REVIEW_MODEL`: locked to `openai/gpt-5.6-sol`; both layers use
@@ -188,7 +191,7 @@ boundary, [docs/source-review-policy.md](docs/source-review-policy.md) for the
 allowed-optimization and benchmark-emulation boundary,
 [docs/binary-analysis.md](docs/binary-analysis.md) for the bounded opaque-file
 inspection contract, and
-[docs/l2-source-review.md](docs/l2-source-review.md) for the Kimi/GLM/SOL models,
+[docs/l2-source-review.md](docs/l2-source-review.md) for the Terra/GLM/SOL models,
 isolated coding harness, evidence, budgets, and canary/rollback contract,
 [docs/l4-adjudication.md](docs/l4-adjudication.md) for the automated
 clear/reject court that resolves a hold instead of queuing it, and

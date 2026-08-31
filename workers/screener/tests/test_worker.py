@@ -449,7 +449,7 @@ async def test_shadow_review_is_attempt_bound_and_does_not_change_verdict(
         tools=(),
         usage=L2Usage(input_tokens=100, output_tokens=10),
         cache_hit=False,
-        response_models=("moonshotai/kimi-k3", "openai/gpt-5.6-sol"),
+        response_models=("openai/gpt-5.6-terra", "openai/gpt-5.6-sol"),
         resolution_basis="authoritative_model_tool_path",
         clearance_path="l3_adjudicated_safe",
         critic_disposition="confirm_safe",

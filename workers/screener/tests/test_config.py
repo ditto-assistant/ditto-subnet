@@ -57,7 +57,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.static_preflight_v2_mode == "off"
     assert cfg.static_preflight_audit_file is None
     assert cfg.l2_review_mode == "off"
-    assert cfg.l2_review_model == "moonshotai/kimi-k3"
+    assert cfg.l2_review_model == "openai/gpt-5.6-terra"
     assert cfg.l2_review_provider == "openrouter"
     assert cfg.l2_fallback_models == ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
     assert cfg.l3_review_enabled is True
@@ -106,7 +106,7 @@ def test_remote_build_timeout_is_independent_and_configurable(
             "off, shadow, or enforce",
         ),
         ("SCREENER_L2_REVIEW_MODE", "always", "off, shadow, or enforce"),
-        ("SCREENER_L2_REVIEW_MODEL", "openai/other", "moonshotai/kimi-k3"),
+        ("SCREENER_L2_REVIEW_MODEL", "openai/other", "gpt-5.6-terra"),
         ("SCREENER_L2_REVIEW_PROVIDER", "azure", "must be openrouter"),
         (
             "SCREENER_L2_FALLBACK_MODELS",

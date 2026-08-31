@@ -1,18 +1,18 @@
-# Kimi/GLM/SOL level-2 review with SOL critic and adjudicators
+# Terra/GLM/SOL level-2 review with SOL critic and adjudicators
 
 Level 2 is an optional escalation behind the bounded Luna source review. On
-Targon and Cloud Run it runs in the same source-review rental as L1, using an
-in-process analyzer (no nested Docker). It is
+the screener worker it runs locally beside L1, using an in-process analyzer
+(no nested Docker). It is
 disabled by default. A clean or advisory-only L1 result never pays its cost;
 medium/high Luna findings and elevated static preflight matches become
 artifact-bound L2 routing leads. Static leads are resolved before untrusted
-Docker execution; they are no longer treated as terminal proof. A Kimi
-violation retains quarantine. A primary-Kimi safe
+Docker execution; they are no longer treated as terminal proof. A Terra
+violation retains quarantine. A primary-Terra safe
 result can clear directly only when a deterministic certificate verifies a
 medium-risk L1 lead, confidence of at least 0.98, complete L1-file coverage, a
 targeted analyzer call, no violation evidence, and a context-to-authoritative-
-decision-to-answer-sink path. An obvious single-mechanism Kimi violation stops
-at L2 only when Kimi has not narrowed away a distinct L1 mechanism family.
+decision-to-answer-sink path. An obvious single-mechanism Terra violation stops
+at L2 only when Terra has not narrowed away a distinct L1 mechanism family.
 Benchmark-family or mixed benchmark, scorer, tool, provider, scope, credential,
 or exfiltration leads use a bounded, medium-reasoning SOL cause adjudicator so
 quarantine records the primary causal mechanism rather than whichever
@@ -40,24 +40,19 @@ Neither layer can reject or ban.
 
 ## Model and budget contract
 
-The OpenRouter catalog was verified on 2026-07-18:
+The OpenRouter catalog was verified on 2026-08-31:
 
-- L2 exact model: `moonshotai/kimi-k3` (canonical
-  `moonshotai/kimi-k3-20260715`), with provider and model fallback disabled;
-- L3 critic and cause/safety adjudicators: exact model `openai/gpt-5.6-sol` (canonical
-  `openai/gpt-5.6-sol-20260709`), with model fallback disabled;
-- Kimi reasoning is mandatory and currently exposes only its `max`/model-default
-  level. SOL L3 uses `medium` reasoning for the
+- L2 primary model: `openai/gpt-5.6-terra`, with ordered error-only model
+  failover to `z-ai/glm-5.2` and `openai/gpt-5.6-sol`;
+- L3 critic and cause/safety adjudicators: exact model `openai/gpt-5.6-sol`;
+- Terra uses model-default reasoning. SOL L3 uses `medium` reasoning for the
   clearance critic and violation-cause adjudicator, and `low` for the bounded
   safety-disagreement adjudicator. Mixed benchmark/scorer leads promote that
   final adjudicator to `medium` reasoning;
-- privacy routing: ZDR required and data collection denied;
-- Kimi context is 1,048,576 tokens and costs $3/M input, $0.30/M cached input,
-  and $15/M output. GLM context is 1,048,576 tokens and currently costs
-  $0.2674/M input, $0.04966/M cached input, and $0.8404/M output. SOL context
-  is 1,050,000 tokens and
-  costs $5/M input, $0.50/M cached input, and $30/M output below its
-  272,000-token price tier.
+- Terra supports tool calling, has a 1.05M-token context, and is served by
+  OpenAI, Azure, and AWS Bedrock. All model calls require ZDR, deny data
+  collection, allow provider failover, and sort eligible providers by
+  throughput.
 
 The screener allows 425,000 cumulative effective input tokens (uncached plus
 10% of cached input), 20,000 cumulative output tokens, 2,400 output tokens per
@@ -74,7 +69,7 @@ when the provider omits cost. A stable instructions/tool/dossier prefix,
 `prompt_cache_key`, and artifact-scoped `session_id` maximize provider cache
 reuse without enabling response replay caching. The result-cache key includes
 all budgets, model/fallback/critic routing, reasoning settings, artifact/L1
-digests, prompt revisions `l2-kimi-source-review-v35-policy-v10`,
+digests, prompt revisions `l2-terra-source-review-v37-policy-v10`,
 `l3-sol-adversarial-critic-v20-policy-v10`,
 `l3-sol-violation-cause-v26-policy-v10`,
 `l3-sol-cause-disagreement-v6-policy-v10`,
@@ -114,13 +109,14 @@ Forced GLM calibration against the same starter confirmed Responses API and
 isolated-tool compatibility, but GLM did not produce a valid clearance within
 the bounded trials: separate attempts exhausted effective token, corrective
 tool-call, malformed-argument, or step limits. Every outcome remained
-`retryable_infra`; none cleared or rejected the artifact, and SOL L3 was not
-silently substituted after a model-behavior failure. GLM remains calibration
-history, not a production availability fallback.
+`retryable_infra`; none cleared or rejected the artifact. That historical
+calibration is not a clearance result. In the current model chain, GLM is used
+only after Terra fails before producing a response, and its safe output still
+requires the normal independent SOL path.
 
 Catalog references:
 
-- <https://openrouter.ai/provider/moonshotai>
+- <https://openrouter.ai/openai/gpt-5.6-terra>
 - <https://openrouter.ai/z-ai/glm-5.2>
 - <https://openrouter.ai/openai/gpt-5.6-sol/>
 - <https://openrouter.ai/docs/api/reference/responses/overview>
@@ -210,7 +206,7 @@ only the same sanitized structured result and default to seven days. Complete-
 write loops, file locks, and atomic replacement make identical concurrent reviews idempotent across
 workers sharing the cache. A provisional-safe analyst stage and complete SOL
 critic result are cached separately, so a retryable critic resumes without
-paying for Kimi and a retryable adjudicator reruns only that final bounded
+paying for Terra and a retryable adjudicator reruns only that final bounded
 trajectory. Cache-hit stages contribute zero new usage to the retry audit.
 The Platform-managed `l3_enabled` switch independently skips SOL critic and
 adjudicator trajectories while preserving L1 routing, the paid L2 analyst,
@@ -237,7 +233,8 @@ runs the production reviewer and analyzer image with bounded concurrency, and
 writes a mode-0600 checkpoint after each case. Every item runs once per command.
 Retryable infrastructure or model-contract failures remain in the checkpoint;
 an operator must issue a new calibration command to retry them. A later manual
-run may resume from sanitized Kimi and, when available, SOL-critic stage caches.
+run may resume from sanitized analyst and, when available, SOL-critic stage
+caches.
 Output contains
 only disposition, resolution basis,
 categories, routing/model/provider metadata, attempts, latency, usage, and
@@ -270,7 +267,7 @@ must pass disposition and causal-basis gates before enforcement can be enabled.
 
 - `off` (default): L1 behavior and manifest digest are unchanged; no analyzer
   image or SOL request is needed.
-- `shadow`: selected L1 findings run Kimi L2 and only safe results that lack the
+- `shadow`: selected L1 findings run Terra L2 and only safe results that lack the
   strict direct-clearance certificate run SOL L3; they write private audit/cost
   evidence, but the signed L1 result remains authoritative.
 - `enforce`: a distinct manifest rotation is signed; L2 safe/violation/failure

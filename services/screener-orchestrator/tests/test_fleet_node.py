@@ -123,7 +123,7 @@ def test_source_review_job_receives_attempt_bound_policy() -> None:
             "review_settings_checksum": "a" * 64,
             "review_settings": {
                 "mode": "enforce",
-                "l2_model": "moonshotai/kimi-k3",
+                "l2_model": "openai/gpt-5.6-terra",
                 "l2_fallback_models": ["z-ai/glm-5.2", "openai/gpt-5.6-sol"],
                 "l3_enabled": True,
                 "l3_model": "openai/gpt-5.6-sol",

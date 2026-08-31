@@ -998,7 +998,7 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
             review_env.extend(
                 [
                     {"name": "SCREENER_L2_REVIEW_MODE", "value": "enforce"},
-                    {"name": "SCREENER_L2_REVIEW_MODEL", "value": "moonshotai/kimi-k3"},
+                    {"name": "SCREENER_L2_REVIEW_MODEL", "value": "openai/gpt-5.6-terra"},
                     {"name": "SCREENER_L3_REVIEW_ENABLED", "value": "true"},
                     {"name": "SCREENER_L3_REVIEW_MODEL", "value": "openai/gpt-5.6-sol"},
                     {"name": "SCREENER_L2_ALWAYS_ESCALATE", "value": "true"},

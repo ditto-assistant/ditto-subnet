@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ditto_screener.config import ScreenerConfig
 
 ReviewModel = Literal[
+    "openai/gpt-5.6-terra",
     "moonshotai/kimi-k3",
     "z-ai/glm-5.2",
     "openai/gpt-5.6-sol",

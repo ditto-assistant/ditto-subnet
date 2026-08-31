@@ -73,10 +73,10 @@ from ditto_screener.heartbeat import (
 )
 from ditto_screener.l2_review import (
     IsolatedCodingHarness,
-    KimiSolSourceReviewAgent,
     L2AuditJournal,
     L2RunResult,
     LayeredSourceReviewAgent,
+    TerraSolSourceReviewAgent,
 )
 from ditto_screener.platform import (
     LocalScreeningProviderSelected,
@@ -606,7 +606,7 @@ class BuildGate:
             concern_hold_count=config.review_concern_hold_count,
             clear_min_notes=config.review_clear_min_notes,
         )
-        l2_reviewer = KimiSolSourceReviewAgent(
+        l2_reviewer = TerraSolSourceReviewAgent(
             api_key_file=config.source_review_api_key_file,
             base_url=config.source_review_base_url,
             harness=IsolatedCodingHarness(

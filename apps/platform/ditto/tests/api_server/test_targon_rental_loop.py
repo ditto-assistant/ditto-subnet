@@ -76,7 +76,7 @@ def test_source_review_layer_env_pins_l2_and_l3() -> None:
     )
     assert env["SCREENER_L2_REVIEW_MODE"] == "enforce"
     assert env["SCREENER_L3_REVIEW_ENABLED"] == "true"
-    assert env["SCREENER_L2_REVIEW_MODEL"] == "moonshotai/kimi-k3"
+    assert env["SCREENER_L2_REVIEW_MODEL"] == "openai/gpt-5.6-terra"
 
 
 def test_private_failure_text_escapes_postgres_nul_bytes() -> None:

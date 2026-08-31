@@ -331,9 +331,9 @@ DEFAULT_V8_MANIFEST = PolicyManifest(
     ),
 )
 DEFAULT_L2_MANIFEST = PolicyManifest(
-    rotation_id="v8-luna-sol-l2-source-review-behavioral-oracle",
+    rotation_id="v8-luna-terra-sol-l2-source-review-behavioral-oracle",
     module_specs=(
-        {"kind": "agentic_source_review", "id": "luna-sol-source-review"},
+        {"kind": "agentic_source_review", "id": "luna-terra-sol-source-review"},
         {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
     ),
 )
@@ -1302,7 +1302,9 @@ def load_policy_engine(
             (
                 AgenticSourceReviewModule(
                     module_id=(
-                        "luna-sol-source-review" if l2_profile else "luna-source-review"
+                        "luna-terra-sol-source-review"
+                        if l2_profile
+                        else "luna-source-review"
                     )
                 ),
                 BehavioralOracleModule(module_id="v8-behavioral-oracle"),
