@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.4 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Bound court to reserved lease window
+  ([#1395](https://github.com/ditto-assistant/ditto-subnet/pull/1395),
+  [`9aba38c`](https://github.com/ditto-assistant/ditto-subnet/commit/9aba38ca8ca836cf515d711f7e92daa412463a7e))
+
+
 ## v0.177.3 (2026-08-31)
 
 ### Bug Fixes
