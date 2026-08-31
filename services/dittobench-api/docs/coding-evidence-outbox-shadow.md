@@ -159,6 +159,13 @@ schedule attempts. `Release` retains the terminal evidence digest supplied by
 the trusted terminal builder and cross-checks it against the acknowledged
 terminal request.
 
+The future remote object handoff is defined by
+[`docs/coding-private-s3-data-plane.md`](../../../docs/coding-private-s3-data-plane.md).
+It may upload only bytes already sealed in this local store, and Platform must
+finalize their exact identities before a freeze or result can reference them.
+The remote store cannot reconstruct an unfinished collection or authorize a
+candidate retry.
+
 Coding contract v1 remains permanently `weight_eligible=false`.
 
 ## Validation

@@ -46,6 +46,11 @@ grader delivery during authoring and memory delivery during grading. The
 synthetic vector URL is not part of canonical identity and is not consumed by
 Rust or miner code.
 
+The broader input/evidence transport boundary is frozen in
+[`docs/coding-private-s3-data-plane.md`](../../../docs/coding-private-s3-data-plane.md).
+That document does not add an evidence capability to this route: current
+artifact capabilities remain input-only and phase-specific.
+
 Environment and grader images remain immutable OCI digests. Base-tree,
 test-manifest, and grader-plan hashes remain identities within their parent
 bundles rather than separately presigned objects.

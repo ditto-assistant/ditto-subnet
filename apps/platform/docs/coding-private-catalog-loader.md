@@ -142,6 +142,10 @@ errors. Oversized, malformed, digest-drifted, or non-member records are
 non-retryable integrity errors. Task cancellation is preserved rather than
 translated into either domain.
 
+The catalog is the private-input side of the broader S3 data-plane contract in
+[`docs/coding-private-s3-data-plane.md`](../../../docs/coding-private-s3-data-plane.md).
+It does not share an authority with sealed executor evidence.
+
 ## Activation boundary
 
 The API lifespan constructs this source only when its separate configuration is
