@@ -20,6 +20,7 @@ from uuid import UUID
 import httpx
 import pytest
 
+from ditto_screener import gate as gate_module
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.gate import (
     _MAX_ARCHIVE_MEMBERS,
@@ -59,6 +60,12 @@ def test_gateway_state_is_owned_by_worker_and_appendable_by_rootless_uid() -> No
     try:
         assert Path(state_dir).stat().st_mode & 0o7777 == 0o711
         assert Path(state_file).stat().st_mode & 0o777 == 0o622
+        staged_script = Path(state_dir) / "fake_gateway.py"
+        assert (
+            staged_script.read_bytes()
+            == Path(gate_module.__file__).with_name("fake_gateway.py").read_bytes()
+        )
+        assert staged_script.stat().st_mode & 0o777 == 0o444
         assert _gateway_call_count(state_file) == 0
     finally:
         shutil.rmtree(state_dir)
@@ -74,6 +81,7 @@ def test_gateway_state_uses_the_configured_host_visible_root(
     try:
         assert Path(state_dir).parent == shared_root
         assert Path(state_file).parent == Path(state_dir)
+        assert (Path(state_dir) / "fake_gateway.py").is_file()
     finally:
         shutil.rmtree(state_dir)
 
