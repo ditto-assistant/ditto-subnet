@@ -91,6 +91,8 @@ class TestParseApiServerConfigFromEnv:
         assert config.coding_private_catalog is None
         assert config.coding_shadow_reconciliation_enabled is False
         assert config.coding_shadow_reconciliation_selection_delay_blocks == 20
+        assert config.coding_shadow_ticket_set_enabled is False
+        assert config.coding_shadow_ticket_lease_seconds == 3600
 
     def test_shadow_reconciliation_requires_its_complete_activation_boundary(
         self,
@@ -114,6 +116,20 @@ class TestParseApiServerConfigFromEnv:
                     coding_shadow_reconciliation_selection_delay_blocks=0,
                 )
             )
+
+    def test_shadow_ticket_set_activation_is_independent_and_bounded(self) -> None:
+        base = make_api_server_config()
+        with pytest.raises(ApiServerConfigError, match="DITTO_ADMIN_API_TOKEN"):
+            check_config(replace(base, coding_shadow_ticket_set_enabled=True))
+        with pytest.raises(ApiServerConfigError, match="between 60 and 7200"):
+            check_config(replace(base, coding_shadow_ticket_lease_seconds=30))
+        check_config(
+            replace(
+                base,
+                admin_api_token="test-admin-token-at-least-32-characters",
+                coding_shadow_ticket_set_enabled=True,
+            )
+        )
 
     def test_private_coding_catalog_config_is_optional_and_separate(
         self, monkeypatch: pytest.MonkeyPatch

@@ -24,8 +24,17 @@ member fails, so the set is never intentionally published partially.
 
 ## Activation boundary
 
-This is an internal issuer only. The separate task-lease builder can verify and
-reconstruct one issued ticket, but neither component selects validators, runs in
-the background, exposes task or capsule bytes over HTTP, grants Luna access,
-delivers work to a validator, scores results, deploys anything, or affects
-emissions. Coding contract v1 remains permanently `weight_eligible=false`.
+The only production caller is the admin-only
+`POST /api/v1/admin/coding-shadow/ticket-sets` route. It remains disabled unless
+`DITTO_CODING_SHADOW_TICKET_SET_ENABLED=true` and `DITTO_ADMIN_API_TOKEN` is
+configured. The caller must name one reconciled run, a stable ticket-set UUID,
+and exactly three unique, sorted validator hotkeys, then repeat the exact
+confirmation string. Platform supplies the bounded shared lease lifetime.
+`DITTO_CODING_SHADOW_TICKET_LEASE_SECONDS` defaults to 3600 and is constrained
+to 60 through 7200 seconds; callers cannot override it per request.
+
+The separate task-lease builder can verify and reconstruct one issued ticket,
+but neither component selects validators, runs in the background, exposes task
+or capsule bytes, grants Luna access, delivers work to a validator, scores
+results, deploys anything, or affects emissions. Coding contract v1 remains
+permanently `weight_eligible=false`.

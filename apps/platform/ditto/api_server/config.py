@@ -420,6 +420,16 @@ class ApiServerConfig:
     request cannot choose a different reveal boundary.
     """
 
+    coding_shadow_ticket_set_enabled: bool = False
+    """Permit one explicitly confirmed k=3 shadow ticket-set request.
+
+    ``DITTO_CODING_SHADOW_TICKET_SET_ENABLED`` ships false. Enabling it does
+    not select validators, run a worker, dispatch a model, or affect weights.
+    """
+
+    coding_shadow_ticket_lease_seconds: int = 60 * 60
+    """Platform-controlled lifetime for an issued shadow coding ticket set."""
+
     dashboard_enabled: bool = True
     """Serve the public dashboard SPA (``dashboard/index.html``) at ``/``.
 
@@ -611,6 +621,12 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         .lower()
         in _TRUTHY
     )
+    ticket_set_enabled = (
+        os.environ.get("DITTO_CODING_SHADOW_TICKET_SET_ENABLED", "false")
+        .strip()
+        .lower()
+        in _TRUTHY
+    )
     try:
         reconciliation_selection_delay_blocks = int(
             os.environ.get("DITTO_CODING_SHADOW_SELECTION_DELAY_BLOCKS", "20")
@@ -618,6 +634,14 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     except ValueError as error:
         raise ApiServerConfigError(
             "DITTO_CODING_SHADOW_SELECTION_DELAY_BLOCKS must be an integer"
+        ) from error
+    try:
+        coding_shadow_ticket_lease_seconds = int(
+            os.environ.get("DITTO_CODING_SHADOW_TICKET_LEASE_SECONDS", "3600")
+        )
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "DITTO_CODING_SHADOW_TICKET_LEASE_SECONDS must be an integer"
         ) from error
     dashboard_wandb_url = os.environ.get(
         "DITTO_DASHBOARD_WANDB_URL", "https://wandb.ai/"
@@ -913,6 +937,8 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         coding_shadow_reconciliation_selection_delay_blocks=(
             reconciliation_selection_delay_blocks
         ),
+        coding_shadow_ticket_set_enabled=ticket_set_enabled,
+        coding_shadow_ticket_lease_seconds=coding_shadow_ticket_lease_seconds,
         dashboard_enabled=dashboard_enabled,
         dashboard_wandb_url=dashboard_wandb_url,
         top5_backoff_base=top5_backoff_base,
@@ -980,6 +1006,14 @@ def check_config(config: ApiServerConfig) -> None:
     if config.coding_shadow_reconciliation_enabled and config.admin_api_token is None:
         raise ApiServerConfigError(
             "coding shadow reconciliation requires DITTO_ADMIN_API_TOKEN"
+        )
+    if not 60 <= config.coding_shadow_ticket_lease_seconds <= 2 * 60 * 60:
+        raise ApiServerConfigError(
+            "DITTO_CODING_SHADOW_TICKET_LEASE_SECONDS must be between 60 and 7200"
+        )
+    if config.coding_shadow_ticket_set_enabled and config.admin_api_token is None:
+        raise ApiServerConfigError(
+            "coding shadow ticket-set issuance requires DITTO_ADMIN_API_TOKEN"
         )
     if len(set(config.coding_catalog_curator_hotkeys)) != len(
         config.coding_catalog_curator_hotkeys
