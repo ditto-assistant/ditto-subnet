@@ -68,6 +68,21 @@ def test_deploy_repairs_legacy_remote_build_mode_and_restarts_worker() -> None:
     assert updater.index(repair) < updater.index(fast_path_guard)
 
 
+def test_hetzner_fleet_keeps_builds_and_runtime_local() -> None:
+    fleet_env = (
+        MONOREPO_ROOT
+        / "infra"
+        / "ansible"
+        / "roles"
+        / "hetzner_screener_fleet"
+        / "templates"
+        / "fleet.env.j2"
+    ).read_text()
+
+    assert "SCREENER_REMOTE_BUILD_MODE=off" in fleet_env
+    assert "SCREENER_REMOTE_BUILD_MODE=require" not in fleet_env
+
+
 def test_deploy_workflow_discovers_screeners_by_label_not_a_fixed_vm() -> None:
     workflow = workflow_text("screener-deploy.yml")
 
