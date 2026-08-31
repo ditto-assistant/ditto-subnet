@@ -8,6 +8,10 @@ RUN pip install --no-cache-dir --require-hashes -r /opt/l2-analyzer-requirements
 
 COPY --chown=65532:65532 tools/l2_analyzer.py /opt/l2_analyzer.py
 COPY --chown=65532:65532 ditto_screener/data/starter-kit-provenance-*.json /opt/starter-manifests/
+# Fleet release staging inherits a private umask. The rootless analyzer runs
+# as container root so its bind-mounted source maps to the daemon identity;
+# make only these immutable, repository-owned inputs readable by that identity.
+RUN chmod 0444 /opt/l2_analyzer.py /opt/starter-manifests/*.json
 
 USER 65532:65532
 WORKDIR /scratch

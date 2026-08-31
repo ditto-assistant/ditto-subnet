@@ -177,14 +177,20 @@ def test_hetzner_workers_use_release_bound_rootless_analyzer() -> None:
     )
     assert "Ensure rootless-analyzer workspace parents" in tasks
     assert 'group: "{{ screener_fleet_executor_group }}"' in tasks
+    assert "Ensure the rootless gateway bind-mount root" in tasks
+    assert (
+        "screener_fleet_gateway_state_root: /var/lib/ditto-screener-gateway-state"
+        in defaults
+    )
     assert (
         "Environment=DOCKER_CONFIG={{ screener_fleet_state_dir }}/workers/%i/docker"
         in worker
     )
     assert (
-        "Environment=SCREENER_GATEWAY_STATE_ROOT={{ screener_fleet_state_dir }}"
-        "/workers/%i/gateway-state" in worker
+        "Environment=SCREENER_GATEWAY_STATE_ROOT="
+        "{{ screener_fleet_gateway_state_root }}" in worker
     )
+    assert "{{ screener_fleet_gateway_state_root }}" in worker
     assert (
         "SCREENER_L2_WORKSPACE_ROOT={{ screener_fleet_l2_workspace_root }}/%i" in worker
     )

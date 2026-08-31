@@ -520,6 +520,9 @@ def test_updater_keeps_the_trusted_l2_analyzer_ready_for_dynamic_settings() -> N
     assert 'deployed_l2_mode" == "$requested_l2_mode' in updater
     assert 'record_l2_mode "$requested_l2_mode"' in updater
     assert "USER 65532:65532" in dockerfile
+    assert (
+        "RUN chmod 0444 /opt/l2_analyzer.py /opt/starter-manifests/*.json" in dockerfile
+    )
     assert "ENTRYPOINT" in dockerfile
 
 
