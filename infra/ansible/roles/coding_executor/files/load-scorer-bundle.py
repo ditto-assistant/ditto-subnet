@@ -44,6 +44,7 @@ EXPECTED_ATTESTATION_PATH = Path(
 EXPECTED_CLIENT_GROUP = "ditto-coding-client"
 ISOLATED_DAEMON_LABEL = "io.heyditto.dittobench.isolated=true"
 SCORER_CONTRACT_LABEL = "io.heyditto.dittobench.coding-executor-scorer-contract"
+SCORER_POLICY_LABEL = "io.heyditto.dittobench.coding-executor-locked-policy-sha256"
 SOURCE_REVISION_LABEL = "org.opencontainers.image.revision"
 SCORER_ENTRYPOINT = "/dittobench-coding-executor-scorer"
 SCORER_USER = "65532:65532"
@@ -279,6 +280,8 @@ def validate_loaded_image(
         fail("loaded scorer image labels are invalid")
     if labels.get(SCORER_CONTRACT_LABEL) != manifest["scorer_contract"]:
         fail("loaded scorer image contract does not match the release manifest")
+    if labels.get(SCORER_POLICY_LABEL) != manifest["locked_policy_sha256"]:
+        fail("loaded scorer image locked policy does not match the release manifest")
     if labels.get(SOURCE_REVISION_LABEL) != manifest["source_revision"]:
         fail("loaded scorer image source revision does not match the release manifest")
     if config.get("Volumes") not in (None, {}):

@@ -147,17 +147,22 @@ transport.
 ## Dedicated scorer artifact
 
 `Dockerfile` now has a separately built `coding-executor-scorer` target. Its
-`dittobench-coding-executor-scorer` binary is provenance-stamped and stays
-disabled until a future deployment profile supplies the fixed rootless Docker
-socket, locked policy, root-owned control-token file, private state root, and
-attested runtime image identity. Only then does it compose the reviewed coding
-host behind its fixed Unix socket, exposing constant health plus the existing
-supervisor/publication handlers. It has no TCP listener, canary route, ordinary
-scorer route, broker, ticket, wallet, secret in the artifact, or
-provider/Platform authority. The protected release workflow publishes and
-signs the dedicated image, but no deployment consumes it automatically. A
-later scorer-service slice must add the real configuration and another later
-paired mTLS slice may connect a validator.
+`dittobench-coding-executor-scorer` binary is provenance-stamped, includes only
+the Docker CLI needed for the dedicated rootless daemon and the canonical
+read-only locked policy, and stays disabled until a future deployment profile
+supplies the fixed Docker socket, root-owned control-token file, private state
+root, and attested runtime image identity. It does not receive a ticket, wallet,
+provider, Platform credential, or validator route in the artifact.
+
+When a later systemd/container profile enables it, that profile must use the
+dedicated host network and set one non-loopback
+`DITTOBENCH_SANDBOX_HOST_GATEWAY_IP`. The scorer binds its private capability
+listener only to that address and advertises `host.docker.internal:11438`; the
+same value is passed to candidate Docker networking. This is required because
+the capability router rejects loopback sources. A later service/firewall slice
+must narrow that port to candidate traffic before any scorer starts. The
+protected release workflow publishes and signs the image, but no deployment
+consumes it automatically.
 
 The release boundary is frozen by
 `scripts/render-coding-executor-scorer-manifest.py`. It emits only the exact
@@ -196,9 +201,10 @@ exact exported image ID, while the bundle still binds it to the signed
 `ghcr.io/ditto-assistant/dittobench-coding-executor-scorer@sha256:...`
 release reference. The image must also prove its `linux/amd64` platform,
 `65532:65532` user, fixed `/dittobench-coding-executor-scorer` entrypoint,
-scorer-contract and source-revision labels, no volume, no port, no embedded
-healthcheck or command, and no credential-shaped environment. A tag, wrong
-repository, alternate socket, root user, or configuration drift fails closed.
+scorer-contract, locked-policy, and source-revision labels, no volume, no port,
+no embedded healthcheck or command, and no credential-shaped environment. A
+tag, wrong repository, alternate socket, root user, or configuration drift
+fails closed.
 
 Only after those checks does the loader atomically write the root-owned `0640`
 `scorer-image-attestation.json` in the common attestation directory. It binds
