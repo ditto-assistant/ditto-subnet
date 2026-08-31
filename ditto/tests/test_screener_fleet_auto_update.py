@@ -187,8 +187,8 @@ def test_hetzner_workers_use_release_bound_rootless_analyzer() -> None:
         in worker
     )
     assert (
-        "Environment=SCREENER_GATEWAY_STATE_ROOT={{ screener_fleet_gateway_state_root }}"
-        in worker
+        "Environment=SCREENER_GATEWAY_STATE_ROOT="
+        "{{ screener_fleet_gateway_state_root }}" in worker
     )
     assert "{{ screener_fleet_gateway_state_root }}" in worker
     assert (
