@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.11 (2026-08-31)
+
+### Bug Fixes
+
+- **platform**: Retain node scope for screener canaries
+  ([#1403](https://github.com/ditto-assistant/ditto-subnet/pull/1403),
+  [`f840ef3`](https://github.com/ditto-assistant/ditto-subnet/commit/f840ef3a8f86d5df7a7891eda92d1c3c15104d9c))
+
+
 ## v0.177.10 (2026-08-31)
 
 ### Bug Fixes
