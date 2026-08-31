@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.12 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Keep local reviews on the worker
+  ([#1404](https://github.com/ditto-assistant/ditto-subnet/pull/1404),
+  [`274da52`](https://github.com/ditto-assistant/ditto-subnet/commit/274da528d9ae9c33c10af87b165f3f613f026c3f))
+
+
 ## v0.177.11 (2026-08-31)
 
 ### Bug Fixes
