@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.10 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Bound GCE watchdog at zero capacity
+  ([#1402](https://github.com/ditto-assistant/ditto-subnet/pull/1402),
+  [`b452c8e`](https://github.com/ditto-assistant/ditto-subnet/commit/b452c8ea155b4e2c50f03b360a3d90feaaf3b6cf))
+
+
 ## v0.177.9 (2026-08-31)
 
 ### Bug Fixes
