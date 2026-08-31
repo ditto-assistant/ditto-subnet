@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.6 (2026-08-31)
+
+### Bug Fixes
+
+- **platform**: Accept node-scoped screener verdicts
+  ([#1397](https://github.com/ditto-assistant/ditto-subnet/pull/1397),
+  [`d3a3c2e`](https://github.com/ditto-assistant/ditto-subnet/commit/d3a3c2e5adf37c6ed49cd7f644eea8ff673b39c7))
+
+
 ## v0.177.5 (2026-08-31)
 
 ### Bug Fixes
