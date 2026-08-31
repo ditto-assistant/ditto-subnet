@@ -21,6 +21,7 @@ from uuid import UUID
 import httpx
 import pytest
 
+import ditto_screener.l2_review as l2_review
 from ditto_screener.heartbeat import source_review_progress_stage
 from ditto_screener.l2_review import (
     _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK,
@@ -2145,7 +2146,7 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
     assert requests[2]["model"] == "openai/gpt-5.6-sol"
     assert requests[3]["model"] == "openai/gpt-5.6-sol"
     assert "only" not in requests[1]["provider"]  # type: ignore[operator]
-    assert requests[1]["provider"]["allow_fallbacks"] is False  # type: ignore[index]
+    assert requests[1]["provider"]["allow_fallbacks"] is True  # type: ignore[index]
     assert requests[1]["provider"]["require_parameters"] is False  # type: ignore[index]
     assert requests[0]["max_output_tokens"] == 2_400
     assert requests[1]["reasoning"] == {"effort": "medium"}
@@ -3783,6 +3784,50 @@ async def test_model_turn_has_an_aggregate_wall_clock_deadline(
             )
 
     assert requests == 1
+
+
+async def test_model_turn_timeout_is_bounded_and_retried_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    requests = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        await asyncio.sleep(1)
+        return httpx.Response(200, json={})
+
+    monkeypatch.setattr(l2_review, "_MAX_COMPLETION_REQUEST_SECONDS", 0.01)
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(None, retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        transport=httpx.MockTransport(handler),
+    )
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        with pytest.raises(TimeoutError):
+            await agent._post(
+                client,
+                "test-key",
+                [],
+                artifact_sha256="d" * 64,
+                reasoning_effort="low",
+                model="openai/gpt-5.6-sol",
+                fallback_models=(),
+                provider=None,
+                deadline=asyncio.get_running_loop().time() + 1,
+            )
+
+    assert requests == 2
 
 
 def test_catalog_pricing_budget_accounts_for_long_context_tier() -> None:

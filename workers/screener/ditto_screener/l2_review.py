@@ -64,6 +64,11 @@ L2_MODEL = "moonshotai/kimi-k3"
 L2_FALLBACK_MODELS = ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
 L3_MODEL = "openai/gpt-5.6-sol"
 L3_PROVIDER = "openrouter"
+# A reviewer has several dependent model turns and the final court needs a
+# meaningful slice of the lease. Do not allow one stalled upstream turn to
+# consume the entire L2/L3 window before the terminal adjudicator can run.
+_MAX_COMPLETION_REQUEST_SECONDS = 75.0
+_MAX_COMPLETION_REQUEST_ATTEMPTS = 2
 # Every policy version whose L2/L3 policy text this build carries. The
 # platform may require any one of them during a scheduled activation window.
 _SUPPORTED_POLICY_VERSIONS = tuple(
@@ -3547,7 +3552,11 @@ class KimiSolSourceReviewAgent:
             "prompt_cache_key": l2_prompt_cache_key(policy_version),
             "session_id": f"ditto-l2-{artifact_sha256[:32]}",
             "provider": {
-                "allow_fallbacks": False,
+                # Kimi's current Responses endpoint is filtered out when
+                # ``allow_fallbacks`` is true with the analyzer's tool schema.
+                # The independent SOL roles support provider fallback, so do
+                # not pin them to one degraded route.
+                "allow_fallbacks": model != L2_MODEL,
                 # Kimi's only current endpoint advertises every analyzer
                 # capability we use, but OpenRouter's Responses beta counts
                 # endpoint-level fields (for example instructions) when this
@@ -3564,21 +3573,39 @@ class KimiSolSourceReviewAgent:
             request["provider"]["only"] = [provider]  # type: ignore[index]
         if reasoning_effort != "model_default":
             request["reasoning"] = {"effort": reasoning_effort}
-        timeout = self._turn_timeout(deadline)
         # HTTPX's read timeout is an inactivity timeout, not a wall-clock cap.
-        # A provider can keep a broken response alive with occasional bytes,
-        # so enforce the signed lease budget around the entire model turn too.
-        async with asyncio.timeout(timeout):
-            response = await client.post(
-                f"{self._base_url}/responses",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "X-OpenRouter-Metadata": "enabled",
-                    **_OPENROUTER_ATTRIBUTION_HEADERS,
-                },
-                json=request,
-                timeout=timeout,
-            )
+        # A provider can keep a broken response alive with occasional bytes, so
+        # bound each turn and allow one fresh connection before escalating.
+        for attempt in range(_MAX_COMPLETION_REQUEST_ATTEMPTS):
+            timeout = min(self._turn_timeout(deadline), _MAX_COMPLETION_REQUEST_SECONDS)
+            try:
+                async with asyncio.timeout(timeout):
+                    response = await client.post(
+                        f"{self._base_url}/responses",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "X-OpenRouter-Metadata": "enabled",
+                            **_OPENROUTER_ATTRIBUTION_HEADERS,
+                        },
+                        json=request,
+                        timeout=timeout,
+                    )
+                break
+            except (TimeoutError, httpx.TimeoutException):
+                if attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS:
+                    raise
+                if (
+                    deadline is not None
+                    and asyncio.get_running_loop().time() >= deadline
+                ):
+                    raise
+                logger.warning(
+                    "L2/L3 model turn timed out; retrying attempt %d/%d",
+                    attempt + 1,
+                    _MAX_COMPLETION_REQUEST_ATTEMPTS,
+                )
+        else:  # pragma: no cover - the loop either breaks or raises.
+            raise RuntimeError("L2/L3 model turn retry loop exhausted")
         response.raise_for_status()
         payload: object | None = None
         with contextlib.suppress(ValueError, TypeError):
