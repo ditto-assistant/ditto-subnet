@@ -5860,7 +5860,7 @@ async def submit_result(
         # remain retryable under the same policy.
         if (
             not late_deferred_result
-            and not retain_scored_policy_rescreen
+            and (not retain_scored_policy_rescreen or payload.passed)
             and payload.policy_version == required_policy
         ):
             agent.screening_policy_version = payload.policy_version

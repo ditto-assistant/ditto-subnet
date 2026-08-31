@@ -2425,6 +2425,29 @@ ALTER SEQUENCE public.score_audit_log_seq_seq OWNED BY public.score_audit_log.se
 
 
 --
+-- Name: scored_policy_rescreen_releases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scored_policy_rescreen_releases (
+    release_id uuid NOT NULL,
+    activation_revision integer NOT NULL,
+    target_policy_version integer NOT NULL,
+    agent_id uuid NOT NULL,
+    "position" integer NOT NULL,
+    state text NOT NULL,
+    attempt_id uuid,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_scored_policy_rescreen_releases_scored_policy_rescre_48dd CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_scored_policy_rescreen_releases_scored_policy_rescre_4b7f CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'paused'::text, 'terminal'::text]))),
+    CONSTRAINT ck_scored_policy_rescreen_releases_scored_policy_rescre_7cbf CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_scored_policy_rescreen_releases_scored_policy_rescre_f553 CHECK (((target_policy_version >= 1) AND ("position" >= 1)))
+);
+
+
+--
 -- Name: scored_screening_snapshot_restorations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4687,6 +4710,14 @@ ALTER TABLE ONLY public.queue_policy_settings_revisions
 
 
 --
+-- Name: scored_policy_rescreen_releases pk_scored_policy_rescreen_releases; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scored_policy_rescreen_releases
+    ADD CONSTRAINT pk_scored_policy_rescreen_releases PRIMARY KEY (release_id);
+
+
+--
 -- Name: scored_screening_snapshot_restorations pk_scored_screening_snapshot_restorations; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4900,6 +4931,22 @@ ALTER TABLE ONLY public.score_audit_log
 
 ALTER TABLE ONLY public.score_audit_log
     ADD CONSTRAINT score_audit_log_pkey PRIMARY KEY (seq);
+
+
+--
+-- Name: scored_policy_rescreen_releases scored_policy_rescreen_releases_activation_agent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scored_policy_rescreen_releases
+    ADD CONSTRAINT scored_policy_rescreen_releases_activation_agent_key UNIQUE (activation_revision, agent_id);
+
+
+--
+-- Name: scored_policy_rescreen_releases scored_policy_rescreen_releases_attempt_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scored_policy_rescreen_releases
+    ADD CONSTRAINT scored_policy_rescreen_releases_attempt_key UNIQUE (attempt_id);
 
 
 --
@@ -5727,6 +5774,13 @@ CREATE UNIQUE INDEX queue_policy_settings_scope_revision_idx ON public.queue_pol
 --
 
 CREATE INDEX score_audit_log_agent_id_idx ON public.score_audit_log USING btree (agent_id);
+
+
+--
+-- Name: scored_policy_rescreen_releases_active_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX scored_policy_rescreen_releases_active_idx ON public.scored_policy_rescreen_releases USING btree (activation_revision, target_policy_version, state, "position");
 
 
 --
@@ -6667,6 +6721,30 @@ ALTER TABLE ONLY public.miner_session_tokens
 
 ALTER TABLE ONLY public.name_claim_endorsements
     ADD CONSTRAINT name_claim_endorsements_claim_id_fkey FOREIGN KEY (claim_id) REFERENCES public.name_claims(claim_id) ON DELETE CASCADE;
+
+
+--
+-- Name: scored_policy_rescreen_releases scored_policy_rescreen_releases_activation_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scored_policy_rescreen_releases
+    ADD CONSTRAINT scored_policy_rescreen_releases_activation_fkey FOREIGN KEY (activation_revision) REFERENCES public.screener_policy_activations(revision) ON DELETE RESTRICT;
+
+
+--
+-- Name: scored_policy_rescreen_releases scored_policy_rescreen_releases_agent_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scored_policy_rescreen_releases
+    ADD CONSTRAINT scored_policy_rescreen_releases_agent_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: scored_policy_rescreen_releases scored_policy_rescreen_releases_attempt_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scored_policy_rescreen_releases
+    ADD CONSTRAINT scored_policy_rescreen_releases_attempt_fkey FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
 
 
 --

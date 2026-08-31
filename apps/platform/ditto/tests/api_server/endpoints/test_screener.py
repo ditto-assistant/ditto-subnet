@@ -102,7 +102,10 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.attestation import record_attestation
-from ditto.db.queries.screening import MAX_SCREENING_EXPIRIES
+from ditto.db.queries.screening import (
+    MAX_SCREENING_EXPIRIES,
+    POLICY_ONLY_RESCREEN_REASON,
+)
 from ditto.db.queries.tickets import issue_ticket, ticket_attempt_cap
 from ditto.tests.legacy_era import retired_era_writes_allowed
 from ditto_screening_protocol import (
@@ -239,6 +242,11 @@ def _result_payload(
         policy_version = 8
     if passed and isinstance(attempt_id, UUID):
         overrides.setdefault("outcome", ScreenResultOutcome.PASS)
+    if (
+        passed
+        and isinstance(attempt_id, UUID)
+        and not bool(overrides.get("policy_only"))
+    ):
         overrides.setdefault("image_sha256", "12" * 32)
         overrides.setdefault("image_size_bytes", 123)
         overrides.setdefault("image_id", "sha256:" + "34" * 32)
@@ -273,6 +281,7 @@ def _result_payload(
             if isinstance(overrides.get("review_notes_digest"), str)
             else None,
             deferred_source_review=bool(overrides.get("deferred_source_review", False)),
+            policy_only=bool(overrides.get("policy_only", False)),
             review_settings_revision=overrides.get("review_settings_revision")
             if isinstance(overrides.get("review_settings_revision"), int)
             else None,
@@ -8197,6 +8206,98 @@ class TestSubmitResult:
             )
             assert release is not None
             assert release.state == "paused"
+
+    async def test_scored_policy_rescreen_pass_retains_score_and_stamps_new_policy(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A terminal V11 clear updates only its attestation, not its V10 rank."""
+        target_policy = SCREENING_POLICY_VERSION + 1
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCORED,
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        attempt_id = uuid4()
+        now = datetime.now(UTC)
+        retained_upload_id = uuid4()
+        async with session_maker() as session, session.begin():
+            activation = ScreenerPolicyActivation(
+                parent_revision=0,
+                target_policy_version=target_policy,
+                activate_at=now - timedelta(minutes=1),
+                rescreen_scored=True,
+                reason="release one scored v11 clear while retaining its v10 rank",
+                actor="test",
+            )
+            session.add(activation)
+            agent = await session.get(Agent, agent_id, with_for_update=True)
+            assert agent is not None
+            agent.screened_image_sha256 = "12" * 32
+            agent.screened_image_size_bytes = 123
+            agent.screened_image_id = "sha256:" + "34" * 32
+            agent.screened_image_ref = f"ditto-screen/{agent_id}:retained"
+            agent.screened_image_upload_id = retained_upload_id
+            agent.screened_image_verified_at = now - timedelta(days=1)
+            await session.flush()
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=target_policy,
+                    status="running",
+                    started_at=now - timedelta(minutes=1),
+                    deadline=now + timedelta(minutes=44),
+                    reason_code=POLICY_ONLY_RESCREEN_REASON,
+                    public_reason=None,
+                )
+            )
+            await session.flush()
+            session.add(
+                ScoredPolicyRescreenRelease(
+                    release_id=uuid4(),
+                    activation_revision=activation.revision,
+                    target_policy_version=target_policy,
+                    agent_id=agent_id,
+                    position=1,
+                    state="running",
+                    attempt_id=attempt_id,
+                    actor="test",
+                    reason="release one scored v11 clear while retaining its v10 rank",
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.screener_policy_activation.invalidate()
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                attempt_id=attempt_id,
+                policy_version=target_policy,
+                passed=True,
+                policy_only=True,
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == AgentStatus.SCORED
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.status == AgentStatus.SCORED
+            assert agent.screening_policy_version == target_policy
+            release = await session.scalar(
+                select(ScoredPolicyRescreenRelease).where(
+                    ScoredPolicyRescreenRelease.attempt_id == attempt_id
+                )
+            )
+            assert release is not None
+            assert release.state == "terminal"
 
     async def test_infrastructure_failure_is_parked_not_rejected(
         self,

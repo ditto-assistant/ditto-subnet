@@ -27,7 +27,7 @@ the model cannot see:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -48,6 +48,7 @@ from ditto.api_models.screener_policy_activation import (
     ScheduleScreenerPolicyActivationRequest,
     ScoredPolicyRescreenReleaseView,
     ScoredPolicyRescreenView,
+    ScoredRescreenState,
     ScreenerPolicyActivationRevision,
     ScreenerPolicyActivationView,
 )
@@ -130,7 +131,9 @@ def _release_view(
         target_policy_version=release.target_policy_version,
         agent_id=release.agent_id,
         position=release.position,
-        state=release.state,
+        # The database constraint is the runtime authority; narrow its checked
+        # value here so the response preserves the explicit wire contract.
+        state=cast(ScoredRescreenState, release.state),
         attempt_id=release.attempt_id,
     )
 
