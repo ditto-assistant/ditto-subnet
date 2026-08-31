@@ -103,9 +103,11 @@ grant, runs this certifier, and always revokes the gateway, workspace route,
 and harness. The lease pack hash is the public-canary identity; the receipt
 `canary_manifest_sha256` is this package's execution digest. They are not
 required to be equal. Certified receipts still require observed inference
-evidence; unused inference still yields a persistable failed receipt. The host
-constructs the adapter only when `DITTOBENCH_CODING_CANARY_ENABLED` is set and
-the certification pack root is present. Flags stay false until a separately
+evidence; unused inference still yields a persistable failed receipt. Public
+canary dispatches use the lease UUID as dispatch `ticket_id` and settle on
+`coding_certification_inference_requests`, not the private-ticket ledger. The
+host constructs the adapter only when `DITTOBENCH_CODING_CANARY_ENABLED` is set
+and the certification pack root is present. Flags stay false until a separately
 reviewed activation.
 
 Coding contract v1 remains permanently shadow-only. A separately reviewed

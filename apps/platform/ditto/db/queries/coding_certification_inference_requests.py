@@ -1,4 +1,4 @@
-"""Durable request and provider-settlement ledger for shadow coding Luna."""
+"""Durable request ledger for claimed-lease public-canary Luna."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select, union_all
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,12 +20,18 @@ from ditto.api_models.coding_inference import (
     provider_settlement_digest,
 )
 from ditto.db.models import (
+    CodingCertificationInferenceGrant,
     CodingCertificationInferenceRequest,
-    CodingInferenceGrant,
-    CodingInferenceRequest,
 )
 from ditto.db.queries.coding_inference_grants import (
     coding_inference_bearer_digest,
+)
+from ditto.db.queries.coding_inference_requests import (
+    CodingInferenceDispatchAuthority,
+    CodingInferenceRequestConflictError,
+    CodingInferenceRequestIntegrityError,
+    CodingInferenceRequestNotAvailableError,
+    coding_inference_settlement_identity_taken,
 )
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -42,38 +48,9 @@ _UNSETTLED_REASONS = frozenset(
 )
 
 
-class CodingInferenceRequestNotAvailableError(Exception):
-    """The grant or request is not available to the caller."""
-
-
-class CodingInferenceRequestIntegrityError(Exception):
-    """Trusted request, grant, policy, or settlement identity disagrees."""
-
-
-class CodingInferenceRequestConflictError(Exception):
-    """The requested request-ledger transition conflicts with durable state."""
-
-
 @dataclass(frozen=True)
-class CodingInferenceDispatchAuthority:
-    """Trusted identity fixed before a provider request may be dispatched."""
-
-    grant_id: UUID
-    ticket_id: UUID
-    generation: int
-    sequence: int
-    request_sequence: int
-    attempt: int
-    request_id: UUID
-    case_id: str
-    profile_capability_id: str
-    inference_grant_sha256: str
-    locked_request_sha256: str
-
-
-@dataclass(frozen=True)
-class CodingInferenceRequestResult:
-    request: CodingInferenceRequest
+class CodingCertificationInferenceRequestResult:
+    request: CodingCertificationInferenceRequest
     idempotent: bool
 
 
@@ -142,11 +119,11 @@ def _validate_authority(authority: CodingInferenceDispatchAuthority) -> None:
 
 def _authority_matches_grant(
     authority: CodingInferenceDispatchAuthority,
-    grant: CodingInferenceGrant,
+    grant: CodingCertificationInferenceGrant,
 ) -> bool:
     return bool(
         authority.grant_id == grant.grant_id
-        and authority.ticket_id == grant.ticket_id
+        and authority.ticket_id == grant.lease_id
         and authority.generation == grant.generation
         and authority.case_id == grant.case_id
         and authority.profile_capability_id == grant.profile_capability_id
@@ -157,11 +134,11 @@ def _authority_matches_grant(
 
 def _authority_matches_grant_identity(
     authority: CodingInferenceDispatchAuthority,
-    grant: CodingInferenceGrant,
+    grant: CodingCertificationInferenceGrant,
 ) -> bool:
     return bool(
         authority.grant_id == grant.grant_id
-        and authority.ticket_id == grant.ticket_id
+        and authority.ticket_id == grant.lease_id
         and authority.case_id == grant.case_id
         and authority.profile_capability_id == grant.profile_capability_id
         and authority.inference_grant_sha256 == grant.inference_grant_sha256
@@ -171,12 +148,12 @@ def _authority_matches_grant_identity(
 
 def _authority_matches_request(
     authority: CodingInferenceDispatchAuthority,
-    request: CodingInferenceRequest,
+    request: CodingCertificationInferenceRequest,
 ) -> bool:
     return all(
         (
             authority.grant_id == request.grant_id,
-            authority.ticket_id == request.ticket_id,
+            authority.ticket_id == request.lease_id,
             authority.generation == request.generation,
             authority.sequence == request.sequence,
             authority.request_sequence == request.request_sequence,
@@ -192,7 +169,7 @@ def _authority_matches_request(
 
 
 def _grant_matches_policy(
-    grant: CodingInferenceGrant,
+    grant: CodingCertificationInferenceGrant,
     policy: CodingInferencePolicy,
 ) -> bool:
     return bool(
@@ -214,7 +191,7 @@ def _grant_matches_policy(
     )
 
 
-def _revoke_grant(grant: CodingInferenceGrant, now: datetime) -> None:
+def _revoke_grant(grant: CodingCertificationInferenceGrant, now: datetime) -> None:
     grant.status = "revoked"
     grant.bearer_digest = None
     grant.broker_public_key = None
@@ -223,7 +200,7 @@ def _revoke_grant(grant: CodingInferenceGrant, now: datetime) -> None:
     grant.updated_at = now
 
 
-def _exhaust_grant(grant: CodingInferenceGrant, now: datetime) -> None:
+def _exhaust_grant(grant: CodingCertificationInferenceGrant, now: datetime) -> None:
     grant.status = "exhausted"
     grant.bearer_digest = None
     grant.broker_public_key = None
@@ -232,7 +209,7 @@ def _exhaust_grant(grant: CodingInferenceGrant, now: datetime) -> None:
     grant.updated_at = now
 
 
-def _grant_usage_budget_exhausted(grant: CodingInferenceGrant) -> bool:
+def _grant_usage_budget_exhausted(grant: CodingCertificationInferenceGrant) -> bool:
     return bool(
         grant.prompt_tokens >= grant.prompt_token_budget
         or grant.completion_tokens >= grant.completion_token_budget
@@ -240,7 +217,7 @@ def _grant_usage_budget_exhausted(grant: CodingInferenceGrant) -> bool:
     )
 
 
-def _grant_budget_exhausted(grant: CodingInferenceGrant) -> bool:
+def _grant_budget_exhausted(grant: CodingCertificationInferenceGrant) -> bool:
     return bool(
         grant.request_count >= grant.request_budget
         or _grant_usage_budget_exhausted(grant)
@@ -256,7 +233,7 @@ def _fits_postgres_bigint(current: int, delta: int) -> bool:
 
 
 def _usage_fits_postgres_bigint(
-    grant: CodingInferenceGrant,
+    grant: CodingCertificationInferenceGrant,
     settlement: CodingInferenceProviderSettlement,
 ) -> bool:
     return (
@@ -269,10 +246,10 @@ def _usage_fits_postgres_bigint(
 async def _locked_grant(
     session: AsyncSession,
     grant_id: UUID,
-) -> CodingInferenceGrant | None:
+) -> CodingCertificationInferenceGrant | None:
     return await session.scalar(
-        select(CodingInferenceGrant)
-        .where(CodingInferenceGrant.grant_id == grant_id)
+        select(CodingCertificationInferenceGrant)
+        .where(CodingCertificationInferenceGrant.grant_id == grant_id)
         .with_for_update()
         .execution_options(populate_existing=True)
     )
@@ -281,23 +258,23 @@ async def _locked_grant(
 async def _latest_request(
     session: AsyncSession,
     grant_id: UUID,
-) -> CodingInferenceRequest | None:
+) -> CodingCertificationInferenceRequest | None:
     return await session.scalar(
-        select(CodingInferenceRequest)
-        .where(CodingInferenceRequest.grant_id == grant_id)
-        .order_by(CodingInferenceRequest.sequence.desc())
+        select(CodingCertificationInferenceRequest)
+        .where(CodingCertificationInferenceRequest.grant_id == grant_id)
+        .order_by(CodingCertificationInferenceRequest.sequence.desc())
         .limit(1)
         .with_for_update()
         .execution_options(populate_existing=True)
     )
 
 
-async def begin_coding_inference_request(
+async def begin_coding_certification_inference_request(
     session: AsyncSession,
     *,
     authority: CodingInferenceDispatchAuthority,
     bearer: str,
-) -> CodingInferenceRequestResult:
+) -> CodingCertificationInferenceRequestResult:
     """Atomically reserve one ordered provider dispatch under a live grant."""
 
     _validate_authority(authority)
@@ -345,7 +322,9 @@ async def begin_coding_inference_request(
             raise CodingInferenceRequestIntegrityError(
                 "coding inference active-request accounting drifted"
             )
-        return CodingInferenceRequestResult(request=latest, idempotent=True)
+        return CodingCertificationInferenceRequestResult(
+            request=latest, idempotent=True
+        )
     if grant.active_requests != 0:
         raise CodingInferenceRequestConflictError(
             "coding inference grant already has an active request"
@@ -397,10 +376,10 @@ async def begin_coding_inference_request(
             "coding inference grant budget is exhausted"
         )
 
-    request = CodingInferenceRequest(
+    request = CodingCertificationInferenceRequest(
         request_row_id=uuid4(),
         grant_id=authority.grant_id,
-        ticket_id=authority.ticket_id,
+        lease_id=authority.ticket_id,
         generation=authority.generation,
         sequence=authority.sequence,
         request_sequence=authority.request_sequence,
@@ -425,47 +404,7 @@ async def begin_coding_inference_request(
     grant.active_requests = 1
     grant.updated_at = now
     await session.flush()
-    return CodingInferenceRequestResult(request=request, idempotent=False)
-
-
-async def coding_inference_settlement_identity_taken(
-    session: AsyncSession,
-    *,
-    exclude_request_row_id: UUID,
-    settlement_sha256: str,
-    provider_generation_id: str | None,
-) -> bool:
-    """True when a settlement digest or generation id exists on either ledger."""
-
-    ticket_conditions = [
-        CodingInferenceRequest.provider_settlement_sha256 == settlement_sha256
-    ]
-    certification_conditions = [
-        CodingCertificationInferenceRequest.provider_settlement_sha256
-        == settlement_sha256
-    ]
-    if provider_generation_id is not None:
-        ticket_conditions.append(
-            CodingInferenceRequest.provider_generation_id == provider_generation_id
-        )
-        certification_conditions.append(
-            CodingCertificationInferenceRequest.provider_generation_id
-            == provider_generation_id
-        )
-    duplicate = await session.scalar(
-        union_all(
-            select(CodingInferenceRequest.request_row_id).where(
-                CodingInferenceRequest.request_row_id != exclude_request_row_id,
-                or_(*ticket_conditions),
-            ),
-            select(CodingCertificationInferenceRequest.request_row_id).where(
-                CodingCertificationInferenceRequest.request_row_id
-                != exclude_request_row_id,
-                or_(*certification_conditions),
-            ),
-        ).limit(1)
-    )
-    return duplicate is not None
+    return CodingCertificationInferenceRequestResult(request=request, idempotent=False)
 
 
 def _settlement_matches_authority(
@@ -486,13 +425,13 @@ def _settlement_matches_authority(
     )
 
 
-async def settle_coding_inference_request(
+async def settle_coding_certification_inference_request(
     session: AsyncSession,
     *,
     authority: CodingInferenceDispatchAuthority,
     settlement: CodingInferenceProviderSettlement,
     policy: CodingInferencePolicy,
-) -> CodingInferenceRequestResult:
+) -> CodingCertificationInferenceRequestResult:
     """Persist one trusted settlement and account its real provider spend."""
 
     _validate_authority(authority)
@@ -516,10 +455,10 @@ async def settle_coding_inference_request(
 
     grant = await _locked_grant(session, authority.grant_id)
     request = await session.scalar(
-        select(CodingInferenceRequest)
+        select(CodingCertificationInferenceRequest)
         .where(
-            CodingInferenceRequest.grant_id == authority.grant_id,
-            CodingInferenceRequest.sequence == authority.sequence,
+            CodingCertificationInferenceRequest.grant_id == authority.grant_id,
+            CodingCertificationInferenceRequest.sequence == authority.sequence,
         )
         .with_for_update()
         .execution_options(populate_existing=True)
@@ -555,7 +494,9 @@ async def settle_coding_inference_request(
                 and stored == settlement
                 and request.provider_generation_id == settlement.provider_generation_id
             ):
-                return CodingInferenceRequestResult(request=request, idempotent=True)
+                return CodingCertificationInferenceRequestResult(
+                    request=request, idempotent=True
+                )
         raise CodingInferenceRequestConflictError(
             "coding inference settlement conflicts with durable state"
         )
@@ -596,7 +537,9 @@ async def settle_coding_inference_request(
             grant.active_requests = 0
             grant.updated_at = now
         await session.flush()
-        return CodingInferenceRequestResult(request=request, idempotent=False)
+        return CodingCertificationInferenceRequestResult(
+            request=request, idempotent=False
+        )
 
     request.status = settlement.outcome.value
     request.provider_settlement_sha256 = settlement_sha256
@@ -627,15 +570,15 @@ async def settle_coding_inference_request(
         raise CodingInferenceRequestIntegrityError(
             "coding inference provider settlement identity was reused"
         ) from error
-    return CodingInferenceRequestResult(request=request, idempotent=False)
+    return CodingCertificationInferenceRequestResult(request=request, idempotent=False)
 
 
-async def fail_coding_inference_request_unsettled(
+async def fail_coding_certification_inference_request_unsettled(
     session: AsyncSession,
     *,
     authority: CodingInferenceDispatchAuthority,
     reason: str,
-) -> CodingInferenceRequestResult:
+) -> CodingCertificationInferenceRequestResult:
     """Terminally revoke a request whose provider settlement is unavailable."""
 
     _validate_authority(authority)
@@ -645,10 +588,10 @@ async def fail_coding_inference_request_unsettled(
         )
     grant = await _locked_grant(session, authority.grant_id)
     request = await session.scalar(
-        select(CodingInferenceRequest)
+        select(CodingCertificationInferenceRequest)
         .where(
-            CodingInferenceRequest.grant_id == authority.grant_id,
-            CodingInferenceRequest.sequence == authority.sequence,
+            CodingCertificationInferenceRequest.grant_id == authority.grant_id,
+            CodingCertificationInferenceRequest.sequence == authority.sequence,
         )
         .with_for_update()
         .execution_options(populate_existing=True)
@@ -666,7 +609,9 @@ async def fail_coding_inference_request_unsettled(
         )
     if request.status != "started":
         if request.status == "unsettled" and request.unsettled_reason == reason:
-            return CodingInferenceRequestResult(request=request, idempotent=True)
+            return CodingCertificationInferenceRequestResult(
+                request=request, idempotent=True
+            )
         raise CodingInferenceRequestConflictError(
             "coding inference unsettled failure conflicts with durable state"
         )
@@ -682,17 +627,16 @@ async def fail_coding_inference_request_unsettled(
         grant.active_requests = 0
         grant.updated_at = now
     await session.flush()
-    return CodingInferenceRequestResult(request=request, idempotent=False)
+    return CodingCertificationInferenceRequestResult(request=request, idempotent=False)
 
 
 __all__ = [
+    "CodingCertificationInferenceRequestResult",
     "CodingInferenceDispatchAuthority",
     "CodingInferenceRequestConflictError",
     "CodingInferenceRequestIntegrityError",
     "CodingInferenceRequestNotAvailableError",
-    "CodingInferenceRequestResult",
-    "begin_coding_inference_request",
-    "coding_inference_settlement_identity_taken",
-    "fail_coding_inference_request_unsettled",
-    "settle_coding_inference_request",
+    "begin_coding_certification_inference_request",
+    "fail_coding_certification_inference_request_unsettled",
+    "settle_coding_certification_inference_request",
 ]

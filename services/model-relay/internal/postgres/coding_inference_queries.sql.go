@@ -11,6 +11,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const applyCodingCertificationInferenceGrantSettlement = `-- name: ApplyCodingCertificationInferenceGrantSettlement :exec
+UPDATE coding_certification_inference_grants
+SET status = $1::text,
+    bearer_digest = CASE WHEN $1::text = 'active' THEN bearer_digest ELSE NULL END,
+    broker_public_key = CASE WHEN $1::text = 'active' THEN broker_public_key ELSE NULL END,
+    prompt_tokens = prompt_tokens + $2::bigint,
+    completion_tokens = completion_tokens + $3::bigint,
+    cost_usd_micros = cost_usd_micros + $4::bigint,
+    active_requests = 0,
+    revoked_at = CASE
+      WHEN $1::text = 'revoked' THEN COALESCE(revoked_at, $5::timestamptz)
+      ELSE NULL
+    END,
+    updated_at = $5::timestamptz
+WHERE grant_id = $6::uuid
+`
+
+type ApplyCodingCertificationInferenceGrantSettlementParams struct {
+	Status           string             `json:"status"`
+	PromptTokens     int64              `json:"promptTokens"`
+	CompletionTokens int64              `json:"completionTokens"`
+	CostUsdMicros    int64              `json:"costUsdMicros"`
+	Now              pgtype.Timestamptz `json:"now"`
+	GrantID          pgtype.UUID        `json:"grantId"`
+}
+
+func (q *Queries) ApplyCodingCertificationInferenceGrantSettlement(ctx context.Context, arg ApplyCodingCertificationInferenceGrantSettlementParams) error {
+	_, err := q.db.Exec(ctx, applyCodingCertificationInferenceGrantSettlement,
+		arg.Status,
+		arg.PromptTokens,
+		arg.CompletionTokens,
+		arg.CostUsdMicros,
+		arg.Now,
+		arg.GrantID,
+	)
+	return err
+}
+
 const applyCodingInferenceGrantSettlement = `-- name: ApplyCodingInferenceGrantSettlement :exec
 UPDATE coding_inference_grants
 SET status = $1::text,
@@ -49,6 +87,25 @@ func (q *Queries) ApplyCodingInferenceGrantSettlement(ctx context.Context, arg A
 	return err
 }
 
+const beginCodingCertificationInferenceGrantRequest = `-- name: BeginCodingCertificationInferenceGrantRequest :exec
+UPDATE coding_certification_inference_grants
+SET request_count = request_count + $1::integer,
+    active_requests = 1,
+    updated_at = $2::timestamptz
+WHERE grant_id = $3::uuid
+`
+
+type BeginCodingCertificationInferenceGrantRequestParams struct {
+	RequestIncrement int32              `json:"requestIncrement"`
+	Now              pgtype.Timestamptz `json:"now"`
+	GrantID          pgtype.UUID        `json:"grantId"`
+}
+
+func (q *Queries) BeginCodingCertificationInferenceGrantRequest(ctx context.Context, arg BeginCodingCertificationInferenceGrantRequestParams) error {
+	_, err := q.db.Exec(ctx, beginCodingCertificationInferenceGrantRequest, arg.RequestIncrement, arg.Now, arg.GrantID)
+	return err
+}
+
 const beginCodingInferenceGrantRequest = `-- name: BeginCodingInferenceGrantRequest :exec
 UPDATE coding_inference_grants
 SET request_count = request_count + $1::integer,
@@ -70,12 +127,23 @@ func (q *Queries) BeginCodingInferenceGrantRequest(ctx context.Context, arg Begi
 
 const countActiveCodingInferenceRequestsForValidator = `-- name: CountActiveCodingInferenceRequestsForValidator :one
 SELECT COUNT(*)::bigint
-FROM coding_inference_requests r
-JOIN coding_inference_grants g ON g.grant_id = r.grant_id
-WHERE r.status = 'started'
-  AND g.status = 'active'
-  AND g.expires_at > $1::timestamptz
-  AND g.validator_hotkey = $2::text
+FROM (
+    SELECT r.request_row_id
+    FROM coding_inference_requests r
+    JOIN coding_inference_grants g ON g.grant_id = r.grant_id
+    WHERE r.status = 'started'
+      AND g.status = 'active'
+      AND g.expires_at > $1::timestamptz
+      AND g.validator_hotkey = $2::text
+    UNION ALL
+    SELECT r.request_row_id
+    FROM coding_certification_inference_requests r
+    JOIN coding_certification_inference_grants g ON g.grant_id = r.grant_id
+    WHERE r.status = 'started'
+      AND g.status = 'active'
+      AND g.expires_at > $1::timestamptz
+      AND g.validator_hotkey = $2::text
+) active
 `
 
 type CountActiveCodingInferenceRequestsForValidatorParams struct {
@@ -92,11 +160,21 @@ func (q *Queries) CountActiveCodingInferenceRequestsForValidator(ctx context.Con
 
 const countActiveCodingInferenceRequestsGlobal = `-- name: CountActiveCodingInferenceRequestsGlobal :one
 SELECT COUNT(*)::bigint
-FROM coding_inference_requests r
-JOIN coding_inference_grants g ON g.grant_id = r.grant_id
-WHERE r.status = 'started'
-  AND g.status = 'active'
-  AND g.expires_at > $1::timestamptz
+FROM (
+    SELECT r.request_row_id
+    FROM coding_inference_requests r
+    JOIN coding_inference_grants g ON g.grant_id = r.grant_id
+    WHERE r.status = 'started'
+      AND g.status = 'active'
+      AND g.expires_at > $1::timestamptz
+    UNION ALL
+    SELECT r.request_row_id
+    FROM coding_certification_inference_requests r
+    JOIN coding_certification_inference_grants g ON g.grant_id = r.grant_id
+    WHERE r.status = 'started'
+      AND g.status = 'active'
+      AND g.expires_at > $1::timestamptz
+) active
 `
 
 func (q *Queries) CountActiveCodingInferenceRequestsGlobal(ctx context.Context, now pgtype.Timestamptz) (int64, error) {
@@ -107,15 +185,27 @@ func (q *Queries) CountActiveCodingInferenceRequestsGlobal(ctx context.Context, 
 }
 
 const findCodingInferenceSettlementIdentity = `-- name: FindCodingInferenceSettlementIdentity :one
-SELECT request_row_id FROM coding_inference_requests
-WHERE request_row_id <> $1::uuid
-  AND (
-    provider_settlement_sha256 = $2::text
-    OR (
-      $3::text IS NOT NULL
-      AND provider_generation_id = $3::text
-    )
-  )
+SELECT request_row_id FROM (
+    SELECT request_row_id FROM coding_inference_requests
+    WHERE request_row_id <> $1::uuid
+      AND (
+        provider_settlement_sha256 = $2::text
+        OR (
+          $3::text IS NOT NULL
+          AND provider_generation_id = $3::text
+        )
+      )
+    UNION ALL
+    SELECT request_row_id FROM coding_certification_inference_requests
+    WHERE request_row_id <> $1::uuid
+      AND (
+        provider_settlement_sha256 = $2::text
+        OR (
+          $3::text IS NOT NULL
+          AND provider_generation_id = $3::text
+        )
+      )
+) identities
 LIMIT 1
 `
 
@@ -130,6 +220,98 @@ func (q *Queries) FindCodingInferenceSettlementIdentity(ctx context.Context, arg
 	var request_row_id pgtype.UUID
 	err := row.Scan(&request_row_id)
 	return request_row_id, err
+}
+
+const getCodingCertificationInferenceGrantForUpdate = `-- name: GetCodingCertificationInferenceGrantForUpdate :one
+
+SELECT grant_id, lease_id, validator_hotkey, case_id, profile_capability_id, inference_grant_sha256, model, provider_api, provider_route, receipt_provider, provider_route_profile, provider_account_guardrail, provider_pipeline_policy, provider_cache_policy, reasoning_effort, status, bearer_digest, revoke_bearer_digest, broker_public_key, generation, request_budget, prompt_token_budget, completion_token_budget, cost_budget_usd_micros, request_count, prompt_tokens, completion_tokens, cost_usd_micros, active_requests, expires_at, revoked_at, weight_eligible, created_at, updated_at FROM coding_certification_inference_grants
+WHERE grant_id = $1::uuid
+FOR UPDATE
+`
+
+// Public-canary inference uses a separate claimed-lease grant and request
+// ledger. Ticket lookup is first; only ErrNoRows falls through here.
+// Shared capacity and settlement-identity uniqueness UNION both ledgers.
+func (q *Queries) GetCodingCertificationInferenceGrantForUpdate(ctx context.Context, grantID pgtype.UUID) (CodingCertificationInferenceGrant, error) {
+	row := q.db.QueryRow(ctx, getCodingCertificationInferenceGrantForUpdate, grantID)
+	var i CodingCertificationInferenceGrant
+	err := row.Scan(
+		&i.GrantID,
+		&i.LeaseID,
+		&i.ValidatorHotkey,
+		&i.CaseID,
+		&i.ProfileCapabilityID,
+		&i.InferenceGrantSha256,
+		&i.Model,
+		&i.ProviderApi,
+		&i.ProviderRoute,
+		&i.ReceiptProvider,
+		&i.ProviderRouteProfile,
+		&i.ProviderAccountGuardrail,
+		&i.ProviderPipelinePolicy,
+		&i.ProviderCachePolicy,
+		&i.ReasoningEffort,
+		&i.Status,
+		&i.BearerDigest,
+		&i.RevokeBearerDigest,
+		&i.BrokerPublicKey,
+		&i.Generation,
+		&i.RequestBudget,
+		&i.PromptTokenBudget,
+		&i.CompletionTokenBudget,
+		&i.CostBudgetUsdMicros,
+		&i.RequestCount,
+		&i.PromptTokens,
+		&i.CompletionTokens,
+		&i.CostUsdMicros,
+		&i.ActiveRequests,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+		&i.WeightEligible,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getCodingCertificationInferenceRequestForUpdate = `-- name: GetCodingCertificationInferenceRequestForUpdate :one
+SELECT request_row_id, grant_id, lease_id, generation, sequence, request_sequence, attempt, request_id, case_id, profile_capability_id, inference_grant_sha256, locked_request_sha256, status, provider_settlement_sha256, provider_generation_id, provider_settlement_json, unsettled_reason, started_at, settled_at, weight_eligible FROM coding_certification_inference_requests
+WHERE grant_id = $1::uuid
+  AND sequence = $2::integer
+FOR UPDATE
+`
+
+type GetCodingCertificationInferenceRequestForUpdateParams struct {
+	GrantID  pgtype.UUID `json:"grantId"`
+	Sequence int32       `json:"sequence"`
+}
+
+func (q *Queries) GetCodingCertificationInferenceRequestForUpdate(ctx context.Context, arg GetCodingCertificationInferenceRequestForUpdateParams) (CodingCertificationInferenceRequest, error) {
+	row := q.db.QueryRow(ctx, getCodingCertificationInferenceRequestForUpdate, arg.GrantID, arg.Sequence)
+	var i CodingCertificationInferenceRequest
+	err := row.Scan(
+		&i.RequestRowID,
+		&i.GrantID,
+		&i.LeaseID,
+		&i.Generation,
+		&i.Sequence,
+		&i.RequestSequence,
+		&i.Attempt,
+		&i.RequestID,
+		&i.CaseID,
+		&i.ProfileCapabilityID,
+		&i.InferenceGrantSha256,
+		&i.LockedRequestSha256,
+		&i.Status,
+		&i.ProviderSettlementSha256,
+		&i.ProviderGenerationID,
+		&i.ProviderSettlementJson,
+		&i.UnsettledReason,
+		&i.StartedAt,
+		&i.SettledAt,
+		&i.WeightEligible,
+	)
+	return i, err
 }
 
 const getCodingDatabaseNow = `-- name: GetCodingDatabaseNow :one
@@ -289,6 +471,42 @@ func (q *Queries) GetCodingInferenceRequestForUpdate(ctx context.Context, arg Ge
 	return i, err
 }
 
+const getLatestCodingCertificationInferenceRequestForUpdate = `-- name: GetLatestCodingCertificationInferenceRequestForUpdate :one
+SELECT request_row_id, grant_id, lease_id, generation, sequence, request_sequence, attempt, request_id, case_id, profile_capability_id, inference_grant_sha256, locked_request_sha256, status, provider_settlement_sha256, provider_generation_id, provider_settlement_json, unsettled_reason, started_at, settled_at, weight_eligible FROM coding_certification_inference_requests
+WHERE grant_id = $1::uuid
+ORDER BY sequence DESC
+LIMIT 1
+FOR UPDATE
+`
+
+func (q *Queries) GetLatestCodingCertificationInferenceRequestForUpdate(ctx context.Context, grantID pgtype.UUID) (CodingCertificationInferenceRequest, error) {
+	row := q.db.QueryRow(ctx, getLatestCodingCertificationInferenceRequestForUpdate, grantID)
+	var i CodingCertificationInferenceRequest
+	err := row.Scan(
+		&i.RequestRowID,
+		&i.GrantID,
+		&i.LeaseID,
+		&i.Generation,
+		&i.Sequence,
+		&i.RequestSequence,
+		&i.Attempt,
+		&i.RequestID,
+		&i.CaseID,
+		&i.ProfileCapabilityID,
+		&i.InferenceGrantSha256,
+		&i.LockedRequestSha256,
+		&i.Status,
+		&i.ProviderSettlementSha256,
+		&i.ProviderGenerationID,
+		&i.ProviderSettlementJson,
+		&i.UnsettledReason,
+		&i.StartedAt,
+		&i.SettledAt,
+		&i.WeightEligible,
+	)
+	return i, err
+}
+
 const getLatestCodingInferenceRequestForUpdate = `-- name: GetLatestCodingInferenceRequestForUpdate :one
 SELECT request_row_id, grant_id, ticket_id, generation, sequence, request_sequence, attempt, request_id, case_id, profile_capability_id, inference_grant_sha256, locked_request_sha256, status, provider_settlement_sha256, provider_generation_id, provider_settlement_json, unsettled_reason, started_at, settled_at, weight_eligible FROM coding_inference_requests
 WHERE grant_id = $1::uuid
@@ -304,6 +522,111 @@ func (q *Queries) GetLatestCodingInferenceRequestForUpdate(ctx context.Context, 
 		&i.RequestRowID,
 		&i.GrantID,
 		&i.TicketID,
+		&i.Generation,
+		&i.Sequence,
+		&i.RequestSequence,
+		&i.Attempt,
+		&i.RequestID,
+		&i.CaseID,
+		&i.ProfileCapabilityID,
+		&i.InferenceGrantSha256,
+		&i.LockedRequestSha256,
+		&i.Status,
+		&i.ProviderSettlementSha256,
+		&i.ProviderGenerationID,
+		&i.ProviderSettlementJson,
+		&i.UnsettledReason,
+		&i.StartedAt,
+		&i.SettledAt,
+		&i.WeightEligible,
+	)
+	return i, err
+}
+
+const insertCodingCertificationInferenceRequest = `-- name: InsertCodingCertificationInferenceRequest :one
+INSERT INTO coding_certification_inference_requests (
+    request_row_id,
+    grant_id,
+    lease_id,
+    generation,
+    sequence,
+    request_sequence,
+    attempt,
+    request_id,
+    case_id,
+    profile_capability_id,
+    inference_grant_sha256,
+    locked_request_sha256,
+    status,
+    provider_settlement_sha256,
+    provider_generation_id,
+    provider_settlement_json,
+    unsettled_reason,
+    started_at,
+    settled_at,
+    weight_eligible
+) VALUES (
+    $1::uuid,
+    $2::uuid,
+    $3::uuid,
+    $4::integer,
+    $5::integer,
+    $6::integer,
+    $7::integer,
+    $8::uuid,
+    $9::text,
+    $10::text,
+    $11::text,
+    $12::text,
+    'started',
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    $13::timestamptz,
+    NULL,
+    false
+)
+RETURNING request_row_id, grant_id, lease_id, generation, sequence, request_sequence, attempt, request_id, case_id, profile_capability_id, inference_grant_sha256, locked_request_sha256, status, provider_settlement_sha256, provider_generation_id, provider_settlement_json, unsettled_reason, started_at, settled_at, weight_eligible
+`
+
+type InsertCodingCertificationInferenceRequestParams struct {
+	RequestRowID         pgtype.UUID        `json:"requestRowId"`
+	GrantID              pgtype.UUID        `json:"grantId"`
+	LeaseID              pgtype.UUID        `json:"leaseId"`
+	Generation           int32              `json:"generation"`
+	Sequence             int32              `json:"sequence"`
+	RequestSequence      int32              `json:"requestSequence"`
+	Attempt              int32              `json:"attempt"`
+	RequestID            pgtype.UUID        `json:"requestId"`
+	CaseID               string             `json:"caseId"`
+	ProfileCapabilityID  string             `json:"profileCapabilityId"`
+	InferenceGrantSha256 string             `json:"inferenceGrantSha256"`
+	LockedRequestSha256  string             `json:"lockedRequestSha256"`
+	StartedAt            pgtype.Timestamptz `json:"startedAt"`
+}
+
+func (q *Queries) InsertCodingCertificationInferenceRequest(ctx context.Context, arg InsertCodingCertificationInferenceRequestParams) (CodingCertificationInferenceRequest, error) {
+	row := q.db.QueryRow(ctx, insertCodingCertificationInferenceRequest,
+		arg.RequestRowID,
+		arg.GrantID,
+		arg.LeaseID,
+		arg.Generation,
+		arg.Sequence,
+		arg.RequestSequence,
+		arg.Attempt,
+		arg.RequestID,
+		arg.CaseID,
+		arg.ProfileCapabilityID,
+		arg.InferenceGrantSha256,
+		arg.LockedRequestSha256,
+		arg.StartedAt,
+	)
+	var i CodingCertificationInferenceRequest
+	err := row.Scan(
+		&i.RequestRowID,
+		&i.GrantID,
+		&i.LeaseID,
 		&i.Generation,
 		&i.Sequence,
 		&i.RequestSequence,
@@ -430,6 +753,28 @@ func (q *Queries) InsertCodingInferenceRequest(ctx context.Context, arg InsertCo
 	return i, err
 }
 
+const markCodingCertificationInferenceRequestUnsettled = `-- name: MarkCodingCertificationInferenceRequestUnsettled :exec
+UPDATE coding_certification_inference_requests
+SET status = 'unsettled',
+    provider_settlement_sha256 = NULL,
+    provider_generation_id = NULL,
+    provider_settlement_json = NULL,
+    unsettled_reason = $1::text,
+    settled_at = $2::timestamptz
+WHERE request_row_id = $3::uuid
+`
+
+type MarkCodingCertificationInferenceRequestUnsettledParams struct {
+	UnsettledReason string             `json:"unsettledReason"`
+	SettledAt       pgtype.Timestamptz `json:"settledAt"`
+	RequestRowID    pgtype.UUID        `json:"requestRowId"`
+}
+
+func (q *Queries) MarkCodingCertificationInferenceRequestUnsettled(ctx context.Context, arg MarkCodingCertificationInferenceRequestUnsettledParams) error {
+	_, err := q.db.Exec(ctx, markCodingCertificationInferenceRequestUnsettled, arg.UnsettledReason, arg.SettledAt, arg.RequestRowID)
+	return err
+}
+
 const markCodingInferenceRequestUnsettled = `-- name: MarkCodingInferenceRequestUnsettled :exec
 UPDATE coding_inference_requests
 SET status = 'unsettled',
@@ -452,6 +797,27 @@ func (q *Queries) MarkCodingInferenceRequestUnsettled(ctx context.Context, arg M
 	return err
 }
 
+const revokeCodingCertificationInferenceGrantUnsettled = `-- name: RevokeCodingCertificationInferenceGrantUnsettled :exec
+UPDATE coding_certification_inference_grants
+SET status = 'revoked',
+    bearer_digest = NULL,
+    broker_public_key = NULL,
+    active_requests = 0,
+    revoked_at = COALESCE(revoked_at, $1::timestamptz),
+    updated_at = $1::timestamptz
+WHERE grant_id = $2::uuid
+`
+
+type RevokeCodingCertificationInferenceGrantUnsettledParams struct {
+	Now     pgtype.Timestamptz `json:"now"`
+	GrantID pgtype.UUID        `json:"grantId"`
+}
+
+func (q *Queries) RevokeCodingCertificationInferenceGrantUnsettled(ctx context.Context, arg RevokeCodingCertificationInferenceGrantUnsettledParams) error {
+	_, err := q.db.Exec(ctx, revokeCodingCertificationInferenceGrantUnsettled, arg.Now, arg.GrantID)
+	return err
+}
+
 const revokeCodingInferenceGrantUnsettled = `-- name: RevokeCodingInferenceGrantUnsettled :exec
 UPDATE coding_inference_grants
 SET status = 'revoked',
@@ -470,6 +836,38 @@ type RevokeCodingInferenceGrantUnsettledParams struct {
 
 func (q *Queries) RevokeCodingInferenceGrantUnsettled(ctx context.Context, arg RevokeCodingInferenceGrantUnsettledParams) error {
 	_, err := q.db.Exec(ctx, revokeCodingInferenceGrantUnsettled, arg.Now, arg.GrantID)
+	return err
+}
+
+const settleCodingCertificationInferenceRequest = `-- name: SettleCodingCertificationInferenceRequest :exec
+UPDATE coding_certification_inference_requests
+SET status = $1::text,
+    provider_settlement_sha256 = $2::text,
+    provider_generation_id = $3::text,
+    provider_settlement_json = $4::text,
+    unsettled_reason = NULL,
+    settled_at = $5::timestamptz
+WHERE request_row_id = $6::uuid
+`
+
+type SettleCodingCertificationInferenceRequestParams struct {
+	Status                   string             `json:"status"`
+	ProviderSettlementSha256 string             `json:"providerSettlementSha256"`
+	ProviderGenerationID     pgtype.Text        `json:"providerGenerationId"`
+	ProviderSettlementJson   string             `json:"providerSettlementJson"`
+	SettledAt                pgtype.Timestamptz `json:"settledAt"`
+	RequestRowID             pgtype.UUID        `json:"requestRowId"`
+}
+
+func (q *Queries) SettleCodingCertificationInferenceRequest(ctx context.Context, arg SettleCodingCertificationInferenceRequestParams) error {
+	_, err := q.db.Exec(ctx, settleCodingCertificationInferenceRequest,
+		arg.Status,
+		arg.ProviderSettlementSha256,
+		arg.ProviderGenerationID,
+		arg.ProviderSettlementJson,
+		arg.SettledAt,
+		arg.RequestRowID,
+	)
 	return err
 }
 

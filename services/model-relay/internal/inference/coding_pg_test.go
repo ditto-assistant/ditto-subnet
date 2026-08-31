@@ -322,6 +322,176 @@ func fakeCodingProviderStatus(
 	}))
 }
 
+func newCodingCertificationPGFixture(t *testing.T, cfg *config.Config) *codingPGFixture {
+	t.Helper()
+	pool := testutil.NewTestPGPool(t)
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vector := loadCodingPolicyVector(t)
+	var locked codingLockedRequest
+	if err := json.Unmarshal(vector.LockedRequests[0], &locked); err != nil {
+		t.Fatal(err)
+	}
+	locked.MaxCompletionTokens = codingCanaryCompletionTokenBudget
+	lockedSHA256, err := codingCanonicalSHA256(locked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	deadline := now.Add(20 * time.Minute)
+	f := &codingPGFixture{
+		pool: pool, now: now, deadline: deadline,
+		grantID:    uuid.MustParse("66666666-6666-4666-8666-666666666666"),
+		ticketID:   uuid.MustParse("77777777-7777-4777-8777-777777777777"),
+		requestID:  uuid.MustParse("88888888-8888-4888-8888-888888888888"),
+		brokerPriv: priv, vector: vector, locked: locked, lockedSHA256: lockedSHA256,
+	}
+	connection, err := pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Exec(t.Context(), `SET session_replication_role = replica`); err != nil {
+		connection.Release()
+		t.Fatal(err)
+	}
+	_, insertLeaseErr := connection.Exec(t.Context(), `
+		INSERT INTO coding_certification_leases (
+		  lease_id, agent_id, artifact_sha256, screened_image_sha256,
+		  screened_image_id, screened_image_ref, screened_image_upload_id,
+		  validator_hotkey, bench_version, coding_contract_version,
+		  core_qualification_observation_id, core_qualification_policy_checksum,
+		  canary_manifest_sha256, runner_plan_sha256, grader_plan_sha256,
+		  resource_profile_sha256, inference_policy_sha256,
+		  status, weight_eligible, issued_at, deadline, claimed_at, aborted_at,
+		  authority, created_at
+		) VALUES (
+		  $1, $2, repeat('a', 64), repeat('b', 64),
+		  'canary-image', 'canary-image-ref', $3,
+		  $4, 12, 1, $5, repeat('c', 64),
+		  repeat('d', 64), repeat('e', 64), repeat('f', 64),
+		  repeat('0', 64), $6,
+		  'claimed', false, $7, $8, $7, NULL,
+		  '{}'::jsonb, $7
+		)`,
+		f.ticketID, uuid.New(), uuid.New(), pgTestHotkey, uuid.New(),
+		codingInferenceGrantSHA256, now.Add(-time.Minute), deadline)
+	_, insertGrantErr := connection.Exec(t.Context(), `
+		INSERT INTO coding_certification_inference_grants (
+		  grant_id, lease_id, validator_hotkey,
+		  case_id, profile_capability_id, inference_grant_sha256,
+		  model, provider_api, provider_route, receipt_provider,
+		  provider_route_profile, provider_account_guardrail,
+		  provider_pipeline_policy, provider_cache_policy, reasoning_effort,
+		  status, bearer_digest, revoke_bearer_digest, broker_public_key, generation,
+		  request_budget, prompt_token_budget, completion_token_budget,
+		  cost_budget_usd_micros, request_count, prompt_tokens,
+		  completion_tokens, cost_usd_micros, active_requests,
+		  expires_at, revoked_at, weight_eligible, created_at, updated_at
+		) VALUES (
+		  $1, $2, $3, $4, $5, $6,
+		  $7, $8, $9, $10, $11, $12, $13, $14, $15,
+		  'active', $16, repeat('d', 64), $17, 1, $18, $19, $20, $21,
+		  0, 0, 0, 0, 0, $22, NULL, false, $23, $23
+		)`,
+		f.grantID, f.ticketID, pgTestHotkey, codingCanaryCaseID, codingCanaryProfileID,
+		codingInferenceGrantSHA256, codingModel, codingProviderAPI, codingProviderRoute,
+		codingReceiptProvider, codingProviderRouteProfile, codingAccountGuardrail,
+		codingPipelinePolicy, codingCachePolicy, codingReasoningEffort,
+		bearerDigest(codingTestBearer), base64.RawURLEncoding.EncodeToString(pub),
+		int32(codingCanaryRequestBudget), codingCanaryPromptTokenBudget,
+		codingCanaryCompletionTokenBudget, int64(codingMaxCostUSDMicros),
+		deadline, now.Add(-time.Minute))
+	_, restoreErr := connection.Exec(t.Context(), `SET session_replication_role = origin`)
+	connection.Release()
+	if insertLeaseErr != nil || insertGrantErr != nil || restoreErr != nil {
+		t.Fatalf("seed canary grant: lease=%v grant=%v restore=%v", insertLeaseErr, insertGrantErr, restoreErr)
+	}
+	queries := postgres.New(pool)
+	logger := slog.New(slog.NewTextHandler(testWriter{t}, nil))
+	f.deps = &Deps{
+		Cfg: cfg, Logger: logger,
+		Pool: pool, Queries: queries, Upstream: &http.Client{},
+		Settings: NewSettingsResolver(queries, logger),
+		Now:      func() time.Time { return f.now },
+	}
+	return f
+}
+
+func (f *codingPGFixture) canaryDispatchBody(t *testing.T, sequence, requestSequence, attempt int32) []byte {
+	t.Helper()
+	request := codingDispatchRequest{
+		Schema: codingDispatchRequestSchema, CodingContractVersion: 1, WeightEligible: false,
+		TicketID: f.ticketID.String(), CaseID: codingCanaryCaseID,
+		ProfileCapabilityID: codingCanaryProfileID, InferenceGrantSHA256: codingInferenceGrantSHA256,
+		GrantID: f.grantID.String(), Generation: 1, Sequence: sequence,
+		RequestSequence: requestSequence, Attempt: attempt, RequestID: f.requestID.String(),
+		LockedRequestSHA256: f.lockedSHA256, LockedRequest: f.locked,
+		Deadline: isoformatMicro(f.deadline),
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestCodingCertificationFullFlowPersistsCanonicalSettlement(t *testing.T) {
+	vector := loadCodingPolicyVector(t)
+	var captured []byte
+	provider := fakeCodingProvider(t, codingProviderBody(t, vector, true), &captured)
+	defer provider.Close()
+	f := newCodingCertificationPGFixture(t, codingTestConfig(t, provider.URL))
+	f.deps.Upstream = provider.Client()
+	body := f.canaryDispatchBody(t, 1, 1, 1)
+	w := serve(f.deps, codingRequest(body, f.headers(body)))
+	if w.Code != http.StatusOK || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("response=%d %s headers=%v", w.Code, w.Body.String(), w.Header())
+	}
+	var result codingDispatchResult
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Schema != codingDispatchResultSchema || result.WeightEligible ||
+		result.Settlement.Outcome != "complete" || result.NormalizedResponseBase64 == nil {
+		t.Fatalf("result=%#v", result)
+	}
+	var ticketRows int
+	if err := f.pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM coding_inference_requests WHERE grant_id = $1`, f.grantID).
+		Scan(&ticketRows); err != nil {
+		t.Fatal(err)
+	}
+	if ticketRows != 0 {
+		t.Fatalf("canary dispatch wrote ticket ledger rows=%d", ticketRows)
+	}
+	var requestStatus, settlementJSON string
+	var providerGeneration *string
+	if err := f.pool.QueryRow(t.Context(), `
+		SELECT status, provider_settlement_json, provider_generation_id
+		FROM coding_certification_inference_requests WHERE grant_id = $1 AND sequence = 1`, f.grantID).
+		Scan(&requestStatus, &settlementJSON, &providerGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if requestStatus != "complete" || providerGeneration == nil || *providerGeneration != "generation-synthetic-001" ||
+		!strings.Contains(settlementJSON, `"outcome":"complete"`) {
+		t.Fatalf("request=%s generation=%v settlement=%s", requestStatus, providerGeneration, settlementJSON)
+	}
+	var grantStatus string
+	var requestCount, active int
+	var prompt, completion, cost int64
+	if err := f.pool.QueryRow(t.Context(), `
+		SELECT status, request_count, active_requests, prompt_tokens, completion_tokens, cost_usd_micros
+		FROM coding_certification_inference_grants WHERE grant_id = $1`, f.grantID).
+		Scan(&grantStatus, &requestCount, &active, &prompt, &completion, &cost); err != nil {
+		t.Fatal(err)
+	}
+	if grantStatus != "active" || requestCount != 1 || active != 0 || prompt != 1000 || completion != 200 || cost != 1234 {
+		t.Fatalf("grant=%s count=%d active=%d usage=%d/%d/%d", grantStatus, requestCount, active, prompt, completion, cost)
+	}
+}
+
 func TestCodingFullFlowPersistsCanonicalSettlement(t *testing.T) {
 	vector := loadCodingPolicyVector(t)
 	var captured []byte

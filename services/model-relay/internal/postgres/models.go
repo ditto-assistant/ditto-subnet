@@ -54,6 +54,66 @@ func (ns NullTicketstatus) Value() (driver.Value, error) {
 	return string(ns.Ticketstatus), nil
 }
 
+type CodingCertificationInferenceGrant struct {
+	GrantID                  pgtype.UUID        `json:"grantId"`
+	LeaseID                  pgtype.UUID        `json:"leaseId"`
+	ValidatorHotkey          string             `json:"validatorHotkey"`
+	CaseID                   string             `json:"caseId"`
+	ProfileCapabilityID      string             `json:"profileCapabilityId"`
+	InferenceGrantSha256     string             `json:"inferenceGrantSha256"`
+	Model                    string             `json:"model"`
+	ProviderApi              string             `json:"providerApi"`
+	ProviderRoute            string             `json:"providerRoute"`
+	ReceiptProvider          string             `json:"receiptProvider"`
+	ProviderRouteProfile     string             `json:"providerRouteProfile"`
+	ProviderAccountGuardrail string             `json:"providerAccountGuardrail"`
+	ProviderPipelinePolicy   string             `json:"providerPipelinePolicy"`
+	ProviderCachePolicy      string             `json:"providerCachePolicy"`
+	ReasoningEffort          string             `json:"reasoningEffort"`
+	Status                   string             `json:"status"`
+	BearerDigest             pgtype.Text        `json:"bearerDigest"`
+	RevokeBearerDigest       pgtype.Text        `json:"revokeBearerDigest"`
+	BrokerPublicKey          pgtype.Text        `json:"brokerPublicKey"`
+	Generation               int32              `json:"generation"`
+	RequestBudget            int32              `json:"requestBudget"`
+	PromptTokenBudget        int64              `json:"promptTokenBudget"`
+	CompletionTokenBudget    int64              `json:"completionTokenBudget"`
+	CostBudgetUsdMicros      int64              `json:"costBudgetUsdMicros"`
+	RequestCount             int32              `json:"requestCount"`
+	PromptTokens             int64              `json:"promptTokens"`
+	CompletionTokens         int64              `json:"completionTokens"`
+	CostUsdMicros            int64              `json:"costUsdMicros"`
+	ActiveRequests           int32              `json:"activeRequests"`
+	ExpiresAt                pgtype.Timestamptz `json:"expiresAt"`
+	RevokedAt                pgtype.Timestamptz `json:"revokedAt"`
+	WeightEligible           bool               `json:"weightEligible"`
+	CreatedAt                pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt                pgtype.Timestamptz `json:"updatedAt"`
+}
+
+type CodingCertificationInferenceRequest struct {
+	RequestRowID             pgtype.UUID        `json:"requestRowId"`
+	GrantID                  pgtype.UUID        `json:"grantId"`
+	LeaseID                  pgtype.UUID        `json:"leaseId"`
+	Generation               int32              `json:"generation"`
+	Sequence                 int32              `json:"sequence"`
+	RequestSequence          int32              `json:"requestSequence"`
+	Attempt                  int32              `json:"attempt"`
+	RequestID                pgtype.UUID        `json:"requestId"`
+	CaseID                   string             `json:"caseId"`
+	ProfileCapabilityID      string             `json:"profileCapabilityId"`
+	InferenceGrantSha256     string             `json:"inferenceGrantSha256"`
+	LockedRequestSha256      string             `json:"lockedRequestSha256"`
+	Status                   string             `json:"status"`
+	ProviderSettlementSha256 pgtype.Text        `json:"providerSettlementSha256"`
+	ProviderGenerationID     pgtype.Text        `json:"providerGenerationId"`
+	ProviderSettlementJson   pgtype.Text        `json:"providerSettlementJson"`
+	UnsettledReason          pgtype.Text        `json:"unsettledReason"`
+	StartedAt                pgtype.Timestamptz `json:"startedAt"`
+	SettledAt                pgtype.Timestamptz `json:"settledAt"`
+	WeightEligible           bool               `json:"weightEligible"`
+}
+
 type CodingInferenceGrant struct {
 	GrantID                  pgtype.UUID        `json:"grantId"`
 	TicketID                 pgtype.UUID        `json:"ticketId"`

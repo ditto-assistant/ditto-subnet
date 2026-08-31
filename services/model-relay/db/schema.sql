@@ -908,6 +908,38 @@ CREATE TABLE public.coding_certification_inference_grants (
 
 
 --
+-- Name: coding_certification_inference_requests; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_certification_inference_requests (
+    request_row_id uuid NOT NULL,
+    grant_id uuid NOT NULL,
+    lease_id uuid NOT NULL,
+    generation integer NOT NULL,
+    sequence integer NOT NULL,
+    request_sequence integer NOT NULL,
+    attempt integer NOT NULL,
+    request_id uuid NOT NULL,
+    case_id text NOT NULL,
+    profile_capability_id text NOT NULL,
+    inference_grant_sha256 text NOT NULL,
+    locked_request_sha256 text NOT NULL,
+    status text NOT NULL,
+    provider_settlement_sha256 text,
+    provider_generation_id text,
+    provider_settlement_json text,
+    unsettled_reason text,
+    started_at timestamp with time zone NOT NULL,
+    settled_at timestamp with time zone,
+    weight_eligible boolean NOT NULL,
+    CONSTRAINT ck_coding_certification_inference_requests_coding_certi_079e CHECK ((((octet_length(case_id) >= 1) AND (octet_length(case_id) <= 256)) AND ((octet_length(profile_capability_id) >= 1) AND (octet_length(profile_capability_id) <= 256)) AND (case_id !~ '[[:space:][:cntrl:]]'::text) AND (profile_capability_id !~ '[[:space:][:cntrl:]]'::text) AND ((provider_settlement_json IS NULL) OR ((octet_length(provider_settlement_json) >= 1) AND (octet_length(provider_settlement_json) <= 65536))))),
+    CONSTRAINT ck_coding_certification_inference_requests_coding_certi_747e CHECK (((status = ANY (ARRAY['started'::text, 'receipt_free_retry'::text, 'complete'::text, 'provider_failure'::text, 'unsettled'::text])) AND (((status = 'started'::text) AND (provider_settlement_sha256 IS NULL) AND (provider_generation_id IS NULL) AND (provider_settlement_json IS NULL) AND (unsettled_reason IS NULL) AND (settled_at IS NULL)) OR ((status = ANY (ARRAY['receipt_free_retry'::text, 'complete'::text, 'provider_failure'::text])) AND (provider_settlement_sha256 IS NOT NULL) AND (provider_settlement_json IS NOT NULL) AND (unsettled_reason IS NULL) AND (settled_at IS NOT NULL)) OR ((status = 'unsettled'::text) AND (provider_settlement_sha256 IS NULL) AND (provider_generation_id IS NULL) AND (provider_settlement_json IS NULL) AND (unsettled_reason = ANY (ARRAY['provider_settlement_unavailable'::text, 'provider_response_lost'::text, 'relay_infrastructure'::text, 'invalid_provider_settlement'::text])) AND (settled_at IS NOT NULL))) AND ((settled_at IS NULL) OR (settled_at >= started_at)) AND (weight_eligible = false))),
+    CONSTRAINT ck_coding_certification_inference_requests_coding_certi_82ce CHECK (((inference_grant_sha256 ~ '^[0-9a-f]{64}$'::text) AND (locked_request_sha256 ~ '^[0-9a-f]{64}$'::text) AND ((provider_settlement_sha256 IS NULL) OR (provider_settlement_sha256 ~ '^[0-9a-f]{64}$'::text)) AND ((provider_generation_id IS NULL) OR (((octet_length(provider_generation_id) >= 1) AND (octet_length(provider_generation_id) <= 256)) AND (provider_generation_id !~ '[[:space:][:cntrl:]]'::text))))),
+    CONSTRAINT ck_coding_certification_inference_requests_coding_certi_fa38 CHECK ((((generation >= 1) AND (generation <= 2147483647)) AND ((sequence >= 1) AND (sequence <= 1100)) AND ((request_sequence >= 1) AND (request_sequence <= 256)) AND ((attempt >= 1) AND (attempt <= 3))))
+);
+
+
+--
 -- Name: coding_certification_leases; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3743,6 +3775,54 @@ ALTER TABLE ONLY public.coding_certification_inference_grants
 
 
 --
+-- Name: coding_certification_inference_requests coding_certification_inference_requests_grant_sequence_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_inference_requests
+    ADD CONSTRAINT coding_certification_inference_requests_grant_sequence_key UNIQUE (grant_id, sequence);
+
+
+--
+-- Name: coding_certification_inference_requests coding_certification_inference_requests_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_inference_requests
+    ADD CONSTRAINT coding_certification_inference_requests_pkey PRIMARY KEY (request_row_id);
+
+
+--
+-- Name: coding_certification_inference_requests coding_certification_inference_requests_provider_generation_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_inference_requests
+    ADD CONSTRAINT coding_certification_inference_requests_provider_generation_key UNIQUE (provider_generation_id);
+
+
+--
+-- Name: coding_certification_inference_requests coding_certification_inference_requests_request_attempt_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_inference_requests
+    ADD CONSTRAINT coding_certification_inference_requests_request_attempt_key UNIQUE (grant_id, request_sequence, attempt);
+
+
+--
+-- Name: coding_certification_inference_requests coding_certification_inference_requests_request_id_attempt_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_inference_requests
+    ADD CONSTRAINT coding_certification_inference_requests_request_id_attempt_key UNIQUE (grant_id, request_id, attempt);
+
+
+--
+-- Name: coding_certification_inference_requests coding_certification_inference_requests_settlement_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_inference_requests
+    ADD CONSTRAINT coding_certification_inference_requests_settlement_key UNIQUE (provider_settlement_sha256);
+
+
+--
 -- Name: coding_capability_certifications coding_certifications_identity_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5236,6 +5316,13 @@ CREATE INDEX coding_certification_inference_grants_validator_expiry_idx ON publi
 
 
 --
+-- Name: coding_certification_inference_requests_grant_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_certification_inference_requests_grant_status_idx ON public.coding_certification_inference_requests USING btree (grant_id, status, sequence);
+
+
+--
 -- Name: coding_certification_leases_inflight_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6116,6 +6203,14 @@ ALTER TABLE ONLY public.coding_catalog_retirements
 
 ALTER TABLE ONLY public.coding_certification_inference_grants
     ADD CONSTRAINT coding_certification_inference_grants_lease_fkey FOREIGN KEY (lease_id) REFERENCES public.coding_certification_leases(lease_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_certification_inference_requests coding_certification_inference_requests_grant_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_inference_requests
+    ADD CONSTRAINT coding_certification_inference_requests_grant_fkey FOREIGN KEY (grant_id, lease_id) REFERENCES public.coding_certification_inference_grants(grant_id, lease_id) ON DELETE CASCADE;
 
 
 --
