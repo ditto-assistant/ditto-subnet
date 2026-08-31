@@ -16,7 +16,15 @@ receipt only when all of these match:
   five minutes of clock skew), no later than its deadline, and not expired;
 - the agent's immutable source-artifact SHA-256;
 - the agent's current screened-image SHA-256;
-- the receipt's known-field canonical digest.
+- the receipt's known-field canonical digest;
+- for invoked model evidence (`complete` or `provider_failure`), the claimed
+  lease's `coding_certification_inference_requests` ledger: no `started` or
+  `unsettled` rows, grant accounting equal to the receipt, and
+  `provider_receipt_set_sha256` equal to the reconstructed settlement digest.
+
+Unused-inference failed receipts (`coding_inference_not_observed`, no invoked
+model evidence) persist without a settlement row. A settlement on that lease
+makes that unused-inference claim a `409`.
 
 The signature binds the validator, agent, benchmark version, lease ID,
 screened image, and receipt digest. Exact retries are idempotent. Reusing the

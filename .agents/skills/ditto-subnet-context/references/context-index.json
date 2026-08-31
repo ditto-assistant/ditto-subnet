@@ -333,7 +333,7 @@
     {
       "id": "coding-inference-requests",
       "title": "Shadow coding inference request ledger",
-      "keywords": ["coding inference request", "coding settlement ledger", "provider settlement", "Luna request reservation", "unsettled provider request", "claimed-lease request ledger", "public-canary inference settlement", "coding certification inference request"],
+      "keywords": ["coding inference request", "coding settlement ledger", "provider settlement", "Luna request reservation", "unsettled provider request", "claimed-lease request ledger", "public-canary inference settlement", "coding certification inference request", "certified canary settlement bind"],
       "summary": "Reserve ordered coding-model dispatches and durably persist canonical trusted provider settlements without enabling a live provider route.",
       "owns": ["apps/platform/ditto/db/queries/coding_inference_requests.py", "apps/platform/ditto/db/queries/coding_certification_inference_requests.py", "apps/platform/alembic/versions/2026_08_30_add_coding_inference_requests.py", "apps/platform/alembic/versions/2026_08_31_add_coding_certification_inference_requests.py", "apps/platform/docs/coding-inference-request-ledger.md"],
       "read": ["apps/platform/docs/coding-inference-grant-authority.md", "services/dittobench-api/docs/coding-luna-relay-contract-shadow.md", "services/dittobench-api/docs/coding-luna-relay-journal-shadow.md"],

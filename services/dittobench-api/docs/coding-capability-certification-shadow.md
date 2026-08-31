@@ -105,10 +105,11 @@ and harness. The lease pack hash is the public-canary identity; the receipt
 required to be equal. Certified receipts still require observed inference
 evidence; unused inference still yields a persistable failed receipt. Public
 canary dispatches use the lease UUID as dispatch `ticket_id` and settle on
-`coding_certification_inference_requests`, not the private-ticket ledger. The
-host constructs the adapter only when `DITTOBENCH_CODING_CANARY_ENABLED` is set
-and the certification pack root is present. Flags stay false until a separately
-reviewed activation.
+`coding_certification_inference_requests`, not the private-ticket ledger.
+Platform persists `certified` only when that ledger matches the receipt.
+The host constructs the adapter only when `DITTOBENCH_CODING_CANARY_ENABLED` is
+set and the certification pack root is present. Flags stay false until a
+separately reviewed activation.
 
 Coding contract v1 remains permanently shadow-only. A separately reviewed
 contract v2, calibration result, and owner-approved emissions policy are

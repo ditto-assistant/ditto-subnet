@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
@@ -13,16 +14,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.coding_certification import (
     CodingCapabilityCertificationReceipt,
+    CodingCertificationModelUsageStatus,
+)
+from ditto.api_models.coding_inference import (
+    CodingInferenceProviderSettlement,
+    CodingInferenceReceipt,
+    CodingInferenceReceiptOutcome,
+    CodingInferenceReceiptSet,
+    coding_inference_digest,
 )
 from ditto.db.models import (
     Agent,
     CodingCapabilityCertification,
+    CodingCertificationInferenceGrant,
+    CodingCertificationInferenceRequest,
     CodingCertificationLease,
 )
 
 
 class CodingCertificationConflictError(Exception):
     """The same certification identity was replayed with different bytes."""
+
+
+class CodingCertificationSettlementError(Exception):
+    """The receipt's model evidence disagrees with the durable canary ledger."""
 
 
 @dataclass(frozen=True)
@@ -97,6 +112,208 @@ async def get_coding_certification_by_lease(
     )
 
 
+_TERMINAL_REQUEST_STATUSES = frozenset(
+    {"receipt_free_retry", "complete", "provider_failure"}
+)
+
+
+def _invoked_model_evidence(
+    receipt: CodingCapabilityCertificationReceipt,
+) -> bool:
+    evidence = receipt.model_evidence
+    return (
+        evidence is not None
+        and evidence.usage_status is not CodingCertificationModelUsageStatus.NOT_INVOKED
+    )
+
+
+def _receipt_from_settlement(
+    settlement: CodingInferenceProviderSettlement,
+    *,
+    sequence: int,
+    prompt_sha256: str,
+    tool_schema_sha256: str,
+    settlement_sha256: str,
+) -> CodingInferenceReceipt:
+    return CodingInferenceReceipt.model_validate_json(
+        json.dumps(
+            {
+                "schema": "dittobench-coding-inference-receipt-v1",
+                "sequence": sequence,
+                "request_sequence": settlement.request_sequence,
+                "attempt": settlement.attempt,
+                "request_id": str(settlement.request_id),
+                "locked_request_sha256": settlement.locked_request_sha256,
+                "prompt_sha256": prompt_sha256,
+                "tool_schema_sha256": tool_schema_sha256,
+                "outcome": settlement.outcome.value,
+                "failure_code": settlement.terminal_error_code,
+                "http_status": settlement.http_status,
+                "response_sha256": settlement.response_sha256,
+                "response_digest_kind": settlement.response_digest_kind,
+                "provider_generation_id": settlement.provider_generation_id,
+                "provider_settlement_sha256": settlement_sha256,
+                "model": settlement.model,
+                "provider_route": settlement.provider_route,
+                "provider_route_profile": settlement.provider_route_profile,
+                "provider_selected": settlement.router_attempts[0].selected,
+                "receipt_provider": settlement.receipt_provider,
+                "fallback_used": settlement.fallback_used,
+                "prompt_tokens": settlement.prompt_tokens,
+                "completion_tokens": settlement.completion_tokens,
+                "total_tokens": settlement.total_tokens,
+                "cost_usd_micros": settlement.cost_usd_micros,
+                "timed_out": settlement.timed_out,
+            }
+        )
+    )
+
+
+async def require_coding_certification_settlement(
+    session: AsyncSession,
+    *,
+    lease_id: UUID,
+    receipt: CodingCapabilityCertificationReceipt,
+) -> None:
+    """Bind invoked receipts to the claimed-lease canary settlement ledger."""
+
+    grant = await session.scalar(
+        select(CodingCertificationInferenceGrant)
+        .where(CodingCertificationInferenceGrant.lease_id == lease_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    rows = list(
+        (
+            await session.scalars(
+                select(CodingCertificationInferenceRequest)
+                .where(
+                    CodingCertificationInferenceRequest.lease_id == lease_id,
+                )
+                .order_by(CodingCertificationInferenceRequest.sequence.asc())
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+    )
+    if not _invoked_model_evidence(receipt):
+        if rows:
+            raise CodingCertificationSettlementError(
+                "coding certification unused inference observed a settlement"
+            )
+        return
+    evidence = receipt.model_evidence
+    if evidence is None:
+        raise CodingCertificationSettlementError(
+            "coding certification settlement is missing"
+        )
+    if (
+        grant is None
+        or grant.weight_eligible
+        or grant.generation < 1
+        or grant.inference_grant_sha256 != receipt.inference_grant_sha256
+        or grant.inference_grant_sha256 != evidence.inference_grant_sha256
+        or grant.active_requests != 0
+        or not rows
+    ):
+        raise CodingCertificationSettlementError(
+            "coding certification settlement is missing"
+        )
+    if any(row.status not in _TERMINAL_REQUEST_STATUSES for row in rows):
+        raise CodingCertificationSettlementError(
+            "coding certification settlement is unsettled"
+        )
+    if any(
+        row.provider_settlement_json is None
+        or row.provider_settlement_sha256 is None
+        or row.lease_id != grant.lease_id
+        or row.grant_id != grant.grant_id
+        or row.inference_grant_sha256 != grant.inference_grant_sha256
+        or row.generation != grant.generation
+        or row.weight_eligible
+        for row in rows
+    ):
+        raise CodingCertificationSettlementError(
+            "coding certification settlement is incomplete"
+        )
+    try:
+        settlements = [
+            CodingInferenceProviderSettlement.model_validate_json(
+                row.provider_settlement_json or ""
+            )
+            for row in rows
+        ]
+        reconstructed = [
+            _receipt_from_settlement(
+                settlement,
+                sequence=row.sequence,
+                prompt_sha256=evidence.prompt_sha256,
+                tool_schema_sha256=evidence.tool_schema_sha256,
+                settlement_sha256=row.provider_settlement_sha256 or "",
+            )
+            for row, settlement in zip(rows, settlements, strict=True)
+        ]
+        receipt_set = CodingInferenceReceiptSet.model_validate_json(
+            json.dumps(
+                {
+                    "schema": "dittobench-coding-inference-receipt-set-v1",
+                    "coding_contract_version": 1,
+                    "ticket_id": str(grant.lease_id),
+                    "case_id": grant.case_id,
+                    "profile_capability_id": grant.profile_capability_id,
+                    "grant_id": str(grant.grant_id),
+                    "generation": grant.generation,
+                    "inference_grant_sha256": grant.inference_grant_sha256,
+                    "request_budget": grant.request_budget,
+                    "prompt_token_budget": grant.prompt_token_budget,
+                    "completion_token_budget": grant.completion_token_budget,
+                    "receipts": [
+                        item.model_dump(mode="json", by_alias=True)
+                        for item in reconstructed
+                    ],
+                }
+            )
+        )
+        digest = coding_inference_digest(receipt_set)
+    except (TypeError, ValueError) as error:
+        raise CodingCertificationSettlementError(
+            "coding certification settlement disagrees with receipt evidence"
+        ) from error
+    complete_count = sum(1 for row in rows if row.status == "complete")
+    retry_count = sum(1 for row in rows if row.status == "receipt_free_retry")
+    last_outcome = reconstructed[-1].outcome
+    usage_ok = (
+        evidence.usage_status is CodingCertificationModelUsageStatus.COMPLETE
+        and last_outcome is CodingInferenceReceiptOutcome.COMPLETE
+        and complete_count >= 1
+    ) or (
+        evidence.usage_status is CodingCertificationModelUsageStatus.PROVIDER_FAILURE
+        and last_outcome is CodingInferenceReceiptOutcome.PROVIDER_FAILURE
+    )
+    if (
+        not usage_ok
+        or digest != evidence.provider_receipt_set_sha256
+        or evidence.requests != grant.request_count
+        or evidence.retry_count != retry_count
+        or evidence.prompt_tokens != grant.prompt_tokens
+        or evidence.completion_tokens != grant.completion_tokens
+        or evidence.cost_usd_micros != grant.cost_usd_micros
+        or evidence.total_tokens != grant.prompt_tokens + grant.completion_tokens
+        or any(
+            settlement.ticket_id != grant.lease_id
+            or settlement.grant_id != grant.grant_id
+            or settlement.generation != grant.generation
+            or settlement.inference_grant_sha256 != grant.inference_grant_sha256
+            or settlement.case_id != grant.case_id
+            or settlement.profile_capability_id != grant.profile_capability_id
+            for settlement in settlements
+        )
+    ):
+        raise CodingCertificationSettlementError(
+            "coding certification settlement disagrees with receipt evidence"
+        )
+
+
 def coding_certification_lease_accepts_receipt(
     lease: CodingCertificationLease,
     *,
@@ -135,6 +352,9 @@ async def insert_coding_certification(
 ) -> CodingCertificationInsertResult:
     """Insert one immutable receipt or accept its exact transport replay."""
 
+    await require_coding_certification_settlement(
+        session, lease_id=lease_id, receipt=receipt
+    )
     receipt_json = receipt.model_dump(mode="json", by_alias=True)
     values = {
         "certification_row_id": uuid4(),

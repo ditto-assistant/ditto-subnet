@@ -44,10 +44,19 @@ from ditto.api_models.benchmark_progress import (
 )
 from ditto.api_models.coding_certification import (
     CodingCapabilityCertificationReceipt,
+    _canonical_json_bytes,
     coding_certification_signing_message,
 )
 from ditto.api_models.coding_certification_leases import (
     CodingCertificationLeaseStatus,
+)
+from ditto.api_models.coding_inference import (
+    CodingInferencePolicy,
+    CodingInferenceProviderSettlement,
+    CodingInferenceReceiptSet,
+    coding_inference_digest,
+    policy_digest,
+    provider_settlement_digest,
 )
 from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
@@ -116,6 +125,8 @@ from ditto.db.models import (
     BenchmarkRollout,
     BenchmarkRolloutMember,
     CodingCapabilityCertification,
+    CodingCertificationInferenceGrant,
+    CodingCertificationInferenceRequest,
     CodingCertificationLease,
     ConfirmationBundle,
     ConfirmationBundleSettingsRevision,
@@ -13269,6 +13280,154 @@ async def _seed_claimed_certification_lease(
     return lease_id
 
 
+def _finalize_coding_receipt(
+    vector: dict[str, object],
+) -> CodingCapabilityCertificationReceipt:
+    payload = json.loads(json.dumps(vector))
+    payload.pop("certification_sha256", None)
+    payload["certification_sha256"] = hashlib.sha256(
+        _canonical_json_bytes(payload)
+    ).hexdigest()
+    return CodingCapabilityCertificationReceipt.model_validate(payload)
+
+
+async def _seed_canary_complete_settlement(
+    maker: async_sessionmaker[AsyncSession],
+    lease_id: UUID,
+    receipt: CodingCapabilityCertificationReceipt,
+) -> CodingCapabilityCertificationReceipt:
+    vector = json.loads(
+        (
+            Path(__file__).parents[6]
+            / "packages/dittobench-coding-contract/testdata"
+            / "coding_inference_policy_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    policy = CodingInferencePolicy.model_validate(vector["policy"])
+    raw = dict(vector["provider_settlements"]["complete"][0])
+    grant_id = uuid4()
+    raw["ticket_id"] = str(lease_id)
+    raw["grant_id"] = str(grant_id)
+    settlement = CodingInferenceProviderSettlement.model_validate_json(json.dumps(raw))
+    settlement_sha256 = provider_settlement_digest(settlement, policy)
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        lease = await session.get(CodingCertificationLease, lease_id)
+        assert lease is not None
+        session.add(
+            CodingCertificationInferenceGrant(
+                grant_id=grant_id,
+                lease_id=lease_id,
+                validator_hotkey=_VALIDATOR_HOTKEY,
+                case_id=settlement.case_id,
+                profile_capability_id=settlement.profile_capability_id,
+                inference_grant_sha256=policy_digest(policy),
+                model=policy.model,
+                provider_api=policy.provider_api,
+                provider_route=policy.provider_route,
+                receipt_provider=policy.receipt_provider,
+                provider_route_profile=policy.provider_route_profile,
+                provider_account_guardrail=policy.provider_account_guardrail,
+                provider_pipeline_policy=policy.provider_pipeline_policy,
+                provider_cache_policy=policy.provider_cache_policy,
+                reasoning_effort=policy.reasoning_effort,
+                status="revoked",
+                bearer_digest=None,
+                revoke_bearer_digest="dd" * 32,
+                broker_public_key=None,
+                generation=settlement.generation,
+                request_budget=32,
+                prompt_token_budget=10_000,
+                completion_token_budget=2_000,
+                cost_budget_usd_micros=policy.max_cost_usd_micros,
+                request_count=1,
+                prompt_tokens=settlement.prompt_tokens,
+                completion_tokens=settlement.completion_tokens,
+                cost_usd_micros=settlement.cost_usd_micros,
+                active_requests=0,
+                expires_at=lease.deadline,
+                revoked_at=now,
+                weight_eligible=False,
+                created_at=now - timedelta(minutes=1),
+                updated_at=now,
+            )
+        )
+        session.add(
+            CodingCertificationInferenceRequest(
+                request_row_id=uuid4(),
+                grant_id=grant_id,
+                lease_id=lease_id,
+                generation=settlement.generation,
+                sequence=1,
+                request_sequence=settlement.request_sequence,
+                attempt=settlement.attempt,
+                request_id=settlement.request_id,
+                case_id=settlement.case_id,
+                profile_capability_id=settlement.profile_capability_id,
+                inference_grant_sha256=policy_digest(policy),
+                locked_request_sha256=settlement.locked_request_sha256,
+                status="complete",
+                provider_settlement_sha256=settlement_sha256,
+                provider_generation_id=settlement.provider_generation_id,
+                provider_settlement_json=settlement.model_dump_json(by_alias=True),
+                unsettled_reason=None,
+                started_at=now - timedelta(seconds=5),
+                settled_at=now,
+                weight_eligible=False,
+            )
+        )
+    from ditto.db.queries.coding_certifications import _receipt_from_settlement
+
+    reconstructed = _receipt_from_settlement(
+        settlement,
+        sequence=1,
+        prompt_sha256=policy.prompt_sha256,
+        tool_schema_sha256=policy.tool_schema_sha256,
+        settlement_sha256=settlement_sha256,
+    )
+    receipt_set = CodingInferenceReceiptSet.model_validate_json(
+        json.dumps(
+            {
+                "schema": "dittobench-coding-inference-receipt-set-v1",
+                "coding_contract_version": 1,
+                "ticket_id": str(lease_id),
+                "case_id": settlement.case_id,
+                "profile_capability_id": settlement.profile_capability_id,
+                "grant_id": str(grant_id),
+                "generation": settlement.generation,
+                "inference_grant_sha256": policy_digest(policy),
+                "request_budget": 32,
+                "prompt_token_budget": 10_000,
+                "completion_token_budget": 2_000,
+                "receipts": [reconstructed.model_dump(mode="json", by_alias=True)],
+            }
+        )
+    )
+    payload = receipt.model_dump(mode="json", by_alias=True)
+    payload["inference_grant_sha256"] = policy_digest(policy)
+    payload["model_evidence"] = {
+        "model": policy.model,
+        "provider": policy.provider_route,
+        "provider_route_profile": policy.provider_route_profile,
+        "reasoning_effort": policy.reasoning_effort,
+        "inference_grant_sha256": policy_digest(policy),
+        "prompt_sha256": policy.prompt_sha256,
+        "tool_schema_sha256": policy.tool_schema_sha256,
+        "usage_status": "complete",
+        "fallback_used": False,
+        "cost_source": "provider_receipt_v1",
+        "currency": "USD",
+        "provider_receipt_set_sha256": coding_inference_digest(receipt_set),
+        "requests": 1,
+        "prompt_tokens": settlement.prompt_tokens,
+        "completion_tokens": settlement.completion_tokens,
+        "total_tokens": settlement.total_tokens,
+        "cost_usd_micros": settlement.cost_usd_micros,
+        "retry_count": 0,
+    }
+    return _finalize_coding_receipt(payload)
+
+
 def _coding_certification_payload(
     agent_id: UUID,
     lease_id: UUID,
@@ -13304,6 +13463,7 @@ async def test_shadow_coding_certification_is_append_only_idempotent_and_visible
     await _seed_ticket(session_maker, agent_id)
     receipt = _coding_certification_receipt()
     lease_id = await _seed_claimed_certification_lease(session_maker, agent_id, receipt)
+    receipt = await _seed_canary_complete_settlement(session_maker, lease_id, receipt)
     _install_db(app, session_maker)
     _install_chain(app)
     app.state.config = replace(
@@ -13367,6 +13527,7 @@ async def test_shadow_coding_certification_rejects_conflict_image_and_signature(
     await _seed_ticket(session_maker, agent_id)
     receipt = _coding_certification_receipt()
     lease_id = await _seed_claimed_certification_lease(session_maker, agent_id, receipt)
+    receipt = await _seed_canary_complete_settlement(session_maker, lease_id, receipt)
     _install_db(app, session_maker)
     _install_chain(app)
     endpoint = f"/api/v1/validator/agent/{agent_id}/coding-certification"
@@ -13433,3 +13594,47 @@ async def test_shadow_coding_certification_rejects_unclaimed_lease(
     )
     assert rejected.status_code == 409
     assert "claimed certification lease" in rejected.text
+
+
+async def test_shadow_coding_certification_rejects_certified_without_settlement(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    receipt = _coding_certification_receipt()
+    lease_id = await _seed_claimed_certification_lease(session_maker, agent_id, receipt)
+    _install_db(app, session_maker)
+    _install_chain(app)
+    rejected = await client.post(
+        f"/api/v1/validator/agent/{agent_id}/coding-certification",
+        json=_coding_certification_payload(agent_id, lease_id, receipt=receipt),
+    )
+    assert rejected.status_code == 409
+    assert "settlement is missing" in rejected.text
+
+
+async def test_shadow_coding_certification_accepts_unused_inference_without_settlement(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    receipt = _coding_certification_receipt()
+    lease_id = await _seed_claimed_certification_lease(session_maker, agent_id, receipt)
+    payload = receipt.model_dump(mode="json", by_alias=True)
+    payload["status"] = "failed"
+    payload["failure_stage"] = "run"
+    payload["failure_code"] = "coding_inference_not_observed"
+    payload["model_evidence"] = None
+    unused = _finalize_coding_receipt(payload)
+    _install_db(app, session_maker)
+    _install_chain(app)
+    accepted = await client.post(
+        f"/api/v1/validator/agent/{agent_id}/coding-certification",
+        json=_coding_certification_payload(agent_id, lease_id, receipt=unused),
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["status"] == "failed"
+    assert accepted.json()["accepted"] is True
+    assert accepted.json()["active"] is False
