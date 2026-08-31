@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.16 (2026-08-31)
+
+### Bug Fixes
+
+- **backroom**: Retain concurrent screener workers
+  ([#1408](https://github.com/ditto-assistant/ditto-subnet/pull/1408),
+  [`6cdad58`](https://github.com/ditto-assistant/ditto-subnet/commit/6cdad582e1c32d6c4924f07ba095d36e112b0caa))
+
+
 ## v0.177.15 (2026-08-31)
 
 ### Bug Fixes
