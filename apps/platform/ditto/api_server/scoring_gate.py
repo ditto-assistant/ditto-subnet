@@ -1250,10 +1250,8 @@ def evaluate_rejected_resubmission(
     normalized_source_hash: str | None = None,
     content_fingerprint: dict | None = None,
     rejected: Sequence[RejectedArtifact] = (),
-    jaccard_tol: float = _DEFAULT_RESUBMISSION_JACCARD_TOL,
-    containment_tol: float = _DEFAULT_RESUBMISSION_CONTAINMENT_TOL,
 ) -> ReviewDecision:
-    """Hold an artifact that re-uploads one an operator already rejected.
+    """Hold an artifact that is exactly the one an operator rejected.
 
     :func:`evaluate_duplicate_signals` answers "did this miner take *another*
     owner's work", so every rule there deliberately skips the candidate's own
@@ -1264,23 +1262,18 @@ def evaluate_rejected_resubmission(
     inverts the ownership test: same-owner resubmission is the primary case, not
     an exemption.
 
-    Three signals, in descending strength, mirroring rules 1 / 1b / 2 of the
-    copy gate:
+    Only two identity signals can create a hold:
 
     1. **Exact match** — same ``sha256`` as a rejected artifact.
     2. **Exact repack** — same ``normalized_source_hash``: reformatted,
        re-commented, or files renamed and reordered, but the same source.
-    3. **Near-duplicate lexical fingerprint** — reference-aware
-       ``content_fingerprint`` at or above ``jaccard_tol`` Jaccard, or at or
-       above ``containment_tol`` containment *in the padding direction only*
-       and only when the candidate residual is at least
-       ``_DEFAULT_RESUBMISSION_PADDING_RATIO`` (1.15) times the rejected
-       residual (see :func:`_resubmission_lexical_match`). ``>=`` alone was a
-       false positive on remediations that add replacement files: Hogwarts_v2
-       v4–v9 (same owner as banned Hogwarts_v1 v16) sat at Jaccard 0.945–0.973
-       and containment 0.996 once the Gryffindor dispatcher was swapped for a
-       generic closer, which made ``candidate_card >= rejected_card`` without
-       being a padded re-upload. The Jaccard bar is unchanged.
+    A lexical near-duplicate cannot distinguish a remediated descendant from
+    an evasion. It is a source-review signal, not artifact-identity proof, and
+    must never recreate an ATH copy hold after the source-review pipeline has
+    made its verdict.
+
+    The historical calibration notes below document the removed lexical channel
+    and why it belongs to source review instead of this identity gate.
 
     Where rule 3's thresholds come from
     ==================================
@@ -1365,13 +1358,14 @@ def evaluate_rejected_resubmission(
     rule prospective: an artifact uploaded before the rejection existed is not
     held by it.
 
-    This is a *hold*, not a rejection. It routes to ``ath_pending_review`` with
-    the matched ancestor named, and an operator decides whether the resemblance
-    is a genuine re-upload or an honest descendant that shares scaffolding. The
-    lexical channel cannot tell those apart — its own documentation notes it
-    does not defeat identifier renaming or statement reordering — so it must not
-    be wired to anything terminal.
+    This is a *hold*, not a rejection. It applies only to byte-identical or
+    canonicalized-identical artifacts and routes them to ``ath_pending_review``.
+    Lexical descendants remain the source-review pipeline's responsibility.
     """
+    # Keep the keyword during the rollout so callers compiled against the prior
+    # pure-function contract remain compatible while lexical evidence moves to
+    # source review.
+    del content_fingerprint
     if not rejected:
         return _NOT_HELD
 
@@ -1390,21 +1384,6 @@ def evaluate_rejected_resubmission(
         ):
             candidates.append((row, "the same canonicalized source as"))
             continue
-        fired = _resubmission_lexical_match(
-            content_fingerprint,
-            row.content_fingerprint,
-            jaccard_tol=jaccard_tol,
-            containment_tol=containment_tol,
-        )
-        if fired is not None:
-            j, c = fired
-            candidates.append(
-                (
-                    row,
-                    "a lexical near-duplicate of "
-                    f"(jaccard {j:.3f}, containment {c:.3f})",
-                )
-            )
     if not candidates:
         return _NOT_HELD
 
