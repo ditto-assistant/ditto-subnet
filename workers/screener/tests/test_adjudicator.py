@@ -202,6 +202,91 @@ async def test_deadline_bounds_a_completion_and_its_retry(tmp_path: Path) -> Non
     assert requests == 1
 
 
+async def test_budget_terminated_ledger_uses_one_preloaded_final_turn(
+    tmp_path: Path,
+) -> None:
+    """L4 decides retained L1 evidence instead of rediscovering the archive."""
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                _call(
+                                    "submit_adjudication",
+                                    {
+                                        "decision": "clear",
+                                        "clear_clause": "model_authors_graded_slot",
+                                        "reason": "the served model writes the reply",
+                                        "citations": [
+                                            {"path": "src/main.rs", "line": 6}
+                                        ],
+                                    },
+                                )
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(
+        _archive(tmp_path),
+        notes=[
+            {
+                "kind": "concern",
+                "category": "benchmark_emulation",
+                "path": "src/main.rs",
+                "line": 6,
+                "summary": "review the served response assembly",
+            }
+        ],
+        error_code="source-review-lease-budget-exhausted",
+    )
+
+    assert result.decision == "clear"
+    assert result.citations[0].path == "src/main.rs"
+    assert len(requests) == 1
+    assert [tool["function"]["name"] for tool in requests[0]["tools"]] == [
+        "submit_adjudication"
+    ]
+    assert "Preloaded source evidence" in str(requests[0]["messages"])
+
+
+async def test_budget_terminated_review_without_evidence_settles_immediately(
+    tmp_path: Path,
+) -> None:
+    """No retained evidence means no model rediscovery or miner-facing retry."""
+    requests = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(500)
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(
+        _archive(tmp_path),
+        notes=[],
+        error_code="source-review-lease-budget-exhausted",
+    )
+
+    assert result.decision == "clear"
+    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.escalation_code == "adjudicator-no-evidence"
+    assert requests == 0
+
+
 _CONCERN = {
     "kind": "concern",
     "category": "benchmark_emulation",

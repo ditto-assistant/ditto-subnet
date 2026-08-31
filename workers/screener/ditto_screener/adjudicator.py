@@ -89,6 +89,17 @@ _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
 _MAX_RECORDED_READS = 2_048
 _MAX_NOTES_IN_PROMPT = 48
 _MAX_CITATIONS = 8
+# A budget-terminated L1 review already spent its discovery window. L4 is the
+# court, not a second unconstrained source-review pass: preload the exact
+# evidence L1 reached and require its decision in one bounded model turn.
+_MAX_PRELOADED_LEDGER_LOCATIONS = 16
+_BUDGET_TERMINATED_REVIEW_CODES = frozenset(
+    {
+        "source-review-lease-budget-exhausted",
+        "source-review-read-budget-exhausted",
+        "source-review-step-budget-exhausted",
+    }
+)
 _COMPACTED_TURNS_TO_KEEP = 3
 
 _SYSTEM_PROMPT = """
@@ -328,6 +339,10 @@ _TOOLS: list[dict[str, object]] = [
     },
 ]
 
+# ``submit_adjudication`` is the final (and only decision-only) tool above.
+# Keep the selected schema object rather than retyping a second contract.
+_DECISION_ONLY_TOOLS = [_TOOLS[-1]]
+
 
 @dataclass(frozen=True)
 class _Verdict:
@@ -444,6 +459,57 @@ def _finding_brief(finding: Mapping[str, object] | None) -> str:
     return json.dumps(bounded, separators=(",", ":"))
 
 
+def _preload_ledger_evidence(
+    repository: TarSourceRepository,
+    notes: Sequence[Mapping[str, object]],
+) -> tuple[str, set[tuple[str, int]]]:
+    """Return bounded source excerpts for the L4 decision-only path.
+
+    L1's ledger gives exact leads. After its discovery budget expires, asking
+    L4 to rediscover an archive can consume the entire renewable lease and
+    still leave the miner waiting on a model timeout. The host preloads bounded
+    ranges around those leads, records every delivered line, and gives the
+    court only its final-decision tool. A reject remains fail-closed: its
+    citations must still name an executable preloaded line.
+    """
+    outputs: list[str] = []
+    read_locations: set[tuple[str, int]] = set()
+    requested: set[tuple[str, int]] = set()
+    for note in notes:
+        path = note.get("path")
+        line = note.get("line")
+        if (
+            not isinstance(path, str)
+            or not path
+            or not isinstance(line, int)
+            or isinstance(line, bool)
+            or not 1 <= line <= 1_000_000
+        ):
+            continue
+        location = (path.removeprefix("./"), line)
+        if location in requested:
+            continue
+        requested.add(location)
+        if len(requested) > _MAX_PRELOADED_LEDGER_LOCATIONS:
+            break
+        try:
+            output = _execute_tool(
+                repository,
+                "read_file",
+                {
+                    "path": location[0],
+                    "start_line": max(1, line - 12),
+                    "end_line": line + 12,
+                },
+            )
+        except ValueError:
+            continue
+        _record_reads(output, read_locations)
+        if read_locations:
+            outputs.append(output)
+    return "\n".join(outputs), read_locations
+
+
 def _compacted_adjudicator_messages(
     messages: list[dict[str, object]],
 ) -> list[dict[str, object]]:
@@ -526,6 +592,30 @@ class SourceReviewAdjudicator:
                 notes=note_count,
                 policy_version=policy_version,
             )
+        decision_only = error_code in _BUDGET_TERMINATED_REVIEW_CODES
+        preloaded_evidence = ""
+        preloaded_reads: set[tuple[str, int]] = set()
+        if decision_only:
+            preloaded_evidence, preloaded_reads = _preload_ledger_evidence(
+                repository, notes
+            )
+            if not preloaded_evidence:
+                # L1 consumed its bounded discovery time but produced no
+                # source evidence. There is nothing for a court to decide; do
+                # not burn its reserve rediscovering the archive. This is still
+                # the terminal no-proven-breach adjudication, not a retry.
+                return _settle_refusal(
+                    _escalate(
+                        "adjudicator-no-evidence",
+                        "Automated adjudication received no retained source evidence",
+                        model=self._model,
+                        notes=note_count,
+                        policy_version=policy_version,
+                    ),
+                    model=self._model,
+                    notes=note_count,
+                    policy_version=policy_version,
+                )
         try:
             verdict, read_locations = await self._run(
                 repository,
@@ -535,6 +625,9 @@ class SourceReviewAdjudicator:
                 error_code=error_code,
                 deadline=deadline,
                 policy_version=policy_version,
+                decision_only=decision_only,
+                preloaded_evidence=preloaded_evidence,
+                preloaded_reads=preloaded_reads,
             )
         except (
             OSError,
@@ -688,7 +781,17 @@ class SourceReviewAdjudicator:
         error_code: str | None,
         deadline: float | None,
         policy_version: int,
+        decision_only: bool = False,
+        preloaded_evidence: str = "",
+        preloaded_reads: set[tuple[str, int]] | None = None,
     ) -> tuple[_Verdict, set[tuple[str, int]]]:
+        decision_only_instruction = (
+            "\nThe host preloaded the exact source excerpts for the retained "
+            "ledger. Decide from those excerpts now. Discovery tools are disabled; "
+            "call submit_adjudication exactly once."
+            if decision_only
+            else ""
+        )
         messages: list[dict[str, object]] = [
             {"role": "system", "content": _system_prompt(policy_version)},
             {
@@ -698,15 +801,24 @@ class SourceReviewAdjudicator:
                     f"Why the review stopped: {error_code or 'bounded review'}\n"
                     f"Upstream finding (a lead): {_finding_brief(finding)}\n"
                     f"Notes ledger (leads): {_ledger_brief(notes)}\n"
-                    "Archive inventory:\n" + repository.inventory()
+                    "Archive inventory:\n"
+                    + repository.inventory()
+                    + (
+                        "\nPreloaded source evidence:\n" + preloaded_evidence
+                        if preloaded_evidence
+                        else ""
+                    )
+                    + decision_only_instruction
                 ),
             },
         ]
-        read_locations: set[tuple[str, int]] = set()
+        read_locations = set(preloaded_reads or ())
+        tools = _DECISION_ONLY_TOOLS if decision_only else _TOOLS
+        max_steps = 1 if decision_only else self._max_steps
         async with httpx.AsyncClient(
             transport=self._transport, timeout=self._timeout_seconds
         ) as client:
-            for _step in range(self._max_steps):
+            for _step in range(max_steps):
                 request_timeout = self._timeout_seconds
                 if deadline is not None:
                     remaining = deadline - asyncio.get_running_loop().time()
@@ -723,10 +835,15 @@ class SourceReviewAdjudicator:
                         api_key,
                         _compacted_adjudicator_messages(messages),
                         timeout=request_timeout,
+                        tools=tools,
                     )
                 messages.append(message)
                 tool_calls = message.get("tool_calls")
                 if not isinstance(tool_calls, list) or not tool_calls:
+                    if decision_only:
+                        raise ValueError(
+                            "decision-only adjudicator response omitted final tool call"
+                        )
                     messages.append(
                         {
                             "role": "user",
@@ -741,6 +858,10 @@ class SourceReviewAdjudicator:
                     call_id, name, arguments = _tool_call(call)
                     if name == "submit_adjudication":
                         return _verdict_from(arguments), read_locations
+                    if decision_only:
+                        raise ValueError(
+                            "decision-only adjudicator requested source discovery"
+                        )
                     try:
                         output = _execute_tool(repository, name, arguments)
                     except ValueError as error:
@@ -763,11 +884,12 @@ class SourceReviewAdjudicator:
         messages: list[dict[str, object]],
         *,
         timeout: float | None,
+        tools: Sequence[Mapping[str, object]] = _TOOLS,
     ) -> dict[str, object]:
         request = {
             "model": self._model,
             "messages": messages,
-            "tools": _TOOLS,
+            "tools": list(tools),
             # A free-form answer cannot settle the court and previously used
             # an entire provider turn before the corrective prompt below.
             # Every valid next action is one of these bounded tools, so make
