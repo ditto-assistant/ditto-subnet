@@ -85,6 +85,7 @@ from ditto.db.models import (
     ScreenerCapacityEvent,
     ScreenerCapacitySnapshot,
     ScreenerHeartbeat,
+    ScreenerNodeChannelSettingsRevision,
     ScreenerProviderSettingsRevision,
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
@@ -2210,6 +2211,13 @@ class TestFederatedScreenerNodes:
             mode="enforce", adjudicator_mode="enforce"
         )
         node_checksum = _review_settings_checksum(node_settings)
+        canary_agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING_FAILED,
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        failed_attempt_id = uuid4()
+        now = datetime.now(UTC)
         async with session_maker() as session, session.begin():
             revision = ScreenerReviewSettingsRevision(
                 parent_revision=0,
@@ -2222,6 +2230,43 @@ class TestFederatedScreenerNodes:
             session.add(revision)
             await session.flush()
             node_revision = revision.revision
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=failed_attempt_id,
+                    agent_id=canary_agent_id,
+                    screener_hotkey=node_keypair.ss58_address,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="failed",
+                    started_at=now - timedelta(minutes=1),
+                    deadline=now,
+                    finished_at=now,
+                    public_reason="Screening worker stopped reporting this attempt",
+                    reason_code="worker-lease-orphaned",
+                )
+            )
+            session.add(
+                ScreeningRetryOverride(
+                    override_id=uuid4(),
+                    agent_id=canary_agent_id,
+                    attempt_id=failed_attempt_id,
+                    artifact_sha256=_SHA256,
+                    expected_score_count=0,
+                    force_full_review=True,
+                    review_settings_revision=node_revision,
+                    reason="one node-scoped adjudicator canary",
+                    actor="test",
+                )
+            )
+            session.add(
+                ScreenerNodeChannelSettingsRevision(
+                    environment="prod",
+                    node_id=node_id,
+                    parent_revision=0,
+                    settings={"screening_concurrency": 1},
+                    reason="admit one node-scoped canary",
+                    actor="test",
+                )
+            )
         worker_settings = await client.get(
             "/api/v1/screener/review-settings",
             headers=node_headers,
@@ -2243,6 +2288,10 @@ class TestFederatedScreenerNodes:
             },
         )
         assert worker_claim.status_code == 200, worker_claim.text
+        assert worker_claim.json()["items"][0]["agent_id"] == str(canary_agent_id)
+        # The active node binding is already supplied with this claim; a queue
+        # item only carries an override when it differs from that binding.
+        assert worker_claim.json()["items"][0]["review_settings_override"] is None
 
         # Only positive decimal worker suffixes belong to the enrolled node.
         invalid_instance_id = f"{node_id}-worker-0"

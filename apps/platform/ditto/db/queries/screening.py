@@ -1091,7 +1091,8 @@ async def claim_screening_attempts(
             )
             instance_id = review_settings_binding[1]
             if (
-                canary_settings.scope not in {"*", instance_id}
+                canary_settings.scope
+                not in {"*", instance_id, review_settings_binding[2]}
                 or parsed_canary_settings.mode != "enforce"
                 or not parsed_canary_settings.l3_enabled
                 or parsed_canary_settings.adjudicator_mode != "enforce"
