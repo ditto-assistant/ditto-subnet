@@ -1,0 +1,12 @@
+[Unit]
+Description=Restrict dedicated rootless coding-executor daemon egress
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/ditto-coding-executor/executor-egress-guard.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+---
+# Provision only the default-off rootless daemon on hosts created by the
+# optional coding-executor Terraform cohort. This play never installs a scorer
+# or validator and defaults to a no-op until host variables explicitly enable
+# the daemon after a protected infrastructure apply.
+- name: Provision dedicated shadow-coding executor daemons
+  hosts: role_coding_executor
+  become: true
+  gather_facts: true
+  roles:
+    - base
+    - coding_executor

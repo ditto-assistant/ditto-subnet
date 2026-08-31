@@ -1,0 +1,23 @@
+---
+# Dedicated rootless Docker daemon for a future shadow-coding executor host.
+# The role does nothing unless an operator explicitly enables it in protected
+# host configuration after the optional three-host Terraform cohort exists.
+coding_executor_daemon_enabled: false
+
+coding_executor_user: ditto-coding-executor
+coding_executor_group: ditto-coding-executor
+# Future trusted scorer/worker services join this group in their own reviewed
+# role. Keeping it empty in this layer proves the daemon starts with no client
+# process, credential, or candidate workload.
+coding_executor_client_group: ditto-coding-client
+coding_executor_home: /var/lib/ditto-coding-executor
+coding_executor_runtime_dir: /run/ditto-coding-executor
+coding_executor_docker_host: unix:///run/ditto-coding-executor/docker.sock
+coding_executor_unit: ditto-coding-executor-docker
+coding_executor_egress_guard_unit: ditto-coding-executor-egress-guard
+
+# These are daemon-envelope bounds, not candidate budgets. A future coding
+# scorer still gets all resource limits from the signed task/grader authority.
+coding_executor_daemon_memory_max: 24G
+coding_executor_daemon_tasks_max: 8192
+coding_executor_docker_apt_arch: amd64
