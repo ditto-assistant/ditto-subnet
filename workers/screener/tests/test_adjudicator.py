@@ -171,6 +171,7 @@ async def test_request_uses_provider_supported_completion_parameter(
     assert len(requests) == 1
     assert requests[0]["max_tokens"] == 6_000
     assert "max_completion_tokens" not in requests[0]
+    assert requests[0]["tool_choice"] == "required"
     assert requests[0]["provider"] == {
         "zdr": True,
         "data_collection": "deny",
@@ -195,6 +196,7 @@ async def test_deadline_bounds_a_completion_and_its_retry(tmp_path: Path) -> Non
 
     assert result.decision == "clear"
     assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.escalation_code == "adjudicator-failed"
     assert requests == 1
 
 
@@ -589,3 +591,15 @@ def test_the_court_is_only_built_when_an_operator_turns_it_on(
     built = build_adjudicator(make_config(adjudicator_mode=mode))
 
     assert (built is None) == (mode == "off")
+
+
+def test_the_court_uses_the_audited_deep_review_completion_budget(make_config) -> None:
+    built = build_adjudicator(
+        make_config(
+            adjudicator_mode="enforce",
+            l2_max_completion_tokens=16_384,
+        )
+    )
+
+    assert built is not None
+    assert built._max_completion_tokens == 16_384

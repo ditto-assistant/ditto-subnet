@@ -323,6 +323,10 @@ def _settle_refusal(
         model=model,
         prompt_revision=ADJUDICATOR_PROMPT_REVISION,
         notes_considered=notes,
+        # This is a terminal clear, not an internal escalation, but retaining
+        # the refusal code makes the signed private review evidence honest
+        # about why the no-proven-breach rule settled the case.
+        escalation_code=refusal_code,
     )
 
 
@@ -682,7 +686,11 @@ class SourceReviewAdjudicator:
             "model": self._model,
             "messages": messages,
             "tools": _TOOLS,
-            "tool_choice": "auto",
+            # A free-form answer cannot settle the court and previously used
+            # an entire provider turn before the corrective prompt below.
+            # Every valid next action is one of these bounded tools, so make
+            # that contract explicit for the fast path as well.
+            "tool_choice": "required",
             # OpenRouter advertises GLM 5.3 Flash's completion ceiling as
             # ``max_tokens``. With require_parameters enabled, sending the
             # OpenAI-specific alias filters every eligible endpoint and the
@@ -832,4 +840,11 @@ def build_adjudicator(config: object) -> SourceReviewAdjudicator | None:
         model=str(getattr(config, "adjudicator_model", _DEFAULT_MODEL)),
         timeout_seconds=float(getattr(config, "adjudicator_timeout_seconds", 600.0)),
         max_steps=int(getattr(config, "adjudicator_max_steps", _MAX_STEPS)),
+        # Review settings expose a single, audited completion ceiling for the
+        # paid deep-review path.  The court used to ignore it and silently
+        # retain its 6k constructor default, even when the canary explicitly
+        # granted 16k.  L4 is a consumer of that same bounded budget.
+        max_completion_tokens=int(
+            getattr(config, "l2_max_completion_tokens", _MAX_COMPLETION_TOKENS)
+        ),
     )
