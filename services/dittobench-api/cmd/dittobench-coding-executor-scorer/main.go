@@ -6,23 +6,31 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
+	"github.com/ditto-assistant/dittobench-api/internal/codinghost"
 	"github.com/ditto-assistant/dittobench-api/internal/release"
+	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
 )
 
 const (
 	defaultSocketPath = "/run/ditto-coding-scorer/control.sock"
 	enableEnvironment = "DITTOBENCH_CODING_EXECUTOR_SCORER_ENABLED"
+	policyFile        = "/opt/ditto/coding/coding_inference_policy_locked_v1.json"
+	policySHA256      = "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6"
 )
 
 type configuration struct {
@@ -40,13 +48,76 @@ func configurationFromEnvironment(socketPath string, getenv func(string) string)
 	return configuration{}, errors.New("coding executor scorer is disabled")
 }
 
-func controlMux() *http.ServeMux {
+func controlMux(host *codinghost.Host) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")
 		response.WriteHeader(http.StatusNoContent)
 	})
+	mux.Handle("POST /v1/coding/supervisor/{operation}", host.SupervisorHandler())
+	mux.Handle("POST /v1/coding/publications/{operation}", host.PublicationHandler())
 	return mux
+}
+
+func loadPolicy(path string) (codingcontract.InferencePolicy, error) {
+	var zero codingcontract.InferencePolicy
+	if !filepath.IsAbs(path) || filepath.Clean(path) == string(filepath.Separator) {
+		return zero, errors.New("coding executor scorer policy path is invalid")
+	}
+	handle, err := os.Open(path)
+	if err != nil {
+		return zero, errors.New("coding executor scorer policy is unavailable")
+	}
+	defer handle.Close()
+	body, err := io.ReadAll(io.LimitReader(handle, codingcontract.MaxInferencePolicyBytes+1))
+	if err != nil || len(body) == 0 || len(body) > codingcontract.MaxInferencePolicyBytes {
+		return zero, errors.New("coding executor scorer policy is invalid")
+	}
+	policy, err := codingcontract.ParseInferencePolicy(body)
+	if err != nil {
+		return zero, errors.New("coding executor scorer policy is invalid")
+	}
+	digest, err := codingcontract.InferencePolicySHA256(policy)
+	if err != nil || digest != policySHA256 {
+		return zero, errors.New("coding executor scorer policy is not locked")
+	}
+	return policy, nil
+}
+
+func buildHost() (*codinghost.Host, net.Listener, error) {
+	tokenPath := strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_EXECUTOR_CONTROL_TOKEN_FILE"))
+	privateRoot := strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_EXECUTOR_PRIVATE_ROOT"))
+	imageRepository := strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY"))
+	if !filepath.IsAbs(tokenPath) || !filepath.IsAbs(privateRoot) || imageRepository == "" ||
+		!strings.EqualFold(strings.TrimSpace(os.Getenv("DITTOBENCH_REQUIRE_ROOTLESS_DOCKER")), "true") ||
+		!strings.EqualFold(strings.TrimSpace(os.Getenv("DITTOBENCH_REQUIRE_ISOLATED_DOCKER_DAEMON")), "true") ||
+		strings.TrimSpace(os.Getenv("DOCKER_HOST")) != "unix:///run/ditto-coding-executor/docker.sock" {
+		return nil, nil, errors.New("coding executor scorer runtime profile is incomplete")
+	}
+	token, err := os.ReadFile(tokenPath)
+	if err != nil || len(strings.TrimSpace(string(token))) < 32 {
+		return nil, nil, errors.New("coding executor scorer token is unavailable")
+	}
+	policy, err := loadPolicy(policyFile)
+	if err != nil {
+		return nil, nil, err
+	}
+	source, err := net.Listen("tcp4", "127.0.0.1:11438")
+	if err != nil {
+		return nil, nil, errors.New("coding executor scorer source listener is unavailable")
+	}
+	host, err := codinghost.New(codinghost.Config{
+		ControlToken: strings.TrimSpace(string(token)), PrivateRoot: privateRoot,
+		SourceListener: source, SourcePublicBaseURL: "http://127.0.0.1:11438", Policy: policy,
+		RuntimeImageRepository: imageRepository, Docker: sandbox.NewLocalDocker(),
+		CandidateUID: 65532, CandidateGID: 65532, MaxTotalBytes: 16 << 30,
+		JournalMaxTotalBytes: 3 << 30, MaxAttempts: 64, Now: time.Now,
+	})
+	if err != nil {
+		_ = source.Close()
+		return nil, nil, errors.New("coding executor scorer host is unavailable")
+	}
+	return host, source, nil
 }
 
 func listenUnix(path string) (net.Listener, error) {
@@ -89,13 +160,20 @@ func main() {
 		fmt.Fprintln(os.Stderr, "coding executor scorer is not enabled")
 		os.Exit(78)
 	}
+	host, source, err := buildHost()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "coding executor scorer runtime is unavailable")
+		os.Exit(78)
+	}
+	defer source.Close()
+	defer func() { _ = host.Close(context.Background()) }()
 	listener, err := listenUnix(config.socketPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "coding executor scorer socket is unavailable")
 		os.Exit(111)
 	}
 	defer listener.Close()
-	if err := http.Serve(listener, controlMux()); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := http.Serve(listener, controlMux(host)); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, "coding executor scorer stopped")
 		os.Exit(111)
 	}

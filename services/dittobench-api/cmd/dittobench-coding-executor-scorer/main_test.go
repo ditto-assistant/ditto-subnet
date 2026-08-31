@@ -20,7 +20,7 @@ func TestConfigurationIsDefaultOffAndPinsTheUnixSocket(t *testing.T) {
 }
 
 func TestControlMuxOnlyExposesConstantHealth(t *testing.T) {
-	mux := controlMux()
+	mux := controlMux(nil)
 	health := httptest.NewRecorder()
 	mux.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
 	if health.Code != http.StatusNoContent || health.Body.Len() != 0 || health.Header().Get("Cache-Control") != "no-store" {
