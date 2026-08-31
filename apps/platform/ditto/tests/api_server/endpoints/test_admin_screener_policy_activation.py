@@ -335,6 +335,10 @@ class TestResolverDueActivation:
             assert policy.required_policy_version == SCREENING_POLICY_VERSION
             assert policy.rescreen_stale_agents is True
             assert policy.rescreen_scored is True
+            # A full activation still releases scored rows one at a time. The
+            # global V11 requirement applies to fresh work, while the target
+            # here fences each retained V10 score behind an explicit release.
+            assert policy.scored_rescreen_policy_version == SCREENING_POLICY_VERSION
 
     async def test_target_above_the_build_clamps_to_it(
         self,
