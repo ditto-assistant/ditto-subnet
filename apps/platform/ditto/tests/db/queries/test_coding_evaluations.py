@@ -312,6 +312,9 @@ async def _seed_certification(session: AsyncSession, agent_id: UUID) -> None:
                 screened_image_sha256=agent.screened_image_sha256,
                 validator_hotkey=_VALIDATOR,
                 bench_version=_BENCH,
+                settlement_generation=1,
+                settlement_inference_grant_sha256="99" * 32,
+                settlement_provider_receipt_set_sha256="aa" * 32,
                 ticket_deadline=now + timedelta(hours=1),
                 coding_contract_version=1,
                 certification_id="cert-coding-shadow-001",
@@ -330,6 +333,62 @@ async def _seed_certification(session: AsyncSession, agent_id: UUID) -> None:
                 created_at=now,
             )
         )
+
+
+async def _seed_unbound_certification(session: AsyncSession, agent_id: UUID) -> None:
+    async with session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        now = datetime.now(UTC)
+        session.add(
+            CodingCapabilityCertification(
+                certification_row_id=uuid4(),
+                agent_id=agent.agent_id,
+                artifact_sha256=agent.sha256,
+                screened_image_sha256=agent.screened_image_sha256,
+                validator_hotkey=_VALIDATOR,
+                bench_version=_BENCH,
+                ticket_deadline=now + timedelta(hours=1),
+                coding_contract_version=1,
+                certification_id="cert-coding-shadow-legacy-unbound",
+                status="certified",
+                failure_stage=None,
+                failure_code=None,
+                certification_sha256="14" * 32,
+                canary_manifest_sha256="15" * 32,
+                transcript_object_key="sha256/" + "16" * 32,
+                frozen_submission_object_key="sha256/" + "17" * 32,
+                issued_at=now - timedelta(minutes=5),
+                expires_at=now + timedelta(hours=2),
+                weight_eligible=False,
+                receipt={},
+                signature="18" * 64,
+                created_at=now,
+            )
+        )
+
+
+async def test_selection_assignment_rejects_unbound_legacy_certification(
+    session: AsyncSession,
+) -> None:
+    await _seed_catalog(session)
+    agent = await _seed_qualified_agent(session)
+    await _seed_unbound_certification(session, agent.agent_id)
+
+    with pytest.raises(
+        CodingAssignmentNotQualifiedError,
+        match="active artifact certification",
+    ):
+        async with session.begin():
+            await create_coding_selection_assignment(
+                session,
+                finalized_source=_FinalizedBlocks(),
+                agent_id=agent.agent_id,
+                bench_version=_BENCH,
+                coding_run_id="coding-assignment-legacy-unbound",
+                corpus_release_id="private-coding-corpus-v1",
+                policy=CodingAssignmentPolicy(selection_delay_blocks=20),
+            )
 
 
 async def test_selection_assignment_is_future_bound_idempotent_and_append_only(

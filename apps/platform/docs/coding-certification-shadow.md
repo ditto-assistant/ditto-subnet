@@ -20,7 +20,10 @@ receipt only when all of these match:
 - for invoked model evidence (`complete` or `provider_failure`), the claimed
   lease's `coding_certification_inference_requests` ledger: no `started` or
   `unsettled` rows, grant accounting equal to the receipt, and
-  `provider_receipt_set_sha256` equal to the reconstructed settlement digest.
+  `provider_receipt_set_sha256` equal to the reconstructed settlement digest;
+- a terminal (`revoked` or `exhausted`) canary grant and immutable binding
+  fields on the receipt row recording its generation, inference-grant digest,
+  and settlement-set digest.
 
 Unused-inference failed receipts (`coding_inference_not_observed`, no invoked
 model evidence) persist without a settlement row. A settlement on that lease
@@ -42,12 +45,17 @@ status = certified
 receipt not expired
 stored artifact == current agent artifact
 stored screened image == current screened image
+immutable terminal-ledger binding present
 ```
 
 A new upload or rebuilt screened image therefore invalidates prior evidence
 without deleting audit history. The table stores only content-addressed
 transcript/frozen-submission keys and the bounded receipt JSON, never repository
 contents, grader tests, provider credentials, or signing keys.
+
+Legacy rows without the immutable binding remain visible for audit but are not
+active certification authority. They cannot create private assignments, tickets,
+claims, task leases, or coding inference grants.
 
 ## Operator visibility
 

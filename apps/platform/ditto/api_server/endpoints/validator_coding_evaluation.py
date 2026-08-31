@@ -29,6 +29,9 @@ from ditto.db.models import (
     CodingShadowRun,
     CodingShadowTicket,
 )
+from ditto.db.queries.coding_certifications import (
+    coding_certification_settlement_bound,
+)
 from ditto.db.queries.coding_evaluations import (
     CodingShadowConflictError,
     coding_shadow_result_matches,
@@ -174,6 +177,7 @@ async def submit_coding_shadow_result(
             or _aware(ticket.claim_expires_at) <= now
             or certification is None
             or certification.status != "certified"
+            or not coding_certification_settlement_bound(certification)
             or certification.agent_id != agent_id
             or certification.validator_hotkey != payload.validator_hotkey
             or certification.artifact_sha256 != run.artifact_sha256

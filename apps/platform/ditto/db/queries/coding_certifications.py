@@ -47,6 +47,13 @@ class CodingCertificationInsertResult:
 
 
 @dataclass(frozen=True)
+class CodingCertificationSettlementBinding:
+    generation: int
+    inference_grant_sha256: str
+    provider_receipt_set_sha256: str
+
+
+@dataclass(frozen=True)
 class AgentCodingCertificationSummary:
     coding_supported: bool
     active_certification_count: int
@@ -58,6 +65,18 @@ class AgentCodingCertificationSummary:
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def coding_certification_settlement_bound(
+    row: CodingCapabilityCertification,
+) -> bool:
+    """Whether this immutable receipt has a verified terminal-ledger binding."""
+
+    return (
+        row.settlement_generation is not None
+        and row.settlement_inference_grant_sha256 is not None
+        and row.settlement_provider_receipt_set_sha256 is not None
+    )
 
 
 async def get_coding_certification_identity(
@@ -174,7 +193,7 @@ async def require_coding_certification_settlement(
     *,
     lease_id: UUID,
     receipt: CodingCapabilityCertificationReceipt,
-) -> None:
+) -> CodingCertificationSettlementBinding | None:
     """Bind invoked receipts to the claimed-lease canary settlement ledger."""
 
     grant = await session.scalar(
@@ -201,7 +220,7 @@ async def require_coding_certification_settlement(
             raise CodingCertificationSettlementError(
                 "coding certification unused inference observed a settlement"
             )
-        return
+        return None
     evidence = receipt.model_evidence
     if evidence is None:
         raise CodingCertificationSettlementError(
@@ -213,6 +232,7 @@ async def require_coding_certification_settlement(
         or grant.generation < 1
         or grant.inference_grant_sha256 != receipt.inference_grant_sha256
         or grant.inference_grant_sha256 != evidence.inference_grant_sha256
+        or grant.status not in {"revoked", "exhausted"}
         or grant.active_requests != 0
         or not rows
     ):
@@ -312,6 +332,11 @@ async def require_coding_certification_settlement(
         raise CodingCertificationSettlementError(
             "coding certification settlement disagrees with receipt evidence"
         )
+    return CodingCertificationSettlementBinding(
+        generation=grant.generation,
+        inference_grant_sha256=grant.inference_grant_sha256,
+        provider_receipt_set_sha256=digest,
+    )
 
 
 def coding_certification_lease_accepts_receipt(
@@ -352,7 +377,7 @@ async def insert_coding_certification(
 ) -> CodingCertificationInsertResult:
     """Insert one immutable receipt or accept its exact transport replay."""
 
-    await require_coding_certification_settlement(
+    settlement_binding = await require_coding_certification_settlement(
         session, lease_id=lease_id, receipt=receipt
     )
     receipt_json = receipt.model_dump(mode="json", by_alias=True)
@@ -364,6 +389,19 @@ async def insert_coding_certification(
         "validator_hotkey": validator_hotkey,
         "bench_version": bench_version,
         "lease_id": lease_id,
+        "settlement_generation": (
+            settlement_binding.generation if settlement_binding is not None else None
+        ),
+        "settlement_inference_grant_sha256": (
+            settlement_binding.inference_grant_sha256
+            if settlement_binding is not None
+            else None
+        ),
+        "settlement_provider_receipt_set_sha256": (
+            settlement_binding.provider_receipt_set_sha256
+            if settlement_binding is not None
+            else None
+        ),
         "ticket_deadline": ticket_deadline,
         "coding_contract_version": receipt.coding_contract_version,
         "certification_id": receipt.certification_id,
@@ -468,7 +506,8 @@ async def summarize_agent_coding_certifications(
                     CodingCapabilityCertification.status != "unsupported"
                 ),
                 func.count().filter(
-                    CodingCapabilityCertification.status == "certified"
+                    CodingCapabilityCertification.status == "certified",
+                    CodingCapabilityCertification.settlement_generation.is_not(None),
                 ),
             ).where(
                 CodingCapabilityCertification.agent_id == agent.agent_id,
@@ -510,6 +549,7 @@ async def active_validator_coding_certification(
             CodingCapabilityCertification.coding_contract_version
             == coding_contract_version,
             CodingCapabilityCertification.status == "certified",
+            CodingCapabilityCertification.settlement_generation.is_not(None),
             CodingCapabilityCertification.expires_at > _aware(active_through),
         )
         .order_by(CodingCapabilityCertification.created_at.desc())
@@ -526,6 +566,7 @@ def coding_certification_stale_reason(
     "active",
     "expired",
     "not_certified",
+    "settlement_unbound",
     "artifact_changed",
     "screened_image_changed",
 ]:
@@ -535,6 +576,8 @@ def coding_certification_stale_reason(
         return "screened_image_changed"
     if row.status != "certified":
         return "not_certified"
+    if not coding_certification_settlement_bound(row):
+        return "settlement_unbound"
     if _aware(row.expires_at) <= _aware(now):
         return "expired"
     return "active"

@@ -146,6 +146,9 @@ def _fixture() -> SimpleNamespace:
         artifact_sha256=authority.agent_artifact_sha256,
         screened_image_sha256=authority.screened_image_sha256,
         status="certified",
+        settlement_generation=1,
+        settlement_inference_grant_sha256="11" * 32,
+        settlement_provider_receipt_set_sha256="22" * 32,
         expires_at=ticket.deadline.replace(year=ticket.deadline.year + 1),
     )
     agent = SimpleNamespace(

@@ -13502,6 +13502,21 @@ async def test_shadow_coding_certification_is_append_only_idempotent_and_visible
     assert admin.json()["coding_certified"] is True
     assert admin.json()["active_certification_count"] == 1
     assert admin.json()["certifications"][0]["lease_id"] == str(lease_id)
+    assert receipt.model_evidence is not None
+    async with session_maker() as session:
+        stored = await session.scalar(
+            select(CodingCapabilityCertification).where(
+                CodingCapabilityCertification.agent_id == agent_id
+            )
+        )
+        assert stored is not None
+        assert stored.settlement_generation is not None
+        assert stored.settlement_inference_grant_sha256 == (
+            receipt.inference_grant_sha256
+        )
+        assert stored.settlement_provider_receipt_set_sha256 == (
+            receipt.model_evidence.provider_receipt_set_sha256
+        )
 
     async with session_maker() as session, session.begin():
         agent = await session.get(Agent, agent_id, with_for_update=True)
@@ -13638,3 +13653,53 @@ async def test_shadow_coding_certification_accepts_unused_inference_without_sett
     assert accepted.json()["status"] == "failed"
     assert accepted.json()["accepted"] is True
     assert accepted.json()["active"] is False
+
+
+async def test_shadow_coding_certification_rejects_unbound_legacy_certified_replay(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    await _seed_ticket(session_maker, agent_id)
+    receipt = _coding_certification_receipt()
+    lease_id = await _seed_claimed_certification_lease(session_maker, agent_id, receipt)
+    receipt = await _seed_canary_complete_settlement(session_maker, lease_id, receipt)
+    async with session_maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        lease = await session.get(CodingCertificationLease, lease_id)
+        assert agent is not None and lease is not None
+        session.add(
+            CodingCapabilityCertification(
+                certification_row_id=uuid4(),
+                agent_id=agent_id,
+                artifact_sha256=agent.sha256,
+                screened_image_sha256=agent.screened_image_sha256,
+                validator_hotkey=_VALIDATOR_HOTKEY,
+                bench_version=_BENCH_VERSION,
+                lease_id=lease_id,
+                ticket_deadline=lease.deadline,
+                coding_contract_version=receipt.coding_contract_version,
+                certification_id=receipt.certification_id,
+                status=receipt.status.value,
+                failure_stage=None,
+                failure_code=None,
+                certification_sha256=receipt.certification_sha256,
+                canary_manifest_sha256=receipt.canary_manifest_sha256,
+                transcript_object_key=receipt.authoring_transcript_object_key,
+                frozen_submission_object_key=receipt.frozen_submission_object_key,
+                issued_at=datetime.fromtimestamp(receipt.issued_at_unix, UTC),
+                expires_at=datetime.fromtimestamp(receipt.expires_at_unix, UTC),
+                weight_eligible=False,
+                receipt=receipt.model_dump(mode="json", by_alias=True),
+                signature="99" * 64,
+            )
+        )
+    _install_db(app, session_maker)
+    _install_chain(app)
+    replay = await client.post(
+        f"/api/v1/validator/agent/{agent_id}/coding-certification",
+        json=_coding_certification_payload(agent_id, lease_id, receipt=receipt),
+    )
+    assert replay.status_code == 409
+    assert "durable settlement binding" in replay.text
