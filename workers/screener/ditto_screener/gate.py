@@ -972,6 +972,20 @@ class BuildGate:
                     review_factory = cleared_preflight
 
             if policy_only:
+                # A policy-only rescreen has retained build/runtime evidence,
+                # so it bypasses the normal post-health point that starts this
+                # task.  Start the same deferred source-review task before the
+                # policy asks for it; otherwise ``review_source`` asserts and
+                # the rescreen is incorrectly reported as infrastructure
+                # failure without producing review evidence.
+                if review_factory is None:
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="source-review-unavailable",
+                        summary="policy-only rescreen could not start source review",
+                        detail="screener error: source review was not initialized",
+                    )
+                review_task = asyncio.create_task(review_factory())
 
                 async def unavailable_challenge(
                     _challenge_id: str,
