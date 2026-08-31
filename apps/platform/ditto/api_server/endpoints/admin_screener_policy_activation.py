@@ -52,6 +52,7 @@ from ditto.api_models.screener_policy_activation import (
     ScreenerPolicyActivationRevision,
     ScreenerPolicyActivationView,
 )
+from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.screener_policy_activation import (
@@ -63,6 +64,7 @@ from ditto.db.models import (
     Score,
     ScoredPolicyRescreenRelease,
     ScoredScreeningSnapshotRestoration,
+    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
 )
 from ditto.db.models import (
@@ -94,6 +96,7 @@ def _revision_view(
         target_policy_version=row.target_policy_version,
         activate_at=row.activate_at,
         rescreen_scored=row.rescreen_scored,
+        canary_only=row.canary_only,
         reason=row.reason,
         actor=row.actor,
         created_at=row.created_at,
@@ -135,6 +138,7 @@ def _release_view(
         # value here so the response preserves the explicit wire contract.
         state=cast(ScoredRescreenState, release.state),
         attempt_id=release.attempt_id,
+        review_settings_revision=release.review_settings_revision,
     )
 
 
@@ -316,6 +320,18 @@ async def advance_scored_rescreen(
                     ),
                 )
             if current.state == "paused" and payload.retry_paused:
+                if (
+                    payload.review_settings_revision is not None
+                    and payload.review_settings_revision
+                    != current.review_settings_revision
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "paused scored policy rescreens retain their original "
+                            "review settings revision"
+                        ),
+                    )
                 current.state = "pending"
                 current.attempt_id = None
                 current.actor = actor
@@ -329,6 +345,47 @@ async def advance_scored_rescreen(
                     ),
                 )
         else:
+            review_settings_revision = payload.review_settings_revision
+            if activation.canary_only:
+                if review_settings_revision is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "canary-only scored policy rescreens require an "
+                            "immutable L4-enforce review settings revision"
+                        ),
+                    )
+                review_revision = await session.get(
+                    ScreenerReviewSettingsRevision, review_settings_revision
+                )
+                if review_revision is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="review settings revision does not exist",
+                    )
+                review_settings = ScreenerReviewSettings.model_validate(
+                    review_revision.settings
+                )
+                if (
+                    review_settings.mode != "enforce"
+                    or not review_settings.l3_enabled
+                    or review_settings.adjudicator_mode != "enforce"
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "canary-only scored policy rescreens require enforce "
+                            "mode with L3 and the adjudicator enforced"
+                        ),
+                    )
+            elif review_settings_revision is not None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "review settings revision is only valid for a canary-only "
+                        "scored policy rescreen"
+                    ),
+                )
             next_candidate = await _next_scored_rescreen_candidate(
                 session,
                 activation=activation,
@@ -357,6 +414,7 @@ async def advance_scored_rescreen(
                     position=position,
                     state="pending",
                     attempt_id=None,
+                    review_settings_revision=review_settings_revision,
                     actor=actor,
                     reason=payload.reason.strip(),
                 )
@@ -421,6 +479,19 @@ async def schedule_activation(
                 "implements it, then schedule the activation"
             ),
         )
+    if payload.canary_only and not payload.rescreen_scored:
+        raise HTTPException(
+            status_code=422,
+            detail="canary-only activation requires rescreen_scored=true",
+        )
+    if (
+        payload.canary_only
+        and payload.target_policy_version <= SCREENING_FLOOR_POLICY_VERSION
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="canary-only activation must target a policy above the floor",
+        )
     actual_revision = await _latest_revision(session)
     if payload.expected_revision != actual_revision:
         raise HTTPException(
@@ -438,6 +509,7 @@ async def schedule_activation(
             target_policy_version=payload.target_policy_version,
             activate_at=activate_at,
             rescreen_scored=payload.rescreen_scored,
+            canary_only=payload.canary_only,
             reason=payload.reason.strip(),
             actor=actor,
         )

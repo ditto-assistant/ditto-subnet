@@ -3176,6 +3176,7 @@ describe('Backroom MCP tools', () => {
       position: 1,
       state: 'paused',
       attempt_id: '33333333-3333-4333-8333-333333333333',
+      review_settings_revision: null,
     },
     next_agent_id: null,
     next_position: null,

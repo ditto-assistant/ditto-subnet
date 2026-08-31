@@ -2440,6 +2440,7 @@ CREATE TABLE public.scored_policy_rescreen_releases (
     reason text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    review_settings_revision integer,
     CONSTRAINT ck_scored_policy_rescreen_releases_scored_policy_rescre_48dd CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
     CONSTRAINT ck_scored_policy_rescreen_releases_scored_policy_rescre_4b7f CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'paused'::text, 'terminal'::text]))),
     CONSTRAINT ck_scored_policy_rescreen_releases_scored_policy_rescre_7cbf CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
@@ -2726,6 +2727,7 @@ CREATE TABLE public.screener_policy_activations (
     reason text NOT NULL,
     actor text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    canary_only boolean DEFAULT false NOT NULL,
     CONSTRAINT ck_screener_policy_activations_screener_policy_activati_1ae6 CHECK ((parent_revision >= 0)),
     CONSTRAINT ck_screener_policy_activations_screener_policy_activati_555e CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
     CONSTRAINT ck_screener_policy_activations_screener_policy_activati_7fca CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
@@ -6745,6 +6747,14 @@ ALTER TABLE ONLY public.scored_policy_rescreen_releases
 
 ALTER TABLE ONLY public.scored_policy_rescreen_releases
     ADD CONSTRAINT scored_policy_rescreen_releases_attempt_fkey FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: scored_policy_rescreen_releases scored_policy_rescreen_releases_review_settings_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scored_policy_rescreen_releases
+    ADD CONSTRAINT scored_policy_rescreen_releases_review_settings_fkey FOREIGN KEY (review_settings_revision) REFERENCES public.screener_review_settings_revisions(revision) ON DELETE RESTRICT;
 
 
 --

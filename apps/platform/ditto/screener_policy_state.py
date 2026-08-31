@@ -20,13 +20,32 @@ from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 # concurrent readers observe either the old or the new value, never a torn one.
 _required_policy_version: int = SCREENING_FLOOR_POLICY_VERSION
 _rescreen_scored: bool = False
+_scored_rescreen_policy_version: int | None = None
+_scored_rescreen_activation_revision: int | None = None
 
 
-def update_effective_screener_policy(version: int, *, rescreen_scored: bool) -> None:
+def update_effective_screener_policy(
+    version: int,
+    *,
+    rescreen_scored: bool,
+    scored_rescreen_policy_version: int | None = None,
+    scored_rescreen_activation_revision: int | None = None,
+) -> None:
     """Publish the resolver's computed policy to synchronous readers."""
-    global _required_policy_version, _rescreen_scored
+    global _required_policy_version
+    global _rescreen_scored
+    global _scored_rescreen_policy_version
+    global _scored_rescreen_activation_revision
     _required_policy_version = version
     _rescreen_scored = rescreen_scored
+    _scored_rescreen_policy_version = (
+        scored_rescreen_policy_version
+        if scored_rescreen_policy_version is not None
+        else version
+        if rescreen_scored and version > SCREENING_FLOOR_POLICY_VERSION
+        else None
+    )
+    _scored_rescreen_activation_revision = scored_rescreen_activation_revision
 
 
 def effective_screening_policy_version() -> int:
@@ -37,3 +56,13 @@ def effective_screening_policy_version() -> int:
 def effective_rescreen_scored() -> bool:
     """Whether stale scored/live rows may use an explicit rollout release."""
     return _rescreen_scored
+
+
+def effective_scored_rescreen_policy_version() -> int | None:
+    """The target version for the one explicit scored-policy release."""
+    return _scored_rescreen_policy_version
+
+
+def effective_scored_rescreen_activation_revision() -> int | None:
+    """The due schedule revision that owns an explicit scored-policy release."""
+    return _scored_rescreen_activation_revision

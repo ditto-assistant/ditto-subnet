@@ -9951,6 +9951,8 @@ export interface components {
              * @default false
              */
             retry_paused: boolean;
+            /** Review Settings Revision */
+            review_settings_revision?: number | null;
         };
         /** AgentCodingCertificationStatus */
         AgentCodingCertificationStatus: {
@@ -20720,6 +20722,11 @@ export interface components {
             activate_at: string;
             /** Actor */
             actor?: string | null;
+            /**
+             * Canary Only
+             * @default false
+             */
+            canary_only: boolean;
             /** Confirmation */
             confirmation: string;
             /** Expected Revision */
@@ -20852,6 +20859,8 @@ export interface components {
             attempt_id: string | null;
             /** Position */
             position: number;
+            /** Review Settings Revision */
+            review_settings_revision?: number | null;
             /**
              * State
              * @enum {string}
@@ -21965,6 +21974,11 @@ export interface components {
             /** Actor */
             actor: string;
             /**
+             * Canary Only
+             * @default false
+             */
+            canary_only: boolean;
+            /**
              * Created At
              * Format: date-time
              */
@@ -22232,6 +22246,11 @@ export interface components {
              * @default false
              */
             policy_only: boolean;
+            /**
+             * Policy Version
+             * @description Exact policy version bound to this claimed attempt. Null only for the legacy read-only queue endpoint.
+             */
+            policy_version?: number | null;
             /**
              * Precheck Reason Code
              * @description Platform-owned deterministic rejection discovered atomically while leasing. The worker must not download the artifact when set.
@@ -32148,6 +32167,7 @@ export interface operations {
         parameters: {
             query: {
                 policy_version: number;
+                canary_policy_version?: number | null;
                 limit?: number;
                 renewable_lease?: boolean;
                 review_settings_revision?: number | null;

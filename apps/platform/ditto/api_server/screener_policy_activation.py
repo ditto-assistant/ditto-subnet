@@ -41,10 +41,9 @@ DEFAULT_TTL_SECONDS = 5.0
 class EffectiveScreenerPolicy(NamedTuple):
     """The version the queue requires now, and what a due activation implies.
 
-    ``rescreen_scored`` is only meaningful when the required version is above
-    the floor: the governing activation decided whether scored and live agents
-    screened under a stale version re-enter the queue alongside evaluating and
-    rejected rows.
+    ``scored_rescreen_policy_version`` is set only for a due canary-only
+    activation. It lets an explicit rollout release attest the target without
+    raising the normal queue requirement for fresh submissions.
     """
 
     required_policy_version: int
@@ -52,17 +51,22 @@ class EffectiveScreenerPolicy(NamedTuple):
     builtin_policy_version: int = SCREENING_POLICY_VERSION
     governing_revision: int | None = None
     rescreen_scored: bool = False
+    scored_rescreen_policy_version: int | None = None
+    scored_rescreen_activation_revision: int | None = None
     latest_revision: int = 0
 
     @property
     def rescreen_stale_agents(self) -> bool:
         """Whether agents screened under a stale version re-enter the queue.
 
-        With no due activation (required == floor) nothing is stale by
-        definition. Once an activation is due, evaluating/rejected rows always
-        rescreen; scored/live rows rescreen only when the activation said so.
+        A normal due activation makes the queue requirement stale. A due
+        canary-only activation leaves that requirement at the floor but makes
+        the one explicit scored release eligible at its target policy.
         """
-        return self.required_policy_version > self.floor_policy_version
+        return (
+            self.required_policy_version > self.floor_policy_version
+            or self.scored_rescreen_policy_version is not None
+        )
 
 
 @dataclass
@@ -95,7 +99,12 @@ class ScreenerPolicyActivationResolver:
                 required_policy_version=SCREENING_FLOOR_POLICY_VERSION
             )
             update_effective_screener_policy(
-                policy.required_policy_version, rescreen_scored=policy.rescreen_scored
+                policy.required_policy_version,
+                rescreen_scored=policy.rescreen_scored,
+                scored_rescreen_policy_version=policy.scored_rescreen_policy_version,
+                scored_rescreen_activation_revision=(
+                    policy.scored_rescreen_activation_revision
+                ),
             )
             return policy
         now = time.monotonic()
@@ -103,6 +112,12 @@ class ScreenerPolicyActivationResolver:
             update_effective_screener_policy(
                 self._cache.policy.required_policy_version,
                 rescreen_scored=self._cache.policy.rescreen_scored,
+                scored_rescreen_policy_version=(
+                    self._cache.policy.scored_rescreen_policy_version
+                ),
+                scored_rescreen_activation_revision=(
+                    self._cache.policy.scored_rescreen_activation_revision
+                ),
             )
             return self._cache.policy
         async with self._lock:
@@ -111,6 +126,12 @@ class ScreenerPolicyActivationResolver:
                 update_effective_screener_policy(
                     self._cache.policy.required_policy_version,
                     rescreen_scored=self._cache.policy.rescreen_scored,
+                    scored_rescreen_policy_version=(
+                        self._cache.policy.scored_rescreen_policy_version
+                    ),
+                    scored_rescreen_activation_revision=(
+                        self._cache.policy.scored_rescreen_activation_revision
+                    ),
                 )
                 return self._cache.policy
             async with session_maker() as session:
@@ -122,10 +143,25 @@ class ScreenerPolicyActivationResolver:
                 policy = EffectiveScreenerPolicy(
                     required_policy_version=max(
                         SCREENING_FLOOR_POLICY_VERSION,
-                        min(governing.target_policy_version, SCREENING_POLICY_VERSION),
+                        min(
+                            (
+                                SCREENING_FLOOR_POLICY_VERSION
+                                if governing.canary_only
+                                else governing.target_policy_version
+                            ),
+                            SCREENING_POLICY_VERSION,
+                        ),
                     ),
                     governing_revision=governing.revision,
                     rescreen_scored=governing.rescreen_scored,
+                    scored_rescreen_policy_version=(
+                        governing.target_policy_version
+                        if governing.canary_only and governing.rescreen_scored
+                        else None
+                    ),
+                    scored_rescreen_activation_revision=(
+                        governing.revision if governing.rescreen_scored else None
+                    ),
                     latest_revision=latest.revision if latest is not None else 0,
                 )
             else:
@@ -135,7 +171,12 @@ class ScreenerPolicyActivationResolver:
                 )
             self._cache = _CacheEntry(policy=policy, loaded_at=time.monotonic())
             update_effective_screener_policy(
-                policy.required_policy_version, rescreen_scored=policy.rescreen_scored
+                policy.required_policy_version,
+                rescreen_scored=policy.rescreen_scored,
+                scored_rescreen_policy_version=policy.scored_rescreen_policy_version,
+                scored_rescreen_activation_revision=(
+                    policy.scored_rescreen_activation_revision
+                ),
             )
             return policy
 
@@ -152,14 +193,34 @@ async def resolve_screener_policy_activation(
         policy = EffectiveScreenerPolicy(
             required_policy_version=max(
                 SCREENING_FLOOR_POLICY_VERSION,
-                min(governing.target_policy_version, SCREENING_POLICY_VERSION),
+                min(
+                    (
+                        SCREENING_FLOOR_POLICY_VERSION
+                        if governing.canary_only
+                        else governing.target_policy_version
+                    ),
+                    SCREENING_POLICY_VERSION,
+                ),
             ),
             governing_revision=governing.revision,
             rescreen_scored=governing.rescreen_scored,
+            scored_rescreen_policy_version=(
+                governing.target_policy_version
+                if governing.canary_only and governing.rescreen_scored
+                else None
+            ),
+            scored_rescreen_activation_revision=(
+                governing.revision if governing.rescreen_scored else None
+            ),
             latest_revision=latest.revision if latest is not None else 0,
         )
         update_effective_screener_policy(
-            policy.required_policy_version, rescreen_scored=policy.rescreen_scored
+            policy.required_policy_version,
+            rescreen_scored=policy.rescreen_scored,
+            scored_rescreen_policy_version=policy.scored_rescreen_policy_version,
+            scored_rescreen_activation_revision=(
+                policy.scored_rescreen_activation_revision
+            ),
         )
         return policy
     policy = EffectiveScreenerPolicy(
@@ -167,6 +228,9 @@ async def resolve_screener_policy_activation(
         latest_revision=latest.revision if latest is not None else 0,
     )
     update_effective_screener_policy(
-        policy.required_policy_version, rescreen_scored=policy.rescreen_scored
+        policy.required_policy_version,
+        rescreen_scored=policy.rescreen_scored,
+        scored_rescreen_policy_version=policy.scored_rescreen_policy_version,
+        scored_rescreen_activation_revision=policy.scored_rescreen_activation_revision,
     )
     return policy

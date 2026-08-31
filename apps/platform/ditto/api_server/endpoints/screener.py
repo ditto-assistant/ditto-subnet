@@ -186,6 +186,7 @@ from ditto.db.models import (
     ScreenerHeartbeat,
     ScreenerNode,
     ScreenerNodeBootstrapGrant,
+    ScreenerPolicyActivation,
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
     ScreeningAttempt,
@@ -222,6 +223,7 @@ from ditto.db.queries.screening import (
     screening_priority_order,
 )
 from ditto_screening_protocol import (
+    SCREENING_POLICY_VERSION,
     ScreenResultOutcome,
     SourceReviewObservationPayload,
     verdict_signing_message,
@@ -4128,6 +4130,9 @@ async def claim(
     screener_hotkey: ScreenerDep,
     session: SessionDep,
     policy_version: Annotated[int, Query(ge=1)],
+    canary_policy_version: Annotated[
+        int | None, Query(ge=1, le=SCREENING_POLICY_VERSION)
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=20)] = 1,
     renewable_lease: Annotated[bool, Query()] = False,
     review_settings_revision: Annotated[int | None, Query(ge=0)] = None,
@@ -4257,6 +4262,7 @@ async def claim(
                 deferred_review_mode=queue_settings.deferred_source_review.mode,
                 review_settings_binding=binding,
                 review_settings_enrolled_node_id=node_id,
+                canary_policy_version=canary_policy_version,
             )
     else:
         # SQLite is used by local/test deployments and has no advisory locks.
@@ -4313,6 +4319,7 @@ async def claim(
                 deferred_review_mode=queue_settings.deferred_source_review.mode,
                 review_settings_binding=binding,
                 review_settings_enrolled_node_id=node_id,
+                canary_policy_version=canary_policy_version,
             )
     items = [
         ScreenerQueueItem(
@@ -4324,6 +4331,7 @@ async def claim(
             created_at=agent.created_at,
             attempt_id=attempt.attempt_id,
             lease_deadline=attempt.deadline,
+            policy_version=attempt.policy_version,
             # ``precheck_reason_code`` is the exact-duplicate channel and the
             # signed queue contract requires it to be paired with
             # ``duplicate_of``. Mechanical deferred admission has its own
@@ -5277,10 +5285,9 @@ async def submit_result(
     # can never promote a submission without attesting the required policy —
     # which is the scheduled-activation version, not merely the newest one the
     # build ships.
-    if payload.passed and payload.policy_version != required_policy:
-        raise AgentNotScreenableError(
-            f"passing verdict requires screening policy {required_policy}"
-        )
+    requires_isolated_canary_authorization = (
+        payload.passed and payload.policy_version != required_policy
+    )
     if (
         payload.reason_code == "exact-cross-miner-duplicate"
         and payload.outcome != ScreenResultOutcome.DETERMINISTIC_REJECT
@@ -5768,6 +5775,25 @@ async def submit_result(
             if attempt is not None
             else None
         )
+        if requires_isolated_canary_authorization:
+            activation = (
+                await session.get(
+                    ScreenerPolicyActivation,
+                    scored_policy_release.activation_revision,
+                )
+                if scored_policy_release is not None
+                else None
+            )
+            if (
+                scored_policy_release is None
+                or scored_policy_release.state != "running"
+                or scored_policy_release.target_policy_version != payload.policy_version
+                or activation is None
+                or not activation.canary_only
+            ):
+                raise AgentNotScreenableError(
+                    f"passing verdict requires screening policy {required_policy}"
+                )
         rescreening = (
             agent.status
             in (
@@ -5786,6 +5812,7 @@ async def submit_result(
             and agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
             and agent.screening_policy_version < required_policy
         )
+        released_scored_rescreen = scored_policy_release is not None
         # A released policy canary retains its V10 score until L4 has produced
         # a final clear (a passing result) or reject.  Infrastructure and
         # review-inconclusive outcomes are evidence, not authority to wipe a
@@ -5817,13 +5844,14 @@ async def submit_result(
             pass
         elif deferred_deep_attempt:
             agent.status = target
-        elif (rolling_rescreen or stale_scored_rescreen) and (
-            payload.passed or retain_scored_policy_rescreen
-        ):
+        elif (
+            rolling_rescreen or stale_scored_rescreen or released_scored_rescreen
+        ) and (payload.passed or retain_scored_policy_rescreen):
             pass
         elif (
             rolling_rescreen
             or stale_scored_rescreen
+            or released_scored_rescreen
             or agent.status in (_SCREENABLE_STATUSES)
             or rescreening
         ):
@@ -5861,7 +5889,7 @@ async def submit_result(
         if (
             not late_deferred_result
             and (not retain_scored_policy_rescreen or payload.passed)
-            and payload.policy_version == required_policy
+            and (payload.policy_version == required_policy or released_scored_rescreen)
         ):
             agent.screening_policy_version = payload.policy_version
         if payload.passed and not late_deferred_result and not payload.policy_only:

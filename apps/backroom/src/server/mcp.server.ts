@@ -544,7 +544,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_screener_policy_activation:
     'Read the scheduled screening-policy activation and its revision history; latest is null when none was ever scheduled.',
   schedule_screener_policy_activation:
-    'Schedule one future screening-policy activation. Confirmation: "SCHEDULE SCREENER POLICY ACTIVATION". 409 stale revision; 422 bad phrase, naive/past time, or out-of-range target.',
+    'Schedule one future screening-policy activation. `canaryOnly` keeps ordinary submissions on the current policy and permits only explicit scored releases to attest the target. Confirmation: "SCHEDULE SCREENER POLICY ACTIVATION". 409 stale revision; 422 bad phrase, naive/past time, or out-of-range target.',
   restore_scored_screening_snapshot:
     'Atomically restore a scored cohort displaced by one scored-rescreen activation. Confirmation: "RESTORE SCORED SCREENING SNAPSHOT". Requires exact activation revisions, policy versions, benchmark version, and cohort count.',
   get_continual_retest_settings:
@@ -1767,7 +1767,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Schedule screener policy activation',
       description:
-        'Schedule one future screening-policy activation, append-only: expectedRevision as the concurrent-write guard (409 stale), targetPolicyVersion within the floor..builtin bounds the read reports (422 out of range), activateAt as ISO-8601 that MUST carry a timezone offset (422 naive or in the past), rescreenScored (default true) deciding whether already-scored submissions rescreen under the new policy, and an auditable reason. The activation lands at the scheduled instant without a redeploy; a new schedule supersedes the pending one. Exact confirmation "SCHEDULE SCREENER POLICY ACTIVATION" required. Requires backroom:write.',
+        'Schedule one future screening-policy activation, append-only: expectedRevision as the concurrent-write guard (409 stale), targetPolicyVersion within the floor..builtin bounds the read reports (422 out of range), activateAt as ISO-8601 that MUST carry a timezone offset (422 naive or in the past), rescreenScored (default true), and an auditable reason. Set canaryOnly true to keep ordinary submissions on the current policy while explicit scored releases alone attest the target; it requires rescreenScored and a target above the floor. Exact confirmation "SCHEDULE SCREENER POLICY ACTIVATION" required. Requires backroom:write.',
       inputSchema: scheduleScreenerPolicyActivationInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -1791,7 +1791,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Advance scored policy rescreen',
       description:
-        'Release exactly one stale score, or retry its paused row. Match the checkpoint revision and agent; no next release until terminal. Exact confirmation "ADVANCE SCORED POLICY RESCREEN" required. Requires backroom:write.',
+        'Release exactly one stale score, or retry its paused row. Match the checkpoint revision and agent; no next release until terminal. A canary-only activation requires reviewSettingsRevision for an immutable enforce-mode L3/L4 posture. Exact confirmation "ADVANCE SCORED POLICY RESCREEN" required. Requires backroom:write.',
       inputSchema: advanceScoredPolicyRescreenInputSchema,
       annotations: toolAnnotations('write', true),
     },
