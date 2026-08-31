@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,10 +46,11 @@ async def claim_next_coding_ticket(
     *,
     validator_hotkey: str,
     instance_id: str,
+    run_row_id: UUID,
 ) -> CodingTicketClaim | None:
     """Claim or renew the one ticket owned by a stable worker instance."""
 
-    _validate_identity(validator_hotkey, instance_id)
+    _validate_authority(validator_hotkey, instance_id, run_row_id)
     await _lock_instance(session, validator_hotkey, instance_id)
     now = await _database_now(session)
     current = await session.scalar(
@@ -62,6 +64,10 @@ async def claim_next_coding_ticket(
         .limit(1)
     )
     if current is not None:
+        if current.run_row_id != run_row_id:
+            raise CodingClaimConflictError(
+                "coding worker instance is bound to another run"
+            )
         if await _has_terminal_result(session, current.ticket_id):
             _clear_claim(current)
             await session.flush()
@@ -103,6 +109,7 @@ async def claim_next_coding_ticket(
         .join(Agent, Agent.agent_id == CodingShadowRun.agent_id)
         .where(
             CodingShadowTicket.validator_hotkey == validator_hotkey,
+            CodingShadowTicket.run_row_id == run_row_id,
             CodingShadowTicket.deadline > now + _MINIMUM_REMAINING,
             ~terminal,
             ~frozen,
@@ -158,13 +165,15 @@ async def start_coding_ticket_claim(
     *,
     validator_hotkey: str,
     instance_id: str,
-    ticket_id,
+    run_row_id: UUID,
+    ticket_id: UUID,
     claim_generation: int,
 ) -> CodingTicketClaim:
     return await _update_claim(
         session,
         validator_hotkey=validator_hotkey,
         instance_id=instance_id,
+        run_row_id=run_row_id,
         ticket_id=ticket_id,
         claim_generation=claim_generation,
         start=True,
@@ -176,13 +185,15 @@ async def heartbeat_coding_ticket_claim(
     *,
     validator_hotkey: str,
     instance_id: str,
-    ticket_id,
+    run_row_id: UUID,
+    ticket_id: UUID,
     claim_generation: int,
 ) -> CodingTicketClaim:
     return await _update_claim(
         session,
         validator_hotkey=validator_hotkey,
         instance_id=instance_id,
+        run_row_id=run_row_id,
         ticket_id=ticket_id,
         claim_generation=claim_generation,
         start=False,
@@ -194,11 +205,12 @@ async def _update_claim(
     *,
     validator_hotkey: str,
     instance_id: str,
-    ticket_id,
+    run_row_id: UUID,
+    ticket_id: UUID,
     claim_generation: int,
     start: bool,
 ) -> CodingTicketClaim:
-    _validate_identity(validator_hotkey, instance_id)
+    _validate_authority(validator_hotkey, instance_id, run_row_id)
     if claim_generation < 1 or claim_generation > (1 << 31) - 1:
         raise CodingClaimConflictError("coding claim generation is invalid")
     await _lock_instance(session, validator_hotkey, instance_id)
@@ -206,6 +218,7 @@ async def _update_claim(
     ticket = await session.get(CodingShadowTicket, ticket_id, with_for_update=True)
     if (
         ticket is None
+        or ticket.run_row_id != run_row_id
         or ticket.validator_hotkey != validator_hotkey
         or ticket.claim_instance_id != instance_id
         or ticket.claim_generation != claim_generation
@@ -314,11 +327,14 @@ async def _lock_instance(
     )
 
 
-def _validate_identity(validator_hotkey: str, instance_id: str) -> None:
+def _validate_authority(
+    validator_hotkey: str, instance_id: str, run_row_id: UUID
+) -> None:
     if (
         _VALIDATOR.fullmatch(validator_hotkey) is None
         or _INSTANCE.fullmatch(instance_id) is None
         or len(instance_id.encode()) > 128
+        or run_row_id.int == 0
     ):
         raise CodingClaimConflictError("coding claim identity is invalid")
 

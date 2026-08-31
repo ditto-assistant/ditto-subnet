@@ -11996,6 +11996,11 @@ export interface components {
              * Format: date-time
              */
             requested_at: string;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
             /** Signature */
             signature: string;
             /**
@@ -12020,6 +12025,11 @@ export interface components {
              * Format: date-time
              */
             requested_at: string;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
             /** Signature */
             signature: string;
             /** Validator Hotkey */

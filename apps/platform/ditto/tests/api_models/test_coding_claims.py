@@ -14,6 +14,7 @@ from ditto.api_models.coding_claims import (
 
 _NOW = datetime(2026, 8, 23, 20, tzinfo=UTC)
 _TICKET = UUID("33333333-3333-4333-8333-333333333333")
+_RUN = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
 
 
 def _response(**updates) -> dict:
@@ -65,6 +66,7 @@ def test_claim_signing_domains_are_action_and_generation_separated() -> None:
     next_message = coding_claim_next_signing_message(
         validator_hotkey="5" + "V" * 47,
         instance_id="coding-worker-instance-001",
+        run_row_id=_RUN,
         nonce=nonce,
         requested_at=_NOW,
     )
@@ -72,6 +74,7 @@ def test_claim_signing_domains_are_action_and_generation_separated() -> None:
         action="start",
         validator_hotkey="5" + "V" * 47,
         instance_id="coding-worker-instance-001",
+        run_row_id=_RUN,
         ticket_id=_TICKET,
         claim_generation=1,
         nonce=nonce,
@@ -81,6 +84,7 @@ def test_claim_signing_domains_are_action_and_generation_separated() -> None:
         action="heartbeat",
         validator_hotkey="5" + "V" * 47,
         instance_id="coding-worker-instance-001",
+        run_row_id=_RUN,
         ticket_id=_TICKET,
         claim_generation=1,
         nonce=nonce,
@@ -88,4 +92,5 @@ def test_claim_signing_domains_are_action_and_generation_separated() -> None:
     )
     assert len({next_message, start, heartbeat}) == 3
     assert str(_TICKET).encode() not in next_message
+    assert str(_RUN).encode() in next_message
     assert b"\x001\x00" in start

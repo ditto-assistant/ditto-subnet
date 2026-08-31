@@ -6,15 +6,20 @@ Platform exposes three signed validator endpoints:
 - `POST /api/v1/validator/coding-shadow/claims/{ticket_id}/start`
 - `POST /api/v1/validator/coding-shadow/claims/{ticket_id}/heartbeat`
 
-Every request binds validator hotkey, stable worker-instance identity, fresh
-nonce, and timestamp. Start and heartbeat additionally bind the exact ticket
-and monotonically increasing claim generation. Responses are no-store,
-contract-v1, and permanently `weight_eligible=false`.
+Every request binds validator hotkey, stable worker-instance identity, exact
+`run_row_id`, fresh nonce, and timestamp. Start and heartbeat additionally bind
+the exact ticket and monotonically increasing claim generation. Responses are
+no-store, contract-v1, and permanently `weight_eligible=false`.
 
 Claim acquisition is serialized per validator/instance with a transaction
 advisory lock and per ticket with `FOR UPDATE SKIP LOCKED`. One unstarted claim
 has a two-minute heartbeat lease. If that lease expires before start, another
 instance may claim the ticket with a new generation.
+
+The acquisition query selects only tickets belonging to the signed run. If a
+stable instance already owns a non-terminal claim from another run, changing
+its configured run fence returns a conflict without clearing or transferring
+that claim. Operators use a distinct stable instance for a distinct canary run.
 
 `start` is the no-clean-retry boundary. Once set, `claim_started_at` is never
 cleared merely because the heartbeat expired, so a different instance cannot

@@ -55,6 +55,7 @@ from ditto.db.queries.coding_catalog import (
     retire_coding_catalog_release,
 )
 from ditto.db.queries.coding_claims import (
+    CodingClaimConflictError,
     CodingClaimNotAvailableError,
     claim_next_coding_ticket,
     heartbeat_coding_ticket_claim,
@@ -773,6 +774,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
                 session,
                 validator_hotkey=_VALIDATOR,
                 instance_id="coding-worker-expiring-certification",
+                run_row_id=run_row_id,
             )
             is None
         )
@@ -783,20 +785,41 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
         )
         assert certification is not None
         certification.expires_at = ticket_deadline + timedelta(hours=1)
+    different_run_row_id = uuid4()
+    async with session.begin():
+        assert (
+            await claim_next_coding_ticket(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id="coding-worker-wrong-run",
+                run_row_id=different_run_row_id,
+            )
+            is None
+        )
     instance_id = "coding-worker-instance-a"
     async with session.begin():
         claim = await claim_next_coding_ticket(
             session,
             validator_hotkey=_VALIDATOR,
             instance_id=instance_id,
+            run_row_id=run_row_id,
         )
     assert claim is not None and claim.ticket.ticket_id == ticket_id
     assert claim.ticket.claim_generation == 1 and claim.idempotent is False
+    with pytest.raises(CodingClaimConflictError, match="another run"):
+        async with session.begin():
+            await claim_next_coding_ticket(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id=instance_id,
+                run_row_id=different_run_row_id,
+            )
     async with session.begin():
         replayed_claim = await claim_next_coding_ticket(
             session,
             validator_hotkey=_VALIDATOR,
             instance_id=instance_id,
+            run_row_id=run_row_id,
         )
     assert replayed_claim is not None and replayed_claim.idempotent is True
     async with session.begin():
@@ -805,6 +828,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
                 session,
                 validator_hotkey=_VALIDATOR,
                 instance_id="coding-worker-instance-b",
+                run_row_id=run_row_id,
             )
             is None
         )
@@ -820,6 +844,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             session,
             validator_hotkey=_VALIDATOR,
             instance_id=transferred_instance,
+            run_row_id=run_row_id,
         )
     assert transferred is not None and transferred.ticket.claim_generation == 2
     with pytest.raises(CodingClaimNotAvailableError):
@@ -828,6 +853,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
                 session,
                 validator_hotkey=_VALIDATOR,
                 instance_id=instance_id,
+                run_row_id=run_row_id,
                 ticket_id=ticket_id,
                 claim_generation=1,
             )
@@ -837,6 +863,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             session,
             validator_hotkey=_VALIDATOR,
             instance_id=instance_id,
+            run_row_id=run_row_id,
             ticket_id=ticket_id,
             claim_generation=2,
         )
@@ -846,6 +873,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             session,
             validator_hotkey=_VALIDATOR,
             instance_id=instance_id,
+            run_row_id=run_row_id,
             ticket_id=ticket_id,
             claim_generation=2,
         )
@@ -855,6 +883,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             session,
             validator_hotkey=_VALIDATOR,
             instance_id=instance_id,
+            run_row_id=run_row_id,
             ticket_id=ticket_id,
             claim_generation=2,
         )
@@ -872,6 +901,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
                 session,
                 validator_hotkey=_VALIDATOR,
                 instance_id="coding-worker-instance-c",
+                run_row_id=run_row_id,
             )
             is None
         )
@@ -880,6 +910,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             session,
             validator_hotkey=_VALIDATOR,
             instance_id=instance_id,
+            run_row_id=run_row_id,
         )
     assert recovered is not None and recovered.idempotent
     async with session.begin():
