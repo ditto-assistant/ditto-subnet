@@ -2175,6 +2175,60 @@ class TestFederatedScreenerNodes:
         )
         assert readiness.json()["nodes"][0]["ready"] is True
 
+        # A persistent node can run distinct local processes while retaining
+        # one enrolled node credential. Their signed telemetry identities must
+        # both authenticate and count toward controller readiness.
+        worker_instance_id = f"{node_id}-worker-1"
+        worker_timestamp = heartbeat_timestamp + 1
+        worker_message = (
+            "ditto-screener-heartbeat:v3:"
+            f"{node_keypair.ss58_address}:0.4.2:3:{SCREENING_POLICY_VERSION}:"
+            f"polling::{worker_instance_id}:-:-:{worker_timestamp}"
+        ).encode()
+        worker_heartbeat = await client.post(
+            "/api/v1/screener/heartbeat",
+            headers=node_headers,
+            json={
+                "screener_hotkey": node_keypair.ss58_address,
+                "software_version": "0.4.2",
+                "protocol_version": 3,
+                "policy_version": SCREENING_POLICY_VERSION,
+                "state": "polling",
+                "instance_id": worker_instance_id,
+                "timestamp": worker_timestamp,
+                "signature": node_keypair.sign(worker_message).hex(),
+            },
+        )
+        assert worker_heartbeat.status_code == 200, worker_heartbeat.text
+        readiness = await client.get(
+            "/api/v1/screener/controller/nodes?environment=prod",
+            headers=controller_headers,
+        )
+        assert readiness.json()["nodes"][0]["ready"] is True
+
+        # Only positive decimal worker suffixes belong to the enrolled node.
+        invalid_instance_id = f"{node_id}-worker-0"
+        invalid_message = (
+            "ditto-screener-heartbeat:v3:"
+            f"{node_keypair.ss58_address}:0.4.2:3:{SCREENING_POLICY_VERSION}:"
+            f"polling::{invalid_instance_id}:-:-:{worker_timestamp}"
+        ).encode()
+        invalid_heartbeat = await client.post(
+            "/api/v1/screener/heartbeat",
+            headers=node_headers,
+            json={
+                "screener_hotkey": node_keypair.ss58_address,
+                "software_version": "0.4.2",
+                "protocol_version": 3,
+                "policy_version": SCREENING_POLICY_VERSION,
+                "state": "polling",
+                "instance_id": invalid_instance_id,
+                "timestamp": worker_timestamp,
+                "signature": node_keypair.sign(invalid_message).hex(),
+            },
+        )
+        assert invalid_heartbeat.status_code == 401
+
         node_queue = await client.get(
             "/api/v1/screener/queue",
             headers=node_headers,

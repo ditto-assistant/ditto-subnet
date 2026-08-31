@@ -533,6 +533,25 @@ async def require_screener(
 ScreenerDep = Annotated[str, Depends(require_screener)]
 
 
+def _is_enrolled_node_heartbeat_instance(
+    *, node_id: str, instance_id: str | None
+) -> bool:
+    """Return whether one signed heartbeat is attributable to an enrolled node.
+
+    A persistent fleet has one enrolled node credential and can run multiple
+    local worker processes. Keep the credential scoped to its exact node,
+    while allowing the narrowly-defined telemetry suffix emitted by those
+    processes. This does not authorize another node or an arbitrary logical
+    instance to report through the node's bearer token.
+    """
+    if instance_id == node_id:
+        return True
+    if instance_id is None:
+        return False
+    worker_pattern = rf"{re.escape(node_id)}-worker-[1-9][0-9]*"
+    return re.fullmatch(worker_pattern, instance_id) is not None
+
+
 async def require_screener_controller(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
@@ -3463,7 +3482,15 @@ async def list_controller_nodes(
         _, channel_settings = await resolve_screener_node_channel_settings(
             session, node_id=node.node_id
         )
-        heartbeat = heartbeats.get((node.screener_hotkey, node.node_id))
+        node_heartbeats = [
+            heartbeat
+            for (hotkey, instance_id), heartbeat in heartbeats.items()
+            if hotkey == node.screener_hotkey
+            and _is_enrolled_node_heartbeat_instance(
+                node_id=node.node_id, instance_id=instance_id
+            )
+        ]
+        heartbeat = max(node_heartbeats, key=lambda row: row.seen_at, default=None)
         seen_at = heartbeat.seen_at if heartbeat is not None else None
         if seen_at is not None and seen_at.tzinfo is None:
             seen_at = seen_at.replace(tzinfo=UTC)
@@ -3781,7 +3808,9 @@ async def heartbeat(
     if request_body.screener_hotkey != screener_hotkey:
         raise ScreenerAuthError("heartbeat body hotkey does not match header")
     enrolled_node_id = getattr(request.state, "screener_node_id", None)
-    if enrolled_node_id is not None and request_body.instance_id != enrolled_node_id:
+    if enrolled_node_id is not None and not _is_enrolled_node_heartbeat_instance(
+        node_id=enrolled_node_id, instance_id=request_body.instance_id
+    ):
         raise ScreenerAuthError("heartbeat instance does not match enrolled node")
     now = datetime.now(UTC)
     if abs(int(now.timestamp()) - request_body.timestamp) > _HEARTBEAT_MAX_SKEW_SECONDS:
