@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.179.2 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Settle exhausted review evidence promptly
+  ([#1419](https://github.com/ditto-assistant/ditto-subnet/pull/1419),
+  [`0d131f6`](https://github.com/ditto-assistant/ditto-subnet/commit/0d131f6c09407590a27ba99501858c017c691e73))
+
+
 ## v0.179.1 (2026-08-31)
 
 ### Bug Fixes
