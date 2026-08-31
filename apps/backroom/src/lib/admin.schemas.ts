@@ -591,6 +591,34 @@ export const screenerHostSpecsSchema = z.object({
   architecture: z.string().min(1),
 })
 
+const screenerDockerHealthSchema = z.object({
+  status: z.enum(['healthy', 'degraded', 'unavailable']),
+  running_containers: z.number().int().nonnegative(),
+  unhealthy_containers: z.number().int().nonnegative(),
+})
+
+const screenerSystemMetricsSchema = z.object({
+  collected_at: z.number().int().nonnegative(),
+  cpu_percent: z.number().int().min(0).max(100),
+  memory_percent: z.number().int().min(0).max(100),
+  disk_percent: z.number().int().min(0).max(100),
+  docker: screenerDockerHealthSchema,
+})
+
+export const screenerNodeWorkerSchema = z.object({
+  instance_id: z.string().min(1),
+  seen_at: z.string(),
+  reported_at: z.string(),
+  software_version: z.string().min(1),
+  protocol_version: z.number().int().nonnegative(),
+  policy_version: z.number().int().nonnegative(),
+  state: z.string().min(1),
+  active_agent_id: z.string().uuid().nullable().default(null),
+  current_phase: z.string().nullable().default(null),
+  system_metrics: screenerSystemMetricsSchema.nullish().transform((value) => value ?? null),
+  host_specs: screenerHostSpecsSchema.nullish().transform((value) => value ?? null),
+})
+
 export const screenerCapacityNodeSchema = z.object({
   environment: z.string().min(1),
   node_id: z.string().min(1),
@@ -610,6 +638,7 @@ export const screenerCapacityNodeSchema = z.object({
   policy_version: z.number().int().nullable(),
   current_phase: z.string().nullable(),
   host_specs: screenerHostSpecsSchema.nullish().transform((value) => value ?? null),
+  workers: z.array(screenerNodeWorkerSchema).default([]),
 })
 
 export const trustedImageBuildSchema = z.object({
