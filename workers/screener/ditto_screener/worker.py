@@ -18,7 +18,7 @@ import logging
 import re
 import socket
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -536,33 +536,48 @@ class ScreenerWorker:
                             build_id=build_id,
                         )
 
-                    async def remote_source_review() -> SourceReviewObservation | None:
-                        payload = await self._platform.review_submission_source(
-                            agent_id,
-                            attempt_id=attempt_id,
-                            timeout=self._config.source_review_timeout_seconds,
-                        )
-                        if payload is None:
-                            return None
-                        return SourceReviewObservation(
-                            ok=payload.ok,
-                            risk_level=payload.risk_level,
-                            finding_digest=payload.finding_digest,
-                            categories=tuple(payload.categories),
-                            error_code=payload.error_code,
-                            finding=(
-                                payload.finding.model_dump(mode="json")
-                                if payload.finding is not None
-                                else None
-                            ),
-                            failure_disposition=payload.failure_disposition,
-                            clearance_certified=payload.clearance_certified,
-                            review_audit=(
-                                payload.review_audit.model_dump(mode="json")
-                                if payload.review_audit is not None
-                                else None
-                            ),
-                        )
+                    # A local build has no provider-owned image-build record.
+                    # Its review must therefore stay in this gate: the fleet
+                    # source-review claim correctly requires a completed
+                    # provider build and runtime smoke, and queueing one here
+                    # would wait on a prerequisite that local mode can never
+                    # produce.
+                    remote_source_review: (
+                        Callable[[], Awaitable[SourceReviewObservation | None]] | None
+                    ) = None
+                    if self._config.remote_build_mode != "off":
+
+                        async def review_with_remote_provider() -> (
+                            SourceReviewObservation | None
+                        ):
+                            payload = await self._platform.review_submission_source(
+                                agent_id,
+                                attempt_id=attempt_id,
+                                timeout=self._config.source_review_timeout_seconds,
+                            )
+                            if payload is None:
+                                return None
+                            return SourceReviewObservation(
+                                ok=payload.ok,
+                                risk_level=payload.risk_level,
+                                finding_digest=payload.finding_digest,
+                                categories=tuple(payload.categories),
+                                error_code=payload.error_code,
+                                finding=(
+                                    payload.finding.model_dump(mode="json")
+                                    if payload.finding is not None
+                                    else None
+                                ),
+                                failure_disposition=payload.failure_disposition,
+                                clearance_certified=payload.clearance_certified,
+                                review_audit=(
+                                    payload.review_audit.model_dump(mode="json")
+                                    if payload.review_audit is not None
+                                    else None
+                                ),
+                            )
+
+                        remote_source_review = review_with_remote_provider
 
                     result = await self._gate.screen(
                         agent_id=agent_id,

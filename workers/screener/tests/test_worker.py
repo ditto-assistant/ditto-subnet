@@ -81,6 +81,7 @@ class _FakeGate:
         self.build_only_calls: list[bool] = []
         self.policy_only_calls: list[bool] = []
         self.deferred_source_review_calls: list[bool] = []
+        self.remote_source_reviews: list[Any] = []
         self.policy_versions: list[int] = []
         self.shadow_result: Any = None
         self.applied_review_settings: list[Any] = []
@@ -103,6 +104,7 @@ class _FakeGate:
         policy_only: bool = False,
         deferred_source_review: bool = False,
         policy_version: int | None = None,
+        remote_source_review: Any = None,
         **_: Any,
     ) -> ScreeningDecision:
         self.calls.append(agent_id)
@@ -110,6 +112,7 @@ class _FakeGate:
         self.build_only_calls.append(build_only)
         self.policy_only_calls.append(policy_only)
         self.deferred_source_review_calls.append(deferred_source_review)
+        self.remote_source_reviews.append(remote_source_review)
         if policy_version is not None:
             self.policy_versions.append(policy_version)
         if (
@@ -556,6 +559,19 @@ async def test_remote_build_gets_full_timeout_despite_stale_local_override(
     await worker._screen_one(_item(agent), policy_version=SCREENING_POLICY_VERSION)
 
     assert observed_timeouts == [1500]
+
+
+async def test_local_build_mode_keeps_source_review_in_the_worker(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A local image cannot satisfy the fleet review job's build prerequisite."""
+    platform = _FakePlatform([])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(remote_build_mode="off"), platform, gate)
+
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+
+    assert gate.remote_source_reviews == [None]
 
 
 async def test_build_only_quarantine_is_rejected_and_posts_no_verdict(
