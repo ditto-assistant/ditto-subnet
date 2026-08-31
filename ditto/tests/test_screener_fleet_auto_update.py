@@ -222,10 +222,32 @@ def test_self_updater_reconciles_stale_workers_when_canary_shrinks() -> None:
     workers on the activated release.
     """
     updater = UPDATER.read_text()
+    stop_fleet = updater[updater.index("stop_fleet()") : updater.index("start_fleet()")]
+    awk_programs = [
+        program.split("'", 1)[0] for program in stop_fleet.split("awk '")[1:]
+    ]
 
     assert "list-units --all --type=service --plain --no-legend" in updater
     assert "ditto-screener-worker@*.service" in updater
-    assert "^ditto-screener-worker@[1-9][0-9]*\\\\.service$" in updater
+    assert len(awk_programs) == 2
+    unit_listing = "\n".join(
+        (
+            "ditto-screener-worker@1.service loaded active running",
+            "ditto-screener-worker@12.service loaded inactive dead",
+            "ditto-screener-worker@0.service loaded active running",
+            "ditto-screener-worker@1.service.bak loaded inactive dead",
+        )
+    )
+    for program in awk_programs:
+        result = subprocess.run(
+            ["awk", program],
+            input=unit_listing,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines() == ["1", "12"]
     assert '"$SYSTEMCTL" disable "ditto-screener-worker@$index.service"' in updater
     assert '"$SYSTEMCTL" enable --now "ditto-screener-worker@$index.service"' in updater
     stop = updater.index("stop_fleet()")

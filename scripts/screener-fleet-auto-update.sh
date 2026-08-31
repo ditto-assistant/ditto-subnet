@@ -173,10 +173,10 @@ stop_fleet() {
   for index in $(
     "$SYSTEMCTL" list-units --all --type=service --plain --no-legend \
       'ditto-screener-worker@*.service' \
-      | awk '$1 ~ /^ditto-screener-worker@[1-9][0-9]*\\.service$/ {
+      | awk '$1 ~ /^ditto-screener-worker@[1-9][0-9]*\.service$/ {
           worker = $1
           sub(/^ditto-screener-worker@/, "", worker)
-          sub(/\\.service$/, "", worker)
+          sub(/\.service$/, "", worker)
           print worker
         }'
   ); do
@@ -190,10 +190,10 @@ stop_fleet() {
   for index in $(
     "$SYSTEMCTL" list-units --all --type=service --plain --no-legend \
       'ditto-screener-worker@*.service' \
-      | awk '$1 ~ /^ditto-screener-worker@[1-9][0-9]*\\.service$/ {
+      | awk '$1 ~ /^ditto-screener-worker@[1-9][0-9]*\.service$/ {
           worker = $1
           sub(/^ditto-screener-worker@/, "", worker)
-          sub(/\\.service$/, "", worker)
+          sub(/\.service$/, "", worker)
           print worker
         }'
   ); do
