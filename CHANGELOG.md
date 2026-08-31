@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.177.1 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Bind local workers to node reviews
+  ([`a5e8af8`](https://github.com/ditto-assistant/ditto-subnet/commit/a5e8af808dec245da4111dee0b7697a0559407e4))
+
+
 ## v0.177.0 (2026-08-31)
 
 ### Features
