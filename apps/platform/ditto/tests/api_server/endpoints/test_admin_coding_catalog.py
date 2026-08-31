@@ -150,3 +150,86 @@ async def test_catalog_registration_is_signed_idempotent_and_retirable(
     replay_retire = await client.post(retire_url, headers=_HEADERS, json=retire)
     assert replay_retire.status_code == 200
     assert replay_retire.json()["total"] == 1
+
+
+async def test_catalog_supersession_appends_replacement_and_retirement_atomically(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    releases_url = "/api/v1/admin/coding-catalog/releases"
+    previous = _commitment()
+    registered = await client.post(
+        releases_url,
+        headers=_HEADERS,
+        json=_register_payload(previous),
+    )
+    assert registered.status_code == 200, registered.text
+
+    replacement = _commitment(
+        corpus_release_id="private-coding-corpus-v2",
+        catalog_merkle_root="55" * 32,
+    )
+    payload = {
+        "previous_corpus_release_id": previous.corpus_release_id,
+        "expected_previous_commitment_sha256": previous.commitment_sha256,
+        "replacement_commitment": replacement.model_dump(mode="json", by_alias=True),
+        "replacement_signature": _CURATOR.sign(
+            coding_catalog_commitment_signing_message(replacement)
+        ).hex(),
+        "reason": "replace the reviewed private coding catalog",
+        "actor": "operator@example.com",
+        "confirmation": (
+            "SUPERSEDE SHADOW CODING CATALOG private-coding-corpus-v1 "
+            "WITH private-coding-corpus-v2"
+        ),
+    }
+    superseded = await client.post(
+        "/api/v1/admin/coding-catalog/supersede",
+        headers=_HEADERS,
+        json=payload,
+    )
+    assert superseded.status_code == 200, superseded.text
+    releases = {
+        item["commitment"]["corpus_release_id"]: item
+        for item in superseded.json()["releases"]
+    }
+    assert superseded.json()["total"] == 2
+    assert releases[previous.corpus_release_id]["retired"] is True
+    assert releases[replacement.corpus_release_id]["retired"] is False
+
+    replay = await client.post(
+        "/api/v1/admin/coding-catalog/supersede",
+        headers=_HEADERS,
+        json=payload,
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["total"] == 2
+
+    stale_replacement = _commitment(
+        corpus_release_id="private-coding-corpus-v3",
+        catalog_merkle_root="66" * 32,
+    )
+    stale = {
+        **payload,
+        "expected_previous_commitment_sha256": "ff" * 32,
+        "replacement_commitment": stale_replacement.model_dump(
+            mode="json", by_alias=True
+        ),
+        "replacement_signature": _CURATOR.sign(
+            coding_catalog_commitment_signing_message(stale_replacement)
+        ).hex(),
+        "confirmation": (
+            "SUPERSEDE SHADOW CODING CATALOG private-coding-corpus-v1 "
+            "WITH private-coding-corpus-v3"
+        ),
+    }
+    conflict = await client.post(
+        "/api/v1/admin/coding-catalog/supersede",
+        headers=_HEADERS,
+        json=stale,
+    )
+    assert conflict.status_code == 409
+    final = await client.get(releases_url, headers=_HEADERS)
+    assert final.json()["total"] == 2

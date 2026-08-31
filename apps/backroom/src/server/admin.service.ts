@@ -103,6 +103,7 @@ import {
   getCodingCatalogInputSchema,
   registerCodingCatalogInputSchema,
   retireCodingCatalogInputSchema,
+  supersedeCodingCatalogInputSchema,
   agentCodingShadowEvaluationInputSchema,
   agentCodingShadowEvaluationStatusSchema,
   agentCoreQualificationInputSchema,
@@ -2074,6 +2075,24 @@ export async function retireCodingCatalogRelease(rawInput: unknown, actor: strin
     body: {
       corpus_release_id: input.corpusReleaseId,
       expected_commitment_sha256: input.expectedCommitmentSha256,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return codingCatalogControlSchema.parse(payload)
+}
+
+export async function supersedeCodingCatalogRelease(rawInput: unknown, actor: string) {
+  const input = supersedeCodingCatalogInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/coding-catalog/supersede', {
+    method: 'POST',
+    actor,
+    body: {
+      previous_corpus_release_id: input.previousCorpusReleaseId,
+      expected_previous_commitment_sha256: input.expectedPreviousCommitmentSha256,
+      replacement_commitment: input.replacementCommitment,
+      replacement_signature: input.replacementSignature,
       reason: input.reason,
       actor,
       confirmation: input.confirmation,

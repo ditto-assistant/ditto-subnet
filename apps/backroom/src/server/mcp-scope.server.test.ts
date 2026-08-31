@@ -373,6 +373,7 @@ describe('MCP scope challenges', () => {
 
     for (const name of [
       'register_coding_catalog_release',
+      'supersede_coding_catalog_release',
       'retire_coding_catalog_release',
     ]) {
       const write = new Request('https://backroom.dittobench.ai/mcp', {

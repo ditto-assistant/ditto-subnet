@@ -143,6 +143,14 @@ def test_private_coding_catalog_deploy_is_default_off_and_relay_blind() -> None:
         "platform-coding-catalog-secret-key",
     ):
         assert secret in terraform
+    for curator_secret in (
+        "platform-coding-catalog-curator-access-key",
+        "platform-coding-catalog-curator-secret-key",
+    ):
+        assert curator_secret in terraform
+    runtime_secret_locals = terraform[: terraform.index("# --- Network:")]
+    assert "coding_catalog_curator_access_key.secret_id" not in runtime_secret_locals
+    assert "coding_catalog_curator_secret_key.secret_id" not in runtime_secret_locals
     for key in (
         "DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY",
         "DITTO_CODING_CATALOG_STORAGE_SECRET_KEY",

@@ -5077,6 +5077,15 @@ export const retireCodingCatalogInputSchema = z.object({
   confirmation: z.string(),
 })
 
+export const supersedeCodingCatalogInputSchema = z.object({
+  previousCorpusReleaseId: z.string().min(1).max(256),
+  expectedPreviousCommitmentSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  replacementCommitment: z.record(z.string(), z.unknown()),
+  replacementSignature: z.string().regex(/^[0-9a-fA-F]{128}$/),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
 export const codingShadowResultRecordSchema = z.object({
   result_id: z.string().uuid(),
   ticket_id: z.string().uuid(),

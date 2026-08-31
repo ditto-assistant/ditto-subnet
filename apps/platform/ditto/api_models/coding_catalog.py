@@ -129,6 +129,44 @@ class AdminRetireCodingCatalogRequest(BaseModel):
         return value
 
 
+class AdminSupersedeCodingCatalogRequest(BaseModel):
+    """Atomically append a replacement and tombstone its predecessor."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    previous_corpus_release_id: OpaqueId
+    expected_previous_commitment_sha256: Sha256
+    replacement_commitment: CodingCatalogCommitment
+    replacement_signature: Signature
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+
+    @model_validator(mode="after")
+    def release_identity_advances(self) -> AdminSupersedeCodingCatalogRequest:
+        if (
+            self.previous_corpus_release_id
+            == self.replacement_commitment.corpus_release_id
+        ):
+            raise ValueError("replacement catalog must use a new corpus_release_id")
+        return self
+
+    @field_validator("reason")
+    @classmethod
+    def reason_is_substantive(cls, value: str) -> str:
+        if len(value.strip()) < 8:
+            raise ValueError("reason must contain at least 8 non-whitespace characters")
+        return value.strip()
+
+    @field_validator("actor")
+    @classmethod
+    def actor_is_substantive(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("actor must not be blank")
+        return value
+
+
 class CodingCatalogReleaseRecord(CodingEvaluationModel):
     release_row_id: UUID
     commitment: CodingCatalogCommitment
