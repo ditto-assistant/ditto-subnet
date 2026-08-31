@@ -3552,17 +3552,12 @@ class KimiSolSourceReviewAgent:
             "prompt_cache_key": l2_prompt_cache_key(policy_version),
             "session_id": f"ditto-l2-{artifact_sha256[:32]}",
             "provider": {
-                # Kimi's current Responses endpoint is filtered out when
-                # ``allow_fallbacks`` is true with the analyzer's tool schema.
-                # The independent SOL roles support provider fallback, so do
-                # not pin them to one degraded route.
-                "allow_fallbacks": model != L2_MODEL,
-                # Kimi's only current endpoint advertises every analyzer
-                # capability we use, but OpenRouter's Responses beta counts
-                # endpoint-level fields (for example instructions) when this
-                # flag is true and incorrectly filters that endpoint. Keep the
-                # exact model list + ZDR boundary instead; retain the stricter
-                # check for the OpenAI-only critic.
+                # Every reviewer has more than one compatible route in the
+                # current OpenRouter directory. Prefer the fastest healthy
+                # endpoint and permit the router to move to the next one on an
+                # outage, while retaining the source-data privacy boundary.
+                "allow_fallbacks": True,
+                "sort": "throughput",
                 "require_parameters": provider is not None,
                 "zdr": True,
                 "data_collection": "deny",

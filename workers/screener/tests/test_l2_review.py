@@ -2135,7 +2135,8 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
     }
     assert requests[0]["model"] == L2_MODEL
     assert requests[0]["provider"] == {
-        "allow_fallbacks": False,
+        "allow_fallbacks": True,
+        "sort": "throughput",
         "require_parameters": False,
         "zdr": True,
         "data_collection": "deny",
@@ -2147,6 +2148,7 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
     assert requests[3]["model"] == "openai/gpt-5.6-sol"
     assert "only" not in requests[1]["provider"]  # type: ignore[operator]
     assert requests[1]["provider"]["allow_fallbacks"] is True  # type: ignore[index]
+    assert requests[1]["provider"]["sort"] == "throughput"  # type: ignore[index]
     assert requests[1]["provider"]["require_parameters"] is False  # type: ignore[index]
     assert requests[0]["max_output_tokens"] == 2_400
     assert requests[1]["reasoning"] == {"effort": "medium"}
