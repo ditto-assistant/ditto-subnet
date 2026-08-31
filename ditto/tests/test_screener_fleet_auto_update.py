@@ -158,6 +158,7 @@ def test_hetzner_workers_use_release_bound_rootless_analyzer() -> None:
         ROOT / "workers/screener/scripts/install-rootless-docker.sh"
     ).read_text()
     updater = UPDATER.read_text()
+    worker = (ROLE / "templates/ditto-screener-worker@.service.j2").read_text()
 
     for package in ("uidmap", "slirp4netns", "rootlesskit", "dbus-user-session"):
         assert f"- {package}" in tasks
@@ -170,6 +171,16 @@ def test_hetzner_workers_use_release_bound_rootless_analyzer() -> None:
     assert '"$release_dir/src/workers/screener" >&2' in updater
     assert 'docker tag "$l2_candidate" "$L2_ANALYZER_ACTIVE"' in updater
     assert "rootless analyzer executor is unavailable" in updater
+    assert (
+        "screener_fleet_l2_workspace_root: /var/tmp/ditto-screener-l2-workspaces"
+        in defaults
+    )
+    assert "Ensure rootless-analyzer workspace parents" in tasks
+    assert 'group: "{{ screener_fleet_executor_group }}"' in tasks
+    assert (
+        "SCREENER_L2_WORKSPACE_ROOT={{ screener_fleet_l2_workspace_root }}/%i" in worker
+    )
+    assert "{{ screener_fleet_l2_workspace_root }}/%i" in worker
 
 
 def test_role_stops_workers_above_configured_capacity() -> None:

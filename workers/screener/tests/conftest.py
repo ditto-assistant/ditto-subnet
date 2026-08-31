@@ -67,6 +67,7 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "l3_review_model": "openai/gpt-5.6-sol",
         "l3_review_provider": "openrouter",
         "l2_analyzer_image": "ditto-screener-l2-analyzer:active",
+        "l2_workspace_root": None,
         "l2_cache_dir": "/tmp/ditto-screener-test/l2/cache",
         "l2_audit_journal_file": "/tmp/ditto-screener-test/l2/audit.jsonl",
         "l2_timeout_seconds": 900.0,

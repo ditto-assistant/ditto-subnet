@@ -902,6 +902,31 @@ class _SafeStaticLeadReviewer:
         raise AssertionError("a cleared static lead must not rerun L1")
 
 
+class _AdjudicatedStaticLeadReviewer(_SafeStaticLeadReviewer):
+    async def resolve_lead(
+        self, *_args: Any, **_kwargs: Any
+    ) -> SourceReviewObservation:
+        self.resolve_calls += 1
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest="b" * 64,
+            categories=("cross_user_access",),
+            failure_disposition="inconclusive",
+            finding={
+                "prompt_revision": "l3-sol-adversarial-critic-v3",
+                "risk_level": "high",
+                "confidence": 0.99,
+                "categories": ["cross_user_access"],
+                "evidence": [],
+            },
+            adjudication={
+                "decision": "clear",
+                "reason": "the observed lead is not reachable on the served path",
+            },
+        )
+
+
 async def test_l3_cleared_static_lead_can_continue_to_build(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -921,6 +946,35 @@ async def test_l3_cleared_static_lead_can_continue_to_build(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
     assert result.outcome == ScreeningOutcome.PASS
+    assert reviewer.resolve_calls == 1
+    assert reviewer.l1_calls == 0
+    assert any(call[0] == "build" for call in calls)
+
+
+async def test_l4_cleared_static_lead_builds_before_it_passes(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A terminal L4 clear admits only after the full image contract passes."""
+    tarball = _valid_tar(
+        **{
+            "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
+            "scripts/local-only.sh": (
+                b'path="/var/run/docker.sock"\nconnect_control_socket "$path"\n'
+            ),
+        }
+    )
+    calls: list[list[str]] = []
+    reviewer = _AdjudicatedStaticLeadReviewer()
+    gate = _gate_with(make_config(), _ok_run(calls), tarball=tarball)
+    gate._policy = _review_engine()
+    gate._source_reviewer = reviewer  # type: ignore[assignment]
+
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert result.adjudication is not None
+    assert result.adjudication["decision"] == "clear"
     assert reviewer.resolve_calls == 1
     assert reviewer.l1_calls == 0
     assert any(call[0] == "build" for call in calls)

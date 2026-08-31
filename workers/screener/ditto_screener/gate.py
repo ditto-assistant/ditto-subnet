@@ -603,6 +603,7 @@ class BuildGate:
                     config.docker_host if config.require_rootless_docker else None
                 ),
             ),
+            workspace_root=config.l2_workspace_root,
             cache_dir=config.l2_cache_dir,
             audit_journal=L2AuditJournal(
                 config.l2_audit_journal_file,
@@ -850,6 +851,18 @@ class BuildGate:
                         policy_version=policy_version,
                     )
                     if resolved_preflight.ok and resolved_preflight.risk_level == "low":
+                        preflight_clearance = resolved_preflight
+                    elif (
+                        resolved_preflight.adjudication is not None
+                        and resolved_preflight.adjudication.get("decision") == "clear"
+                    ):
+                        # L4 has terminally cleared the static lead, but a full
+                        # screen still owes Platform a verified runtime image.
+                        # Returning PASS here bypasses build/export and makes
+                        # the worker correctly reject the incomplete result.
+                        # Carry this exact cleared observation into the normal
+                        # post-build policy phase so its signed L4 evidence is
+                        # retained on the final verdict.
                         preflight_clearance = resolved_preflight
                     elif resolved_preflight.failure_disposition == "pass_inconclusive":
                         # Continue through cheap mechanical/runtime gates exactly
