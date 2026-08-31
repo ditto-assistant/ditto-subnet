@@ -178,6 +178,14 @@ def test_hetzner_workers_use_release_bound_rootless_analyzer() -> None:
     assert "Ensure rootless-analyzer workspace parents" in tasks
     assert 'group: "{{ screener_fleet_executor_group }}"' in tasks
     assert (
+        "Environment=DOCKER_CONFIG={{ screener_fleet_state_dir }}/workers/%i/docker"
+        in worker
+    )
+    assert (
+        "Environment=SCREENER_GATEWAY_STATE_ROOT={{ screener_fleet_state_dir }}"
+        "/workers/%i/gateway-state" in worker
+    )
+    assert (
         "SCREENER_L2_WORKSPACE_ROOT={{ screener_fleet_l2_workspace_root }}/%i" in worker
     )
     assert "{{ screener_fleet_l2_workspace_root }}/%i" in worker
@@ -222,10 +230,32 @@ def test_self_updater_reconciles_stale_workers_when_canary_shrinks() -> None:
     workers on the activated release.
     """
     updater = UPDATER.read_text()
+    stop_fleet = updater[updater.index("stop_fleet()") : updater.index("start_fleet()")]
+    awk_programs = [
+        program.split("'", 1)[0] for program in stop_fleet.split("awk '")[1:]
+    ]
 
     assert "list-units --all --type=service --plain --no-legend" in updater
     assert "ditto-screener-worker@*.service" in updater
-    assert "^ditto-screener-worker@[1-9][0-9]*\\\\.service$" in updater
+    assert len(awk_programs) == 2
+    unit_listing = "\n".join(
+        (
+            "ditto-screener-worker@1.service loaded active running",
+            "ditto-screener-worker@12.service loaded inactive dead",
+            "ditto-screener-worker@0.service loaded active running",
+            "ditto-screener-worker@1.service.bak loaded inactive dead",
+        )
+    )
+    for program in awk_programs:
+        result = subprocess.run(
+            ["awk", program],
+            input=unit_listing,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines() == ["1", "12"]
     assert '"$SYSTEMCTL" disable "ditto-screener-worker@$index.service"' in updater
     assert '"$SYSTEMCTL" enable --now "ditto-screener-worker@$index.service"' in updater
     stop = updater.index("stop_fleet()")

@@ -436,16 +436,29 @@ def _gateway_call_count(path: str) -> int:
 
 
 def _prepare_gateway_state() -> tuple[str, str]:
-    """Create a host-readable, rootless-gateway-writable call counter.
+    """Stage host-visible fake-gateway inputs and its writable call counter.
 
     Root in a rootless Docker user namespace maps to a different host uid.  The
     worker therefore owns the pre-created file and grants that mapped uid only
     append access.  The containing directory is searchable but not writable, so
     the gateway cannot replace the counter with a file the worker cannot read.
     """
-    state_dir = tempfile.mkdtemp(prefix="ditto-gateway-state-")
+    # A systemd worker may use PrivateTmp, but rootless Docker runs outside that
+    # namespace. A bind mount from the private /tmp is therefore invisible to
+    # the daemon. The fleet gives us an explicit, per-worker host-visible root
+    # for these ephemeral inputs; local/test workers retain tempfile's default
+    # when it is not configured.  Stage the static gateway script here too:
+    # ProtectSystem=strict makes the immutable release path an invalid Docker
+    # bind-mount source for the rootless daemon.
+    shared_root = os.environ.get("SCREENER_GATEWAY_STATE_ROOT")
+    if shared_root:
+        Path(shared_root).mkdir(mode=0o700, parents=True, exist_ok=True)
+    state_dir = tempfile.mkdtemp(prefix="ditto-gateway-state-", dir=shared_root)
     state_file = str(Path(state_dir) / "model-called")
     try:
+        staged_script = Path(state_dir) / "fake_gateway.py"
+        shutil.copyfile(Path(__file__).with_name("fake_gateway.py"), staged_script)
+        os.chmod(staged_script, 0o444)
         os.chmod(state_dir, 0o711)
         fd = os.open(state_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
@@ -2366,7 +2379,7 @@ class BuildGate:
         if code != 0:
             return False, f"could not create isolated network: {_log_tail(out)}"
 
-        script = str(Path(__file__).with_name("fake_gateway.py").resolve())
+        script = str(Path(state_dir) / "fake_gateway.py")
         code, out = await self._run(
             [
                 "run",
