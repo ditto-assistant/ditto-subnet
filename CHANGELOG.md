@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.176.1 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Preserve local review liveness
+  ([`df0460c`](https://github.com/ditto-assistant/ditto-subnet/commit/df0460c1abd24011230c35975da9ff352e87df11))
+
+
 ## v0.176.0 (2026-08-31)
 
 ### Bug Fixes
