@@ -36,7 +36,7 @@ sets it true, the role installs a rootless Docker daemon under the empty
 `ditto-coding-executor` local identity. It creates a socket owned by the empty
 future-client group `ditto-coding-client`, labels the daemon
 `io.heyditto.dittobench.isolated=true`, enforces bounded logs/GC, and blocks
-that daemon identity from private and metadata egress except DNS.
+that daemon identity from all egress except metadata DNS.
 
 The role intentionally installs neither a client service nor a candidate image.
 No user belongs to `ditto-coding-client` at this stage, so the rootless socket
@@ -44,6 +44,20 @@ has no trusted scorer or worker consumer. A future slice must add the dedicated
 scorer process, join only that process to the client group, prove the complete
 candidate proxy policy, and retain every coding feature gate false until a
 reviewed canary activation.
+
+## Capability-only candidate egress
+
+`coding_executor_capability_egress_enabled` remains false by default and may
+be enabled only after the scorer runtime has been materialized from its attested
+image. It preserves the rootless daemon's default-deny policy and allows one
+reviewed non-loopback IPv4 gateway only on TCP `11438`. That is the future
+scorer capability route; every other private, metadata, peer-container, and
+public destination remains rejected. It does not create a listener, service,
+token, validator route, task, or coding gate.
+
+The later scorer-service profile must bind its capability listener to this same
+gateway and prove the host-side inbound policy before it starts. A general
+proxy, inference route, or validator transport belongs to later reviewed work.
 
 ## Production runtime-bundle staging
 

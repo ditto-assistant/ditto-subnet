@@ -47,6 +47,23 @@
       control. It cannot extract an unverified image or fetch a runtime from a
       registry.
 
+- name: Reject capability egress before scorer runtime materialization
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_capability_egress_enabled | bool) or coding_executor_scorer_runtime_materialize_enabled | bool
+    fail_msg: >-
+      Capability egress requires the materialized attested scorer runtime. It
+      cannot pre-authorize arbitrary rootless daemon network access.
+
+- name: Reject an invalid capability egress configuration
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_capability_egress_enabled | bool) or coding_executor_capability_gateway is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}$')
+      - not (coding_executor_capability_egress_enabled | bool) or coding_executor_capability_port | int == 11438
+    fail_msg: >-
+      Capability egress accepts only one reviewed IPv4 gateway on the fixed
+      scorer capability port. The guard rejects every other daemon destination.
+
 - name: Report that the coding executor daemon is deliberately disabled
   ansible.builtin.debug:
     msg: >-
@@ -141,8 +158,8 @@
       register: coding_executor_daemon_config
 
     - name: Install the rootless daemon egress-guard service
-      ansible.builtin.copy:
-        src: ditto-coding-executor-egress-guard.service
+      ansible.builtin.template:
+        src: ditto-coding-executor-egress-guard.service.j2
         dest: "/etc/systemd/system/{{ coding_executor_egress_guard_unit }}.service"
         owner: root
         group: root

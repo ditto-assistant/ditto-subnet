@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -20,6 +21,7 @@ DEFAULTS = (ROLE / "defaults/main.yml").read_text()
 TASKS = (ROLE / "tasks/main.yml").read_text()
 INSTALLER = (ROLE / "files/install-rootless-docker.sh").read_text()
 GUARD = (ROLE / "files/executor-egress-guard.sh").read_text()
+GUARD_UNIT = ROLE / "templates/ditto-coding-executor-egress-guard.service.j2"
 DAEMON = (ROLE / "files/rootless-daemon.json").read_text()
 PLAYBOOK = (ROOT / "infra/ansible/playbooks/gcp-coding-executor.yml").read_text()
 WORKFLOW = (ROOT / ".github/workflows/infra-ci.yml").read_text()
@@ -160,11 +162,79 @@ def test_rootless_daemon_private_egress_guard_and_ci_coverage_are_present() -> N
         assert cidr in GUARD
     assert 'chain="DCE-EXEC-EGRESS"' in GUARD
     assert "169.254.169.254/32 --dport 53 -j ACCEPT" in GUARD
+    assert 'capability_gateway="${CODING_EXECUTOR_CAPABILITY_GATEWAY:-}"' in GUARD
+    assert 'iptables -A "$replacement" -j REJECT' in GUARD
+    assert "coding_executor_capability_egress_enabled" in DEFAULTS
+    assert "coding_executor_capability_gateway" in GUARD_UNIT.read_text()
     assert "hosts: role_coding_executor" in PLAYBOOK
     assert "gcp-coding-executor.yml" in WORKFLOW
     assert "docker-ce-rootless-extras" in TASKS
     assert "coding_executor_daemon_enabled" in DOC
     assert "neither a client service nor a candidate image" in DOC
+
+
+def test_rootless_egress_guard_allows_only_the_reviewed_capability_gateway(
+    tmp_path: Path,
+) -> None:
+    command_dir = tmp_path / "bin"
+    command_dir.mkdir()
+    log = tmp_path / "iptables.log"
+    iptables = command_dir / "iptables"
+    iptables.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$1\" == '-D' ]]; then exit 1; fi\n"
+        'printf \'%s\\n\' "$*" >> "$IPTABLES_LOG"\n'
+    )
+    iptables.chmod(0o755)
+    identity = command_dir / "id"
+    identity.write_text("#!/usr/bin/env bash\nprintf '4242\\n'\n")
+    identity.chmod(0o755)
+    environment = os.environ | {
+        "CODING_EXECUTOR_CAPABILITY_GATEWAY": "10.30.0.5",
+        "CODING_EXECUTOR_CAPABILITY_PORT": "11438",
+        "IPTABLES_LOG": str(log),
+        "PATH": str(command_dir) + ":" + os.environ["PATH"],
+    }
+
+    result = subprocess.run(
+        ["bash", str(ROLE / "files/executor-egress-guard.sh")],
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    commands = log.read_text()
+    assert "-p tcp -d 10.30.0.5/32 --dport 11438 -j ACCEPT" in commands
+    assert "-A DCE-EXEC-EGRESS-" in commands
+    assert "-j REJECT" in commands
+
+
+def test_rootless_egress_guard_rejects_an_invalid_capability_gateway(
+    tmp_path: Path,
+) -> None:
+    command_dir = tmp_path / "bin"
+    command_dir.mkdir()
+    identity = command_dir / "id"
+    identity.write_text("#!/usr/bin/env bash\nprintf '4242\\n'\n")
+    identity.chmod(0o755)
+    environment = os.environ | {
+        "CODING_EXECUTOR_CAPABILITY_GATEWAY": "127.0.0.1",
+        "CODING_EXECUTOR_CAPABILITY_PORT": "11438",
+        "PATH": str(command_dir) + ":" + os.environ["PATH"],
+    }
+
+    result = subprocess.run(
+        ["bash", str(ROLE / "files/executor-egress-guard.sh")],
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "capability gateway is invalid" in result.stderr
 
 
 def _manifest(archive_sha256: str, *, fixture: bool = False) -> bytes:
