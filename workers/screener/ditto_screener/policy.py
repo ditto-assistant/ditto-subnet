@@ -127,6 +127,7 @@ class ScreeningDecision:
     finding: Mapping[str, object] | None = None
     review_audit: Mapping[str, object] | None = None
     adjudication: Mapping[str, object] | None = None
+    review_notes: tuple[Mapping[str, object], ...] = ()
 
     def __post_init__(self) -> None:
         if self.policy_version != SCREENING_POLICY_VERSION:
@@ -159,6 +160,13 @@ class ScreeningDecision:
             > _MAX_FINDING_BYTES
         ):
             raise ValueError("adjudication exceeds bounded size")
+        if len(self.review_notes) > 48:
+            raise ValueError("review notes exceed bounded size")
+        if (
+            len(json.dumps(self.review_notes, sort_keys=True, separators=(",", ":")))
+            > _MAX_FINDING_BYTES
+        ):
+            raise ValueError("review notes exceed bounded payload")
         if (
             self.outcome == ScreeningOutcome.PASS_INCONCLUSIVE
             and self.review_audit is None
@@ -260,6 +268,7 @@ class ModuleResult:
     finding: Mapping[str, object] | None = None
     review_audit: Mapping[str, object] | None = None
     adjudication: Mapping[str, object] | None = None
+    review_notes: tuple[Mapping[str, object], ...] = ()
 
 
 class PolicyModule(Protocol):
@@ -545,6 +554,7 @@ class AgenticSourceReviewModule(_BaseModule):
                 ),
             )
         observation = await context.review_source()
+        review_notes = observation.notes
         adjudication = observation.adjudication
         if adjudication is not None:
             decision = adjudication.get("decision")
@@ -561,6 +571,7 @@ class AgenticSourceReviewModule(_BaseModule):
                     evidence,
                     finding=observation.finding,
                     adjudication=adjudication,
+                    review_notes=review_notes,
                 )
             if decision == "reject":
                 # Policy modules do not have authority to reject. Carry the
@@ -571,6 +582,7 @@ class AgenticSourceReviewModule(_BaseModule):
                     evidence,
                     finding=observation.finding,
                     adjudication=adjudication,
+                    review_notes=review_notes,
                 )
             # A host-refused verdict remains an operator hold, never a retry
             # loop and never an admission.
@@ -579,6 +591,7 @@ class AgenticSourceReviewModule(_BaseModule):
                 evidence,
                 finding=observation.finding,
                 adjudication=adjudication,
+                review_notes=review_notes,
             )
         if not observation.ok:
             if observation.failure_disposition == "pass_inconclusive":
@@ -595,6 +608,7 @@ class AgenticSourceReviewModule(_BaseModule):
                     ),
                     finding=observation.finding,
                     review_audit=observation.review_audit,
+                    review_notes=review_notes,
                 )
             disposition = (
                 ModuleDisposition.INCONCLUSIVE
@@ -610,6 +624,7 @@ class AgenticSourceReviewModule(_BaseModule):
                         "private source review did not produce a usable result",
                     ),
                 ),
+                review_notes=review_notes,
             )
         if observation.risk_level == "low" and set(observation.categories) <= (
             {"none"} | _ADVISORY_SOURCE_CATEGORIES
@@ -618,7 +633,11 @@ class AgenticSourceReviewModule(_BaseModule):
             # clean or advisory-only source review is useful operator context.
             # Advisory correctness/build observations are not anti-cheat
             # tripwires by themselves.
-            return ModuleResult(ModuleDisposition.CLEAR, finding=observation.finding)
+            return ModuleResult(
+                ModuleDisposition.CLEAR,
+                finding=observation.finding,
+                review_notes=review_notes,
+            )
         if observation.risk_level not in {"low", "medium", "high"}:
             return ModuleResult(
                 ModuleDisposition.INCONCLUSIVE,
@@ -629,6 +648,7 @@ class AgenticSourceReviewModule(_BaseModule):
                         "private source review returned an invalid risk level",
                     ),
                 ),
+                review_notes=review_notes,
             )
         code, summary = _source_review_reason(observation.categories)
         return ModuleResult(
@@ -642,6 +662,7 @@ class AgenticSourceReviewModule(_BaseModule):
                 ),
             ),
             finding=observation.finding,
+            review_notes=review_notes,
         )
 
 
@@ -1018,6 +1039,7 @@ class PolicyEngine:
         finding: Mapping[str, object] | None = None
         review_audit: Mapping[str, object] | None = None
         adjudication: Mapping[str, object] | None = None
+        review_notes: tuple[Mapping[str, object], ...] = ()
         selected = False
         pass_inconclusive = False
         # The mechanical lane does not collect source-review evidence. The
@@ -1031,6 +1053,7 @@ class PolicyEngine:
                 finding = result.finding or finding
                 review_audit = result.review_audit or review_audit
                 adjudication = result.adjudication or adjudication
+                review_notes = (*review_notes, *result.review_notes)
                 terminal = _module_terminal(result.disposition)
                 if terminal is not None:
                     if terminal == ScreeningOutcome.PASS_INCONCLUSIVE:
@@ -1042,6 +1065,7 @@ class PolicyEngine:
                         finding,
                         review_audit=review_audit,
                         adjudication=adjudication,
+                        review_notes=review_notes,
                     )
                 selected = selected or result.disposition == ModuleDisposition.TRIPWIRE
 
@@ -1074,6 +1098,7 @@ class PolicyEngine:
             finding = result.finding or finding
             review_audit = result.review_audit or review_audit
             adjudication = result.adjudication or adjudication
+            review_notes = (*review_notes, *result.review_notes)
             terminal = _module_terminal(result.disposition)
             if terminal is not None:
                 return self._decision(
@@ -1082,6 +1107,7 @@ class PolicyEngine:
                     finding,
                     review_audit=review_audit,
                     adjudication=adjudication,
+                    review_notes=review_notes,
                 )
             cleared = cleared or (
                 module.clears_selection
@@ -1110,6 +1136,7 @@ class PolicyEngine:
                 finding,
                 review_audit=review_audit,
                 adjudication=adjudication,
+                review_notes=review_notes,
             )
 
         if pass_inconclusive:
@@ -1119,6 +1146,7 @@ class PolicyEngine:
                 finding,
                 review_audit=review_audit,
                 adjudication=adjudication,
+                review_notes=review_notes,
             )
 
         return self._decision(
@@ -1127,6 +1155,7 @@ class PolicyEngine:
             finding,
             review_audit=review_audit,
             adjudication=adjudication,
+            review_notes=review_notes,
         )
 
     def _decision(
@@ -1137,6 +1166,7 @@ class PolicyEngine:
         *,
         review_audit: Mapping[str, object] | None = None,
         adjudication: Mapping[str, object] | None = None,
+        review_notes: tuple[Mapping[str, object], ...] = (),
     ) -> ScreeningDecision:
         bounded = tuple(evidence[:_MAX_EVIDENCE])
         detail = ""
@@ -1156,6 +1186,7 @@ class PolicyEngine:
             finding=finding,
             review_audit=review_audit,
             adjudication=adjudication,
+            review_notes=review_notes,
         )
 
     def malicious_preflight_decision(
@@ -1193,6 +1224,7 @@ class PolicyEngine:
                 observation.finding,
                 review_audit=observation.review_audit,
                 adjudication=adjudication,
+                review_notes=observation.notes,
             )
         if not observation.ok:
             retryable = observation.failure_disposition == "retryable_infra"
@@ -1218,6 +1250,7 @@ class PolicyEngine:
                 ),
                 observation.finding,
                 review_audit=observation.review_audit,
+                review_notes=observation.notes,
             )
         if observation.risk_level not in {"medium", "high"}:
             raise ValueError("pre-execution source decision requires elevated risk")
@@ -1233,6 +1266,7 @@ class PolicyEngine:
                 ),
             ),
             observation.finding,
+            review_notes=observation.notes,
         )
 
 

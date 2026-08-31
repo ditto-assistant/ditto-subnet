@@ -21,6 +21,7 @@ type GeneratedSourceReviewInvariantAssessment =
 type GeneratedSourceReviewInvariantDecision =
   PlatformComponents['schemas']['SourceReviewInvariantDecision']
 type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
+type GeneratedSourceReviewNote = PlatformComponents['schemas']['SourceReviewNote']
 type GeneratedValidatorUpdaterStatus = PlatformComponents['schemas']['ValidatorUpdaterStatus']
 type GeneratedAdminActiveHotkeyBan = PlatformComponents['schemas']['AdminActiveHotkeyBan']
 type GeneratedAdminHotkeyBanAuditEntry =
@@ -3856,6 +3857,16 @@ export const sourceReviewFindingSchema = z
     }
   })
 
+export const sourceReviewNoteSchema = z.strictObject({
+  kind: z.enum(['concern', 'cleared', 'observation']),
+  category: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
+  path: z.string().min(1).max(240).nullable().optional(),
+  line: z.number().int().min(1).max(10_000_000).nullable().optional(),
+  summary: z.string().min(1).max(300),
+  confidence: z.number().min(0).max(1).nullable().optional(),
+  stage: z.enum(['l1', 'l2', 'l3']),
+} satisfies PlatformResponseShape<GeneratedSourceReviewNote>)
+
 export const screeningQuarantineSchema = z.object({
   quarantine_id: z.string().uuid(),
   agent_id: z.string().uuid(),
@@ -3878,6 +3889,8 @@ export const screeningQuarantineSchema = z.object({
   evidence: z.array(screeningEvidenceItemSchema).nullish().default(null),
   finding: sourceReviewFindingSchema.nullish().default(null),
   finding_verified: z.boolean().nullish().default(false),
+  review_notes_digest: z.string().regex(/^[0-9a-f]{64}$/).nullish().default(null),
+  review_notes: z.array(sourceReviewNoteSchema).min(1).max(48).nullish().default(null),
   status: z.enum(['active', 'resolved']),
   created_at: z.string(),
   resolved_at: z.string().nullable(),

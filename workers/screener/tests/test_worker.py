@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -40,6 +41,8 @@ from ditto_screening_protocol import (
     ScreenResultOutcome,
     ScreenReviewAudit,
     SourceReviewFinding,
+    SourceReviewNote,
+    source_review_notes_digest,
 )
 
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
@@ -631,6 +634,14 @@ async def test_terminal_source_budget_exhaustion_is_signed_and_submitted_once(
             ),
         ),
         review_audit=audit.model_dump(mode="json"),
+        review_notes=(
+            {
+                "kind": "observation",
+                "category": "review_budget",
+                "summary": "Collected bounded review evidence before exhaustion.",
+                "stage": "l1",
+            },
+        ),
     )
     platform = _FakePlatform([])
     worker = _worker(make_config(), platform, _FakeGate(result))
@@ -642,7 +653,41 @@ async def test_terminal_source_budget_exhaustion_is_signed_and_submitted_once(
     assert verdict["passed"] is True
     assert verdict["outcome"] == ScreenResultOutcome.PASS_INCONCLUSIVE
     assert verdict["review_audit_digest"] == audit.canonical_digest()
+    expected_notes = [
+        SourceReviewNote(
+            kind="observation",
+            category="review_budget",
+            summary="Collected bounded review evidence before exhaustion.",
+            stage="l1",
+        )
+    ]
+    assert verdict["review_notes"] == expected_notes
+    assert verdict["review_notes_digest"] == source_review_notes_digest(expected_notes)
     assert verdict["reason_code"] == "source-review-inconclusive"
+
+
+async def test_passing_source_review_notes_keep_the_policy_manifest_binding(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    result = replace(
+        _decision(ScreeningOutcome.PASS),
+        review_notes=(
+            {
+                "kind": "cleared",
+                "category": "general_runtime",
+                "summary": "Reviewed the normal provider-bound execution path.",
+                "stage": "l1",
+            },
+        ),
+    )
+    platform = _FakePlatform([])
+    worker = _worker(make_config(), platform, _FakeGate(result))
+
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+
+    verdict = platform.verdicts[0]
+    assert verdict["manifest_digest"] == result.manifest_digest
+    assert verdict["review_notes"] is not None
 
 
 async def test_passing_gate_without_verified_image_posts_no_verdict(

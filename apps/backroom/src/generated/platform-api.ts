@@ -7603,6 +7603,10 @@ export interface components {
             review_audit?: components["schemas"]["ScreenReviewAudit"] | null;
             /** Review Audit Digest */
             review_audit_digest?: string | null;
+            /** Review Notes */
+            review_notes?: components["schemas"]["SourceReviewNote"][] | null;
+            /** Review Notes Digest */
+            review_notes_digest?: string | null;
             /**
              * Status
              * @enum {string}
@@ -20780,6 +20784,13 @@ export interface components {
             review_audit?: components["schemas"]["ScreenReviewAudit"] | null;
             /** Review Audit Digest */
             review_audit_digest?: string | null;
+            /**
+             * Review Notes
+             * @description Bounded, public-safe source-review determinations. Their canonical digest is signed with the verdict.
+             */
+            review_notes?: components["schemas"]["SourceReviewNote"][] | null;
+            /** Review Notes Digest */
+            review_notes_digest?: string | null;
             /** Review Settings Checksum */
             review_settings_checksum?: string | null;
             /** Review Settings Instance Id */

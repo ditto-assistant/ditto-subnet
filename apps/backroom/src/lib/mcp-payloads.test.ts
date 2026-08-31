@@ -192,6 +192,16 @@ describe('screening list summaries', () => {
             summary: 'The authored code reads ambient credentials.',
           },
           finding_verified: true,
+          review_notes_digest: '34'.repeat(32),
+          review_notes: Array.from({ length: 4 }, (_, index) => ({
+            kind: index % 2 === 0 ? 'cleared' : 'observation',
+            category: 'general_runtime',
+            path: `src/file-${index}.py`,
+            line: index + 1,
+            summary: 'Bounded source review note '.repeat(8),
+            confidence: 0.8,
+            stage: 'l1',
+          })),
           status: 'active',
           created_at: '2026-07-25T12:00:00Z',
           resolved_at: null,
@@ -206,8 +216,10 @@ describe('screening list summaries', () => {
       items: Array<Record<string, unknown>>
     }
     expect(summary.items[0]).not.toHaveProperty('evidence')
+    expect(summary.items[0]).not.toHaveProperty('review_notes')
     expect(summary.items[0]).toMatchObject({
       evidence_count: 8,
+      review_notes_count: 4,
       finding: { risk_level: 'high', evidence_count: 8 },
     })
     expect(summary.items[0].evidence_codes).toEqual(
@@ -218,10 +230,15 @@ describe('screening list summaries', () => {
     expect(bytes(summary)).toBeLessThan(bytes(payload) * 0.25)
 
     const full = compactScreeningQuarantines(payload, 'full') as {
-      items: Array<{ evidence: Array<unknown>; finding: { evidence: Array<unknown> } }>
+      items: Array<{
+        evidence: Array<unknown>
+        finding: { evidence: Array<unknown> }
+        review_notes: Array<unknown>
+      }>
     }
     expect(full.items[0].evidence).toHaveLength(8)
     expect(full.items[0].finding.evidence).toHaveLength(8)
+    expect(full.items[0].review_notes).toHaveLength(4)
   })
 })
 

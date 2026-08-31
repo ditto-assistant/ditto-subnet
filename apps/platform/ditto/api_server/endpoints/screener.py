@@ -5075,7 +5075,17 @@ async def _backfill_quarantine_payloads(
         if payload.review_audit is not None
         else None
     )
-    if evidence_json is None and finding_json is None and audit_json is None:
+    notes_json = (
+        [note.model_dump(mode="json") for note in payload.review_notes]
+        if payload.review_notes is not None
+        else None
+    )
+    if (
+        evidence_json is None
+        and finding_json is None
+        and audit_json is None
+        and notes_json is None
+    ):
         return
     quarantine = await session.scalar(
         select(ScreeningQuarantine).where(ScreeningQuarantine.attempt_id == attempt_id)
@@ -5092,6 +5102,17 @@ async def _backfill_quarantine_payloads(
         ):
             raise AgentNotScreenableError(
                 "re-reported review audit conflicts with retained evidence"
+            )
+    if notes_json is not None and payload.review_notes_digest is not None:
+        if quarantine.review_notes is None and quarantine.review_notes_digest is None:
+            quarantine.review_notes = notes_json
+            quarantine.review_notes_digest = payload.review_notes_digest
+        elif (
+            quarantine.review_notes != notes_json
+            or quarantine.review_notes_digest != payload.review_notes_digest
+        ):
+            raise AgentNotScreenableError(
+                "re-reported review notes conflict with retained evidence"
             )
     if quarantine.evidence is None and evidence_json:
         quarantine.evidence = evidence_json
@@ -5164,6 +5185,7 @@ async def submit_result(
             finding_digest=payload.finding_digest,
             review_audit_digest=payload.review_audit_digest,
             adjudication_digest=payload.adjudication_digest,
+            review_notes_digest=payload.review_notes_digest,
             deferred_source_review=payload.deferred_source_review,
             policy_only=payload.policy_only,
             review_settings_revision=payload.review_settings_revision,
@@ -5264,6 +5286,7 @@ async def submit_result(
             "quarantine",
         }
         or payload.adjudication is not None
+        or payload.review_notes is not None
     )
     deferred_review: AthReview | None = None
     reported_attempt: ScreeningAttempt | None = None
@@ -5874,6 +5897,15 @@ async def submit_result(
                             if payload.review_audit is not None
                             else None
                         ),
+                        review_notes_digest=payload.review_notes_digest,
+                        review_notes=(
+                            [
+                                note.model_dump(mode="json")
+                                for note in payload.review_notes
+                            ]
+                            if payload.review_notes is not None
+                            else None
+                        ),
                         reason_code=stored_reason_code or INCONCLUSIVE_REASON_CODE,
                         evidence=evidence_json,
                         finding=finding_json,
@@ -5897,6 +5929,12 @@ async def submit_result(
                             if deferred_attempt_lifecycle
                             else "Deep source review deferred until score qualification"
                             if deferred_mechanical_admission
+                            else (
+                                "Source-review evidence retained on an admitted "
+                                "submission"
+                            )
+                            if payload.review_notes is not None
+                            and outcome_value == "pass"
                             else "Bounded source review exhausted; admitted for scoring"
                         )
                         if evidence_deferred
@@ -5930,6 +5968,15 @@ async def submit_result(
                             if payload.review_audit is not None
                             else None
                         ),
+                        "review_notes_digest": payload.review_notes_digest,
+                        "review_notes": (
+                            [
+                                note.model_dump(mode="json")
+                                for note in payload.review_notes
+                            ]
+                            if payload.review_notes is not None
+                            else None
+                        ),
                     },
                     "deep_review_result": {
                         "attempt_id": str(attempt.attempt_id),
@@ -5941,6 +5988,15 @@ async def submit_result(
                         "review_audit": (
                             payload.review_audit.model_dump(mode="json")
                             if payload.review_audit is not None
+                            else None
+                        ),
+                        "review_notes_digest": payload.review_notes_digest,
+                        "review_notes": (
+                            [
+                                note.model_dump(mode="json")
+                                for note in payload.review_notes
+                            ]
+                            if payload.review_notes is not None
                             else None
                         ),
                     },
