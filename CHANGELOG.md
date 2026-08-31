@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.181.0 (2026-08-31)
+
+### Features
+
+- **dashboard**: Make the miner panel a profile, distinct from the submission panel
+  ([#1451](https://github.com/ditto-assistant/ditto-subnet/pull/1451),
+  [`7de6e18`](https://github.com/ditto-assistant/ditto-subnet/commit/7de6e1854042d8d8bc627dda8669accb5611564c))
+
+
 ## v0.180.0 (2026-08-31)
 
 ### Features
