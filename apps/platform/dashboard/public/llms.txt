@@ -21,7 +21,8 @@ The dashboard is the human front door. The same data is available as JSON with `
 - Leaderboard: https://platform-api.heyditto.ai/leaderboard
 - Benchmark: https://platform-api.heyditto.ai/benchmark
 - Submission pipeline: https://platform-api.heyditto.ai/pipeline
-- Validator fleet: https://platform-api.heyditto.ai/operations
+- Validator fleet: https://platform-api.heyditto.ai/operations (also https://platform-api.heyditto.ai/operations/validators)
+- Screener fleet: https://platform-api.heyditto.ai/operations/screeners
 - Recent submissions: https://platform-api.heyditto.ai/submissions
 - ATH reviews: https://platform-api.heyditto.ai/ath
 - Miner profile: https://platform-api.heyditto.ai/miner/{hotkey} or https://platform-api.heyditto.ai/h/{handle}

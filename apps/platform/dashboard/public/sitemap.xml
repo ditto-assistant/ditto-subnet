@@ -26,6 +26,21 @@
     <priority>0.6</priority>
   </url>
   <url>
+    <loc>https://platform-api.heyditto.ai/operations/validators</loc>
+    <changefreq>hourly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://platform-api.heyditto.ai/operations/screeners</loc>
+    <changefreq>hourly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
+    <loc>https://platform-api.heyditto.ai/operations/builds</loc>
+    <changefreq>hourly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
     <loc>https://platform-api.heyditto.ai/submissions</loc>
     <changefreq>hourly</changefreq>
     <priority>0.5</priority>

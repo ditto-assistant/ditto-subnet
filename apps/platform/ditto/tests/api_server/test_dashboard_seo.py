@@ -101,6 +101,10 @@ class TestSitemap:
         xml = sitemap_xml(_ORIGIN, None)
         assert "<loc>https://platform-api.heyditto.ai/</loc>" in xml
         assert "<loc>https://platform-api.heyditto.ai/leaderboard</loc>" in xml
+        assert "<loc>https://platform-api.heyditto.ai/operations/screeners</loc>" in xml
+        assert (
+            "<loc>https://platform-api.heyditto.ai/operations/validators</loc>" in xml
+        )
         assert "<changefreq>always</changefreq>" in xml
         assert "/reviews" not in xml
 
@@ -186,7 +190,7 @@ class TestInjectLiveSeo:
         )
         assert "<title>Validator fleet · Ditto SN118</title>" in html
         assert 'property="og:title" content="Validator fleet · Ditto SN118"' in html
-        assert "validator and screener fleet" in html
+        assert "validator capacity" in html
         assert "Current champion" not in html
         assert "#1 jupiter" not in html
         assert "0.912345" not in html
@@ -194,6 +198,20 @@ class TestInjectLiveSeo:
         assert (
             'property="og:url" content="https://platform-api.heyditto.ai/operations"'
             in html
+        )
+
+    def test_screener_operations_route_has_its_own_metadata(self) -> None:
+        html = inject_live_seo(
+            _MARKED_HTML,
+            origin=_ORIGIN,
+            path="/operations/screeners",
+            snapshot=_snapshot(),
+        )
+        assert "<title>Screener fleet · Ditto SN118</title>" in html
+        assert "screener hosts, shared capacity, worker process state" in html
+        assert (
+            'property="og:url" '
+            'content="https://platform-api.heyditto.ai/operations/screeners"' in html
         )
 
     def test_missing_snapshot_does_not_invent_ranks(self) -> None:

@@ -6,16 +6,19 @@ import { batch, createSignal } from "solid-js";
 import type { Accessor } from "solid-js";
 import {
   ENTITY_PAGES,
+  clearEntityParams,
   currentPageName,
   dashboardHref,
   entityHref,
   isPageName,
+  operationsHref,
+  operationsViewFromPathname,
   pageFromPathname,
   readEntityRoute,
   spaHref,
   spaQuery,
 } from "../lib/router";
-import type { EntityKind, EntityRoute, PageName } from "../lib/router";
+import type { EntityKind, EntityRoute, OperationsView, PageName } from "../lib/router";
 import { rememberScroll, scrollToTop } from "../lib/scroll";
 
 // URL to return to when closing an overlay opened via pushEntityRoute.
@@ -63,12 +66,16 @@ function derivePage(current: PageName | null): PageName {
 }
 
 const [pageSignal, setPageSignal] = createSignal<PageName>(derivePage(null));
+const [operationsViewSignal, setOperationsViewSignal] = createSignal<OperationsView>(
+  operationsViewFromPathname(),
+);
 const [entitySignal, setEntitySignal] = createSignal<EntityRoute | null>(readEntityRoute(), {
   equals: sameEntityRoute,
 });
 
 // Driven by the document URL; defaults to "overview".
 export const currentPage: Accessor<PageName> = pageSignal;
+export const operationsViewRoute: Accessor<OperationsView> = operationsViewSignal;
 export const entityRoute: Accessor<EntityRoute | null> = entitySignal;
 
 // Recompute both signals from the current location. Batched: the two writes
@@ -81,8 +88,25 @@ export const entityRoute: Accessor<EntityRoute | null> = entitySignal;
 export function syncFromLocation(): void {
   batch(() => {
     setPageSignal((prev) => derivePage(prev));
+    setOperationsViewSignal(operationsViewFromPathname());
     setEntitySignal(readEntityRoute());
   });
+}
+
+/** Operations tabs are real routes, not local-only state. A copied URL and
+ * browser Back/Forward therefore restore the selected fleet. */
+export function navigateToOperationsView(
+  view: OperationsView,
+  options: { replace?: boolean; keepEntity?: boolean } = {},
+): void {
+  const query = spaQuery();
+  if (!options.keepEntity) clearEntityParams(query);
+  const target = operationsHref(view, query);
+  if (hrefNow() === target) return;
+  if (options.replace) history.replaceState((history.state as unknown) ?? {}, "", target);
+  else history.pushState({}, "", target);
+  if (!options.keepEntity) entityReturnUrl.value = null;
+  syncFromLocation();
 }
 
 // Sidebar navigation: route through dashboardHref so an open overlay is

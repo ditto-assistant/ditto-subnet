@@ -28,10 +28,17 @@ import {
   offlineAwareFleetStatusFor,
   orphanedSlotView,
   slotCapacityTitle,
+  screenerWorkerLabel,
   validatorAssignmentView,
   validatorSlotIds,
 } from "./fleet";
-import type { FleetEntryExt, FleetLedgerKey, FleetSingular, SlotPolicy } from "./fleet";
+import type {
+  FleetEntryExt,
+  FleetLedgerKey,
+  FleetSingular,
+  ScreenerHostGroup as ScreenerHostGroupView,
+  SlotPolicy,
+} from "./fleet";
 import {
   ElapsedTime,
   ScreenerProgressView,
@@ -176,6 +183,7 @@ function FleetIdentity(props: {
   singular: FleetSingular;
   names: Record<string, string>;
   status: [string, string];
+  screenerHostId?: string;
   /** Retired screeners name themselves "Unknown screener" (8890). */
   screenerFallback?: string;
 }): JSX.Element {
@@ -186,7 +194,9 @@ function FleetIdentity(props: {
   const displayName = () =>
     props.singular === "validator"
       ? props.names[hotkey()] || ""
-      : props.entry.instance_id || props.screenerFallback || "";
+      : props.screenerHostId
+        ? screenerWorkerLabel(props.entry, props.screenerHostId)
+        : props.entry.instance_id || props.screenerFallback || "";
   const tone = () => props.status[1] || "unknown";
   const keyNode = (): JSX.Element => (
     <>
@@ -202,7 +212,14 @@ function FleetIdentity(props: {
       <span class="fleet-node-identity">
         <Show when={displayName()}>
           {(name) => (
-            <span class="fleet-node-name" title={name()}>
+            <span
+              class="fleet-node-name"
+              title={
+                props.singular === "screener" && props.entry.instance_id
+                  ? props.entry.instance_id
+                  : name()
+              }
+            >
               <Show when={props.singular === "validator"} fallback={name()}>
                 <EntityButton kind="validator" id={hotkey()} label={name()} />
               </Show>
@@ -311,10 +328,11 @@ export function FleetHostCell(props: {
   entry: FleetEntryExt;
   singular: FleetSingular;
   slotPolicy: SlotPolicy | null;
+  groupedScreener?: boolean;
 }): JSX.Element {
   return (
     <td class="fleet-host-cell">
-      <div class="fleet-host">
+      <div classList={{ "fleet-host": true, "fleet-worker-runtime": props.groupedScreener }}>
         <span class="fleet-version">{versionLabel(props.entry)}</span>
         <span
           class="fleet-protocol"
@@ -329,7 +347,7 @@ export function FleetHostCell(props: {
         <Show when={props.singular === "validator" ? updaterModeLine(props.entry) : null}>
           {(mode) => <span class="fleet-updater-mode">{mode()}</span>}
         </Show>
-        <Show when={props.entry.host_specs}>
+        <Show when={!props.groupedScreener && props.entry.host_specs}>
           {(specs) => (
             <span class="fleet-host-specs" title={hostSpecsTitle(specs())}>
               {hostSpecsLine(specs())}
@@ -337,10 +355,18 @@ export function FleetHostCell(props: {
           )}
         </Show>
         <Show
-          when={props.entry.system_metrics}
-          fallback={<span class="fleet-unreported">Host load not reported</span>}
+          when={props.groupedScreener}
+          fallback={
+            <Show
+              when={props.entry.system_metrics}
+              fallback={<span class="fleet-unreported">Host load not reported</span>}
+            >
+              {(metrics) => <ResourceChart metrics={metrics()} />}
+            </Show>
+          }
         >
-          {(metrics) => <ResourceChart metrics={metrics()} />}
+          <span class="fleet-worker-capacity">Shared host capacity</span>
+          <span class="fleet-unreported">No per-worker CPU/RAM quota</span>
         </Show>
       </div>
     </td>
@@ -790,6 +816,172 @@ function UpdaterNotice(props: { entry: FleetEntryExt }): JSX.Element {
   );
 }
 
+function reportedTimestamp(entry: FleetEntryExt): number {
+  const value = Date.parse(String(entry.seen_at || entry.reported_at || ""));
+  return Number.isFinite(value) ? value : 0;
+}
+
+function latestWorkerWith<T>(
+  workers: FleetEntryExt[],
+  read: (entry: FleetEntryExt) => T | null | undefined,
+): T | null {
+  let latest: FleetEntryExt | null = null;
+  workers.forEach((entry) => {
+    if (read(entry) && (!latest || reportedTimestamp(entry) > reportedTimestamp(latest))) {
+      latest = entry;
+    }
+  });
+  return latest ? (read(latest) ?? null) : null;
+}
+
+function screenerHostStatus(
+  workers: FleetEntryExt[],
+  benchVersion: number | null,
+): { label: string; tone: string } {
+  const statuses = workers.map((entry) => fleetStatusFor(entry, benchVersion));
+  const rank: Record<string, number> = {
+    bad: 6,
+    warn: 5,
+    paused: 4,
+    unknown: 3,
+    progress: 2,
+    good: 1,
+  };
+  const tone = statuses.reduce(
+    (worst, status) => ((rank[status[1]] || 0) > (rank[worst] || 0) ? status[1] : worst),
+    "good",
+  );
+  const healthy = statuses.filter((status) => status[1] === "good").length;
+  if (healthy === workers.length) return { label: String(workers.length) + " healthy", tone };
+  const attention = workers.length - healthy;
+  return {
+    label:
+      (healthy ? String(healthy) + " healthy · " : "") +
+      String(attention) +
+      " need" +
+      (attention === 1 ? "s" : "") +
+      " attention",
+    tone,
+  };
+}
+
+/** One physical screener host. Host-wide capacity and load live on the summary
+ * exactly once; its child rows describe the independent worker processes that
+ * share that machine and explicitly state that no per-worker quota exists. */
+export function ScreenerHostGroup(props: {
+  group: ScreenerHostGroupView;
+  names: Record<string, string>;
+  benchVersion: number | null;
+  highlightId: string | null;
+}): JSX.Element {
+  const workers = () => props.group.workers;
+  const count = () => workers().length;
+  const status = () => screenerHostStatus(workers(), props.benchVersion);
+  const specs = () => latestWorkerWith(workers(), (entry) => entry.host_specs);
+  const metrics = () => latestWorkerWith(workers(), (entry) => entry.system_metrics);
+  const latestReport = () =>
+    workers().reduce<FleetEntryExt | null>(
+      (latest, entry) =>
+        !latest || reportedTimestamp(entry) > reportedTimestamp(latest) ? entry : latest,
+      null,
+    );
+  const hasActiveWork = () =>
+    workers().some(
+      (entry) =>
+        entry.state === "screening" || Boolean(entry.active_agent_id || entry.screening_progress),
+    );
+  return (
+    <tr class="screener-host-row">
+      <td colspan={3}>
+        <details class="screener-host-group" open={hasActiveWork()}>
+          <summary class="screener-host-summary">
+            <span class="screener-host-identity">
+              <span class={"fleet-node-dot " + status().tone} aria-hidden="true" />
+              <span>
+                <strong>{props.group.hostId}</strong>
+                <span class="screener-host-state">
+                  <span class={"fleet-node-status " + status().tone}>{status().label}</span>
+                  <Show when={latestReport()}>
+                    {(entry) => (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span title={entry().seen_at || entry().reported_at || ""}>
+                          {relTime(entry().seen_at || entry().reported_at)}
+                        </span>
+                      </>
+                    )}
+                  </Show>
+                </span>
+              </span>
+            </span>
+            <span class="screener-host-capacity">
+              <Show
+                when={specs()}
+                fallback={<span class="fleet-unreported">Host size not reported</span>}
+              >
+                {(value) => (
+                  <span class="fleet-host-specs" title={hostSpecsTitle(value())}>
+                    {hostSpecsLine(value())}
+                  </span>
+                )}
+              </Show>
+            </span>
+            <span class="screener-host-load">
+              <Show
+                when={metrics()}
+                fallback={<span class="fleet-unreported">Host load not reported</span>}
+              >
+                {(value) => <ResourceChart metrics={value()} />}
+              </Show>
+            </span>
+            <span class="screener-host-toggle">
+              <span>{String(count()) + " worker" + (count() === 1 ? "" : "s")}</span>
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="m4 6 4 4 4-4" />
+              </svg>
+            </span>
+          </summary>
+          <div class="screener-workers-board">
+            <table
+              class="fleet-table screener-worker-table"
+              aria-label={props.group.hostId + " workers"}
+            >
+              <thead>
+                <tr>
+                  <th scope="col" style="width:214px">
+                    Worker
+                  </th>
+                  <th scope="col" class="fleet-work-col">
+                    Current work
+                  </th>
+                  <th scope="col" style="width:176px">
+                    Runtime
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <For each={workers()}>
+                  {(entry) => (
+                    <FleetRow
+                      entry={entry}
+                      singular="screener"
+                      names={props.names}
+                      slotPolicy={null}
+                      benchVersion={props.benchVersion}
+                      highlightId={props.highlightId}
+                      groupedScreenerHostId={props.group.hostId}
+                    />
+                  )}
+                </For>
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </td>
+    </tr>
+  );
+}
+
 function rowActivation(
   singular: FleetSingular,
   hotkey: () => string,
@@ -826,6 +1018,7 @@ export interface FleetRowProps {
   /** Null while no weight snapshot has loaded (nothing renders — absence of
    * data is not "no weights"); validators only. */
   chainVectors?: FleetChainVectors | null;
+  groupedScreenerHostId?: string;
 }
 
 /** One active fleet row (renderFleet 9017–9109). */
@@ -865,6 +1058,7 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
           singular={props.singular}
           names={props.names}
           status={status()}
+          screenerHostId={props.groupedScreenerHostId}
         />
       </td>
       <td class="fleet-work-col">
@@ -919,7 +1113,12 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
           </Show>
         </Show>
       </td>
-      <FleetHostCell entry={props.entry} singular={props.singular} slotPolicy={props.slotPolicy} />
+      <FleetHostCell
+        entry={props.entry}
+        singular={props.singular}
+        slotPolicy={props.slotPolicy}
+        groupedScreener={Boolean(props.groupedScreenerHostId)}
+      />
     </tr>
   );
 }

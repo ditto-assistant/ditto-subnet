@@ -52,6 +52,57 @@ export interface FleetReportExt extends FleetReport {
 
 export type FleetSingular = "validator" | "screener";
 
+export interface ScreenerHostGroup {
+  hostId: string;
+  workers: FleetEntryExt[];
+}
+
+/** Local fleet services identify themselves as `<node>-worker-<n>`. The node
+ * portion is the real machine boundary: every sibling reports the same host
+ * load and host hardware, while work/state remain process-local. Legacy and
+ * provider workers without that suffix remain a one-worker host of their own. */
+export function screenerHostId(entry: FleetEntryExt): string {
+  const instanceId = String(entry.instance_id || "").trim();
+  if (instanceId) return instanceId.replace(/-worker-[1-9][0-9]*$/, "");
+  return String(entry.screener_hotkey || "Unknown screener host");
+}
+
+/** Short process label inside a host disclosure. Keep the full instance id in
+ * the DOM title/route identity; repeating the host prefix four times adds no
+ * information once the workers are grouped underneath that host. */
+export function screenerWorkerLabel(entry: FleetEntryExt, hostId: string): string {
+  const instanceId = String(entry.instance_id || "").trim();
+  const prefix = hostId + "-worker-";
+  if (instanceId.startsWith(prefix)) return "Worker " + instanceId.slice(prefix.length);
+  return instanceId || "Worker";
+}
+
+export function groupScreenerHosts(entries: readonly FleetEntryExt[]): ScreenerHostGroup[] {
+  const groups = new Map<string, FleetEntryExt[]>();
+  entries.forEach((entry) => {
+    const hostId = screenerHostId(entry);
+    const workers = groups.get(hostId);
+    if (workers) workers.push(entry);
+    else groups.set(hostId, [entry]);
+  });
+  return Array.from(groups, ([hostId, workers]) => ({
+    hostId,
+    // ES2022 target: sort a copy instead of mutating the feed-owned array.
+    // oxlint-disable-next-line unicorn/no-array-sort
+    workers: workers.slice().sort((left, right) => {
+      const prefix = hostId + "-worker-";
+      const leftId = String(left.instance_id || "");
+      const rightId = String(right.instance_id || "");
+      const leftOrdinal = leftId.startsWith(prefix) ? Number(leftId.slice(prefix.length)) : NaN;
+      const rightOrdinal = rightId.startsWith(prefix) ? Number(rightId.slice(prefix.length)) : NaN;
+      if (Number.isFinite(leftOrdinal) && Number.isFinite(rightOrdinal)) {
+        return leftOrdinal - rightOrdinal;
+      }
+      return leftId.localeCompare(rightId);
+    }),
+  }));
+}
+
 /** Stake-weighted validator order (8190–8205): stake desc, weightless last,
  * hotkey as the deterministic tiebreak. Screeners keep feed order. */
 export function sortFleetEntries(
