@@ -175,6 +175,7 @@ async def test_request_uses_provider_supported_completion_parameter(
     assert "max_completion_tokens" not in requests[0]
     assert requests[0]["tool_choice"] == "required"
     assert requests[0]["provider"] == {
+        "allow_fallbacks": True,
         "zdr": True,
         "data_collection": "deny",
         "require_parameters": True,
