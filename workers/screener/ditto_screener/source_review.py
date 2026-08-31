@@ -3552,6 +3552,7 @@ class OpenRouterSourceReviewAgent:
                 # Disabling this turned one provider outage into a terminal L1
                 # timeout even though a compliant provider was available.
                 "allow_fallbacks": True,
+                "sort": "throughput",
                 "zdr": True,
                 "data_collection": "deny",
                 "require_parameters": True,

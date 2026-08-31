@@ -2031,6 +2031,7 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     )
     assert seen[0]["provider"] == {
         "allow_fallbacks": True,
+        "sort": "throughput",
         "zdr": True,
         "data_collection": "deny",
         "require_parameters": True,

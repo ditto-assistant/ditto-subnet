@@ -176,6 +176,7 @@ async def test_request_uses_provider_supported_completion_parameter(
     assert requests[0]["tool_choice"] == "required"
     assert requests[0]["provider"] == {
         "allow_fallbacks": True,
+        "sort": "throughput",
         "zdr": True,
         "data_collection": "deny",
         "require_parameters": True,
