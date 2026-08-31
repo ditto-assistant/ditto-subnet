@@ -285,6 +285,16 @@
   notify: Restart screener fleet workers
   when: screener_fleet_runtime_enabled
 
+- name: Ensure the rootless gateway bind-mount root
+  ansible.builtin.file:
+    path: "{{ screener_fleet_gateway_state_root }}"
+    state: directory
+    owner: "{{ screener_fleet_executor_user }}"
+    group: "{{ screener_fleet_executor_group }}"
+    mode: "0770"
+  notify: Restart screener fleet workers
+  when: screener_fleet_runtime_enabled
+
 # The fleet lane agent still owns trusted KVM and source-review container
 # lifecycle through the system daemon. The analyzer itself is always launched
 # through the separately namespaced rootless socket rendered below.

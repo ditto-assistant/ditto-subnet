@@ -53,6 +53,10 @@ screener_fleet_rootless_docker_host: unix:///run/ditto-screener-docker/docker.so
 screener_fleet_executor_user: ditto-builder
 screener_fleet_executor_group: ditto-builder
 screener_fleet_executor_home: /var/lib/ditto-screener-docker
+# The rootless daemon cannot traverse the screener's private state tree. This
+# shared parent is owned by the daemon identity while the screener has group
+# write access; each gateway invocation still creates a unique 0711 child.
+screener_fleet_gateway_state_root: /var/lib/ditto-screener-gateway-state
 screener_fleet_credential_file: "{{ screener_fleet_config_dir }}/node.json"
 screener_fleet_registration_token_file: "{{ screener_fleet_config_dir }}/registration-token"
 screener_fleet_source_review_key_file: >-
