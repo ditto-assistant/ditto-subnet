@@ -22,15 +22,19 @@ The handler accepts only the proof-bound
 
 1. bounds and duplicate-checks the JSON document;
 2. verifies the bearer digest and Ed25519 DPoP over the exact body;
-3. binds ticket, case, profile, grant generation and deadline to the locked DB
-   grant;
+3. binds ticket or claimed-lease identity (dispatch `ticket_id`), case, profile,
+   grant generation and deadline to the locked DB grant — ticket grants first,
+   certification grants only when that ticket row is absent;
 4. independently validates the fixed system prompt, tool schema, Luna model,
    medium/excluded reasoning, serial tools, provider route, ZDR and no-fallback
    request;
 5. locks the grant and latest request row;
 6. uses PostgreSQL `clock_timestamp()` for lease and durable event time;
 7. enforces logical request/retry ordering, task budgets and concurrency;
-8. commits a `started` coding request before calling OpenRouter.
+8. commits a `started` coding request on the matching ledger before calling
+   OpenRouter. Ticket and canary started rows share one admission lock and
+   concurrency cap. Settlement digests and provider generation IDs are unique
+   across both ledgers.
 
 Receipt-free retry keeps the request UUID, logical sequence and locked request
 digest while advancing only attempt/global sequence. It never consumes a

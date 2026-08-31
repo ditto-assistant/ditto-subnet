@@ -82,9 +82,11 @@ normal default creates no transport. Revocation remains available for
 already-persisted grants if transport configuration is later removed.
 
 The dedicated model-relay coding route and validator-local gateway consume
-this authority only when their independent gates are also enabled. No committed
-deployment enables those gates, so deploying this code alone cannot send a
-Luna request, run a coding task, affect an ordinary score, or affect weights.
+this authority only when their independent gates are also enabled. Ticket
+grants settle on `coding_inference_requests`. Claimed-lease canary grants
+settle on `coding_certification_inference_requests`. No committed deployment
+enables those gates, so deploying this code alone cannot send a Luna request,
+run a coding task, affect an ordinary score, or affect weights.
 
 See `coding-inference-request-ledger.md` and `docs/coding-shadow-worker.md` for
 the durable dispatch and coordinated activation boundaries.

@@ -438,6 +438,14 @@ def test_preview_compose_stack_does_not_route_to_worktrees() -> None:
     assert "platform-api" not in topic_ids
 
 
+def test_public_canary_inference_settlement_routes_to_request_ledger() -> None:
+    topic_ids = [
+        str(topic["id"])
+        for topic in lookup("claimed-lease public-canary inference settlement")
+    ]
+    assert topic_ids[0] == "coding-inference-requests"
+
+
 def test_platform_api_review_does_not_select_ath_review() -> None:
     topic_ids = {str(topic["id"]) for topic in lookup("review the platform API change")}
     assert "platform-api" in topic_ids
