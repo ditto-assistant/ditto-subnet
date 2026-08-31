@@ -4646,14 +4646,11 @@ def _public_activity_status(
 ) -> str:
     """Collapse internal moderation detail into stable public lifecycle labels."""
     needs_rescreen = (
-        status
-        in (
-            AgentStatus.EVALUATING,
-            AgentStatus.REJECTED,
-        )
+        status == AgentStatus.EVALUATING
         and screening_policy_version < effective_screening_policy_version()
-        # Mirrors the claim path: a policy bump only re-queues agents admitted
-        # to the active benchmark era, so non-admitted ones stay ``not_queued``.
+        # Mirrors the claim path: only unfinished evaluations re-queue on a
+        # policy bump. A terminal rejection stays visible unless an operator
+        # explicitly authorizes its exact rescreen.
         and benchmark_admitted
     )
     if has_active_attempt or status == AgentStatus.SCREENING:
