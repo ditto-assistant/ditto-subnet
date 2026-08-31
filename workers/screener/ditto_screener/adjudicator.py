@@ -89,9 +89,11 @@ _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
 _MAX_RECORDED_READS = 2_048
 _MAX_NOTES_IN_PROMPT = 48
 _MAX_CITATIONS = 8
-# A budget-terminated L1 review already spent its discovery window. L4 is the
-# court, not a second unconstrained source-review pass: preload the exact
-# evidence L1 reached and require its decision in one bounded model turn.
+# L4 is the court, not a second source-review pass. Whenever an upstream layer
+# retained exact source leads, preload those leads and require the court's
+# decision in one bounded model turn. The only exception is a failure before
+# any note was recorded: L4 may inspect the archive then, because there is no
+# ledger for it to decide.
 _MAX_PRELOADED_LEDGER_LOCATIONS = 16
 _BUDGET_TERMINATED_REVIEW_CODES = frozenset(
     {
@@ -465,12 +467,12 @@ def _preload_ledger_evidence(
 ) -> tuple[str, set[tuple[str, int]]]:
     """Return bounded source excerpts for the L4 decision-only path.
 
-    L1's ledger gives exact leads. After its discovery budget expires, asking
-    L4 to rediscover an archive can consume the entire renewable lease and
-    still leave the miner waiting on a model timeout. The host preloads bounded
-    ranges around those leads, records every delivered line, and gives the
-    court only its final-decision tool. A reject remains fail-closed: its
-    citations must still name an executable preloaded line.
+    L1/L2/L3's ledger gives exact leads. Asking L4 to rediscover an archive
+    after any evidence-bearing inconclusive handoff can consume the renewable
+    lease and still leave the miner waiting on a model timeout. The host
+    preloads bounded ranges around those leads, records every delivered line,
+    and gives the court only its final-decision tool. A reject remains
+    fail-closed: its citations must still name an executable preloaded line.
     """
     outputs: list[str] = []
     read_locations: set[tuple[str, int]] = set()
@@ -572,6 +574,7 @@ class SourceReviewAdjudicator:
         error_code: str | None = None,
         deadline: float | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        ledger_final: bool = False,
     ) -> SourceReviewAdjudication:
         """Decide one held review. Never raises and always settles terminally."""
         note_count = len(notes)
@@ -592,18 +595,40 @@ class SourceReviewAdjudicator:
                 notes=note_count,
                 policy_version=policy_version,
             )
-        decision_only = error_code in _BUDGET_TERMINATED_REVIEW_CODES
+        # The retained ledger is the court record.  It is independent of why
+        # an upstream review stopped: a contradictory L2/L3 verdict with notes
+        # is no reason to repeat L1's archive walk and burn the lease a second
+        # time. ``ledger_final`` marks the production layered handoff; direct
+        # callers without that marker retain the inspectable court path used by
+        # unit and manual-review tooling.
+        decision_only = bool(notes) and (ledger_final or error_code is not None)
         preloaded_evidence = ""
         preloaded_reads: set[tuple[str, int]] = set()
+        if not notes and error_code in _BUDGET_TERMINATED_REVIEW_CODES:
+            # An upstream review consumed its discovery budget without
+            # recording evidence. There is nothing for the court to decide;
+            # settle rather than spend its reserve rediscovering the archive.
+            return _settle_refusal(
+                _escalate(
+                    "adjudicator-no-evidence",
+                    "Automated adjudication received no retained source evidence",
+                    model=self._model,
+                    notes=note_count,
+                    policy_version=policy_version,
+                ),
+                model=self._model,
+                notes=note_count,
+                policy_version=policy_version,
+            )
         if decision_only:
             preloaded_evidence, preloaded_reads = _preload_ledger_evidence(
                 repository, notes
             )
             if not preloaded_evidence:
-                # L1 consumed its bounded discovery time but produced no
-                # source evidence. There is nothing for a court to decide; do
-                # not burn its reserve rediscovering the archive. This is still
-                # the terminal no-proven-breach adjudication, not a retry.
+                # The upstream layers retained a ledger but no usable source
+                # evidence. There is nothing for a court to decide; do not
+                # burn its reserve rediscovering the archive. This is still the
+                # terminal no-proven-breach adjudication, not a retry.
                 return _settle_refusal(
                     _escalate(
                         "adjudicator-no-evidence",
