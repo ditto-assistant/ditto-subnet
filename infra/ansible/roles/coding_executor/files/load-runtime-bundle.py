@@ -10,6 +10,7 @@ digest and safety properties the later Go executor will require.
 from __future__ import annotations
 
 import argparse
+import grp
 import importlib.util
 import json
 import os
@@ -36,6 +37,7 @@ EXPECTED_ARCHIVE_PATH = Path("/var/lib/ditto-coding-executor/staged/supervisor.o
 EXPECTED_ATTESTATION_PATH = Path(
     "/var/lib/ditto-coding-executor/staged/runtime-image-attestation.json"
 )
+EXPECTED_CLIENT_GROUP = "ditto-coding-client"
 SUPERVISOR_ENTRYPOINT = "/usr/local/bin/dittobench-coding-supervisor"
 TRUSTED_DRIVER_NAME = "dittobench-test-driver"
 ISOLATED_DAEMON_LABEL = "io.heyditto.dittobench.isolated=true"
@@ -303,6 +305,7 @@ def write_attestation(path: Path, value: dict[str, str]) -> None:
     if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.lstat().st_mode)):
         fail("runtime-image attestation path is not a regular file")
     try:
+        client_group = grp.getgrnam(EXPECTED_CLIENT_GROUP)
         encoded = (
             json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
         ).encode()
@@ -311,10 +314,10 @@ def write_attestation(path: Path, value: dict[str, str]) -> None:
             output.write(encoded)
             output.flush()
             os.fsync(output.fileno())
-        os.chown(temporary_path, 0, 0)
-        os.chmod(temporary_path, 0o600)
+        os.chown(temporary_path, 0, client_group.gr_gid)
+        os.chmod(temporary_path, 0o640)
         os.replace(temporary_path, path)
-    except OSError as exc:
+    except (KeyError, OSError) as exc:
         fail(f"cannot write runtime-image attestation: {exc}")
 
 

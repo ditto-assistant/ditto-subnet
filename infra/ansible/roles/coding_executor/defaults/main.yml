@@ -38,3 +38,13 @@ coding_executor_runtime_manifest_sha256: ""
 # is the exact, non-fixture production image described by the staged manifest.
 coding_executor_runtime_image_load_enabled: false
 coding_executor_runtime_image_attestation_path: /var/lib/ditto-coding-executor/staged/runtime-image-attestation.json
+
+# The first non-root socket client is a local attestation guard, not a scorer.
+# It can inspect only the already-attested image and exits on any drift. A
+# later reviewed scorer release/transport must replace this guard before any
+# ticket, Platform, or candidate authority can reach the executor.
+coding_executor_client_guard_enabled: false
+coding_executor_scorer_user: ditto-coding-scorer
+coding_executor_scorer_group: ditto-coding-scorer
+coding_executor_scorer_home: /var/lib/ditto-coding-scorer
+coding_executor_client_guard_unit: ditto-coding-executor-client-guard

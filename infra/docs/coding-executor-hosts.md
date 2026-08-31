@@ -112,12 +112,35 @@ supervisor entrypoint, and these labels:
 - `io.heyditto.dittobench.trusted-test-driver-name=dittobench-test-driver`
 - `org.opencontainers.image.revision` matching the manifest source revision
 
-Only after all checks does it atomically write the root-owned `0600`
-`runtime-image-attestation.json` beside the staged inputs. A bundle that does
+Only after all checks does it atomically write the root-owned `0640`
+`runtime-image-attestation.json` beside the staged inputs. Its only non-root
+reader is the otherwise-empty `ditto-coding-client` group. A bundle that does
 not restore the exact repository digest fails closed; no fallback pull, local
-tag, registry credential, scorer, client-group member, or candidate process is
-introduced. The future scorer-client role must consume and revalidate this
-attestation, not treat mere image presence as authority.
+tag, registry credential, task-serving scorer, or candidate process is
+introduced. The client guard below consumes and revalidates this attestation;
+future scorer code must do the same rather than treating image presence as
+authority.
+
+## Attestation-bound client guard
+
+`coding_executor_client_guard_enabled` is a third default-off control. It may
+be true only after runtime-image loading is enabled and has written the fixed
+attestation. It creates `ditto-coding-scorer` as the **only** member of
+`ditto-coding-client`, then runs a hardened systemd guard with no capabilities,
+no network address family, no listener, and no writable state.
+
+The guard can issue only Docker `info` and `image inspect` calls against the
+fixed rootless socket. On every check it proves the daemon label/rootless state
+and compares image ID, repository digest, platform, entrypoint, labels,
+volumes, and environment with the root-owned attestation. It cannot pull, load,
+create, start, run, remove, publish, or expose an image. A mismatch exits the
+guard; it does not attempt remediation or candidate execution.
+
+This is not yet a task-serving scorer: it receives no validator or Platform
+request path, wallet, Platform/provider/registry credential, secret, ticket,
+or network listener. The next functional scorer slice needs its own immutable
+release artifact and a separately reviewed paired mTLS validator-to-executor
+transport.
 
 Destroying a created cohort is intentionally not a routine rollback: the shared
 compute module has deletion protection. Rollback during the shadow phase means

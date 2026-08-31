@@ -1,0 +1,32 @@
+[Unit]
+Description=Ditto coding executor attestation-bound Docker client guard
+After={{ coding_executor_unit }}.service
+Requires={{ coding_executor_unit }}.service
+ConditionPathExists={{ coding_executor_runtime_image_attestation_path }}
+
+[Service]
+Type=simple
+User={{ coding_executor_scorer_user }}
+Group={{ coding_executor_scorer_group }}
+SupplementaryGroups={{ coding_executor_client_group }}
+Environment=HOME={{ coding_executor_scorer_home }}
+ExecStart=/usr/local/lib/ditto-coding-executor/coding-executor-client-guard.py
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
