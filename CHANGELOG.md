@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.8 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Share fake gateway with rootless Docker
+  ([#1400](https://github.com/ditto-assistant/ditto-subnet/pull/1400),
+  [`580c349`](https://github.com/ditto-assistant/ditto-subnet/commit/580c349c1868e05d588f8df90afc95b248b43358))
+
+
 ## v0.177.7 (2026-08-31)
 
 ### Bug Fixes
