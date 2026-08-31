@@ -28,7 +28,11 @@ from ditto_screener.policy import (
     core_decision,
     load_policy_engine,
 )
-from ditto_screening_protocol import SCREENING_POLICY_VERSION, SourceReviewFinding
+from ditto_screening_protocol import (
+    SCREENING_POLICY_VERSION,
+    SourceReviewFinding,
+    SourceReviewNote,
+)
 
 _AGENT = UUID("4f2a1309-f763-4d40-9326-9eb7d13339e8")
 _ATTEMPT = UUID("7c5df3f9-3ea7-47ba-92d1-1bbcf4c5f300")
@@ -136,6 +140,43 @@ async def test_default_v7_runs_luna_review_and_behavioral_oracle_and_passes() ->
     assert reviews == 1
     # The always-on oracle runs even though source review cleared (no tripwire).
     assert challenges == 1
+
+
+async def test_full_valid_source_review_ledger_reaches_the_decision() -> None:
+    """A complete signed ledger is evidence, not an infrastructure failure."""
+
+    notes = tuple(
+        SourceReviewNote(
+            kind="cleared",
+            category="general_runtime",
+            path=f"src/{index:02d}/" + "runtime_" * 28 + ".rs",
+            line=index + 1,
+            summary="Reviewed model-authored output from current user records. " * 5,
+            confidence=1.0,
+            stage="l3",
+        ).model_dump(mode="json")
+        for index in range(48)
+    )
+    assert len(json.dumps(notes, sort_keys=True, separators=(",", ":"))) > 8 * 1024
+
+    async def no_challenge(*_):  # type: ignore[no-untyped-def]
+        raise AssertionError("the bounded source review already cleared")
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=True,
+            risk_level="low",
+            finding_digest=None,
+            categories=("none",),
+            notes=notes,
+        )
+
+    decision = await load_policy_engine(None).evaluate(
+        _context(no_challenge, review), skip_challenges=True
+    )
+
+    assert decision.outcome == ScreeningOutcome.PASS
+    assert decision.review_notes == notes
 
 
 async def test_timing_is_only_a_tripwire_and_routes_to_quarantine(

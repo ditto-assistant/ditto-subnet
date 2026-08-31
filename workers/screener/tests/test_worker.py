@@ -787,6 +787,8 @@ async def test_screen_one_retryable_failure_preserves_v6_screening_failed_verdic
     assert platform.verdicts[0]["passed"] is False
     assert platform.verdicts[0]["detail"].startswith("screener error:")
     assert platform.verdicts[0]["outcome"] == ScreenResultOutcome.RETRYABLE_INFRA
+    assert platform.verdicts[0]["private_failure_detail"] is not None
+    assert platform.verdicts[0]["private_failure_log_tail"] is not None
 
 
 async def test_inconclusive_completes_attempt_without_mislabeling_infrastructure(

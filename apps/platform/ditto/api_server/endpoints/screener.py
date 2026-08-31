@@ -5954,10 +5954,14 @@ async def submit_result(
             attempt.status = attempt_status
             attempt.finished_at = datetime.now(UTC)
             attempt.public_reason = public_reason
-            if attempt.reason_code not in {
-                DEFERRED_MECHANICAL_REASON,
-                POLICY_ONLY_RESCREEN_REASON,
-            }:
+            if attempt.reason_code != DEFERRED_MECHANICAL_REASON and (
+                attempt.reason_code != POLICY_ONLY_RESCREEN_REASON or not payload.passed
+            ):
+                # ``policy-only-rescreen`` identifies a *running* canary's
+                # execution mode. Once it fails, retain the signed worker
+                # cause instead, so the miner's owner-only feedback and the
+                # operator retry record say why it stopped. Successful
+                # canaries keep the marker as their compact audit label.
                 attempt.reason_code = stored_reason_code
             attempt.review_settings_revision = payload.review_settings_revision
             attempt.review_settings_instance_id = payload.review_settings_instance_id

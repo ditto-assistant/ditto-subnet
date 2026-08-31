@@ -8159,6 +8159,7 @@ class TestSubmitResult:
                     status="running",
                     started_at=now - timedelta(minutes=1),
                     deadline=now + timedelta(minutes=44),
+                    reason_code=POLICY_ONLY_RESCREEN_REASON,
                     public_reason=None,
                 )
             )
@@ -8188,7 +8189,14 @@ class TestSubmitResult:
                 policy_version=target_policy,
                 passed=False,
                 outcome="retryable_infra",
-                reason_code="source-review-model-response-invalid",
+                policy_only=True,
+                reason_code="unexpected-infrastructure",
+                private_failure_detail=(
+                    "screener error: ValueError: review notes exceed bounded payload"
+                ),
+                private_failure_log_tail=(
+                    "ValueError: review notes exceed bounded payload"
+                ),
             ),
         )
 
@@ -8199,6 +8207,16 @@ class TestSubmitResult:
             assert agent is not None
             assert agent.status == AgentStatus.SCORED
             assert agent.screening_policy_version == SCREENING_POLICY_VERSION
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            assert attempt is not None
+            assert attempt.reason_code == "unexpected-infrastructure"
+            assert attempt.private_failure_detail == (
+                "screener error: ValueError: review notes exceed bounded payload"
+            )
+            assert attempt.private_failure_log_tail == (
+                "ValueError: review notes exceed bounded payload"
+            )
+            assert attempt.failure_lane == "screening"
             release = await session.scalar(
                 select(ScoredPolicyRescreenRelease).where(
                     ScoredPolicyRescreenRelease.attempt_id == attempt_id
