@@ -179,6 +179,7 @@ from ditto.db.models import (
     BenchmarkRollout,
     BenchmarkRolloutMember,
     ProviderOutageCircuit,
+    ScoredPolicyRescreenRelease,
     ScreenedImageUpload,
     ScreenerCapacityEvent,
     ScreenerCapacitySnapshot,
@@ -5758,6 +5759,15 @@ async def submit_result(
         late_deferred_result = (
             deferred_attempt_lifecycle and not deferred_review_active_now
         )
+        scored_policy_release = (
+            await session.scalar(
+                select(ScoredPolicyRescreenRelease)
+                .where(ScoredPolicyRescreenRelease.attempt_id == attempt.attempt_id)
+                .with_for_update()
+            )
+            if attempt is not None
+            else None
+        )
         rescreening = (
             agent.status
             in (
@@ -5775,6 +5785,14 @@ async def submit_result(
             and screener_policy.rescreen_scored
             and agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
             and agent.screening_policy_version < required_policy
+        )
+        # A released policy canary retains its V10 score until L4 has produced
+        # a final clear (a passing result) or reject.  Infrastructure and
+        # review-inconclusive outcomes are evidence, not authority to wipe a
+        # miner's existing board position; they pause the one-row rollout for
+        # an explicit operator retry.
+        retain_scored_policy_rescreen = (
+            scored_policy_release is not None and target != AgentStatus.REJECTED
         )
         rolling_rescreen = bool(
             await session.scalar(
@@ -5799,7 +5817,9 @@ async def submit_result(
             pass
         elif deferred_deep_attempt:
             agent.status = target
-        elif (rolling_rescreen or stale_scored_rescreen) and payload.passed:
+        elif (rolling_rescreen or stale_scored_rescreen) and (
+            payload.passed or retain_scored_policy_rescreen
+        ):
             pass
         elif (
             rolling_rescreen
@@ -5838,7 +5858,11 @@ async def submit_result(
         # screening run requires an explicit operator authorization or a due
         # scheduled activation's cohort-wide rescreen; infrastructure failures
         # remain retryable under the same policy.
-        if not late_deferred_result and payload.policy_version == required_policy:
+        if (
+            not late_deferred_result
+            and not retain_scored_policy_rescreen
+            and payload.policy_version == required_policy
+        ):
             agent.screening_policy_version = payload.policy_version
         if payload.passed and not late_deferred_result and not payload.policy_only:
             agent.screened_image_sha256 = payload.image_sha256
@@ -5915,6 +5939,12 @@ async def submit_result(
                 attempt,
                 payload=payload,
                 provider=getattr(request.state, "screener_provider", "gcp"),
+            )
+        if scored_policy_release is not None:
+            scored_policy_release.state = (
+                "terminal"
+                if target == AgentStatus.REJECTED or payload.passed
+                else "paused"
             )
         if target == AgentStatus.QUARANTINED or records_review_evidence:
             if attempt is None:

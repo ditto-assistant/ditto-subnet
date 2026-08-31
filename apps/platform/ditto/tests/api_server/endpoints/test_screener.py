@@ -81,11 +81,13 @@ from ditto.db.models import (
     ProviderOutageCircuit,
     Score,
     ScoreAuditEntry,
+    ScoredPolicyRescreenRelease,
     ScreenedImageUpload,
     ScreenerCapacityEvent,
     ScreenerCapacitySnapshot,
     ScreenerHeartbeat,
     ScreenerNodeChannelSettingsRevision,
+    ScreenerPolicyActivation,
     ScreenerProviderSettingsRevision,
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
@@ -8112,6 +8114,89 @@ class TestSubmitResult:
             assert agent is not None
             assert agent.status == AgentStatus.SCREENING_FAILED
             assert agent.screening_policy_version == SCREENING_POLICY_VERSION - 1
+
+    async def test_scored_policy_rescreen_retryable_result_pauses_without_delisting(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A V11 non-verdict keeps its V10 score until an operator retries it."""
+        target_policy = SCREENING_POLICY_VERSION + 1
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCORED,
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        attempt_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            activation = ScreenerPolicyActivation(
+                parent_revision=0,
+                target_policy_version=target_policy,
+                activate_at=now - timedelta(minutes=1),
+                rescreen_scored=True,
+                reason="release one scored v11 canary while retaining its v10 rank",
+                actor="test",
+            )
+            session.add(activation)
+            await session.flush()
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=target_policy,
+                    status="running",
+                    started_at=now - timedelta(minutes=1),
+                    deadline=now + timedelta(minutes=44),
+                    public_reason=None,
+                )
+            )
+            await session.flush()
+            session.add(
+                ScoredPolicyRescreenRelease(
+                    release_id=uuid4(),
+                    activation_revision=activation.revision,
+                    target_policy_version=target_policy,
+                    agent_id=agent_id,
+                    position=1,
+                    state="running",
+                    attempt_id=attempt_id,
+                    actor="test",
+                    reason="release one scored v11 canary while retaining its v10 rank",
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.screener_policy_activation.invalidate()
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                attempt_id=attempt_id,
+                policy_version=target_policy,
+                passed=False,
+                outcome="retryable_infra",
+                reason_code="source-review-model-response-invalid",
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == AgentStatus.SCORED
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.status == AgentStatus.SCORED
+            assert agent.screening_policy_version == SCREENING_POLICY_VERSION
+            release = await session.scalar(
+                select(ScoredPolicyRescreenRelease).where(
+                    ScoredPolicyRescreenRelease.attempt_id == attempt_id
+                )
+            )
+            assert release is not None
+            assert release.state == "paused"
 
     async def test_infrastructure_failure_is_parked_not_rejected(
         self,

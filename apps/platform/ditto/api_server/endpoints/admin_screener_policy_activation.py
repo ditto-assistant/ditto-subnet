@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Annotated
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import and_, exists, func, or_, select
@@ -38,12 +38,16 @@ from sqlalchemy.orm import aliased
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener_policy_activation import (
+    ADVANCE_SCORED_RESCREEN_CONFIRMATION,
     CONFIRMATION,
     RESTORE_SCORED_CONFIRMATION,
+    AdvanceScoredPolicyRescreenRequest,
     RestoredScoredSubmission,
     RestoreScoredScreeningSnapshotRequest,
     RestoreScoredScreeningSnapshotResponse,
     ScheduleScreenerPolicyActivationRequest,
+    ScoredPolicyRescreenReleaseView,
+    ScoredPolicyRescreenView,
     ScreenerPolicyActivationRevision,
     ScreenerPolicyActivationView,
 )
@@ -56,17 +60,20 @@ from ditto.api_server.screener_policy_activation import (
 from ditto.db.models import (
     Agent,
     Score,
+    ScoredPolicyRescreenRelease,
     ScoredScreeningSnapshotRestoration,
     ScreeningAttempt,
 )
 from ditto.db.models import (
     ScreenerPolicyActivation as ActivationRow,
 )
+from ditto.db.queries.scores import list_eligible_ledger
 from ditto.db.queries.screener_policy_activation import (
     insert_screener_policy_activation,
     latest_screener_policy_activation,
     list_screener_policy_activations,
 )
+from ditto.db.queries.screening import prerequisite_screening_predicates
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
@@ -115,6 +122,117 @@ async def _latest_revision(session: AsyncSession) -> int:
     return latest.revision if latest is not None else 0
 
 
+def _release_view(
+    release: ScoredPolicyRescreenRelease,
+) -> ScoredPolicyRescreenReleaseView:
+    return ScoredPolicyRescreenReleaseView(
+        activation_revision=release.activation_revision,
+        target_policy_version=release.target_policy_version,
+        agent_id=release.agent_id,
+        position=release.position,
+        state=release.state,
+        attempt_id=release.attempt_id,
+    )
+
+
+async def _next_scored_rescreen_candidate(
+    session: AsyncSession,
+    *,
+    activation: ActivationRow,
+    terminal_agent_ids: set[UUID],
+) -> tuple[UUID, int] | None:
+    """Choose the next current-board row, never an arbitrary stale score.
+
+    The owner-reduced public ledger supplies the first five positions so one
+    miner cannot occupy the whole canary prefix.  The non-deduped ledger then
+    finishes every remaining scored submission in the same descending order.
+    This is called only from an operator checkpoint, never from the poll path.
+    """
+    board = await list_eligible_ledger(
+        session, include_fingerprints=False, include_details=False
+    )
+    all_scored = await list_eligible_ledger(
+        session,
+        include_fingerprints=False,
+        include_details=False,
+        dedupe_owners=False,
+    )
+    ordered_ids = list(
+        dict.fromkeys(
+            [row.agent_id for row in board] + [row.agent_id for row in all_scored]
+        )
+    )
+    if not ordered_ids:
+        return None
+    _missing_dataset, admitted = await prerequisite_screening_predicates(session)
+    admitted_ids = set(
+        await session.scalars(
+            select(Agent.agent_id).where(
+                Agent.agent_id.in_(ordered_ids),
+                Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
+                Agent.screening_policy_version < activation.target_policy_version,
+                admitted,
+            )
+        )
+    )
+    for position, agent_id in enumerate(ordered_ids, start=1):
+        if agent_id in admitted_ids and agent_id not in terminal_agent_ids:
+            return agent_id, position
+    return None
+
+
+async def _scored_rescreen_view(
+    session: AsyncSession,
+    *,
+    policy: EffectiveScreenerPolicy,
+) -> ScoredPolicyRescreenView:
+    if (
+        policy.governing_revision is None
+        or not policy.rescreen_scored
+        or not policy.rescreen_stale_agents
+    ):
+        return ScoredPolicyRescreenView(
+            activation_revision=None,
+            target_policy_version=None,
+            current=None,
+            next_agent_id=None,
+            next_position=None,
+        )
+    activation = await session.get(ActivationRow, policy.governing_revision)
+    if activation is None:
+        return ScoredPolicyRescreenView(
+            activation_revision=None,
+            target_policy_version=None,
+            current=None,
+            next_agent_id=None,
+            next_position=None,
+        )
+    releases = list(
+        await session.scalars(
+            select(ScoredPolicyRescreenRelease)
+            .where(
+                ScoredPolicyRescreenRelease.activation_revision == activation.revision
+            )
+            .order_by(ScoredPolicyRescreenRelease.position)
+        )
+    )
+    current = next((row for row in releases if row.state != "terminal"), None)
+    next_candidate = None
+    if current is None:
+        next_candidate = await _next_scored_rescreen_candidate(
+            session,
+            activation=activation,
+            terminal_agent_ids={row.agent_id for row in releases},
+        )
+    return ScoredPolicyRescreenView(
+        activation_revision=activation.revision,
+        target_policy_version=activation.target_policy_version,
+        current=_release_view(current) if current is not None else None,
+        next_agent_id=next_candidate[0] if next_candidate is not None else None,
+        next_position=next_candidate[1] if next_candidate is not None else None,
+    )
+
+
 @router.get("", response_model=ScreenerPolicyActivationView)
 async def get_activation(
     _admin: AdminDep, session: SessionDep
@@ -124,6 +242,125 @@ async def get_activation(
     latest = await latest_screener_policy_activation(session)
     history = list(await list_screener_policy_activations(session))
     return _view(policy, latest, history)
+
+
+@router.get("/scored-rescreen", response_model=ScoredPolicyRescreenView)
+async def get_scored_rescreen(
+    _admin: AdminDep, session: SessionDep
+) -> ScoredPolicyRescreenView:
+    """Read the one-at-a-time, score-preserving policy rollout checkpoint."""
+    return await _scored_rescreen_view(
+        session, policy=await resolve_screener_policy_activation(session)
+    )
+
+
+@router.post("/advance-scored-rescreen", response_model=ScoredPolicyRescreenView)
+async def advance_scored_rescreen(
+    payload: AdvanceScoredPolicyRescreenRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> ScoredPolicyRescreenView:
+    """Release exactly one current-board row after an explicit checkpoint.
+
+    The policy schedule establishes the rule.  It does *not* bulk-requeue
+    every existing score: a false V11 clear must be observable before the next
+    V10 score is touched.  A non-verdict leaves the released row paused; the
+    caller must explicitly choose to retry it rather than silently advancing.
+    """
+    if payload.confirmation != ADVANCE_SCORED_RESCREEN_CONFIRMATION:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"confirmation must be exactly {ADVANCE_SCORED_RESCREEN_CONFIRMATION}"
+            ),
+        )
+    actor = (payload.actor or "backroom").strip()
+    async with session.begin():
+        policy = await resolve_screener_policy_activation(session)
+        if (
+            policy.governing_revision is None
+            or not policy.rescreen_scored
+            or not policy.rescreen_stale_agents
+            or policy.governing_revision != payload.expected_activation_revision
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="no due scored policy rescreen matches the expected activation",
+            )
+        activation = await session.get(
+            ActivationRow, policy.governing_revision, with_for_update=True
+        )
+        assert activation is not None
+        releases = list(
+            await session.scalars(
+                select(ScoredPolicyRescreenRelease)
+                .where(
+                    ScoredPolicyRescreenRelease.activation_revision
+                    == activation.revision
+                )
+                .order_by(ScoredPolicyRescreenRelease.position)
+                .with_for_update()
+            )
+        )
+        current = next((row for row in releases if row.state != "terminal"), None)
+        if current is not None:
+            if current.agent_id != payload.expected_agent_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "scored policy rescreen checkpoint changed; refresh before "
+                        f"advancing (current {current.agent_id})"
+                    ),
+                )
+            if current.state == "paused" and payload.retry_paused:
+                current.state = "pending"
+                current.attempt_id = None
+                current.actor = actor
+                current.reason = payload.reason.strip()
+            else:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "current scored policy rescreen is not terminal; use "
+                        "retry_paused only for a paused non-verdict"
+                    ),
+                )
+        else:
+            next_candidate = await _next_scored_rescreen_candidate(
+                session,
+                activation=activation,
+                terminal_agent_ids={row.agent_id for row in releases},
+            )
+            if next_candidate is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="no eligible stale scored submission remains to rescreen",
+                )
+            agent_id, position = next_candidate
+            if agent_id != payload.expected_agent_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "scored policy rescreen order changed; refresh before "
+                        f"advancing (next {agent_id})"
+                    ),
+                )
+            session.add(
+                ScoredPolicyRescreenRelease(
+                    release_id=uuid4(),
+                    activation_revision=activation.revision,
+                    target_policy_version=activation.target_policy_version,
+                    agent_id=agent_id,
+                    position=position,
+                    state="pending",
+                    attempt_id=None,
+                    actor=actor,
+                    reason=payload.reason.strip(),
+                )
+            )
+    return await _scored_rescreen_view(
+        session, policy=await resolve_screener_policy_activation(session)
+    )
 
 
 @router.post("", response_model=ScreenerPolicyActivationView)

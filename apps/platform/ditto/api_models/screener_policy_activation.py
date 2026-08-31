@@ -23,11 +23,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 CONFIRMATION = "SCHEDULE SCREENER POLICY ACTIVATION"
 RESTORE_SCORED_CONFIRMATION = "RESTORE SCORED SCREENING SNAPSHOT"
+ADVANCE_SCORED_RESCREEN_CONFIRMATION = "ADVANCE SCORED POLICY RESCREEN"
 
 ActivationState = Literal["pending", "due"]
 
@@ -79,6 +81,47 @@ class ScreenerPolicyActivationView(BaseModel):
     builtin_policy_version: int
     latest: ScreenerPolicyActivationRevision | None
     revisions: list[ScreenerPolicyActivationRevision]
+
+
+ScoredRescreenState = Literal["pending", "running", "paused", "terminal"]
+
+
+class ScoredPolicyRescreenReleaseView(BaseModel):
+    """The one scored submission currently released under a policy rollout."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    activation_revision: int = Field(ge=1)
+    target_policy_version: int = Field(ge=1)
+    agent_id: UUID
+    position: int = Field(ge=1)
+    state: ScoredRescreenState
+    attempt_id: UUID | None
+
+
+class ScoredPolicyRescreenView(BaseModel):
+    """Read-only rollout checkpoint for the score-preserving rescreen lane."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    activation_revision: int | None
+    target_policy_version: int | None
+    current: ScoredPolicyRescreenReleaseView | None
+    next_agent_id: UUID | None
+    next_position: int | None
+
+
+class AdvanceScoredPolicyRescreenRequest(BaseModel):
+    """Release exactly one top-down scored policy rescreen, or retry its pause."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    expected_activation_revision: int = Field(ge=1)
+    expected_agent_id: UUID
+    retry_paused: bool = False
+    reason: str = Field(min_length=8)
+    confirmation: str
+    actor: str | None = Field(default=None, max_length=120)
 
 
 class RestoreScoredScreeningSnapshotRequest(BaseModel):

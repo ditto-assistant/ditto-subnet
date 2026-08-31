@@ -67,6 +67,7 @@ describe('Backroom MCP tools', () => {
 
     expect(response.tools.map((tool) => tool.name).sort()).toEqual(
       [
+        'advance_scored_policy_rescreen',
         'execute_screening_quarantine_batch',
         'expand_benchmark_rollout_cohort',
         'get_backroom_access',
@@ -140,6 +141,7 @@ describe('Backroom MCP tools', () => {
         'get_leaderboard',
         'get_miner_owner_footprint',
         'get_score_history',
+        'get_scored_policy_rescreen',
         'get_screened_image_rebuild',
         'get_validator_score_replacement',
         'list_v9_contract_retests',
@@ -210,19 +212,20 @@ describe('Backroom MCP tools', () => {
     // shadow coding-evaluation ledger read, the exact
     // node/resource/image/controller bootstrap-grant schema, and the signed
     // catalog register/retire/read tools, plus the two complete screener
-    // provider/node capacity write schemas. Keep modest headroom for schema
+    // provider/node capacity write schemas plus the two one-at-a-time scored
+    // policy-rescreen checkpoint controls. Keep modest headroom for schema
     // evolution; tighten the description budgets, not this whole-payload
     // backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(111_000)
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(114_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
-    // in get_backroom_tool_help, not here. 22_800 admits the screener
+    // in get_backroom_tool_help, not here. 23_500 admits the screener
     // policy-activation pair, four short shadow qualification catalog lines,
     // the coding-evaluation ledger read, the bootstrap-grant line, and three
     // short catalog-release lines; operational tutorials stay in
     // get_backroom_tool_help.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      22_800,
+      23_500,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -3163,6 +3166,20 @@ describe('Backroom MCP tools', () => {
       },
     ],
   }
+  const scoredPolicyRescreenView = {
+    activation_revision: 3,
+    target_policy_version: 11,
+    current: {
+      activation_revision: 3,
+      target_policy_version: 11,
+      agent_id: '22222222-2222-4222-8222-222222222222',
+      position: 1,
+      state: 'paused',
+      attempt_id: '33333333-3333-4333-8333-333333333333',
+    },
+    next_agent_id: null,
+    next_position: null,
+  }
 
   it('reads the future screening-policy activation', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
@@ -3182,6 +3199,67 @@ describe('Backroom MCP tools', () => {
       'https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation',
       expect.objectContaining({ method: 'GET' }),
     )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the scored-policy checkpoint without releasing any score', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(scoredPolicyRescreenView))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_scored_policy_rescreen',
+      arguments: {},
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toEqual(scoredPolicyRescreenView)
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation/scored-rescreen',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('retries only the exact paused scored-policy checkpoint', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const resumed = {
+      ...scoredPolicyRescreenView,
+      current: { ...scoredPolicyRescreenView.current, state: 'pending', attempt_id: null },
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(resumed))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'advance_scored_policy_rescreen',
+      arguments: {
+        expectedActivationRevision: 3,
+        expectedAgentId: '22222222-2222-4222-8222-222222222222',
+        retryPaused: true,
+        reason: 'retry the reviewed V11 canary after its infrastructure pause',
+        confirmation: 'ADVANCE SCORED POLICY RESCREEN',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toEqual(resumed)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation/advance-scored-rescreen',
+    )
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({
+      expected_activation_revision: 3,
+      expected_agent_id: '22222222-2222-4222-8222-222222222222',
+      retry_paused: true,
+      reason: 'retry the reviewed V11 canary after its infrastructure pause',
+      actor: 'peyton@omniaura.ai',
+      confirmation: 'ADVANCE SCORED POLICY RESCREEN',
+    })
 
     await client.close()
     await server.close()

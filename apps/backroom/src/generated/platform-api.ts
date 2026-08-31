@@ -1312,6 +1312,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screener-policy-activation/advance-scored-rescreen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Advance Scored Rescreen
+         * @description Release exactly one current-board row after an explicit checkpoint.
+         *
+         *     The policy schedule establishes the rule.  It does *not* bulk-requeue
+         *     every existing score: a false V11 clear must be observable before the next
+         *     V10 score is touched.  A non-verdict leaves the released row paused; the
+         *     caller must explicitly choose to retry it rather than silently advancing.
+         */
+        post: operations["advance_scored_rescreen_api_v1_admin_screener_policy_activation_advance_scored_rescreen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-policy-activation/restore-scored-snapshot": {
         parameters: {
             query?: never;
@@ -1329,6 +1354,26 @@ export interface paths {
          *     history. Nothing is requeued and no historical attempt is changed.
          */
         post: operations["restore_scored_snapshot_api_v1_admin_screener_policy_activation_restore_scored_snapshot_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screener-policy-activation/scored-rescreen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Scored Rescreen
+         * @description Read the one-at-a-time, score-preserving policy rollout checkpoint.
+         */
+        get: operations["get_scored_rescreen_api_v1_admin_screener_policy_activation_scored_rescreen_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9723,6 +9768,30 @@ export interface components {
             effective: components["schemas"]["EffectiveValidatorSlotSettings"];
             /** History */
             history: components["schemas"]["ValidatorSlotSettingsRevision"][];
+        };
+        /**
+         * AdvanceScoredPolicyRescreenRequest
+         * @description Release exactly one top-down scored policy rescreen, or retry its pause.
+         */
+        AdvanceScoredPolicyRescreenRequest: {
+            /** Actor */
+            actor?: string | null;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Activation Revision */
+            expected_activation_revision: number;
+            /**
+             * Expected Agent Id
+             * Format: uuid
+             */
+            expected_agent_id: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Retry Paused
+             * @default false
+             */
+            retry_paused: boolean;
         };
         /** AgentCodingCertificationStatus */
         AgentCodingCertificationStatus: {
@@ -20609,6 +20678,45 @@ export interface components {
             tool_mean: number;
         };
         /**
+         * ScoredPolicyRescreenReleaseView
+         * @description The one scored submission currently released under a policy rollout.
+         */
+        ScoredPolicyRescreenReleaseView: {
+            /** Activation Revision */
+            activation_revision: number;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Attempt Id */
+            attempt_id: string | null;
+            /** Position */
+            position: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "running" | "paused" | "terminal";
+            /** Target Policy Version */
+            target_policy_version: number;
+        };
+        /**
+         * ScoredPolicyRescreenView
+         * @description Read-only rollout checkpoint for the score-preserving rescreen lane.
+         */
+        ScoredPolicyRescreenView: {
+            /** Activation Revision */
+            activation_revision: number | null;
+            current: components["schemas"]["ScoredPolicyRescreenReleaseView"] | null;
+            /** Next Agent Id */
+            next_agent_id: string | null;
+            /** Next Position */
+            next_position: number | null;
+            /** Target Policy Version */
+            target_policy_version: number | null;
+        };
+        /**
          * ScorerBenchmarkCapability
          * @description Identity-bound benchmark support observed from the scorer sidecar.
          */
@@ -27301,6 +27409,41 @@ export interface operations {
             };
         };
     };
+    advance_scored_rescreen_api_v1_admin_screener_policy_activation_advance_scored_rescreen_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdvanceScoredPolicyRescreenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoredPolicyRescreenView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     restore_scored_snapshot_api_v1_admin_screener_policy_activation_restore_scored_snapshot_post: {
         parameters: {
             query?: never;
@@ -27323,6 +27466,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RestoreScoredScreeningSnapshotResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_scored_rescreen_api_v1_admin_screener_policy_activation_scored_rescreen_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoredPolicyRescreenView"];
                 };
             };
             /** @description Validation Error */
