@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.176.2 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Authorize persistent worker heartbeats
+  ([`291f6fe`](https://github.com/ditto-assistant/ditto-subnet/commit/291f6fed4a07e92337566af5a6741add70b04ab2))
+
+
 ## v0.176.1 (2026-08-31)
 
 ### Bug Fixes
