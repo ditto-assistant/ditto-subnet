@@ -261,10 +261,17 @@ async def test_certified_receipt_requires_matching_settlement() -> None:
     grant = _grant(policy, settlement)
     request = _request(grant, settlement, policy)
     receipt = _certified_receipt(grant, request, settlement, policy)
-    await require_coding_certification_settlement(
+    binding = await require_coding_certification_settlement(
         _Session(grant, [request]),  # type: ignore[arg-type]
         lease_id=_LEASE,
         receipt=receipt,
+    )
+    assert receipt.model_evidence is not None
+    assert binding is not None
+    assert binding.generation == grant.generation
+    assert binding.inference_grant_sha256 == grant.inference_grant_sha256
+    assert binding.provider_receipt_set_sha256 == (
+        receipt.model_evidence.provider_receipt_set_sha256
     )
 
 
@@ -283,6 +290,20 @@ async def test_certified_receipt_rejects_missing_and_unsettled_ledger() -> None:
     with pytest.raises(CodingCertificationSettlementError, match="unsettled"):
         await require_coding_certification_settlement(
             _Session(grant, [started]),  # type: ignore[arg-type]
+            lease_id=_LEASE,
+            receipt=receipt,
+        )
+
+
+async def test_certified_receipt_rejects_active_grant_after_settlement() -> None:
+    policy, settlement = _policy_and_settlement()
+    grant = _grant(policy, settlement)
+    request = _request(grant, settlement, policy)
+    receipt = _certified_receipt(grant, request, settlement, policy)
+    grant.status = "active"
+    with pytest.raises(CodingCertificationSettlementError, match="missing"):
+        await require_coding_certification_settlement(
+            _Session(grant, [request]),  # type: ignore[arg-type]
             lease_id=_LEASE,
             receipt=receipt,
         )

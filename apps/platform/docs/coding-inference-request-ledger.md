@@ -52,9 +52,11 @@ first and, only on a missing ticket row, a claimed-lease certification grant.
 It reserves and settles on the matching ledger, and shared concurrency plus
 settlement-identity uniqueness count both started ledgers. Platform accepts a
 `certified` canary receipt only when that lease's request ledger matches the
-receipt's invoked model evidence. Unused-inference failures still persist
-without a settlement. No deployment config enables the route. Coding task
-scheduling, scoring and weight activation remain absent.
+receipt's invoked model evidence and the grant is terminal. It records the
+verified generation, grant digest, and settlement-set digest immutably on the
+certification row. Unused-inference failures still persist without a
+settlement. No deployment config enables the route. Coding task scheduling,
+scoring and weight activation remain absent.
 
 Validation:
 

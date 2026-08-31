@@ -11719,7 +11719,7 @@ export interface components {
              * Stale Reason
              * @enum {string}
              */
-            stale_reason: "active" | "expired" | "not_certified" | "artifact_changed" | "screened_image_changed";
+            stale_reason: "active" | "expired" | "not_certified" | "settlement_unbound" | "artifact_changed" | "screened_image_changed";
             status: components["schemas"]["CodingCertificationStatus"];
             /**
              * Ticket Deadline

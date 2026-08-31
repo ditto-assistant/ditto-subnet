@@ -31,6 +31,7 @@ from ditto.db.queries.coding_certifications import (
     CodingCertificationSettlementError,
     coding_certification_lease_accepts_receipt,
     coding_certification_matches,
+    coding_certification_settlement_bound,
     get_coding_certification_by_lease,
     get_coding_certification_identity,
     insert_coding_certification,
@@ -139,6 +140,14 @@ async def submit_coding_certification(
                     status_code=409,
                     detail="coding certification identity names different evidence",
                 )
+            if (
+                receipt.status is CodingCertificationStatus.CERTIFIED
+                and not coding_certification_settlement_bound(existing)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="certified receipt lacks durable settlement binding",
+                )
             return SubmitCodingCertificationResponse(
                 agent_id=agent_id,
                 certification_id=receipt.certification_id,
@@ -147,6 +156,7 @@ async def submit_coding_certification(
                 idempotent=True,
                 active=(
                     receipt.status is CodingCertificationStatus.CERTIFIED
+                    and coding_certification_settlement_bound(existing)
                     and _aware(existing.expires_at) > now
                 ),
             )
@@ -230,6 +240,7 @@ async def submit_coding_certification(
         idempotent=result.idempotent,
         active=(
             receipt.status is CodingCertificationStatus.CERTIFIED
+            and coding_certification_settlement_bound(result.row)
             and _aware(result.row.expires_at) > now
         ),
     )

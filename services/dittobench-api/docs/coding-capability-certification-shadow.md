@@ -107,6 +107,9 @@ evidence; unused inference still yields a persistable failed receipt. Public
 canary dispatches use the lease UUID as dispatch `ticket_id` and settle on
 `coding_certification_inference_requests`, not the private-ticket ledger.
 Platform persists `certified` only when that ledger matches the receipt.
+The persisted receipt also carries the verified terminal grant generation,
+inference-grant digest, and settlement-set digest; legacy unbound receipts are
+evidence history, never private-task authority.
 The host constructs the adapter only when `DITTOBENCH_CODING_CANARY_ENABLED` is
 set and the certification pack root is present. Flags stay false until a
 separately reviewed activation.

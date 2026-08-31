@@ -182,6 +182,7 @@ async def _active_certification(
             CodingCapabilityCertification.bench_version == bench_version,
             CodingCapabilityCertification.coding_contract_version == 1,
             CodingCapabilityCertification.status == "certified",
+            CodingCapabilityCertification.settlement_generation.is_not(None),
             CodingCapabilityCertification.expires_at > now,
         )
         .order_by(

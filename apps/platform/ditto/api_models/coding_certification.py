@@ -308,6 +308,7 @@ class CodingCertificationRecord(BaseModel):
         "active",
         "expired",
         "not_certified",
+        "settlement_unbound",
         "artifact_changed",
         "screened_image_changed",
     ]

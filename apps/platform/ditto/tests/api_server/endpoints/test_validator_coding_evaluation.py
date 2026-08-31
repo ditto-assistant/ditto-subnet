@@ -322,6 +322,9 @@ async def _seed(
                 screened_image_sha256="cd" * 32,
                 validator_hotkey=_VALIDATOR,
                 bench_version=_BENCH,
+                settlement_generation=1,
+                settlement_inference_grant_sha256="99" * 32,
+                settlement_provider_receipt_set_sha256="aa" * 32,
                 ticket_deadline=deadline,
                 coding_contract_version=1,
                 certification_id="cert-endpoint-shadow-001",
@@ -434,6 +437,114 @@ async def _record_core_qualification_exit(
             )
             assert observed is not None and observed.row.complete_wave
             assert observed.row.qualified is (wave == 1)
+
+
+async def _remove_settlement_binding(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    agent_id: UUID,
+) -> None:
+    """Model the pre-binding legacy row attached to an already-issued ticket."""
+
+    async with maker() as session, session.begin():
+        certification = await session.scalar(
+            select(CodingCapabilityCertification).where(
+                CodingCapabilityCertification.agent_id == agent_id,
+                CodingCapabilityCertification.validator_hotkey == _VALIDATOR,
+            )
+        )
+        assert certification is not None
+        certification.settlement_generation = None
+        certification.settlement_inference_grant_sha256 = None
+        certification.settlement_provider_receipt_set_sha256 = None
+
+
+async def test_unbound_legacy_certification_cannot_write_private_ticket_steps(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    _install(app, session_maker, monkeypatch)
+    agent_id, run, ticket, deadline = await _seed(session_maker)
+    await _remove_settlement_binding(session_maker, agent_id=agent_id)
+
+    authoring = _authoring_evidence()
+    authoring_digest = coding_authoring_evidence_digest(authoring)
+    transcript_key = f"sha256/{authoring.authoring_transcript_sha256}"
+    frozen_key = f"sha256/{authoring.frozen_patch_sha256}"
+    freeze_message = coding_authoring_freeze_signing_message(
+        validator_hotkey=_VALIDATOR,
+        agent_id=agent_id,
+        bench_version=_BENCH,
+        run_row_id=run.run_row_id,
+        ticket_id=ticket.ticket_id,
+        ticket_deadline=deadline,
+        coding_run_id=run.coding_run_id,
+        agent_artifact_sha256="ab" * 32,
+        screened_image_sha256="cd" * 32,
+        run_manifest_sha256=run.run_manifest_sha256,
+        task_set_manifest_sha256=run.task_set_manifest_sha256,
+        authoring_evidence_sha256=authoring_digest,
+        authoring_transcript_object_key=transcript_key,
+        authoring_transcript_bytes=_TRANSCRIPT_BYTES,
+        authoring_event_count=_AUTHORING_EVENTS,
+        frozen_submission_object_key=frozen_key,
+    )
+    freeze = await client.post(
+        "/api/v1/validator/coding-shadow/authoring-freeze",
+        json={
+            "validator_hotkey": _VALIDATOR,
+            "agent_id": str(agent_id),
+            "bench_version": _BENCH,
+            "run_row_id": str(run.run_row_id),
+            "ticket_id": str(ticket.ticket_id),
+            "ticket_deadline": deadline.isoformat(),
+            "coding_run_id": run.coding_run_id,
+            "agent_artifact_sha256": "ab" * 32,
+            "screened_image_sha256": "cd" * 32,
+            "run_manifest_sha256": run.run_manifest_sha256,
+            "task_set_manifest_sha256": run.task_set_manifest_sha256,
+            "authoring_evidence_sha256": authoring_digest,
+            "evidence": authoring.model_dump(mode="json"),
+            "authoring_transcript_object_key": transcript_key,
+            "authoring_transcript_bytes": _TRANSCRIPT_BYTES,
+            "authoring_event_count": _AUTHORING_EVENTS,
+            "frozen_submission_object_key": frozen_key,
+            "signature": _KEYPAIR.sign(freeze_message).hex(),
+        },
+    )
+    assert freeze.status_code == 409, freeze.text
+
+    evidence = _evidence(ticket.ticket_id)
+    result_digest = coding_run_evidence_digest(evidence)
+    result_message = coding_shadow_result_signing_message(
+        validator_hotkey=_VALIDATOR,
+        agent_id=agent_id,
+        run_row_id=run.run_row_id,
+        ticket_id=ticket.ticket_id,
+        bench_version=_BENCH,
+        ticket_deadline=deadline,
+        agent_artifact_sha256="ab" * 32,
+        screened_image_sha256="cd" * 32,
+        run_evidence_sha256=result_digest,
+    )
+    result = await client.post(
+        f"/api/v1/validator/agent/{agent_id}/coding-shadow-result",
+        json={
+            "validator_hotkey": _VALIDATOR,
+            "bench_version": _BENCH,
+            "run_row_id": str(run.run_row_id),
+            "ticket_id": str(ticket.ticket_id),
+            "ticket_deadline": deadline.isoformat(),
+            "agent_artifact_sha256": "ab" * 32,
+            "screened_image_sha256": "cd" * 32,
+            "run_evidence_sha256": result_digest,
+            "evidence": evidence.model_dump(mode="json", by_alias=True),
+            "signature": _KEYPAIR.sign(result_message).hex(),
+        },
+    )
+    assert result.status_code == 409, result.text
 
 
 async def test_signed_authoring_freeze_is_idempotent_and_operator_visible(
@@ -738,6 +849,9 @@ async def test_signed_shadow_result_is_idempotent_visible_and_score_separate(
                     screened_image_sha256="cd" * 32,
                     validator_hotkey=validator,
                     bench_version=_BENCH,
+                    settlement_generation=1,
+                    settlement_inference_grant_sha256="99" * 32,
+                    settlement_provider_receipt_set_sha256="aa" * 32,
                     ticket_deadline=deadline,
                     coding_contract_version=1,
                     certification_id=f"cert-endpoint-shadow-00{index}",

@@ -33,6 +33,7 @@ from ditto.db.queries.coding_catalog import (
 )
 from ditto.db.queries.coding_certifications import (
     active_validator_coding_certification,
+    coding_certification_stale_reason,
 )
 from ditto.db.queries.coding_inference_grants import revoke_ticket_coding_inference
 from ditto.db.queries.core_qualification import (
@@ -259,6 +260,12 @@ async def issue_coding_shadow_ticket(
             or existing_certification.coding_contract_version
             != run.coding_contract_version
             or _aware(existing_certification.expires_at) <= deadline
+            or coding_certification_stale_reason(
+                existing_certification,
+                agent,
+                now=issued_at,
+            )
+            != "active"
         ):
             raise CodingShadowConflictError(
                 "coding ticket identity already names different authority"

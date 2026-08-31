@@ -943,7 +943,8 @@ class CodingCapabilityCertification(Base):
 
     Rows are append-only and never participate in score aggregation or weights.
     Active certification is derived at read time from the exact agent/source
-    artifact, screened-image digest, ``certified`` status, and expiry.
+    artifact, screened-image digest, ``certified`` status, expiry, and a
+    settlement binding written only after terminal canary-ledger verification.
     """
 
     __tablename__ = "coding_capability_certifications"
@@ -957,6 +958,16 @@ class CodingCapabilityCertification(Base):
     validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
     bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
     lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    # Set only after Platform locks and verifies the claimed lease's terminal
+    # canary settlement ledger in the same transaction as this immutable row.
+    # Legacy receipts intentionally remain NULL and are not active authority.
+    settlement_generation: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    settlement_inference_grant_sha256: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    settlement_provider_receipt_set_sha256: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
     ticket_deadline: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
@@ -1067,6 +1078,15 @@ class CodingCapabilityCertification(Base):
             "status <> 'certified' OR (transcript_object_key IS NOT NULL "
             "AND frozen_submission_object_key IS NOT NULL)",
             name="coding_certifications_certified_artifacts",
+        ),
+        CheckConstraint(
+            "((settlement_generation IS NULL "
+            "AND settlement_inference_grant_sha256 IS NULL "
+            "AND settlement_provider_receipt_set_sha256 IS NULL) "
+            "OR (settlement_generation BETWEEN 1 AND 2147483647 "
+            "AND settlement_inference_grant_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND settlement_provider_receipt_set_sha256 ~ '^[0-9a-f]{64}$'))",
+            name="coding_certifications_settlement_binding_check",
         ),
         Index(
             "coding_certifications_agent_created_idx",

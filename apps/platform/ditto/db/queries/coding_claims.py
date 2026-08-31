@@ -120,6 +120,7 @@ async def claim_next_coding_ticket(
             Agent.sha256 == CodingShadowRun.artifact_sha256,
             Agent.screened_image_sha256 == CodingShadowRun.screened_image_sha256,
             CodingCapabilityCertification.status == "certified",
+            CodingCapabilityCertification.settlement_generation.is_not(None),
             CodingCapabilityCertification.validator_hotkey == validator_hotkey,
             CodingCapabilityCertification.agent_id == CodingShadowRun.agent_id,
             CodingCapabilityCertification.artifact_sha256
@@ -252,6 +253,7 @@ async def _claim_result(
         or agent.sha256 != run.artifact_sha256
         or agent.screened_image_sha256 != run.screened_image_sha256
         or certification.status != "certified"
+        or certification.settlement_generation is None
         or certification.validator_hotkey != ticket.validator_hotkey
         or certification.agent_id != run.agent_id
         or certification.artifact_sha256 != run.artifact_sha256
