@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.13 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Persist signed source review notes
+  ([#1405](https://github.com/ditto-assistant/ditto-subnet/pull/1405),
+  [`c695c0c`](https://github.com/ditto-assistant/ditto-subnet/commit/c695c0c5ae8bf7081c93886d339913bda85de99f))
+
+
 ## v0.177.12 (2026-08-31)
 
 ### Bug Fixes
