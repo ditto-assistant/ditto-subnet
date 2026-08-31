@@ -87,6 +87,8 @@ def test_signed_updater_installs_the_split_debian_docker_cli() -> None:
 
     assert "Install the Docker CLI split from docker.io on Debian 13" in tasks
     assert "    name: docker-cli" in tasks
+    assert "Install the Docker Buildx plugin split from docker.io on Debian 13" in tasks
+    assert "    name: docker-buildx" in tasks
     assert "when: ansible_facts['distribution_major_version'] == '13'" in tasks
 
 
