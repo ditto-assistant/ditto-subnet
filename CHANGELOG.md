@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.15 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Expose persistent worker capacity
+  ([#1407](https://github.com/ditto-assistant/ditto-subnet/pull/1407),
+  [`8600fb9`](https://github.com/ditto-assistant/ditto-subnet/commit/8600fb9b61936ff77842c04331bd9cd72b7dcf84))
+
+
 ## v0.177.14 (2026-08-31)
 
 ### Bug Fixes
