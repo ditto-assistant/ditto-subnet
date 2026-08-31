@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.179.7 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Bound L2 review model turns
+  ([#1433](https://github.com/ditto-assistant/ditto-subnet/pull/1433),
+  [`9e3a86a`](https://github.com/ditto-assistant/ditto-subnet/commit/9e3a86a5623646da53ab83b8461bb74224ddaf03))
+
+
 ## v0.179.6 (2026-08-31)
 
 ### Bug Fixes
