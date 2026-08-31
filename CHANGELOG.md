@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.177.9 (2026-08-31)
+
+### Bug Fixes
+
+- **screener**: Honor the L4 completion budget
+  ([#1401](https://github.com/ditto-assistant/ditto-subnet/pull/1401),
+  [`7378cd6`](https://github.com/ditto-assistant/ditto-subnet/commit/7378cd680334a9da02cc946af74c1790697ea5df))
+
+
 ## v0.177.8 (2026-08-31)
 
 ### Bug Fixes
