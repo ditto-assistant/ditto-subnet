@@ -196,6 +196,7 @@ async def test_deadline_bounds_a_completion_and_its_retry(tmp_path: Path) -> Non
 
     assert result.decision == "clear"
     assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.escalation_code == "adjudicator-failed"
     assert requests == 1
 
 

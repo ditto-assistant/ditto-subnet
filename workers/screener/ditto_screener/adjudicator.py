@@ -323,6 +323,10 @@ def _settle_refusal(
         model=model,
         prompt_revision=ADJUDICATOR_PROMPT_REVISION,
         notes_considered=notes,
+        # This is a terminal clear, not an internal escalation, but retaining
+        # the refusal code makes the signed private review evidence honest
+        # about why the no-proven-breach rule settled the case.
+        escalation_code=refusal_code,
     )
 
 
