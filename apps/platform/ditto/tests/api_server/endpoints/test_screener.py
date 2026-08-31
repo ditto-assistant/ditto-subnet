@@ -3366,6 +3366,13 @@ class TestQueue:
             created_at=now - timedelta(minutes=30),
             screening_policy_version=SCREENING_POLICY_VERSION - 1,
         )
+        stale_rejected = await _seed_agent(
+            session_maker,
+            status=AgentStatus.REJECTED,
+            name="stale-rejected",
+            created_at=now - timedelta(minutes=15),
+            screening_policy_version=SCREENING_POLICY_VERSION - 1,
+        )
         async with session_maker() as session, session.begin():
             session.add(
                 BenchmarkRollout(
@@ -3386,6 +3393,7 @@ class TestQueue:
         listed = {UUID(item["agent_id"]) for item in response.json()["items"]}
         assert stale_historical not in listed
         assert stale_current_era in listed
+        assert stale_rejected not in listed
 
     async def test_lists_only_uploaded_oldest_first(
         self,

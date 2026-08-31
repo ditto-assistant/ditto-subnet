@@ -6828,7 +6828,7 @@ class TestPublicActivity:
         }
         assert by_version == {_ERA: era_sha, _NEXT_ERA: next_sha}
 
-    async def test_stale_rejection_projects_as_waiting_for_rescreen(
+    async def test_stale_rejection_remains_terminal_without_operator_rescreen(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -6844,8 +6844,8 @@ class TestPublicActivity:
         _install_db(app, session_maker)
 
         entry = (await client.get("/api/v1/public/activity")).json()["entries"][0]
-        assert entry["status"] == "waiting_screening"
-        assert entry["screening_reason"] is None
+        assert entry["status"] == "rejected"
+        assert entry["screening_reason"] == "Container failed the health check"
 
     async def test_policy_bump_projects_unadmitted_stale_agent_as_not_queued(
         self,

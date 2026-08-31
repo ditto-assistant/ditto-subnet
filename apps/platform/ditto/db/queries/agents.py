@@ -417,13 +417,13 @@ async def query_public_activity_page(
         if active_assignment_agent_ids
         else false()
     )
-    # A stale policy version only puts an agent back in the screening queue if
-    # it is admitted to the active benchmark era; the claim path applies the
-    # same boundary. Non-admitted historical agents fall through to
-    # ``not_queued`` instead of inflating the waiting_screening backlog the
-    # capacity controller scales on.
+    # A stale policy version only puts an active evaluation back in the
+    # screening queue if it is admitted to the active benchmark era. Terminal
+    # rejections stay terminal until an operator requests an exact rescreen;
+    # a policy bump must never silently consume another review or re-open the
+    # submission on the public board.
     needs_rescreen = (
-        Agent.status.in_((AgentStatus.EVALUATING, AgentStatus.REJECTED))
+        (Agent.status == AgentStatus.EVALUATING)
         & (Agent.screening_policy_version < effective_screening_policy_version())
         & admitted
     )

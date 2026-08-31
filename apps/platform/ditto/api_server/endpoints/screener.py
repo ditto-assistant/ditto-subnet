@@ -4050,12 +4050,12 @@ async def queue(
     missing_dataset, prerequisite_admitted = await prerequisite_screening_predicates(
         session
     )
-    # A due activation re-queues everything screened under a stale policy on
-    # the same criteria: evaluating/rejected rows always rescreen (the
-    # ``< required_policy`` arm above), and scored/live rows join them only
-    # when the governing activation opted them in, so a routine version bump
-    # cannot silently pull champions off the ledger without an operator
-    # decision recorded on the schedule row.
+    # A due activation re-queues only incomplete evaluation rows under a stale
+    # policy.  A terminal rejection remains final until an operator uses the
+    # exact rejected-submission rescreen control: a policy bump is not evidence
+    # that a resolved quarantine or deterministic policy finding became valid.
+    # Scored/live rows join only when the governing activation opted them in, so
+    # a routine version bump cannot silently pull champions off the ledger.
     stale_scored_rescreen = (
         screener_policy.rescreen_stale_agents and screener_policy.rescreen_scored
     )
@@ -4067,12 +4067,7 @@ async def queue(
                     Agent.status == AgentStatus.UPLOADED,
                     Agent.status == AgentStatus.SCREENING_FAILED,
                     (
-                        Agent.status.in_(
-                            (
-                                AgentStatus.EVALUATING,
-                                AgentStatus.REJECTED,
-                            )
-                        )
+                        (Agent.status == AgentStatus.EVALUATING)
                         & (Agent.screening_policy_version < required_policy)
                         & prerequisite_admitted
                     ),
