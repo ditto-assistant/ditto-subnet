@@ -160,6 +160,11 @@ function PipelineCard(props: {
     const active = screener();
     return active ? screenerStageLabel(active.screening_progress?.stage) : "";
   };
+  // Source review has deliberately serialized capacity. Make that policy
+  // explicit on the live submission rather than leaving the reader to infer
+  // it from a single pulsing step in the admission track.
+  const serialReview = () =>
+    /^source_review_\d+$/.test(screener()?.screening_progress?.stage ?? "");
   const admissionLabel = () => {
     if (props.column !== "admission") return "";
     if (entry().status === "waiting_screening") return "Waiting for admission";
@@ -220,6 +225,15 @@ function PipelineCard(props: {
             wall-clock; the ladder opens that segment into the four stages
             the screener actually runs. */}
         <ReviewStageLadder stage={screener()?.screening_progress?.stage ?? null} />
+        <Show when={serialReview()}>
+          <span
+            class="pipeline-serial-review"
+            role="status"
+            title="Source integrity reviews are deliberately processed one submission at a time."
+          >
+            Manual review · one at a time
+          </span>
+        </Show>
       </Show>
       <Show when={isUpNext() || queueGate() || rolloutPosition() || rescore()?.isQualification}>
         <span class="pipeline-item-badges">
@@ -371,6 +385,18 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
             if (active + queued <= 0) return "";
             return active + " in progress · " + queued + " queued";
           };
+          // The count and the item window are reconciled independently. Keep
+          // active admission work visible if a delayed snapshot has the count
+          // before its submission record; a blank lane would falsely read as
+          // no work. Once the record arrives this notice is replaced by its
+          // normal card (and, for source review, the serial-review badge).
+          const unlistedAdmissionWork = () => {
+            if (column().def.status !== "admission" || props.unavailable || props.loading) {
+              return 0;
+            }
+            const listed = items().filter((item) => item.entry.status === "screening").length;
+            return Math.max(0, Number(props.statusCounts.screening || 0) - listed);
+          };
           return (
             <section
               class="pipeline-column"
@@ -420,7 +446,18 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
                   <Show when={!props.loading} fallback={<div class="pipeline-empty">Loading…</div>}>
                     <Show
                       when={items().length}
-                      fallback={<div class="pipeline-empty">{column().def.empty}</div>}
+                      fallback={
+                        <Show
+                          when={unlistedAdmissionWork()}
+                          fallback={<div class="pipeline-empty">{column().def.empty}</div>}
+                        >
+                          <div class="pipeline-unlisted-admission" role="status">
+                            {unlistedAdmissionWork()} active admission
+                            {unlistedAdmissionWork() === 1 ? " is" : "s are"} in progress.
+                            Submission details are awaiting the next pipeline snapshot.
+                          </div>
+                        </Show>
+                      }
                     >
                       <For each={items()}>
                         {(item, index) => (

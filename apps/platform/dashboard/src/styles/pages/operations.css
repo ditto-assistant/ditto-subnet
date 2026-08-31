@@ -954,6 +954,17 @@
 .review-rung.current > b {
   color: var(--gold);
 }
+/* The review ladder names the active layer; this compact status names the
+   capacity policy behind it. It must remain distinct from ordinary image
+   admission, which can fan out across screeners. */
+.pipeline-serial-review {
+  display: inline-flex;
+  margin-top: 6px;
+  color: var(--gold);
+  font: 700 8.5px/1.3 var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 .pipeline-count-detail {
   display: block;
   margin-top: 3px;
@@ -964,6 +975,13 @@
   padding: 7px 4px;
   text-align: center;
   font-size: 11px;
+}
+.pipeline-unlisted-admission {
+  padding: 7px 4px;
+  color: var(--gold);
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .fleet-ledger {
