@@ -146,9 +146,9 @@ async def _next_scored_rescreen_candidate(
 ) -> tuple[UUID, int] | None:
     """Choose the next current-board row, never an arbitrary stale score.
 
-    The owner-reduced public ledger supplies the first five positions so one
-    miner cannot occupy the whole canary prefix.  The non-deduped ledger then
-    finishes every remaining scored submission in the same descending order.
+    The first five owner-reduced public-ledger rows form the canary prefix, so
+    one miner cannot occupy it.  The non-deduped ledger then finishes every
+    remaining scored submission in the same descending order.
     This is called only from an operator checkpoint, never from the poll path.
     """
     board = await list_eligible_ledger(
@@ -162,7 +162,7 @@ async def _next_scored_rescreen_candidate(
     )
     ordered_ids = list(
         dict.fromkeys(
-            [row.agent_id for row in board] + [row.agent_id for row in all_scored]
+            [row.agent_id for row in board[:5]] + [row.agent_id for row in all_scored]
         )
     )
     if not ordered_ids:
