@@ -2293,6 +2293,44 @@ class TestFederatedScreenerNodes:
         # item only carries an override when it differs from that binding.
         assert worker_claim.json()["items"][0]["review_settings_override"] is None
 
+        # The node-scoped revision that Platform accepted at claim time must
+        # also be accepted when this exact local worker terminalizes the lease.
+        attempt_id = UUID(worker_claim.json()["items"][0]["attempt_id"])
+        result_payload = _result_payload(
+            canary_agent_id,
+            passed=False,
+            attempt_id=attempt_id,
+            outcome=ScreenResultOutcome.RETRYABLE_INFRA,
+            reason_code="source-review-model-response-invalid",
+            review_settings_revision=node_revision,
+            review_settings_instance_id=worker_instance_id,
+            review_settings_scope=node_id,
+            review_settings_checksum=node_checksum,
+        )
+        result_message = verdict_signing_message(
+            screener_hotkey=node_keypair.ss58_address,
+            agent_id=canary_agent_id,
+            attempt_id=attempt_id,
+            passed=False,
+            policy_version=SCREENING_POLICY_VERSION,
+            outcome=ScreenResultOutcome.RETRYABLE_INFRA,
+            reason_code="source-review-model-response-invalid",
+            review_settings_revision=node_revision,
+            review_settings_instance_id=worker_instance_id,
+            review_settings_scope=node_id,
+            review_settings_checksum=node_checksum,
+        )
+        result_payload["screener_hotkey"] = node_keypair.ss58_address
+        result_payload["signature"] = node_keypair.sign(result_message).hex()
+        _install_chain(app)
+        terminal = await client.post(
+            f"/api/v1/screener/agent/{canary_agent_id}/result",
+            headers=node_headers,
+            json=result_payload,
+        )
+        assert terminal.status_code == 200, terminal.text
+        assert terminal.json()["status"] == AgentStatus.SCREENING_FAILED
+
         # Only positive decimal worker suffixes belong to the enrolled node.
         invalid_instance_id = f"{node_id}-worker-0"
         invalid_message = (
