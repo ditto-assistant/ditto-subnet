@@ -48,3 +48,13 @@ coding_executor_scorer_user: ditto-coding-scorer
 coding_executor_scorer_group: ditto-coding-scorer
 coding_executor_scorer_home: /var/lib/ditto-coding-scorer
 coding_executor_client_guard_unit: ditto-coding-executor-client-guard
+
+# The signed scorer service bundle has a disjoint staging tree and authority
+# from the private supervisor runtime bundle above. Verification never loads or
+# starts the scorer image.
+coding_executor_scorer_bundle_enabled: false
+coding_executor_scorer_staging_dir: /var/lib/ditto-coding-executor/scorer-staged
+coding_executor_scorer_release_manifest_path: /var/lib/ditto-coding-executor/scorer-staged/scorer.release.json
+coding_executor_scorer_bundle_manifest_path: /var/lib/ditto-coding-executor/scorer-staged/scorer.bundle.json
+coding_executor_scorer_archive_path: /var/lib/ditto-coding-executor/scorer-staged/scorer.oci.tar
+coding_executor_scorer_bundle_manifest_sha256: ""

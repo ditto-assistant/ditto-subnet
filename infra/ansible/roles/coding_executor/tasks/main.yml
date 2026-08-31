@@ -24,6 +24,12 @@
       The dedicated Docker client guard requires the attested runtime-image
       control. It cannot treat an unverified image as a scorer authority.
 
+- name: Reject scorer-bundle staging without the dedicated daemon
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_scorer_bundle_enabled | bool) or coding_executor_daemon_enabled | bool
+    fail_msg: Scorer-bundle staging requires the dedicated coding executor host.
+
 - name: Report that the coding executor daemon is deliberately disabled
   ansible.builtin.debug:
     msg: >-
@@ -180,6 +186,41 @@
         - load-runtime-bundle.py
         - stage-runtime-bundle.sh
         - verify-runtime-bundle.py
+        - verify-scorer-bundle.py
+
+    - name: Verify the separately staged coding executor scorer bundle
+      when: coding_executor_scorer_bundle_enabled | bool
+      block:
+        - name: Require the fixed scorer-bundle staging profile
+          ansible.builtin.assert:
+            that:
+              - coding_executor_scorer_staging_dir == '/var/lib/ditto-coding-executor/scorer-staged'
+              - coding_executor_scorer_release_manifest_path == '/var/lib/ditto-coding-executor/scorer-staged/scorer.release.json'
+              - coding_executor_scorer_bundle_manifest_path == '/var/lib/ditto-coding-executor/scorer-staged/scorer.bundle.json'
+              - coding_executor_scorer_archive_path == '/var/lib/ditto-coding-executor/scorer-staged/scorer.oci.tar'
+              - coding_executor_scorer_bundle_manifest_sha256 is match('^[0-9a-f]{64}$')
+
+        - name: Create the root-owned scorer-bundle staging directory
+          ansible.builtin.file:
+            path: "{{ coding_executor_scorer_staging_dir }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: Verify the staged scorer bundle without loading it
+          ansible.builtin.command:
+            argv:
+              - /usr/local/lib/ditto-coding-executor/verify-scorer-bundle.py
+              - --release-manifest
+              - "{{ coding_executor_scorer_release_manifest_path }}"
+              - --bundle-manifest
+              - "{{ coding_executor_scorer_bundle_manifest_path }}"
+              - --archive
+              - "{{ coding_executor_scorer_archive_path }}"
+              - --expected-bundle-sha256
+              - "{{ coding_executor_scorer_bundle_manifest_sha256 }}"
+          changed_when: false
 
     - name: Verify a protected staged coding runtime bundle without loading it
       when: coding_executor_runtime_bundle_enabled | bool

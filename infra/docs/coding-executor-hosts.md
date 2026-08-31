@@ -169,6 +169,12 @@ digest reference, refuses output overwrite, saves an OCI archive, and renders a
 bundle manifest binding both archive and signed release manifests. It does not
 contact an executor host or grant it registry access.
 
+`coding_executor_scorer_bundle_enabled` is a separate default-off host control.
+It verifies root-owned IAP-transferred scorer release/bundle manifests and the
+OCI archive against one protected bundle-manifest SHA. It cross-checks source,
+image, platform, contract, and policy identity, but does not load the image,
+replace the client guard, start the scorer, or enable any transport or ticket.
+
 Destroying a created cohort is intentionally not a routine rollback: the shared
 compute module has deletion protection. Rollback during the shadow phase means
 leave the hosts present and disable the later daemon/worker configuration; any
