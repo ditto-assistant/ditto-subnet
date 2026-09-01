@@ -78,9 +78,21 @@ preflight verify the runtime/scorer attestation chain, binary and policy hashes,
 credential path, rootless socket, and capability gateway. Only after a healthy
 service start does Ansible stop the temporary guard.
 
-This service is still local-only: it creates no validator transport, mTLS
-identity, ticket route, task assignment, or coding gate. Those require the next
-reviewed routing layer.
+This service is still local-only: it creates no validator transport, TCP/TLS
+listener, ticket assignment, or coding gate. Its Unix control socket now
+requires one bounded `dittobench-coding-executor-control-v1` envelope signed by
+the single configured validator hotkey. The ingress verifies SS58/SR25519,
+method and operation, exact request-body SHA-256, supervisor ticket/run
+identity, expiry, and one-time nonce before replacing the external envelope
+with the host-local control token. The token never leaves the scorer process.
+Every failed check is the same redacted rejection, and the constant health
+route remains body-free.
+
+The role default for `coding_executor_validator_hotkey` is empty and the scorer
+service gate remains false. Even with a hotkey configured, this layer cannot be
+reached from another host. The next transport PR must terminate the separately
+staged mTLS identity, bind its client identity to the same hotkey, and forward
+only the already-signed envelope to this Unix ingress.
 
 ## Scorer mTLS identity staging
 
@@ -89,7 +101,8 @@ for that later routing layer. An operator pre-positions a root-only validator
 CA certificate, scorer server certificate, and scorer key at fixed paths. The
 host verifies CA chain, server purpose, expiration, and certificate/key public
 key match, but does not start a TLS listener or receive any validator request.
-The following transport-proxy PR must consume only this verified identity.
+The following transport-proxy PR must consume only this verified identity and
+must not bypass the signed Unix ingress.
 
 ## Production runtime-bundle staging
 

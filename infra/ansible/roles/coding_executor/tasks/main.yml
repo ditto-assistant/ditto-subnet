@@ -523,10 +523,11 @@
               - coding_executor_scorer_runtime_policy_path == '/opt/ditto/coding/coding_inference_policy_locked_v1.json'
               - coding_executor_scorer_runtime_attestation_path == '/var/lib/ditto-coding-executor/attestations/scorer-runtime-attestation.json'
               - coding_executor_capability_port | int == 11438
+              - coding_executor_validator_hotkey is match('^[1-9A-HJ-NP-Za-km-z]{47,48}$')
             fail_msg: >-
               The scorer service uses fixed runtime, credential, and capability
-              paths. Do not make a caller-selected binary, token, or listener
-              authoritative.
+              paths and one validator hotkey. Do not make a caller-selected
+              binary, token, identity, or listener authoritative.
 
         - name: Create the root-only scorer credential directory
           ansible.builtin.file:
