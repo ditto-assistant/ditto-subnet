@@ -56,6 +56,12 @@ var maximumSize = map[Kind]int64{
 	KindTerminalPublicationAcknowledgement:  1 << 20,
 }
 
+// MaximumSize returns the hard byte bound for one known sealed-evidence kind.
+func MaximumSize(kind Kind) (int64, bool) {
+	value, ok := maximumSize[kind]
+	return value, ok
+}
+
 // WireUploadCapability may cross the validator-to-executor boundary. Its URL
 // is deliberately absent from String, GoString, and structured logs.
 type WireUploadCapability struct {

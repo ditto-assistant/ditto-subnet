@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -22,15 +23,17 @@ import (
 	"unicode/utf8"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
+	"github.com/ditto-assistant/dittobench-api/internal/codingevidence"
 	"github.com/ditto-assistant/dittobench-api/internal/codingoutbox"
 	"github.com/google/uuid"
 )
 
 const (
-	commandSchema        = "dittobench-coding-publication-command-v1"
-	responseSchema       = "dittobench-coding-publication-result-v1"
-	maximumCommandBytes  = 6 << 20
-	maximumResponseBytes = 32 << 20
+	commandSchema         = "dittobench-coding-publication-command-v1"
+	evidenceCommandSchema = "dittobench-coding-sealed-evidence-open-command-v1"
+	responseSchema        = "dittobench-coding-publication-result-v1"
+	maximumCommandBytes   = 6 << 20
+	maximumResponseBytes  = 32 << 20
 )
 
 var (
@@ -84,6 +87,15 @@ type lookupCommand struct {
 	Schema   string                        `json:"schema"`
 	TicketID string                        `json:"ticket_id"`
 	Stage    codingoutbox.PublicationStage `json:"stage"`
+}
+
+type evidenceOpenCommand struct {
+	Schema       string              `json:"schema"`
+	TicketID     string              `json:"ticket_id"`
+	RecordID     string              `json:"record_id"`
+	EvidenceKind codingevidence.Kind `json:"evidence_kind"`
+	SHA256       string              `json:"sha256"`
+	SizeBytes    int64               `json:"size_bytes"`
 }
 
 type pendingResult struct {
@@ -178,6 +190,78 @@ func (service *Service) Handler() http.Handler {
 		response.WriteHeader(http.StatusOK)
 		_, _ = response.Write(encoded)
 	})
+}
+
+// EvidenceHandler streams one exact immutable outbox object to the trusted
+// validator. It has no S3 or Platform authority and never buffers the body.
+func (service *Service) EvidenceHandler() http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Cache-Control", "no-store")
+		response.Header().Set("Content-Type", "application/json")
+		response.Header().Set("X-Content-Type-Options", "nosniff")
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/coding/evidence/open" || request.URL.RawQuery != "" {
+			writeError(response, http.StatusNotFound, "not_found")
+			return
+		}
+		if !service.authorized(request) {
+			writeError(response, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		defer service.release()
+		mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+		if err != nil || mediaType != "application/json" || request.Header.Get("Content-Encoding") != "" {
+			writeError(response, http.StatusUnsupportedMediaType, "unsupported_media_type")
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(response, request.Body, 32<<10))
+		if err != nil || codingcontract.ValidateJSONDocument(body, 32<<10) != nil {
+			writeError(response, http.StatusBadRequest, "invalid_command")
+			return
+		}
+		var command evidenceOpenCommand
+		if decodeRequired(body, &command, "schema", "ticket_id", "record_id", "evidence_kind", "sha256", "size_bytes") != nil ||
+			command.Schema != evidenceCommandSchema {
+			writeError(response, http.StatusBadRequest, "invalid_command")
+			return
+		}
+		reader, err := service.openEvidence(request.Context(), command)
+		if err != nil {
+			writeError(response, statusForError(err), codeForError(err))
+			return
+		}
+		defer reader.Close()
+		response.Header().Set("Content-Type", "application/octet-stream")
+		response.Header().Set("Content-Length", strconv.FormatInt(command.SizeBytes, 10))
+		response.Header().Set("X-Ditto-Evidence-Kind", string(command.EvidenceKind))
+		response.Header().Set("X-Ditto-Evidence-SHA256", command.SHA256)
+		response.WriteHeader(http.StatusOK)
+		_, _ = io.CopyN(response, reader, command.SizeBytes)
+	})
+}
+
+func (service *Service) openEvidence(ctx context.Context, command evidenceOpenCommand) (io.ReadCloser, error) {
+	maximum, known := codingevidence.MaximumSize(command.EvidenceKind)
+	if command.Schema != evidenceCommandSchema || !validTicketID(command.TicketID) ||
+		!validLowerSHA256(command.RecordID) || !validLowerSHA256(command.SHA256) ||
+		!known || command.SizeBytes < 1 || command.SizeBytes > maximum {
+		return nil, ErrInvalid
+	}
+	attempt, _, err := service.store.Lookup(ctx, codingoutbox.PurposeShadowAttempt, command.TicketID)
+	if err != nil {
+		return nil, codingoutbox.ErrState
+	}
+	if attempt.ID() != command.RecordID {
+		return nil, codingoutbox.ErrConflict
+	}
+	artifact, reader, err := service.store.OpenSealedEvidence(ctx, command.RecordID, command.EvidenceKind)
+	if err != nil {
+		return nil, err
+	}
+	if artifact.SHA256 != command.SHA256 || artifact.SizeBytes != command.SizeBytes {
+		_ = reader.Close()
+		return nil, codingoutbox.ErrConflict
+	}
+	return reader, nil
 }
 
 func (service *Service) execute(ctx context.Context, operation string, body []byte) (result, error) {
@@ -391,6 +475,11 @@ func decodeBody(value string, maximum int64) ([]byte, error) {
 func validTicketID(value string) bool {
 	parsed, err := uuid.Parse(value)
 	return err == nil && parsed != uuid.Nil && parsed.String() == value
+}
+
+func validLowerSHA256(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == sha256.Size && value == strings.ToLower(value)
 }
 
 func validStage(stage codingoutbox.PublicationStage) bool {

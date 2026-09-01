@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlsplit
@@ -16,8 +18,24 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from ditto.validator.errors import PlatformInfrastructureError
 
 PublicationStage = Literal["authoring_freeze", "terminal_result"]
+SealedEvidenceKind = Literal[
+    "authoring-transcript",
+    "frozen-submission",
+    "authoring-publication-request",
+    "authoring-publication-acknowledgement",
+    "terminal-publication-request",
+    "terminal-publication-acknowledgement",
+]
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_RESPONSE_BYTES = 6 << 20
+_EVIDENCE_MAX_BYTES: dict[str, int] = {
+    "authoring-transcript": 512 << 20,
+    "frozen-submission": 128 << 20,
+    "authoring-publication-request": 4 << 20,
+    "authoring-publication-acknowledgement": 1 << 20,
+    "terminal-publication-request": 4 << 20,
+    "terminal-publication-acknowledgement": 1 << 20,
+}
 
 
 class _WireModel(BaseModel):
@@ -283,6 +301,108 @@ class CodingPublicationClient:
             )
         return result.publication
 
+    @asynccontextmanager
+    async def stream_evidence(
+        self,
+        *,
+        ticket_id: str,
+        record_id: str,
+        evidence_kind: SealedEvidenceKind,
+        sha256: str,
+        size_bytes: int,
+    ) -> AsyncIterator[AsyncIterator[bytes]]:
+        """Yield an exact bounded local stream and verify it when exhausted."""
+
+        maximum = _EVIDENCE_MAX_BYTES.get(evidence_kind)
+        if (
+            not _canonical_uuid(ticket_id)
+            or _SHA256.fullmatch(record_id) is None
+            or _SHA256.fullmatch(sha256) is None
+            or maximum is None
+            or isinstance(size_bytes, bool)
+            or not 1 <= size_bytes <= maximum
+        ):
+            raise ValueError("coding sealed evidence stream authority is invalid")
+        payload = {
+            "schema": "dittobench-coding-sealed-evidence-open-command-v1",
+            "ticket_id": ticket_id,
+            "record_id": record_id,
+            "evidence_kind": evidence_kind,
+            "sha256": sha256,
+            "size_bytes": size_bytes,
+        }
+        try:
+            async with self.client.stream(
+                "POST",
+                f"{self.base_url.rstrip('/')}/v1/coding/evidence/open",
+                headers={
+                    "Authorization": f"Bearer {self.control_token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/octet-stream",
+                    "Cache-Control": "no-store",
+                },
+                json=payload,
+                follow_redirects=False,
+            ) as response:
+                try:
+                    response_size = int(response.headers.get("Content-Length", ""))
+                except ValueError:
+                    response_size = -1
+                if (
+                    response.status_code != 200
+                    or response.headers.get("Content-Type", "").split(";", 1)[0]
+                    != "application/octet-stream"
+                    or response.headers.get("Content-Encoding", "") != ""
+                    or "no-store"
+                    not in {
+                        directive.strip().lower()
+                        for directive in response.headers.get(
+                            "Cache-Control", ""
+                        ).split(",")
+                    }
+                    or response.headers.get("X-Ditto-Evidence-Kind") != evidence_kind
+                    or response.headers.get("X-Ditto-Evidence-SHA256") != sha256
+                    or response_size != size_bytes
+                ):
+                    raise PlatformInfrastructureError(
+                        "coding sealed evidence stream response is invalid"
+                    )
+                digest = hashlib.sha256()
+                total = 0
+                complete = False
+
+                async def chunks() -> AsyncIterator[bytes]:
+                    nonlocal complete, total
+                    async for chunk in response.aiter_bytes(chunk_size=64 << 10):
+                        if not chunk:
+                            continue
+                        if total + len(chunk) > size_bytes:
+                            raise PlatformInfrastructureError(
+                                "coding sealed evidence stream exceeded its size"
+                            )
+                        total += len(chunk)
+                        digest.update(chunk)
+                        yield chunk
+                    complete = True
+
+                try:
+                    yield chunks()
+                except BaseException:
+                    raise
+                else:
+                    if (
+                        not complete
+                        or total != size_bytes
+                        or digest.hexdigest() != sha256
+                    ):
+                        raise PlatformInfrastructureError(
+                            "coding sealed evidence stream identity is invalid"
+                        )
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding sealed evidence stream request failed"
+            ) from error
+
     async def _call(self, operation: str, payload: dict[str, object]) -> _Result:
         body = bytearray()
         try:
@@ -369,4 +489,5 @@ __all__ = [
     "PublicationArtifact",
     "PublicationAuthority",
     "PublicationStage",
+    "SealedEvidenceKind",
 ]

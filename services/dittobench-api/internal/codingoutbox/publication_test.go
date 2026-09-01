@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
+	"github.com/ditto-assistant/dittobench-api/internal/codingevidence"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
 )
 
@@ -24,6 +25,7 @@ type publicationFixture struct {
 	attempt    *Attempt
 	transcript TranscriptArtifact
 	frozen     FrozenArtifact
+	frozenBody []byte
 	authority  PublicationAuthority
 	limits     codingrunner.Limits
 }
@@ -49,7 +51,7 @@ func newPublicationFixture(t *testing.T, suffix string) publicationFixture {
 	}
 	return publicationFixture{
 		store: store, clock: clock, root: root, binding: binding, attempt: attempt,
-		transcript: transcript, frozen: frozen, limits: limits,
+		transcript: transcript, frozen: frozen, frozenBody: cloneBytes(submission.Patch), limits: limits,
 		authority: PublicationAuthority{
 			AgentID: "11111111-1111-4111-8111-111111111111", BenchVersion: 12,
 			RunRowID:              "22222222-2222-4222-8222-222222222222",
@@ -335,6 +337,30 @@ func TestShadowPublicationLifecycleSurvivesRestartAndGatesRelease(t *testing.T) 
 		t.Context(), fixture.attempt.ID(), fixture.terminalAuthority().EvidenceSHA256,
 	); err != nil {
 		t.Fatalf("idempotent release: %v", err)
+	}
+	sealed := []struct {
+		kind codingevidence.Kind
+		body []byte
+	}{
+		{codingevidence.KindAuthoringTranscript, []byte("{\"sequence\":1}\n")},
+		{codingevidence.KindFrozenSubmission, fixture.frozenBody},
+		{codingevidence.KindAuthoringPublicationRequest, authoringBody},
+		{codingevidence.KindAuthoringPublicationAcknowledgement, authoringAck},
+		{codingevidence.KindTerminalPublicationRequest, terminalBody},
+		{codingevidence.KindTerminalPublicationAcknowledgement, terminalAck},
+	}
+	for _, expected := range sealed {
+		artifact, sealedReader, err := fixture.store.OpenSealedEvidence(
+			t.Context(), fixture.attempt.ID(), expected.kind,
+		)
+		if err != nil {
+			t.Fatalf("open sealed %s: %v", expected.kind, err)
+		}
+		body := readPublicationBytes(t, sealedReader)
+		if artifact.Kind != expected.kind || artifact.SHA256 != digest(expected.body) ||
+			artifact.SizeBytes != int64(len(expected.body)) || !bytes.Equal(body, expected.body) {
+			t.Fatalf("sealed %s artifact=%#v size=%d", expected.kind, artifact, len(body))
+		}
 	}
 	fixture.clock.now = fixture.clock.now.Add(2 * time.Minute)
 	report, err := fixture.store.Sweep(t.Context())

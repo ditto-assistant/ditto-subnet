@@ -178,3 +178,95 @@ async def test_publication_client_rejects_redirects_bad_identity_and_secret_leak
             control_token=_TOKEN,
             client=http,
         )
+
+
+async def test_publication_client_streams_and_verifies_sealed_evidence() -> None:
+    ticket_id = "33333333-3333-4333-8333-333333333333"
+    record_id = "11" * 32
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/coding/evidence/open"
+        assert request.headers["Authorization"] == f"Bearer {_TOKEN}"
+        payload = json.loads(request.content)
+        assert payload == {
+            "schema": "dittobench-coding-sealed-evidence-open-command-v1",
+            "ticket_id": ticket_id,
+            "record_id": record_id,
+            "evidence_kind": "terminal-publication-request",
+            "sha256": _REQUEST_SHA256,
+            "size_bytes": len(_REQUEST),
+        }
+        return httpx.Response(
+            200,
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Type": "application/octet-stream",
+                "Content-Length": str(len(_REQUEST)),
+                "X-Ditto-Evidence-Kind": "terminal-publication-request",
+                "X-Ditto-Evidence-SHA256": _REQUEST_SHA256,
+            },
+            content=_REQUEST,
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), trust_env=False
+    ) as http:
+        client = CodingPublicationClient(
+            base_url="http://127.0.0.1:18081",
+            control_token=_TOKEN,
+            client=http,
+        )
+        async with client.stream_evidence(
+            ticket_id=ticket_id,
+            record_id=record_id,
+            evidence_kind="terminal-publication-request",
+            sha256=_REQUEST_SHA256,
+            size_bytes=len(_REQUEST),
+        ) as chunks:
+            body = b"".join([chunk async for chunk in chunks])
+        assert body == _REQUEST
+
+
+async def test_publication_client_rejects_unconsumed_or_truncated_evidence() -> None:
+    ticket_id = "33333333-3333-4333-8333-333333333333"
+    record_id = "11" * 32
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Type": "application/octet-stream",
+                "Content-Length": str(len(_REQUEST)),
+                "X-Ditto-Evidence-Kind": "terminal-publication-request",
+                "X-Ditto-Evidence-SHA256": _REQUEST_SHA256,
+            },
+            content=_REQUEST[:-1],
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), trust_env=False
+    ) as http:
+        client = CodingPublicationClient(
+            base_url="http://127.0.0.1:18081",
+            control_token=_TOKEN,
+            client=http,
+        )
+        with pytest.raises(PlatformInfrastructureError, match="identity"):
+            async with client.stream_evidence(
+                ticket_id=ticket_id,
+                record_id=record_id,
+                evidence_kind="terminal-publication-request",
+                sha256=_REQUEST_SHA256,
+                size_bytes=len(_REQUEST),
+            ) as chunks:
+                _ = b"".join([chunk async for chunk in chunks])
+        with pytest.raises(PlatformInfrastructureError, match="identity"):
+            async with client.stream_evidence(
+                ticket_id=ticket_id,
+                record_id=record_id,
+                evidence_kind="terminal-publication-request",
+                sha256=_REQUEST_SHA256,
+                size_bytes=len(_REQUEST),
+            ):
+                pass

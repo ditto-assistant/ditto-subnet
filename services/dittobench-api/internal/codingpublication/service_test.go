@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
+	"github.com/ditto-assistant/dittobench-api/internal/codingevidence"
 	"github.com/ditto-assistant/dittobench-api/internal/codingoutbox"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
 )
@@ -22,12 +24,14 @@ import (
 const fixtureControlToken = "coding-publication-control-token-0000000000000001"
 
 type publicationFixture struct {
-	store     *codingoutbox.Store
-	service   *Service
-	ticketID  string
-	authority codingoutbox.PublicationAuthority
-	request   []byte
-	ack       []byte
+	store          *codingoutbox.Store
+	service        *Service
+	ticketID       string
+	authority      codingoutbox.PublicationAuthority
+	transcript     codingoutbox.TranscriptArtifact
+	transcriptBody []byte
+	request        []byte
+	ack            []byte
 }
 
 func newPublicationFixture(t *testing.T) publicationFixture {
@@ -116,7 +120,8 @@ func newPublicationFixture(t *testing.T) publicationFixture {
 	}
 	return publicationFixture{
 		store: store, service: service, ticketID: ticketID,
-		authority: authority, request: request, ack: ack,
+		authority: authority, transcript: transcript, transcriptBody: transcriptBody,
+		request: request, ack: ack,
 	}
 }
 
@@ -147,6 +152,25 @@ func decodeResult(t *testing.T, response *httptest.ResponseRecorder) result {
 		t.Fatal(err)
 	}
 	return value
+}
+
+func invokeEvidence(
+	t *testing.T,
+	service *Service,
+	command evidenceOpenCommand,
+	token string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/coding/evidence/open",
+		bytes.NewReader(mustJSON(t, command)),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	service.EvidenceHandler().ServeHTTP(response, request)
+	return response
 }
 
 func TestPublicationServiceDurablyPreparesReplaysAndAcknowledges(t *testing.T) {
@@ -216,6 +240,64 @@ func TestPublicationServiceDurablyPreparesReplaysAndAcknowledges(t *testing.T) {
 	}, fixtureControlToken)
 	if value := decodeResult(t, response); len(value.Pending) != 0 {
 		t.Fatalf("pending after ack=%#v", value.Pending)
+	}
+}
+
+func TestEvidenceServiceStreamsExactReleasedObjects(t *testing.T) {
+	fixture := newPublicationFixture(t)
+	preparedResponse := invoke(t, fixture.service, "prepare", map[string]any{
+		"schema": commandSchema, "ticket_id": fixture.ticketID,
+		"stage": codingoutbox.PublicationTerminalResult, "authority": fixture.authority,
+		"body_base64": base64.StdEncoding.EncodeToString(fixture.request),
+	}, fixtureControlToken)
+	prepared := decodeResult(t, preparedResponse)
+	if prepared.Artifact == nil || prepared.RecordID == "" {
+		t.Fatalf("prepared=%#v", prepared)
+	}
+	ackResponse := invoke(t, fixture.service, "acknowledge", map[string]any{
+		"schema": commandSchema, "ticket_id": fixture.ticketID,
+		"stage":          codingoutbox.PublicationTerminalResult,
+		"request_sha256": prepared.Artifact.SHA256,
+		"body_base64":    base64.StdEncoding.EncodeToString(fixture.ack),
+	}, fixtureControlToken)
+	acknowledged := decodeResult(t, ackResponse)
+	if acknowledged.Artifact == nil {
+		t.Fatalf("acknowledged=%#v", acknowledged)
+	}
+	cases := []struct {
+		kind codingevidence.Kind
+		body []byte
+	}{
+		{codingevidence.KindAuthoringTranscript, fixture.transcriptBody},
+		{codingevidence.KindTerminalPublicationRequest, fixture.request},
+		{codingevidence.KindTerminalPublicationAcknowledgement, fixture.ack},
+	}
+	for _, expected := range cases {
+		digest := sha256.Sum256(expected.body)
+		command := evidenceOpenCommand{
+			Schema: evidenceCommandSchema, TicketID: fixture.ticketID,
+			RecordID: prepared.RecordID, EvidenceKind: expected.kind,
+			SHA256: hex.EncodeToString(digest[:]), SizeBytes: int64(len(expected.body)),
+		}
+		response := invokeEvidence(t, fixture.service, command, fixtureControlToken)
+		if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), expected.body) ||
+			response.Header().Get("Content-Type") != "application/octet-stream" ||
+			response.Header().Get("Content-Length") != strconv.Itoa(len(expected.body)) ||
+			response.Header().Get("X-Ditto-Evidence-Kind") != string(expected.kind) ||
+			response.Header().Get("X-Ditto-Evidence-SHA256") != command.SHA256 {
+			t.Fatalf("kind=%s status=%d headers=%v", expected.kind, response.Code, response.Header())
+		}
+	}
+	drifted := evidenceOpenCommand{
+		Schema: evidenceCommandSchema, TicketID: fixture.ticketID,
+		RecordID: prepared.RecordID, EvidenceKind: codingevidence.KindAuthoringTranscript,
+		SHA256: strings.Repeat("0", 64), SizeBytes: fixture.transcript.SizeBytes,
+	}
+	if response := invokeEvidence(t, fixture.service, drifted, fixtureControlToken); response.Code != http.StatusConflict {
+		t.Fatalf("drift status=%d", response.Code)
+	}
+	if response := invokeEvidence(t, fixture.service, drifted, "wrong-control-token-000000000000000000"); response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d", response.Code)
 	}
 }
 

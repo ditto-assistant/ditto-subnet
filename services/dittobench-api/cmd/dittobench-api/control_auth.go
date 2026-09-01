@@ -44,6 +44,7 @@ func (s *server) newControlPlaneMux() *http.ServeMux {
 	mux.HandleFunc("POST /v1/confirmation/execute", s.handleConfirmationExecute)
 	mux.HandleFunc("POST /v1/coding/supervisor/{operation}", s.handleCodingSupervisor)
 	mux.HandleFunc("POST /v1/coding/publications/{operation}", s.handleCodingPublication)
+	mux.HandleFunc("POST /v1/coding/evidence/open", s.handleCodingEvidence)
 	mux.HandleFunc("POST /v1/coding/certifier/canary", s.handleCodingCanary)
 	return mux
 }
@@ -72,6 +73,7 @@ var controlPlaneRoutes = []string{
 	"POST /v1/confirmation/execute",
 	"POST /v1/coding/supervisor/{operation}",
 	"POST /v1/coding/publications/{operation}",
+	"POST /v1/coding/evidence/open",
 	"POST /v1/coding/certifier/canary",
 }
 
@@ -89,6 +91,14 @@ func (s *server) handleCodingPublication(response http.ResponseWriter, request *
 		return
 	}
 	s.codingHost.PublicationHandler().ServeHTTP(response, request)
+}
+
+func (s *server) handleCodingEvidence(response http.ResponseWriter, request *http.Request) {
+	if s == nil || s.codingHost == nil {
+		http.NotFound(response, request)
+		return
+	}
+	s.codingHost.EvidenceHandler().ServeHTTP(response, request)
 }
 
 func (s *server) handleCodingCanary(response http.ResponseWriter, request *http.Request) {

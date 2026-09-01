@@ -283,6 +283,13 @@ func (host *Host) PublicationHandler() http.Handler {
 	return host.publication.Handler()
 }
 
+func (host *Host) EvidenceHandler() http.Handler {
+	if host == nil {
+		return http.NotFoundHandler()
+	}
+	return host.publication.EvidenceHandler()
+}
+
 func (host *Host) CanaryHandler() http.Handler {
 	if host == nil || host.canary == nil {
 		return http.NotFoundHandler()

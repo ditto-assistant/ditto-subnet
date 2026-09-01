@@ -132,6 +132,17 @@ client's `json=` convenience path. When the handoff
 stores the verified response it must also supply the request object's SHA-256;
 the journal commits that correlation so a response from another signed request
 cannot be attached by ticket/run identity alone.
+
+The same authenticated loopback service exposes a separate
+`POST /v1/coding/evidence/open` byte stream. Its command binds ticket, outbox
+record, evidence kind, SHA-256, and exact positive size. The response is raw
+`application/octet-stream` with no compression, redirects, JSON, base64,
+filesystem path, or storage key. `Content-Length`, evidence-kind, and SHA-256
+headers must match before the Python client yields a chunk; normal context exit
+also requires the caller to have exhausted the stream with the exact byte count
+and digest. All six evidence kinds remain readable from a released record until
+its ordinary retention sweep. This is a local export boundary only and owns no
+S3 or Platform capability.
 Endpoint paths remain fixed by the Platform client; the terminal agent path is
 derived only from the journal's canonical `agent_id`, never from stored URL
 input.
@@ -152,12 +163,12 @@ Platform client, host sweeping, and the production volume location.
 Certification integration must reserve only after health and seed succeed;
 pre-reserving for unsupported miners would leak capacity until expiry.
 
-This store now provides self-contained byte replay for prepared shadow
-publication requests and verified acknowledgements. It does not call Platform,
-create signatures, request grading leases, classify terminal failures, or
-schedule attempts. `Release` retains the terminal evidence digest supplied by
-the trusted terminal builder and cross-checks it against the acknowledged
-terminal request.
+This store now provides self-contained streaming replay for transcripts,
+frozen submissions, prepared shadow publication requests, and verified
+acknowledgements. It does not call Platform, create signatures, request grading
+leases, classify terminal failures, upload remote bytes, or schedule attempts.
+`Release` retains the terminal evidence digest supplied by the trusted terminal
+builder and cross-checks it against the acknowledged terminal request.
 
 The future remote object handoff is defined by
 [`docs/coding-private-s3-data-plane.md`](../../../docs/coding-private-s3-data-plane.md).

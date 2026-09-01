@@ -21,6 +21,11 @@ For one stable worker instance it:
 7. obtains the freeze-bound grading lease, runs the protected grader, and uses
    the same prepare -> publish -> acknowledge order for terminal evidence.
 
+The private Go host can now stream every sealed outbox evidence kind to the
+trusted Python validator by exact ticket, record, kind, digest, and size. That
+stream is not yet wired to S3: the next layer owns capability requests, the PUT,
+and Platform finalization without rebuilding or buffering these bytes.
+
 The Go host is constructed when `DITTOBENCH_CODING_SHADOW_ENABLED=true` or
 `DITTOBENCH_CODING_CANARY_ENABLED=true`. It composes the phase-specific Docker
 executor factory, artifact fetcher, scoped memory projector, durable outbox,
