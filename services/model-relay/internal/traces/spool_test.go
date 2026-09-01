@@ -254,7 +254,10 @@ func TestRecoveryShipsTornLeftoverFromPreviousProcess(t *testing.T) {
 	good1, _ := json.Marshal(&Record{Schema: SchemaVersion, Event: EventSettled, RecordedAt: time.Date(2026, 8, 21, 17, 0, 0, 0, time.UTC), Request: Request{Lane: LaneInference, Kind: KindChat}})
 	good2, _ := json.Marshal(&Record{Schema: SchemaVersion, Event: EventSettled, RecordedAt: time.Date(2026, 8, 21, 17, 4, 0, 0, time.UTC), Request: Request{Lane: LaneInference, Kind: KindChat}})
 	content := string(good1) + "\n" + string(good2) + "\n" + `{"schema":"ditto.inference.trace.v1","event":"inference.settled","request":{"lane":"inference","ki`
-	if err := os.WriteFile(filepath.Join(dir, openDirName, "inference-chat-20260821T170000Z-abc.jsonl"), []byte(content), 0o640); err != nil {
+	// A restart of the same slot keeps its instance identity, so the leftover
+	// this process must adopt is one carrying its own name.
+	leftover := openName("inference-chat", "relay-2", time.Date(2026, 8, 21, 17, 0, 0, 0, time.UTC))
+	if err := os.WriteFile(filepath.Join(dir, openDirName, leftover), []byte(content), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	s3 := newFakeS3(t)
@@ -333,5 +336,115 @@ func TestNilSpoolerIsANoOpRecorder(t *testing.T) {
 	r.Record(sampleRecord(KindChat, 1))
 	if err := s.Close(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A relay sharing a spool directory with its siblings must never adopt a file
+// another live instance still has open: truncateToCompleteLines opens O_RDWR and
+// truncates, which tears the owner's stream and leaves a NUL hole at its next
+// buffered flush. Observed in production as objects named for one relay slot
+// holding only other slots' records.
+func TestRecoveryLeavesLiveSiblingOpenFileAlone(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, openDirName), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := json.Marshal(&Record{Schema: SchemaVersion, Event: EventSettled, RecordedAt: time.Date(2026, 8, 21, 17, 0, 0, 0, time.UTC), Request: Request{Lane: LaneInference, Kind: KindChat}})
+	sibling := openName("inference-chat", "relay-8011", time.Date(2026, 8, 21, 17, 0, 0, 0, time.UTC))
+	path := filepath.Join(dir, openDirName, sibling)
+	if err := os.WriteFile(path, append(rec, '\n'), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spool, err := NewSpooler(SpoolOptions{Dir: dir, Instance: "relay-8010"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.Close(context.Background())
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("sibling's open file must stay in open/: %v", err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Size() != before.Size() {
+		t.Fatalf("sibling's file was truncated: %d -> %d bytes", before.Size(), after.Size())
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, readyDirName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("sibling's file must not be renamed into ready/: %v", entries[0].Name())
+	}
+}
+
+// Once a sibling has gone quiet for long enough that it cannot still be
+// writing, its leftover is adopted rather than stranded forever.
+func TestRecoveryAdoptsAbandonedSiblingFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, openDirName), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := json.Marshal(&Record{Schema: SchemaVersion, Event: EventSettled, RecordedAt: time.Date(2026, 8, 21, 17, 0, 0, 0, time.UTC), Request: Request{Lane: LaneInference, Kind: KindChat}})
+	for _, name := range []string{
+		openName("inference-chat", "relay-8011", time.Date(2026, 8, 21, 17, 0, 0, 0, time.UTC)),
+		"inference-chat-20260821T170000Z-legacy.jsonl", // pre-ownership name
+	} {
+		path := filepath.Join(dir, openDirName, name)
+		if err := os.WriteFile(path, append(rec, '\n'), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		stale := time.Now().Add(-2 * time.Hour)
+		if err := os.Chtimes(path, stale, stale); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spool, err := NewSpooler(SpoolOptions{Dir: dir, Instance: "relay-8010"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.Close(context.Background())
+
+	open, err := os.ReadDir(filepath.Join(dir, openDirName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 0 {
+		t.Fatalf("abandoned files should have left open/: %d remain", len(open))
+	}
+	ready, err := os.ReadDir(filepath.Join(dir, readyDirName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ready) != 2 {
+		t.Fatalf("both abandoned files should be in ready/: got %d", len(ready))
+	}
+	for _, e := range ready {
+		if !strings.Contains(e.Name(), "inference-chat-relay_8010-") {
+			t.Fatalf("adopted file should be renamed under the adopting instance: %s", e.Name())
+		}
+	}
+}
+
+func TestParseOpenNameRoundTrip(t *testing.T) {
+	name := openName("inference-chat", "ditto-platform-prod:8010", time.Date(2026, 8, 31, 8, 51, 21, 0, time.UTC))
+	stream, instance, ok := parseOpenName(name)
+	if !ok {
+		t.Fatalf("openName output must parse: %s", name)
+	}
+	if stream != "inference-chat" {
+		t.Fatalf("stream = %q", stream)
+	}
+	if instance != "ditto_platform_prod_8010" {
+		t.Fatalf("instance = %q", instance)
+	}
+	if _, _, ok := parseOpenName("inference-chat-20260821T170000Z-abc.jsonl"); ok {
+		t.Fatal("a pre-ownership name must not parse as owned")
 	}
 }

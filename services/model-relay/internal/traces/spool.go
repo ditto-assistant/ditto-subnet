@@ -312,7 +312,7 @@ func (s *Spooler) write(rec *Record) {
 
 func (s *Spooler) openStream(key string) (*streamFile, error) {
 	now := s.opts.Now().UTC()
-	name := fmt.Sprintf("%s-%s-%s%s", key, now.Format("20060102T150405Z"), randomSuffix(), spoolExt)
+	name := openName(key, s.opts.Instance, now)
 	path := filepath.Join(s.opts.Dir, openDirName, name)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o640)
 	if err != nil {
@@ -383,6 +383,40 @@ func marshalLine(rec *Record) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// openName is <stream>-<instance>-<openedTS>-<rand>.jsonl. The instance is
+// part of the name so that a relay sharing a spool directory with its siblings
+// can tell its own open files from theirs: recovery must never truncate a file
+// another live process is still writing to.
+func openName(stream, instance string, opened time.Time) string {
+	return fmt.Sprintf("%s-%s-%s-%s%s", stream, sanitizeInstance(instance),
+		opened.Format("20060102T150405Z"), randomSuffix(), spoolExt)
+}
+
+// parseOpenName splits a name produced by openName. Names written before the
+// instance was part of the name do not parse, and are reported as such so the
+// caller can fall back to the staleness check.
+func parseOpenName(name string) (stream, instance string, ok bool) {
+	base, found := strings.CutSuffix(name, spoolExt)
+	if !found {
+		return "", "", false
+	}
+	// <lane>-<kind>-<instance>-<ts>-<rand>: sanitizeInstance guarantees the
+	// instance itself contains no '-', so the field count is exact.
+	parts := strings.Split(base, "-")
+	if len(parts) != 5 {
+		return "", "", false
+	}
+	return parts[0] + "-" + parts[1], parts[2], true
+}
+
+// abandonedAfter is how long an open file owned by another instance must go
+// untouched before this process may adopt it. A live spooler flushes every
+// FlushInterval and rotates its own files at RotateInterval, so silence for
+// several rotation periods means the owner is gone.
+func (s *Spooler) abandonedAfter() time.Duration {
+	return 4 * s.opts.RotateInterval
 }
 
 // readyName is <stream>-<instance>-<firstTS>-<lastTS>-<rand>.jsonl.
@@ -461,6 +495,25 @@ func (s *Spooler) recoverOpenFiles() error {
 			continue
 		}
 		path := filepath.Join(s.opts.Dir, openDirName, e.Name())
+		nameStream, owner, parsed := parseOpenName(e.Name())
+		if !parsed || owner != sanitizeInstance(s.opts.Instance) {
+			// Not ours, or written before open files carried an owner. A live
+			// sibling relay may still hold this file open with a buffered
+			// writer: truncating it tears its stream and leaves a NUL hole at
+			// the old write offset. Adopt it only once it has gone quiet.
+			info, ierr := e.Info()
+			if ierr != nil {
+				s.opts.Logger.Error("trace spool recovery stat failed; leaving file in place",
+					slog.String("path", path), slog.String("error", ierr.Error()))
+				continue
+			}
+			if age := s.opts.Now().UTC().Sub(info.ModTime().UTC()); age < s.abandonedAfter() {
+				s.opts.Logger.Info("trace spool skipping open file owned by another instance",
+					slog.String("file", e.Name()), slog.String("owner", owner),
+					slog.Duration("idle_for", age))
+				continue
+			}
+		}
 		stream, first, last, records, err := truncateToCompleteLines(path)
 		if err != nil {
 			s.opts.Logger.Error("trace spool recovery failed; leaving file in place",
@@ -472,7 +525,11 @@ func (s *Spooler) recoverOpenFiles() error {
 			continue
 		}
 		if stream == "" {
-			stream = strings.SplitN(e.Name(), "-2", 2)[0] // best effort: "<lane>-<kind>"
+			if parsed {
+				stream = nameStream
+			} else {
+				stream = strings.SplitN(e.Name(), "-2", 2)[0] // best effort: "<lane>-<kind>"
+			}
 		}
 		target := filepath.Join(s.opts.Dir, readyDirName, readyName(stream, s.opts.Instance, first, last))
 		if err := os.Rename(path, target); err != nil {
