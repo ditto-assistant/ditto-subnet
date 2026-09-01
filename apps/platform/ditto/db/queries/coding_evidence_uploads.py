@@ -44,6 +44,7 @@ class CodingSealedEvidenceConflictError(RuntimeError):
 @dataclass(frozen=True)
 class CodingSealedEvidenceUploadReservation:
     upload: CodingSealedEvidenceUpload
+    ticket: CodingShadowTicket
     idempotent: bool
 
 
@@ -96,6 +97,7 @@ async def reserve_coding_sealed_evidence_upload(
         if _upload_matches(existing, sha256=sha256, size_bytes=size_bytes):
             return CodingSealedEvidenceUploadReservation(
                 upload=existing,
+                ticket=ticket,
                 idempotent=True,
             )
         raise CodingSealedEvidenceConflictError(
@@ -125,6 +127,7 @@ async def reserve_coding_sealed_evidence_upload(
             raise RuntimeError("inserted coding evidence upload was not readable")
         return CodingSealedEvidenceUploadReservation(
             upload=upload,
+            ticket=ticket,
             idempotent=False,
         )
     upload = await session.scalar(
@@ -140,7 +143,11 @@ async def reserve_coding_sealed_evidence_upload(
         raise CodingSealedEvidenceConflictError(
             "coding evidence kind already reserves different immutable bytes"
         )
-    return CodingSealedEvidenceUploadReservation(upload=upload, idempotent=True)
+    return CodingSealedEvidenceUploadReservation(
+        upload=upload,
+        ticket=ticket,
+        idempotent=True,
+    )
 
 
 async def finalize_coding_sealed_evidence_upload(

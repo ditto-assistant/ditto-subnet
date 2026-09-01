@@ -5195,6 +5195,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/coding-shadow/evidence-upload-capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Coding Evidence Upload Capability
+         * @description Reserve exact bytes and mint one claim-bounded PUT bearer capability.
+         */
+        post: operations["request_coding_evidence_upload_capability_api_v1_validator_coding_shadow_evidence_upload_capability_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/coding-shadow/grading-lease": {
         parameters: {
             query?: never;
@@ -12669,6 +12689,99 @@ export interface components {
              * @constant
              */
             weight_eligible: false;
+        };
+        /**
+         * CodingSealedEvidenceKind
+         * @enum {string}
+         */
+        CodingSealedEvidenceKind: "authoring-transcript" | "frozen-submission" | "authoring-publication-request" | "authoring-publication-acknowledgement" | "terminal-publication-request" | "terminal-publication-acknowledgement";
+        /** CodingSealedEvidenceUploadCapability */
+        CodingSealedEvidenceUploadCapability: {
+            /** Checksum Sha256 B64 */
+            checksum_sha256_b64: string;
+            /** Claim Generation */
+            claim_generation: number;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /**
+             * Content Type
+             * @constant
+             */
+            content_type: "application/octet-stream";
+            evidence_kind: components["schemas"]["CodingSealedEvidenceKind"];
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-sealed-evidence-upload-capability-v1";
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /**
+             * Upload Id
+             * Format: uuid
+             */
+            upload_id: string;
+            /** Url */
+            url: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * CodingSealedEvidenceUploadCapabilityRequest
+         * @description Signed validator request for one evidence PUT capability.
+         */
+        CodingSealedEvidenceUploadCapabilityRequest: {
+            /** Claim Generation */
+            claim_generation: number;
+            evidence_kind: components["schemas"]["CodingSealedEvidenceKind"];
+            /** Instance Id */
+            instance_id: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Sha256 */
+            sha256: string;
+            /** Signature */
+            signature: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /** CodingSelectionAssignmentRecord */
         CodingSelectionAssignmentRecord: {
@@ -34715,6 +34828,67 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    request_coding_evidence_upload_capability_api_v1_validator_coding_shadow_evidence_upload_capability_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingSealedEvidenceUploadCapabilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingSealedEvidenceUploadCapability"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Live started coding claim not available. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Replay or immutable evidence conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Dedicated evidence store is not configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

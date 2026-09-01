@@ -134,6 +134,9 @@ from ditto.api_server.endpoints.validator_coding_delivery import (
 from ditto.api_server.endpoints.validator_coding_evaluation import (
     router as validator_coding_evaluation_router,
 )
+from ditto.api_server.endpoints.validator_coding_evidence import (
+    router as validator_coding_evidence_router,
+)
 from ditto.api_server.endpoints.validator_coding_freezes import (
     router as validator_coding_freezes_router,
 )
@@ -204,6 +207,7 @@ __all__ = [
     "validator_coding_certification_leases_router",
     "validator_coding_claims_router",
     "validator_coding_delivery_router",
+    "validator_coding_evidence_router",
     "validator_coding_freezes_router",
     "validator_coding_grading_router",
     "validator_coding_inference_router",
