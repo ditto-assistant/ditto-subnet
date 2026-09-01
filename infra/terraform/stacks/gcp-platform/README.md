@@ -68,11 +68,12 @@ Do not lock the retention policies in the same apply that first creates them;
 verify provider behavior and recovery before a separately approved,
 irreversible lock operation.
 
-`enable_coding_storage_platform_binding` is a second, independent false gate.
-It grants only the dedicated Platform API identity access to the private-input
-reader and evidence-finalizer HMAC secret containers. It refuses to plan unless
-the authorities and dedicated Platform identity are also enabled. It never
-grants the create-only curator secret and does not render application config.
+`enable_coding_storage_platform_binding` is a second, independent gate. Its
+follow-on rollout intent must not merge until the authority-only apply has been
+verified. It grants only the dedicated Platform API identity access to the
+private-input reader and evidence-finalizer HMAC secret containers, refuses to
+plan without the authorities and dedicated Platform identity, never grants the
+create-only curator secret, and does not render application config.
 
 - **Operator, locally (recommended for the first apply):** authenticate with
   your own ADC (`gcloud auth application-default login`), `cp

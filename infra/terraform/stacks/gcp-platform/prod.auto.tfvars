@@ -33,9 +33,12 @@ enable_screener_fleet_x509_identity = false
 # verify names, retention, IAM, HMAC custody, audit cost, and org-policy drift
 # before an owner authorizes apply.
 enable_coding_s3_authorities = true
-# Runtime secret access is staged independently after the bucket/IAM plan. It
-# remains false even when the storage authorities are first created.
-enable_coding_storage_platform_binding = false
+# Follow-on intent only: DO NOT MERGE this layer until the authority-only plan
+# above has been applied and its buckets, HMAC identities, secret versions,
+# audit config, and secure-transport policy are independently verified.
+# This grants the dedicated Platform API identity only the reader/finalizer
+# secret pair; application configuration remains separately disabled.
+enable_coding_storage_platform_binding = true
 
 screener_fleet_min_replicas         = 0
 screener_fleet_max_replicas         = 6

@@ -15,7 +15,7 @@ def _resource_body(source: str, resource_type: str, name: str) -> str:
     return source.split(marker, 1)[1].split("\n}\n", 1)[0]
 
 
-def test_coding_storage_rollout_stages_only_authority_creation() -> None:
+def test_coding_storage_access_rollout_keeps_application_gates_off() -> None:
     variables = (GCP_ROOT / "variables.tf").read_text()
     intent = (GCP_ROOT / "prod.auto.tfvars").read_text()
     terraform = TERRAFORM.read_text()
@@ -29,7 +29,7 @@ def test_coding_storage_rollout_stages_only_authority_creation() -> None:
     assert "default     = false" in declaration
     assert re.search(r"^enable_coding_s3_authorities\s*=\s*true$", intent, re.MULTILINE)
     assert re.search(
-        r"^enable_coding_storage_platform_binding\s*=\s*false$",
+        r"^enable_coding_storage_platform_binding\s*=\s*true$",
         intent,
         re.MULTILINE,
     )
@@ -124,7 +124,7 @@ def test_hmac_secrets_and_platform_binding_are_independently_gated() -> None:
     ].split("\n}\n", 1)[0]
     assert "default     = false" in binding
     assert re.search(
-        r"^enable_coding_storage_platform_binding\s*=\s*false$",
+        r"^enable_coding_storage_platform_binding\s*=\s*true$",
         intent,
         re.MULTILINE,
     )

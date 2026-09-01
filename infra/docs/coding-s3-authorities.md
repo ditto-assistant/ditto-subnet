@@ -87,11 +87,17 @@ configuration; no conclusion was drawn from that gap.
 
 ## Platform binding
 
-Keep `enable_coding_storage_platform_binding = false` during the first storage
-apply. A later protected plan may enable it only after the buckets and HMAC
-identities exist and the Platform VM uses its dedicated API service account.
-That plan grants Secret Manager access but does not enable either application
-integration.
+The follow-on access-rollout source sets
+`enable_coding_storage_platform_binding = true`, but that PR must remain draft
+and unmerged until the authority-only plan has been applied and independently
+verified. Merging it earlier would collapse two separately reviewed authority
+transitions into one Terraform plan.
+
+Once the prerequisite is recorded, its protected plan may grant the dedicated
+Platform API identity access only to the private-input reader and evidence-
+finalizer secret containers. The plan must contain no curator grant, bucket IAM
+change, application config, Ansible converge, or retention lock. Both Platform
+application integrations remain false after apply.
 
 Before an Ansible converge, set `PLATFORM_TARGET_ENV=dev|prod` and source
 `infra/ansible/scripts/platform-app-env.sh`. The script selects only that
