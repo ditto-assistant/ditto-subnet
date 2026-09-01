@@ -67,6 +67,7 @@ import {
   getCodingCatalogInputSchema,
   registerCodingCatalogMcpInputSchema,
   retireCodingCatalogInputSchema,
+  supersedeCodingCatalogInputSchema,
   agentCodingShadowEvaluationInputSchema,
   agentCoreQualificationInputSchema,
   getCoreQualificationPolicyInputSchema,
@@ -147,6 +148,7 @@ import {
   fetchCodingCatalogReleases,
   registerCodingCatalogRelease,
   retireCodingCatalogRelease,
+  supersedeCodingCatalogRelease,
   fetchAgentCodingShadowEvaluations,
   fetchAgentCoreQualification,
   fetchCoreQualificationPolicy,
@@ -245,6 +247,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_screener_provider_settings',
   'set_screener_node_channel_settings',
   'register_coding_catalog_release',
+  'supersede_coding_catalog_release',
   'retire_coding_catalog_release',
   'resolve_screening_quarantine',
   'resolve_screening_dispute',
@@ -489,6 +492,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read signed shadow catalog commitments, retirement, and exposure counts.',
   register_coding_catalog_release:
     'Register one curator-signed, weight-zero catalog commitment.',
+  supersede_coding_catalog_release:
+    'Atomically append a replacement catalog and tombstone its predecessor.',
   retire_coding_catalog_release:
     'Irreversibly retire a shadow catalog commitment after review.',
   get_agent_coding_shadow_evaluations:
@@ -1369,6 +1374,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => retireCodingCatalogRelease(input, props.session.email)),
+  )
+
+  registerTool(
+    'supersede_coding_catalog_release',
+    {
+      title: 'Supersede shadow coding catalog',
+      description:
+        'Atomically advance the append-only coding-catalog WAL: verify and append one new curator-signed release, then append a retirement tombstone for the exact predecessor. No row or private problem object is mutated. Requires reason and SUPERSEDE SHADOW CODING CATALOG {old} WITH {new}.',
+      inputSchema: supersedeCodingCatalogInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => supersedeCodingCatalogRelease(input, props.session.email)),
   )
 
   registerTool(

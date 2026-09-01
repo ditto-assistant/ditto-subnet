@@ -60,6 +60,13 @@ secret-delivery service. Client-side encryption, credential custody, provider
 capability verification, and curator upload are separate operator-reviewed
 controls and do not become active merely by merging this code.
 
+Offline publication uses a separate bucket-scoped read-write identity stored as
+`platform-coding-catalog-curator-access-key` and
+`platform-coding-catalog-curator-secret-key`. Terraform owns those containers
+but intentionally grants neither one to the Platform app service account. The
+curator identity is for the protected upload workflow only; it must never be
+rendered into Platform, Backroom, relay, validator, or miner runtime settings.
+
 The reviewed activation sequence is:
 
 ```yaml
@@ -105,6 +112,13 @@ output is a protected upload plan containing object hashes and opaque task
 identities, not task bytes or credentials. It does not contact S3, write a
 catalog object, register the commitment, or sign an admin request; those remain
 separate offline curator operations.
+
+Backroom MCP exposes the append-only release ledger through
+`get_coding_catalog_releases`, `register_coding_catalog_release`,
+`supersede_coding_catalog_release`, and `retire_coding_catalog_release`.
+Supersession is one Platform transaction: it appends the signed replacement and
+the predecessor's retirement tombstone together, or appends neither. It never
+updates or deletes a release, retirement, exposure, or private problem object.
 
 ## Record contract
 

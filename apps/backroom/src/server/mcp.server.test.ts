@@ -181,6 +181,7 @@ describe('Backroom MCP tools', () => {
         'set_submission_cooldown',
         'unban_hotkey',
         'register_coding_catalog_release',
+        'supersede_coding_catalog_release',
         'retire_coding_catalog_release',
       ].sort(),
     )
@@ -7043,6 +7044,25 @@ describe('Backroom MCP tools', () => {
       },
     })
     expect(registered.isError, JSON.stringify(registered.content)).not.toBe(true)
+    const replacementCommitment = {
+      ...commitment,
+      corpus_release_id: 'private-coding-corpus-v2',
+      catalog_merkle_root: '1'.repeat(64),
+      commitment_sha256: '2'.repeat(64),
+    }
+    const superseded = await client.callTool({
+      name: 'supersede_coding_catalog_release',
+      arguments: {
+        previousCorpusReleaseId: commitment.corpus_release_id,
+        expectedPreviousCommitmentSha256: commitment.commitment_sha256,
+        replacementCommitment,
+        replacementSignature: 'a'.repeat(128),
+        reason: 'append reviewed replacement and retire predecessor',
+        confirmation:
+          'SUPERSEDE SHADOW CODING CATALOG private-coding-corpus-v1 WITH private-coding-corpus-v2',
+      },
+    })
+    expect(superseded.isError, JSON.stringify(superseded.content)).not.toBe(true)
     expect(
       (
         await client.callTool({
@@ -7074,6 +7094,14 @@ describe('Backroom MCP tools', () => {
     expect(JSON.parse(String(retireCall?.[1]?.body))).toMatchObject({
       actor: 'peyton@omniaura.ai',
       corpus_release_id: 'private-coding-corpus-v1',
+    })
+    const supersedeCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith('/api/v1/admin/coding-catalog/supersede'),
+    )
+    expect(JSON.parse(String(supersedeCall?.[1]?.body))).toMatchObject({
+      actor: 'peyton@omniaura.ai',
+      previous_corpus_release_id: 'private-coding-corpus-v1',
+      replacement_commitment: { corpus_release_id: 'private-coding-corpus-v2' },
     })
 
     await client.close()

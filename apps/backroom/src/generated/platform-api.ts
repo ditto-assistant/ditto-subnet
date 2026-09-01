@@ -393,6 +393,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/coding-catalog/supersede": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Supersede Coding Catalog
+         * @description Advance the WAL with one replacement release and one retirement row.
+         */
+        post: operations["supersede_coding_catalog_api_v1_admin_coding_catalog_supersede_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/coding-shadow/reconcile": {
         parameters: {
             query?: never;
@@ -9250,6 +9270,28 @@ export interface components {
             current: components["schemas"]["SubmissionSettingsRevision"];
             /** History */
             history: components["schemas"]["SubmissionSettingsRevision"][];
+        };
+        /**
+         * AdminSupersedeCodingCatalogRequest
+         * @description Atomically append a replacement and tombstone its predecessor.
+         */
+        AdminSupersedeCodingCatalogRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Previous Commitment Sha256 */
+            expected_previous_commitment_sha256: string;
+            /** Previous Corpus Release Id */
+            previous_corpus_release_id: string;
+            /** Reason */
+            reason: string;
+            replacement_commitment: components["schemas"]["CodingCatalogCommitment"];
+            /** Replacement Signature */
+            replacement_signature: string;
         };
         /** AdminV9ContractRetestItem */
         AdminV9ContractRetestItem: {
@@ -25894,6 +25936,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["AdminRetireCodingCatalogRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingCatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    supersede_coding_catalog_api_v1_admin_coding_catalog_supersede_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminSupersedeCodingCatalogRequest"];
             };
         };
         responses: {
