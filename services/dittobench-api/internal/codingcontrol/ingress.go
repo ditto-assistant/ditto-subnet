@@ -147,6 +147,19 @@ func (ingress *Ingress) Handler() http.Handler {
 	})
 }
 
+func OperationForRequest(method, path, rawQuery string) (string, bool) {
+	operation, ok := operationByPath[path]
+	return operation, ok && method == http.MethodPost && rawQuery == ""
+}
+
+func EnvelopeValidatorHotkey(values []string) (string, bool) {
+	envelope, ok := parseEnvelope(values)
+	if !ok {
+		return "", false
+	}
+	return envelope.ValidatorHotkey, true
+}
+
 func parseEnvelope(values []string) (codingcontract.ExecutorControlEnvelope, bool) {
 	var zero codingcontract.ExecutorControlEnvelope
 	if len(values) != 1 || len(values[0]) == 0 || len(values[0]) > base64.RawURLEncoding.EncodedLen(maxEnvelopeBytes) {

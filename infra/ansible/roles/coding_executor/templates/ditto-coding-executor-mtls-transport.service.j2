@@ -1,0 +1,42 @@
+[Unit]
+Description=Ditto coding executor mTLS transport
+After={{ coding_executor_scorer_service_unit }}.service network-online.target
+Requires={{ coding_executor_scorer_service_unit }}.service
+Wants=network-online.target
+ConditionPathExists={{ coding_executor_scorer_runtime_binary_path }}
+ConditionPathIsSocket=/run/ditto-coding-scorer/control.sock
+
+[Service]
+Type=simple
+User={{ coding_executor_scorer_user }}
+Group={{ coding_executor_scorer_group }}
+Environment=HOME={{ coding_executor_scorer_home }}
+Environment=DITTOBENCH_CODING_EXECUTOR_MTLS_TRANSPORT_ENABLED=true
+Environment=DITTOBENCH_CODING_EXECUTOR_MTLS_BIND_ADDRESS={{ coding_executor_mtls_bind_address }}
+Environment=DITTOBENCH_CODING_EXECUTOR_MTLS_SOURCE_CIDR={{ coding_executor_mtls_source_cidr }}
+Environment=DITTOBENCH_CODING_EXECUTOR_VALIDATOR_HOTKEY={{ coding_executor_validator_hotkey }}
+LoadCredential=validator-ca.pem:{{ coding_executor_mtls_ca_certificate_path }}
+LoadCredential=server-cert.pem:{{ coding_executor_mtls_server_certificate_path }}
+LoadCredential=server-key.pem:{{ coding_executor_mtls_server_key_path }}
+ExecStart={{ coding_executor_scorer_runtime_binary_path }} --mtls-proxy
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow={{ coding_executor_mtls_source_cidr }}
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

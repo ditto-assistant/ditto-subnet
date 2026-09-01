@@ -102,6 +102,26 @@
       mTLS identity staging requires the materialized attested scorer runtime.
       It cannot establish a transport identity for an unverified host binary.
 
+- name: Reject mTLS transport before scorer and identity prerequisites
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_mtls_transport_enabled | bool) or coding_executor_scorer_service_enabled | bool
+      - not (coding_executor_mtls_transport_enabled | bool) or coding_executor_mtls_identity_enabled | bool
+    fail_msg: >-
+      The mTLS transport requires the signed Unix-ingress scorer and verified
+      mTLS identity. It cannot expose an independent executor path.
+
+- name: Reject an invalid mTLS transport profile
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_mtls_transport_enabled | bool) or coding_executor_mtls_transport_unit == 'ditto-coding-executor-mtls-transport'
+      - not (coding_executor_mtls_transport_enabled | bool) or coding_executor_mtls_bind_address is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}$')
+      - not (coding_executor_mtls_transport_enabled | bool) or coding_executor_mtls_source_cidr is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}/32$')
+      - not (coding_executor_mtls_transport_enabled | bool) or coding_executor_mtls_port | int == 9443
+    fail_msg: >-
+      The mTLS transport accepts one reviewed private IPv4 bind, validator
+      source CIDR, and fixed port only.
+
 - name: Report that the coding executor daemon is deliberately disabled
   ansible.builtin.debug:
     msg: >-
@@ -659,10 +679,31 @@
               - /usr/local/lib/ditto-coding-executor/verify-scorer-mtls-identity.sh
           changed_when: false
 
+    - name: Install the default-off scorer mTLS transport
+      when: coding_executor_mtls_transport_enabled | bool
+      block:
+        - name: Install the fixed scorer mTLS transport unit
+          ansible.builtin.template:
+            src: ditto-coding-executor-mtls-transport.service.j2
+            dest: "/etc/systemd/system/{{ coding_executor_mtls_transport_unit }}.service"
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Start mTLS transport only after scorer and identity verification
+          ansible.builtin.systemd_service:
+            name: "{{ coding_executor_mtls_transport_unit }}.service"
+            enabled: true
+            state: restarted
+            daemon_reload: true
+
     - name: Report that task-serving scorer and worker activation remain disabled
+      when:
+        - not (coding_executor_scorer_service_enabled | bool)
+        - not (coding_executor_mtls_transport_enabled | bool)
       ansible.builtin.debug:
         msg: >-
           Dedicated rootless daemon is ready on {{ coding_executor_docker_host }},
           and an optional local guard may inspect an attested image, but no
           task-serving scorer, validator, wallet, Platform control, ticket,
-          network listener, or coding gate has been installed or enabled.
+          mTLS transport, or coding gate has been installed or enabled.
