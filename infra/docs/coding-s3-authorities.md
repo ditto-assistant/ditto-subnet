@@ -203,3 +203,41 @@ SHA-256 bound. The commands are never automatic and intentionally leave their
 small retained canary objects in place. Do not enable either Platform
 application integration until the control-plane and data-plane receipt digests
 are reviewed together.
+
+## Development Platform activation
+
+Only after all four control/data-plane receipt digests are reviewed may the
+development host override both role defaults:
+
+```yaml
+platform_coding_catalog_enabled: true
+platform_coding_evidence_enabled: true
+```
+
+Production pins both values to `false`. Merge does not deploy or converge an
+infra-only host-var change. Before converge, verify the `dev` branch contains
+the exact reviewed Platform storage implementation and canary commits; the
+development host intentionally checks out `dev`, not `main`. The operator must
+then select the development Terraform outputs and converge only the development
+VM:
+
+```sh
+export GCP_OSLOGIN_USER=<operator-os-login-user>
+export PLATFORM_TARGET_ENV=dev
+source infra/ansible/scripts/platform-app-env.sh
+ansible-playbook -i infra/ansible/inventory/gcp.yml \
+  infra/ansible/playbooks/gcp-platform-app.yml \
+  --limit ditto-platform-dev
+```
+
+The role fails before Secret Manager access or `.env` rendering if either
+environment-scoped bucket/access ID is absent or if the two authorities reuse a
+bucket, HMAC identity, miner-upload authority, or avatar authority. After
+converge, verify the exact dev checkout/config SHA and API health, confirm the
+private catalog and evidence minters load only in the Python Platform role, and
+recheck that the production `.env` was not modified.
+
+This activation still creates no coding run or ticket, starts no worker or
+executor, invokes no model or grader, and affects no score, rank, weight, or
+emission. Rollback is both dev flags back to `false` followed by the same
+development-only converge.

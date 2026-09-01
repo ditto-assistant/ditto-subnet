@@ -210,3 +210,31 @@ test "$PLATFORM_CODING_EVIDENCE_ACCESS_KEY" = finalizer-prod
         capture_output=True,
         text=True,
     )
+
+
+def test_coding_storage_application_activation_is_dev_only() -> None:
+    defaults = yaml.safe_load(
+        (ROOT / "infra/ansible/roles/platform_app/defaults/main.yml").read_text()
+    )
+    dev = yaml.safe_load(
+        (ROOT / "infra/ansible/host_vars/ditto-platform-dev.yml").read_text()
+    )
+    prod = yaml.safe_load(
+        (ROOT / "infra/ansible/host_vars/ditto-platform-prod.yml").read_text()
+    )
+    compose = (ROOT / "docker-compose.yml").read_text()
+
+    assert defaults["platform_coding_catalog_enabled"] is False
+    assert defaults["platform_coding_evidence_enabled"] is False
+    assert dev["platform_env"] == "dev"
+    assert dev["platform_branch"] == "dev"
+    assert dev["platform_coding_catalog_enabled"] is True
+    assert dev["platform_coding_evidence_enabled"] is True
+    assert "platform_inference_relay_ports" not in dev
+    assert prod["platform_env"] == "prod"
+    assert prod["platform_branch"] == "main"
+    assert prod["platform_coding_catalog_enabled"] is False
+    assert prod["platform_coding_evidence_enabled"] is False
+    assert "DITTOBENCH_CODING_SHADOW_ENABLED:-false" in compose
+    assert "DITTOBENCH_CODING_CANARY_ENABLED:-false" in compose
+    assert "VALIDATOR_CODING_SHADOW_ENABLED:-false" in compose

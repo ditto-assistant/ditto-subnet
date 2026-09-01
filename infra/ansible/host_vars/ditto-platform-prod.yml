@@ -58,6 +58,11 @@ platform_inference_relay_ports: [8010, 8011]
 # Deploy-owned runtime values live separately in /opt/ditto-platform/.env.deploy.
 secret_pylon_token: platform-prod-pylon-open-access-token
 
+# Production remains explicitly dark while the development-only storage
+# configuration canary runs. Do not inherit a future role-default change.
+platform_coding_catalog_enabled: false
+platform_coding_evidence_enabled: false
+
 # Platform-operated screener auth: allowlist the dedicated prod screener hotkey
 # and share its bearer token (the same SCREENER_API_TOKEN configured on
 # ditto-screener-prod). This replaces the validator-permit gate, so the screener

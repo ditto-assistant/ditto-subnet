@@ -20,3 +20,11 @@ platform_hippius_endpoint: "https://eu-central-1.hippius.com"
 # Per-env Secret Manager secret ids (shared ones are in the platform_app role).
 # Deploy-owned runtime values live separately in /opt/ditto-platform/.env.deploy.
 secret_pylon_token: platform-dev-pylon-open-access-token
+
+# Development-only coding storage activation. BLOCKED until both #1476
+# control-plane receipts and both #1478 data-plane receipts pass review. These
+# flags only render the private-input reader and sealed-evidence finalizer into
+# the Python Platform process; no coding worker, ticket issuer, scorer, or
+# weight path is enabled here.
+platform_coding_catalog_enabled: true
+platform_coding_evidence_enabled: true
