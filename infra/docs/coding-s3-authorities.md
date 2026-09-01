@@ -110,3 +110,41 @@ clear every private-input and evidence storage variable.
 Even after apply, coding remains inactive. Platform configuration, secret
 access, capability issuance, worker activation, scoring, and weights require
 separate reviews.
+
+## Post-apply control verification
+
+After each protected apply, run the inert control-plane verifier before moving
+to the next phase:
+
+```sh
+python3 infra/ansible/scripts/verify_coding_storage_authorities.py \
+  --project ditto-app-dev \
+  --environment prod \
+  --phase authorities \
+  --source-sha <exact-applied-main-sha> \
+  --output coding-storage-authorities-receipt.json
+```
+
+Use `--phase platform-access` only after the separate Platform-binding apply.
+The command issues only `gcloud` describe/list/IAM-policy reads. It never reads
+a Secret Manager payload or performs an object operation. It verifies bucket
+location, class, uniform access, public-access prevention, versioning,
+retention, exact bucket IAM, service-account identities, one active HMAC key
+per identity, secure HTTP transport, Data Read/Write audit logging, and the
+phase-specific Platform secret bindings. Any curator access, direct Platform
+bucket IAM, broad storage role, public member, missing audit mode, or drifted
+retention fails closed.
+
+Run it with the protected infrastructure plan identity or a dedicated audit
+identity that can read bucket descriptions/IAM, service-account and HMAC
+metadata, Secret Manager IAM policies, effective organization policy, and the
+project audit configuration. It needs no `secretmanager.versions.access`,
+object-data, bucket-mutation, IAM-mutation, or Terraform-state write permission.
+An identity missing any required control-plane read fails the verification; do
+not reinterpret that as a passing or absent policy.
+
+The output is mode `0600`, creation-only, URL-free, and contains no HMAC access
+ID or secret value. Its canonical payload receives a SHA-256 receipt digest.
+This receipt proves control-plane posture only. A later data-plane canary must
+separately prove exact private-input GET and sealed-evidence PUT/HEAD/full-hash
+behavior before either Platform application gate is enabled.
