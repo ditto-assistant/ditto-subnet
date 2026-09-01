@@ -61,16 +61,27 @@ the first plan must check existing audit configuration and expected cost.
 
 ## First protected plan
 
-1. Keep `enable_coding_s3_authorities = false` for ordinary plans.
-2. Review the proposed names and confirm they are globally available.
+The authority-rollout source intent sets
+`enable_coding_s3_authorities = true` while keeping
+`enable_coding_storage_platform_binding = false`. Merge records intent only;
+it does not run Terraform.
+
+A read-only preflight on 2026-09-01 returned `NOT_FOUND` for all four proposed
+bucket names. That observation does not reserve a globally unique name, so the
+protected plan/apply operator must recheck immediately before apply. The same
+developer identity lacked permission to inspect effective org-policy and audit
+configuration; no conclusion was drawn from that gap.
+
+1. Confirm the plan source is the exact current `main` SHA.
+2. Recheck the four proposed names and confirm they remain globally available.
 3. Confirm the EU location and 30-day input / 90-day evidence minimums.
 4. Inspect existing project Cloud Storage audit and organization-policy
    configuration for conflicts, and confirm every XML client uses HTTPS.
-5. Set the production intent to true in a separately reviewed PR.
-6. Run the protected `gcp-platform` plan; do not apply from an application
+5. Confirm Platform secret binding and both application gates remain false.
+6. Run the protected `gcp-platform` plan; never apply from an application
    release workflow.
 7. Verify the plan creates exactly two buckets and three identities per
-   environment, with no public, list, overwrite, or delete grant.
+   environment, with no public, list, overwrite, delete, or Platform grant.
 8. Apply only after owner approval, then record the exact Terraform revision
    and resource identities.
 

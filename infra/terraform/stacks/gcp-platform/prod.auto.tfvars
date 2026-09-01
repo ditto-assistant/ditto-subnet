@@ -28,10 +28,11 @@ enable_screener_fleet_dev_host = false
 # its public CA trust anchor has been reviewed and supplied.
 enable_screener_fleet_x509_identity = false
 
-# Private coding byte authorities remain absent until the bucket names,
-# retention periods, IAM diff, HMAC custody, and Data Access audit cost are
-# approved in a protected infrastructure plan.
-enable_coding_s3_authorities = false
+# Stage only creation of the private coding byte authorities in the next
+# protected plan. Merge alone does not apply Terraform. The plan must still
+# verify names, retention, IAM, HMAC custody, audit cost, and org-policy drift
+# before an owner authorizes apply.
+enable_coding_s3_authorities = true
 # Runtime secret access is staged independently after the bucket/IAM plan. It
 # remains false even when the storage authorities are first created.
 enable_coding_storage_platform_binding = false

@@ -59,13 +59,14 @@ Terraform change. A Terraform merge alone does not alter either bucket; the
 
 Applied **deliberately** (not on every merge). Two paths:
 
-The private coding authorities remain absent while
-`enable_coding_s3_authorities = false`. Their first protected plan must review
-the globally unique bucket names, retention periods, custom roles, HMAC secret
-custody, project-wide Cloud Storage Data Access audit cost, and the project-wide
-`storage.secureHttpTransport` policy. Do not lock the retention policies in the
-same apply that first creates them; verify the provider behavior and recovery
-runbook before a separately approved, irreversible lock operation.
+Production intent now stages private coding authority creation with
+`enable_coding_s3_authorities = true`; merge alone does not run Terraform. The
+first protected plan must review the globally unique bucket names, retention
+periods, custom roles, HMAC secret custody, project-wide Cloud Storage Data
+Access audit cost, and the project-wide `storage.secureHttpTransport` policy.
+Do not lock the retention policies in the same apply that first creates them;
+verify provider behavior and recovery before a separately approved,
+irreversible lock operation.
 
 `enable_coding_storage_platform_binding` is a second, independent false gate.
 It grants only the dedicated Platform API identity access to the private-input

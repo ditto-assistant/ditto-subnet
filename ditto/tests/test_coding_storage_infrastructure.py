@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).parents[2]
 GCP_ROOT = ROOT / "infra" / "terraform" / "stacks" / "gcp-platform"
 TERRAFORM = GCP_ROOT / "coding-storage.tf"
@@ -13,18 +15,26 @@ def _resource_body(source: str, resource_type: str, name: str) -> str:
     return source.split(marker, 1)[1].split("\n}\n", 1)[0]
 
 
-def test_coding_storage_authorities_are_absent_by_default() -> None:
+def test_coding_storage_rollout_stages_only_authority_creation() -> None:
     variables = (GCP_ROOT / "variables.tf").read_text()
     intent = (GCP_ROOT / "prod.auto.tfvars").read_text()
     terraform = TERRAFORM.read_text()
+    platform_defaults = yaml.safe_load(
+        (ROOT / "infra/ansible/roles/platform_app/defaults/main.yml").read_text()
+    )
 
     declaration = variables.split('variable "enable_coding_s3_authorities"', 1)[
         1
     ].split("\n}\n", 1)[0]
     assert "default     = false" in declaration
+    assert re.search(r"^enable_coding_s3_authorities\s*=\s*true$", intent, re.MULTILINE)
     assert re.search(
-        r"^enable_coding_s3_authorities\s*=\s*false$", intent, re.MULTILINE
+        r"^enable_coding_storage_platform_binding\s*=\s*false$",
+        intent,
+        re.MULTILINE,
     )
+    assert platform_defaults["platform_coding_catalog_enabled"] is False
+    assert platform_defaults["platform_coding_evidence_enabled"] is False
     assert (
         "coding_storage_envs = var.enable_coding_s3_authorities "
         "? local.app_envs : {}" in terraform
