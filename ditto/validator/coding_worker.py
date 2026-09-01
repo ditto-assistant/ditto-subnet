@@ -175,6 +175,8 @@ class CodingWorkerRuntime(CodingAttemptRuntime, Protocol):
     async def recover(
         self,
         *,
+        agent_id: UUID,
+        agent_artifact_sha256: str,
         ticket_id: UUID,
         coding_run_id: str,
         deadline: datetime,
@@ -330,6 +332,8 @@ class CodingShadowWorker:
 
     async def _recover_started(self, claim: CodingClaimResponse) -> bool:
         recovery = await self._runtime.recover(
+            agent_id=claim.agent_id,
+            agent_artifact_sha256=claim.agent_artifact_sha256,
             ticket_id=claim.ticket_id,
             coding_run_id=claim.coding_run_id,
             deadline=claim.ticket_deadline,
@@ -374,6 +378,8 @@ class CodingShadowWorker:
 
     async def _require_released(self, claim: CodingClaimResponse) -> None:
         terminal = await self._runtime.recover(
+            agent_id=claim.agent_id,
+            agent_artifact_sha256=claim.agent_artifact_sha256,
             ticket_id=claim.ticket_id,
             coding_run_id=claim.coding_run_id,
             deadline=claim.ticket_deadline,

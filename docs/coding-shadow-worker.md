@@ -63,6 +63,28 @@ Terminal acknowledgement advances the outbox to `released`; observing that
 durable state is also the only point where the supervisor may evict its
 process-local session tombstone.
 
+## Dedicated-executor client boundary
+
+`CodingSupervisorRuntime` now has an explicit remote mode for the dedicated
+executor transport. A trusted caller supplies a separately constructed TLS 1.3
+client, the loaded validator keypair, private executor origin, and validator
+hotkey. Every exact supervisor body is SHA-256 bound into a fresh, short-lived
+`dittobench-coding-executor-control-v1` envelope; recovery additionally carries
+the durable claim's agent UUID and artifact SHA instead of inventing missing
+identity. The remote request sends only the signed envelope and JSON body—never
+the local scorer bearer.
+
+`CodingExecutorTLSConfig` and `create_coding_executor_http_client` validate
+three distinct absolute credential files, reject symlinks, writable or
+executable credentials, oversized inputs, and group/world-readable private
+keys, then construct a no-proxy, no-redirect TLS 1.3-only client. This client is
+deliberately not parsed from environment or constructed by validator startup
+yet. The publication/outbox client still uses the local bearer transport, so
+wiring only the supervisor remotely would strand durable evidence after
+candidate execution. A later atomic PR must move publication operations to the
+same signed mTLS authority before any deploy or worker gate can reference this
+client.
+
 ## Activation checklist
 
 Activation is deliberately a coordinated operator action, not a code default.

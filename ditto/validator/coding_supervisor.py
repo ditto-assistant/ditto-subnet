@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import ipaddress
 import json
+import os
+import ssl
+import stat
 from collections.abc import Callable
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
@@ -21,6 +27,7 @@ from ditto.api_models.coding import (
     CodingGradingLeaseResponse,
     CodingTaskEvidence,
 )
+from ditto.api_models.coding_executor_control import CodingExecutorOperation
 from ditto.api_models.coding_harness import CodingHarnessLaunchResponse
 from ditto.api_models.coding_inference_grants import (
     CodingInferenceExchangeResponse,
@@ -34,10 +41,38 @@ from ditto.validator.coding_attempt import (
 )
 from ditto.validator.config import ValidatorConfig
 from ditto.validator.errors import ValidatorInfrastructureError
+from ditto.validator.signing import sign_coding_executor_control
 
 _REQUEST_SCHEMA = "dittobench-coding-attempt-supervisor-request-v1"
 _RESPONSE_SCHEMA = "dittobench-coding-attempt-supervisor-response-v1"
 _MAX_BODY_BYTES = 8 << 20
+_MAX_TLS_FILE_BYTES = 1 << 20
+_EXECUTOR_OPERATION = {
+    "prepare": CodingExecutorOperation.SUPERVISOR_PREPARE,
+    "author": CodingExecutorOperation.SUPERVISOR_AUTHOR,
+    "grade": CodingExecutorOperation.SUPERVISOR_GRADE,
+    "abort_authoring": CodingExecutorOperation.SUPERVISOR_ABORT_AUTHORING,
+    "abort_grading": CodingExecutorOperation.SUPERVISOR_ABORT_GRADING,
+    "recover": CodingExecutorOperation.SUPERVISOR_RECOVER,
+}
+
+
+@dataclass(frozen=True, repr=False)
+class CodingExecutorTLSConfig:
+    ca_path: str
+    client_cert_path: str
+    client_key_path: str
+    timeout_seconds: float
+
+    def __post_init__(self) -> None:
+        paths = (self.ca_path, self.client_cert_path, self.client_key_path)
+        if (
+            any(not value or not os.path.isabs(value) for value in paths)
+            or len(set(paths)) != 3
+            or not 1 <= self.timeout_seconds <= 300
+        ):
+            raise ValueError("coding executor TLS client configuration is invalid")
+
 
 type SupervisorOperation = Literal[
     "prepare", "author", "grade", "abort_authoring", "abort_grading", "recover"
@@ -207,22 +242,36 @@ class CodingSupervisorRuntime:
         config: ValidatorConfig,
         client: httpx.AsyncClient,
         platform: CodingInferencePlatform,
+        keypair: Any | None = None,
+        executor_base_url: str | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
-        parsed = urlsplit(config.dittobench_api_url)
+        remote = executor_base_url is not None
         token = config.dittobench_control_token
+        base_url = (
+            executor_base_url
+            if executor_base_url is not None
+            else config.dittobench_api_url
+        )
+        parsed = urlsplit(base_url)
         if (
             not _tls_or_loopback(parsed.scheme, parsed.hostname)
             or not parsed.netloc
             or parsed.username is not None
             or parsed.password is not None
+            or parsed.path not in {"", "/"}
             or parsed.query
             or parsed.fragment
-            or not _valid_control_token(token)
+            or (remote and not _private_executor_endpoint(parsed))
+            or (not remote and not _valid_control_token(token))
+            or (remote and keypair is None)
         ):
             raise ValueError("coding supervisor configuration is invalid")
-        self._base = config.dittobench_api_url.rstrip("/")
-        self._token = token
+        self._base = base_url.rstrip("/")
+        self._token = None if remote else token
+        self._remote = remote
+        self._keypair = keypair
+        self._validator_hotkey = getattr(config, "validator_hotkey", "")
         self._client = client
         self._platform = platform
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -243,6 +292,8 @@ class CodingSupervisorRuntime:
             )
         prepared = await self._call(
             operation="prepare",
+            agent_id=UUID(lease.run_manifest.agent_id),
+            agent_artifact_sha256=lease.run_manifest.agent_artifact_sha256,
             ticket_id=lease.ticket_id,
             coding_run_id=lease.coding_run_id,
             deadline=lease.ticket_deadline,
@@ -268,6 +319,8 @@ class CodingSupervisorRuntime:
             _validate_grant_authority(lease, exchange)
             response = await self._call(
                 operation="author",
+                agent_id=UUID(lease.run_manifest.agent_id),
+                agent_artifact_sha256=lease.run_manifest.agent_artifact_sha256,
                 ticket_id=lease.ticket_id,
                 coding_run_id=lease.coding_run_id,
                 deadline=lease.ticket_deadline,
@@ -331,6 +384,8 @@ class CodingSupervisorRuntime:
     ) -> CodingGradingOutcome:
         response = await self._call(
             operation="grade",
+            agent_id=lease.agent_id,
+            agent_artifact_sha256=lease.run_manifest.agent_artifact_sha256,
             ticket_id=lease.ticket_id,
             coding_run_id=lease.coding_run_id,
             deadline=lease.ticket_deadline,
@@ -373,6 +428,8 @@ class CodingSupervisorRuntime:
     async def abort_authoring(self, lease: CodingAuthoringLeaseResponse) -> None:
         response = await self._call(
             operation="abort_authoring",
+            agent_id=UUID(lease.run_manifest.agent_id),
+            agent_artifact_sha256=lease.run_manifest.agent_artifact_sha256,
             ticket_id=lease.ticket_id,
             coding_run_id=lease.coding_run_id,
             deadline=lease.ticket_deadline,
@@ -389,6 +446,8 @@ class CodingSupervisorRuntime:
     async def abort_grading(self, lease: CodingGradingLeaseResponse) -> None:
         response = await self._call(
             operation="abort_grading",
+            agent_id=lease.agent_id,
+            agent_artifact_sha256=lease.run_manifest.agent_artifact_sha256,
             ticket_id=lease.ticket_id,
             coding_run_id=lease.coding_run_id,
             deadline=lease.ticket_deadline,
@@ -403,12 +462,16 @@ class CodingSupervisorRuntime:
     async def recover(
         self,
         *,
+        agent_id: UUID,
+        agent_artifact_sha256: str,
         ticket_id: UUID,
         coding_run_id: str,
         deadline: datetime,
     ) -> CodingSupervisorRecovery:
         response = await self._call(
             operation="recover",
+            agent_id=agent_id,
+            agent_artifact_sha256=agent_artifact_sha256,
             ticket_id=ticket_id,
             coding_run_id=coding_run_id,
             deadline=deadline,
@@ -425,6 +488,8 @@ class CodingSupervisorRuntime:
         self,
         *,
         operation: SupervisorOperation,
+        agent_id: UUID,
+        agent_artifact_sha256: str,
         ticket_id: UUID,
         coding_run_id: str,
         deadline: datetime,
@@ -434,7 +499,14 @@ class CodingSupervisorRuntime:
         harness: dict[str, Any] | None,
     ) -> _SupervisorResponse:
         if (
-            ticket_id.int == 0
+            agent_id.int == 0
+            or len(agent_artifact_sha256) != 64
+            or agent_artifact_sha256 != agent_artifact_sha256.lower()
+            or any(
+                character not in "0123456789abcdef"
+                for character in agent_artifact_sha256
+            )
+            or ticket_id.int == 0
             or not coding_run_id
             or len(coding_run_id) > 256
             or any(
@@ -486,17 +558,46 @@ class CodingSupervisorRuntime:
             pool=min(10.0, remaining),
         )
         endpoint = operation.replace("_", "-")
+        headers = {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+        }
+        if self._remote:
+            issued_at = now.astimezone(UTC).replace(microsecond=0)
+            lifetime = min(
+                timedelta(minutes=1),
+                deadline.astimezone(UTC) - issued_at,
+            )
+            if lifetime <= timedelta(0) or self._keypair is None:
+                raise CodingAttemptIntegrityError(
+                    "coding executor signing authority expired"
+                )
+            envelope = sign_coding_executor_control(
+                self._keypair,
+                validator_hotkey=self._validator_hotkey,
+                agent_id=agent_id,
+                agent_artifact_sha256=agent_artifact_sha256,
+                coding_run_id=coding_run_id,
+                ticket_id=ticket_id,
+                operation=_EXECUTOR_OPERATION[operation],
+                request_body_sha256=hashlib.sha256(body).hexdigest(),
+                nonce=uuid4(),
+                issued_at=issued_at,
+                lifetime=lifetime,
+            )
+            encoded = envelope.model_dump_json(by_alias=True).encode()
+            headers["X-Dittobench-Coding-Control"] = (
+                base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+            )
+        else:
+            headers["Authorization"] = f"Bearer {self._token}"
         received = bytearray()
         try:
             async with asyncio.timeout(remaining):
                 async with self._client.stream(
                     "POST",
                     f"{self._base}/v1/coding/supervisor/{endpoint}",
-                    headers={
-                        "Authorization": f"Bearer {self._token}",
-                        "Content-Type": "application/json",
-                        "Cache-Control": "no-store",
-                    },
+                    headers=headers,
                     content=body,
                     follow_redirects=False,
                     timeout=timeout,
@@ -557,6 +658,50 @@ class CodingSupervisorRuntime:
         return "CodingSupervisorRuntime(private=True)"
 
 
+def create_coding_executor_http_client(
+    config: CodingExecutorTLSConfig,
+) -> httpx.AsyncClient:
+    """Build the dedicated no-proxy TLS 1.3 client from protected files."""
+
+    ca = _require_tls_file(config.ca_path, private=False)
+    certificate = _require_tls_file(config.client_cert_path, private=False)
+    key = _require_tls_file(config.client_key_path, private=True)
+    try:
+        context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=str(ca))
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.maximum_version = ssl.TLSVersion.TLSv1_3
+        context.check_hostname = True
+        context.load_cert_chain(certfile=str(certificate), keyfile=str(key))
+    except (OSError, ssl.SSLError) as error:
+        raise ValueError("coding executor mTLS credentials are invalid") from error
+    return httpx.AsyncClient(
+        verify=context,
+        trust_env=False,
+        follow_redirects=False,
+        timeout=config.timeout_seconds,
+    )
+
+
+def _require_tls_file(value: str, *, private: bool) -> Path:
+    path = Path(value)
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise ValueError("coding executor mTLS credential is unavailable") from error
+    mode = stat.S_IMODE(metadata.st_mode)
+    if (
+        not path.is_absolute()
+        or not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or not 0 < metadata.st_size <= _MAX_TLS_FILE_BYTES
+        or mode & 0o111
+        or mode & 0o022
+        or (private and mode & 0o077)
+    ):
+        raise ValueError("coding executor mTLS credential is unsafe")
+    return path
+
+
 def _tls_or_loopback(scheme: str, hostname: str | None) -> bool:
     if hostname is None or hostname == "":
         return False
@@ -571,6 +716,16 @@ def _tls_or_loopback(scheme: str, hostname: str | None) -> bool:
         return ipaddress.ip_address(hostname).is_loopback
     except ValueError:
         return False
+
+
+def _private_executor_endpoint(parsed: Any) -> bool:
+    if parsed.scheme != "https" or parsed.port != 9443 or not parsed.hostname:
+        return False
+    try:
+        address = ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        return False
+    return address.version == 4 and address.is_private and not address.is_loopback
 
 
 def _authoring_payload(authoring: CodingAuthoringOutcome) -> dict[str, Any]:

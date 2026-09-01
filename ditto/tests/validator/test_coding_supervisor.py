@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
+import ssl
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +20,7 @@ from ditto.api_models.coding import (
     CodingGradingLeaseResponse,
     CodingRunManifest,
 )
+from ditto.api_models.coding_executor_control import CodingExecutorControlEnvelope
 from ditto.api_models.coding_harness import CodingHarnessLaunchResponse
 from ditto.api_models.coding_inference_grants import (
     CodingInferenceExchangeResponse,
@@ -28,9 +32,11 @@ from ditto.validator.coding_attempt import (
     CodingAttemptRuntime,
 )
 from ditto.validator.coding_supervisor import (
+    CodingExecutorTLSConfig,
     CodingInferencePlatform,
     CodingSupervisorRecovery,
     CodingSupervisorRuntime,
+    create_coding_executor_http_client,
 )
 from ditto.validator.errors import ValidatorInfrastructureError
 from ditto.validator.platform import PlatformClient
@@ -47,6 +53,26 @@ def _config() -> Any:
         dittobench_api_url="https://dittobench-api:8000",
         dittobench_control_token="coding-supervisor-control-token-000000000000",
     )
+
+
+class _Keypair:
+    def __init__(self) -> None:
+        self.messages: list[bytes] = []
+
+    def sign(self, message: bytes) -> bytes:
+        self.messages.append(message)
+        return b"\xab" * 64
+
+
+class _SSLContext:
+    def __init__(self) -> None:
+        self.minimum_version: Any = None
+        self.maximum_version: Any = None
+        self.check_hostname = False
+        self.cert_chain: tuple[str, str] | None = None
+
+    def load_cert_chain(self, *, certfile: str, keyfile: str) -> None:
+        self.cert_chain = (certfile, keyfile)
 
 
 def _clock() -> datetime:
@@ -89,9 +115,18 @@ def _lease(model: type[Any], *, grading: bool = False) -> Any:
         "coding_run_id": request["coding_run_id"],
     }
     if grading:
+        manifest = CodingRunManifest.model_validate_json(
+            json.dumps(_CONTRACT["manifest"])
+        ).model_copy(
+            update={
+                "coding_run_id": request["coding_run_id"],
+                "agent_id": "11111111-1111-4111-8111-111111111111",
+            }
+        )
         values.update(
             agent_id=UUID("11111111-1111-4111-8111-111111111111"),
             run_row_id=UUID("22222222-2222-4222-8222-222222222222"),
+            run_manifest=manifest,
         )
     else:
         manifest = CodingRunManifest.model_validate_json(
@@ -269,6 +304,8 @@ async def test_runtime_author_grade_abort_and_recover() -> None:
         await runtime.abort_authoring(authoring_lease)
         await runtime.abort_grading(grading_lease)
         recovery = await runtime.recover(
+            agent_id=UUID(authoring_lease.run_manifest.agent_id),
+            agent_artifact_sha256=(authoring_lease.run_manifest.agent_artifact_sha256),
             ticket_id=authoring_lease.ticket_id,
             coding_run_id=authoring_lease.coding_run_id,
             deadline=authoring_lease.ticket_deadline,
@@ -296,6 +333,114 @@ async def test_runtime_author_grade_abort_and_recover() -> None:
         assert timeout["read"] > 30
         assert timeout["connect"] <= 10
     assert "control-token" not in repr(runtime)
+
+
+@pytest.mark.asyncio
+async def test_remote_runtime_signs_exact_body_without_forwarding_bearer() -> None:
+    lease = _lease(CodingAuthoringLeaseResponse)
+    keypair = _Keypair()
+    observed: list[CodingExecutorControlEnvelope] = []
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "10.30.0.8"
+        assert request.url.port == 9443
+        assert "authorization" not in request.headers
+        raw_header = request.headers["x-dittobench-coding-control"]
+        decoded = base64.urlsafe_b64decode(raw_header + "=" * (-len(raw_header) % 4))
+        envelope = CodingExecutorControlEnvelope.model_validate_json(decoded)
+        assert (
+            envelope.request_body_sha256 == hashlib.sha256(request.content).hexdigest()
+        )
+        assert envelope.ticket_id == lease.ticket_id
+        assert envelope.coding_run_id == lease.coding_run_id
+        assert envelope.agent_id == UUID(lease.run_manifest.agent_id)
+        assert (
+            envelope.agent_artifact_sha256 == lease.run_manifest.agent_artifact_sha256
+        )
+        observed.append(envelope)
+        return _dynamic_response(request)
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://127.0.0.1:8000",
+        dittobench_control_token="coding-supervisor-control-token-000000000000",
+        validator_hotkey="5" + "A" * 47,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        runtime = CodingSupervisorRuntime(
+            cast(Any, config),
+            client,
+            _Platform(lease),
+            keypair=keypair,
+            executor_base_url="https://10.30.0.8:9443",
+            clock=_clock,
+        )
+        recovery = await runtime.recover(
+            agent_id=UUID(lease.run_manifest.agent_id),
+            agent_artifact_sha256=lease.run_manifest.agent_artifact_sha256,
+            ticket_id=lease.ticket_id,
+            coding_run_id=lease.coding_run_id,
+            deadline=lease.ticket_deadline,
+        )
+    assert recovery.state == "terminal_pending"
+    assert len(observed) == 1
+    assert len(keypair.messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_executor_http_client_pins_tls13_and_protected_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ca = tmp_path / "ca.pem"
+    certificate = tmp_path / "client.pem"
+    key = tmp_path / "client-key.pem"
+    for path in (ca, certificate, key):
+        path.write_text("test")
+    ca.chmod(0o444)
+    certificate.chmod(0o444)
+    key.chmod(0o600)
+    context = _SSLContext()
+    monkeypatch.setattr(
+        "ditto.validator.coding_supervisor.ssl.create_default_context",
+        lambda *_args, **_kwargs: context,
+    )
+    client_options: dict[str, Any] = {}
+
+    class _Client:
+        trust_env = False
+
+        async def aclose(self) -> None:
+            return None
+
+    def _client(**options: Any) -> _Client:
+        client_options.update(options)
+        return _Client()
+
+    monkeypatch.setattr(
+        "ditto.validator.coding_supervisor.httpx.AsyncClient",
+        _client,
+    )
+    config = CodingExecutorTLSConfig(
+        ca_path=str(ca),
+        client_cert_path=str(certificate),
+        client_key_path=str(key),
+        timeout_seconds=30.0,
+    )
+    client = create_coding_executor_http_client(config)
+    try:
+        assert context.minimum_version == ssl.TLSVersion.TLSv1_3
+        assert context.maximum_version == ssl.TLSVersion.TLSv1_3
+        assert context.check_hostname is True
+        assert context.cert_chain == (str(certificate), str(key))
+        assert client.trust_env is False
+        assert client_options["verify"] is context
+        assert client_options["follow_redirects"] is False
+    finally:
+        await client.aclose()
+
+    key.chmod(0o644)
+    with pytest.raises(ValueError, match="credential is unsafe"):
+        create_coding_executor_http_client(config)
 
 
 @pytest.mark.asyncio
@@ -431,6 +576,19 @@ def test_runtime_configuration_and_vector_shape() -> None:
         object(),  # type: ignore[arg-type]
         object(),  # type: ignore[arg-type]
     )
+    public_executor: Any = SimpleNamespace(
+        dittobench_api_url="http://127.0.0.1:8000",
+        dittobench_control_token="coding-supervisor-control-token-000000000000",
+        validator_hotkey="5" + "A" * 47,
+    )
+    with pytest.raises(ValueError):
+        CodingSupervisorRuntime(
+            public_executor,
+            object(),  # type: ignore[arg-type]
+            object(),  # type: ignore[arg-type]
+            keypair=_Keypair(),
+            executor_base_url="https://8.8.8.8:9443",
+        )
     for operation, request in _SUPERVISOR["requests"].items():
         assert request["schema"] == "dittobench-coding-attempt-supervisor-request-v1"
         assert request["operation"] == operation
