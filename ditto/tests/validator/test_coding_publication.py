@@ -227,6 +227,62 @@ async def test_publication_client_streams_and_verifies_sealed_evidence() -> None
         assert body == _REQUEST
 
 
+async def test_publication_client_parses_canonical_evidence_manifest() -> None:
+    ticket_id = "33333333-3333-4333-8333-333333333333"
+    record_id = "11" * 32
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/coding/evidence/manifest"
+        payload = json.loads(request.content)
+        assert payload["record_id"] == record_id
+        return httpx.Response(
+            200,
+            headers={"Cache-Control": "no-store"},
+            json={
+                "schema": "dittobench-coding-sealed-evidence-manifest-v1",
+                "coding_contract_version": 1,
+                "weight_eligible": False,
+                "ticket_id": ticket_id,
+                "record_id": record_id,
+                "evidence": [
+                    {
+                        "evidence_kind": "authoring-transcript",
+                        "sha256": "aa" * 32,
+                        "size_bytes": 4096,
+                    },
+                    {
+                        "evidence_kind": "frozen-submission",
+                        "sha256": "bb" * 32,
+                        "size_bytes": 2048,
+                    },
+                    {
+                        "evidence_kind": "authoring-publication-request",
+                        "sha256": _REQUEST_SHA256,
+                        "size_bytes": len(_REQUEST),
+                    },
+                ],
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), trust_env=False
+    ) as http:
+        client = CodingPublicationClient(
+            base_url="http://127.0.0.1:18081",
+            control_token=_TOKEN,
+            client=http,
+        )
+        manifest = await client.evidence_manifest(
+            ticket_id=ticket_id,
+            record_id=record_id,
+        )
+    assert [item.evidence_kind for item in manifest.evidence] == [
+        "authoring-transcript",
+        "frozen-submission",
+        "authoring-publication-request",
+    ]
+
+
 async def test_publication_client_rejects_unconsumed_or_truncated_evidence() -> None:
     ticket_id = "33333333-3333-4333-8333-333333333333"
     record_id = "11" * 32

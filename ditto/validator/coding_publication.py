@@ -86,6 +86,37 @@ class PublicationRecord(PendingPublication):
     acknowledgement: PublicationArtifact | None = None
 
 
+class SealedEvidenceArtifact(_WireModel):
+    evidence_kind: SealedEvidenceKind
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(strict=True, gt=0)
+
+    @model_validator(mode="after")
+    def size_matches_kind(self) -> SealedEvidenceArtifact:
+        if self.size_bytes > _EVIDENCE_MAX_BYTES[self.evidence_kind]:
+            raise ValueError("coding sealed evidence artifact exceeds its bound")
+        return self
+
+
+class SealedEvidenceManifest(_WireModel):
+    schema_name: Literal["dittobench-coding-sealed-evidence-manifest-v1"] = Field(
+        alias="schema"
+    )
+    coding_contract_version: Literal[1]
+    weight_eligible: Literal[False]
+    ticket_id: UUID
+    record_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    evidence: list[SealedEvidenceArtifact] = Field(min_length=1, max_length=6)
+
+    @model_validator(mode="after")
+    def evidence_is_unique_and_canonical(self) -> SealedEvidenceManifest:
+        canonical = tuple(_EVIDENCE_MAX_BYTES)
+        positions = [canonical.index(item.evidence_kind) for item in self.evidence]
+        if positions != sorted(set(positions)):
+            raise ValueError("coding sealed evidence manifest order is invalid")
+        return self
+
+
 @dataclass(frozen=True, repr=False)
 class PreparedCodingPublication:
     stage: PublicationStage
@@ -301,6 +332,69 @@ class CodingPublicationClient:
             )
         return result.publication
 
+    async def evidence_manifest(
+        self,
+        *,
+        ticket_id: str,
+        record_id: str,
+    ) -> SealedEvidenceManifest:
+        if not _canonical_uuid(ticket_id) or _SHA256.fullmatch(record_id) is None:
+            raise ValueError("coding sealed evidence manifest authority is invalid")
+        body = bytearray()
+        try:
+            async with self.client.stream(
+                "POST",
+                f"{self.base_url.rstrip('/')}/v1/coding/evidence/manifest",
+                headers={
+                    "Authorization": f"Bearer {self.control_token}",
+                    "Content-Type": "application/json",
+                    "Cache-Control": "no-store",
+                },
+                json={
+                    "schema": "dittobench-coding-sealed-evidence-manifest-command-v1",
+                    "ticket_id": ticket_id,
+                    "record_id": record_id,
+                },
+                follow_redirects=False,
+            ) as response:
+                if (
+                    response.status_code != 200
+                    or not response.headers.get("Content-Type", "")
+                    .lower()
+                    .startswith("application/json")
+                    or "no-store"
+                    not in {
+                        directive.strip().lower()
+                        for directive in response.headers.get(
+                            "Cache-Control", ""
+                        ).split(",")
+                    }
+                ):
+                    raise PlatformInfrastructureError(
+                        "coding sealed evidence manifest request was rejected"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=16 << 10):
+                    if len(body) + len(chunk) > 32 << 10:
+                        raise PlatformInfrastructureError(
+                            "coding sealed evidence manifest response is too large"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding sealed evidence manifest request failed"
+            ) from error
+        try:
+            manifest = SealedEvidenceManifest.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding sealed evidence manifest response is invalid"
+            ) from None
+        if manifest.ticket_id != UUID(ticket_id) or manifest.record_id != record_id:
+            raise PlatformInfrastructureError(
+                "coding sealed evidence manifest identity is invalid"
+            )
+        return manifest
+
     @asynccontextmanager
     async def stream_evidence(
         self,
@@ -489,5 +583,7 @@ __all__ = [
     "PublicationArtifact",
     "PublicationAuthority",
     "PublicationStage",
+    "SealedEvidenceArtifact",
     "SealedEvidenceKind",
+    "SealedEvidenceManifest",
 ]

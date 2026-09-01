@@ -57,6 +57,7 @@ func TestHostComposesPrivateHandlersAndClosesWithoutExecutingCandidate(t *testin
 		"/v1/coding/supervisor/recover":   host.SupervisorHandler(),
 		"/v1/coding/publications/pending": host.PublicationHandler(),
 		"/v1/coding/evidence/open":        host.EvidenceHandler(),
+		"/v1/coding/evidence/manifest":    host.EvidenceHandler(),
 	} {
 		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
 		request.Header.Set("Content-Type", "application/json")

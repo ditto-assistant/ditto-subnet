@@ -29,11 +29,13 @@ import (
 )
 
 const (
-	commandSchema         = "dittobench-coding-publication-command-v1"
-	evidenceCommandSchema = "dittobench-coding-sealed-evidence-open-command-v1"
-	responseSchema        = "dittobench-coding-publication-result-v1"
-	maximumCommandBytes   = 6 << 20
-	maximumResponseBytes  = 32 << 20
+	commandSchema                 = "dittobench-coding-publication-command-v1"
+	evidenceCommandSchema         = "dittobench-coding-sealed-evidence-open-command-v1"
+	evidenceManifestCommandSchema = "dittobench-coding-sealed-evidence-manifest-command-v1"
+	evidenceManifestSchema        = "dittobench-coding-sealed-evidence-manifest-v1"
+	responseSchema                = "dittobench-coding-publication-result-v1"
+	maximumCommandBytes           = 6 << 20
+	maximumResponseBytes          = 32 << 20
 )
 
 var (
@@ -96,6 +98,27 @@ type evidenceOpenCommand struct {
 	EvidenceKind codingevidence.Kind `json:"evidence_kind"`
 	SHA256       string              `json:"sha256"`
 	SizeBytes    int64               `json:"size_bytes"`
+}
+
+type evidenceManifestCommand struct {
+	Schema   string `json:"schema"`
+	TicketID string `json:"ticket_id"`
+	RecordID string `json:"record_id"`
+}
+
+type evidenceManifestArtifact struct {
+	EvidenceKind codingevidence.Kind `json:"evidence_kind"`
+	SHA256       string              `json:"sha256"`
+	SizeBytes    int64               `json:"size_bytes"`
+}
+
+type evidenceManifestResult struct {
+	Schema                string                     `json:"schema"`
+	CodingContractVersion int                        `json:"coding_contract_version"`
+	WeightEligible        bool                       `json:"weight_eligible"`
+	TicketID              string                     `json:"ticket_id"`
+	RecordID              string                     `json:"record_id"`
+	Evidence              []evidenceManifestArtifact `json:"evidence"`
 }
 
 type pendingResult struct {
@@ -199,7 +222,10 @@ func (service *Service) EvidenceHandler() http.Handler {
 		response.Header().Set("Cache-Control", "no-store")
 		response.Header().Set("Content-Type", "application/json")
 		response.Header().Set("X-Content-Type-Options", "nosniff")
-		if request.Method != http.MethodPost || request.URL.Path != "/v1/coding/evidence/open" || request.URL.RawQuery != "" {
+		if request.Method != http.MethodPost ||
+			(request.URL.Path != "/v1/coding/evidence/open" &&
+				request.URL.Path != "/v1/coding/evidence/manifest") ||
+			request.URL.RawQuery != "" {
 			writeError(response, http.StatusNotFound, "not_found")
 			return
 		}
@@ -216,6 +242,29 @@ func (service *Service) EvidenceHandler() http.Handler {
 		body, err := io.ReadAll(http.MaxBytesReader(response, request.Body, 32<<10))
 		if err != nil || codingcontract.ValidateJSONDocument(body, 32<<10) != nil {
 			writeError(response, http.StatusBadRequest, "invalid_command")
+			return
+		}
+		if request.URL.Path == "/v1/coding/evidence/manifest" {
+			var command evidenceManifestCommand
+			if decodeRequired(body, &command, "schema", "ticket_id", "record_id") != nil ||
+				command.Schema != evidenceManifestCommandSchema {
+				writeError(response, http.StatusBadRequest, "invalid_command")
+				return
+			}
+			manifest, err := service.evidenceManifest(request.Context(), command)
+			if err != nil {
+				writeError(response, statusForError(err), codeForError(err))
+				return
+			}
+			encoded, err := json.Marshal(manifest)
+			if err != nil || len(encoded)+1 > 32<<10 {
+				writeError(response, http.StatusBadGateway, "response_invalid")
+				return
+			}
+			encoded = append(encoded, '\n')
+			response.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
+			response.WriteHeader(http.StatusOK)
+			_, _ = response.Write(encoded)
 			return
 		}
 		var command evidenceOpenCommand
@@ -237,6 +286,41 @@ func (service *Service) EvidenceHandler() http.Handler {
 		response.WriteHeader(http.StatusOK)
 		_, _ = io.CopyN(response, reader, command.SizeBytes)
 	})
+}
+
+func (service *Service) evidenceManifest(
+	ctx context.Context,
+	command evidenceManifestCommand,
+) (evidenceManifestResult, error) {
+	var zero evidenceManifestResult
+	if command.Schema != evidenceManifestCommandSchema || !validTicketID(command.TicketID) ||
+		!validLowerSHA256(command.RecordID) {
+		return zero, ErrInvalid
+	}
+	attempt, _, err := service.store.Lookup(ctx, codingoutbox.PurposeShadowAttempt, command.TicketID)
+	if err != nil {
+		return zero, codingoutbox.ErrState
+	}
+	if attempt.ID() != command.RecordID {
+		return zero, codingoutbox.ErrConflict
+	}
+	artifacts, err := service.store.SealedEvidenceManifest(ctx, command.RecordID)
+	if err != nil {
+		return zero, err
+	}
+	result := evidenceManifestResult{
+		Schema: evidenceManifestSchema, CodingContractVersion: codingcontract.ContractVersion,
+		WeightEligible: false, TicketID: command.TicketID, RecordID: command.RecordID,
+		Evidence: make([]evidenceManifestArtifact, len(artifacts)),
+	}
+	for index, artifact := range artifacts {
+		result.Evidence[index] = evidenceManifestArtifact{
+			EvidenceKind: artifact.Kind,
+			SHA256:       artifact.SHA256,
+			SizeBytes:    artifact.SizeBytes,
+		}
+	}
+	return result, nil
 }
 
 func (service *Service) openEvidence(ctx context.Context, command evidenceOpenCommand) (io.ReadCloser, error) {

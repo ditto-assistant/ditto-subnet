@@ -143,6 +143,13 @@ also requires the caller to have exhausted the stream with the exact byte count
 and digest. All six evidence kinds remain readable from a released record until
 its ordinary retention sweep. This is a local export boundary only and owns no
 S3 or Platform capability.
+
+`POST /v1/coding/evidence/manifest` returns the canonical currently available
+kind, SHA-256, and exact size identities for that same ticket and record. It is
+body-free and omits local paths, object keys, URLs, and credentials. The worker
+must resolve identities from this manifest before requesting a capability; in
+particular it must never infer frozen-patch byte size from changed-byte counts
+or another semantic field.
 Endpoint paths remain fixed by the Platform client; the terminal agent path is
 derived only from the journal's canonical `agent_id`, never from stored URL
 input.

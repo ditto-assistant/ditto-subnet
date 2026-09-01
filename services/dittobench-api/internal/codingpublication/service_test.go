@@ -288,6 +288,26 @@ func TestEvidenceServiceStreamsExactReleasedObjects(t *testing.T) {
 			t.Fatalf("kind=%s status=%d headers=%v", expected.kind, response.Code, response.Header())
 		}
 	}
+	manifestRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/coding/evidence/manifest",
+		bytes.NewReader(mustJSON(t, evidenceManifestCommand{
+			Schema:   evidenceManifestCommandSchema,
+			TicketID: fixture.ticketID,
+			RecordID: prepared.RecordID,
+		})),
+	)
+	manifestRequest.Header.Set("Content-Type", "application/json")
+	manifestRequest.Header.Set("Authorization", "Bearer "+fixtureControlToken)
+	manifestResponse := httptest.NewRecorder()
+	fixture.service.EvidenceHandler().ServeHTTP(manifestResponse, manifestRequest)
+	var manifest evidenceManifestResult
+	if err := json.Unmarshal(manifestResponse.Body.Bytes(), &manifest); err != nil ||
+		manifestResponse.Code != http.StatusOK || manifest.Schema != evidenceManifestSchema ||
+		manifest.TicketID != fixture.ticketID || manifest.RecordID != prepared.RecordID ||
+		len(manifest.Evidence) != len(cases) {
+		t.Fatalf("manifest=%#v status=%d err=%v", manifest, manifestResponse.Code, err)
+	}
 	drifted := evidenceOpenCommand{
 		Schema: evidenceCommandSchema, TicketID: fixture.ticketID,
 		RecordID: prepared.RecordID, EvidenceKind: codingevidence.KindAuthoringTranscript,

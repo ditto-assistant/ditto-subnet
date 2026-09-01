@@ -349,7 +349,11 @@ func TestShadowPublicationLifecycleSurvivesRestartAndGatesRelease(t *testing.T) 
 		{codingevidence.KindTerminalPublicationRequest, terminalBody},
 		{codingevidence.KindTerminalPublicationAcknowledgement, terminalAck},
 	}
-	for _, expected := range sealed {
+	manifest, err := fixture.store.SealedEvidenceManifest(t.Context(), fixture.attempt.ID())
+	if err != nil || len(manifest) != len(sealed) {
+		t.Fatalf("sealed manifest=%#v err=%v", manifest, err)
+	}
+	for index, expected := range sealed {
 		artifact, sealedReader, err := fixture.store.OpenSealedEvidence(
 			t.Context(), fixture.attempt.ID(), expected.kind,
 		)
@@ -360,6 +364,9 @@ func TestShadowPublicationLifecycleSurvivesRestartAndGatesRelease(t *testing.T) 
 		if artifact.Kind != expected.kind || artifact.SHA256 != digest(expected.body) ||
 			artifact.SizeBytes != int64(len(expected.body)) || !bytes.Equal(body, expected.body) {
 			t.Fatalf("sealed %s artifact=%#v size=%d", expected.kind, artifact, len(body))
+		}
+		if manifest[index] != artifact {
+			t.Fatalf("sealed manifest[%d]=%#v artifact=%#v", index, manifest[index], artifact)
 		}
 	}
 	fixture.clock.now = fixture.clock.now.Add(2 * time.Minute)

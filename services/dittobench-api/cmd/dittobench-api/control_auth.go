@@ -45,6 +45,7 @@ func (s *server) newControlPlaneMux() *http.ServeMux {
 	mux.HandleFunc("POST /v1/coding/supervisor/{operation}", s.handleCodingSupervisor)
 	mux.HandleFunc("POST /v1/coding/publications/{operation}", s.handleCodingPublication)
 	mux.HandleFunc("POST /v1/coding/evidence/open", s.handleCodingEvidence)
+	mux.HandleFunc("POST /v1/coding/evidence/manifest", s.handleCodingEvidence)
 	mux.HandleFunc("POST /v1/coding/certifier/canary", s.handleCodingCanary)
 	return mux
 }
@@ -74,6 +75,7 @@ var controlPlaneRoutes = []string{
 	"POST /v1/coding/supervisor/{operation}",
 	"POST /v1/coding/publications/{operation}",
 	"POST /v1/coding/evidence/open",
+	"POST /v1/coding/evidence/manifest",
 	"POST /v1/coding/certifier/canary",
 }
 

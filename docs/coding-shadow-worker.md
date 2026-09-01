@@ -28,6 +28,9 @@ capability, forwards the stream with the signed size/type/checksum/metadata
 headers, rejects redirects or incomplete transfers, and asks Platform to
 finalize the object. The worker does not call that uploader yet; publication
 ordering remains a separate review layer.
+The authenticated outbox manifest supplies the frozen submission's exact byte
+size, which is intentionally absent from the signed freeze request. Worker
+integration must use that manifest and must not reconstruct this value.
 
 The Go host is constructed when `DITTOBENCH_CODING_SHADOW_ENABLED=true` or
 `DITTOBENCH_CODING_CANARY_ENABLED=true`. It composes the phase-specific Docker
