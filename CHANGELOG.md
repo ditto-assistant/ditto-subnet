@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.181.1 (2026-09-01)
+
+### Bug Fixes
+
+- **screener**: Bind oracle to claimed benchmark version
+  ([`8723017`](https://github.com/ditto-assistant/ditto-subnet/commit/872301708a0fdf38318c8c613d9f8eac503c0ccf))
+
+
 ## v0.181.0 (2026-08-31)
 
 ### Features
