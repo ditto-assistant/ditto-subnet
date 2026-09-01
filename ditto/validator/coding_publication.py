@@ -15,6 +15,10 @@ from uuid import UUID
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from ditto.api_models.coding_evidence_upload import (
+    CodingSealedEvidenceFinalization,
+    CodingSealedEvidenceKind,
+)
 from ditto.validator.errors import PlatformInfrastructureError
 
 PublicationStage = Literal["authoring_freeze", "terminal_result"]
@@ -143,7 +147,7 @@ class _Result(_WireModel):
     )
     coding_contract_version: Literal[1]
     weight_eligible: Literal[False]
-    operation: Literal["prepare", "acknowledge", "pending", "open", "lookup"]
+    operation: Literal["prepare", "acknowledge", "release", "pending", "open", "lookup"]
     record_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     artifact: PublicationArtifact | None = None
     pending: list[PendingPublication] | None = None
@@ -155,6 +159,7 @@ class _Result(_WireModel):
         valid = {
             "prepare": self.record_id is not None and self.artifact is not None,
             "acknowledge": self.record_id is not None and self.artifact is not None,
+            "release": self.record_id is not None,
             "pending": self.pending is not None,
             "open": self.record_id is not None and self.body_base64 is not None,
             "lookup": self.record_id is not None and self.publication is not None,
@@ -244,6 +249,40 @@ class CodingPublicationClient:
                 "coding publication acknowledgement result is invalid"
             )
         return result.artifact
+
+    async def release(
+        self,
+        *,
+        ticket_id: str,
+        record_id: str,
+        terminal_evidence_sha256: str,
+        finalization: CodingSealedEvidenceFinalization,
+    ) -> None:
+        """Release local retention after Platform finalized the terminal ack."""
+
+        if (
+            not _canonical_uuid(ticket_id)
+            or _SHA256.fullmatch(record_id) is None
+            or _SHA256.fullmatch(terminal_evidence_sha256) is None
+            or finalization.ticket_id != UUID(ticket_id)
+            or finalization.evidence_kind
+            != CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
+        ):
+            raise ValueError("coding publication release authority is invalid")
+        result = await self._call(
+            "release",
+            {
+                "schema": "dittobench-coding-publication-command-v1",
+                "ticket_id": ticket_id,
+                "record_id": record_id,
+                "terminal_evidence_sha256": terminal_evidence_sha256,
+                "finalization": finalization.model_dump(mode="json", by_alias=True),
+            },
+        )
+        if result.record_id != record_id:
+            raise PlatformInfrastructureError(
+                "coding publication release result is invalid"
+            )
 
     async def pending(self, *, limit: int = 100) -> list[PendingPublication]:
         if not 1 <= limit <= 10_000:

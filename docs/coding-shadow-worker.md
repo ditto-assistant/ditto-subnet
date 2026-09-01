@@ -70,9 +70,11 @@ Restored grading is admitted only when the phase runner independently observes
 the acknowledged authoring publication in the durable outbox and the supplied
 authoring evidence matches that outbox record. Process-local session loss by
 itself grants no retry.
-Terminal acknowledgement advances the outbox to `released`; observing that
-durable state is also the only point where the supervisor may evict its
-process-local session tombstone.
+Terminal acknowledgement remains `terminal_pending` while its exact bytes are
+uploaded and finalized by Platform. Only the explicit finalization-bound local
+release advances the outbox to `released`; observing that durable state is also
+the only point where the supervisor may evict its process-local session
+tombstone. The uploader-to-worker call is intentionally not wired yet.
 
 ## Activation checklist
 

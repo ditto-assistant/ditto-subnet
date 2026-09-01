@@ -6,10 +6,10 @@ publication request/acknowledgement bytes. `internal/codinghost` and the Python
 shadow worker use it only behind independent default-off gates. No ordinary
 score or weight path imports it.
 
-The private record schema is now `dittobench-coding-evidence-outbox-v2` so the
-reserved publication capacity and acknowledgement commitments cannot be
-misread as the earlier artifact-only shape. The committed feature gates are
-false, so there is no live spool to migrate merely by deploying this change.
+The private record schema is now `dittobench-coding-evidence-outbox-v3` so the
+remote finalization identity required for release cannot be misread as the
+earlier acknowledgement-only shape. The committed feature gates are false, so
+there is no live spool to migrate merely by deploying this change.
 
 ## Authority and lifecycle
 
@@ -43,16 +43,20 @@ state machine:
 
 ```text
 ready -> authoring request -> authoring acknowledgement
-      -> terminal request  -> terminal acknowledgement -> released
+      -> terminal request  -> terminal acknowledgement
+      -> remote acknowledgement finalization -> released
 
 terminal_without_patch
-  -> terminal request -> terminal acknowledgement -> released
+  -> terminal request -> terminal acknowledgement
+  -> remote acknowledgement finalization -> released
 ```
 
 The authoring acknowledgement persists the exact freeze ID but is only a
 midpoint. A gradeable patch cannot prepare its terminal request before that
 acknowledgement, and a shadow record cannot transition to `released` until the
-terminal acknowledgement and exact terminal evidence digest are durable.
+terminal acknowledgement is durable locally and Platform has finalized that
+exact acknowledgement object's digest and size in the same ticket and claim
+generation. The ordinary release API rejects shadow records.
 
 The outbox guarantees recovery only after an object and its checksummed record
 have committed. It cannot resume an active workspace or transcript writer:
@@ -119,9 +123,11 @@ overhead, and reconciles orphan bytes on restart; it cannot evict unpublished
 evidence.
 Directory scans have cardinality and batch limits. `Pending` exposes sealed
 evidence; `PendingPublications` exposes only the next exact replayable request
-per attempt. `Release` enforces a durable terminal acknowledgement for shadow
-attempts; an authoring-freeze midpoint is insufficient. Changed requests,
-acknowledgements, authority, or terminal evidence conflict. Released and
+per attempt. `ReleaseShadow` requires the normalized Platform finalization for
+the terminal acknowledgement; the generic `Release` path rejects shadow
+attempts. An authoring-freeze midpoint or a locally durable terminal response
+is insufficient. Changed requests, acknowledgements, finalization identity,
+authority, or terminal evidence conflict. Released and
 expired records have separate bounded retention windows. An object is removed
 only after no retained record references it and its orphan grace period has elapsed.
 Clock rollback fails closed.
@@ -174,8 +180,11 @@ This store now provides self-contained streaming replay for transcripts,
 frozen submissions, prepared shadow publication requests, and verified
 acknowledgements. It does not call Platform, create signatures, request grading
 leases, classify terminal failures, upload remote bytes, or schedule attempts.
-`Release` retains the terminal evidence digest supplied by the trusted terminal
-builder and cross-checks it against the acknowledged terminal request.
+`ReleaseShadow` derives and retains the terminal evidence digest from the
+acknowledged terminal request and persists the exact claim generation, upload
+ID, terminal-acknowledgement digest and size, and finalized timestamp returned
+by Platform. Platform's replay-only `idempotent` bit is intentionally excluded
+from that immutable identity.
 
 The future remote object handoff is defined by
 [`docs/coding-private-s3-data-plane.md`](../../../docs/coding-private-s3-data-plane.md).

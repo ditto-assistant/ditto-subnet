@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
+	"github.com/ditto-assistant/dittobench-api/internal/codingevidence"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
 	"github.com/google/uuid"
 	"golang.org/x/sys/unix"
@@ -230,6 +231,9 @@ func (store *Store) Release(ctx context.Context, id, terminalEvidenceSHA256 stri
 	if record == nil {
 		return ErrInvalid
 	}
+	if record.Binding.Purpose == PurposeShadowAttempt {
+		return ErrState
+	}
 	if record.State == StateReleased {
 		if record.ReleaseEvidenceSHA256 == terminalEvidenceSHA256 {
 			return nil
@@ -257,6 +261,89 @@ func (store *Store) Release(ctx context.Context, id, terminalEvidenceSHA256 stri
 	}
 	store.records[id] = updated
 	return nil
+}
+
+// ReleaseShadow transitions one shadow attempt only after Platform has
+// finalized the exact terminal-publication acknowledgement object. The
+// finalization is normalized before persistence so exact Platform replays may
+// differ only in their non-authoritative idempotent response bit.
+func (store *Store) ReleaseShadow(
+	ctx context.Context,
+	id string,
+	finalization codingevidence.WireFinalization,
+) error {
+	if ctx == nil || ctx.Err() != nil || !lowerSHA256(id) {
+		return ErrInvalid
+	}
+	identity, err := releaseFinalizationIdentity(finalization)
+	if err != nil {
+		return err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	now := store.config.Now().UTC()
+	if err := store.checkOpenAndClock(now); err != nil {
+		return err
+	}
+	record := store.records[id]
+	if record == nil || record.Binding.Purpose != PurposeShadowAttempt {
+		return ErrInvalid
+	}
+	if record.State == StateReleased {
+		if record.ReleaseFinalization != nil && *record.ReleaseFinalization == identity {
+			return nil
+		}
+		return ErrConflict
+	}
+	if record.State != StateReady && record.State != StateTerminalWithoutPatch {
+		return ErrState
+	}
+	publication := record.TerminalPublication
+	if publication == nil || publication.Acknowledgement == nil {
+		return ErrState
+	}
+	if identity.TicketID != record.Binding.TicketID ||
+		identity.SHA256 != publication.Acknowledgement.SHA256 ||
+		identity.SizeBytes != publication.Acknowledgement.SizeBytes ||
+		time.Unix(0, identity.FinalizedAtUnixNano).UTC().After(record.Binding.Deadline) {
+		return ErrConflict
+	}
+	updated := cloneRecord(record)
+	updated.Generation++
+	updated.State = StateReleased
+	updated.ReleaseEvidenceSHA256 = publication.Authority.EvidenceSHA256
+	updated.ReleaseFinalization = &identity
+	updated.ReleasedAtUnix = now.Unix()
+	if err := store.persistRecord(updated); err != nil {
+		return err
+	}
+	store.records[id] = updated
+	return nil
+}
+
+func releaseFinalizationIdentity(
+	value codingevidence.WireFinalization,
+) (ReleaseFinalization, error) {
+	ticket, ticketErr := uuid.Parse(value.TicketID)
+	upload, uploadErr := uuid.Parse(value.UploadID)
+	finalizedAtUnixNano := value.FinalizedAt.UTC().UnixNano()
+	if value.Schema != "dittobench-coding-sealed-evidence-finalized-v1" ||
+		value.CodingContractVersion != 1 || value.WeightEligible || !value.Accepted ||
+		ticketErr != nil || ticket == uuid.Nil || ticket.String() != value.TicketID ||
+		uploadErr != nil || upload == uuid.Nil || upload.String() != value.UploadID ||
+		value.ClaimGeneration < 1 || value.ClaimGeneration > (1<<31)-1 ||
+		value.EvidenceKind != codingevidence.KindTerminalPublicationAcknowledgement ||
+		!lowerSHA256(value.SHA256) || value.SizeBytes < 1 ||
+		value.SizeBytes > maximumPublicationAckBytes || value.FinalizedAt.IsZero() ||
+		finalizedAtUnixNano <= 0 || value.FinalizedAt.Nanosecond()%1_000 != 0 {
+		return ReleaseFinalization{}, ErrInvalid
+	}
+	return ReleaseFinalization{
+		TicketID: value.TicketID, ClaimGeneration: value.ClaimGeneration,
+		UploadID: value.UploadID, EvidenceKind: value.EvidenceKind,
+		SHA256: value.SHA256, SizeBytes: value.SizeBytes,
+		FinalizedAtUnixNano: finalizedAtUnixNano,
+	}, nil
 }
 
 func (store *Store) OpenTranscript(ctx context.Context, id string) (io.ReadCloser, error) {
@@ -570,7 +657,7 @@ func validateRecord(record *Record, expectedID string) error {
 			record.WriterNonce != "" || record.StagingName != "")) ||
 		(record.State == StateExpired && (record.OutcomeSHA256 != "" || record.SealedAtUnix != 0 || record.Frozen != nil || record.Failure != nil ||
 			record.WriterNonce != "" || record.StagingName != "")) ||
-		(record.State != StateReleased && (record.ReleaseEvidenceSHA256 != "" || record.ReleasedAtUnix != 0)) ||
+		(record.State != StateReleased && (record.ReleaseEvidenceSHA256 != "" || record.ReleaseFinalization != nil || record.ReleasedAtUnix != 0)) ||
 		(record.State != StateExpired && record.ExpiredAtUnix != 0) {
 		return fmt.Errorf("%w: record state shape disagrees", ErrCorrupt)
 	}
@@ -725,5 +812,9 @@ func cloneRecord(record *Record) *Record {
 	}
 	copy.AuthoringPublication = clonePublication(record.AuthoringPublication)
 	copy.TerminalPublication = clonePublication(record.TerminalPublication)
+	if record.ReleaseFinalization != nil {
+		value := *record.ReleaseFinalization
+		copy.ReleaseFinalization = &value
+	}
 	return &copy
 }

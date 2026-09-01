@@ -3,11 +3,16 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from datetime import UTC, datetime
 from uuid import UUID
 
 import httpx
 import pytest
 
+from ditto.api_models.coding_evidence_upload import (
+    CodingSealedEvidenceFinalization,
+    CodingSealedEvidenceKind,
+)
 from ditto.validator.coding_publication import (
     CodingPublicationClient,
     PublicationAuthority,
@@ -31,6 +36,23 @@ def _authority() -> PublicationAuthority:
         run_manifest_sha256="bb" * 32,
         task_set_manifest_sha256="cc" * 32,
         evidence_sha256="dd" * 32,
+    )
+
+
+def _finalization() -> CodingSealedEvidenceFinalization:
+    return CodingSealedEvidenceFinalization(
+        schema="dittobench-coding-sealed-evidence-finalized-v1",
+        coding_contract_version=1,
+        weight_eligible=False,
+        ticket_id=UUID("33333333-3333-4333-8333-333333333333"),
+        claim_generation=3,
+        upload_id=UUID("44444444-4444-4444-8444-444444444444"),
+        evidence_kind=(CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT),
+        sha256=_ACK_SHA256,
+        size_bytes=len(_ACK),
+        finalized_at=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+        accepted=True,
+        idempotent=False,
     )
 
 
@@ -68,6 +90,15 @@ async def test_publication_client_preserves_exact_request_and_acknowledgement() 
                 "sha256": _ACK_SHA256,
                 "size_bytes": len(_ACK),
             }
+        elif operation == "release":
+            assert payload == {
+                "schema": "dittobench-coding-publication-command-v1",
+                "ticket_id": "33333333-3333-4333-8333-333333333333",
+                "record_id": "11" * 32,
+                "terminal_evidence_sha256": "dd" * 32,
+                "finalization": _finalization().model_dump(mode="json", by_alias=True),
+            }
+            base["record_id"] = "11" * 32
         elif operation == "pending":
             base["pending"] = []
         elif operation == "open":
@@ -115,6 +146,12 @@ async def test_publication_client_preserves_exact_request_and_acknowledgement() 
             body=_ACK,
         )
         assert acknowledged.sha256 == _ACK_SHA256
+        await client.release(
+            ticket_id="33333333-3333-4333-8333-333333333333",
+            record_id=record_id,
+            terminal_evidence_sha256="dd" * 32,
+            finalization=_finalization(),
+        )
         assert await client.pending() == []
         looked_up = await client.lookup(
             ticket_id="33333333-3333-4333-8333-333333333333",
@@ -138,6 +175,7 @@ async def test_publication_client_preserves_exact_request_and_acknowledgement() 
     assert [operation for operation, _ in calls] == [
         "prepare",
         "acknowledge",
+        "release",
         "pending",
         "lookup",
         "open",

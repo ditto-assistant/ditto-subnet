@@ -179,6 +179,18 @@ func (fixture publicationFixture) terminalAcknowledgement(t *testing.T) []byte {
 	return append(body, '\n')
 }
 
+func (fixture publicationFixture) terminalFinalization(body []byte) codingevidence.WireFinalization {
+	return codingevidence.WireFinalization{
+		Schema:                "dittobench-coding-sealed-evidence-finalized-v1",
+		CodingContractVersion: 1, WeightEligible: false,
+		TicketID: fixture.binding.TicketID, ClaimGeneration: 1,
+		UploadID:     "44444444-4444-4444-8444-444444444444",
+		EvidenceKind: codingevidence.KindTerminalPublicationAcknowledgement,
+		SHA256:       digest(body), SizeBytes: int64(len(body)),
+		FinalizedAt: fixture.clock.Now().UTC(), Accepted: true,
+	}
+}
+
 func reopenPublicationStore(t *testing.T, fixture publicationFixture) (*Store, *Attempt) {
 	t.Helper()
 	store, err := Open(Config{
@@ -309,12 +321,20 @@ func TestShadowPublicationLifecycleSurvivesRestartAndGatesRelease(t *testing.T) 
 		t.Fatal(err)
 	}
 	if err := fixture.store.Release(
-		t.Context(), fixture.attempt.ID(), strings.Repeat("8", 64),
-	); !errors.Is(err, ErrConflict) {
-		t.Fatalf("changed terminal evidence release err=%v", err)
-	}
-	if err := fixture.store.Release(
 		t.Context(), fixture.attempt.ID(), fixture.terminalAuthority().EvidenceSHA256,
+	); !errors.Is(err, ErrState) {
+		t.Fatalf("shadow release bypass err=%v", err)
+	}
+	finalization := fixture.terminalFinalization(terminalAck)
+	driftedFinalization := finalization
+	driftedFinalization.SHA256 = strings.Repeat("8", 64)
+	if err := fixture.store.ReleaseShadow(
+		t.Context(), fixture.attempt.ID(), driftedFinalization,
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed terminal acknowledgement finalization err=%v", err)
+	}
+	if err := fixture.store.ReleaseShadow(
+		t.Context(), fixture.attempt.ID(), finalization,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -333,8 +353,9 @@ func TestShadowPublicationLifecycleSurvivesRestartAndGatesRelease(t *testing.T) 
 	if err != nil || !bytes.Equal(readPublicationBytes(t, reader), terminalAck) {
 		t.Fatalf("terminal acknowledgement replay err=%v", err)
 	}
-	if err := fixture.store.Release(
-		t.Context(), fixture.attempt.ID(), fixture.terminalAuthority().EvidenceSHA256,
+	finalization.Idempotent = true
+	if err := fixture.store.ReleaseShadow(
+		t.Context(), fixture.attempt.ID(), finalization,
 	); err != nil {
 		t.Fatalf("idempotent release: %v", err)
 	}
@@ -596,7 +617,9 @@ func TestTerminalWithoutPatchPublishesWithoutAuthoringFreeze(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Release(t.Context(), attempt.ID(), fixture.terminalAuthority().EvidenceSHA256); err != nil {
+	if err := store.ReleaseShadow(
+		t.Context(), attempt.ID(), fixture.terminalFinalization(fixture.terminalAcknowledgement(t)),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {

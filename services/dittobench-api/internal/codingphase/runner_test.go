@@ -635,6 +635,26 @@ func TestPendingRecoveryDistinguishesAcknowledgedAuthoring(t *testing.T) {
 	}
 }
 
+func TestPendingRecoveryRetainsAcknowledgedTerminalUntilRelease(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	record := codingoutbox.Record{TerminalPublication: &codingoutbox.PublicationRecord{
+		Stage: codingoutbox.PublicationTerminalResult,
+		Request: codingoutbox.PublicationArtifact{
+			ObjectKey: "sha256/" + digest, SHA256: digest, SizeBytes: 10,
+		},
+		Acknowledgement: &codingoutbox.PublicationArtifact{
+			ObjectKey: "sha256/" + strings.Repeat("b", 64),
+			SHA256:    strings.Repeat("b", 64), SizeBytes: 10,
+		},
+	}}
+	outcome, ok := pendingRecovery(record)
+	if !ok || outcome.State != "terminal_pending" || outcome.PublicationStage == nil ||
+		*outcome.PublicationStage != string(codingoutbox.PublicationTerminalResult) ||
+		outcome.RequestSHA256 == nil || *outcome.RequestSHA256 != digest {
+		t.Fatalf("outcome=%#v ok=%v", outcome, ok)
+	}
+}
+
 func TestRunnerFailureStillRevokesFreezesAndForbidsCleanRetry(t *testing.T) {
 	fixture := newPhaseFixture(t)
 	fixture.harness.runErr = errors.New("candidate run failed")

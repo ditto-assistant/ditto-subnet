@@ -369,7 +369,7 @@ func (runner *Runner) Recover(
 	if runner == nil || ctx == nil || ctx.Err() != nil {
 		return codingsupervisor.RecoveryOutcome{}, ErrLifecycle
 	}
-	attempt, record, err := runner.outbox.Lookup(ctx, codingoutbox.PurposeShadowAttempt, request.TicketID)
+	_, record, err := runner.outbox.Lookup(ctx, codingoutbox.PurposeShadowAttempt, request.TicketID)
 	if errors.Is(err, codingoutbox.ErrInvalid) {
 		return codingsupervisor.RecoveryOutcome{State: "none"}, nil
 	}
@@ -384,15 +384,6 @@ func (runner *Runner) Recover(
 	cancel()
 	if revokeErr != nil {
 		return codingsupervisor.RecoveryOutcome{}, errors.Join(ErrLifecycle, revokeErr)
-	}
-	if record.State == codingoutbox.StateReady && record.TerminalPublication != nil &&
-		record.TerminalPublication.Acknowledgement != nil {
-		if err := runner.outbox.Release(
-			ctx, attempt.ID(), record.TerminalPublication.Authority.EvidenceSHA256,
-		); err != nil {
-			return codingsupervisor.RecoveryOutcome{}, errors.Join(ErrLifecycle, err)
-		}
-		return codingsupervisor.RecoveryOutcome{State: "released"}, nil
 	}
 	switch record.State {
 	case codingoutbox.StateReserved:
@@ -544,12 +535,18 @@ func submissionChangedBytes(submission codingrunner.FrozenSubmission) (uint64, e
 }
 
 func pendingRecovery(record codingoutbox.Record) (codingsupervisor.RecoveryOutcome, bool) {
+	if record.TerminalPublication != nil && lowerSHA256(record.TerminalPublication.Request.SHA256) {
+		stage := string(codingoutbox.PublicationTerminalResult)
+		digest := record.TerminalPublication.Request.SHA256
+		return codingsupervisor.RecoveryOutcome{
+			State: "terminal_pending", PublicationStage: &stage, RequestSHA256: &digest,
+		}, true
+	}
 	publications := []struct {
 		state string
 		stage codingoutbox.PublicationStage
 		value *codingoutbox.PublicationRecord
 	}{
-		{"terminal_pending", codingoutbox.PublicationTerminalResult, record.TerminalPublication},
 		{"authoring_pending", codingoutbox.PublicationAuthoringFreeze, record.AuthoringPublication},
 	}
 	for _, publication := range publications {

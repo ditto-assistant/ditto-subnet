@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
+	"github.com/ditto-assistant/dittobench-api/internal/codingevidence"
 	"github.com/google/uuid"
 	"golang.org/x/sys/unix"
 )
@@ -743,10 +744,22 @@ func validatePublicationRecords(record *Record) error {
 	}
 	if record.State == StateReleased && record.Binding.Purpose == PurposeShadowAttempt {
 		if record.TerminalPublication == nil || record.TerminalPublication.Acknowledgement == nil ||
+			record.ReleaseFinalization == nil ||
 			record.ReleaseEvidenceSHA256 != record.TerminalPublication.Authority.EvidenceSHA256 ||
+			record.ReleaseFinalization.TicketID != record.Binding.TicketID ||
+			record.ReleaseFinalization.EvidenceKind != codingevidence.KindTerminalPublicationAcknowledgement ||
+			record.ReleaseFinalization.SHA256 != record.TerminalPublication.Acknowledgement.SHA256 ||
+			record.ReleaseFinalization.SizeBytes != record.TerminalPublication.Acknowledgement.SizeBytes ||
+			!canonicalUUID(record.ReleaseFinalization.UploadID) ||
+			record.ReleaseFinalization.ClaimGeneration < 1 ||
+			record.ReleaseFinalization.ClaimGeneration > (1<<31)-1 ||
+			record.ReleaseFinalization.FinalizedAtUnixNano <= 0 ||
+			time.Unix(0, record.ReleaseFinalization.FinalizedAtUnixNano).UTC().After(record.Binding.Deadline) ||
 			record.ReleasedAtUnix < record.TerminalPublication.AcknowledgedAtUnix {
 			return fmt.Errorf("%w: shadow release lacks terminal acknowledgement", ErrCorrupt)
 		}
+	} else if record.State == StateReleased && record.ReleaseFinalization != nil {
+		return fmt.Errorf("%w: non-shadow release carries remote finalization", ErrCorrupt)
 	}
 	return nil
 }

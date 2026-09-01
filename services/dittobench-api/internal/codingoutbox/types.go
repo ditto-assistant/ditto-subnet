@@ -11,11 +11,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ditto-assistant/dittobench-api/internal/codingevidence"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
 )
 
 const (
-	recordSchema                   = "dittobench-coding-evidence-outbox-v2"
+	recordSchema                   = "dittobench-coding-evidence-outbox-v3"
 	maximumRecordBytes             = 4 << 20
 	recordReserveBytes             = 2 * maximumRecordBytes
 	maximumPublicationRequestBytes = 4 << 20
@@ -182,6 +183,19 @@ type PublicationRecord struct {
 	AcknowledgedAtUnix        int64                `json:"acknowledged_at_unix,omitempty"`
 }
 
+// ReleaseFinalization is the immutable subset of Platform's verified-object
+// acknowledgement that authorizes local shadow evidence release. Idempotent
+// response metadata is deliberately omitted because it is not object identity.
+type ReleaseFinalization struct {
+	TicketID            string              `json:"ticket_id"`
+	ClaimGeneration     int                 `json:"claim_generation"`
+	UploadID            string              `json:"upload_id"`
+	EvidenceKind        codingevidence.Kind `json:"evidence_kind"`
+	SHA256              string              `json:"sha256"`
+	SizeBytes           int64               `json:"size_bytes"`
+	FinalizedAtUnixNano int64               `json:"finalized_at_unix_nano"`
+}
+
 type PendingPublication struct {
 	RecordID  string
 	Binding   Binding
@@ -236,6 +250,7 @@ type Record struct {
 	AuthoringPublication  *PublicationRecord          `json:"authoring_publication,omitempty"`
 	TerminalPublication   *PublicationRecord          `json:"terminal_publication,omitempty"`
 	ReleaseEvidenceSHA256 string                      `json:"release_evidence_sha256,omitempty"`
+	ReleaseFinalization   *ReleaseFinalization        `json:"release_finalization,omitempty"`
 	CreatedAtUnixNano     int64                       `json:"created_at_unix_nano"`
 	UpdatedAtUnixNano     int64                       `json:"updated_at_unix_nano"`
 	SealedAtUnix          int64                       `json:"sealed_at_unix,omitempty"`

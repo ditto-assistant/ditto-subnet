@@ -134,6 +134,21 @@ func mustJSON(t *testing.T, value any) []byte {
 	return append(body, '\n')
 }
 
+func terminalFinalization(
+	ticketID string,
+	acknowledgement codingoutbox.PublicationArtifact,
+) codingevidence.WireFinalization {
+	return codingevidence.WireFinalization{
+		Schema:                "dittobench-coding-sealed-evidence-finalized-v1",
+		CodingContractVersion: 1, WeightEligible: false,
+		TicketID: ticketID, ClaimGeneration: 3,
+		UploadID:     "44444444-4444-4444-8444-444444444444",
+		EvidenceKind: codingevidence.KindTerminalPublicationAcknowledgement,
+		SHA256:       acknowledgement.SHA256, SizeBytes: acknowledgement.SizeBytes,
+		FinalizedAt: time.Date(2026, 8, 23, 20, 1, 0, 0, time.UTC), Accepted: true,
+	}
+}
+
 func invoke(t *testing.T, service *Service, operation string, command any, token string) *httptest.ResponseRecorder {
 	t.Helper()
 	body := mustJSON(t, command)
@@ -207,6 +222,21 @@ func TestPublicationServiceDurablyPreparesReplaysAndAcknowledges(t *testing.T) {
 		pending.Pending[0].Request != *prepared.Artifact {
 		t.Fatalf("pending=%#v status=%d", pending, response.Code)
 	}
+	prematureDigest := sha256.Sum256(fixture.ack)
+	prematureSHA256 := hex.EncodeToString(prematureDigest[:])
+	prematureAck := codingoutbox.PublicationArtifact{
+		ObjectKey: "sha256/" + prematureSHA256,
+		SHA256:    prematureSHA256, SizeBytes: int64(len(fixture.ack)),
+	}
+	response = invoke(t, fixture.service, "release", map[string]any{
+		"schema": commandSchema, "ticket_id": fixture.ticketID,
+		"record_id":                prepared.RecordID,
+		"terminal_evidence_sha256": fixture.authority.EvidenceSHA256,
+		"finalization":             terminalFinalization(fixture.ticketID, prematureAck),
+	}, fixtureControlToken)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("premature release status=%d body=%s", response.Code, response.Body.String())
+	}
 	response = invoke(t, fixture.service, "open", map[string]any{
 		"schema": commandSchema, "record_id": prepared.RecordID,
 		"stage": codingoutbox.PublicationTerminalResult, "acknowledgement": false,
@@ -226,6 +256,13 @@ func TestPublicationServiceDurablyPreparesReplaysAndAcknowledges(t *testing.T) {
 	if response.Code != http.StatusOK || acknowledged.Artifact == nil {
 		t.Fatalf("acknowledged=%#v status=%d", acknowledged, response.Code)
 	}
+	_, record, err := fixture.store.Lookup(
+		t.Context(), codingoutbox.PurposeShadowAttempt, fixture.ticketID,
+	)
+	if err != nil || record.State != codingoutbox.StateTerminalWithoutPatch ||
+		record.ReleaseFinalization != nil {
+		t.Fatalf("acknowledgement released before finalization record=%#v err=%v", record, err)
+	}
 	response = invoke(t, fixture.service, "lookup", map[string]any{
 		"schema": commandSchema, "ticket_id": fixture.ticketID,
 		"stage": codingoutbox.PublicationTerminalResult,
@@ -240,6 +277,35 @@ func TestPublicationServiceDurablyPreparesReplaysAndAcknowledges(t *testing.T) {
 	}, fixtureControlToken)
 	if value := decodeResult(t, response); len(value.Pending) != 0 {
 		t.Fatalf("pending after ack=%#v", value.Pending)
+	}
+	finalization := terminalFinalization(fixture.ticketID, *acknowledged.Artifact)
+	response = invoke(t, fixture.service, "release", map[string]any{
+		"schema": commandSchema, "ticket_id": fixture.ticketID,
+		"record_id":                prepared.RecordID,
+		"terminal_evidence_sha256": fixture.authority.EvidenceSHA256,
+		"finalization":             finalization,
+	}, fixtureControlToken)
+	if response.Code != http.StatusOK || decodeResult(t, response).RecordID != prepared.RecordID {
+		t.Fatalf("release status=%d body=%s", response.Code, response.Body.String())
+	}
+	_, record, err = fixture.store.Lookup(
+		t.Context(), codingoutbox.PurposeShadowAttempt, fixture.ticketID,
+	)
+	if err != nil || record.State != codingoutbox.StateReleased ||
+		record.ReleaseFinalization == nil ||
+		record.ReleaseFinalization.UploadID != finalization.UploadID ||
+		record.ReleaseFinalization.ClaimGeneration != finalization.ClaimGeneration {
+		t.Fatalf("finalized release record=%#v err=%v", record, err)
+	}
+	finalization.Idempotent = true
+	response = invoke(t, fixture.service, "release", map[string]any{
+		"schema": commandSchema, "ticket_id": fixture.ticketID,
+		"record_id":                prepared.RecordID,
+		"terminal_evidence_sha256": fixture.authority.EvidenceSHA256,
+		"finalization":             finalization,
+	}, fixtureControlToken)
+	if response.Code != http.StatusOK {
+		t.Fatalf("idempotent release status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -263,6 +329,15 @@ func TestEvidenceServiceStreamsExactReleasedObjects(t *testing.T) {
 	acknowledged := decodeResult(t, ackResponse)
 	if acknowledged.Artifact == nil {
 		t.Fatalf("acknowledged=%#v", acknowledged)
+	}
+	releaseResponse := invoke(t, fixture.service, "release", map[string]any{
+		"schema": commandSchema, "ticket_id": fixture.ticketID,
+		"record_id":                prepared.RecordID,
+		"terminal_evidence_sha256": fixture.authority.EvidenceSHA256,
+		"finalization":             terminalFinalization(fixture.ticketID, *acknowledged.Artifact),
+	}, fixtureControlToken)
+	if releaseResponse.Code != http.StatusOK {
+		t.Fatalf("release status=%d body=%s", releaseResponse.Code, releaseResponse.Body.String())
 	}
 	cases := []struct {
 		kind codingevidence.Kind

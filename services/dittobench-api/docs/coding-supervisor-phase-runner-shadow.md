@@ -62,7 +62,9 @@ through the authority-validating canonical serializer.
 
 Recovery never republishes a workspace or inference capability and never
 reruns candidate code. It reports exact pending publication records when they
-already exist; otherwise durable collecting/reserved/ready states are
+already exist; an acknowledged terminal publication remains `terminal_pending`
+until the trusted validator supplies its Platform finalization to the separate
+local release operation. Otherwise durable collecting/reserved/ready states are
 conservatively `ambiguous`, released is `released`, and expired is `expired`.
 The next disabled wiring review must persist and publish the complete
 authoring/terminal Platform envelopes before it can claim end-to-end
