@@ -148,3 +148,58 @@ ID or secret value. Its canonical payload receives a SHA-256 receipt digest.
 This receipt proves control-plane posture only. A later data-plane canary must
 separately prove exact private-input GET and sealed-evidence PUT/HEAD/full-hash
 behavior before either Platform application gate is enabled.
+
+## Data-plane canary
+
+After both control-plane receipts pass, use the separate confirmation-gated
+canary modes. First, an authorized curator operator writes the deterministic
+private-input canary using a temporary owner-only secret file:
+
+```sh
+cd apps/platform
+umask 077
+uv run python scripts/verify_coding_storage_data_plane.py seed-private-input \
+  --project ditto-app-dev \
+  --environment prod \
+  --source-sha <exact-applied-main-sha> \
+  --curator-access-key <non-secret-terraform-output> \
+  --curator-secret-file <mode-0600-temporary-file> \
+  --confirm 'SEED CODING STORAGE PRIVATE INPUT CANARY' \
+  --output coding-storage-curator-seed-receipt.json
+```
+
+The curator command performs one create-only write. It never reads, lists,
+overwrites, or deletes an object. The fixed content-addressed key means a
+second seed cannot silently replace the first object. The operator must remove
+the temporary curator secret file immediately after the command; neither the
+receipt nor the Platform verification path contains that credential.
+
+Then run Platform verification on the GCE host carrying the exact
+`ditto-platform-api` service account:
+
+```sh
+cd /opt/ditto-subnet/apps/platform
+uv run python scripts/verify_coding_storage_data_plane.py verify-platform \
+  --project ditto-app-dev \
+  --environment prod \
+  --source-sha <exact-deployed-main-sha> \
+  --private-input-access-key <non-secret-terraform-output> \
+  --evidence-access-key <non-secret-terraform-output> \
+  --confirm 'RUN CODING STORAGE DATA PLANE CANARY' \
+  --output coding-storage-data-plane-receipt.json
+```
+
+This mode rejects any other attached identity, proves the curator secret is
+denied, and fetches only the reader/finalizer secret values into process
+memory. It verifies the exact private-input bytes and SHA-256; reader list,
+write, delete, and cross-authority operations must be denied. It then uses the
+production sealed-evidence capability minter for a checksum/metadata-bound PUT,
+HEAD, and full-download SHA-256 verification; finalizer list, delete, and
+cross-authority operations must be denied. A matching immutable evidence object
+is reused without a second PUT.
+
+Both receipts are URL-free, secret-free, creation-only mode `0600`, and
+SHA-256 bound. The commands are never automatic and intentionally leave their
+small retained canary objects in place. Do not enable either Platform
+application integration until the control-plane and data-plane receipt digests
+are reviewed together.
