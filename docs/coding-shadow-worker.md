@@ -23,8 +23,11 @@ For one stable worker instance it:
 
 The private Go host can now stream every sealed outbox evidence kind to the
 trusted Python validator by exact ticket, record, kind, digest, and size. That
-stream is not yet wired to S3: the next layer owns capability requests, the PUT,
-and Platform finalization without rebuilding or buffering these bytes.
+stream now has an unwired trusted uploader which requests an exact Platform
+capability, forwards the stream with the signed size/type/checksum/metadata
+headers, rejects redirects or incomplete transfers, and asks Platform to
+finalize the object. The worker does not call that uploader yet; publication
+ordering remains a separate review layer.
 
 The Go host is constructed when `DITTOBENCH_CODING_SHADOW_ENABLED=true` or
 `DITTOBENCH_CODING_CANARY_ENABLED=true`. It composes the phase-specific Docker

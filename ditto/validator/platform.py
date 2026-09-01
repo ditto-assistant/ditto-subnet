@@ -50,6 +50,13 @@ from ditto.api_models.coding_claims import (
     CodingClaimNextRequest,
     CodingClaimResponse,
 )
+from ditto.api_models.coding_evidence_upload import (
+    CodingSealedEvidenceFinalization,
+    CodingSealedEvidenceFinalizeRequest,
+    CodingSealedEvidenceKind,
+    CodingSealedEvidenceUploadCapability,
+    CodingSealedEvidenceUploadCapabilityRequest,
+)
 from ditto.api_models.coding_harness import (
     CodingHarnessLaunchRequest,
     CodingHarnessLaunchResponse,
@@ -121,6 +128,8 @@ from ditto.validator.signing import (
     sign_coding_inference_exchange,
     sign_coding_inference_grant,
     sign_coding_inference_revoke,
+    sign_coding_sealed_evidence_finalization,
+    sign_coding_sealed_evidence_upload,
     sign_coding_shadow_result,
     sign_inference_exchange,
     sign_job_fail_request,
@@ -165,6 +174,7 @@ _CODING_INFERENCE_GRANT_MAX_BYTES = 64 << 10
 _CODING_HARNESS_LAUNCH_MAX_BYTES = 64 << 10
 _CODING_CLAIM_MAX_BYTES = 64 << 10
 _CODING_CERTIFICATION_LEASE_MAX_BYTES = 64 << 10
+_CODING_EVIDENCE_MAX_BYTES = 32 << 10
 
 
 def _coding_certification_grant_authority(value: object) -> tuple[object, ...]:
@@ -621,6 +631,196 @@ class PlatformClient:
                 "coding claim response identity is invalid"
             )
         return claim
+
+    async def request_coding_evidence_upload_capability(
+        self,
+        claim: CodingClaimResponse,
+        *,
+        evidence_kind: CodingSealedEvidenceKind,
+        sha256: str,
+        size_bytes: int,
+    ) -> CodingSealedEvidenceUploadCapability:
+        """Reserve one exact identity and obtain its short-lived PUT bearer."""
+
+        if claim.validator_hotkey != self._config.validator_hotkey:
+            raise PlatformInfrastructureError(
+                "coding evidence claim validator identity is invalid"
+            )
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingSealedEvidenceUploadCapabilityRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            instance_id=claim.instance_id,
+            ticket_id=claim.ticket_id,
+            claim_generation=claim.claim_generation,
+            evidence_kind=evidence_kind,
+            sha256=sha256,
+            size_bytes=size_bytes,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_sealed_evidence_upload(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                instance_id=claim.instance_id,
+                ticket_id=claim.ticket_id,
+                claim_generation=claim.claim_generation,
+                evidence_kind=evidence_kind,
+                sha256=sha256,
+                size_bytes=size_bytes,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        body = await self._send_coding_evidence_request(
+            path="/coding-shadow/evidence-upload-capability",
+            payload=payload,
+            operation="capability",
+        )
+        try:
+            capability = CodingSealedEvidenceUploadCapability.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding evidence capability response is invalid"
+            ) from None
+        if (
+            capability.ticket_id != claim.ticket_id
+            or capability.claim_generation != claim.claim_generation
+            or capability.ticket_deadline != claim.ticket_deadline
+            or capability.evidence_kind != evidence_kind
+            or capability.sha256 != sha256
+            or capability.size_bytes != size_bytes
+        ):
+            raise PlatformInfrastructureError(
+                "coding evidence capability response identity is invalid"
+            )
+        return capability
+
+    async def finalize_coding_evidence_upload(
+        self,
+        claim: CodingClaimResponse,
+        capability: CodingSealedEvidenceUploadCapability,
+    ) -> CodingSealedEvidenceFinalization:
+        """Ask Platform to verify and append one exact uploaded identity."""
+
+        if (
+            claim.validator_hotkey != self._config.validator_hotkey
+            or capability.ticket_id != claim.ticket_id
+            or capability.claim_generation != claim.claim_generation
+            or capability.ticket_deadline != claim.ticket_deadline
+        ):
+            raise PlatformInfrastructureError(
+                "coding evidence finalization claim authority is invalid"
+            )
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingSealedEvidenceFinalizeRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            instance_id=claim.instance_id,
+            ticket_id=claim.ticket_id,
+            claim_generation=claim.claim_generation,
+            upload_id=capability.upload_id,
+            evidence_kind=capability.evidence_kind,
+            sha256=capability.sha256,
+            size_bytes=capability.size_bytes,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_sealed_evidence_finalization(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                instance_id=claim.instance_id,
+                ticket_id=claim.ticket_id,
+                claim_generation=claim.claim_generation,
+                upload_id=capability.upload_id,
+                evidence_kind=capability.evidence_kind,
+                sha256=capability.sha256,
+                size_bytes=capability.size_bytes,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        body = await self._send_coding_evidence_request(
+            path="/coding-shadow/evidence-finalization",
+            payload=payload,
+            operation="finalization",
+        )
+        try:
+            finalized = CodingSealedEvidenceFinalization.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding evidence finalization response is invalid"
+            ) from None
+        if (
+            finalized.ticket_id != capability.ticket_id
+            or finalized.claim_generation != capability.claim_generation
+            or finalized.upload_id != capability.upload_id
+            or finalized.evidence_kind != capability.evidence_kind
+            or finalized.sha256 != capability.sha256
+            or finalized.size_bytes != capability.size_bytes
+        ):
+            raise PlatformInfrastructureError(
+                "coding evidence finalization response identity is invalid"
+            )
+        return finalized
+
+    async def _send_coding_evidence_request(
+        self,
+        *,
+        path: str,
+        payload: (
+            CodingSealedEvidenceUploadCapabilityRequest
+            | CodingSealedEvidenceFinalizeRequest
+        ),
+        operation: str,
+    ) -> bytes:
+        body = bytearray()
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base}{_PREFIX}{path}",
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            ) as response:
+                if "no-store" not in {
+                    directive.strip().lower()
+                    for directive in response.headers.get("Cache-Control", "").split(
+                        ","
+                    )
+                }:
+                    raise PlatformInfrastructureError(
+                        f"coding evidence {operation} response cache policy is invalid"
+                    )
+                if (
+                    not response.headers.get("Content-Type", "")
+                    .lower()
+                    .startswith("application/json")
+                ):
+                    raise PlatformInfrastructureError(
+                        f"coding evidence {operation} response type is invalid"
+                    )
+                if response.status_code == 503:
+                    raise PlatformInfrastructureError(
+                        f"coding evidence {operation} is temporarily unavailable"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        f"coding evidence {operation} rejected ({response.status_code})"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=16 << 10):
+                    if len(body) + len(chunk) > _CODING_EVIDENCE_MAX_BYTES:
+                        raise PlatformInfrastructureError(
+                            f"coding evidence {operation} response is too large"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                f"coding evidence {operation} request failed"
+            ) from error
+        if not body:
+            raise PlatformInfrastructureError(
+                f"coding evidence {operation} response is empty"
+            )
+        return bytes(body)
 
     async def request_coding_inference_grant(
         self,

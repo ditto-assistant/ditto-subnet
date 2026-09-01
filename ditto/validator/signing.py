@@ -49,6 +49,11 @@ from ditto.api_models.coding_claims import (
     coding_claim_action_signing_message,
     coding_claim_next_signing_message,
 )
+from ditto.api_models.coding_evidence_upload import (
+    CodingSealedEvidenceKind,
+    coding_sealed_evidence_finalize_signing_message,
+    coding_sealed_evidence_upload_signing_message,
+)
 from ditto.api_models.coding_harness import coding_harness_launch_signing_message
 from ditto.api_models.coding_inference_grants import (
     coding_certification_inference_grant_signing_message,
@@ -429,6 +434,66 @@ def sign_coding_claim_action(
             instance_id=instance_id,
             ticket_id=ticket_id,
             claim_generation=claim_generation,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
+def sign_coding_sealed_evidence_upload(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    instance_id: str,
+    ticket_id: UUID,
+    claim_generation: int,
+    evidence_kind: CodingSealedEvidenceKind,
+    sha256: str,
+    size_bytes: int,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    signature: bytes = keypair.sign(
+        coding_sealed_evidence_upload_signing_message(
+            validator_hotkey=validator_hotkey,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=claim_generation,
+            evidence_kind=evidence_kind,
+            sha256=sha256,
+            size_bytes=size_bytes,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
+def sign_coding_sealed_evidence_finalization(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    instance_id: str,
+    ticket_id: UUID,
+    claim_generation: int,
+    upload_id: UUID,
+    evidence_kind: CodingSealedEvidenceKind,
+    sha256: str,
+    size_bytes: int,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    signature: bytes = keypair.sign(
+        coding_sealed_evidence_finalize_signing_message(
+            validator_hotkey=validator_hotkey,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=claim_generation,
+            upload_id=upload_id,
+            evidence_kind=evidence_kind,
+            sha256=sha256,
+            size_bytes=size_bytes,
             nonce=nonce,
             requested_at=requested_at,
         )

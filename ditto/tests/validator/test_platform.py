@@ -39,8 +39,16 @@ from ditto.api_models.coding_certification_leases import (
 from ditto.api_models.coding_claims import (
     CodingClaimActionRequest,
     CodingClaimNextRequest,
+    CodingClaimResponse,
     coding_claim_action_signing_message,
     coding_claim_next_signing_message,
+)
+from ditto.api_models.coding_evidence_upload import (
+    CodingSealedEvidenceFinalizeRequest,
+    CodingSealedEvidenceKind,
+    CodingSealedEvidenceUploadCapabilityRequest,
+    coding_sealed_evidence_finalize_signing_message,
+    coding_sealed_evidence_upload_signing_message,
 )
 from ditto.api_models.coding_harness import (
     CodingHarnessLaunchRequest,
@@ -573,6 +581,135 @@ async def test_coding_claim_client_treats_no_store_404_as_empty_queue() -> None:
             keypair,
         ).claim_next_coding_ticket("coding-worker-instance-001")
     assert claim is None
+
+
+async def test_coding_evidence_client_signs_capability_and_finalization() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    now = datetime.now(UTC).replace(microsecond=0)
+    ticket_id = UUID("33333333-3333-4333-8333-333333333333")
+    upload_id = UUID("55555555-5555-4555-8555-555555555555")
+    claim = CodingClaimResponse.model_validate(
+        {
+            "schema": "dittobench-coding-ticket-claim-v1",
+            "coding_contract_version": 1,
+            "weight_eligible": False,
+            "validator_hotkey": keypair.ss58_address,
+            "instance_id": "coding-worker-instance-001",
+            "claim_generation": 7,
+            "claim_expires_at": now + timedelta(minutes=2),
+            "claim_started_at": now,
+            "idempotent": False,
+            "agent_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "run_row_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "ticket_id": ticket_id,
+            "ticket_deadline": now + timedelta(hours=1),
+            "bench_version": 12,
+            "coding_run_id": "coding-run-001",
+            "agent_artifact_sha256": "aa" * 32,
+            "screened_image_sha256": "bb" * 32,
+            "run_manifest_sha256": "cc" * 32,
+            "task_set_manifest_sha256": "dd" * 32,
+        }
+    )
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            upload_payload = (
+                CodingSealedEvidenceUploadCapabilityRequest.model_validate_json(
+                    request.content
+                )
+            )
+            message = coding_sealed_evidence_upload_signing_message(
+                validator_hotkey=upload_payload.validator_hotkey,
+                instance_id=upload_payload.instance_id,
+                ticket_id=upload_payload.ticket_id,
+                claim_generation=upload_payload.claim_generation,
+                evidence_kind=upload_payload.evidence_kind,
+                sha256=upload_payload.sha256,
+                size_bytes=upload_payload.size_bytes,
+                nonce=upload_payload.nonce,
+                requested_at=upload_payload.requested_at,
+            )
+            assert keypair.verify(message, bytes.fromhex(upload_payload.signature))
+            body = {
+                "schema": "dittobench-coding-sealed-evidence-upload-capability-v1",
+                "coding_contract_version": 1,
+                "weight_eligible": False,
+                "ticket_id": str(ticket_id),
+                "claim_generation": 7,
+                "ticket_deadline": claim.ticket_deadline.isoformat(),
+                "upload_id": str(upload_id),
+                "evidence_kind": "authoring-transcript",
+                "sha256": "ab" * 32,
+                "size_bytes": 4096,
+                "content_type": "application/octet-stream",
+                "checksum_sha256_b64": "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s=",
+                "url": (
+                    "https://evidence.invalid/coding-evidence/v1/authoring-transcript/"
+                    f"sha256/{'ab' * 32}?X-Amz-Date={now.strftime('%Y%m%dT%H%M%SZ')}"
+                    "&X-Amz-Expires=120&X-Amz-Signature=synthetic"
+                ),
+                "expires_at": (now + timedelta(minutes=2)).isoformat(),
+            }
+        else:
+            finalize_payload = CodingSealedEvidenceFinalizeRequest.model_validate_json(
+                request.content
+            )
+            message = coding_sealed_evidence_finalize_signing_message(
+                validator_hotkey=finalize_payload.validator_hotkey,
+                instance_id=finalize_payload.instance_id,
+                ticket_id=finalize_payload.ticket_id,
+                claim_generation=finalize_payload.claim_generation,
+                upload_id=finalize_payload.upload_id,
+                evidence_kind=finalize_payload.evidence_kind,
+                sha256=finalize_payload.sha256,
+                size_bytes=finalize_payload.size_bytes,
+                nonce=finalize_payload.nonce,
+                requested_at=finalize_payload.requested_at,
+            )
+            assert keypair.verify(message, bytes.fromhex(finalize_payload.signature))
+            body = {
+                "schema": "dittobench-coding-sealed-evidence-finalized-v1",
+                "coding_contract_version": 1,
+                "weight_eligible": False,
+                "ticket_id": str(ticket_id),
+                "claim_generation": 7,
+                "upload_id": str(upload_id),
+                "evidence_kind": "authoring-transcript",
+                "sha256": "ab" * 32,
+                "size_bytes": 4096,
+                "finalized_at": datetime.now(UTC).isoformat(),
+                "accepted": True,
+                "idempotent": False,
+            }
+        return httpx.Response(
+            200,
+            headers={"Cache-Control": "no-store"},
+            json=body,
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        capability = await platform.request_coding_evidence_upload_capability(
+            claim,
+            evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+            sha256="ab" * 32,
+            size_bytes=4096,
+        )
+        finalized = await platform.finalize_coding_evidence_upload(
+            claim,
+            capability,
+        )
+    assert calls == 2
+    assert finalized.upload_id == upload_id
+    assert finalized.weight_eligible is False
 
 
 async def test_coding_authoring_client_rejects_oversized_response() -> None:
