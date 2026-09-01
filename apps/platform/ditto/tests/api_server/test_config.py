@@ -68,6 +68,8 @@ def _set_minimum_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "DITTO_CODING_EVIDENCE_STORAGE_REGION",
         "DITTO_CODING_EVIDENCE_STORAGE_USE_TLS",
         "DITTO_CODING_EVIDENCE_TIMEOUT_SECONDS",
+        "DITTO_CODING_STORAGE_READINESS_ENABLED",
+        "DITTO_CODING_STORAGE_READINESS_ENVIRONMENT",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -100,6 +102,8 @@ class TestParseApiServerConfigFromEnv:
         assert config.coding_catalog_curator_hotkeys == ()
         assert config.coding_private_catalog is None
         assert config.coding_sealed_evidence_storage is None
+        assert config.coding_storage_readiness_enabled is False
+        assert config.coding_storage_readiness_environment == "prod"
         assert config.coding_shadow_reconciliation_enabled is False
         assert config.coding_shadow_reconciliation_selection_delay_blocks == 20
         assert config.coding_shadow_ticket_set_enabled is False
@@ -127,6 +131,11 @@ class TestParseApiServerConfigFromEnv:
                     coding_shadow_reconciliation_selection_delay_blocks=0,
                 )
             )
+
+    def test_storage_readiness_requires_both_dedicated_authorities(self) -> None:
+        base = make_api_server_config(coding_storage_readiness_enabled=True)
+        with pytest.raises(ApiServerConfigError, match="both dedicated"):
+            check_config(base)
 
     def test_shadow_ticket_set_activation_is_independent_and_bounded(self) -> None:
         base = make_api_server_config()

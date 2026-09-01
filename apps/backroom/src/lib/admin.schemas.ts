@@ -5057,6 +5057,31 @@ export const getCodingCatalogInputSchema = z.object({
   limit: z.number().int().min(1).max(100).default(50),
 })
 
+export const codingStorageReadinessInputSchema = z.object({})
+
+const codingStorageAuthorityReadinessSchema = z.object({
+  status: z.enum(['ready', 'missing', 'drifted', 'unavailable']),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  size_bytes: z.number().int().positive(),
+  exact_object_verified: z.boolean(),
+})
+
+export const codingStorageReadinessSchema = z.object({
+  schema: z.literal('dittobench-coding-storage-readiness-v1'),
+  environment: z.enum(['dev', 'prod']),
+  source_sha: z.string(),
+  checked_at: z.string().datetime({ offset: true }),
+  ready: z.boolean(),
+  private_input: codingStorageAuthorityReadinessSchema,
+  sealed_evidence: codingStorageAuthorityReadinessSchema,
+  authorities_distinct: z.literal(true),
+  read_only: z.literal(true),
+  weight_eligible: z.literal(false),
+})
+void (codingStorageReadinessSchema satisfies z.ZodType<
+  PlatformComponents['schemas']['AdminCodingStorageReadinessResponse']
+>)
+
 export const registerCodingCatalogInputSchema = z.object({
   commitment: codingCatalogCommitmentSchema,
   signature: z.string().regex(/^[0-9a-fA-F]{128}$/),

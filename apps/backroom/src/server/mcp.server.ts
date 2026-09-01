@@ -64,6 +64,7 @@ import {
   agentScoringReadinessInputSchema,
   agentCodingCertificationInputSchema,
   getCodingCatalogInputSchema,
+  codingStorageReadinessInputSchema,
   registerCodingCatalogMcpInputSchema,
   retireCodingCatalogInputSchema,
   agentCodingShadowEvaluationInputSchema,
@@ -143,6 +144,7 @@ import {
   fetchAgentScoringReadiness,
   fetchAgentCodingCertifications,
   fetchCodingCatalogReleases,
+  fetchCodingStorageReadiness,
   registerCodingCatalogRelease,
   retireCodingCatalogRelease,
   fetchAgentCodingShadowEvaluations,
@@ -484,6 +486,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Apply complete revisioned concurrency limits for one enrolled screener node after reading get_screener_capacity.',
   get_coding_catalog_releases:
     'Read signed shadow catalog commitments, retirement, and exposure counts.',
+  get_coding_storage_readiness:
+    'Read Coding storage exact-canary status.',
   register_coding_catalog_release:
     'Register one curator-signed, weight-zero catalog commitment.',
   retire_coding_catalog_release:
@@ -1325,6 +1329,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchCodingCatalogReleases(input)),
+  )
+
+  registerTool(
+    'get_coding_storage_readiness',
+    {
+      title: 'Get Coding storage readiness',
+      description:
+        'Read secret-free exact-canary status for dedicated Coding storage. Returns no storage coordinates and never changes tickets, scores, or weights.',
+      inputSchema: codingStorageReadinessInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchCodingStorageReadiness(input)),
   )
 
   registerTool(

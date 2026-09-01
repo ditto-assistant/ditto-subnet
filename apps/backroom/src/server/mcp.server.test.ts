@@ -136,6 +136,7 @@ describe('Backroom MCP tools', () => {
         'get_agent_coding_certifications',
         'get_agent_coding_shadow_evaluations',
         'get_coding_catalog_releases',
+        'get_coding_storage_readiness',
         'get_agent_core_qualification',
         'get_agent_scores',
         'get_leaderboard',
@@ -6917,6 +6918,48 @@ describe('Backroom MCP tools', () => {
     })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/coding-shadow-evaluations?limit=25`,
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer platform-admin-token' }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads redacted coding storage readiness without write authority', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const authority = {
+      status: 'ready',
+      sha256: 'a'.repeat(64),
+      size_bytes: 64,
+      exact_object_verified: true,
+    }
+    const payload = {
+      schema: 'dittobench-coding-storage-readiness-v1',
+      environment: 'dev',
+      source_sha: 'b'.repeat(40),
+      checked_at: '2026-09-01T00:00:00Z',
+      ready: true,
+      private_input: authority,
+      sealed_evidence: authority,
+      authorities_distinct: true,
+      read_only: true,
+      weight_eligible: false,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_coding_storage_readiness',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toEqual(payload)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/coding-storage/readiness',
       expect.objectContaining({
         headers: expect.objectContaining({ Authorization: 'Bearer platform-admin-token' }),
       }),

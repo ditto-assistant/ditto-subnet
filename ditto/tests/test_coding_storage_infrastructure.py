@@ -35,6 +35,7 @@ def test_coding_storage_access_rollout_keeps_application_gates_off() -> None:
     )
     assert platform_defaults["platform_coding_catalog_enabled"] is False
     assert platform_defaults["platform_coding_evidence_enabled"] is False
+    assert platform_defaults["platform_coding_storage_readiness_enabled"] is False
     assert (
         "coding_storage_envs = var.enable_coding_s3_authorities "
         "? local.app_envs : {}" in terraform

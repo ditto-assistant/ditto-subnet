@@ -6,6 +6,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal, cast
 from urllib.parse import parse_qs, urlparse
 
 from ditto.api_models.inference_concurrency_settings import (
@@ -416,6 +417,12 @@ class ApiServerConfig:
     expose a validator route, worker, score, or weight path by itself.
     """
 
+    coding_storage_readiness_enabled: bool = False
+    """Expose the admin-only exact-canary readiness snapshot."""
+
+    coding_storage_readiness_environment: Literal["dev", "prod"] = "prod"
+    """Environment suffix used by deterministic retained canary objects."""
+
     coding_shadow_reconciliation_enabled: bool = False
     """Permit one explicitly confirmed shadow coding reconciliation request.
 
@@ -637,6 +644,22 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         .strip()
         .lower()
         in _TRUTHY
+    )
+    coding_storage_readiness_enabled = (
+        os.environ.get("DITTO_CODING_STORAGE_READINESS_ENABLED", "false")
+        .strip()
+        .lower()
+        in _TRUTHY
+    )
+    raw_coding_storage_readiness_environment = os.environ.get(
+        "DITTO_CODING_STORAGE_READINESS_ENVIRONMENT", "prod"
+    ).strip()
+    if raw_coding_storage_readiness_environment not in {"dev", "prod"}:
+        raise ApiServerConfigError(
+            "DITTO_CODING_STORAGE_READINESS_ENVIRONMENT must be dev or prod"
+        )
+    coding_storage_readiness_environment = cast(
+        Literal["dev", "prod"], raw_coding_storage_readiness_environment
     )
     try:
         reconciliation_selection_delay_blocks = int(
@@ -947,6 +970,8 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         coding_sealed_evidence_storage=(
             parse_coding_sealed_evidence_storage_config_from_env()
         ),
+        coding_storage_readiness_enabled=coding_storage_readiness_enabled,
+        coding_storage_readiness_environment=coding_storage_readiness_environment,
         coding_shadow_reconciliation_enabled=reconciliation_enabled,
         coding_shadow_reconciliation_selection_delay_blocks=(
             reconciliation_selection_delay_blocks
@@ -1044,6 +1069,12 @@ def check_config(config: ApiServerConfig) -> None:
         )
     catalog = config.coding_private_catalog
     evidence_store = config.coding_sealed_evidence_storage
+    if config.coding_storage_readiness_enabled and (
+        catalog is None or evidence_store is None
+    ):
+        raise ApiServerConfigError(
+            "coding storage readiness requires both dedicated storage authorities"
+        )
     if catalog is not None:
         upload = config.storage
         same_endpoint = _http_origin(catalog.endpoint_url) == _http_origin(

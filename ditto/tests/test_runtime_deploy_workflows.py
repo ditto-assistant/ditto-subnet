@@ -128,6 +128,7 @@ def test_private_coding_storage_deploy_is_default_off_and_relay_blind() -> None:
 
     assert defaults["platform_coding_catalog_enabled"] is False
     assert defaults["platform_coding_evidence_enabled"] is False
+    assert defaults["platform_coding_storage_readiness_enabled"] is False
     assert defaults["platform_coding_catalog_endpoint"] == (
         "https://storage.googleapis.com"
     )
@@ -142,8 +143,13 @@ def test_private_coding_storage_deploy_is_default_off_and_relay_blind() -> None:
     assert "platform_coding_evidence_access_key | quote" in template
     assert "platform_secrets.coding_evidence_secret_key | quote" in template
     assert "platform_coding_evidence_use_tls | bool" in template
+    assert "DITTO_CODING_STORAGE_READINESS_ENABLED=" in template
+    assert "platform_coding_storage_readiness_enabled | bool" in template
+    assert "DITTO_CODING_STORAGE_READINESS_ENVIRONMENT=" in template
     assert "platform_coding_catalog_enabled | bool" in tasks
     assert "platform_coding_evidence_enabled | bool" in tasks
+    assert "platform_coding_storage_readiness_enabled | bool" in tasks
+    assert "platform_env in ['dev', 'prod']" in tasks
     assert "platform_coding_catalog_bucket != platform_bucket" in tasks
     assert "platform_coding_catalog_bucket != (platform_hippius_bucket" in tasks
     assert "platform_coding_evidence_bucket != platform_bucket" in tasks
@@ -175,6 +181,8 @@ def test_private_coding_storage_deploy_is_default_off_and_relay_blind() -> None:
         "DITTO_CODING_EVIDENCE_STORAGE_SECRET_KEY",
     ):
         assert f'{key}: ""' in ecosystem
+    assert 'DITTO_CODING_STORAGE_READINESS_ENABLED: "false"' in ecosystem
+    assert 'DITTO_CODING_STORAGE_READINESS_ENVIRONMENT: "prod"' in ecosystem
 
 
 def test_platform_app_env_selects_one_coding_storage_environment() -> None:
@@ -226,15 +234,18 @@ def test_coding_storage_application_activation_is_dev_only() -> None:
 
     assert defaults["platform_coding_catalog_enabled"] is False
     assert defaults["platform_coding_evidence_enabled"] is False
+    assert defaults["platform_coding_storage_readiness_enabled"] is False
     assert dev["platform_env"] == "dev"
     assert dev["platform_branch"] == "dev"
     assert dev["platform_coding_catalog_enabled"] is True
     assert dev["platform_coding_evidence_enabled"] is True
+    assert dev["platform_coding_storage_readiness_enabled"] is True
     assert "platform_inference_relay_ports" not in dev
     assert prod["platform_env"] == "prod"
     assert prod["platform_branch"] == "main"
     assert prod["platform_coding_catalog_enabled"] is False
     assert prod["platform_coding_evidence_enabled"] is False
+    assert prod["platform_coding_storage_readiness_enabled"] is False
     assert "DITTOBENCH_CODING_SHADOW_ENABLED:-false" in compose
     assert "DITTOBENCH_CODING_CANARY_ENABLED:-false" in compose
     assert "VALIDATOR_CODING_SHADOW_ENABLED:-false" in compose

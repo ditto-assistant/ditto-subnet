@@ -100,6 +100,8 @@ import {
   agentCodingCertificationInputSchema,
   agentCodingCertificationStatusSchema,
   codingCatalogControlSchema,
+  codingStorageReadinessInputSchema,
+  codingStorageReadinessSchema,
   getCodingCatalogInputSchema,
   registerCodingCatalogInputSchema,
   retireCodingCatalogInputSchema,
@@ -2049,6 +2051,14 @@ export async function fetchCodingCatalogReleases(rawInput: unknown) {
     `/api/v1/admin/coding-catalog/releases?limit=${input.limit}`,
   )
   return codingCatalogControlSchema.parse(payload)
+}
+
+export async function fetchCodingStorageReadiness(rawInput: unknown) {
+  codingStorageReadinessInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    '/api/v1/admin/coding-storage/readiness',
+  )
+  return codingStorageReadinessSchema.parse(payload)
 }
 
 export async function registerCodingCatalogRelease(rawInput: unknown, actor: string) {

@@ -28,3 +28,4 @@ secret_pylon_token: platform-dev-pylon-open-access-token
 # weight path is enabled here.
 platform_coding_catalog_enabled: true
 platform_coding_evidence_enabled: true
+platform_coding_storage_readiness_enabled: true

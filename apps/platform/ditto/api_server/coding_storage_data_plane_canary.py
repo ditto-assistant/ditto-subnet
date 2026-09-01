@@ -129,26 +129,26 @@ def _validate_access_id(value: str) -> None:
         raise CodingStorageCanaryError("HMAC access ID is outside safe bounds")
 
 
-def _private_payload(environment: str) -> bytes:
+def coding_storage_private_canary_payload(environment: str) -> bytes:
     return (
         "dittobench-coding-storage-private-input-canary-v1\n"
         f"environment={environment}\n"
     ).encode()
 
 
-def _evidence_payload(environment: str) -> bytes:
+def coding_storage_evidence_canary_payload(environment: str) -> bytes:
     return (
         "dittobench-coding-storage-sealed-evidence-canary-v1\n"
         f"environment={environment}\n"
     ).encode()
 
 
-def _private_key(payload: bytes) -> str:
+def coding_storage_private_canary_key(payload: bytes) -> str:
     digest = hashlib.sha256(payload).hexdigest()
     return f"coding-verification/v1/private-input/sha256/{digest}"
 
 
-def _evidence_key(payload: bytes) -> str:
+def coding_storage_evidence_canary_key(payload: bytes) -> str:
     return coding_sealed_evidence_object_key(
         evidence_kind=CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT,
         sha256=hashlib.sha256(payload).hexdigest(),
@@ -173,8 +173,8 @@ async def seed_private_input(
     *,
     backend: CodingStorageCanaryBackend | None = None,
 ) -> dict[str, Any]:
-    payload = _private_payload(config.environment)
-    key = _private_key(payload)
+    payload = coding_storage_private_canary_payload(config.environment)
+    key = coding_storage_private_canary_key(payload)
     observed = await (backend or LiveCodingStorageCanaryBackend()).seed_private_input(
         config,
         key=key,
@@ -201,10 +201,10 @@ async def verify_platform(
     *,
     backend: CodingStorageCanaryBackend | None = None,
 ) -> dict[str, Any]:
-    private_payload = _private_payload(config.environment)
-    evidence_payload = _evidence_payload(config.environment)
-    private_key = _private_key(private_payload)
-    evidence_key = _evidence_key(evidence_payload)
+    private_payload = coding_storage_private_canary_payload(config.environment)
+    evidence_payload = coding_storage_evidence_canary_payload(config.environment)
+    private_key = coding_storage_private_canary_key(private_payload)
+    evidence_key = coding_storage_evidence_canary_key(evidence_payload)
     observed = await (backend or LiveCodingStorageCanaryBackend()).verify_platform(
         config,
         private_key=private_key,

@@ -81,6 +81,10 @@ from ditto.api_models.coding_evidence_upload import (
     coding_sealed_evidence_finalize_signing_message,
     coding_sealed_evidence_upload_signing_message,
 )
+from ditto.api_models.coding_storage_readiness import (
+    AdminCodingStorageReadinessResponse,
+    CodingStorageAuthorityReadiness,
+)
 from ditto.api_models.core_qualification import (
     AdminCoreQualificationPolicyRequest,
     AdminCoreQualificationPolicyResponse,
@@ -291,6 +295,7 @@ __all__ = [
     "AdminCoreQualificationPolicyResponse",
     "AdminCoreQualificationRefreshRequest",
     "AdminCodingCatalogResponse",
+    "AdminCodingStorageReadinessResponse",
     "AdminCodingShadowReconciliationRequest",
     "AdminCodingShadowReconciliationResponse",
     "AdminCodingShadowTicketRecord",
@@ -311,6 +316,7 @@ __all__ = [
     "CodingCatalogCommitment",
     "CodingCatalogReleaseRecord",
     "CodingCatalogTaskExposure",
+    "CodingStorageAuthorityReadiness",
     "CodingCertificationLeaseAbortRequest",
     "CodingCertificationLeaseAuthority",
     "CodingCertificationLeaseClaimRequest",

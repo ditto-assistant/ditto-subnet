@@ -433,6 +433,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/coding-storage/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Coding Storage Readiness */
+        get: operations["get_coding_storage_readiness_api_v1_admin_coding_storage_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/confirmation-bundle-settings": {
         parameters: {
             query?: never;
@@ -6466,6 +6483,48 @@ export interface components {
             /**
              * Weight Eligible
              * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * AdminCodingStorageReadinessResponse
+         * @description Admin-only, secret-free readiness snapshot for the Coding data plane.
+         */
+        AdminCodingStorageReadinessResponse: {
+            /**
+             * Authorities Distinct
+             * @constant
+             */
+            authorities_distinct: true;
+            /**
+             * Checked At
+             * Format: date-time
+             */
+            checked_at: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "dev" | "prod";
+            private_input: components["schemas"]["CodingStorageAuthorityReadiness"];
+            /**
+             * Read Only
+             * @constant
+             */
+            read_only: true;
+            /** Ready */
+            ready: boolean;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-storage-readiness-v1";
+            sealed_evidence: components["schemas"]["CodingStorageAuthorityReadiness"];
+            /** Source Sha */
+            source_sha: string;
+            /**
+             * Weight Eligible
              * @constant
              */
             weight_eligible: false;
@@ -13174,6 +13233,23 @@ export interface components {
             ticket_id: string;
             /** Validator Hotkey */
             validator_hotkey: string;
+        };
+        /**
+         * CodingStorageAuthorityReadiness
+         * @description One authority's exact-object observation without storage coordinates.
+         */
+        CodingStorageAuthorityReadiness: {
+            /** Exact Object Verified */
+            exact_object_verified: boolean;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "missing" | "drifted" | "unavailable";
         };
         /** CodingTaskResult */
         CodingTaskResult: {
@@ -26159,6 +26235,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_coding_storage_readiness_api_v1_admin_coding_storage_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingStorageReadinessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

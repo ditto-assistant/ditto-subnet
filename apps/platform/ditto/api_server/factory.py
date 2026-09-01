@@ -32,6 +32,7 @@ from ditto.api_server.coding_private_catalog import (
 from ditto.api_server.coding_sealed_evidence_storage import (
     CodingSealedEvidenceCapabilityMinter,
 )
+from ditto.api_server.coding_storage_readiness import CodingStorageReadinessProbe
 from ditto.api_server.config import (
     ApiServerConfig,
     parse_api_server_config_from_env,
@@ -69,6 +70,7 @@ from ditto.api_server.endpoints import (
     admin_coding_certifications_router,
     admin_coding_evaluations_router,
     admin_coding_reconciliation_router,
+    admin_coding_storage_router,
     admin_coding_ticket_sets_router,
     admin_confirmation_bundles_router,
     admin_continual_retest_settings_router,
@@ -278,6 +280,19 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     config.coding_sealed_evidence_storage
                 )
                 if config.coding_sealed_evidence_storage is not None
+                and _process_role() == PLATFORM_ROLE
+                else None
+            )
+            app.state.coding_storage_readiness_probe = (
+                CodingStorageReadinessProbe.from_config(
+                    environment=config.coding_storage_readiness_environment,
+                    source_sha=config.commit_hash,
+                    private_config=config.coding_private_catalog,
+                    evidence_config=config.coding_sealed_evidence_storage,
+                )
+                if config.coding_storage_readiness_enabled
+                and config.coding_private_catalog is not None
+                and config.coding_sealed_evidence_storage is not None
                 and _process_role() == PLATFORM_ROLE
                 else None
             )
@@ -502,6 +517,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.state.coding_private_catalog_source = None
     app.state.coding_artifact_capability_minter = None
     app.state.coding_sealed_evidence_capability_minter = None
+    app.state.coding_storage_readiness_probe = None
     app.state.coding_inference_grant_transport = None
     # Hot-swappable efficiency-bonus policy: the compute path resolves the
     # latest append-only revision through this resolver (short TTL), falling
@@ -621,6 +637,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_coding_evaluations_router, prefix="/api/v1")
     app.include_router(admin_coding_reconciliation_router, prefix="/api/v1")
     app.include_router(admin_coding_ticket_sets_router, prefix="/api/v1")
+    app.include_router(admin_coding_storage_router, prefix="/api/v1")
     app.include_router(admin_confirmation_bundles_router, prefix="/api/v1")
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
     app.include_router(admin_core_qualification_router, prefix="/api/v1")

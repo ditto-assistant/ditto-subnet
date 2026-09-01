@@ -212,6 +212,7 @@ development host override both role defaults:
 ```yaml
 platform_coding_catalog_enabled: true
 platform_coding_evidence_enabled: true
+platform_coding_storage_readiness_enabled: true
 ```
 
 Production pins both values to `false`. Merge does not deploy or converge an
@@ -241,3 +242,20 @@ This activation still creates no coding run or ticket, starts no worker or
 executor, invokes no model or grader, and affects no score, rank, weight, or
 emission. Rollback is both dev flags back to `false` followed by the same
 development-only converge.
+
+## Runtime readiness visibility
+
+When the development-only readiness gate is enabled, an authenticated admin
+may request `GET /api/v1/admin/coding-storage/readiness`. The Platform process
+performs only exact-key reads against the two retained data-plane canaries: a
+bounded private-input GET and sealed-evidence HEAD plus full-object SHA-256.
+The response contains the expected digest, size, status, deployed source SHA,
+and environment, but no bucket, object key, endpoint, access ID, secret, or
+presigned URL. Missing, drifted, timed-out, or unavailable objects fail the
+combined readiness result closed.
+
+Backroom exposes the same snapshot as a read-only MCP operation. This status
+is operator evidence only: `read_only=true` and `weight_eligible=false`, with
+no database mutation, task issuance, worker activation, score, rank, weight,
+or emission effect. Production and the role default keep the readiness gate
+false, and relay processes explicitly scrub it.

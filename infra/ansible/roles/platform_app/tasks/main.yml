@@ -315,6 +315,17 @@
     mode: "0750"
   when: platform_trace_enabled | bool
 
+- name: Validate Coding storage readiness activation boundary
+  ansible.builtin.assert:
+    that:
+      - platform_coding_catalog_enabled | bool
+      - platform_coding_evidence_enabled | bool
+      - platform_env in ['dev', 'prod']
+    fail_msg: >-
+      Coding storage readiness requires both dedicated storage authorities and
+      a known dev/prod canary environment. It does not enable either authority.
+  when: platform_coding_storage_readiness_enabled | bool
+
 - name: Validate private coding catalog activation
   ansible.builtin.assert:
     that:

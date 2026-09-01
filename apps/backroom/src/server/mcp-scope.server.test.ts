@@ -559,6 +559,7 @@ describe('MCP scope challenges', () => {
       'get_agent_coding_certifications',
       'get_agent_coding_shadow_evaluations',
       'get_coding_catalog_releases',
+      'get_coding_storage_readiness',
       'get_core_qualification_policy',
       'get_agent_core_qualification',
     ]) {

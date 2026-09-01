@@ -149,6 +149,11 @@ const relayApp = (port, index) => ({
     DITTO_CODING_EVIDENCE_STORAGE_REGION: "",
     DITTO_CODING_EVIDENCE_STORAGE_USE_TLS: "",
     DITTO_CODING_EVIDENCE_TIMEOUT_SECONDS: "",
+    // The readiness route is never mounted by a relay. Clear its gate as a
+    // second boundary so a shared Platform env cannot make relay boot depend
+    // on credentials that are intentionally scrubbed above.
+    DITTO_CODING_STORAGE_READINESS_ENABLED: "false",
+    DITTO_CODING_STORAGE_READINESS_ENVIRONMENT: "prod",
   },
   autorestart: true,
   max_restarts: 10,

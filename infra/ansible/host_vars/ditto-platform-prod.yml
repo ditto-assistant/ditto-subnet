@@ -62,6 +62,7 @@ secret_pylon_token: platform-prod-pylon-open-access-token
 # configuration canary runs. Do not inherit a future role-default change.
 platform_coding_catalog_enabled: false
 platform_coding_evidence_enabled: false
+platform_coding_storage_readiness_enabled: false
 
 # Platform-operated screener auth: allowlist the dedicated prod screener hotkey
 # and share its bearer token (the same SCREENER_API_TOKEN configured on

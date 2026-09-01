@@ -202,6 +202,10 @@ platform_coding_evidence_use_tls: true
 platform_coding_evidence_timeout_seconds: 10
 secret_coding_evidence_secret_key: "coding-evidence-finalizer-{{ platform_env }}-hmac-secret"
 
+# Admin-only exact-canary observation. This performs GET/HEAD/full-hash reads
+# and has no write, list, worker, ticket, score, or weight authority.
+platform_coding_storage_readiness_enabled: false
+
 # Subnet / pricing config (mirrors .env.example defaults).
 platform_netuid: 118
 platform_subtensor_network: finney
