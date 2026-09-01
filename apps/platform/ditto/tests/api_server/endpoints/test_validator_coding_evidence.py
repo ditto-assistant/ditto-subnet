@@ -48,7 +48,17 @@ def _payload(**updates: object) -> dict[str, object]:
         "requested_at": requested_at,
     }
     values["signature"] = _KEYPAIR.sign(
-        coding_sealed_evidence_upload_signing_message(**values)
+        coding_sealed_evidence_upload_signing_message(
+            validator_hotkey=_VALIDATOR,
+            instance_id=_INSTANCE,
+            ticket_id=_TICKET,
+            claim_generation=7,
+            evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+            sha256="ab" * 32,
+            size_bytes=4096,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
     ).hex()
     values.update(updates)
     return CodingSealedEvidenceUploadCapabilityRequest.model_validate(
