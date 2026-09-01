@@ -54,6 +54,12 @@ class CodingSealedEvidenceFinalizationResult:
     idempotent: bool
 
 
+@dataclass(frozen=True)
+class CodingSealedEvidenceFinalizationAuthority:
+    upload: CodingSealedEvidenceUpload
+    ticket: CodingShadowTicket
+
+
 async def reserve_coding_sealed_evidence_upload(
     session: AsyncSession,
     *,
@@ -150,7 +156,7 @@ async def reserve_coding_sealed_evidence_upload(
     )
 
 
-async def finalize_coding_sealed_evidence_upload(
+async def authorize_coding_sealed_evidence_finalization(
     session: AsyncSession,
     *,
     validator_hotkey: str,
@@ -161,13 +167,8 @@ async def finalize_coding_sealed_evidence_upload(
     evidence_kind: CodingSealedEvidenceKind,
     sha256: str,
     size_bytes: int,
-) -> CodingSealedEvidenceFinalizationResult:
-    """Append the accepted finalization after a future storage verifier runs.
-
-    This function deliberately receives only that verifier's exact immutable
-    identity.  It neither verifies nor learns an object-store location; the
-    following S3 integration layer must do that before it invokes this ledger.
-    """
+) -> CodingSealedEvidenceFinalizationAuthority:
+    """Lock and return the exact live reservation before storage verification."""
 
     kind, sha256, size_bytes = _validate_evidence_identity(
         evidence_kind=evidence_kind,
@@ -199,6 +200,41 @@ async def finalize_coding_sealed_evidence_upload(
         raise CodingSealedEvidenceConflictError(
             "coding evidence finalization disagrees with its reservation"
         )
+    return CodingSealedEvidenceFinalizationAuthority(upload=upload, ticket=ticket)
+
+
+async def finalize_coding_sealed_evidence_upload(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    instance_id: str,
+    ticket_id: UUID,
+    claim_generation: int,
+    upload_id: UUID,
+    evidence_kind: CodingSealedEvidenceKind,
+    sha256: str,
+    size_bytes: int,
+) -> CodingSealedEvidenceFinalizationResult:
+    """Append the accepted finalization after a future storage verifier runs.
+
+    This function deliberately receives only that verifier's exact immutable
+    identity.  It neither verifies nor learns an object-store location; the
+    following S3 integration layer must do that before it invokes this ledger.
+    """
+
+    authority = await authorize_coding_sealed_evidence_finalization(
+        session,
+        validator_hotkey=validator_hotkey,
+        instance_id=instance_id,
+        ticket_id=ticket_id,
+        claim_generation=claim_generation,
+        upload_id=upload_id,
+        evidence_kind=evidence_kind,
+        sha256=sha256,
+        size_bytes=size_bytes,
+    )
+    upload, ticket = authority.upload, authority.ticket
+    kind = evidence_kind.value
 
     existing = await session.get(
         CodingSealedEvidenceFinalization,
@@ -384,9 +420,11 @@ async def _database_now(session: AsyncSession) -> datetime:
 
 __all__ = [
     "CodingSealedEvidenceConflictError",
+    "CodingSealedEvidenceFinalizationAuthority",
     "CodingSealedEvidenceFinalizationResult",
     "CodingSealedEvidenceNotAvailableError",
     "CodingSealedEvidenceUploadReservation",
+    "authorize_coding_sealed_evidence_finalization",
     "finalize_coding_sealed_evidence_upload",
     "reserve_coding_sealed_evidence_upload",
 ]

@@ -16,6 +16,7 @@ from ditto.api_server.coding_sealed_evidence_storage import (
     coding_sealed_evidence_object_key,
     parse_coding_sealed_evidence_storage_config_from_env,
 )
+from ditto.api_server.storage.models import ObjectMetadata, VerifiedObject
 from ditto.db.models import CodingSealedEvidenceUpload
 
 _NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
@@ -24,6 +25,15 @@ _NOW = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 class _Store:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.metadata = ObjectMetadata(
+            size_bytes=4096,
+            metadata={
+                "sha256": "ab" * 32,
+                "evidence-kind": "authoring-transcript",
+            },
+            content_type="application/octet-stream",
+        )
+        self.verified = VerifiedObject(size_bytes=4096, sha256="ab" * 32)
 
     async def presigned_put_url(
         self,
@@ -50,6 +60,16 @@ class _Store:
             "?X-Amz-Date=20260901T120000Z"
             f"&X-Amz-Expires={expires_in}&X-Amz-Signature=synthetic"
         )
+
+    async def head_object(self, *, key: str) -> ObjectMetadata:
+        self.calls.append({"head": key})
+        return self.metadata
+
+    async def verify_object_sha256(
+        self, *, key: str, expected_size_bytes: int
+    ) -> VerifiedObject:
+        self.calls.append({"verify": key, "expected_size_bytes": expected_size_bytes})
+        return self.verified
 
 
 def _config() -> CodingSealedEvidenceStorageConfig:
@@ -151,3 +171,47 @@ async def test_minter_rejects_near_expiry_or_identity_drift() -> None:
             ticket_deadline=_NOW + timedelta(hours=1),
             claim_expires_at=_NOW + timedelta(minutes=2),
         )
+
+
+async def test_verifier_checks_metadata_and_complete_bytes() -> None:
+    store = _Store()
+    upload = _upload()
+    minter = CodingSealedEvidenceCapabilityMinter(_config(), object_store=store)
+
+    verified = await minter.verify(upload)
+
+    key = coding_sealed_evidence_object_key(
+        evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+        sha256=upload.sha256,
+    )
+    assert verified.upload_id == upload.upload_id
+    assert verified.sha256 == upload.sha256
+    assert store.calls == [
+        {"head": key},
+        {"verify": key, "expected_size_bytes": upload.size_bytes},
+    ]
+
+
+async def test_verifier_rejects_metadata_or_byte_drift() -> None:
+    store = _Store()
+    upload = _upload()
+    minter = CodingSealedEvidenceCapabilityMinter(_config(), object_store=store)
+    store.metadata = ObjectMetadata(
+        size_bytes=upload.size_bytes,
+        metadata={"sha256": upload.sha256, "evidence-kind": "frozen-submission"},
+        content_type="application/octet-stream",
+    )
+    with pytest.raises(CodingSealedEvidenceStorageIntegrityError, match="metadata"):
+        await minter.verify(upload)
+
+    store.metadata = ObjectMetadata(
+        size_bytes=upload.size_bytes,
+        metadata={
+            "sha256": upload.sha256,
+            "evidence-kind": "authoring-transcript",
+        },
+        content_type="application/octet-stream",
+    )
+    store.verified = VerifiedObject(size_bytes=upload.size_bytes, sha256="cd" * 32)
+    with pytest.raises(CodingSealedEvidenceStorageIntegrityError, match="bytes"):
+        await minter.verify(upload)

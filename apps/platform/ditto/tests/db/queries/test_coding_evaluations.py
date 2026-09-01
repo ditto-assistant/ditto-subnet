@@ -74,6 +74,7 @@ from ditto.db.queries.coding_evaluations import (
 from ditto.db.queries.coding_evidence_uploads import (
     CodingSealedEvidenceConflictError,
     CodingSealedEvidenceNotAvailableError,
+    authorize_coding_sealed_evidence_finalization,
     finalize_coding_sealed_evidence_upload,
     reserve_coding_sealed_evidence_upload,
 )
@@ -888,6 +889,20 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
         )
     assert replayed_evidence_upload.idempotent is True
     assert replayed_evidence_upload.upload.upload_id == upload_id
+    async with session.begin():
+        finalization_authority = await authorize_coding_sealed_evidence_finalization(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=2,
+            upload_id=upload_id,
+            evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+            sha256=evidence_sha256,
+            size_bytes=_TRANSCRIPT_BYTES,
+        )
+    assert finalization_authority.upload.upload_id == upload_id
+    assert finalization_authority.ticket.ticket_id == ticket_id
     with pytest.raises(CodingSealedEvidenceConflictError, match="different"):
         async with session.begin():
             await reserve_coding_sealed_evidence_upload(

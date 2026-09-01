@@ -14,15 +14,26 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.coding_evidence_upload import (
+    CodingSealedEvidenceFinalizeRequest,
     CodingSealedEvidenceKind,
     CodingSealedEvidenceUploadCapability,
     CodingSealedEvidenceUploadCapabilityRequest,
+    coding_sealed_evidence_finalize_signing_message,
     coding_sealed_evidence_upload_signing_message,
+)
+from ditto.api_server.coding_sealed_evidence_storage import (
+    CodingSealedEvidenceVerifiedObject,
 )
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.endpoints import validator_coding_evidence as endpoint_module
-from ditto.db.models import CodingSealedEvidenceUpload, CodingShadowTicket
+from ditto.db.models import (
+    CodingSealedEvidenceFinalization,
+    CodingSealedEvidenceUpload,
+    CodingShadowTicket,
+)
 from ditto.db.queries.coding_evidence_uploads import (
+    CodingSealedEvidenceFinalizationAuthority,
+    CodingSealedEvidenceFinalizationResult,
     CodingSealedEvidenceUploadReservation,
 )
 
@@ -90,6 +101,77 @@ def _reservation() -> CodingSealedEvidenceUploadReservation:
     )
 
 
+def _finalize_payload(**updates: object) -> dict[str, object]:
+    requested_at = cast(datetime, updates.pop("requested_at", datetime.now(UTC)))
+    nonce = cast(UUID, updates.pop("nonce", uuid4()))
+    values: dict[str, object] = {
+        "validator_hotkey": _VALIDATOR,
+        "instance_id": _INSTANCE,
+        "ticket_id": _TICKET,
+        "claim_generation": 7,
+        "upload_id": _UPLOAD,
+        "evidence_kind": CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+        "sha256": "ab" * 32,
+        "size_bytes": 4096,
+        "nonce": nonce,
+        "requested_at": requested_at,
+        "signature": _KEYPAIR.sign(
+            coding_sealed_evidence_finalize_signing_message(
+                validator_hotkey=_VALIDATOR,
+                instance_id=_INSTANCE,
+                ticket_id=_TICKET,
+                claim_generation=7,
+                upload_id=_UPLOAD,
+                evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+                sha256="ab" * 32,
+                size_bytes=4096,
+                nonce=nonce,
+                requested_at=requested_at,
+            )
+        ).hex(),
+    }
+    values.update(updates)
+    return CodingSealedEvidenceFinalizeRequest.model_validate(values).model_dump(
+        mode="json"
+    )
+
+
+def _finalization_authority() -> CodingSealedEvidenceFinalizationAuthority:
+    reservation = _reservation()
+    return CodingSealedEvidenceFinalizationAuthority(
+        upload=reservation.upload,
+        ticket=reservation.ticket,
+    )
+
+
+def _verified() -> CodingSealedEvidenceVerifiedObject:
+    return CodingSealedEvidenceVerifiedObject(
+        upload_id=_UPLOAD,
+        ticket_id=_TICKET,
+        claim_generation=7,
+        evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+        sha256="ab" * 32,
+        size_bytes=4096,
+    )
+
+
+def _finalization_result() -> CodingSealedEvidenceFinalizationResult:
+    row = SimpleNamespace(
+        upload_id=_UPLOAD,
+        ticket_id=_TICKET,
+        claim_generation=7,
+        evidence_kind="authoring-transcript",
+        sha256="ab" * 32,
+        size_bytes=4096,
+        weight_eligible=False,
+        finalized_at=datetime.now(UTC),
+    )
+    return CodingSealedEvidenceFinalizationResult(
+        finalization=cast(CodingSealedEvidenceFinalization, row),
+        idempotent=False,
+    )
+
+
 def _capability() -> CodingSealedEvidenceUploadCapability:
     now = datetime.now(UTC).replace(microsecond=0)
     return CodingSealedEvidenceUploadCapability(
@@ -131,7 +213,12 @@ def _install(
     mocks = SimpleNamespace(
         consume=AsyncMock(return_value=None),
         reserve=AsyncMock(return_value=_reservation()),
-        minter=SimpleNamespace(mint=AsyncMock(return_value=_capability())),
+        authorize=AsyncMock(return_value=_finalization_authority()),
+        finalize=AsyncMock(return_value=_finalization_result()),
+        minter=SimpleNamespace(
+            mint=AsyncMock(return_value=_capability()),
+            verify=AsyncMock(return_value=_verified()),
+        ),
     )
     app.state.coding_sealed_evidence_capability_minter = mocks.minter
     monkeypatch.setattr(
@@ -140,6 +227,16 @@ def _install(
     monkeypatch.setattr(endpoint_module, "consume_validator_nonce", mocks.consume)
     monkeypatch.setattr(
         endpoint_module, "reserve_coding_sealed_evidence_upload", mocks.reserve
+    )
+    monkeypatch.setattr(
+        endpoint_module,
+        "authorize_coding_sealed_evidence_finalization",
+        mocks.authorize,
+    )
+    monkeypatch.setattr(
+        endpoint_module,
+        "finalize_coding_sealed_evidence_upload",
+        mocks.finalize,
     )
     return mocks
 
@@ -186,3 +283,45 @@ async def test_capability_endpoint_rejects_forgery_and_disabled_store(
     assert response.status_code == 503
     assert mocks.consume.await_count == 0
     assert mocks.reserve.await_count == 0
+
+
+async def test_finalization_endpoint_verifies_then_appends_exact_authority(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    mocks = _install(app, session_maker, monkeypatch)
+    response = await client.post(
+        "/api/v1/validator/coding-shadow/evidence-finalization",
+        json=_finalize_payload(),
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.json()["upload_id"] == str(_UPLOAD)
+    assert response.json()["accepted"] is True
+    assert response.json()["weight_eligible"] is False
+    assert mocks.consume.await_count == 1
+    assert mocks.authorize.await_count == 1
+    assert mocks.minter.verify.await_count == 1
+    assert mocks.finalize.await_count == 1
+
+
+async def test_finalization_endpoint_rejects_forgery_before_storage(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    mocks = _install(app, session_maker, monkeypatch)
+    forged = _finalize_payload()
+    forged["signature"] = "00" * 64
+    response = await client.post(
+        "/api/v1/validator/coding-shadow/evidence-finalization",
+        json=forged,
+    )
+    assert response.status_code == 401
+    assert mocks.consume.await_count == 0
+    assert mocks.authorize.await_count == 0
+    assert mocks.minter.verify.await_count == 0
+    assert mocks.finalize.await_count == 0

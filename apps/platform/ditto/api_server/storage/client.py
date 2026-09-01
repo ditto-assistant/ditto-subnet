@@ -530,6 +530,11 @@ class S3StorageClient:
         return ObjectMetadata(
             size_bytes=int(response.get("ContentLength", -1)),
             metadata={str(k): str(v) for k, v in response.get("Metadata", {}).items()},
+            content_type=(
+                str(response["ContentType"])
+                if response.get("ContentType") is not None
+                else None
+            ),
         )
 
     async def get_object(self, *, key: str, max_bytes: int) -> bytes:

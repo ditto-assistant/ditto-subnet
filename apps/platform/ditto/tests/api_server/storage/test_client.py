@@ -244,6 +244,7 @@ class TestScreenedImageStorage:
             client,
             head_result={
                 "ContentLength": 123,
+                "ContentType": "application/x-tar",
                 "Metadata": {"sha256": "ab" * 32, "image-id": "sha256:123"},
             },
         )
@@ -253,6 +254,7 @@ class TestScreenedImageStorage:
         assert result == ObjectMetadata(
             size_bytes=123,
             metadata={"sha256": "ab" * 32, "image-id": "sha256:123"},
+            content_type="application/x-tar",
         )
 
     async def test_multipart_create_part_complete_and_abort(self):

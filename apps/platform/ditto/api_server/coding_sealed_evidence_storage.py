@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
 from urllib.parse import urlparse
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -31,8 +32,16 @@ from ditto.api_server.coding_artifact_capabilities import (
 )
 from ditto.api_server.errors import ApiServerConfigError
 from ditto.api_server.storage.client import S3StorageClient
-from ditto.api_server.storage.errors import ObjectUploadFailedError
-from ditto.api_server.storage.models import StorageConfig
+from ditto.api_server.storage.errors import (
+    ObjectDownloadFailedError,
+    ObjectNotFoundError,
+    ObjectUploadFailedError,
+)
+from ditto.api_server.storage.models import (
+    ObjectMetadata,
+    StorageConfig,
+    VerifiedObject,
+)
 from ditto.db.models import CodingSealedEvidenceUpload
 
 _BUCKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
@@ -68,6 +77,24 @@ class CodingSealedEvidenceObjectStore(Protocol):
         expires_in: int,
     ) -> str:
         """Mint one short-lived PUT capability for an exact immutable object."""
+
+    async def head_object(self, *, key: str) -> ObjectMetadata:
+        """Read bounded metadata for one exact evidence key."""
+
+    async def verify_object_sha256(
+        self, *, key: str, expected_size_bytes: int
+    ) -> VerifiedObject:
+        """Stream and hash the entire expected object."""
+
+
+@dataclass(frozen=True)
+class CodingSealedEvidenceVerifiedObject:
+    upload_id: UUID
+    ticket_id: UUID
+    claim_generation: int
+    evidence_kind: CodingSealedEvidenceKind
+    sha256: str
+    size_bytes: int
 
 
 @dataclass(frozen=True, repr=False)
@@ -237,20 +264,8 @@ class CodingSealedEvidenceCapabilityMinter:
         now = _aware(self._clock())
         ticket_deadline = _aware(ticket_deadline)
         claim_expires_at = _aware(claim_expires_at)
-        kind = _reservation_kind(upload)
-        if (
-            upload.upload_id.int == 0
-            or upload.ticket_id.int == 0
-            or upload.claim_generation < 1
-            or upload.claim_generation > (1 << 31) - 1
-            or upload.weight_eligible
-            or upload.content_type != "application/octet-stream"
-            or _SHA256.fullmatch(upload.sha256) is None
-            or isinstance(upload.size_bytes, bool)
-            or not 1 <= upload.size_bytes <= CODING_SEALED_EVIDENCE_MAX_BYTES[kind]
-            or ticket_deadline <= now
-            or claim_expires_at <= now
-        ):
+        kind = _validate_reservation(upload)
+        if ticket_deadline <= now or claim_expires_at <= now:
             raise CodingSealedEvidenceStorageIntegrityError(
                 "sealed coding evidence reservation authority is invalid"
             )
@@ -324,6 +339,67 @@ class CodingSealedEvidenceCapabilityMinter:
                 "sealed coding evidence signer returned invalid authority"
             ) from error
 
+    async def verify(
+        self,
+        upload: CodingSealedEvidenceUpload,
+    ) -> CodingSealedEvidenceVerifiedObject:
+        """Verify metadata, exact size, and full object SHA-256 before finalizing."""
+
+        kind = _validate_reservation(upload)
+        key = coding_sealed_evidence_object_key(
+            evidence_kind=kind,
+            sha256=upload.sha256,
+        )
+        try:
+            async with asyncio.timeout(self._config.timeout_seconds):
+                metadata = await self._store.head_object(key=key)
+        except TimeoutError:
+            raise CodingSealedEvidenceStorageUnavailableError(
+                "sealed coding evidence metadata verification timed out"
+            ) from None
+        except (ObjectNotFoundError, ObjectUploadFailedError):
+            raise CodingSealedEvidenceStorageUnavailableError(
+                "sealed coding evidence object is unavailable"
+            ) from None
+        expected_metadata = {
+            "sha256": upload.sha256,
+            "evidence-kind": kind.value,
+        }
+        if (
+            metadata.size_bytes != upload.size_bytes
+            or metadata.content_type != "application/octet-stream"
+            or metadata.metadata != expected_metadata
+        ):
+            raise CodingSealedEvidenceStorageIntegrityError(
+                "sealed coding evidence metadata disagrees with reservation"
+            )
+        try:
+            async with asyncio.timeout(self._config.timeout_seconds):
+                verified = await self._store.verify_object_sha256(
+                    key=key,
+                    expected_size_bytes=upload.size_bytes,
+                )
+        except TimeoutError:
+            raise CodingSealedEvidenceStorageUnavailableError(
+                "sealed coding evidence full verification timed out"
+            ) from None
+        except (ObjectDownloadFailedError, ObjectUploadFailedError):
+            raise CodingSealedEvidenceStorageUnavailableError(
+                "sealed coding evidence object verification failed"
+            ) from None
+        if verified.size_bytes != upload.size_bytes or verified.sha256 != upload.sha256:
+            raise CodingSealedEvidenceStorageIntegrityError(
+                "sealed coding evidence bytes disagree with reservation"
+            )
+        return CodingSealedEvidenceVerifiedObject(
+            upload_id=upload.upload_id,
+            ticket_id=upload.ticket_id,
+            claim_generation=upload.claim_generation,
+            evidence_kind=kind,
+            sha256=upload.sha256,
+            size_bytes=upload.size_bytes,
+        )
+
 
 def _reservation_kind(upload: CodingSealedEvidenceUpload) -> CodingSealedEvidenceKind:
     try:
@@ -332,6 +408,27 @@ def _reservation_kind(upload: CodingSealedEvidenceUpload) -> CodingSealedEvidenc
         raise CodingSealedEvidenceStorageIntegrityError(
             "sealed coding evidence kind is invalid"
         ) from error
+
+
+def _validate_reservation(
+    upload: CodingSealedEvidenceUpload,
+) -> CodingSealedEvidenceKind:
+    kind = _reservation_kind(upload)
+    if (
+        upload.upload_id.int == 0
+        or upload.ticket_id.int == 0
+        or upload.claim_generation < 1
+        or upload.claim_generation > (1 << 31) - 1
+        or upload.weight_eligible
+        or upload.content_type != "application/octet-stream"
+        or _SHA256.fullmatch(upload.sha256) is None
+        or isinstance(upload.size_bytes, bool)
+        or not 1 <= upload.size_bytes <= CODING_SEALED_EVIDENCE_MAX_BYTES[kind]
+    ):
+        raise CodingSealedEvidenceStorageIntegrityError(
+            "sealed coding evidence reservation authority is invalid"
+        )
+    return kind
 
 
 def _aware(value: datetime) -> datetime:
@@ -376,6 +473,7 @@ __all__ = [
     "CodingSealedEvidenceStorageConfigurationError",
     "CodingSealedEvidenceStorageIntegrityError",
     "CodingSealedEvidenceStorageUnavailableError",
+    "CodingSealedEvidenceVerifiedObject",
     "coding_sealed_evidence_object_key",
     "parse_coding_sealed_evidence_storage_config_from_env",
 ]

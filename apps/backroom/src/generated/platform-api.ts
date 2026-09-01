@@ -5195,6 +5195,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/coding-shadow/evidence-finalization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finalize Coding Evidence
+         * @description Verify the complete S3 object, then append its immutable finalization.
+         */
+        post: operations["finalize_coding_evidence_api_v1_validator_coding_shadow_evidence_finalization_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/coding-shadow/evidence-upload-capability": {
         parameters: {
             query?: never;
@@ -12689,6 +12709,92 @@ export interface components {
              * @constant
              */
             weight_eligible: false;
+        };
+        /** CodingSealedEvidenceFinalization */
+        CodingSealedEvidenceFinalization: {
+            /**
+             * Accepted
+             * @constant
+             */
+            accepted: true;
+            /** Claim Generation */
+            claim_generation: number;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            evidence_kind: components["schemas"]["CodingSealedEvidenceKind"];
+            /**
+             * Finalized At
+             * Format: date-time
+             */
+            finalized_at: string;
+            /** Idempotent */
+            idempotent: boolean;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-sealed-evidence-finalized-v1";
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /**
+             * Upload Id
+             * Format: uuid
+             */
+            upload_id: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * CodingSealedEvidenceFinalizeRequest
+         * @description Signed validator request to finalize one already uploaded object.
+         */
+        CodingSealedEvidenceFinalizeRequest: {
+            /** Claim Generation */
+            claim_generation: number;
+            evidence_kind: components["schemas"]["CodingSealedEvidenceKind"];
+            /** Instance Id */
+            instance_id: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Sha256 */
+            sha256: string;
+            /** Signature */
+            signature: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /**
+             * Upload Id
+             * Format: uuid
+             */
+            upload_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /**
          * CodingSealedEvidenceKind
@@ -34828,6 +34934,67 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    finalize_coding_evidence_api_v1_validator_coding_shadow_evidence_finalization_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingSealedEvidenceFinalizeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingSealedEvidenceFinalization"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Claim, reservation, or uploaded object unavailable. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Replay, evidence, or immutable authority conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Dedicated evidence store is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -68,6 +68,7 @@ class ObjectMetadata:
 
     size_bytes: int
     metadata: dict[str, str]
+    content_type: str | None = None
 
 
 @dataclass(frozen=True)
