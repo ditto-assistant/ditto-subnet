@@ -35,10 +35,10 @@ under a hard size limit and must be JSON plus `Cache-Control: no-store`.
 `PlatformClient.prepare_coding_authoring_freeze` and
 `prepare_coding_shadow_result` construct the signed immutable request and its
 outbox authority. `publish_prepared_coding_publication` sends those same bytes
-and returns the exact verified acknowledgement bytes. The final worker wiring
-must order them as prepare -> Platform publish -> acknowledge -> upload and
-finalize the terminal acknowledgement -> release, and replay only durable bytes
-after restart.
+and returns the exact verified acknowledgement bytes. The default-off worker
+orders them as prepare -> finalize phase-valid evidence -> Platform publish ->
+acknowledge -> finalize acknowledgement -> release. Restart recovery replays
+only durable bytes and finalized receipt identity.
 
 `internal/codinghost` mounts the local service only behind the scorer shadow
 gate, and `CodingShadowWorker` uses it only behind the separate validator gate.

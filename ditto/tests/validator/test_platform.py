@@ -782,8 +782,49 @@ async def test_coding_evidence_client_replays_finalized_terminal_receipt() -> No
             pending,
             instance_id="coding-worker-instance-001",
         )
+    assert finalized is not None
     assert finalized.upload_id == upload_id
     assert finalized.idempotent is True
+
+
+async def test_coding_evidence_client_reports_missing_terminal_receipt() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    ticket_id = UUID("33333333-3333-4333-8333-333333333333")
+    pending = PendingRelease(
+        record_id="11" * 32,
+        ticket_id=ticket_id,
+        terminal_evidence_sha256="cd" * 32,
+        reservation=ReleaseReservation(
+            ticket_id=ticket_id,
+            claim_generation=7,
+            upload_id=UUID("55555555-5555-4555-8555-555555555555"),
+            evidence_kind="terminal-publication-acknowledgement",
+            sha256="ab" * 32,
+            size_bytes=4096,
+        ),
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            404,
+            headers={"Cache-Control": "no-store"},
+            json={"detail": "finalization not found"},
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        finalized = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).replay_coding_evidence_finalization(
+            pending,
+            instance_id="coding-worker-instance-001",
+        )
+    assert finalized is None
 
 
 async def test_coding_authoring_client_rejects_oversized_response() -> None:

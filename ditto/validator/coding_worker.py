@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
@@ -23,6 +23,7 @@ from ditto.api_models.coding import (
     SubmitCodingShadowResultResponse,
 )
 from ditto.api_models.coding_claims import CodingClaimResponse
+from ditto.api_models.coding_evidence_upload import CodingSealedEvidenceKind
 from ditto.api_models.coding_harness import CodingHarnessLaunchResponse
 from ditto.validator.coding_attempt import (
     CodingAttemptCoordinator,
@@ -31,11 +32,14 @@ from ditto.validator.coding_attempt import (
     CodingAttemptTicket,
     CodingAuthoringOutcome,
 )
+from ditto.validator.coding_evidence_uploader import CodingSealedEvidenceUploader
 from ditto.validator.coding_publication import (
     CodingPublicationClient,
     PreparedCodingPublication,
     PublicationArtifact,
     PublicationRecord,
+    SealedEvidenceArtifact,
+    SealedEvidenceManifest,
 )
 from ditto.validator.coding_supervisor import (
     CodingSupervisorRecovery,
@@ -48,13 +52,64 @@ _LOCKED_POLICY_SHA256 = (
     "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6"
 )
 
+_AUTHORING_PREPARED = (
+    "authoring-transcript",
+    "frozen-submission",
+    "authoring-publication-request",
+)
+_AUTHORING_ACKNOWLEDGED = _AUTHORING_PREPARED + (
+    "authoring-publication-acknowledgement",
+)
+_TERMINAL_SUCCESS_PREPARED = _AUTHORING_ACKNOWLEDGED + ("terminal-publication-request",)
+_TERMINAL_SUCCESS_ACKNOWLEDGED = _TERMINAL_SUCCESS_PREPARED + (
+    "terminal-publication-acknowledgement",
+)
+_TERMINAL_FAILURE_PREPARED = (
+    "authoring-transcript",
+    "terminal-publication-request",
+)
+_TERMINAL_FAILURE_ACKNOWLEDGED = _TERMINAL_FAILURE_PREPARED + (
+    "terminal-publication-acknowledgement",
+)
+
+
+class _ClaimAuthority:
+    """Share one immutable claim identity with heartbeat-renewed expiry."""
+
+    def __init__(self, claim: CodingClaimResponse) -> None:
+        self._claim = claim
+        self._lock = asyncio.Lock()
+        self.terminal_finalized = asyncio.Event()
+
+    async def snapshot(self) -> CodingClaimResponse:
+        async with self._lock:
+            return self._claim
+
+    async def update(self, claim: CodingClaimResponse) -> None:
+        async with self._lock:
+            if not _same_claim_authority(self._claim, claim):
+                raise CodingAttemptIntegrityError(
+                    "coding heartbeat changed immutable claim authority"
+                )
+            self._claim = claim
+
 
 class DurableCodingAttemptPlatform:
     """Adapt PlatformClient to the coordinator with an exact-byte outbox."""
 
-    def __init__(self, platform: Any, publication: CodingPublicationClient) -> None:
+    def __init__(
+        self,
+        platform: Any,
+        publication: CodingPublicationClient,
+        uploader: CodingSealedEvidenceUploader,
+        claim_provider: Callable[[], Awaitable[CodingClaimResponse]],
+        terminal_finalized: Callable[[], None],
+    ) -> None:
         self._platform = platform
         self._publication = publication
+        self._uploader = uploader
+        self._claim_provider = claim_provider
+        self._terminal_finalized = terminal_finalized
 
     async def request_coding_harness_launch(
         self, ticket_id: UUID
@@ -150,13 +205,14 @@ class DurableCodingAttemptPlatform:
     async def publish(
         self, prepared: PreparedCodingPublication
     ) -> SubmitCodingAuthoringFreezeResponse | SubmitCodingShadowResultResponse:
-        _, request = await self._publication.prepare(
+        record_id, request = await self._publication.prepare(
             ticket_id=str(prepared.ticket_id),
             stage=prepared.stage,
             authority=prepared.authority,
             body=prepared.body,
         )
         _validate_artifact(request, prepared.body)
+        await self._upload_before_publication(prepared, record_id)
         (
             accepted,
             acknowledgement,
@@ -168,7 +224,110 @@ class DurableCodingAttemptPlatform:
             body=acknowledgement,
         )
         _validate_artifact(stored, acknowledgement)
+        await self.finalize_acknowledged(prepared, record_id)
         return accepted
+
+    async def finalize_acknowledged(
+        self,
+        prepared: PreparedCodingPublication,
+        record_id: str,
+    ) -> None:
+        manifest = await self._publication.evidence_manifest(
+            ticket_id=str(prepared.ticket_id),
+            record_id=record_id,
+        )
+        kinds = _manifest_kinds(manifest)
+        if prepared.stage == "authoring_freeze":
+            if kinds != _AUTHORING_ACKNOWLEDGED:
+                raise CodingAttemptIntegrityError(
+                    "coding authoring acknowledgement manifest is incomplete"
+                )
+            await self._upload_selected(
+                manifest,
+                ("authoring-publication-acknowledgement",),
+            )
+            return
+        if kinds not in {
+            _TERMINAL_SUCCESS_ACKNOWLEDGED,
+            _TERMINAL_FAILURE_ACKNOWLEDGED,
+        }:
+            raise CodingAttemptIntegrityError(
+                "coding terminal acknowledgement manifest is incomplete"
+            )
+        artifact = _manifest_artifact(
+            manifest,
+            "terminal-publication-acknowledgement",
+        )
+        claim = await self._claim_provider()
+        capability = await self._uploader.reserve(
+            claim,
+            evidence_kind=(
+                CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
+            ),
+            sha256=artifact.sha256,
+            size_bytes=artifact.size_bytes,
+        )
+        await self._publication.prepare_release(
+            record_id=record_id,
+            terminal_evidence_sha256=prepared.authority.evidence_sha256,
+            capability=capability,
+        )
+        claim = await self._claim_provider()
+        finalization = await self._uploader.upload_reserved(
+            claim,
+            record_id=record_id,
+            capability=capability,
+        )
+        self._terminal_finalized()
+        await self._publication.release(
+            ticket_id=str(prepared.ticket_id),
+            record_id=record_id,
+            terminal_evidence_sha256=prepared.authority.evidence_sha256,
+            finalization=finalization,
+        )
+
+    async def _upload_before_publication(
+        self,
+        prepared: PreparedCodingPublication,
+        record_id: str,
+    ) -> None:
+        manifest = await self._publication.evidence_manifest(
+            ticket_id=str(prepared.ticket_id),
+            record_id=record_id,
+        )
+        kinds = _manifest_kinds(manifest)
+        selected: tuple[str, ...]
+        if prepared.stage == "authoring_freeze":
+            if kinds != _AUTHORING_PREPARED:
+                raise CodingAttemptIntegrityError(
+                    "coding authoring publication manifest is incomplete"
+                )
+            selected = _AUTHORING_PREPARED
+        elif kinds == _TERMINAL_SUCCESS_PREPARED:
+            selected = ("terminal-publication-request",)
+        elif kinds == _TERMINAL_FAILURE_PREPARED:
+            selected = _TERMINAL_FAILURE_PREPARED
+        else:
+            raise CodingAttemptIntegrityError(
+                "coding terminal publication manifest is incomplete"
+            )
+        await self._upload_selected(manifest, selected)
+
+    async def _upload_selected(
+        self,
+        manifest: SealedEvidenceManifest,
+        selected: tuple[str, ...],
+    ) -> None:
+        for kind in selected:
+            artifact = _manifest_artifact(manifest, kind)
+            claim = await self._claim_provider()
+            await self._uploader.upload(
+                claim,
+                record_id=manifest.record_id,
+                evidence_kind=CodingSealedEvidenceKind(kind),
+                sha256=artifact.sha256,
+                size_bytes=artifact.size_bytes,
+            )
 
 
 class CodingWorkerRuntime(CodingAttemptRuntime, Protocol):
@@ -190,6 +349,7 @@ class CodingShadowWorker:
         platform: Any,
         runtime: CodingWorkerRuntime,
         publication: CodingPublicationClient,
+        uploader: CodingSealedEvidenceUploader,
         instance_id: str,
         poll_seconds: float = 10.0,
         clock: Callable[[], datetime] | None = None,
@@ -202,11 +362,13 @@ class CodingShadowWorker:
                 for character in instance_id
             )
             or not 1 <= poll_seconds <= 300
+            or uploader is None
         ):
             raise ValueError("coding shadow worker configuration is invalid")
         self._platform = platform
         self._runtime = runtime
         self._publication = publication
+        self._uploader = uploader
         self._instance_id = instance_id
         self._poll_seconds = poll_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -216,7 +378,14 @@ class CodingShadowWorker:
         self._last_now = self._last_now.astimezone(UTC)
         self.busy = False
         self._drain_requested: asyncio.Event | None = None
-        self._durable = DurableCodingAttemptPlatform(platform, publication)
+        self._active_claim: _ClaimAuthority | None = None
+        self._durable = DurableCodingAttemptPlatform(
+            platform,
+            publication,
+            uploader,
+            self._current_claim,
+            self._mark_terminal_finalized,
+        )
         self._coordinator = CodingAttemptCoordinator(
             platform=self._durable,
             runtime=runtime,
@@ -254,6 +423,8 @@ class CodingShadowWorker:
         # Prove the scorer-side outbox/supervisor host exists before taking any
         # Platform work. The host constructs both services atomically.
         await self._publication.pending(limit=1)
+        if await self._recover_pending_release():
+            return True
         if self._drain_requested is not None and self._drain_requested.is_set():
             return False
         claim = await self._platform.claim_next_coding_ticket(self._instance_id)
@@ -321,6 +492,25 @@ class CodingShadowWorker:
             claim,
             lambda: self._recover_started(claim),
         )
+
+    async def _recover_pending_release(self) -> bool:
+        pending = await self._publication.pending_releases(limit=1)
+        if not pending:
+            return False
+        release = pending[0]
+        finalization = await self._platform.replay_coding_evidence_finalization(
+            release,
+            instance_id=self._instance_id,
+        )
+        if finalization is None:
+            return False
+        await self._publication.release(
+            ticket_id=str(release.ticket_id),
+            record_id=release.record_id,
+            terminal_evidence_sha256=release.terminal_evidence_sha256,
+            finalization=finalization,
+        )
+        return True
 
     async def _recover_started(self, claim: CodingClaimResponse) -> bool:
         recovery = await self._runtime.recover(
@@ -413,7 +603,9 @@ class CodingShadowWorker:
                 expected=record.acknowledgement,
                 acknowledgement=True,
             )
-            return _parse_acknowledgement(record, acknowledgement)
+            accepted = _parse_acknowledgement(record, acknowledgement)
+            await self._durable.finalize_acknowledged(prepared, record.record_id)
+            return accepted
         return await self._durable.publish(prepared)
 
     async def _recover_authoring(
@@ -460,11 +652,17 @@ class CodingShadowWorker:
         operation: Callable[[], Coroutine[Any, Any, Any]],
     ) -> Any:
         done = asyncio.Event()
+        authority = _ClaimAuthority(claim)
+        if self._active_claim is not None:
+            raise CodingAttemptIntegrityError(
+                "coding worker already has active claim authority"
+            )
+        self._active_claim = authority
 
         async def heartbeat() -> None:
-            current = claim
             retrying = False
             while not done.is_set():
+                current = await authority.snapshot()
                 delay = (
                     5.0
                     if retrying
@@ -488,6 +686,9 @@ class CodingShadowWorker:
                     except asyncio.CancelledError:
                         raise
                     except Exception:
+                        await asyncio.sleep(0)
+                        if done.is_set() or authority.terminal_finalized.is_set():
+                            return
                         if (
                             current.claim_expires_at - self._now()
                         ).total_seconds() <= 15:
@@ -501,16 +702,43 @@ class CodingShadowWorker:
                         started=True,
                         now=self._now(),
                     )
+                    await authority.update(current)
 
-        async with asyncio.TaskGroup() as group:
-            heartbeat_task = group.create_task(heartbeat())
-            operation_task: asyncio.Task[Any] = group.create_task(operation())
-            try:
-                result = await operation_task
-            finally:
-                done.set()
-            await heartbeat_task
-        return result
+        try:
+            async with asyncio.TaskGroup() as group:
+                heartbeat_task = group.create_task(heartbeat())
+                operation_task: asyncio.Task[Any] = group.create_task(operation())
+                try:
+                    result = await operation_task
+                finally:
+                    done.set()
+                await heartbeat_task
+            return result
+        finally:
+            self._active_claim = None
+
+    async def _current_claim(self) -> CodingClaimResponse:
+        authority = self._active_claim
+        if authority is None:
+            raise CodingAttemptIntegrityError(
+                "coding publication has no active claim authority"
+            )
+        claim = await authority.snapshot()
+        _validate_claim(
+            claim,
+            self._instance_id,
+            started=True,
+            now=self._now(),
+        )
+        return claim
+
+    def _mark_terminal_finalized(self) -> None:
+        authority = self._active_claim
+        if authority is None:
+            raise CodingAttemptIntegrityError(
+                "coding finalization has no active claim authority"
+            )
+        authority.terminal_finalized.set()
 
     def _now(self) -> datetime:
         value = self._clock()
@@ -535,6 +763,44 @@ def _ticket(claim: CodingClaimResponse) -> CodingAttemptTicket:
         agent_artifact_sha256=claim.agent_artifact_sha256,
         screened_image_sha256=claim.screened_image_sha256,
         weight_eligible=False,
+    )
+
+
+def _manifest_kinds(manifest: SealedEvidenceManifest) -> tuple[str, ...]:
+    return tuple(item.evidence_kind for item in manifest.evidence)
+
+
+def _manifest_artifact(
+    manifest: SealedEvidenceManifest,
+    kind: str,
+) -> SealedEvidenceArtifact:
+    for artifact in manifest.evidence:
+        if artifact.evidence_kind == kind:
+            return artifact
+    raise CodingAttemptIntegrityError(f"coding sealed evidence manifest omitted {kind}")
+
+
+def _same_claim_authority(
+    left: CodingClaimResponse,
+    right: CodingClaimResponse,
+) -> bool:
+    return (
+        left.validator_hotkey == right.validator_hotkey
+        and left.instance_id == right.instance_id
+        and left.claim_generation == right.claim_generation
+        and left.claim_started_at == right.claim_started_at
+        and left.agent_id == right.agent_id
+        and left.run_row_id == right.run_row_id
+        and left.ticket_id == right.ticket_id
+        and left.ticket_deadline == right.ticket_deadline
+        and left.bench_version == right.bench_version
+        and left.coding_run_id == right.coding_run_id
+        and left.agent_artifact_sha256 == right.agent_artifact_sha256
+        and left.screened_image_sha256 == right.screened_image_sha256
+        and left.run_manifest_sha256 == right.run_manifest_sha256
+        and left.task_set_manifest_sha256 == right.task_set_manifest_sha256
+        and left.weight_eligible is False
+        and right.weight_eligible is False
     )
 
 

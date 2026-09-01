@@ -25,6 +25,7 @@ from ditto.chain import ChainConfig, create_chain_client
 from ditto.system_health import SystemMetricsCollector
 from ditto.validator.coding_canary import CodingCanaryWorker
 from ditto.validator.coding_canary_runtime import CodingCanaryRuntime
+from ditto.validator.coding_evidence_uploader import CodingSealedEvidenceUploader
 from ditto.validator.coding_publication import CodingPublicationClient
 from ditto.validator.coding_supervisor import CodingSupervisorRuntime
 from ditto.validator.coding_worker import CodingShadowWorker
@@ -114,7 +115,10 @@ async def _amain() -> int:
     )
 
     try:
-        async with httpx.AsyncClient(timeout=config.http_timeout_seconds) as http:
+        async with (
+            httpx.AsyncClient(timeout=config.http_timeout_seconds) as http,
+            contextlib.AsyncExitStack() as coding_clients,
+        ):
             platform = PlatformClient(config, http, keypair)
             dittobench = DittobenchClient(config, http)
 
@@ -170,16 +174,38 @@ async def _amain() -> int:
                 )
                 coding_worker: CodingShadowWorker | None = None
                 if config.coding_shadow_enabled:
+                    coding_local_http = await coding_clients.enter_async_context(
+                        httpx.AsyncClient(
+                            timeout=config.http_timeout_seconds,
+                            trust_env=False,
+                        )
+                    )
+                    coding_storage_http = await coding_clients.enter_async_context(
+                        httpx.AsyncClient(
+                            timeout=httpx.Timeout(
+                                300.0,
+                                connect=10.0,
+                                pool=10.0,
+                            ),
+                            trust_env=False,
+                        )
+                    )
                     publication = CodingPublicationClient(
                         base_url=config.dittobench_api_url,
                         control_token=config.dittobench_control_token,
-                        client=http,
+                        client=coding_local_http,
+                    )
+                    uploader = CodingSealedEvidenceUploader(
+                        platform=platform,
+                        outbox=publication,
+                        storage_client=coding_storage_http,
                     )
                     coding_runtime = CodingSupervisorRuntime(config, http, platform)
                     coding_worker = CodingShadowWorker(
                         platform=platform,
                         runtime=coding_runtime,
                         publication=publication,
+                        uploader=uploader,
                         instance_id=config.coding_shadow_instance_id,
                         poll_seconds=config.coding_shadow_poll_seconds,
                     )

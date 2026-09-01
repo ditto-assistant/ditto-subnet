@@ -1,4 +1,4 @@
-"""Unwired trusted uploader for immutable shadow-coding evidence."""
+"""Trusted uploader for immutable shadow-coding evidence."""
 
 from __future__ import annotations
 
@@ -101,6 +101,10 @@ class CodingSealedEvidenceUploader:
                 "coding evidence uploader clock is invalid"
             )
         now = now.astimezone(UTC)
+        # Platform may have renewed this generation concurrently with the
+        # snapshot supplied here. Validate that snapshot is still locally live
+        # and the capability stays inside the ticket; Platform is authoritative
+        # for its current heartbeat expiry.
         if (
             capability.ticket_id != claim.ticket_id
             or capability.claim_generation != claim.claim_generation
@@ -108,8 +112,10 @@ class CodingSealedEvidenceUploader:
             or capability.evidence_kind != evidence_kind
             or capability.sha256 != sha256
             or capability.size_bytes != size_bytes
+            or claim.claim_started_at is None
+            or claim.claim_expires_at <= now
             or capability.expires_at <= now
-            or capability.expires_at > claim.claim_expires_at
+            or capability.expires_at > claim.ticket_deadline
         ):
             raise PlatformInfrastructureError(
                 "coding evidence upload capability authority is invalid"
@@ -131,12 +137,16 @@ class CodingSealedEvidenceUploader:
                 "coding evidence uploader clock is invalid"
             )
         now = now.astimezone(UTC)
+        # The claim snapshot may predate a concurrent heartbeat renewal. The
+        # immutable generation and ticket deadline remain the stable authority.
         if (
             capability.ticket_id != claim.ticket_id
             or capability.claim_generation != claim.claim_generation
             or capability.ticket_deadline != claim.ticket_deadline
+            or claim.claim_started_at is None
+            or claim.claim_expires_at <= now
             or capability.expires_at <= now
-            or capability.expires_at > claim.claim_expires_at
+            or capability.expires_at > claim.ticket_deadline
         ):
             raise PlatformInfrastructureError(
                 "coding evidence upload capability authority is invalid"

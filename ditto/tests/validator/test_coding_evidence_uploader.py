@@ -273,3 +273,39 @@ async def test_uploader_rejects_expired_capability_before_opening_stream() -> No
             )
     assert local_calls == 0
     assert platform.finalize_calls == 0
+
+
+async def test_uploader_accepts_capability_from_concurrently_renewed_claim() -> None:
+    platform = _Platform()
+    stale_claim = _claim().model_copy(
+        update={"claim_expires_at": _NOW + timedelta(seconds=30)}
+    )
+
+    def unused(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("capability reservation opened a byte stream")
+
+    async with (
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(unused), trust_env=False
+        ) as local_http,
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(unused), trust_env=False
+        ) as storage_http,
+    ):
+        uploader = CodingSealedEvidenceUploader(
+            platform=platform,
+            outbox=CodingPublicationClient(
+                base_url="http://127.0.0.1:18081",
+                control_token=_TOKEN,
+                client=local_http,
+            ),
+            storage_client=storage_http,
+            clock=lambda: _NOW,
+        )
+        capability = await uploader.reserve(
+            stale_claim,
+            evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+            sha256=_SHA256,
+            size_bytes=len(_BODY),
+        )
+    assert capability.expires_at > stale_claim.claim_expires_at

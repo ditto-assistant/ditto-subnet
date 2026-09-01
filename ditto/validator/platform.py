@@ -677,6 +677,10 @@ class PlatformClient:
             payload=payload,
             operation="capability",
         )
+        if body is None:  # pragma: no cover - capability does not allow 404
+            raise PlatformInfrastructureError(
+                "coding evidence capability response is missing"
+            )
         try:
             capability = CodingSealedEvidenceUploadCapability.model_validate_json(body)
         except ValidationError:
@@ -712,7 +716,7 @@ class PlatformClient:
             raise PlatformInfrastructureError(
                 "coding evidence finalization claim authority is invalid"
             )
-        return await self._finalize_coding_evidence_identity(
+        finalized = await self._finalize_coding_evidence_identity(
             instance_id=claim.instance_id,
             ticket_id=capability.ticket_id,
             claim_generation=capability.claim_generation,
@@ -721,13 +725,18 @@ class PlatformClient:
             sha256=capability.sha256,
             size_bytes=capability.size_bytes,
         )
+        if finalized is None:  # pragma: no cover - regular finalization rejects 404
+            raise PlatformInfrastructureError(
+                "coding evidence finalization response is missing"
+            )
+        return finalized
 
     async def replay_coding_evidence_finalization(
         self,
         pending: PendingRelease,
         *,
         instance_id: str,
-    ) -> CodingSealedEvidenceFinalization:
+    ) -> CodingSealedEvidenceFinalization | None:
         """Recover one exact finalized terminal receipt after claim cleanup."""
 
         if (
@@ -751,6 +760,7 @@ class PlatformClient:
             evidence_kind=CodingSealedEvidenceKind(pending.reservation.evidence_kind),
             sha256=pending.reservation.sha256,
             size_bytes=pending.reservation.size_bytes,
+            allow_not_found=True,
         )
 
     async def _finalize_coding_evidence_identity(
@@ -763,7 +773,8 @@ class PlatformClient:
         evidence_kind: CodingSealedEvidenceKind,
         sha256: str,
         size_bytes: int,
-    ) -> CodingSealedEvidenceFinalization:
+        allow_not_found: bool = False,
+    ) -> CodingSealedEvidenceFinalization | None:
         requested_at = datetime.now(UTC)
         nonce = uuid4()
         payload = CodingSealedEvidenceFinalizeRequest(
@@ -795,7 +806,10 @@ class PlatformClient:
             path="/coding-shadow/evidence-finalization",
             payload=payload,
             operation="finalization",
+            allow_not_found=allow_not_found,
         )
+        if body is None:
+            return None
         try:
             finalized = CodingSealedEvidenceFinalization.model_validate_json(body)
         except ValidationError:
@@ -824,7 +838,8 @@ class PlatformClient:
             | CodingSealedEvidenceFinalizeRequest
         ),
         operation: str,
-    ) -> bytes:
+        allow_not_found: bool = False,
+    ) -> bytes | None:
         body = bytearray()
         try:
             async with self._client.stream(
@@ -855,6 +870,8 @@ class PlatformClient:
                     raise PlatformInfrastructureError(
                         f"coding evidence {operation} is temporarily unavailable"
                     )
+                if allow_not_found and response.status_code == 404:
+                    return None
                 if response.status_code != 200:
                     raise PlatformError(
                         f"coding evidence {operation} rejected ({response.status_code})"
