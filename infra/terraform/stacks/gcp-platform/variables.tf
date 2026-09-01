@@ -140,6 +140,12 @@ variable "enable_coding_s3_authorities" {
   default     = false
 }
 
+variable "enable_coding_storage_platform_binding" {
+  description = "Permit only the dedicated Platform API identity to read private-input-reader and evidence-finalizer HMAC secrets. Requires the coding authorities; never grants curator access or enables an application feature."
+  type        = bool
+  default     = false
+}
+
 variable "coding_storage_location" {
   description = "Location for the private coding input and sealed evidence buckets."
   type        = string

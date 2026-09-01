@@ -57,6 +57,14 @@ platform_embedder_url: "{{ lookup('env', 'PLATFORM_EMBEDDER_URL') | default('', 
 #   terraform -chdir=infra/terraform/stacks/gcp-platform output -raw datapipeline_url
 platform_datapipeline_url: "{{ lookup('env', 'PLATFORM_DATAPIPELINE_URL') | default('', true) }}"
 
+# Environment-scoped, non-secret outputs from the default-off coding storage
+# authorities. platform-app-env.sh selects the exact dev/prod map entry through
+# PLATFORM_TARGET_ENV. Empty values keep both Platform integrations disabled.
+platform_coding_catalog_bucket: "{{ lookup('env', 'PLATFORM_CODING_PRIVATE_INPUT_BUCKET') | default('', true) }}"
+platform_coding_catalog_access_key: "{{ lookup('env', 'PLATFORM_CODING_PRIVATE_INPUT_ACCESS_KEY') | default('', true) }}"
+platform_coding_evidence_bucket: "{{ lookup('env', 'PLATFORM_CODING_EVIDENCE_BUCKET') | default('', true) }}"
+platform_coding_evidence_access_key: "{{ lookup('env', 'PLATFORM_CODING_EVIDENCE_ACCESS_KEY') | default('', true) }}"
+
 # Serve the ticket-scoped OpenRouter proxy for the v7 rollout while issuance
 # remains additive. `platform_inference_proxy_required` stays false until the
 # validator transition has drained v6 and removed provider-owned fallback.

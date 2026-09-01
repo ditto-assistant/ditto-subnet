@@ -72,12 +72,62 @@ _pae_export() {
   echo "  $var: set from terraform output $output"
 }
 
+# $1 = env var name, $2 = map-valued terraform output name, $3 = required|optional
+# Reads only the dev/prod entry selected by PLATFORM_TARGET_ENV. These outputs
+# contain bucket names and HMAC access IDs, never secret material.
+_pae_export_env_map() {
+  local var="$1" output="$2" requirement="$3" environment output_json value
+
+  if [ -n "${!var:-}" ]; then
+    echo "  $var: already set, left as-is"
+    return 0
+  fi
+
+  environment="${PLATFORM_TARGET_ENV:-}"
+  case "$environment" in
+    dev | prod) ;;
+    "")
+      if [ "$requirement" = required ]; then
+        echo "  $var: PLATFORM_TARGET_ENV is required for map output $output" >&2
+        _pae_failed=1
+      else
+        echo "  $var: not loaded (set PLATFORM_TARGET_ENV=dev|prod to stage coding storage)"
+      fi
+      return 0
+      ;;
+    *)
+      echo "  $var: PLATFORM_TARGET_ENV must be dev or prod, got: $environment" >&2
+      _pae_failed=1
+      return 0
+      ;;
+  esac
+
+  if ! output_json="$(terraform -chdir="$_pae_tf_dir" output -json "$output" 2>/dev/null)" ||
+    ! value="$(python3 -c 'import json, sys; print(json.loads(sys.argv[2]).get(sys.argv[1], ""))' "$environment" "$output_json" 2>/dev/null)" ||
+    [ -z "$value" ]; then
+    if [ "$requirement" = required ]; then
+      echo "  $var: FAILED to read $output[$environment]" >&2
+      _pae_failed=1
+    else
+      echo "  $var: not available (coding storage not provisioned) — will render DISABLED"
+    fi
+    return 0
+  fi
+
+  export "$var=$value"
+  echo "  $var: set from terraform output $output[$environment]"
+}
+
 _pae_failed=0
 echo "platform-app-env.sh: reading $_pae_tf_dir outputs"
 _pae_export PLATFORM_PG_HOST pg_internal_ip required
 _pae_export PLATFORM_STORAGE_ACCESS_KEY storage_hmac_access_id required
 _pae_export PLATFORM_EMBEDDER_URL embedder_url optional
 _pae_export PLATFORM_DATAPIPELINE_URL datapipeline_url optional
+_pae_export_env_map PLATFORM_CODING_PRIVATE_INPUT_BUCKET coding_private_input_bucket_names optional
+_pae_export_env_map PLATFORM_CODING_PRIVATE_INPUT_ACCESS_KEY coding_private_input_reader_hmac_access_ids optional
+_pae_export_env_map PLATFORM_CODING_EVIDENCE_BUCKET coding_sealed_evidence_bucket_names optional
+_pae_export_env_map PLATFORM_CODING_EVIDENCE_ACCESS_KEY coding_evidence_finalizer_hmac_access_ids optional
 
 if [ -z "${GCP_OSLOGIN_USER:-}" ]; then
   echo "  GCP_OSLOGIN_USER: NOT set — export your OS Login username" >&2
@@ -86,6 +136,7 @@ if [ -z "${GCP_OSLOGIN_USER:-}" ]; then
 fi
 
 unset -f _pae_export
+unset -f _pae_export_env_map
 unset _pae_tf_dir
 
 if [ "$_pae_failed" != 0 ]; then

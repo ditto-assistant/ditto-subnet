@@ -319,32 +319,28 @@
   ansible.builtin.assert:
     that:
       - platform_coding_catalog_bucket | default('') | length > 0
-      - platform_coding_catalog_endpoint | default('') | length > 0
-      - platform_coding_catalog_region | default('') | length > 0
+      - platform_coding_catalog_access_key | default('') | length > 0
+      - platform_coding_catalog_endpoint == 'https://storage.googleapis.com'
+      - platform_coding_catalog_region == 'auto'
+      - platform_coding_catalog_use_tls | bool
       - platform_coding_catalog_bucket != platform_bucket
       - platform_coding_catalog_bucket != (platform_hippius_bucket | default(''))
-      - secret_coding_catalog_access_key != secret_hmac_secret
+      - platform_coding_catalog_access_key != platform_storage_access_key
       - secret_coding_catalog_secret_key != secret_hmac_secret
-      - secret_coding_catalog_access_key != secret_hippius_access_key_id
-      - secret_coding_catalog_access_key != secret_hippius_secret_access_key
       - secret_coding_catalog_secret_key != secret_hippius_access_key_id
       - secret_coding_catalog_secret_key != secret_hippius_secret_access_key
-      - secret_coding_catalog_access_key != secret_coding_catalog_secret_key
+      - not (platform_coding_evidence_enabled | bool) or platform_coding_catalog_bucket != platform_coding_evidence_bucket
+      - not (platform_coding_evidence_enabled | bool) or platform_coding_catalog_access_key != platform_coding_evidence_access_key
+      - not (platform_coding_evidence_enabled | bool) or secret_coding_catalog_secret_key != secret_coding_evidence_secret_key
       - platform_coding_catalog_max_record_bytes | int >= 4096
       - platform_coding_catalog_max_record_bytes | int <= 2097152
       - platform_coding_catalog_timeout_seconds | float >= 0.1
       - platform_coding_catalog_timeout_seconds | float <= 60
     fail_msg: >-
       Private coding catalog activation requires a dedicated bucket, endpoint,
-      region, distinct Secret Manager identities, and bounded record/timeout
-      limits. Do not reuse upload or avatar storage credentials.
-  when: platform_coding_catalog_enabled | bool
-
-- name: Read private coding catalog access key from Secret Manager
-  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_coding_catalog_access_key }} --project={{ gcp_project }}"
-  register: platform_coding_catalog_access_key_read
-  changed_when: false
-  no_log: true
+      Terraform-derived HMAC access ID, distinct Secret Manager identity, and
+      bounded record/timeout limits. Do not reuse upload, avatar, or evidence
+      storage credentials.
   when: platform_coding_catalog_enabled | bool
 
 - name: Read private coding catalog secret key from Secret Manager
@@ -357,13 +353,13 @@
 - name: Validate private coding catalog credentials
   ansible.builtin.assert:
     that:
-      - platform_coding_catalog_access_key_read.stdout | default('') | length > 0
+      - platform_coding_catalog_access_key | default('') | length > 0
       - platform_coding_catalog_secret_key_read.stdout | default('') | length > 0
-      - platform_coding_catalog_access_key_read.stdout != platform_coding_catalog_secret_key_read.stdout
-      - platform_coding_catalog_access_key_read.stdout != (platform_secrets.hmac_secret | default(''))
+      - platform_coding_catalog_access_key != platform_coding_catalog_secret_key_read.stdout
+      - platform_coding_catalog_access_key != (platform_secrets.hmac_secret | default(''))
       - platform_coding_catalog_secret_key_read.stdout != (platform_secrets.hmac_secret | default(''))
-      - platform_coding_catalog_access_key_read.stdout != (platform_secrets.hippius_access_key_id | default(''))
-      - platform_coding_catalog_access_key_read.stdout != (platform_secrets.hippius_secret_access_key | default(''))
+      - platform_coding_catalog_access_key != (platform_secrets.hippius_access_key_id | default(''))
+      - platform_coding_catalog_access_key != (platform_secrets.hippius_secret_access_key | default(''))
       - platform_coding_catalog_secret_key_read.stdout != (platform_secrets.hippius_access_key_id | default(''))
       - platform_coding_catalog_secret_key_read.stdout != (platform_secrets.hippius_secret_access_key | default(''))
     fail_msg: >-
@@ -374,9 +370,67 @@
 
 - name: Fold private coding catalog credentials into the secrets map
   ansible.builtin.set_fact:
-    platform_secrets: "{{ platform_secrets | combine({'coding_catalog_access_key': platform_coding_catalog_access_key_read.stdout, 'coding_catalog_secret_key': platform_coding_catalog_secret_key_read.stdout}) }}"
+    platform_secrets: "{{ platform_secrets | combine({'coding_catalog_secret_key': platform_coding_catalog_secret_key_read.stdout}) }}"
   no_log: true
   when: platform_coding_catalog_enabled | bool
+
+- name: Validate sealed coding evidence activation
+  ansible.builtin.assert:
+    that:
+      - platform_coding_evidence_bucket | default('') | length > 0
+      - platform_coding_evidence_access_key | default('') | length > 0
+      - platform_coding_evidence_endpoint == 'https://storage.googleapis.com'
+      - platform_coding_evidence_region == 'auto'
+      - platform_coding_evidence_use_tls | bool
+      - platform_coding_evidence_bucket != platform_bucket
+      - platform_coding_evidence_bucket != (platform_hippius_bucket | default(''))
+      - platform_coding_evidence_access_key != platform_storage_access_key
+      - secret_coding_evidence_secret_key != secret_hmac_secret
+      - secret_coding_evidence_secret_key != secret_hippius_access_key_id
+      - secret_coding_evidence_secret_key != secret_hippius_secret_access_key
+      - not (platform_coding_catalog_enabled | bool) or platform_coding_evidence_bucket != platform_coding_catalog_bucket
+      - not (platform_coding_catalog_enabled | bool) or platform_coding_evidence_access_key != platform_coding_catalog_access_key
+      - not (platform_coding_catalog_enabled | bool) or secret_coding_evidence_secret_key != secret_coding_catalog_secret_key
+      - platform_coding_evidence_timeout_seconds | float >= 0.1
+      - platform_coding_evidence_timeout_seconds | float <= 60
+    fail_msg: >-
+      Sealed coding evidence activation requires its dedicated bucket,
+      Terraform-derived HMAC access ID, distinct Secret Manager identity, and
+      bounded timeout. Do not reuse upload, avatar, or private-input storage
+      credentials.
+  when: platform_coding_evidence_enabled | bool
+
+- name: Read sealed coding evidence secret key from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_coding_evidence_secret_key }} --project={{ gcp_project }}"
+  register: platform_coding_evidence_secret_key_read
+  changed_when: false
+  no_log: true
+  when: platform_coding_evidence_enabled | bool
+
+- name: Validate sealed coding evidence credentials
+  ansible.builtin.assert:
+    that:
+      - platform_coding_evidence_access_key | default('') | length > 0
+      - platform_coding_evidence_secret_key_read.stdout | default('') | length > 0
+      - platform_coding_evidence_access_key != platform_coding_evidence_secret_key_read.stdout
+      - platform_coding_evidence_access_key != (platform_secrets.hmac_secret | default(''))
+      - platform_coding_evidence_secret_key_read.stdout != (platform_secrets.hmac_secret | default(''))
+      - platform_coding_evidence_access_key != (platform_secrets.hippius_access_key_id | default(''))
+      - platform_coding_evidence_access_key != (platform_secrets.hippius_secret_access_key | default(''))
+      - platform_coding_evidence_secret_key_read.stdout != (platform_secrets.hippius_access_key_id | default(''))
+      - platform_coding_evidence_secret_key_read.stdout != (platform_secrets.hippius_secret_access_key | default(''))
+      - not (platform_coding_catalog_enabled | bool) or platform_coding_evidence_secret_key_read.stdout != (platform_coding_catalog_secret_key_read.stdout | default(''))
+    fail_msg: >-
+      Sealed coding evidence credentials must be nonempty and distinct from
+      upload HMAC, avatar Hippius, and private-input credentials.
+  when: platform_coding_evidence_enabled | bool
+  no_log: true
+
+- name: Fold sealed coding evidence credentials into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'coding_evidence_secret_key': platform_coding_evidence_secret_key_read.stdout}) }}"
+  no_log: true
+  when: platform_coding_evidence_enabled | bool
 
 - name: Render .env
   ansible.builtin.template:

@@ -67,6 +67,12 @@ custody, project-wide Cloud Storage Data Access audit cost, and the project-wide
 same apply that first creates them; verify the provider behavior and recovery
 runbook before a separately approved, irreversible lock operation.
 
+`enable_coding_storage_platform_binding` is a second, independent false gate.
+It grants only the dedicated Platform API identity access to the private-input
+reader and evidence-finalizer HMAC secret containers. It refuses to plan unless
+the authorities and dedicated Platform identity are also enabled. It never
+grants the create-only curator secret and does not render application config.
+
 - **Operator, locally (recommended for the first apply):** authenticate with
   your own ADC (`gcloud auth application-default login`), `cp
   terraform.tfvars.example terraform.tfvars`, fill it in (and export
@@ -104,6 +110,7 @@ runbook before a separately approved, irreversible lock operation.
 
    ```sh
    export GCP_OSLOGIN_USER=…            # gcloud compute os-login describe-profile
+   export PLATFORM_TARGET_ENV=prod      # select environment-scoped coding outputs
    source infra/ansible/scripts/platform-app-env.sh
    ansible-playbook -i infra/ansible/inventory/gcp.yml \
      infra/ansible/playbooks/gcp-platform-app.yml --limit ditto-platform-prod

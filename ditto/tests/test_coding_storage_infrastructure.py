@@ -93,7 +93,9 @@ def test_runtime_identities_cannot_list_overwrite_or_delete() -> None:
     assert "roles/storage.objectUser" not in terraform
 
 
-def test_hmac_secrets_are_created_without_runtime_secret_access() -> None:
+def test_hmac_secrets_and_platform_binding_are_independently_gated() -> None:
+    variables = (GCP_ROOT / "variables.tf").read_text()
+    intent = (GCP_ROOT / "prod.auto.tfvars").read_text()
     terraform = TERRAFORM.read_text()
 
     for identity in (
@@ -107,10 +109,37 @@ def test_hmac_secrets_are_created_without_runtime_secret_access() -> None:
             in terraform
         )
 
-    assert "google_secret_manager_secret_iam_member" not in terraform
-    assert "roles/secretmanager.secretAccessor" not in terraform
+    binding = variables.split('variable "enable_coding_storage_platform_binding"', 1)[
+        1
+    ].split("\n}\n", 1)[0]
+    assert "default     = false" in binding
+    assert re.search(
+        r"^enable_coding_storage_platform_binding\s*=\s*false$",
+        intent,
+        re.MULTILINE,
+    )
+    assert "coding_storage_platform_binding_requires_authorities" in terraform
+    assert "var.platform_dedicated_identity_attached" in terraform
+
+    reader_binding = _resource_body(
+        terraform,
+        "google_secret_manager_secret_iam_member",
+        "coding_private_input_reader_platform",
+    )
+    evidence_binding = _resource_body(
+        terraform,
+        "google_secret_manager_secret_iam_member",
+        "coding_evidence_finalizer_platform",
+    )
+    for body in (reader_binding, evidence_binding):
+        assert "for_each = local.coding_platform_binding_envs" in body
+        assert 'role      = "roles/secretmanager.secretAccessor"' in body
+        assert "local.platform_api_sa_email" in body
+        assert "coding_private_input_curator_hmac" not in body
+
     assert "google_service_account.ditto_platform" not in terraform
-    assert "google_service_account.platform_api" not in terraform
+    assert "coding_private_input_reader_hmac" in reader_binding
+    assert "coding_evidence_finalizer_hmac" in evidence_binding
 
 
 def test_storage_data_access_audit_is_tied_to_the_disabled_gate() -> None:

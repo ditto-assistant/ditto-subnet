@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -111,40 +112,101 @@ def test_platform_deploy_rejects_a_half_provisioned_checkout() -> None:
     assert "HALF provisioned" in command
 
 
-def test_private_coding_catalog_deploy_is_default_off_and_relay_blind() -> None:
-    """Catalog credentials stay with the Python API, not the shared relay pool."""
+def test_private_coding_storage_deploy_is_default_off_and_relay_blind() -> None:
+    """Coding storage credentials stay with Python, not the relay pool."""
     defaults_path = ROOT / "infra/ansible/roles/platform_app/defaults/main.yml"
     defaults = yaml.safe_load(defaults_path.read_text())
     template = (
         ROOT / "infra/ansible/roles/platform_app/templates/platform.env.j2"
     ).read_text()
     tasks = (ROOT / "infra/ansible/roles/platform_app/tasks/main.yml").read_text()
-    terraform = (ROOT / "infra/terraform/stacks/gcp-platform/main.tf").read_text()
+    terraform = (
+        ROOT / "infra/terraform/stacks/gcp-platform/coding-storage.tf"
+    ).read_text()
+    output_script = (ROOT / "infra/ansible/scripts/platform-app-env.sh").read_text()
     ecosystem = (ROOT / "apps/platform/scripts/ecosystem.config.js").read_text()
 
     assert defaults["platform_coding_catalog_enabled"] is False
+    assert defaults["platform_coding_evidence_enabled"] is False
+    assert defaults["platform_coding_catalog_endpoint"] == (
+        "https://storage.googleapis.com"
+    )
+    assert defaults["platform_coding_evidence_endpoint"] == (
+        "https://storage.googleapis.com"
+    )
     assert "DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY=" in template
+    assert "platform_coding_catalog_access_key | quote" in template
     assert "platform_secrets.coding_catalog_secret_key | quote" in template
     assert "platform_coding_catalog_use_tls | bool" in template
+    assert "DITTO_CODING_EVIDENCE_STORAGE_ACCESS_KEY=" in template
+    assert "platform_coding_evidence_access_key | quote" in template
+    assert "platform_secrets.coding_evidence_secret_key | quote" in template
+    assert "platform_coding_evidence_use_tls | bool" in template
     assert "platform_coding_catalog_enabled | bool" in tasks
+    assert "platform_coding_evidence_enabled | bool" in tasks
     assert "platform_coding_catalog_bucket != platform_bucket" in tasks
     assert "platform_coding_catalog_bucket != (platform_hippius_bucket" in tasks
-    assert "secret_coding_catalog_access_key != secret_hippius_access_key_id" in tasks
-    assert (
-        "platform_coding_catalog_access_key_read.stdout | default('') | length > 0"
-        in tasks
-    )
-    assert (
-        "platform_coding_catalog_access_key_read.stdout != "
-        "(platform_secrets.hippius_access_key_id | default(''))" in tasks
-    )
-    for secret in (
-        "platform-coding-catalog-access-key",
-        "platform-coding-catalog-secret-key",
+    assert "platform_coding_evidence_bucket != platform_bucket" in tasks
+    assert "platform_coding_evidence_bucket != platform_coding_catalog_bucket" in tasks
+    assert "platform_coding_catalog_access_key_read" not in tasks
+    assert "coding_private_input_reader_platform" in terraform
+    assert "coding_evidence_finalizer_platform" in terraform
+    runtime_binding_tail = terraform.split(
+        'resource "google_secret_manager_secret_iam_member" '
+        '"coding_private_input_reader_platform"',
+        1,
+    )[1]
+    runtime_binding_tail = runtime_binding_tail.split(
+        'resource "google_project_iam_audit_config"', 1
+    )[0]
+    assert "coding_private_input_curator_hmac" not in runtime_binding_tail
+    assert "PLATFORM_TARGET_ENV" in output_script
+    for output in (
+        "coding_private_input_bucket_names",
+        "coding_private_input_reader_hmac_access_ids",
+        "coding_sealed_evidence_bucket_names",
+        "coding_evidence_finalizer_hmac_access_ids",
     ):
-        assert secret in terraform
+        assert output in output_script
     for key in (
         "DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY",
         "DITTO_CODING_CATALOG_STORAGE_SECRET_KEY",
+        "DITTO_CODING_EVIDENCE_STORAGE_ACCESS_KEY",
+        "DITTO_CODING_EVIDENCE_STORAGE_SECRET_KEY",
     ):
         assert f'{key}: ""' in ecosystem
+
+
+def test_platform_app_env_selects_one_coding_storage_environment() -> None:
+    command = r"""
+terraform() {
+  case "$4" in
+    pg_internal_ip) printf '%s\n' '10.30.0.2' ;;
+    storage_hmac_access_id) printf '%s\n' 'upload-access' ;;
+    embedder_url|datapipeline_url) return 1 ;;
+    coding_private_input_bucket_names)
+      printf '%s\n' '{"dev":"input-dev","prod":"input-prod"}' ;;
+    coding_private_input_reader_hmac_access_ids)
+      printf '%s\n' '{"dev":"reader-dev","prod":"reader-prod"}' ;;
+    coding_sealed_evidence_bucket_names)
+      printf '%s\n' '{"dev":"evidence-dev","prod":"evidence-prod"}' ;;
+    coding_evidence_finalizer_hmac_access_ids)
+      printf '%s\n' '{"dev":"finalizer-dev","prod":"finalizer-prod"}' ;;
+    *) return 1 ;;
+  esac
+}
+export -f terraform
+export GCP_OSLOGIN_USER=test PLATFORM_TARGET_ENV=prod
+source infra/ansible/scripts/platform-app-env.sh >/dev/null
+test "$PLATFORM_CODING_PRIVATE_INPUT_BUCKET" = input-prod
+test "$PLATFORM_CODING_PRIVATE_INPUT_ACCESS_KEY" = reader-prod
+test "$PLATFORM_CODING_EVIDENCE_BUCKET" = evidence-prod
+test "$PLATFORM_CODING_EVIDENCE_ACCESS_KEY" = finalizer-prod
+"""
+    subprocess.run(
+        ["bash", "-c", command],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )

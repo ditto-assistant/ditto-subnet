@@ -53,7 +53,12 @@
       ***
       *** This is a supported configuration (empty = disabled, opt-in), so the
       *** converge continues. If you did not mean to turn this off:
+      {% if item.selector | default('') %}
+      ***   export {{ item.selector }}=dev|prod
+      ***   source infra/ansible/scripts/platform-app-env.sh
+      {% else %}
       ***   export {{ item.env }}="$(terraform -chdir=infra/terraform/stacks/gcp-platform output -raw {{ item.tf_output }})"
+      {% endif %}
       *** and re-run before restarting the app.
   when: lookup('vars', item.var, default='') | string | length == 0
   loop: "{{ platform_optional_env_values }}"

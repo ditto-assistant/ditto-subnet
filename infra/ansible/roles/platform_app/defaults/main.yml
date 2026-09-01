@@ -51,6 +51,34 @@ platform_optional_env_values:
     disabled: >-
       no per-submission dataset is pinned — scores carry no on-chain seed
       provenance and no reproduction command (v7 requires dataset pinning).
+  - var: platform_coding_catalog_bucket
+    env: PLATFORM_CODING_PRIVATE_INPUT_BUCKET
+    tf_output: coding_private_input_bucket_names
+    selector: PLATFORM_TARGET_ENV
+    renders: DITTO_CODING_CATALOG_STORAGE_BUCKET
+    disabled: >-
+      private coding inputs remain unavailable to Platform.
+  - var: platform_coding_catalog_access_key
+    env: PLATFORM_CODING_PRIVATE_INPUT_ACCESS_KEY
+    tf_output: coding_private_input_reader_hmac_access_ids
+    selector: PLATFORM_TARGET_ENV
+    renders: DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY
+    disabled: >-
+      Platform cannot authenticate as the get-only private-input reader.
+  - var: platform_coding_evidence_bucket
+    env: PLATFORM_CODING_EVIDENCE_BUCKET
+    tf_output: coding_sealed_evidence_bucket_names
+    selector: PLATFORM_TARGET_ENV
+    renders: DITTO_CODING_EVIDENCE_STORAGE_BUCKET
+    disabled: >-
+      sealed coding evidence upload and finalization remain unavailable.
+  - var: platform_coding_evidence_access_key
+    env: PLATFORM_CODING_EVIDENCE_ACCESS_KEY
+    tf_output: coding_evidence_finalizer_hmac_access_ids
+    selector: PLATFORM_TARGET_ENV
+    renders: DITTO_CODING_EVIDENCE_STORAGE_ACCESS_KEY
+    disabled: >-
+      Platform cannot authenticate as the sealed-evidence finalizer.
 
 # Pinned so the compose project identity does not follow the checkout path.
 # See templates/platform.env.j2 for why this is not left to compose's default.
@@ -147,19 +175,32 @@ platform_trace_embedding_vectors: true
 secret_backblaze_key_id: platform-backblaze-key-id
 secret_backblaze_application_key: platform-backblaze-application-key
 
-# Private Coding catalog. This is deliberately a separate read-only S3
-# authority, never the miner-upload or avatar bucket. It remains disabled
-# until an operator creates the private bucket, installs the two secret
-# versions, and explicitly enables it in environment host_vars.
+# Private Coding catalog. The non-secret bucket and HMAC access ID come from
+# the environment-scoped Terraform outputs; only the HMAC secret is read from
+# Secret Manager. This remains disabled until both infrastructure gates are
+# applied and an operator explicitly enables it for one host.
 platform_coding_catalog_enabled: false
-platform_coding_catalog_endpoint: "https://s3.hippius.com"
-platform_coding_catalog_region: decentralized
+platform_coding_catalog_endpoint: "https://storage.googleapis.com"
+platform_coding_catalog_region: auto
 platform_coding_catalog_bucket: ""
+platform_coding_catalog_access_key: ""
 platform_coding_catalog_use_tls: true
 platform_coding_catalog_max_record_bytes: 2097152
 platform_coding_catalog_timeout_seconds: 10
-secret_coding_catalog_access_key: platform-coding-catalog-access-key
-secret_coding_catalog_secret_key: platform-coding-catalog-secret-key
+secret_coding_catalog_secret_key: "coding-input-reader-{{ platform_env }}-hmac-secret"
+
+# Sealed evidence uses a different bucket and HMAC identity from both the
+# private inputs and ordinary miner uploads. Configuration alone enables only
+# the already-default-off capability/finalization endpoints; worker and ticket
+# gates remain independent and false.
+platform_coding_evidence_enabled: false
+platform_coding_evidence_endpoint: "https://storage.googleapis.com"
+platform_coding_evidence_region: auto
+platform_coding_evidence_bucket: ""
+platform_coding_evidence_access_key: ""
+platform_coding_evidence_use_tls: true
+platform_coding_evidence_timeout_seconds: 10
+secret_coding_evidence_secret_key: "coding-evidence-finalizer-{{ platform_env }}-hmac-secret"
 
 # Subnet / pricing config (mirrors .env.example defaults).
 platform_netuid: 118

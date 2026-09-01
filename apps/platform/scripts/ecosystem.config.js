@@ -139,6 +139,16 @@ const relayApp = (port, index) => ({
     DITTO_CODING_CATALOG_STORAGE_USE_TLS: "",
     DITTO_CODING_CATALOG_MAX_RECORD_BYTES: "",
     DITTO_CODING_CATALOG_TIMEOUT_SECONDS: "",
+    // Sealed-evidence signing and verification also belongs only to the Python
+    // Platform process. Relays must never inherit either the HMAC credential or
+    // enough endpoint metadata to construct a storage client.
+    DITTO_CODING_EVIDENCE_STORAGE_ENDPOINT_URL: "",
+    DITTO_CODING_EVIDENCE_STORAGE_BUCKET: "",
+    DITTO_CODING_EVIDENCE_STORAGE_ACCESS_KEY: "",
+    DITTO_CODING_EVIDENCE_STORAGE_SECRET_KEY: "",
+    DITTO_CODING_EVIDENCE_STORAGE_REGION: "",
+    DITTO_CODING_EVIDENCE_STORAGE_USE_TLS: "",
+    DITTO_CODING_EVIDENCE_TIMEOUT_SECONDS: "",
   },
   autorestart: true,
   max_restarts: 10,

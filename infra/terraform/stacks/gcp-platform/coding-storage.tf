@@ -5,11 +5,16 @@
 # These buckets and identities remain absent until the reviewed production
 # intent sets enable_coding_s3_authorities=true and a protected Terraform apply
 # is approved. No validator, executor, candidate container, or model identity is
-# granted storage or Secret Manager access here.
+# granted storage or Secret Manager access here. A second default-off gate may
+# grant only the dedicated Platform API identity access to reader/finalizer
+# secrets; it never includes the curator.
 ###############################################################################
 
 locals {
   coding_storage_envs = var.enable_coding_s3_authorities ? local.app_envs : {}
+  coding_platform_binding_envs = (
+    var.enable_coding_storage_platform_binding ? local.coding_storage_envs : {}
+  )
 
   coding_storage_auditor_bindings = {
     for binding in setproduct(keys(local.coding_storage_envs), var.coding_storage_auditors) :
@@ -17,6 +22,16 @@ locals {
       environment = binding[0]
       member      = binding[1]
     }
+  }
+}
+
+check "coding_storage_platform_binding_requires_authorities" {
+  assert {
+    condition = (
+      !var.enable_coding_storage_platform_binding ||
+      (var.enable_coding_s3_authorities && var.platform_dedicated_identity_attached)
+    )
+    error_message = "Platform coding storage binding requires the coding authorities and the dedicated Platform API identity."
   }
 }
 
@@ -202,10 +217,10 @@ resource "google_storage_bucket_iam_member" "coding_evidence_auditor" {
 }
 
 # HMAC credentials support the existing S3-compatible client surface. Secrets
-# are retained in Secret Manager and Terraform state; this layer intentionally
-# grants no runtime principal secretAccessor. A later integration PR must grant
-# only the reader/finalizer pair to the Platform identity and must never expose
-# the curator credential to Platform, validators, executors, or candidates.
+# are retained in Secret Manager and Terraform state. The independent binding
+# gate below may grant only the reader/finalizer pair to the dedicated Platform
+# identity and never exposes the curator credential to Platform, validators,
+# executors, or candidates.
 resource "google_storage_hmac_key" "coding_private_input_curator" {
   for_each = local.coding_storage_envs
 
@@ -285,6 +300,28 @@ resource "google_secret_manager_secret_version" "coding_evidence_finalizer_hmac"
 
   secret      = google_secret_manager_secret.coding_evidence_finalizer_hmac[each.key].id
   secret_data = google_storage_hmac_key.coding_evidence_finalizer[each.key].secret
+}
+
+# A separate gate stages only the two Platform runtime credentials. The
+# create-only curator secret is intentionally absent. Platform receives no
+# bucket IAM directly: its S3 calls authenticate as the narrow HMAC service
+# accounts provisioned above.
+resource "google_secret_manager_secret_iam_member" "coding_private_input_reader_platform" {
+  for_each = local.coding_platform_binding_envs
+
+  project   = var.project
+  secret_id = google_secret_manager_secret.coding_private_input_reader_hmac[each.key].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${local.platform_api_sa_email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "coding_evidence_finalizer_platform" {
+  for_each = local.coding_platform_binding_envs
+
+  project   = var.project
+  secret_id = google_secret_manager_secret.coding_evidence_finalizer_hmac[each.key].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${local.platform_api_sa_email}"
 }
 
 # Cloud Storage Admin Activity logs are always present; this opt-in enables the

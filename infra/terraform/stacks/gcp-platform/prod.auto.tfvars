@@ -32,6 +32,9 @@ enable_screener_fleet_x509_identity = false
 # retention periods, IAM diff, HMAC custody, and Data Access audit cost are
 # approved in a protected infrastructure plan.
 enable_coding_s3_authorities = false
+# Runtime secret access is staged independently after the bucket/IAM plan. It
+# remains false even when the storage authorities are first created.
+enable_coding_storage_platform_binding = false
 
 screener_fleet_min_replicas         = 0
 screener_fleet_max_replicas         = 6

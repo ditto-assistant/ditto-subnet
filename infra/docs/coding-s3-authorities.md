@@ -27,11 +27,10 @@ object, or repository-owned custom roles containing only
 
 HMAC keys exist only to support the repository's established S3-compatible
 client surface at `https://storage.googleapis.com`. Terraform writes each
-one-time key secret into a dedicated Secret Manager container. This layer
-grants no runtime identity access to those secrets. A later Platform
-integration must grant only the input-reader and evidence-finalizer secrets to
-the server-side Platform identity; the curator key must remain outside the
-runtime.
+one-time key secret into a dedicated Secret Manager container. A second,
+false-by-default Platform-binding gate may grant only the input-reader and
+evidence-finalizer secrets to the dedicated server-side Platform identity. The
+curator key remains outside the runtime under every gate combination.
 
 Validators, executors, candidate containers, and model processes receive no
 bucket IAM and no long-lived credential. They may later receive only a bounded
@@ -74,6 +73,22 @@ the first plan must check existing audit configuration and expected cost.
    environment, with no public, list, overwrite, or delete grant.
 8. Apply only after owner approval, then record the exact Terraform revision
    and resource identities.
+
+## Platform binding
+
+Keep `enable_coding_storage_platform_binding = false` during the first storage
+apply. A later protected plan may enable it only after the buckets and HMAC
+identities exist and the Platform VM uses its dedicated API service account.
+That plan grants Secret Manager access but does not enable either application
+integration.
+
+Before an Ansible converge, set `PLATFORM_TARGET_ENV=dev|prod` and source
+`infra/ansible/scripts/platform-app-env.sh`. The script selects only that
+environment's bucket names and non-secret HMAC access IDs. Ansible reads the
+matching secret halves under `no_log` only when the private-input or evidence
+gate is explicitly enabled. It rejects missing, shared, non-TLS, or ordinary
+upload/avatar credentials before rendering `.env`. Relay processes explicitly
+clear every private-input and evidence storage variable.
 
 Even after apply, coding remains inactive. Platform configuration, secret
 access, capability issuance, worker activation, scoring, and weights require

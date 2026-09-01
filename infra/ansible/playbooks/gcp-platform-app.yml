@@ -12,7 +12,7 @@
 # deploy.yml (push dev|main → IAP SSH → scripts/update.sh) brings up + drives the app.
 #
 # ---------------------------------------------------------------------------
-# INVOCATION — this play needs FIVE environment variables, not one.
+# INVOCATION — this play needs the complete environment manifest, not only SSH.
 #
 # On 2026-07-23 this header showed only GCP_OSLOGIN_USER. A prod converge run
 # exactly as documented rendered POSTGRES_HOST=TODO_TF_OUTPUT_pg_internal_ip and
@@ -23,6 +23,7 @@
 # ../scripts/platform-app-env.sh):
 #
 #   export GCP_OSLOGIN_USER=…            # gcloud compute os-login describe-profile
+#   export PLATFORM_TARGET_ENV=prod      # dev|prod; selects map-valued coding outputs
 #   source infra/ansible/scripts/platform-app-env.sh
 #   ansible-playbook -i infra/ansible/inventory/gcp.yml \
 #     infra/ansible/playbooks/gcp-platform-app.yml --limit ditto-platform-prod
@@ -34,6 +35,11 @@
 #   PLATFORM_STORAGE_ACCESS_KEY=…               REQUIRED  <- storage_hmac_access_id
 #   PLATFORM_EMBEDDER_URL=…                     optional  <- embedder_url
 #   PLATFORM_DATAPIPELINE_URL=…                 optional  <- datapipeline_url
+#   PLATFORM_TARGET_ENV=dev|prod                optional until coding storage is staged
+#   PLATFORM_CODING_PRIVATE_INPUT_BUCKET=…      optional  <- coding_private_input_bucket_names[env]
+#   PLATFORM_CODING_PRIVATE_INPUT_ACCESS_KEY=…  optional  <- coding_private_input_reader_hmac_access_ids[env]
+#   PLATFORM_CODING_EVIDENCE_BUCKET=…           optional  <- coding_sealed_evidence_bucket_names[env]
+#   PLATFORM_CODING_EVIDENCE_ACCESS_KEY=…       optional  <- coding_evidence_finalizer_hmac_access_ids[env]
 #
 # REQUIRED ones are asserted by the platform_app role before it renders
 # anything, and any TODO_ placeholder that reaches the written .env fails the
@@ -41,7 +47,9 @@
 # empty means the feature is DISABLED (no embeddings / no dataset pinning, which
 # v7 needs), so the play warns loudly rather than failing. Leaving them unset on
 # a host that had them set SILENTLY TURNS THE FEATURE OFF: always export all
-# four for prod.
+# values for prod. Coding values remain omitted unless their separate role gates
+# are explicitly enabled; enabling either gate with an empty value fails before
+# Secret Manager is read or .env is rendered.
 # ---------------------------------------------------------------------------
 - name: Converge ditto-platform app VMs
   hosts: role_platform_app
