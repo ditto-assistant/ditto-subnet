@@ -1842,7 +1842,9 @@ class CodingShadowRun(Base):
     )
     weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=text("clock_timestamp()"),
     )
 
     __table_args__ = (
@@ -2178,6 +2180,133 @@ class CodingShadowTicket(Base):
             "claim_instance_id",
             unique=True,
             postgresql_where=text("claim_instance_id IS NOT NULL"),
+        ),
+    )
+
+
+class CodingSealedEvidenceUpload(Base):
+    """Immutable Platform reservation for one sealed evidence object.
+
+    This is deliberately only the durable authority for a future short-lived
+    object-store capability.  It records the exact digest and size, never an
+    object key or bearer URL, and it does not itself prove storage possession.
+    """
+
+    __tablename__ = "coding_sealed_evidence_uploads"
+
+    upload_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    ticket_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    claim_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    content_type: Mapped[str] = mapped_column(Text, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["ticket_id"],
+            ["coding_shadow_tickets.ticket_id"],
+            ondelete="CASCADE",
+            name="coding_sealed_evidence_uploads_ticket_fkey",
+        ),
+        UniqueConstraint(
+            "ticket_id",
+            "claim_generation",
+            "evidence_kind",
+            name="coding_sealed_evidence_uploads_ticket_generation_kind_key",
+        ),
+        UniqueConstraint(
+            "upload_id",
+            "ticket_id",
+            "claim_generation",
+            "evidence_kind",
+            "sha256",
+            "size_bytes",
+            name="coding_sealed_evidence_uploads_upload_authority_key",
+        ),
+        CheckConstraint(
+            "claim_generation BETWEEN 1 AND 2147483647 "
+            "AND sha256 ~ '^[0-9a-f]{64}$' "
+            "AND content_type = 'application/octet-stream' "
+            "AND weight_eligible = false",
+            name="coding_sealed_evidence_uploads_authority_check",
+        ),
+        CheckConstraint(
+            "(evidence_kind = 'authoring-transcript' "
+            "AND size_bytes BETWEEN 1 AND 536870912) OR "
+            "(evidence_kind = 'frozen-submission' "
+            "AND size_bytes BETWEEN 1 AND 134217728) OR "
+            "(evidence_kind IN ('authoring-publication-request', "
+            "'terminal-publication-request') "
+            "AND size_bytes BETWEEN 1 AND 4194304) OR "
+            "(evidence_kind IN ('authoring-publication-acknowledgement', "
+            "'terminal-publication-acknowledgement') "
+            "AND size_bytes BETWEEN 1 AND 1048576)",
+            name="coding_sealed_evidence_uploads_kind_size_check",
+        ),
+        Index(
+            "coding_sealed_evidence_uploads_ticket_created_idx",
+            "ticket_id",
+            "created_at",
+        ),
+    )
+
+
+class CodingSealedEvidenceFinalization(Base):
+    """Immutable accepted finalization of one exact evidence reservation."""
+
+    __tablename__ = "coding_sealed_evidence_finalizations"
+
+    upload_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    ticket_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    claim_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    finalized_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=text("clock_timestamp()"),
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            [
+                "upload_id",
+                "ticket_id",
+                "claim_generation",
+                "evidence_kind",
+                "sha256",
+                "size_bytes",
+            ],
+            [
+                "coding_sealed_evidence_uploads.upload_id",
+                "coding_sealed_evidence_uploads.ticket_id",
+                "coding_sealed_evidence_uploads.claim_generation",
+                "coding_sealed_evidence_uploads.evidence_kind",
+                "coding_sealed_evidence_uploads.sha256",
+                "coding_sealed_evidence_uploads.size_bytes",
+            ],
+            ondelete="CASCADE",
+            name="coding_sealed_evidence_finalizations_upload_fkey",
+        ),
+        CheckConstraint(
+            "claim_generation BETWEEN 1 AND 2147483647 "
+            "AND sha256 ~ '^[0-9a-f]{64}$' "
+            "AND weight_eligible = false",
+            name="coding_sealed_evidence_finalizations_authority_check",
+        ),
+        Index(
+            "coding_sealed_evidence_finalizations_ticket_finalized_idx",
+            "ticket_id",
+            "finalized_at",
         ),
     )
 

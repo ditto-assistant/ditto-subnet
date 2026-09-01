@@ -26,6 +26,7 @@ from ditto.api_models.coding_evaluation import (
     coding_authoring_evidence_digest,
     coding_run_evidence_digest,
 )
+from ditto.api_models.coding_evidence_upload import CodingSealedEvidenceKind
 from ditto.api_models.core_qualification import CoreQualificationPolicy
 from ditto.chain.models import BlockInfo
 from ditto.db.models import (
@@ -33,6 +34,8 @@ from ditto.db.models import (
     CodingCapabilityCertification,
     CodingCatalogExposure,
     CodingCatalogRelease,
+    CodingSealedEvidenceFinalization,
+    CodingSealedEvidenceUpload,
     CodingSelectionAssignmentRow,
     CodingShadowAuthoringFreeze,
     CodingShadowResult,
@@ -67,6 +70,12 @@ from ditto.db.queries.coding_evaluations import (
     insert_coding_shadow_result,
     insert_coding_shadow_run,
     issue_coding_shadow_ticket,
+)
+from ditto.db.queries.coding_evidence_uploads import (
+    CodingSealedEvidenceConflictError,
+    CodingSealedEvidenceNotAvailableError,
+    finalize_coding_sealed_evidence_upload,
+    reserve_coding_sealed_evidence_upload,
 )
 from ditto.db.queries.core_qualification import (
     insert_core_qualification_policy,
@@ -850,6 +859,101 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             claim_generation=2,
         )
     assert started_replay.idempotent
+
+    evidence_sha256 = "e1" * 32
+    async with session.begin():
+        evidence_upload = await reserve_coding_sealed_evidence_upload(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=2,
+            evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+            sha256=evidence_sha256,
+            size_bytes=_TRANSCRIPT_BYTES,
+        )
+    assert evidence_upload.idempotent is False
+    assert evidence_upload.upload.weight_eligible is False
+    upload_id = evidence_upload.upload.upload_id
+    async with session.begin():
+        replayed_evidence_upload = await reserve_coding_sealed_evidence_upload(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=2,
+            evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+            sha256=evidence_sha256,
+            size_bytes=_TRANSCRIPT_BYTES,
+        )
+    assert replayed_evidence_upload.idempotent is True
+    assert replayed_evidence_upload.upload.upload_id == upload_id
+    with pytest.raises(CodingSealedEvidenceConflictError, match="different"):
+        async with session.begin():
+            await reserve_coding_sealed_evidence_upload(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id=instance_id,
+                ticket_id=ticket_id,
+                claim_generation=2,
+                evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+                sha256="e2" * 32,
+                size_bytes=_TRANSCRIPT_BYTES,
+            )
+    with pytest.raises(CodingSealedEvidenceConflictError, match="disagrees"):
+        async with session.begin():
+            await finalize_coding_sealed_evidence_upload(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id=instance_id,
+                ticket_id=ticket_id,
+                claim_generation=2,
+                upload_id=upload_id,
+                evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+                sha256="e2" * 32,
+                size_bytes=_TRANSCRIPT_BYTES,
+            )
+    async with session.begin():
+        finalized_evidence = await finalize_coding_sealed_evidence_upload(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=2,
+            upload_id=upload_id,
+            evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+            sha256=evidence_sha256,
+            size_bytes=_TRANSCRIPT_BYTES,
+        )
+    assert finalized_evidence.idempotent is False
+    assert finalized_evidence.finalization.weight_eligible is False
+    async with session.begin():
+        replayed_finalization = await finalize_coding_sealed_evidence_upload(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=2,
+            upload_id=upload_id,
+            evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+            sha256=evidence_sha256,
+            size_bytes=_TRANSCRIPT_BYTES,
+        )
+    assert replayed_finalization.idempotent is True
+    with pytest.raises(SAIntegrityError, match="append-only"):
+        async with session.begin():
+            stored_upload = await session.get(CodingSealedEvidenceUpload, upload_id)
+            assert stored_upload is not None
+            stored_upload.content_type = "text/plain"
+            await session.flush()
+    with pytest.raises(SAIntegrityError, match="append-only"):
+        async with session.begin():
+            stored_finalization = await session.get(
+                CodingSealedEvidenceFinalization, upload_id
+            )
+            assert stored_finalization is not None
+            await session.delete(stored_finalization)
+            await session.flush()
     async with session.begin():
         heartbeat = await heartbeat_coding_ticket_claim(
             session,
@@ -1055,6 +1159,19 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             signature="99" * 64,
         )
     assert replayed.idempotent is True
+
+    with pytest.raises(CodingSealedEvidenceNotAvailableError, match="live started"):
+        async with session.begin():
+            await reserve_coding_sealed_evidence_upload(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id=instance_id,
+                ticket_id=ticket_id,
+                claim_generation=2,
+                evidence_kind=CodingSealedEvidenceKind.FROZEN_SUBMISSION,
+                sha256="e3" * 32,
+                size_bytes=4096,
+            )
 
     changed = evidence.model_copy(update={"run_manifest_sha256": "ff" * 32})
     with pytest.raises(CodingShadowConflictError):
