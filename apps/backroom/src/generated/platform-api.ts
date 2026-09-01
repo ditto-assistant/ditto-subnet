@@ -22215,6 +22215,11 @@ export interface components {
              */
             attempt_id?: string | null;
             /**
+             * Bench Version
+             * @description Exact benchmark generation this submission will enter after a passing screen. Behavioral challenges must use this version so their request envelope matches scored traffic.
+             */
+            bench_version: number;
+            /**
              * Build Only
              * @description Selects the mechanical build/runtime lane. The platform uses it both for already-reviewed prerequisite rebuilds and for score-first admission. The screener skips deep source review but still performs every cheap fail-closed gate.
              * @default false
@@ -22286,6 +22291,7 @@ export interface components {
          *       "items": [
          *         {
          *           "agent_id": "550e8400-e29b-41d4-a716-446655440000",
+         *           "bench_version": 12,
          *           "created_at": "2026-06-08T12:00:00Z",
          *           "miner_hotkey": "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
          *           "name": "alpha-agent",

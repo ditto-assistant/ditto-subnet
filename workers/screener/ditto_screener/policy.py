@@ -258,6 +258,7 @@ class PolicyContext:
 
     agent_id: UUID
     attempt_id: UUID
+    bench_version: int
     miner_hotkey: str
     artifact_sha256: str
     source_digest: str
@@ -845,7 +846,6 @@ _ORACLE_USER_INPUTS: tuple[str, ...] = (
     "Find my note on {subject} and give me the key detail from it.",
     "See what I recorded about {subject} and report back concisely.",
 )
-_ORACLE_BENCH_VERSION = 8
 
 
 @dataclass(frozen=True)
@@ -912,8 +912,10 @@ class BehavioralOracleModule(_BaseModule):
         # (dittobench-starter-kit src/protocol.rs): `case_id`, `system_prompt`
         # and `user_input` are REQUIRED fields with no serde default. Its
         # `bench_version` serde default is zero, which the harness rejects as
-        # unsupported before the handler can run. Keep the v8 selector explicit
-        # for this v8 tool-shaped oracle request.
+        # unsupported before the handler can run. Use the exact benchmark era
+        # Platform bound to this screening claim so the oracle envelope remains
+        # indistinguishable from the submission's scored traffic across future
+        # benchmark rollouts.
         #
         # ENVELOPE PARITY: the request is drawn from the same distributions a
         # scored TOOL case uses, so a harness cannot classify oracle-vs-scored
@@ -930,7 +932,7 @@ class BehavioralOracleModule(_BaseModule):
         # audit-detection shortcut without leaving a residual envelope tell.
         request: Mapping[str, object] = {
             "case_id": "c" + secrets.token_hex(8),
-            "bench_version": _ORACLE_BENCH_VERSION,
+            "bench_version": context.bench_version,
             "system_prompt": _ORACLE_SYSTEM_PROMPT,
             "user_input": secrets.choice(_ORACLE_USER_INPUTS).format(subject=subject),
             "tools": _oracle_tools(),
@@ -1362,6 +1364,7 @@ class ReviewJournal:
         payload = {
             "agent_id": str(context.agent_id),
             "attempt_id": str(context.attempt_id),
+            "bench_version": context.bench_version,
             "miner_hotkey": context.miner_hotkey,
             "outcome": decision.outcome,
             "policy_version": decision.policy_version,

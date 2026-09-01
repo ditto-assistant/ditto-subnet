@@ -4092,9 +4092,14 @@ async def queue(
             .limit(limit)
         )
     ).all()
+    bench_versions = {
+        agent.agent_id: await arrival_bench_version(session, agent=agent)
+        for agent in agents
+    }
     items = [
         ScreenerQueueItem(
             agent_id=a.agent_id,
+            bench_version=bench_versions[a.agent_id],
             miner_hotkey=a.miner_hotkey,
             name=a.name,
             sha256=a.sha256,
@@ -4316,9 +4321,14 @@ async def claim(
                 review_settings_enrolled_node_id=node_id,
                 canary_policy_version=canary_policy_version,
             )
+    bench_versions = {
+        agent.agent_id: await arrival_bench_version(session, agent=agent)
+        for agent, _, _ in claimed
+    }
     items = [
         ScreenerQueueItem(
             agent_id=agent.agent_id,
+            bench_version=bench_versions[agent.agent_id],
             miner_hotkey=agent.miner_hotkey,
             name=agent.name,
             sha256=agent.sha256,

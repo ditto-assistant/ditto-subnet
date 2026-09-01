@@ -269,6 +269,17 @@ class ScreenerQueueItem(BaseModel):
     """One agent awaiting screening."""
 
     agent_id: Annotated[UUID, Field(description="Server-generated agent identifier.")]
+    bench_version: Annotated[
+        int,
+        Field(
+            ge=2,
+            description=(
+                "Exact benchmark generation this submission will enter after a "
+                "passing screen. Behavioral challenges must use this version so "
+                "their request envelope matches scored traffic."
+            ),
+        ),
+    ]
     miner_hotkey: Annotated[str, Field(description="Submitting miner's SS58 hotkey.")]
     name: Annotated[str, Field(description="Miner-chosen agent name.")]
     sha256: Annotated[
@@ -400,6 +411,7 @@ class ScreenerQueueResponse(BaseModel):
                 "items": [
                     {
                         "agent_id": "550e8400-e29b-41d4-a716-446655440000",
+                        "bench_version": 12,
                         "miner_hotkey": (
                             "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
                         ),

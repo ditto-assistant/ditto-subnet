@@ -599,6 +599,7 @@ class ScreenerWorker:
                     result = await self._gate.screen(
                         agent_id=agent_id,
                         attempt_id=attempt_id,
+                        bench_version=item.bench_version,
                         miner_hotkey=item.miner_hotkey,
                         sha256=item.sha256,
                         download_url=str(artifact.download_url),

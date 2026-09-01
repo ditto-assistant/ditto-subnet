@@ -10,7 +10,6 @@ from uuid import UUID
 import pytest
 
 from ditto_screener.policy import (
-    _ORACLE_BENCH_VERSION,
     _ORACLE_SYSTEM_PROMPT,
     CORE_ONLY_MANIFEST,
     AgenticSourceReviewModule,
@@ -37,15 +36,19 @@ from ditto_screening_protocol import (
 _AGENT = UUID("4f2a1309-f763-4d40-9326-9eb7d13339e8")
 _ATTEMPT = UUID("7c5df3f9-3ea7-47ba-92d1-1bbcf4c5f300")
 _DIGEST = "de" * 32
+_BENCH_VERSION = 12
 
 
 def _context(  # type: ignore[no-untyped-def]
     challenge,
     review_source=None,
+    *,
+    bench_version: int = _BENCH_VERSION,
 ) -> PolicyContext:
     return PolicyContext(
         agent_id=_AGENT,
         attempt_id=_ATTEMPT,
+        bench_version=bench_version,
         miner_hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
         artifact_sha256=_DIGEST,
         source_digest=_DIGEST,
@@ -871,6 +874,7 @@ def test_review_journal_is_bounded_private_and_mode_0600(tmp_path: Path) -> None
     row = json.loads(journal_path.read_text())
     assert row["agent_id"] == str(_AGENT)
     assert row["attempt_id"] == str(_ATTEMPT)
+    assert row["bench_version"] == _BENCH_VERSION
     assert row["outcome"] == "quarantine"
     assert not os.stat(journal_path).st_mode & 0o077
 
@@ -1105,7 +1109,10 @@ async def test_oracle_pass_does_not_clear_a_source_review_tripwire() -> None:
     assert any(item.digest is not None for item in decision.evidence)
 
 
-async def test_oracle_request_satisfies_harness_run_contract() -> None:
+@pytest.mark.parametrize("bench_version", [8, 12, 13])
+async def test_oracle_request_satisfies_harness_run_contract(
+    bench_version: int,
+) -> None:
     """The oracle payload must deserialize as the starter kit's RunRequest.
 
     dittobench-starter-kit `src/protocol.rs` declares `case_id`,
@@ -1127,14 +1134,14 @@ async def test_oracle_request_satisfies_harness_run_contract() -> None:
         )
 
     module = BehavioralOracleModule(module_id="v8-behavioral-oracle")
-    await module.evaluate(_context(challenge))
+    await module.evaluate(_context(challenge, bench_version=bench_version))
     (request,) = seen
     required = {"case_id", "system_prompt", "user_input", "bench_version"}
     optional = {"tools", "tool_endpoint", "user_id"}
     for fieldname in required - {"bench_version"}:
         value = request.get(fieldname)
         assert isinstance(value, str) and value, f"missing/empty {fieldname}"
-    assert request.get("bench_version") == _ORACLE_BENCH_VERSION
+    assert request.get("bench_version") == bench_version
     assert set(request) <= required | optional
 
 
@@ -1203,6 +1210,6 @@ async def test_oracle_request_envelope_matches_scored_tool_traffic() -> None:
         assert isinstance(tool.get("name"), str) and tool["name"]
     # The single scored tool-case system prompt, and NO user_id.
     assert request["system_prompt"] == _ORACLE_SYSTEM_PROMPT
-    assert request["bench_version"] == _ORACLE_BENCH_VERSION
+    assert request["bench_version"] == _BENCH_VERSION
     # Scored tool cases carry no user_id; the oracle must not either.
     assert "user_id" not in request

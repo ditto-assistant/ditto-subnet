@@ -51,6 +51,7 @@ _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 def _item(agent_id: UUID, **overrides: Any) -> ScreenerQueueItem:
     overrides.setdefault("lease_deadline", datetime.now(UTC) + timedelta(hours=1))
     overrides.setdefault("policy_version", SCREENING_POLICY_VERSION)
+    overrides.setdefault("bench_version", 12)
     return ScreenerQueueItem(
         agent_id=agent_id,
         miner_hotkey=_MINER,
@@ -87,6 +88,7 @@ class _FakeGate:
         self.deferred_source_review_calls: list[bool] = []
         self.remote_source_reviews: list[Any] = []
         self.policy_versions: list[int] = []
+        self.bench_versions: list[int] = []
         self.shadow_result: Any = None
         self.applied_review_settings: list[Any] = []
 
@@ -108,6 +110,7 @@ class _FakeGate:
         policy_only: bool = False,
         deferred_source_review: bool = False,
         policy_version: int | None = None,
+        bench_version: int | None = None,
         remote_source_review: Any = None,
         **_: Any,
     ) -> ScreeningDecision:
@@ -119,6 +122,8 @@ class _FakeGate:
         self.remote_source_reviews.append(remote_source_review)
         if policy_version is not None:
             self.policy_versions.append(policy_version)
+        if bench_version is not None:
+            self.bench_versions.append(bench_version)
         if (
             self.result.outcome
             in {
@@ -362,6 +367,7 @@ async def test_screen_one_pass_posts_signed_pass_verdict(
     worker = _worker(make_config(), platform, gate)
     await worker._screen_one(_item(agent), policy_version=SCREENING_POLICY_VERSION)
     assert gate.calls == [agent]
+    assert gate.bench_versions == [12]
     assert len(platform.verdicts) == 1
     v = platform.verdicts[0]
     assert v["passed"] is True and v["signature"] == "cd" * 64 and v["detail"] == ""

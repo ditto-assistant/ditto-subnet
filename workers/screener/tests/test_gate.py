@@ -199,6 +199,7 @@ async def _screen(  # type: ignore[no-untyped-def]
     return await gate.screen(
         agent_id=_AGENT,
         attempt_id=_ATTEMPT,
+        bench_version=12,
         miner_hotkey=_MINER,
         sha256=sha256,
         download_url=_URL,
@@ -405,6 +406,7 @@ async def test_targon_runtime_success_skips_docker_and_exports_archive(
         result = await gate.screen(
             agent_id=_AGENT,
             attempt_id=_ATTEMPT,
+            bench_version=12,
             miner_hotkey=_MINER,
             sha256=hashlib.sha256(tarball).hexdigest(),
             download_url=_URL,
@@ -440,6 +442,7 @@ async def test_remote_require_does_not_local_build_without_targon_health(
         result = await gate.screen(
             agent_id=_AGENT,
             attempt_id=_ATTEMPT,
+            bench_version=12,
             miner_hotkey=_MINER,
             sha256=hashlib.sha256(tarball).hexdigest(),
             download_url=_URL,
@@ -469,6 +472,7 @@ async def test_remote_kaniko_failure_is_deterministic_docker_rejection(
         result = await gate.screen(
             agent_id=_AGENT,
             attempt_id=_ATTEMPT,
+            bench_version=12,
             miner_hotkey=_MINER,
             sha256=hashlib.sha256(tarball).hexdigest(),
             download_url=_URL,
@@ -563,6 +567,7 @@ async def test_publish_failure_demotes_pass_with_dedicated_reason(
         result = await gate.screen(
             agent_id=_AGENT,
             attempt_id=_ATTEMPT,
+            bench_version=12,
             miner_hotkey=_MINER,
             sha256=hashlib.sha256(tarball).hexdigest(),
             download_url=_URL,
@@ -605,6 +610,7 @@ async def test_publish_uses_stable_agent_ref_with_attempt_scoped_build(
         result = await gate.screen(
             agent_id=_AGENT,
             attempt_id=_ATTEMPT,
+            bench_version=12,
             miner_hotkey=_MINER,
             sha256=hashlib.sha256(tarball).hexdigest(),
             download_url=_URL,
@@ -1714,6 +1720,7 @@ async def test_expired_lease_budget_short_circuits_before_download(
         result = await gate.screen(
             agent_id=_AGENT,
             attempt_id=_ATTEMPT,
+            bench_version=12,
             miner_hotkey=_MINER,
             sha256=hashlib.sha256(tarball).hexdigest(),
             download_url=_URL,
