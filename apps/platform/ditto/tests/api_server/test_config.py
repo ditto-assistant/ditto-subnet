@@ -12,6 +12,9 @@ from ditto.api_models.inference_concurrency_settings import (
     MAX_CHAT_TOKEN_BUDGET,
 )
 from ditto.api_server.coding_private_catalog import CodingPrivateCatalogConfig
+from ditto.api_server.coding_sealed_evidence_storage import (
+    CodingSealedEvidenceStorageConfig,
+)
 from ditto.api_server.config import check_config, parse_api_server_config_from_env
 from ditto.api_server.errors import ApiServerConfigError
 from ditto.api_server.validator_names import ValidatorNamesConfig
@@ -58,6 +61,13 @@ def _set_minimum_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "DITTO_CODING_CATALOG_STORAGE_USE_TLS",
         "DITTO_CODING_CATALOG_MAX_RECORD_BYTES",
         "DITTO_CODING_CATALOG_TIMEOUT_SECONDS",
+        "DITTO_CODING_EVIDENCE_STORAGE_ENDPOINT_URL",
+        "DITTO_CODING_EVIDENCE_STORAGE_BUCKET",
+        "DITTO_CODING_EVIDENCE_STORAGE_ACCESS_KEY",
+        "DITTO_CODING_EVIDENCE_STORAGE_SECRET_KEY",
+        "DITTO_CODING_EVIDENCE_STORAGE_REGION",
+        "DITTO_CODING_EVIDENCE_STORAGE_USE_TLS",
+        "DITTO_CODING_EVIDENCE_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -89,6 +99,7 @@ class TestParseApiServerConfigFromEnv:
         assert config.inference_proxy.global_concurrency == 96
         assert config.coding_catalog_curator_hotkeys == ()
         assert config.coding_private_catalog is None
+        assert config.coding_sealed_evidence_storage is None
         assert config.coding_shadow_reconciliation_enabled is False
         assert config.coding_shadow_reconciliation_selection_delay_blocks == 20
         assert config.coding_shadow_ticket_set_enabled is False
@@ -149,6 +160,30 @@ class TestParseApiServerConfigFromEnv:
         assert config.coding_private_catalog.bucket == "private-coding"
         assert config.coding_private_catalog.bucket != config.storage.bucket
 
+    def test_sealed_evidence_storage_is_optional_and_separate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv(
+            "DITTO_CODING_EVIDENCE_STORAGE_ENDPOINT_URL",
+            "https://evidence.example.com",
+        )
+        monkeypatch.setenv(
+            "DITTO_CODING_EVIDENCE_STORAGE_BUCKET", "sealed-coding-evidence"
+        )
+        monkeypatch.setenv(
+            "DITTO_CODING_EVIDENCE_STORAGE_ACCESS_KEY", "evidence-access"
+        )
+        monkeypatch.setenv(
+            "DITTO_CODING_EVIDENCE_STORAGE_SECRET_KEY", "evidence-secret"
+        )
+
+        config = parse_api_server_config_from_env(commit_hash="abc")
+
+        assert config.coding_sealed_evidence_storage is not None
+        assert config.coding_sealed_evidence_storage.bucket == "sealed-coding-evidence"
+        assert config.coding_sealed_evidence_storage.bucket != config.storage.bucket
+
     def test_coding_catalog_curator_allowlist_is_explicit_and_validated(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -201,6 +236,39 @@ class TestParseApiServerConfigFromEnv:
                     base,
                     storage=upload,
                     coding_private_catalog=shared_bucket,
+                )
+            )
+
+    def test_sealed_evidence_storage_cannot_reuse_other_authorities(self) -> None:
+        base = make_api_server_config()
+        shared_upload_credential = CodingSealedEvidenceStorageConfig(
+            endpoint_url="https://evidence.example.com",
+            bucket="sealed-coding-evidence",
+            access_key=base.storage.access_key,
+            secret_key="evidence-secret",
+        )
+        with pytest.raises(ApiServerConfigError, match="distinct.*credentials"):
+            check_config(
+                replace(base, coding_sealed_evidence_storage=shared_upload_credential)
+            )
+        catalog = CodingPrivateCatalogConfig(
+            endpoint_url="https://catalog.example.com",
+            bucket="private-coding",
+            access_key="catalog-access",
+            secret_key="catalog-secret",
+        )
+        shared_catalog_bucket = CodingSealedEvidenceStorageConfig(
+            endpoint_url="https://catalog.example.com",
+            bucket="private-coding",
+            access_key="evidence-access",
+            secret_key="evidence-secret",
+        )
+        with pytest.raises(ApiServerConfigError, match="private catalog bucket"):
+            check_config(
+                replace(
+                    base,
+                    coding_private_catalog=catalog,
+                    coding_sealed_evidence_storage=shared_catalog_bucket,
                 )
             )
 

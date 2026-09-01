@@ -35,5 +35,15 @@ SHA-256 before calling finalization. Only then may later freeze/result work
 bind to finalized records. This preserves PostgreSQL and signed Platform
 records as authority; object storage remains immutable byte transport.
 
+## Store isolation
+
+`CodingSealedEvidenceStorageConfig` is optional and has no route by itself.
+When supplied, it must use a bucket and credentials distinct from both the
+miner-upload store and the private-catalog store. The Platform role may create
+an internal capability minter, but no worker calls it in this layer. It derives
+the fixed `coding-evidence/v1/<kind>/sha256/<digest>` key, exact size/type and
+bounded metadata from a reservation, then validates the short-lived PUT URL
+without retaining that bearer URL in the database.
+
 The corresponding transport restrictions are in
 [`docs/coding-private-s3-data-plane.md`](../../../docs/coding-private-s3-data-plane.md).

@@ -26,6 +26,10 @@ from ditto.api_server.coding_private_catalog import (
     CodingPrivateCatalogConfig,
     parse_coding_private_catalog_config_from_env,
 )
+from ditto.api_server.coding_sealed_evidence_storage import (
+    CodingSealedEvidenceStorageConfig,
+    parse_coding_sealed_evidence_storage_config_from_env,
+)
 from ditto.api_server.datapipeline import (
     DataPipelineConfig,
     parse_data_pipeline_config_from_env,
@@ -403,6 +407,13 @@ class ApiServerConfig:
 
     Absence disables private record loading. A public catalog commitment never
     grants access to private corpus bytes by itself.
+    """
+
+    coding_sealed_evidence_storage: CodingSealedEvidenceStorageConfig | None = None
+    """Optional, separately credentialed store for sealed coding evidence.
+
+    Absence disables evidence capability minting. This configuration does not
+    expose a validator route, worker, score, or weight path by itself.
     """
 
     coding_shadow_reconciliation_enabled: bool = False
@@ -933,6 +944,9 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             if (value := item.strip())
         ),
         coding_private_catalog=parse_coding_private_catalog_config_from_env(),
+        coding_sealed_evidence_storage=(
+            parse_coding_sealed_evidence_storage_config_from_env()
+        ),
         coding_shadow_reconciliation_enabled=reconciliation_enabled,
         coding_shadow_reconciliation_selection_delay_blocks=(
             reconciliation_selection_delay_blocks
@@ -1029,6 +1043,7 @@ def check_config(config: ApiServerConfig) -> None:
             "DITTO_CODING_CATALOG_CURATOR_HOTKEYS contains an invalid SS58 address"
         )
     catalog = config.coding_private_catalog
+    evidence_store = config.coding_sealed_evidence_storage
     if catalog is not None:
         upload = config.storage
         same_endpoint = _http_origin(catalog.endpoint_url) == _http_origin(
@@ -1049,6 +1064,38 @@ def check_config(config: ApiServerConfig) -> None:
         raise ApiServerConfigError(
             "coding shadow reconciliation requires a private coding catalog"
         )
+    if evidence_store is not None:
+        upload = config.storage
+        same_endpoint = _http_origin(evidence_store.endpoint_url) == _http_origin(
+            upload.endpoint_url
+        )
+        if same_endpoint and evidence_store.bucket == upload.bucket:
+            raise ApiServerConfigError(
+                "sealed coding evidence must not reuse the miner-upload bucket"
+            )
+        if (
+            evidence_store.access_key == upload.access_key
+            or evidence_store.secret_key == upload.secret_key
+        ):
+            raise ApiServerConfigError(
+                "sealed coding evidence must use distinct least-privilege credentials"
+            )
+        if catalog is not None:
+            same_catalog_endpoint = _http_origin(
+                evidence_store.endpoint_url
+            ) == _http_origin(catalog.endpoint_url)
+            if same_catalog_endpoint and evidence_store.bucket == catalog.bucket:
+                raise ApiServerConfigError(
+                    "sealed coding evidence must not reuse the private catalog bucket"
+                )
+            if (
+                evidence_store.access_key == catalog.access_key
+                or evidence_store.secret_key == catalog.secret_key
+            ):
+                raise ApiServerConfigError(
+                    "sealed coding evidence must use distinct private catalog "
+                    "credentials"
+                )
     names = config.validator_names
     if (names.url is None) != (names.api_key is None):
         raise ApiServerConfigError(

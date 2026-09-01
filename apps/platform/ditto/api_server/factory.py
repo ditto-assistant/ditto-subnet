@@ -29,6 +29,9 @@ from ditto.api_server.coding_artifact_capabilities import (
 from ditto.api_server.coding_private_catalog import (
     create_coding_private_catalog_source,
 )
+from ditto.api_server.coding_sealed_evidence_storage import (
+    CodingSealedEvidenceCapabilityMinter,
+)
 from ditto.api_server.config import (
     ApiServerConfig,
     parse_api_server_config_from_env,
@@ -269,6 +272,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 and _process_role() == PLATFORM_ROLE
                 else None
             )
+            app.state.coding_sealed_evidence_capability_minter = (
+                CodingSealedEvidenceCapabilityMinter(
+                    config.coding_sealed_evidence_storage
+                )
+                if config.coding_sealed_evidence_storage is not None
+                and _process_role() == PLATFORM_ROLE
+                else None
+            )
             app.state.coding_inference_grant_transport = (
                 coding_inference_transport_from_env()
                 if _process_role() == PLATFORM_ROLE
@@ -489,6 +500,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # a separate least-privilege private-catalog credential set.
     app.state.coding_private_catalog_source = None
     app.state.coding_artifact_capability_minter = None
+    app.state.coding_sealed_evidence_capability_minter = None
     app.state.coding_inference_grant_transport = None
     # Hot-swappable efficiency-bonus policy: the compute path resolves the
     # latest append-only revision through this resolver (short TTL), falling
