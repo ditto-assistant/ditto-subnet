@@ -64,7 +64,9 @@ def upgrade() -> None:
             name="coding_sealed_evidence_uploads_ticket_fkey",
             ondelete="CASCADE",
         ),
-        sa.PrimaryKeyConstraint("upload_id", name="coding_sealed_evidence_uploads_pkey"),
+        sa.PrimaryKeyConstraint(
+            "upload_id", name="coding_sealed_evidence_uploads_pkey"
+        ),
         sa.UniqueConstraint(
             "ticket_id",
             "claim_generation",
