@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.db.models import (
     Agent,
     CodingCapabilityCertification,
+    CodingSealedEvidenceFinalization,
     CodingShadowAuthoringFreeze,
     CodingShadowResult,
     CodingShadowRun,
@@ -22,6 +24,8 @@ _INSTANCE = re.compile(r"^[^\s\x00-\x1f\x7f]{1,128}$")
 _VALIDATOR = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{47,48}$")
 _CLAIM_TTL = timedelta(minutes=2)
 _MINIMUM_REMAINING = timedelta(seconds=30)
+_TERMINAL_ACK_KIND = "terminal-publication-acknowledgement"
+_TerminalState = Literal["open", "pending_ack", "complete"]
 
 
 class CodingClaimNotAvailableError(RuntimeError):
@@ -62,9 +66,19 @@ async def claim_next_coding_ticket(
         .limit(1)
     )
     if current is not None:
-        if await _has_terminal_result(session, current.ticket_id):
+        terminal_state = await _terminal_state(session, current)
+        if terminal_state == "complete":
             _clear_claim(current)
             await session.flush()
+        elif terminal_state == "pending_ack":
+            if current.deadline <= now or current.claim_started_at is None:
+                return None
+            result = await _claim_result(session, current, instance_id, True)
+            if result is None:
+                return None
+            _renew(current, now)
+            await session.flush()
+            return result
         elif current.deadline > now and (
             current.claim_started_at is not None
             or (current.claim_expires_at is not None and current.claim_expires_at > now)
@@ -204,6 +218,9 @@ async def _update_claim(
     await _lock_instance(session, validator_hotkey, instance_id)
     now = await _database_now(session)
     ticket = await session.get(CodingShadowTicket, ticket_id, with_for_update=True)
+    terminal_state = (
+        await _terminal_state(session, ticket) if ticket is not None else "open"
+    )
     if (
         ticket is None
         or ticket.validator_hotkey != validator_hotkey
@@ -214,7 +231,9 @@ async def _update_claim(
         or ticket.claim_expires_at is None
         or ticket.deadline <= now
         or ticket.claim_expires_at <= now
-        or await _has_terminal_result(session, ticket_id)
+        or terminal_state == "complete"
+        or (terminal_state == "pending_ack" and start)
+        or (terminal_state == "pending_ack" and ticket.claim_started_at is None)
     ):
         raise CodingClaimNotAvailableError("coding ticket claim is unavailable")
     idempotent = False
@@ -272,13 +291,26 @@ async def _claim_result(
     )
 
 
-async def _has_terminal_result(session: AsyncSession, ticket_id) -> bool:
-    value = await session.scalar(
+async def _terminal_state(
+    session: AsyncSession,
+    ticket: CodingShadowTicket,
+) -> _TerminalState:
+    terminal = await session.scalar(
         select(CodingShadowResult.result_id).where(
-            CodingShadowResult.ticket_id == ticket_id
+            CodingShadowResult.ticket_id == ticket.ticket_id
         )
     )
-    return value is not None
+    if terminal is None:
+        return "open"
+    finalized = await session.scalar(
+        select(CodingSealedEvidenceFinalization.upload_id).where(
+            CodingSealedEvidenceFinalization.ticket_id == ticket.ticket_id,
+            CodingSealedEvidenceFinalization.claim_generation
+            == ticket.claim_generation,
+            CodingSealedEvidenceFinalization.evidence_kind == _TERMINAL_ACK_KIND,
+        )
+    )
+    return "complete" if finalized is not None else "pending_ack"
 
 
 def _renew(ticket: CodingShadowTicket, now: datetime) -> None:

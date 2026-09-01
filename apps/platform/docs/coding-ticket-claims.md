@@ -26,9 +26,14 @@ reassigned.
 
 New authoring-freeze, grading-lease, and terminal-result publication require a
 currently active started claim. Exact already-stored Platform publication
-replays remain idempotent after the lease expires. A terminal result is cleared
-from the instance's claim slot on its next claim request, allowing that worker
-to receive another ticket.
+replays remain idempotent after the lease expires. Terminal result acceptance
+does not immediately clear a started claim: the same stable instance may
+recover or heartbeat it while the exact claim generation lacks finalized
+`terminal-publication-acknowledgement` evidence. The ticket remains excluded
+from new-claim selection and cannot transfer to another instance. Once that
+finalization is appended, heartbeat/start fail and the next claim lookup clears
+the completed authority. This window grants no new candidate or grading
+execution.
 
 The separate validator worker now consumes this ledger only behind its
 default-off gate. The ledger itself does not start a container, score a result,

@@ -1189,6 +1189,49 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
         )
     assert replayed.idempotent is True
 
+    async with session.begin():
+        stored_claim = await session.get(CodingShadowTicket, ticket_id)
+        assert stored_claim is not None
+        stored_claim.claim_acquired_at = _NOW - timedelta(minutes=10)
+        stored_claim.claim_started_at = _NOW - timedelta(minutes=2)
+        stored_claim.claim_heartbeat_at = _NOW - timedelta(minutes=2)
+        stored_claim.claim_expires_at = _NOW - timedelta(minutes=1)
+    async with session.begin():
+        terminal_recovery = await claim_next_coding_ticket(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+        )
+    assert terminal_recovery is not None and terminal_recovery.idempotent
+    assert terminal_recovery.ticket.claim_generation == 2
+    async with session.begin():
+        assert (
+            await claim_next_coding_ticket(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id="coding-worker-terminal-other",
+            )
+            is None
+        )
+    async with session.begin():
+        terminal_heartbeat = await heartbeat_coding_ticket_claim(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=2,
+        )
+    assert terminal_heartbeat.ticket.claim_expires_at is not None
+    with pytest.raises(CodingClaimNotAvailableError):
+        async with session.begin():
+            await start_coding_ticket_claim(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id=instance_id,
+                ticket_id=ticket_id,
+                claim_generation=2,
+            )
+
     for post_terminal_kind in CodingSealedEvidenceKind:
         if (
             post_terminal_kind
@@ -1254,6 +1297,15 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             size_bytes=4096,
         )
     assert terminal_ack_replay.idempotent is True
+    with pytest.raises(CodingClaimNotAvailableError):
+        async with session.begin():
+            await heartbeat_coding_ticket_claim(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id=instance_id,
+                ticket_id=ticket_id,
+                claim_generation=2,
+            )
     async with session.begin():
         assert (
             await claim_next_coding_ticket(
