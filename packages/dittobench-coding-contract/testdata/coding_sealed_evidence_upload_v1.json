@@ -1,0 +1,92 @@
+{
+  "schema": "dittobench-coding-sealed-evidence-upload-vector-v1",
+  "coding_contract_version": 1,
+  "weight_eligible": false,
+  "policies": [
+    {
+      "evidence_kind": "authoring-transcript",
+      "maximum_size_bytes": 536870912
+    },
+    {
+      "evidence_kind": "frozen-submission",
+      "maximum_size_bytes": 134217728
+    },
+    {
+      "evidence_kind": "authoring-publication-request",
+      "maximum_size_bytes": 4194304
+    },
+    {
+      "evidence_kind": "authoring-publication-acknowledgement",
+      "maximum_size_bytes": 1048576
+    },
+    {
+      "evidence_kind": "terminal-publication-request",
+      "maximum_size_bytes": 4194304
+    },
+    {
+      "evidence_kind": "terminal-publication-acknowledgement",
+      "maximum_size_bytes": 1048576
+    }
+  ],
+  "capability": {
+    "schema": "dittobench-coding-sealed-evidence-upload-capability-v1",
+    "coding_contract_version": 1,
+    "weight_eligible": false,
+    "ticket_id": "44444444-4444-4444-8444-444444444444",
+    "claim_generation": 7,
+    "ticket_deadline": "2026-09-01T12:30:00Z",
+    "upload_id": "55555555-5555-4555-8555-555555555555",
+    "evidence_kind": "authoring-transcript",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "size_bytes": 4096,
+    "content_type": "application/octet-stream",
+    "checksum_sha256_b64": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo=",
+    "url": "https://storage.invalid/private-coding/coding-evidence/v1/authoring-transcript/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?X-Amz-Date=20260901T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-evidence-upload",
+    "expires_at": "2026-09-01T12:05:00Z"
+  },
+  "capability_request": {
+    "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "instance_id": "coding-executor-a",
+    "ticket_id": "44444444-4444-4444-8444-444444444444",
+    "claim_generation": 7,
+    "evidence_kind": "authoring-transcript",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "size_bytes": 4096,
+    "nonce": "66666666-6666-4666-8666-666666666666",
+    "requested_at": "2026-09-01T12:00:00Z",
+    "signature": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "finalization_request": {
+    "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "instance_id": "coding-executor-a",
+    "ticket_id": "44444444-4444-4444-8444-444444444444",
+    "claim_generation": 7,
+    "upload_id": "55555555-5555-4555-8555-555555555555",
+    "evidence_kind": "authoring-transcript",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "size_bytes": 4096,
+    "nonce": "66666666-6666-4666-8666-666666666666",
+    "requested_at": "2026-09-01T12:00:00Z",
+    "signature": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "finalization": {
+    "schema": "dittobench-coding-sealed-evidence-finalized-v1",
+    "coding_contract_version": 1,
+    "weight_eligible": false,
+    "ticket_id": "44444444-4444-4444-8444-444444444444",
+    "claim_generation": 7,
+    "upload_id": "55555555-5555-4555-8555-555555555555",
+    "evidence_kind": "authoring-transcript",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "size_bytes": 4096,
+    "finalized_at": "2026-09-01T12:01:00Z",
+    "accepted": true,
+    "idempotent": false
+  },
+  "expected": {
+    "upload_signing_message_utf8": "dittobench-coding-sealed-evidence-upload-capability:v1\u00005GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY\u0000coding-executor-a\u000044444444-4444-4444-8444-444444444444\u00007\u0000authoring-transcript\u0000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u00004096\u000066666666-6666-4666-8666-666666666666\u00002026-09-01T12:00:00.000000+00:00",
+    "upload_signing_message_sha256": "e7c84347f8ebf7ea5f506ea5af9975d8e93573bb0a89f615d34e6c5c00c54183",
+    "finalize_signing_message_utf8": "dittobench-coding-sealed-evidence-finalize:v1\u00005GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY\u0000coding-executor-a\u000044444444-4444-4444-8444-444444444444\u00007\u0000authoring-transcript\u0000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u00004096\u000055555555-5555-4555-8555-555555555555\u000066666666-6666-4666-8666-666666666666\u00002026-09-01T12:00:00.000000+00:00",
+    "finalize_signing_message_sha256": "2387676aec246f9191b6d3d440b5edcac04ff8a82d30dcec759a260b0f6b339e"
+  }
+}

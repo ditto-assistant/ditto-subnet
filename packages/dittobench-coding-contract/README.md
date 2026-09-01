@@ -29,6 +29,14 @@ Its URLs use the reserved `.invalid` domain and synthetic signatures. They are
 transport examples, never identity, credentials, or usable capabilities. Rust
 and miner-facing code must not consume this validator-only vector.
 
+`coding_sealed_evidence_upload_v1.json` freezes the signed validator requests,
+redacted S3 PUT capability, and finalized acknowledgement for one sealed coding
+evidence object. It binds a ticket, active claim generation, upload UUID, kind,
+whole-object SHA-256, exact size, and fixed content type. The capability URL is
+transport only; no key, bucket, credential, or object version enters a signed
+request, finalization, or miner-facing wire. Python and Go consume this vector;
+Rust and miner-facing code must not.
+
 `coding_authoring_freeze_v1.json` freezes the validator-only authoring evidence
 digest, content-addressed evidence references, signed phase-transition message,
 and accepted response. It contains no patch or transcript bytes and grants no

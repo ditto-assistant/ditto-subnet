@@ -66,6 +66,7 @@ def test_backend_workflow_owns_every_platform_coding_contract_vector() -> None:
         "packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_attempt_supervisor_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_sealed_evidence_upload_v1.json",
     } <= backend_paths
     assert (
         "packages/dittobench-coding-contract/testdata/coding_inference_miner_v1.json"

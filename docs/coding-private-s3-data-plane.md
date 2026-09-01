@@ -117,6 +117,11 @@ capability for a frozen submission or a different ticket. An expired URL may be
 refreshed only for the same still-live authority; refreshing a URL never starts
 a new attempt.
 
+The validator/Platform request, trusted executor capability, and finalized
+acknowledgement wire is frozen by
+`packages/dittobench-coding-contract/testdata/coding_sealed_evidence_upload_v1.json`.
+It contains only synthetic values and reserved `.invalid` transport URLs.
+
 ## Evidence publication order
 
 The local durable outbox remains the first commit point. S3 does not replace its

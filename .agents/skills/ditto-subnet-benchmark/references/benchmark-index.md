@@ -20,6 +20,7 @@
 | Shadow trusted attempt runtime | `services/dittobench-api/internal/codingattempt/` |
 | Shadow durable coding evidence outbox | `services/dittobench-api/internal/codingoutbox/` |
 | Shadow private coding S3 data-plane contract | `docs/coding-private-s3-data-plane.md` |
+| Shadow sealed-evidence upload wire | `ditto/api_models/coding_evidence_upload.py`, `apps/platform/ditto/api_models/coding_evidence_upload.py`, `services/dittobench-api/internal/codingevidence/`, `packages/dittobench-coding-contract/testdata/coding_sealed_evidence_upload_v1.json` |
 | Shadow scoped coding-memory seed projector | `services/dittobench-api/internal/codingseed/` |
 | Shadow locked Luna relay contract | `packages/dittobench-coding-contract/testdata/coding_inference_*_v1.json`, `services/dittobench-api/docs/coding-luna-relay-contract-shadow.md` |
 | Shadow ticket-bound Luna relay core | `services/dittobench-api/internal/codingrelay/`, `services/dittobench-api/docs/coding-luna-relay-core-shadow.md` |

@@ -317,6 +317,7 @@ def test_shadow_coding_execution_selects_only_scorer_stack(
         "packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_attempt_supervisor_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_sealed_evidence_upload_v1.json",
     ],
 )
 def test_shared_coding_contract_vectors_select_every_consumer(

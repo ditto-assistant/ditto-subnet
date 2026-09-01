@@ -165,6 +165,8 @@ It may upload only bytes already sealed in this local store, and Platform must
 finalize their exact identities before a freeze or result can reference them.
 The remote store cannot reconstruct an unfinished collection or authorize a
 candidate retry.
+The shared upload/finalization wire is synthetic and frozen by
+`packages/dittobench-coding-contract/testdata/coding_sealed_evidence_upload_v1.json`.
 
 Coding contract v1 remains permanently `weight_eligible=false`.
 
