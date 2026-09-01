@@ -28,6 +28,11 @@ enable_screener_fleet_dev_host = false
 # its public CA trust anchor has been reviewed and supplied.
 enable_screener_fleet_x509_identity = false
 
+# Private coding byte authorities remain absent until the bucket names,
+# retention periods, IAM diff, HMAC custody, and Data Access audit cost are
+# approved in a protected infrastructure plan.
+enable_coding_s3_authorities = false
+
 screener_fleet_min_replicas         = 0
 screener_fleet_max_replicas         = 6
 screener_fleet_backlog_per_instance = 6

@@ -134,6 +134,54 @@ variable "bucket_location" {
   default     = "US"
 }
 
+variable "enable_coding_s3_authorities" {
+  description = "Create the isolated private-input and sealed-evidence GCS XML/S3 authorities. False keeps every bucket, identity, HMAC key, secret version, IAM binding, and Data Access audit change absent."
+  type        = bool
+  default     = false
+}
+
+variable "coding_storage_location" {
+  description = "Location for the private coding input and sealed evidence buckets."
+  type        = string
+  default     = "EU"
+}
+
+variable "coding_private_input_retention_seconds" {
+  description = "Minimum retention for immutable private coding inputs. The first protected apply must review this value before separately locking the policy."
+  type        = number
+  default     = 2592000
+
+  validation {
+    condition     = var.coding_private_input_retention_seconds >= 604800
+    error_message = "Private coding inputs must be retained for at least seven days."
+  }
+}
+
+variable "coding_sealed_evidence_retention_seconds" {
+  description = "Minimum retention for sealed coding evidence. The first protected apply must review this value before separately locking the policy."
+  type        = number
+  default     = 7776000
+
+  validation {
+    condition     = var.coding_sealed_evidence_retention_seconds >= 2592000
+    error_message = "Sealed coding evidence must be retained for at least 30 days."
+  }
+}
+
+variable "coding_storage_auditors" {
+  description = "Optional IAM members granted exact-object get-only access to both coding storage authorities. Empty by default; never use project-wide storage roles here."
+  type        = set(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for member in var.coding_storage_auditors :
+      can(regex("^(group|serviceAccount|user):[^[:space:]]+$", member))
+    ])
+    error_message = "Coding storage auditors must be explicit user:, group:, or serviceAccount: IAM members."
+  }
+}
+
 # --- Database / app secrets (sensitive; provide via TF_VAR_*) ---
 
 variable "db_password" {

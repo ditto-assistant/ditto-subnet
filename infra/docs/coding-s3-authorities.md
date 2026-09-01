@@ -1,0 +1,80 @@
+# Coding S3-compatible authority rollout
+
+The `gcp-platform` stack defines two non-interchangeable coding byte
+authorities using Google Cloud Storage's S3-compatible XML API:
+
+- private inputs: immutable catalog records and task artifacts;
+- sealed evidence: transcripts, frozen submissions, and exact publication
+  request and acknowledgement bytes.
+
+They are absent by default. Merging the Terraform does not create a bucket,
+identity, HMAC key, secret version, IAM binding, or audit configuration.
+
+## Identity boundary
+
+Each environment receives three dedicated service accounts:
+
+| Identity | Private inputs | Sealed evidence | Object list/delete |
+| --- | --- | --- | --- |
+| input curator | create only | none | denied by omission |
+| input reader | exact-object get only | none | denied by omission |
+| evidence finalizer | none | create and exact-object get | denied by omission |
+
+The accounts receive no project role. Bucket bindings use either
+`roles/storage.objectCreator`, which cannot view, delete, or overwrite an
+object, or repository-owned custom roles containing only
+`storage.objects.get` and, for evidence, `storage.objects.create`.
+
+HMAC keys exist only to support the repository's established S3-compatible
+client surface at `https://storage.googleapis.com`. Terraform writes each
+one-time key secret into a dedicated Secret Manager container. This layer
+grants no runtime identity access to those secrets. A later Platform
+integration must grant only the input-reader and evidence-finalizer secrets to
+the server-side Platform identity; the curator key must remain outside the
+runtime.
+
+Validators, executors, candidate containers, and model processes receive no
+bucket IAM and no long-lived credential. They may later receive only a bounded
+method- and object-specific capability after Platform authorization.
+
+## Storage controls
+
+Both buckets enforce uniform bucket-level access, public-access prevention,
+versioning, a minimum retention policy, and `prevent_destroy`. Runtime
+identities cannot overwrite or delete, so content-addressed names remain
+create-once. Incomplete multipart uploads are aborted after one day; no rule
+expires current objects.
+
+Cloud Storage's XML API permits unencrypted HTTP by default. Enabling the
+authorities therefore also enforces the project-wide
+`storage.secureHttpTransport` organization policy. The protected plan must
+check every existing XML/S3 client in the project before apply; all checked-in
+Platform storage endpoints already render HTTPS.
+
+The initial policies are intentionally not locked. Locking a Cloud Storage
+retention policy is irreversible. Review the actual protected plan, prove the
+full upload/finalization/recovery flow, and approve a separate lock operation
+after the retention values are final.
+
+When enabled, Terraform also manages Data Read and Data Write audit logging for
+`storage.googleapis.com`. That is project-wide and can increase log volume, so
+the first plan must check existing audit configuration and expected cost.
+
+## First protected plan
+
+1. Keep `enable_coding_s3_authorities = false` for ordinary plans.
+2. Review the proposed names and confirm they are globally available.
+3. Confirm the EU location and 30-day input / 90-day evidence minimums.
+4. Inspect existing project Cloud Storage audit and organization-policy
+   configuration for conflicts, and confirm every XML client uses HTTPS.
+5. Set the production intent to true in a separately reviewed PR.
+6. Run the protected `gcp-platform` plan; do not apply from an application
+   release workflow.
+7. Verify the plan creates exactly two buckets and three identities per
+   environment, with no public, list, overwrite, or delete grant.
+8. Apply only after owner approval, then record the exact Terraform revision
+   and resource identities.
+
+Even after apply, coding remains inactive. Platform configuration, secret
+access, capability issuance, worker activation, scoring, and weights require
+separate reviews.

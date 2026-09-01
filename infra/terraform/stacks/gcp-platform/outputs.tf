@@ -31,6 +31,31 @@ output "storage_hmac_access_id" {
   value       = google_storage_hmac_key.platform.access_id
 }
 
+output "coding_private_input_bucket_names" {
+  description = "Private coding input S3-compatible bucket names by environment; empty while the authority is disabled."
+  value       = { for k, bucket in google_storage_bucket.coding_private_inputs : k => bucket.name }
+}
+
+output "coding_sealed_evidence_bucket_names" {
+  description = "Sealed coding evidence S3-compatible bucket names by environment; empty while the authority is disabled."
+  value       = { for k, bucket in google_storage_bucket.coding_sealed_evidence : k => bucket.name }
+}
+
+output "coding_private_input_curator_hmac_access_ids" {
+  description = "Non-secret HMAC access IDs for create-only private-input curators by environment."
+  value       = { for k, key in google_storage_hmac_key.coding_private_input_curator : k => key.access_id }
+}
+
+output "coding_private_input_reader_hmac_access_ids" {
+  description = "Non-secret HMAC access IDs for get-only private-input readers by environment."
+  value       = { for k, key in google_storage_hmac_key.coding_private_input_reader : k => key.access_id }
+}
+
+output "coding_evidence_finalizer_hmac_access_ids" {
+  description = "Non-secret HMAC access IDs for create-and-verify evidence finalizers by environment."
+  value       = { for k, key in google_storage_hmac_key.coding_evidence_finalizer : k => key.access_id }
+}
+
 output "api_domain_dev" {
   description = "Dev API hostname."
   value       = var.api_domain_dev

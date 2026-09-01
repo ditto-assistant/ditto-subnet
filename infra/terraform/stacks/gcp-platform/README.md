@@ -18,6 +18,7 @@ boot are handled by the `platform_app` Ansible role.
 | `ditto-pg-platform` VM (`db-staging`, private) | holds `ditto_platform_dev` + `ditto_platform_prod` |
 | `ditto-platform-dev` / `ditto-platform-prod` app VMs (`app-small`, public IP) | one per deploy env |
 | `ditto-platform-agents-{dev,prod}` GCS buckets + one HMAC key | S3-interop blob storage |
+| default-off private coding input + sealed evidence GCS buckets | isolated S3-compatible byte authorities with dedicated HMAC identities |
 | Secret Manager: `platform-db-password`, `platform-storage-hmac-secret`, `platform-{dev,prod}-pylon-open-access-token`, `platform-github-deploy-key`, `platform-taostats-api-key` | values from `TF_VAR_*` (deploy key and optional Taostats key set out of band) |
 | _(not here)_ `DITTO_UPLOAD_PAYMENT_ADDRESS` | deploy-time from the ditto-subnet repo's GitHub env secret |
 | A records `platform-api[-dev].heyditto.ai` → app VM IPs (Cloudflare, DNS-only) | only when `manage_dns = true` |
@@ -58,6 +59,14 @@ Terraform change. A Terraform merge alone does not alter either bucket; the
 
 Applied **deliberately** (not on every merge). Two paths:
 
+The private coding authorities remain absent while
+`enable_coding_s3_authorities = false`. Their first protected plan must review
+the globally unique bucket names, retention periods, custom roles, HMAC secret
+custody, project-wide Cloud Storage Data Access audit cost, and the project-wide
+`storage.secureHttpTransport` policy. Do not lock the retention policies in the
+same apply that first creates them; verify the provider behavior and recovery
+runbook before a separately approved, irreversible lock operation.
+
 - **Operator, locally (recommended for the first apply):** authenticate with
   your own ADC (`gcloud auth application-default login`), `cp
   terraform.tfvars.example terraform.tfvars`, fill it in (and export
@@ -79,6 +88,9 @@ Applied **deliberately** (not on every merge). Two paths:
    `agent_bucket_names`, `storage_hmac_access_id`, plus `wif_provider` +
    `platform_deploy_sa_email` (→ the ditto-subnet repo's `GCP_WIF_PROVIDER` /
    `GCP_PLATFORM_DEPLOY_SA` secrets).
+   When coding storage is deliberately enabled, also retain the coding bucket
+   and non-secret HMAC access-ID outputs. Secret material remains in Secret
+   Manager and Terraform state and must never transit terminal output.
 2. Provision the VMs with Ansible: `gcp-platform-pg.yml` (creates the two
    databases) and `gcp-platform-app.yml` (Docker + Pylon, Node/pm2, clones the
    repo, renders `.env`, Caddy). The app is **not** started here — the first

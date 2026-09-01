@@ -162,12 +162,19 @@ verification of those exact objects.
 
 ## Deployment boundary
 
-This document does not select AWS S3 versus another compatible provider, create
-Terraform resources, or introduce a storage endpoint/environment variable. A
-deployment implementation must prove the chosen provider supports the immutable
-write, presigned capability, metadata, timeout, and full-download verification
-rules above. It must also keep input and evidence identities distinct from the
-existing miner-upload and public artifact stores.
+The default-off infrastructure implementation selects Google Cloud Storage's
+S3-compatible XML API, matching the repository's existing storage provider
+pattern. It defines separate buckets, identities, HMAC credentials, retention,
+and data-access audit configuration in
+[`infra/terraform/stacks/gcp-platform/coding-storage.tf`](../infra/terraform/stacks/gcp-platform/coding-storage.tf).
+Those resources remain absent until a protected Terraform plan explicitly
+enables them. The infrastructure layer introduces no Platform endpoint or
+runtime secret access and does not activate a worker.
+
+Before apply, operators must prove that the planned provider controls support
+the immutable-write, presigned-capability, metadata, timeout, and full-download
+verification rules above. Input and evidence identities remain distinct from
+the existing miner-upload and public artifact stores.
 
 The next implementation layer may add Platform evidence capabilities and
 finalization, then an executor outbox exporter. It must preserve the current
