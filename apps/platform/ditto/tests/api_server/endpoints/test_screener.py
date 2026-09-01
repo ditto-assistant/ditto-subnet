@@ -102,6 +102,7 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.attestation import record_attestation
+from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 from ditto.db.queries.screening import (
     MAX_SCREENING_EXPIRIES,
     POLICY_ONLY_RESCREEN_REASON,
@@ -3423,6 +3424,9 @@ class TestQueue:
         assert body["count"] == 2
         assert [i["name"] for i in body["items"]] == ["older", "younger"]
         assert all(i["status"] == AgentStatus.UPLOADED for i in body["items"])
+        assert all(
+            i["bench_version"] == MIN_SCOREABLE_BENCH_VERSION for i in body["items"]
+        )
         assert body["required_policy_version"] == SCREENING_POLICY_VERSION
 
     async def test_prioritizes_zero_score_submission_before_older_scored_one(
@@ -3915,6 +3919,7 @@ class TestClaim:
         assert item["status"] == AgentStatus.SCREENING
         assert item["attempt_id"]
         assert item["lease_deadline"]
+        assert item["bench_version"] == MIN_SCOREABLE_BENCH_VERSION
 
         duplicate = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
         assert duplicate.status_code == 200
@@ -5622,7 +5627,9 @@ class TestQuarantineAdmin:
         _install_db(app, session_maker)
         _install_chain(app)
         claimed = await client.post(_CLAIM_URL)
-        attempt_id = UUID(claimed.json()["items"][0]["attempt_id"])
+        claimed_item = claimed.json()["items"][0]
+        assert claimed_item["bench_version"] == _TARGET_VERSION
+        attempt_id = UUID(claimed_item["attempt_id"])
         held = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result",
             json=_result_payload(

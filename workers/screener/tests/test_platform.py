@@ -79,6 +79,7 @@ async def test_claim_next_parses_leased_item(
                 "items": [
                     {
                         "agent_id": str(_AGENT),
+                        "bench_version": 12,
                         "miner_hotkey": _MINER,
                         "name": "alpha",
                         "sha256": "de" * 32,
@@ -103,6 +104,7 @@ async def test_claim_next_parses_leased_item(
         )
     assert resp.count == 1
     assert resp.items[0].agent_id == _AGENT
+    assert resp.items[0].bench_version == 12
     assert resp.items[0].sha256 == "de" * 32
 
 

@@ -681,6 +681,7 @@ class BuildGate:
         *,
         agent_id: UUID,
         attempt_id: UUID,
+        bench_version: int,
         miner_hotkey: str,
         sha256: str,
         download_url: str,
@@ -697,6 +698,10 @@ class BuildGate:
         policy_version: int = SCREENING_POLICY_VERSION,
     ) -> ScreeningDecision:
         """Screen one agent end-to-end; never raises.
+
+        ``bench_version`` is the exact generation Platform assigned to this
+        submission. Private behavioral challenges reuse it so the challenge
+        envelope cannot drift from the scored request contract.
 
         ``deadline`` is an optional monotonic-clock (``loop.time()``) bound for
         the whole screen, derived by the worker from the platform's lease. When
@@ -899,6 +904,7 @@ class BuildGate:
                         context = PolicyContext(
                             agent_id=agent_id,
                             attempt_id=attempt_id,
+                            bench_version=bench_version,
                             miner_hotkey=miner_hotkey,
                             artifact_sha256=sha256.lower(),
                             source_digest=source_digest,
@@ -1003,6 +1009,7 @@ class BuildGate:
                 context = PolicyContext(
                     agent_id=agent_id,
                     attempt_id=attempt_id,
+                    bench_version=bench_version,
                     miner_hotkey=miner_hotkey,
                     artifact_sha256=sha256.lower(),
                     source_digest=source_digest,
@@ -1234,6 +1241,7 @@ class BuildGate:
             context = PolicyContext(
                 agent_id=agent_id,
                 attempt_id=attempt_id,
+                bench_version=bench_version,
                 miner_hotkey=miner_hotkey,
                 artifact_sha256=sha256.lower(),
                 source_digest=source_digest,

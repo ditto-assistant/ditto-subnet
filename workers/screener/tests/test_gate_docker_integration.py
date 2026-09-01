@@ -135,6 +135,7 @@ async def test_current_starter_kit_builds_and_health_checks_without_run(
         result = await gate.screen(
             agent_id=uuid4(),
             attempt_id=uuid4(),
+            bench_version=12,
             miner_hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
             sha256=hashlib.sha256(tarball).hexdigest(),
             download_url="https://artifact.test/starter-kit.tar.gz",
@@ -220,6 +221,7 @@ async def test_current_starter_kit_clears_model_binding_audit(
         result = await gate.screen(
             agent_id=uuid4(),
             attempt_id=uuid4(),
+            bench_version=12,
             miner_hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
             sha256=hashlib.sha256(tarball).hexdigest(),
             download_url="https://artifact.test/starter-kit.tar.gz",
@@ -283,6 +285,7 @@ async def test_current_starter_kit_passes_behavioral_oracle(
         result = await gate.screen(
             agent_id=uuid4(),
             attempt_id=uuid4(),
+            bench_version=12,
             miner_hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
             sha256=hashlib.sha256(tarball).hexdigest(),
             download_url="https://artifact.test/starter-kit.tar.gz",
@@ -340,6 +343,7 @@ async def test_current_starter_kit_passes_real_default_v7_luna_review(
         result = await gate.screen(
             agent_id=uuid4(),
             attempt_id=uuid4(),
+            bench_version=12,
             miner_hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
             sha256=hashlib.sha256(tarball).hexdigest(),
             download_url="https://artifact.test/starter-kit.tar.gz",
