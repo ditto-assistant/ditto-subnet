@@ -153,6 +153,7 @@ state transition is released.
 | wrong key, size, kind, metadata, version, or SHA-256 | integrity | fail closed; do not issue a clean retry |
 | candidate failure after the collecting marker | candidate terminal evidence | seal and publish the authoritative failure; do not erase or rerun it |
 | Platform response loss after publication | transport ambiguity | replay only the exact durable request bytes |
+| crash after terminal-ack finalization but before local release | local completion ambiguity | replay the exact finalized receipt from the URL-free local upload reservation; never revive the claim or upload new bytes |
 
 S3 events, inventory jobs, or object listing may support operator audit but may
 not schedule work, infer completion, or repair a claim. PostgreSQL

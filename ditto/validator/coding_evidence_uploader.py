@@ -67,6 +67,28 @@ class CodingSealedEvidenceUploader:
         sha256: str,
         size_bytes: int,
     ) -> CodingSealedEvidenceFinalization:
+        capability = await self.reserve(
+            claim,
+            evidence_kind=evidence_kind,
+            sha256=sha256,
+            size_bytes=size_bytes,
+        )
+        return await self.upload_reserved(
+            claim,
+            record_id=record_id,
+            capability=capability,
+        )
+
+    async def reserve(
+        self,
+        claim: CodingClaimResponse,
+        *,
+        evidence_kind: CodingSealedEvidenceKind,
+        sha256: str,
+        size_bytes: int,
+    ) -> CodingSealedEvidenceUploadCapability:
+        """Reserve and validate one exact capability without opening bytes."""
+
         capability = await self.platform.request_coding_evidence_upload_capability(
             claim,
             evidence_kind=evidence_kind,
@@ -92,6 +114,36 @@ class CodingSealedEvidenceUploader:
             raise PlatformInfrastructureError(
                 "coding evidence upload capability authority is invalid"
             )
+        return capability
+
+    async def upload_reserved(
+        self,
+        claim: CodingClaimResponse,
+        *,
+        record_id: str,
+        capability: CodingSealedEvidenceUploadCapability,
+    ) -> CodingSealedEvidenceFinalization:
+        """Upload and finalize one previously validated exact capability."""
+
+        now = self.clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise PlatformInfrastructureError(
+                "coding evidence uploader clock is invalid"
+            )
+        now = now.astimezone(UTC)
+        if (
+            capability.ticket_id != claim.ticket_id
+            or capability.claim_generation != claim.claim_generation
+            or capability.ticket_deadline != claim.ticket_deadline
+            or capability.expires_at <= now
+            or capability.expires_at > claim.claim_expires_at
+        ):
+            raise PlatformInfrastructureError(
+                "coding evidence upload capability authority is invalid"
+            )
+        evidence_kind = capability.evidence_kind
+        sha256 = capability.sha256
+        size_bytes = capability.size_bytes
         headers = {
             "Content-Length": str(size_bytes),
             "Content-Type": "application/octet-stream",

@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	recordSchema                   = "dittobench-coding-evidence-outbox-v3"
+	recordSchema                   = "dittobench-coding-evidence-outbox-v4"
 	maximumRecordBytes             = 4 << 20
 	recordReserveBytes             = 2 * maximumRecordBytes
 	maximumPublicationRequestBytes = 4 << 20
@@ -196,6 +196,27 @@ type ReleaseFinalization struct {
 	FinalizedAtUnixNano int64               `json:"finalized_at_unix_nano"`
 }
 
+// ReleaseReservation is the durable, non-bearer identity of the Platform PUT
+// capability reserved for terminal acknowledgement evidence. The URL,
+// checksum header and expiry are deliberately never persisted.
+type ReleaseReservation struct {
+	TicketID        string              `json:"ticket_id"`
+	ClaimGeneration int                 `json:"claim_generation"`
+	UploadID        string              `json:"upload_id"`
+	EvidenceKind    codingevidence.Kind `json:"evidence_kind"`
+	SHA256          string              `json:"sha256"`
+	SizeBytes       int64               `json:"size_bytes"`
+}
+
+// PendingRelease is the bounded local recovery authority for one finalized or
+// still-finalizable terminal acknowledgement. It contains no bearer material.
+type PendingRelease struct {
+	RecordID               string
+	TicketID               string
+	TerminalEvidenceSHA256 string
+	Reservation            ReleaseReservation
+}
+
 type PendingPublication struct {
 	RecordID  string
 	Binding   Binding
@@ -250,6 +271,7 @@ type Record struct {
 	AuthoringPublication  *PublicationRecord          `json:"authoring_publication,omitempty"`
 	TerminalPublication   *PublicationRecord          `json:"terminal_publication,omitempty"`
 	ReleaseEvidenceSHA256 string                      `json:"release_evidence_sha256,omitempty"`
+	ReleaseReservation    *ReleaseReservation         `json:"release_reservation,omitempty"`
 	ReleaseFinalization   *ReleaseFinalization        `json:"release_finalization,omitempty"`
 	CreatedAtUnixNano     int64                       `json:"created_at_unix_nano"`
 	UpdatedAtUnixNano     int64                       `json:"updated_at_unix_nano"`

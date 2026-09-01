@@ -299,10 +299,17 @@ func (store *Store) ReleaseShadow(
 		return ErrState
 	}
 	publication := record.TerminalPublication
-	if publication == nil || publication.Acknowledgement == nil {
+	reservation := record.ReleaseReservation
+	if publication == nil || publication.Acknowledgement == nil || reservation == nil {
 		return ErrState
 	}
 	if identity.TicketID != record.Binding.TicketID ||
+		identity.TicketID != reservation.TicketID ||
+		identity.ClaimGeneration != reservation.ClaimGeneration ||
+		identity.UploadID != reservation.UploadID ||
+		identity.EvidenceKind != reservation.EvidenceKind ||
+		identity.SHA256 != reservation.SHA256 ||
+		identity.SizeBytes != reservation.SizeBytes ||
 		identity.SHA256 != publication.Acknowledgement.SHA256 ||
 		identity.SizeBytes != publication.Acknowledgement.SizeBytes ||
 		time.Unix(0, identity.FinalizedAtUnixNano).UTC().After(record.Binding.Deadline) {
@@ -319,6 +326,128 @@ func (store *Store) ReleaseShadow(
 	}
 	store.records[id] = updated
 	return nil
+}
+
+// PrepareShadowRelease persists the redacted terminal-acknowledgement upload
+// authority before the PUT or Platform finalization begins. This closes the
+// crash window in which Platform can complete a claim before the local outbox
+// has enough identity to replay its finalization receipt.
+func (store *Store) PrepareShadowRelease(
+	ctx context.Context,
+	id string,
+	capability codingevidence.WireUploadCapability,
+) (ReleaseReservation, error) {
+	if ctx == nil || ctx.Err() != nil || !lowerSHA256(id) {
+		return ReleaseReservation{}, ErrInvalid
+	}
+	reservation, err := releaseReservationIdentity(capability)
+	if err != nil {
+		return ReleaseReservation{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	now := store.config.Now().UTC()
+	if err := store.checkOpenAndClock(now); err != nil {
+		return ReleaseReservation{}, err
+	}
+	record := store.records[id]
+	if record == nil || record.Binding.Purpose != PurposeShadowAttempt {
+		return ReleaseReservation{}, ErrInvalid
+	}
+	publication := record.TerminalPublication
+	if publication == nil || publication.Acknowledgement == nil ||
+		(record.State != StateReady && record.State != StateTerminalWithoutPatch && record.State != StateReleased) {
+		return ReleaseReservation{}, ErrState
+	}
+	if reservation.TicketID != record.Binding.TicketID ||
+		!capability.TicketDeadline.Equal(record.Binding.Deadline) ||
+		reservation.SHA256 != publication.Acknowledgement.SHA256 ||
+		reservation.SizeBytes != publication.Acknowledgement.SizeBytes {
+		return ReleaseReservation{}, ErrConflict
+	}
+	if record.ReleaseReservation != nil {
+		if *record.ReleaseReservation == reservation {
+			return reservation, nil
+		}
+		return ReleaseReservation{}, ErrConflict
+	}
+	if record.State == StateReleased {
+		return ReleaseReservation{}, ErrCorrupt
+	}
+	updated := cloneRecord(record)
+	updated.Generation++
+	updated.ReleaseReservation = &reservation
+	if err := store.persistRecord(updated); err != nil {
+		return ReleaseReservation{}, err
+	}
+	store.records[id] = updated
+	return reservation, nil
+}
+
+// PendingShadowReleases returns acknowledged terminal records whose redacted
+// upload authority is durable but whose local release has not committed.
+func (store *Store) PendingShadowReleases(
+	ctx context.Context,
+	limit int,
+) ([]PendingRelease, error) {
+	if ctx == nil || ctx.Err() != nil || limit <= 0 || limit > 1_000 {
+		return nil, ErrInvalid
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.checkOpenAndClock(store.config.Now().UTC()); err != nil {
+		return nil, err
+	}
+	records := make([]*Record, 0)
+	for _, record := range store.records {
+		if record.Binding.Purpose == PurposeShadowAttempt &&
+			(record.State == StateReady || record.State == StateTerminalWithoutPatch) &&
+			record.ReleaseReservation != nil && record.TerminalPublication != nil &&
+			record.TerminalPublication.Acknowledgement != nil {
+			records = append(records, record)
+		}
+	}
+	sort.Slice(records, func(left, right int) bool {
+		if records[left].CreatedAtUnixNano == records[right].CreatedAtUnixNano {
+			return records[left].ID < records[right].ID
+		}
+		return records[left].CreatedAtUnixNano < records[right].CreatedAtUnixNano
+	})
+	if len(records) > limit {
+		records = records[:limit]
+	}
+	values := make([]PendingRelease, len(records))
+	for index, record := range records {
+		values[index] = PendingRelease{
+			RecordID: record.ID, TicketID: record.Binding.TicketID,
+			TerminalEvidenceSHA256: record.TerminalPublication.Authority.EvidenceSHA256,
+			Reservation:            *record.ReleaseReservation,
+		}
+	}
+	return values, nil
+}
+
+func releaseReservationIdentity(
+	value codingevidence.WireUploadCapability,
+) (ReleaseReservation, error) {
+	ticket, ticketErr := uuid.Parse(value.TicketID)
+	upload, uploadErr := uuid.Parse(value.UploadID)
+	if value.Schema != "dittobench-coding-sealed-evidence-upload-capability-v1" ||
+		value.CodingContractVersion != 1 || value.WeightEligible ||
+		ticketErr != nil || ticket == uuid.Nil || ticket.String() != value.TicketID ||
+		uploadErr != nil || upload == uuid.Nil || upload.String() != value.UploadID ||
+		value.ClaimGeneration < 1 || value.ClaimGeneration > (1<<31)-1 ||
+		value.EvidenceKind != codingevidence.KindTerminalPublicationAcknowledgement ||
+		!lowerSHA256(value.SHA256) || value.SizeBytes < 1 ||
+		value.SizeBytes > maximumPublicationAckBytes ||
+		value.ContentType != "application/octet-stream" || value.TicketDeadline.IsZero() {
+		return ReleaseReservation{}, ErrInvalid
+	}
+	return ReleaseReservation{
+		TicketID: value.TicketID, ClaimGeneration: value.ClaimGeneration,
+		UploadID: value.UploadID, EvidenceKind: value.EvidenceKind,
+		SHA256: value.SHA256, SizeBytes: value.SizeBytes,
+	}, nil
 }
 
 func releaseFinalizationIdentity(
@@ -815,6 +944,10 @@ func cloneRecord(record *Record) *Record {
 	if record.ReleaseFinalization != nil {
 		value := *record.ReleaseFinalization
 		copy.ReleaseFinalization = &value
+	}
+	if record.ReleaseReservation != nil {
+		value := *record.ReleaseReservation
+		copy.ReleaseReservation = &value
 	}
 	return &copy
 }

@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import httpx
@@ -12,6 +12,7 @@ import pytest
 from ditto.api_models.coding_evidence_upload import (
     CodingSealedEvidenceFinalization,
     CodingSealedEvidenceKind,
+    CodingSealedEvidenceUploadCapability,
 )
 from ditto.validator.coding_publication import (
     CodingPublicationClient,
@@ -53,6 +54,31 @@ def _finalization() -> CodingSealedEvidenceFinalization:
         finalized_at=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
         accepted=True,
         idempotent=False,
+    )
+
+
+def _capability() -> CodingSealedEvidenceUploadCapability:
+    now = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    return CodingSealedEvidenceUploadCapability(
+        schema="dittobench-coding-sealed-evidence-upload-capability-v1",
+        coding_contract_version=1,
+        weight_eligible=False,
+        ticket_id=UUID("33333333-3333-4333-8333-333333333333"),
+        claim_generation=3,
+        ticket_deadline=now + timedelta(hours=1),
+        upload_id=UUID("44444444-4444-4444-8444-444444444444"),
+        evidence_kind=(CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT),
+        sha256=_ACK_SHA256,
+        size_bytes=len(_ACK),
+        content_type="application/octet-stream",
+        checksum_sha256_b64=base64.b64encode(bytes.fromhex(_ACK_SHA256)).decode(),
+        url=(
+            "https://storage.test/coding-evidence/v1/"
+            "terminal-publication-acknowledgement/sha256/"
+            f"{_ACK_SHA256}?X-Amz-Date=20260901T100000Z"
+            "&X-Amz-Expires=120&X-Amz-Signature=synthetic"
+        ),
+        expires_at=now + timedelta(minutes=2),
     )
 
 
@@ -99,6 +125,35 @@ async def test_publication_client_preserves_exact_request_and_acknowledgement() 
                 "finalization": _finalization().model_dump(mode="json", by_alias=True),
             }
             base["record_id"] = "11" * 32
+        elif operation == "prepare_release":
+            assert payload["capability"] == _capability().model_dump(
+                mode="json", by_alias=True
+            )
+            base["record_id"] = "11" * 32
+            base["reservation"] = {
+                "ticket_id": str(_capability().ticket_id),
+                "claim_generation": _capability().claim_generation,
+                "upload_id": str(_capability().upload_id),
+                "evidence_kind": _capability().evidence_kind.value,
+                "sha256": _capability().sha256,
+                "size_bytes": _capability().size_bytes,
+            }
+        elif operation == "pending_releases":
+            base["releases"] = [
+                {
+                    "record_id": "11" * 32,
+                    "ticket_id": str(_capability().ticket_id),
+                    "terminal_evidence_sha256": "dd" * 32,
+                    "reservation": {
+                        "ticket_id": str(_capability().ticket_id),
+                        "claim_generation": _capability().claim_generation,
+                        "upload_id": str(_capability().upload_id),
+                        "evidence_kind": _capability().evidence_kind.value,
+                        "sha256": _capability().sha256,
+                        "size_bytes": _capability().size_bytes,
+                    },
+                }
+            ]
         elif operation == "pending":
             base["pending"] = []
         elif operation == "open":
@@ -146,6 +201,15 @@ async def test_publication_client_preserves_exact_request_and_acknowledgement() 
             body=_ACK,
         )
         assert acknowledged.sha256 == _ACK_SHA256
+        reservation = await client.prepare_release(
+            record_id=record_id,
+            terminal_evidence_sha256="dd" * 32,
+            capability=_capability(),
+        )
+        assert reservation.upload_id == _capability().upload_id
+        pending_releases = await client.pending_releases()
+        assert len(pending_releases) == 1
+        assert pending_releases[0].reservation == reservation
         await client.release(
             ticket_id="33333333-3333-4333-8333-333333333333",
             record_id=record_id,
@@ -175,6 +239,8 @@ async def test_publication_client_preserves_exact_request_and_acknowledgement() 
     assert [operation for operation, _ in calls] == [
         "prepare",
         "acknowledge",
+        "prepare_release",
+        "pending_releases",
         "release",
         "pending",
         "lookup",

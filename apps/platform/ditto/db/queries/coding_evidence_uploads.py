@@ -60,6 +60,80 @@ class CodingSealedEvidenceFinalizationAuthority:
     ticket: CodingShadowTicket
 
 
+async def replay_coding_sealed_evidence_finalization(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    instance_id: str,
+    ticket_id: UUID,
+    claim_generation: int,
+    upload_id: UUID,
+    evidence_kind: CodingSealedEvidenceKind,
+    sha256: str,
+    size_bytes: int,
+) -> CodingSealedEvidenceFinalizationResult | None:
+    """Return one exact terminal-ack receipt without reviving claim authority.
+
+    This path exists only for the crash window after Platform committed the
+    finalization but before the validator committed its local outbox release.
+    It cannot create a finalization, mint a capability, or authorize execution.
+    """
+
+    _validate_claim_identity(
+        validator_hotkey=validator_hotkey,
+        instance_id=instance_id,
+        claim_generation=claim_generation,
+    )
+    kind, sha256, size_bytes = _validate_evidence_identity(
+        evidence_kind=evidence_kind,
+        sha256=sha256,
+        size_bytes=size_bytes,
+    )
+    if kind != CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT.value:
+        return None
+    ticket = await session.get(CodingShadowTicket, ticket_id, with_for_update=True)
+    upload = await session.get(
+        CodingSealedEvidenceUpload, upload_id, with_for_update=True
+    )
+    finalization = await session.get(
+        CodingSealedEvidenceFinalization,
+        upload_id,
+        with_for_update=True,
+    )
+    if finalization is None:
+        return None
+    if (
+        ticket is None
+        or upload is None
+        or ticket.validator_hotkey != validator_hotkey
+        or ticket.ticket_id != ticket_id
+        or ticket.claim_generation != claim_generation
+        or (
+            ticket.claim_instance_id is not None
+            and ticket.claim_instance_id != instance_id
+        )
+        or upload.ticket_id != ticket_id
+        or upload.claim_generation != claim_generation
+        or upload.evidence_kind != kind
+        or not _upload_matches(upload, sha256=sha256, size_bytes=size_bytes)
+        or not _finalization_matches(
+            finalization,
+            ticket_id=ticket_id,
+            claim_generation=claim_generation,
+            evidence_kind=kind,
+            sha256=sha256,
+            size_bytes=size_bytes,
+        )
+    ):
+        raise CodingSealedEvidenceConflictError(
+            "coding evidence finalized receipt replay conflicts"
+        )
+    return CodingSealedEvidenceFinalizationResult(
+        finalization=finalization,
+        idempotent=True,
+    )
+
+
 async def reserve_coding_sealed_evidence_upload(
     session: AsyncSession,
     *,
@@ -434,5 +508,6 @@ __all__ = [
     "CodingSealedEvidenceUploadReservation",
     "authorize_coding_sealed_evidence_finalization",
     "finalize_coding_sealed_evidence_upload",
+    "replay_coding_sealed_evidence_finalization",
     "reserve_coding_sealed_evidence_upload",
 ]

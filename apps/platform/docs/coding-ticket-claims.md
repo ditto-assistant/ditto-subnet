@@ -32,8 +32,10 @@ recover or heartbeat it while the exact claim generation lacks finalized
 `terminal-publication-acknowledgement` evidence. The ticket remains excluded
 from new-claim selection and cannot transfer to another instance. Once that
 finalization is appended, heartbeat/start fail and the next claim lookup clears
-the completed authority. This window grants no new candidate or grading
-execution.
+the completed authority. The validator-local outbox has already persisted the
+redacted upload identity at that point, so it may replay the exact finalized
+receipt after cleanup and finish its local release. That replay grants no new
+candidate, grading, upload, or heartbeat authority.
 
 The separate validator worker now consumes this ledger only behind its
 default-off gate. The ledger itself does not start a container, score a result,

@@ -744,6 +744,7 @@ func validatePublicationRecords(record *Record) error {
 	}
 	if record.State == StateReleased && record.Binding.Purpose == PurposeShadowAttempt {
 		if record.TerminalPublication == nil || record.TerminalPublication.Acknowledgement == nil ||
+			record.ReleaseReservation == nil ||
 			record.ReleaseFinalization == nil ||
 			record.ReleaseEvidenceSHA256 != record.TerminalPublication.Authority.EvidenceSHA256 ||
 			record.ReleaseFinalization.TicketID != record.Binding.TicketID ||
@@ -755,11 +756,32 @@ func validatePublicationRecords(record *Record) error {
 			record.ReleaseFinalization.ClaimGeneration > (1<<31)-1 ||
 			record.ReleaseFinalization.FinalizedAtUnixNano <= 0 ||
 			time.Unix(0, record.ReleaseFinalization.FinalizedAtUnixNano).UTC().After(record.Binding.Deadline) ||
+			record.ReleaseFinalization.TicketID != record.ReleaseReservation.TicketID ||
+			record.ReleaseFinalization.ClaimGeneration != record.ReleaseReservation.ClaimGeneration ||
+			record.ReleaseFinalization.UploadID != record.ReleaseReservation.UploadID ||
+			record.ReleaseFinalization.EvidenceKind != record.ReleaseReservation.EvidenceKind ||
+			record.ReleaseFinalization.SHA256 != record.ReleaseReservation.SHA256 ||
+			record.ReleaseFinalization.SizeBytes != record.ReleaseReservation.SizeBytes ||
 			record.ReleasedAtUnix < record.TerminalPublication.AcknowledgedAtUnix {
 			return fmt.Errorf("%w: shadow release lacks terminal acknowledgement", ErrCorrupt)
 		}
 	} else if record.State == StateReleased && record.ReleaseFinalization != nil {
 		return fmt.Errorf("%w: non-shadow release carries remote finalization", ErrCorrupt)
+	}
+	if record.ReleaseReservation != nil {
+		reservation := record.ReleaseReservation
+		if record.Binding.Purpose != PurposeShadowAttempt ||
+			record.TerminalPublication == nil || record.TerminalPublication.Acknowledgement == nil ||
+			reservation.TicketID != record.Binding.TicketID ||
+			reservation.EvidenceKind != codingevidence.KindTerminalPublicationAcknowledgement ||
+			reservation.SHA256 != record.TerminalPublication.Acknowledgement.SHA256 ||
+			reservation.SizeBytes != record.TerminalPublication.Acknowledgement.SizeBytes ||
+			!canonicalUUID(reservation.UploadID) || reservation.ClaimGeneration < 1 ||
+			reservation.ClaimGeneration > (1<<31)-1 {
+			return fmt.Errorf("%w: shadow release reservation disagrees", ErrCorrupt)
+		}
+	} else if record.ReleaseFinalization != nil {
+		return fmt.Errorf("%w: release finalization lacks reservation", ErrCorrupt)
 	}
 	return nil
 }

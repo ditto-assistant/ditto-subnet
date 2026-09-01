@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from ditto.api_models.coding_evidence_upload import (
     CodingSealedEvidenceFinalization,
     CodingSealedEvidenceKind,
+    CodingSealedEvidenceUploadCapability,
 )
 from ditto.validator.errors import PlatformInfrastructureError
 
@@ -121,6 +122,28 @@ class SealedEvidenceManifest(_WireModel):
         return self
 
 
+class ReleaseReservation(_WireModel):
+    ticket_id: UUID
+    claim_generation: int = Field(strict=True, ge=1, le=(1 << 31) - 1)
+    upload_id: UUID
+    evidence_kind: Literal["terminal-publication-acknowledgement"]
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(strict=True, gt=0, le=1 << 20)
+
+
+class PendingRelease(_WireModel):
+    record_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ticket_id: UUID
+    terminal_evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reservation: ReleaseReservation
+
+    @model_validator(mode="after")
+    def reservation_matches_ticket(self) -> PendingRelease:
+        if self.reservation.ticket_id != self.ticket_id:
+            raise ValueError("coding pending release ticket identity is invalid")
+        return self
+
+
 @dataclass(frozen=True, repr=False)
 class PreparedCodingPublication:
     stage: PublicationStage
@@ -147,11 +170,22 @@ class _Result(_WireModel):
     )
     coding_contract_version: Literal[1]
     weight_eligible: Literal[False]
-    operation: Literal["prepare", "acknowledge", "release", "pending", "open", "lookup"]
+    operation: Literal[
+        "prepare",
+        "acknowledge",
+        "prepare_release",
+        "release",
+        "pending",
+        "pending_releases",
+        "open",
+        "lookup",
+    ]
     record_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     artifact: PublicationArtifact | None = None
     pending: list[PendingPublication] | None = None
     publication: PublicationRecord | None = None
+    reservation: ReleaseReservation | None = None
+    releases: list[PendingRelease] | None = None
     body_base64: str | None = None
 
     @model_validator(mode="after")
@@ -159,8 +193,12 @@ class _Result(_WireModel):
         valid = {
             "prepare": self.record_id is not None and self.artifact is not None,
             "acknowledge": self.record_id is not None and self.artifact is not None,
+            "prepare_release": (
+                self.record_id is not None and self.reservation is not None
+            ),
             "release": self.record_id is not None,
             "pending": self.pending is not None,
+            "pending_releases": self.releases is not None,
             "open": self.record_id is not None and self.body_base64 is not None,
             "lookup": self.record_id is not None and self.publication is not None,
         }
@@ -284,6 +322,46 @@ class CodingPublicationClient:
                 "coding publication release result is invalid"
             )
 
+    async def prepare_release(
+        self,
+        *,
+        record_id: str,
+        terminal_evidence_sha256: str,
+        capability: CodingSealedEvidenceUploadCapability,
+    ) -> ReleaseReservation:
+        if (
+            _SHA256.fullmatch(record_id) is None
+            or _SHA256.fullmatch(terminal_evidence_sha256) is None
+            or capability.evidence_kind
+            != CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
+        ):
+            raise ValueError("coding publication release reservation is invalid")
+        result = await self._call(
+            "prepare_release",
+            {
+                "schema": "dittobench-coding-publication-command-v1",
+                "ticket_id": str(capability.ticket_id),
+                "record_id": record_id,
+                "terminal_evidence_sha256": terminal_evidence_sha256,
+                "capability": capability.model_dump(mode="json", by_alias=True),
+            },
+        )
+        reservation = result.reservation
+        if (
+            result.record_id != record_id
+            or reservation is None
+            or reservation.ticket_id != capability.ticket_id
+            or reservation.claim_generation != capability.claim_generation
+            or reservation.upload_id != capability.upload_id
+            or reservation.evidence_kind != capability.evidence_kind.value
+            or reservation.sha256 != capability.sha256
+            or reservation.size_bytes != capability.size_bytes
+        ):
+            raise PlatformInfrastructureError(
+                "coding publication release reservation result is invalid"
+            )
+        return reservation
+
     async def pending(self, *, limit: int = 100) -> list[PendingPublication]:
         if not 1 <= limit <= 10_000:
             raise ValueError("coding publication pending limit is invalid")
@@ -294,6 +372,15 @@ class CodingPublicationClient:
         if result.pending is None:
             return []
         return result.pending
+
+    async def pending_releases(self, *, limit: int = 100) -> list[PendingRelease]:
+        if not 1 <= limit <= 1_000:
+            raise ValueError("coding publication pending release limit is invalid")
+        result = await self._call(
+            "pending_releases",
+            {"schema": "dittobench-coding-publication-command-v1", "limit": limit},
+        )
+        return result.releases or []
 
     async def open(
         self,
@@ -617,11 +704,13 @@ def _valid_control_token(value: str) -> bool:
 __all__ = [
     "CodingPublicationClient",
     "PendingPublication",
+    "PendingRelease",
     "PreparedCodingPublication",
     "PublicationRecord",
     "PublicationArtifact",
     "PublicationAuthority",
     "PublicationStage",
+    "ReleaseReservation",
     "SealedEvidenceArtifact",
     "SealedEvidenceKind",
     "SealedEvidenceManifest",

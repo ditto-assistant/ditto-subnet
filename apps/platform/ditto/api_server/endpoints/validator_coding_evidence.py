@@ -30,9 +30,11 @@ from ditto.api_server.endpoints.validator import (
 from ditto.chain import ChainClient
 from ditto.db.queries.coding_evidence_uploads import (
     CodingSealedEvidenceConflictError,
+    CodingSealedEvidenceFinalizationResult,
     CodingSealedEvidenceNotAvailableError,
     authorize_coding_sealed_evidence_finalization,
     finalize_coding_sealed_evidence_upload,
+    replay_coding_sealed_evidence_finalization,
     reserve_coding_sealed_evidence_upload,
 )
 from ditto.db.queries.validator_auth import (
@@ -228,18 +230,7 @@ async def finalize_coding_evidence(
         payload.validator_hotkey,
         network=request.app.state.config.chain.subtensor_network,
     )
-    verifier = getattr(
-        request.app.state,
-        "coding_sealed_evidence_capability_minter",
-        None,
-    )
-    if verifier is None:
-        raise HTTPException(
-            status_code=503,
-            detail="coding sealed evidence storage is not configured",
-            headers=_NO_STORE,
-        )
-
+    replayed = None
     try:
         async with session.begin():
             await consume_validator_nonce(
@@ -249,7 +240,7 @@ async def finalize_coding_evidence(
                 now=now,
                 expires_at=now + _REQUEST_MAX_AGE,
             )
-            authority = await authorize_coding_sealed_evidence_finalization(
+            replayed = await replay_coding_sealed_evidence_finalization(
                 session,
                 validator_hotkey=payload.validator_hotkey,
                 instance_id=payload.instance_id,
@@ -260,6 +251,18 @@ async def finalize_coding_evidence(
                 sha256=payload.sha256,
                 size_bytes=payload.size_bytes,
             )
+            if replayed is None:
+                authority = await authorize_coding_sealed_evidence_finalization(
+                    session,
+                    validator_hotkey=payload.validator_hotkey,
+                    instance_id=payload.instance_id,
+                    ticket_id=payload.ticket_id,
+                    claim_generation=payload.claim_generation,
+                    upload_id=payload.upload_id,
+                    evidence_kind=payload.evidence_kind,
+                    sha256=payload.sha256,
+                    size_bytes=payload.size_bytes,
+                )
     except ValidatorRequestReplayError:
         raise HTTPException(
             status_code=409,
@@ -278,6 +281,21 @@ async def finalize_coding_evidence(
             detail="coding evidence finalization identity conflicts",
             headers=_NO_STORE,
         ) from None
+
+    if replayed is not None:
+        return _finalization_response(replayed)
+
+    verifier = getattr(
+        request.app.state,
+        "coding_sealed_evidence_capability_minter",
+        None,
+    )
+    if verifier is None:
+        raise HTTPException(
+            status_code=503,
+            detail="coding sealed evidence storage is not configured",
+            headers=_NO_STORE,
+        )
 
     try:
         verified = await verifier.verify(authority.upload)
@@ -332,6 +350,12 @@ async def finalize_coding_evidence(
             detail="coding evidence finalization authority changed",
             headers=_NO_STORE,
         ) from None
+    return _finalization_response(result)
+
+
+def _finalization_response(
+    result: CodingSealedEvidenceFinalizationResult,
+) -> CodingSealedEvidenceFinalization:
     row = result.finalization
     return CodingSealedEvidenceFinalization(
         schema="dittobench-coding-sealed-evidence-finalized-v1",

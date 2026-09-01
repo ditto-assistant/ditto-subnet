@@ -149,6 +149,36 @@ func terminalFinalization(
 	}
 }
 
+func terminalCapability(
+	ticketID string,
+	acknowledgement codingoutbox.PublicationArtifact,
+) codingevidence.WireUploadCapability {
+	return codingevidence.WireUploadCapability{
+		Schema:                "dittobench-coding-sealed-evidence-upload-capability-v1",
+		CodingContractVersion: 1, WeightEligible: false,
+		TicketID: ticketID, ClaimGeneration: 3,
+		TicketDeadline: time.Date(2026, 8, 23, 21, 0, 0, 0, time.UTC),
+		UploadID:       "44444444-4444-4444-8444-444444444444",
+		EvidenceKind:   codingevidence.KindTerminalPublicationAcknowledgement,
+		SHA256:         acknowledgement.SHA256, SizeBytes: acknowledgement.SizeBytes,
+		ContentType: "application/octet-stream",
+		ChecksumSHA256B64: base64.StdEncoding.EncodeToString(
+			mustDecodeHex(acknowledgement.SHA256),
+		),
+		URL: "https://storage.test/coding-evidence/v1/terminal-publication-acknowledgement/sha256/" +
+			acknowledgement.SHA256 + "?X-Amz-Date=20260823T200000Z&X-Amz-Expires=120&X-Amz-Signature=synthetic",
+		ExpiresAt: time.Date(2026, 8, 23, 20, 2, 0, 0, time.UTC),
+	}
+}
+
+func mustDecodeHex(value string) []byte {
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		panic(err)
+	}
+	return decoded
+}
+
 func invoke(t *testing.T, service *Service, operation string, command any, token string) *httptest.ResponseRecorder {
 	t.Helper()
 	body := mustJSON(t, command)
@@ -278,6 +308,26 @@ func TestPublicationServiceDurablyPreparesReplaysAndAcknowledges(t *testing.T) {
 	if value := decodeResult(t, response); len(value.Pending) != 0 {
 		t.Fatalf("pending after ack=%#v", value.Pending)
 	}
+	capability := terminalCapability(fixture.ticketID, *acknowledged.Artifact)
+	response = invoke(t, fixture.service, "prepare_release", map[string]any{
+		"schema": commandSchema, "ticket_id": fixture.ticketID,
+		"record_id":                prepared.RecordID,
+		"terminal_evidence_sha256": fixture.authority.EvidenceSHA256,
+		"capability":               capability,
+	}, fixtureControlToken)
+	preparedRelease := decodeResult(t, response)
+	if response.Code != http.StatusOK || preparedRelease.Reservation == nil ||
+		preparedRelease.Reservation.UploadID != capability.UploadID {
+		t.Fatalf("prepare release=%#v status=%d", preparedRelease, response.Code)
+	}
+	response = invoke(t, fixture.service, "pending_releases", map[string]any{
+		"schema": commandSchema, "limit": 10,
+	}, fixtureControlToken)
+	pendingReleases := decodeResult(t, response)
+	if response.Code != http.StatusOK || len(pendingReleases.Releases) != 1 ||
+		pendingReleases.Releases[0].RecordID != prepared.RecordID {
+		t.Fatalf("pending releases=%#v status=%d", pendingReleases, response.Code)
+	}
 	finalization := terminalFinalization(fixture.ticketID, *acknowledged.Artifact)
 	response = invoke(t, fixture.service, "release", map[string]any{
 		"schema": commandSchema, "ticket_id": fixture.ticketID,
@@ -307,6 +357,12 @@ func TestPublicationServiceDurablyPreparesReplaysAndAcknowledges(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("idempotent release status=%d body=%s", response.Code, response.Body.String())
 	}
+	response = invoke(t, fixture.service, "pending_releases", map[string]any{
+		"schema": commandSchema, "limit": 10,
+	}, fixtureControlToken)
+	if value := decodeResult(t, response); response.Code != http.StatusOK || len(value.Releases) != 0 {
+		t.Fatalf("released pending releases=%#v status=%d", value, response.Code)
+	}
 }
 
 func TestEvidenceServiceStreamsExactReleasedObjects(t *testing.T) {
@@ -329,6 +385,15 @@ func TestEvidenceServiceStreamsExactReleasedObjects(t *testing.T) {
 	acknowledged := decodeResult(t, ackResponse)
 	if acknowledged.Artifact == nil {
 		t.Fatalf("acknowledged=%#v", acknowledged)
+	}
+	prepareReleaseResponse := invoke(t, fixture.service, "prepare_release", map[string]any{
+		"schema": commandSchema, "ticket_id": fixture.ticketID,
+		"record_id":                prepared.RecordID,
+		"terminal_evidence_sha256": fixture.authority.EvidenceSHA256,
+		"capability":               terminalCapability(fixture.ticketID, *acknowledged.Artifact),
+	}, fixtureControlToken)
+	if prepareReleaseResponse.Code != http.StatusOK {
+		t.Fatalf("prepare release status=%d body=%s", prepareReleaseResponse.Code, prepareReleaseResponse.Body.String())
 	}
 	releaseResponse := invoke(t, fixture.service, "release", map[string]any{
 		"schema": commandSchema, "ticket_id": fixture.ticketID,

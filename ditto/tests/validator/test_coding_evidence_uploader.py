@@ -175,12 +175,17 @@ async def test_uploader_streams_exact_headers_then_finalizes() -> None:
             storage_client=storage_http,
             clock=lambda: _NOW,
         )
-        finalized = await uploader.upload(
+        capability = await uploader.reserve(
             _claim(),
-            record_id=_RECORD_ID,
             evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
             sha256=_SHA256,
             size_bytes=len(_BODY),
+        )
+        assert observed == []
+        finalized = await uploader.upload_reserved(
+            _claim(),
+            record_id=_RECORD_ID,
+            capability=capability,
         )
     assert observed == [_BODY]
     assert platform.finalize_calls == 1

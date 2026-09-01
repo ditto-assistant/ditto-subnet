@@ -105,6 +105,7 @@ from ditto.api_models.validator_confirmation import (
     V9ConfirmationSubmitResponse,
 )
 from ditto.validator.coding_publication import (
+    PendingRelease,
     PreparedCodingPublication,
     PublicationAuthority,
 )
@@ -711,29 +712,81 @@ class PlatformClient:
             raise PlatformInfrastructureError(
                 "coding evidence finalization claim authority is invalid"
             )
-        requested_at = datetime.now(UTC)
-        nonce = uuid4()
-        payload = CodingSealedEvidenceFinalizeRequest(
-            validator_hotkey=self._config.validator_hotkey,
+        return await self._finalize_coding_evidence_identity(
             instance_id=claim.instance_id,
-            ticket_id=claim.ticket_id,
-            claim_generation=claim.claim_generation,
+            ticket_id=capability.ticket_id,
+            claim_generation=capability.claim_generation,
             upload_id=capability.upload_id,
             evidence_kind=capability.evidence_kind,
             sha256=capability.sha256,
             size_bytes=capability.size_bytes,
+        )
+
+    async def replay_coding_evidence_finalization(
+        self,
+        pending: PendingRelease,
+        *,
+        instance_id: str,
+    ) -> CodingSealedEvidenceFinalization:
+        """Recover one exact finalized terminal receipt after claim cleanup."""
+
+        if (
+            not instance_id
+            or len(instance_id.encode()) > 128
+            or any(
+                character.isspace() or not character.isprintable()
+                for character in instance_id
+            )
+            or pending.reservation.evidence_kind
+            != CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT.value
+        ):
+            raise PlatformInfrastructureError(
+                "coding evidence finalization replay authority is invalid"
+            )
+        return await self._finalize_coding_evidence_identity(
+            instance_id=instance_id,
+            ticket_id=pending.ticket_id,
+            claim_generation=pending.reservation.claim_generation,
+            upload_id=pending.reservation.upload_id,
+            evidence_kind=CodingSealedEvidenceKind(pending.reservation.evidence_kind),
+            sha256=pending.reservation.sha256,
+            size_bytes=pending.reservation.size_bytes,
+        )
+
+    async def _finalize_coding_evidence_identity(
+        self,
+        *,
+        instance_id: str,
+        ticket_id: UUID,
+        claim_generation: int,
+        upload_id: UUID,
+        evidence_kind: CodingSealedEvidenceKind,
+        sha256: str,
+        size_bytes: int,
+    ) -> CodingSealedEvidenceFinalization:
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingSealedEvidenceFinalizeRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=claim_generation,
+            upload_id=upload_id,
+            evidence_kind=evidence_kind,
+            sha256=sha256,
+            size_bytes=size_bytes,
             nonce=nonce,
             requested_at=requested_at,
             signature=sign_coding_sealed_evidence_finalization(
                 self._keypair,
                 validator_hotkey=self._config.validator_hotkey,
-                instance_id=claim.instance_id,
-                ticket_id=claim.ticket_id,
-                claim_generation=claim.claim_generation,
-                upload_id=capability.upload_id,
-                evidence_kind=capability.evidence_kind,
-                sha256=capability.sha256,
-                size_bytes=capability.size_bytes,
+                instance_id=instance_id,
+                ticket_id=ticket_id,
+                claim_generation=claim_generation,
+                upload_id=upload_id,
+                evidence_kind=evidence_kind,
+                sha256=sha256,
+                size_bytes=size_bytes,
                 nonce=nonce,
                 requested_at=requested_at,
             ),
@@ -750,12 +803,12 @@ class PlatformClient:
                 "coding evidence finalization response is invalid"
             ) from None
         if (
-            finalized.ticket_id != capability.ticket_id
-            or finalized.claim_generation != capability.claim_generation
-            or finalized.upload_id != capability.upload_id
-            or finalized.evidence_kind != capability.evidence_kind
-            or finalized.sha256 != capability.sha256
-            or finalized.size_bytes != capability.size_bytes
+            finalized.ticket_id != ticket_id
+            or finalized.claim_generation != claim_generation
+            or finalized.upload_id != upload_id
+            or finalized.evidence_kind != evidence_kind
+            or finalized.sha256 != sha256
+            or finalized.size_bytes != size_bytes
         ):
             raise PlatformInfrastructureError(
                 "coding evidence finalization response identity is invalid"

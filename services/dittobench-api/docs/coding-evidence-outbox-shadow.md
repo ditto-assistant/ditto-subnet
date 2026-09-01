@@ -6,9 +6,10 @@ publication request/acknowledgement bytes. `internal/codinghost` and the Python
 shadow worker use it only behind independent default-off gates. No ordinary
 score or weight path imports it.
 
-The private record schema is now `dittobench-coding-evidence-outbox-v3` so the
-remote finalization identity required for release cannot be misread as the
-earlier acknowledgement-only shape. The committed feature gates are false, so
+The private record schema is now `dittobench-coding-evidence-outbox-v4` so the
+redacted upload reservation required for crash-safe finalization replay cannot
+be misread as the earlier receipt-only release shape. The committed feature
+gates are false, so
 there is no live spool to migrate merely by deploying this change.
 
 ## Authority and lifecycle
@@ -54,7 +55,8 @@ terminal_without_patch
 The authoring acknowledgement persists the exact freeze ID but is only a
 midpoint. A gradeable patch cannot prepare its terminal request before that
 acknowledgement, and a shadow record cannot transition to `released` until the
-terminal acknowledgement is durable locally and Platform has finalized that
+terminal acknowledgement is durable locally, its URL-free upload reservation
+is committed to the outbox, and Platform has finalized that
 exact acknowledgement object's digest and size in the same ticket and claim
 generation. The ordinary release API rejects shadow records.
 
@@ -123,7 +125,11 @@ overhead, and reconciles orphan bytes on restart; it cannot evict unpublished
 evidence.
 Directory scans have cardinality and batch limits. `Pending` exposes sealed
 evidence; `PendingPublications` exposes only the next exact replayable request
-per attempt. `ReleaseShadow` requires the normalized Platform finalization for
+per attempt. `PrepareShadowRelease` first persists the terminal
+acknowledgement's ticket, claim generation, upload ID, kind, digest, and size;
+it never persists the bearer URL, checksum header, or expiry.
+`PendingShadowReleases` enumerates that bounded recovery identity after restart.
+`ReleaseShadow` requires the normalized Platform finalization for
 the terminal acknowledgement; the generic `Release` path rejects shadow
 attempts. An authoring-freeze midpoint or a locally durable terminal response
 is insufficient. Changed requests, acknowledgements, finalization identity,
@@ -183,7 +189,8 @@ leases, classify terminal failures, upload remote bytes, or schedule attempts.
 `ReleaseShadow` derives and retains the terminal evidence digest from the
 acknowledged terminal request and persists the exact claim generation, upload
 ID, terminal-acknowledgement digest and size, and finalized timestamp returned
-by Platform. Platform's replay-only `idempotent` bit is intentionally excluded
+by Platform. Those fields must match the previously committed release
+reservation. Platform's replay-only `idempotent` bit is intentionally excluded
 from that immutable identity.
 
 The future remote object handoff is defined by

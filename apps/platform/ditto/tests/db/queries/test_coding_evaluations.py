@@ -76,6 +76,7 @@ from ditto.db.queries.coding_evidence_uploads import (
     CodingSealedEvidenceNotAvailableError,
     authorize_coding_sealed_evidence_finalization,
     finalize_coding_sealed_evidence_upload,
+    replay_coding_sealed_evidence_finalization,
     reserve_coding_sealed_evidence_upload,
 )
 from ditto.db.queries.core_qualification import (
@@ -1266,6 +1267,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             size_bytes=4096,
         )
     assert terminal_ack_upload.idempotent is False
+    terminal_ack_upload_id = terminal_ack_upload.upload.upload_id
     async with session.begin():
         terminal_ack_finalized = await finalize_coding_sealed_evidence_upload(
             session,
@@ -1273,7 +1275,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             instance_id=instance_id,
             ticket_id=ticket_id,
             claim_generation=2,
-            upload_id=terminal_ack_upload.upload.upload_id,
+            upload_id=terminal_ack_upload_id,
             evidence_kind=(
                 CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
             ),
@@ -1289,7 +1291,7 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             instance_id=instance_id,
             ticket_id=ticket_id,
             claim_generation=2,
-            upload_id=terminal_ack_upload.upload.upload_id,
+            upload_id=terminal_ack_upload_id,
             evidence_kind=(
                 CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
             ),
@@ -1315,6 +1317,36 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             )
             is None
         )
+    async with session.begin():
+        completed_replay = await replay_coding_sealed_evidence_finalization(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=2,
+            upload_id=terminal_ack_upload_id,
+            evidence_kind=(
+                CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
+            ),
+            sha256=terminal_ack_sha256,
+            size_bytes=4096,
+        )
+    assert completed_replay is not None and completed_replay.idempotent is True
+    with pytest.raises(CodingSealedEvidenceConflictError):
+        async with session.begin():
+            await replay_coding_sealed_evidence_finalization(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id=instance_id,
+                ticket_id=ticket_id,
+                claim_generation=2,
+                upload_id=terminal_ack_upload_id,
+                evidence_kind=(
+                    CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
+                ),
+                sha256="ff" * 32,
+                size_bytes=4096,
+            )
     with pytest.raises(CodingSealedEvidenceNotAvailableError, match="live started"):
         async with session.begin():
             await reserve_coding_sealed_evidence_upload(

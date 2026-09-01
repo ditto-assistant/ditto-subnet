@@ -73,6 +73,7 @@ from ditto.api_models.validator import (
     ScoreReport,
     ValidatorHeartbeatRequest,
 )
+from ditto.validator.coding_publication import PendingRelease, ReleaseReservation
 from ditto.validator.errors import PlatformError, PlatformInfrastructureError
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import (
@@ -710,6 +711,79 @@ async def test_coding_evidence_client_signs_capability_and_finalization() -> Non
     assert calls == 2
     assert finalized.upload_id == upload_id
     assert finalized.weight_eligible is False
+
+
+async def test_coding_evidence_client_replays_finalized_terminal_receipt() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    ticket_id = UUID("33333333-3333-4333-8333-333333333333")
+    upload_id = UUID("55555555-5555-4555-8555-555555555555")
+    sha256 = "ab" * 32
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = CodingSealedEvidenceFinalizeRequest.model_validate_json(
+            request.content
+        )
+        message = coding_sealed_evidence_finalize_signing_message(
+            validator_hotkey=payload.validator_hotkey,
+            instance_id=payload.instance_id,
+            ticket_id=payload.ticket_id,
+            claim_generation=payload.claim_generation,
+            upload_id=payload.upload_id,
+            evidence_kind=payload.evidence_kind,
+            sha256=payload.sha256,
+            size_bytes=payload.size_bytes,
+            nonce=payload.nonce,
+            requested_at=payload.requested_at,
+        )
+        assert keypair.verify(message, bytes.fromhex(payload.signature))
+        assert payload.instance_id == "coding-worker-instance-001"
+        return httpx.Response(
+            200,
+            headers={"Cache-Control": "no-store"},
+            json={
+                "schema": "dittobench-coding-sealed-evidence-finalized-v1",
+                "coding_contract_version": 1,
+                "weight_eligible": False,
+                "ticket_id": str(ticket_id),
+                "claim_generation": 7,
+                "upload_id": str(upload_id),
+                "evidence_kind": "terminal-publication-acknowledgement",
+                "sha256": sha256,
+                "size_bytes": 4096,
+                "finalized_at": datetime.now(UTC).isoformat(),
+                "accepted": True,
+                "idempotent": True,
+            },
+        )
+
+    pending = PendingRelease(
+        record_id="11" * 32,
+        ticket_id=ticket_id,
+        terminal_evidence_sha256="cd" * 32,
+        reservation=ReleaseReservation(
+            ticket_id=ticket_id,
+            claim_generation=7,
+            upload_id=upload_id,
+            evidence_kind="terminal-publication-acknowledgement",
+            sha256=sha256,
+            size_bytes=4096,
+        ),
+    )
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        finalized = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).replay_coding_evidence_finalization(
+            pending,
+            instance_id="coding-worker-instance-001",
+        )
+    assert finalized.upload_id == upload_id
+    assert finalized.idempotent is True
 
 
 async def test_coding_authoring_client_rejects_oversized_response() -> None:

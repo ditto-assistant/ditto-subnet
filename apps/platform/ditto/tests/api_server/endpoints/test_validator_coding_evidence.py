@@ -172,6 +172,55 @@ def _finalization_result() -> CodingSealedEvidenceFinalizationResult:
     )
 
 
+def _terminal_finalize_payload() -> dict[str, object]:
+    requested_at = datetime.now(UTC)
+    nonce = uuid4()
+    kind = CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
+    return CodingSealedEvidenceFinalizeRequest(
+        validator_hotkey=_VALIDATOR,
+        instance_id=_INSTANCE,
+        ticket_id=_TICKET,
+        claim_generation=7,
+        upload_id=_UPLOAD,
+        evidence_kind=kind,
+        sha256="cd" * 32,
+        size_bytes=2048,
+        nonce=nonce,
+        requested_at=requested_at,
+        signature=_KEYPAIR.sign(
+            coding_sealed_evidence_finalize_signing_message(
+                validator_hotkey=_VALIDATOR,
+                instance_id=_INSTANCE,
+                ticket_id=_TICKET,
+                claim_generation=7,
+                upload_id=_UPLOAD,
+                evidence_kind=kind,
+                sha256="cd" * 32,
+                size_bytes=2048,
+                nonce=nonce,
+                requested_at=requested_at,
+            )
+        ).hex(),
+    ).model_dump(mode="json")
+
+
+def _terminal_finalization_result() -> CodingSealedEvidenceFinalizationResult:
+    row = SimpleNamespace(
+        upload_id=_UPLOAD,
+        ticket_id=_TICKET,
+        claim_generation=7,
+        evidence_kind="terminal-publication-acknowledgement",
+        sha256="cd" * 32,
+        size_bytes=2048,
+        weight_eligible=False,
+        finalized_at=datetime.now(UTC),
+    )
+    return CodingSealedEvidenceFinalizationResult(
+        finalization=cast(CodingSealedEvidenceFinalization, row),
+        idempotent=True,
+    )
+
+
 def _capability() -> CodingSealedEvidenceUploadCapability:
     now = datetime.now(UTC).replace(microsecond=0)
     return CodingSealedEvidenceUploadCapability(
@@ -214,6 +263,7 @@ def _install(
         consume=AsyncMock(return_value=None),
         reserve=AsyncMock(return_value=_reservation()),
         authorize=AsyncMock(return_value=_finalization_authority()),
+        replay=AsyncMock(return_value=None),
         finalize=AsyncMock(return_value=_finalization_result()),
         minter=SimpleNamespace(
             mint=AsyncMock(return_value=_capability()),
@@ -232,6 +282,11 @@ def _install(
         endpoint_module,
         "authorize_coding_sealed_evidence_finalization",
         mocks.authorize,
+    )
+    monkeypatch.setattr(
+        endpoint_module,
+        "replay_coding_sealed_evidence_finalization",
+        mocks.replay,
     )
     monkeypatch.setattr(
         endpoint_module,
@@ -302,6 +357,7 @@ async def test_finalization_endpoint_verifies_then_appends_exact_authority(
     assert response.json()["accepted"] is True
     assert response.json()["weight_eligible"] is False
     assert mocks.consume.await_count == 1
+    assert mocks.replay.await_count == 1
     assert mocks.authorize.await_count == 1
     assert mocks.minter.verify.await_count == 1
     assert mocks.finalize.await_count == 1
@@ -322,6 +378,30 @@ async def test_finalization_endpoint_rejects_forgery_before_storage(
     )
     assert response.status_code == 401
     assert mocks.consume.await_count == 0
+    assert mocks.authorize.await_count == 0
+    assert mocks.minter.verify.await_count == 0
+    assert mocks.finalize.await_count == 0
+
+
+async def test_finalization_endpoint_replays_without_live_claim_or_store(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    mocks = _install(app, session_maker, monkeypatch)
+    mocks.replay.return_value = _terminal_finalization_result()
+    app.state.coding_sealed_evidence_capability_minter = None
+    response = await client.post(
+        "/api/v1/validator/coding-shadow/evidence-finalization",
+        json=_terminal_finalize_payload(),
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.json()["evidence_kind"] == ("terminal-publication-acknowledgement")
+    assert response.json()["idempotent"] is True
+    assert mocks.consume.await_count == 1
+    assert mocks.replay.await_count == 1
     assert mocks.authorize.await_count == 0
     assert mocks.minter.verify.await_count == 0
     assert mocks.finalize.await_count == 0

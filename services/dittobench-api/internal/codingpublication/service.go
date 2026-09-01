@@ -81,9 +81,24 @@ type releaseCommand struct {
 	Finalization           json.RawMessage `json:"finalization"`
 }
 
+type prepareReleaseCommand struct {
+	Schema                 string          `json:"schema"`
+	TicketID               string          `json:"ticket_id"`
+	RecordID               string          `json:"record_id"`
+	TerminalEvidenceSHA256 string          `json:"terminal_evidence_sha256"`
+	Capability             json.RawMessage `json:"capability"`
+}
+
 type pendingCommand struct {
 	Schema string `json:"schema"`
 	Limit  int    `json:"limit"`
+}
+
+type releaseReservationResult struct {
+	RecordID               string                          `json:"record_id"`
+	TicketID               string                          `json:"ticket_id"`
+	TerminalEvidenceSHA256 string                          `json:"terminal_evidence_sha256"`
+	Reservation            codingoutbox.ReleaseReservation `json:"reservation"`
 }
 
 type openCommand struct {
@@ -155,6 +170,8 @@ type result struct {
 	Artifact              *codingoutbox.PublicationArtifact `json:"artifact,omitempty"`
 	Pending               []pendingResult                   `json:"pending"`
 	Publication           *publicationResult                `json:"publication,omitempty"`
+	Reservation           *codingoutbox.ReleaseReservation  `json:"reservation,omitempty"`
+	Releases              []releaseReservationResult        `json:"releases"`
 	BodyBase64            string                            `json:"body_base64,omitempty"`
 }
 
@@ -443,6 +460,58 @@ func (service *Service) execute(ctx context.Context, operation string, body []by
 		}
 		base.RecordID = attempt.ID()
 		return base, nil
+	case "prepare_release":
+		var command prepareReleaseCommand
+		if decodeRequired(
+			body, &command, "schema", "ticket_id", "record_id",
+			"terminal_evidence_sha256", "capability",
+		) != nil || command.Schema != commandSchema || !validTicketID(command.TicketID) ||
+			!validLowerSHA256(command.RecordID) ||
+			!validLowerSHA256(command.TerminalEvidenceSHA256) {
+			return result{}, ErrInvalid
+		}
+		capability, err := codingevidence.DecodeWireUploadCapability(command.Capability)
+		if err != nil {
+			return result{}, ErrInvalid
+		}
+		attempt, record, err := service.store.Lookup(
+			ctx, codingoutbox.PurposeShadowAttempt, command.TicketID,
+		)
+		if err != nil {
+			return result{}, err
+		}
+		if attempt.ID() != command.RecordID || record.TerminalPublication == nil ||
+			record.TerminalPublication.Authority.EvidenceSHA256 != command.TerminalEvidenceSHA256 {
+			return result{}, codingoutbox.ErrConflict
+		}
+		reservation, err := service.store.PrepareShadowRelease(
+			ctx, attempt.ID(), capability,
+		)
+		if err != nil {
+			return result{}, err
+		}
+		base.RecordID = attempt.ID()
+		base.Reservation = &reservation
+		return base, nil
+	case "pending_releases":
+		var command pendingCommand
+		if decodeRequired(body, &command, "schema", "limit") != nil ||
+			command.Schema != commandSchema {
+			return result{}, ErrInvalid
+		}
+		pending, err := service.store.PendingShadowReleases(ctx, command.Limit)
+		if err != nil {
+			return result{}, err
+		}
+		base.Releases = make([]releaseReservationResult, len(pending))
+		for index, item := range pending {
+			base.Releases[index] = releaseReservationResult{
+				RecordID: item.RecordID, TicketID: item.TicketID,
+				TerminalEvidenceSHA256: item.TerminalEvidenceSHA256,
+				Reservation:            item.Reservation,
+			}
+		}
+		return base, nil
 	case "pending":
 		var command pendingCommand
 		if decodeRequired(body, &command, "schema", "limit") != nil || command.Schema != commandSchema {
@@ -600,7 +669,7 @@ func validStage(stage codingoutbox.PublicationStage) bool {
 
 func validOperation(value string) bool {
 	switch value {
-	case "prepare", "acknowledge", "release", "pending", "open", "lookup":
+	case "prepare", "acknowledge", "prepare_release", "release", "pending", "pending_releases", "open", "lookup":
 		return true
 	default:
 		return false

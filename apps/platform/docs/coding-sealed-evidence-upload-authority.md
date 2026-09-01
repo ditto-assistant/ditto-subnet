@@ -34,6 +34,14 @@ instance, and deadline are still live. No other evidence kind may cross that
 terminal boundary. A stale worker cannot reserve or finalize a different
 generation's evidence.
 
+One recovery exception grants no upload or claim authority: after an exact
+`terminal-publication-acknowledgement` finalization already exists, the signing
+validator may replay that immutable receipt by its ticket, generation, upload
+ID, kind, digest, and size even after claim cleanup. Platform reads the existing
+row without minting a URL, checking storage again, extending a deadline, or
+creating state. A missing or changed receipt still follows the live-claim path
+and fails closed when that claim is gone.
+
 The worker must complete that acknowledgement upload before polling for its
 next ticket. The ordinary claim-next transition clears a claim as soon as it
 observes the terminal result; the exception does not resurrect or extend a

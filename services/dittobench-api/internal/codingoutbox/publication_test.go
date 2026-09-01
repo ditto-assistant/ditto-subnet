@@ -191,6 +191,20 @@ func (fixture publicationFixture) terminalFinalization(body []byte) codingeviden
 	}
 }
 
+func (fixture publicationFixture) terminalCapability(body []byte) codingevidence.WireUploadCapability {
+	return codingevidence.WireUploadCapability{
+		Schema:                "dittobench-coding-sealed-evidence-upload-capability-v1",
+		CodingContractVersion: 1, WeightEligible: false,
+		TicketID: fixture.binding.TicketID, ClaimGeneration: 1,
+		TicketDeadline: fixture.binding.Deadline,
+		UploadID:       "44444444-4444-4444-8444-444444444444",
+		EvidenceKind:   codingevidence.KindTerminalPublicationAcknowledgement,
+		SHA256:         digest(body), SizeBytes: int64(len(body)),
+		ContentType: "application/octet-stream", ChecksumSHA256B64: "sensitive-checksum",
+		URL: "https://storage.invalid/private-signed-capability",
+	}
+}
+
 func reopenPublicationStore(t *testing.T, fixture publicationFixture) (*Store, *Attempt) {
 	t.Helper()
 	store, err := Open(Config{
@@ -325,6 +339,45 @@ func TestShadowPublicationLifecycleSurvivesRestartAndGatesRelease(t *testing.T) 
 	); !errors.Is(err, ErrState) {
 		t.Fatalf("shadow release bypass err=%v", err)
 	}
+	capability := fixture.terminalCapability(terminalAck)
+	reservation, err := fixture.store.PrepareShadowRelease(
+		t.Context(), fixture.attempt.ID(), capability,
+	)
+	if err != nil || reservation.UploadID != capability.UploadID {
+		t.Fatalf("release reservation=%#v err=%v", reservation, err)
+	}
+	recordBody, err := os.ReadFile(filepath.Join(fixture.root, "records", fixture.attempt.ID()+".json"))
+	if err != nil || bytes.Contains(recordBody, []byte(capability.URL)) ||
+		bytes.Contains(recordBody, []byte(capability.ChecksumSHA256B64)) {
+		t.Fatalf("release reservation persisted bearer material err=%v", err)
+	}
+	pendingReleases, err := fixture.store.PendingShadowReleases(t.Context(), 10)
+	if err != nil || len(pendingReleases) != 1 ||
+		pendingReleases[0].Reservation != reservation ||
+		pendingReleases[0].TerminalEvidenceSHA256 != fixture.terminalAuthority().EvidenceSHA256 {
+		t.Fatalf("pending releases=%#v err=%v", pendingReleases, err)
+	}
+	if replay, err := fixture.store.PrepareShadowRelease(
+		t.Context(), fixture.attempt.ID(), capability,
+	); err != nil || replay != reservation {
+		t.Fatalf("release reservation replay=%#v err=%v", replay, err)
+	}
+	driftedCapability := capability
+	driftedCapability.UploadID = "55555555-5555-4555-8555-555555555555"
+	if _, err := fixture.store.PrepareShadowRelease(
+		t.Context(), fixture.attempt.ID(), driftedCapability,
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("release reservation drift err=%v", err)
+	}
+	if err := fixture.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fixture.store, fixture.attempt = reopenPublicationStore(t, fixture)
+	pendingReleases, err = fixture.store.PendingShadowReleases(t.Context(), 10)
+	if err != nil || len(pendingReleases) != 1 ||
+		pendingReleases[0].Reservation != reservation {
+		t.Fatalf("restarted pending releases=%#v err=%v", pendingReleases, err)
+	}
 	finalization := fixture.terminalFinalization(terminalAck)
 	driftedFinalization := finalization
 	driftedFinalization.SHA256 = strings.Repeat("8", 64)
@@ -337,6 +390,10 @@ func TestShadowPublicationLifecycleSurvivesRestartAndGatesRelease(t *testing.T) 
 		t.Context(), fixture.attempt.ID(), finalization,
 	); err != nil {
 		t.Fatal(err)
+	}
+	pendingReleases, err = fixture.store.PendingShadowReleases(t.Context(), 10)
+	if err != nil || len(pendingReleases) != 0 {
+		t.Fatalf("released pending releases=%#v err=%v", pendingReleases, err)
 	}
 	if err := fixture.store.Close(); err != nil {
 		t.Fatal(err)
@@ -614,6 +671,11 @@ func TestTerminalWithoutPatchPublishesWithoutAuthoringFreeze(t *testing.T) {
 	}
 	if _, err := attempt.AcknowledgeTerminalPublication(
 		t.Context(), terminalArtifact.SHA256, fixture.terminalAcknowledgement(t),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PrepareShadowRelease(
+		t.Context(), attempt.ID(), fixture.terminalCapability(fixture.terminalAcknowledgement(t)),
 	); err != nil {
 		t.Fatal(err)
 	}

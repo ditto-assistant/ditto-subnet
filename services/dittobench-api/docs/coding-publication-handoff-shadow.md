@@ -1,15 +1,19 @@
 # Shadow coding durable publication handoff
 
 `internal/codingpublication` exposes the existing durable evidence-outbox
-publication state machine to the trusted Python validator over five private
+publication state machine to the trusted Python validator over seven private
 control-token-protected local operations:
 
 - `prepare` stores exact signed authoring-freeze or terminal-result request
   bytes before any Platform transmission;
 - `acknowledge` stores the exact verified Platform response and binds it to the
   prepared request digest without releasing terminal evidence;
+- `prepare_release` persists only the redacted terminal upload identity before
+  finalization begins;
 - `release` accepts only Platform's finalized identity for the exact stored
   terminal acknowledgement and then advances local retention;
+- `pending_releases` enumerates redacted acknowledged/unreleased terminal
+  records for restart recovery;
 - `pending` returns only bounded metadata for the next replayable publication
   per ticket;
 - `open` streams the exact content-addressed request or acknowledgement bytes
