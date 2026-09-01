@@ -13,6 +13,13 @@ revalidates current chain permission, exact ticket ownership, artifact and
 manifest identity, the ticket-bound inference grant, and certification
 lifetime before inserting one row.
 
+The same transaction locks the ticket generation's sealed-evidence
+reservations and finalizations. It requires the exact transcript digest and
+byte size, the frozen-submission digest, and the SHA-256 and byte size of the
+raw signed HTTP request. Re-serializing parsed JSON is not accepted. Missing,
+wrong-generation, pending, or changed evidence rejects both new inserts and
+idempotent replay.
+
 The signed transition also carries the transcript byte size and event count.
 They must be jointly zero or jointly nonzero and remain within the runner's
 512 MiB and 1,000-event hard ceilings.
@@ -38,7 +45,9 @@ that requires a new immutable coding contract.
 
 The row records a validator-signed claim produced after the trusted runner
 freezes authoring. Platform cannot independently prove that a validator-local
-process stopped. The later execution orchestrator remains responsible for
+process stopped, but it does prove that the exact claimed bytes were fully
+verified by the dedicated evidence finalizer before accepting the freeze. The
+execution orchestrator remains responsible for
 revoking the workspace and inference capabilities before submitting the
 freeze, persisting bytes under the declared content addresses, and destroying
 the authoring environment.
@@ -50,6 +59,7 @@ URL minting and never checks or signs the memory bundle.
 
 ## Activation boundary
 
-No scheduler or validator worker calls either delivery endpoint. They do not
-start Luna, materialize a workspace, grade a patch, write an ordinary score, or
+The default-off validator worker calls this endpoint only after finalizing the
+required sealed evidence. The endpoint does not start Luna, materialize a
+workspace, grade a patch, write an ordinary score, or
 affect emissions. Every row and lease is permanently `weight_eligible=false`.

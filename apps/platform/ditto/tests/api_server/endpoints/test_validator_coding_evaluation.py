@@ -26,11 +26,13 @@ from ditto.api_models.coding_evaluation import (
     CodingAuthoringEvidence,
     CodingRunEvidence,
     CodingShadowRunAuthority,
+    SubmitCodingAuthoringFreezeResponse,
     coding_authoring_evidence_digest,
     coding_authoring_freeze_signing_message,
     coding_run_evidence_digest,
     coding_shadow_result_signing_message,
 )
+from ditto.api_models.coding_evidence_upload import CodingSealedEvidenceKind
 from ditto.api_models.core_qualification import CoreQualificationPolicy
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.endpoints import validator_coding_evaluation as endpoint_module
@@ -41,6 +43,8 @@ from ditto.chain.models import BlockInfo
 from ditto.db.models import (
     Agent,
     CodingCapabilityCertification,
+    CodingSealedEvidenceFinalization,
+    CodingSealedEvidenceUpload,
     CodingShadowAuthoringFreeze,
     CodingShadowResult,
     CodingShadowRunIssuance,
@@ -406,6 +410,173 @@ async def _seed(
     return agent_id, run.row, ticket.row, deadline
 
 
+def _json_body(payload: dict) -> bytes:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode()
+
+
+async def _finalize_evidence(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    ticket_id: UUID,
+    identities: tuple[tuple[CodingSealedEvidenceKind, str, int], ...],
+    claim_generation: int = 1,
+) -> None:
+    async with maker() as session, session.begin():
+        existing = {
+            row.evidence_kind: row
+            for row in await session.scalars(
+                select(CodingSealedEvidenceUpload).where(
+                    CodingSealedEvidenceUpload.ticket_id == ticket_id,
+                    CodingSealedEvidenceUpload.claim_generation == claim_generation,
+                )
+            )
+        }
+        pending: list[CodingSealedEvidenceUpload] = []
+        for kind, sha256, size_bytes in identities:
+            row = existing.get(kind.value)
+            if row is not None:
+                assert row.sha256 == sha256 and row.size_bytes == size_bytes
+                continue
+            upload = CodingSealedEvidenceUpload(
+                upload_id=uuid4(),
+                ticket_id=ticket_id,
+                claim_generation=claim_generation,
+                evidence_kind=kind.value,
+                sha256=sha256,
+                size_bytes=size_bytes,
+                content_type="application/octet-stream",
+                weight_eligible=False,
+            )
+            session.add(upload)
+            pending.append(upload)
+        await session.flush()
+        for upload in pending:
+            session.add(
+                CodingSealedEvidenceFinalization(
+                    upload_id=upload.upload_id,
+                    ticket_id=upload.ticket_id,
+                    claim_generation=upload.claim_generation,
+                    evidence_kind=upload.evidence_kind,
+                    sha256=upload.sha256,
+                    size_bytes=upload.size_bytes,
+                    weight_eligible=False,
+                    finalized_at=_NOW,
+                )
+            )
+
+
+async def _post_json_body(
+    client: httpx.AsyncClient,
+    url: str,
+    body: bytes,
+) -> httpx.Response:
+    return await client.post(
+        url,
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+
+
+async def _finalize_authoring_request(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    ticket_id: UUID,
+    evidence: CodingAuthoringEvidence,
+    request_body: bytes,
+) -> None:
+    await _finalize_evidence(
+        maker,
+        ticket_id=ticket_id,
+        identities=(
+            (
+                CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+                evidence.authoring_transcript_sha256,
+                _TRANSCRIPT_BYTES,
+            ),
+            (
+                CodingSealedEvidenceKind.FROZEN_SUBMISSION,
+                evidence.frozen_patch_sha256,
+                2048,
+            ),
+            (
+                CodingSealedEvidenceKind.AUTHORING_PUBLICATION_REQUEST,
+                hashlib.sha256(request_body).hexdigest(),
+                len(request_body),
+            ),
+        ),
+    )
+
+
+async def _finalize_terminal_request(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    ticket_id: UUID,
+    request_body: bytes,
+    transcript_sha256: str,
+    freeze: CodingShadowAuthoringFreeze | None = None,
+    agent_id: UUID | None = None,
+    coding_run_id: str | None = None,
+    acknowledgement_idempotent: bool = False,
+) -> None:
+    identities: list[tuple[CodingSealedEvidenceKind, str, int]] = [
+        (
+            CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+            transcript_sha256,
+            _TRANSCRIPT_BYTES,
+        ),
+        (
+            CodingSealedEvidenceKind.TERMINAL_PUBLICATION_REQUEST,
+            hashlib.sha256(request_body).hexdigest(),
+            len(request_body),
+        ),
+    ]
+    if freeze is not None:
+        assert agent_id is not None and coding_run_id is not None
+        acknowledgement = (
+            SubmitCodingAuthoringFreezeResponse(
+                freeze_id=freeze.freeze_id,
+                agent_id=agent_id,
+                run_row_id=freeze.run_row_id,
+                ticket_id=freeze.ticket_id,
+                coding_run_id=coding_run_id,
+                authoring_evidence_sha256=freeze.authoring_evidence_sha256,
+                frozen_at=freeze.created_at,
+                accepted=True,
+                idempotent=acknowledgement_idempotent,
+                weight_eligible=False,
+            )
+            .model_dump_json(by_alias=True)
+            .encode()
+        )
+        identities[1:1] = [
+            (
+                CodingSealedEvidenceKind.FROZEN_SUBMISSION,
+                freeze.frozen_patch_sha256,
+                2048,
+            ),
+            (
+                CodingSealedEvidenceKind.AUTHORING_PUBLICATION_REQUEST,
+                "ef" * 32,
+                1024,
+            ),
+            (
+                CodingSealedEvidenceKind.AUTHORING_PUBLICATION_ACKNOWLEDGEMENT,
+                hashlib.sha256(acknowledgement).hexdigest(),
+                len(acknowledgement),
+            ),
+        ]
+    await _finalize_evidence(
+        maker,
+        ticket_id=ticket_id,
+        identities=tuple(identities),
+    )
+
+
 async def _record_core_qualification_exit(
     maker: async_sessionmaker[AsyncSession],
     *,
@@ -491,28 +662,37 @@ async def test_unbound_legacy_certification_cannot_write_private_ticket_steps(
         authoring_event_count=_AUTHORING_EVENTS,
         frozen_submission_object_key=frozen_key,
     )
-    freeze = await client.post(
+    freeze_payload = {
+        "validator_hotkey": _VALIDATOR,
+        "agent_id": str(agent_id),
+        "bench_version": _BENCH,
+        "run_row_id": str(run.run_row_id),
+        "ticket_id": str(ticket.ticket_id),
+        "ticket_deadline": deadline.isoformat(),
+        "coding_run_id": run.coding_run_id,
+        "agent_artifact_sha256": "ab" * 32,
+        "screened_image_sha256": "cd" * 32,
+        "run_manifest_sha256": run.run_manifest_sha256,
+        "task_set_manifest_sha256": run.task_set_manifest_sha256,
+        "authoring_evidence_sha256": authoring_digest,
+        "evidence": authoring.model_dump(mode="json"),
+        "authoring_transcript_object_key": transcript_key,
+        "authoring_transcript_bytes": _TRANSCRIPT_BYTES,
+        "authoring_event_count": _AUTHORING_EVENTS,
+        "frozen_submission_object_key": frozen_key,
+        "signature": _KEYPAIR.sign(freeze_message).hex(),
+    }
+    freeze_body = _json_body(freeze_payload)
+    await _finalize_authoring_request(
+        session_maker,
+        ticket_id=ticket.ticket_id,
+        evidence=authoring,
+        request_body=freeze_body,
+    )
+    freeze = await _post_json_body(
+        client,
         "/api/v1/validator/coding-shadow/authoring-freeze",
-        json={
-            "validator_hotkey": _VALIDATOR,
-            "agent_id": str(agent_id),
-            "bench_version": _BENCH,
-            "run_row_id": str(run.run_row_id),
-            "ticket_id": str(ticket.ticket_id),
-            "ticket_deadline": deadline.isoformat(),
-            "coding_run_id": run.coding_run_id,
-            "agent_artifact_sha256": "ab" * 32,
-            "screened_image_sha256": "cd" * 32,
-            "run_manifest_sha256": run.run_manifest_sha256,
-            "task_set_manifest_sha256": run.task_set_manifest_sha256,
-            "authoring_evidence_sha256": authoring_digest,
-            "evidence": authoring.model_dump(mode="json"),
-            "authoring_transcript_object_key": transcript_key,
-            "authoring_transcript_bytes": _TRANSCRIPT_BYTES,
-            "authoring_event_count": _AUTHORING_EVENTS,
-            "frozen_submission_object_key": frozen_key,
-            "signature": _KEYPAIR.sign(freeze_message).hex(),
-        },
+        freeze_body,
     )
     assert freeze.status_code == 409, freeze.text
 
@@ -529,20 +709,29 @@ async def test_unbound_legacy_certification_cannot_write_private_ticket_steps(
         screened_image_sha256="cd" * 32,
         run_evidence_sha256=result_digest,
     )
-    result = await client.post(
+    result_payload = {
+        "validator_hotkey": _VALIDATOR,
+        "bench_version": _BENCH,
+        "run_row_id": str(run.run_row_id),
+        "ticket_id": str(ticket.ticket_id),
+        "ticket_deadline": deadline.isoformat(),
+        "agent_artifact_sha256": "ab" * 32,
+        "screened_image_sha256": "cd" * 32,
+        "run_evidence_sha256": result_digest,
+        "evidence": evidence.model_dump(mode="json", by_alias=True),
+        "signature": _KEYPAIR.sign(result_message).hex(),
+    }
+    result_body = _json_body(result_payload)
+    await _finalize_terminal_request(
+        session_maker,
+        ticket_id=ticket.ticket_id,
+        request_body=result_body,
+        transcript_sha256=authoring.authoring_transcript_sha256,
+    )
+    result = await _post_json_body(
+        client,
         f"/api/v1/validator/agent/{agent_id}/coding-shadow-result",
-        json={
-            "validator_hotkey": _VALIDATOR,
-            "bench_version": _BENCH,
-            "run_row_id": str(run.run_row_id),
-            "ticket_id": str(ticket.ticket_id),
-            "ticket_deadline": deadline.isoformat(),
-            "agent_artifact_sha256": "ab" * 32,
-            "screened_image_sha256": "cd" * 32,
-            "run_evidence_sha256": result_digest,
-            "evidence": evidence.model_dump(mode="json", by_alias=True),
-            "signature": _KEYPAIR.sign(result_message).hex(),
-        },
+        result_body,
     )
     assert result.status_code == 409, result.text
 
@@ -603,11 +792,46 @@ async def test_signed_authoring_freeze_is_idempotent_and_operator_visible(
 
     payload = payload_for(evidence)
     url = "/api/v1/validator/coding-shadow/authoring-freeze"
-    first = await client.post(url, json=payload)
+    body = _json_body(payload)
+    await _finalize_evidence(
+        session_maker,
+        ticket_id=ticket.ticket_id,
+        claim_generation=2,
+        identities=(
+            (
+                CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+                evidence.authoring_transcript_sha256,
+                _TRANSCRIPT_BYTES,
+            ),
+            (
+                CodingSealedEvidenceKind.FROZEN_SUBMISSION,
+                evidence.frozen_patch_sha256,
+                2048,
+            ),
+            (
+                CodingSealedEvidenceKind.AUTHORING_PUBLICATION_REQUEST,
+                hashlib.sha256(body).hexdigest(),
+                len(body),
+            ),
+        ),
+    )
+    missing = await _post_json_body(client, url, body)
+    assert missing.status_code == 409
+    await _finalize_authoring_request(
+        session_maker,
+        ticket_id=ticket.ticket_id,
+        evidence=evidence,
+        request_body=body,
+    )
+    first = await _post_json_body(client, url, body)
     assert first.status_code == 200, first.text
     assert first.headers["Cache-Control"] == "no-store"
     assert first.json()["idempotent"] is False
     assert first.json()["authoring_evidence_sha256"] == digest
+    parsed_response = SubmitCodingAuthoringFreezeResponse.model_validate_json(
+        first.content
+    )
+    assert first.content == parsed_response.model_dump_json(by_alias=True).encode()
     async with session_maker() as session, session.begin():
         stored_ticket = await session.get(CodingShadowTicket, ticket.ticket_id)
         assert stored_ticket is not None
@@ -615,9 +839,11 @@ async def test_signed_authoring_freeze_is_idempotent_and_operator_visible(
         stored_ticket.claim_started_at = _NOW - timedelta(minutes=3)
         stored_ticket.claim_heartbeat_at = _NOW - timedelta(minutes=2)
         stored_ticket.claim_expires_at = _NOW - timedelta(minutes=1)
-    replay = await client.post(url, json=payload)
+    replay = await _post_json_body(client, url, body)
     assert replay.status_code == 200
     assert replay.json()["idempotent"] is True
+    pretty_body = json.dumps(payload, indent=2, ensure_ascii=False).encode()
+    assert (await _post_json_body(client, url, pretty_body)).status_code == 409
 
     async with session_maker() as session:
         assert (
@@ -696,28 +922,37 @@ async def test_authoring_freeze_cannot_be_created_after_final_result(
         authoring_event_count=_AUTHORING_EVENTS,
         frozen_submission_object_key=frozen_key,
     )
-    response = await client.post(
+    payload = {
+        "validator_hotkey": _VALIDATOR,
+        "agent_id": str(agent_id),
+        "bench_version": _BENCH,
+        "run_row_id": str(run.run_row_id),
+        "ticket_id": str(ticket.ticket_id),
+        "ticket_deadline": deadline.isoformat(),
+        "coding_run_id": run.coding_run_id,
+        "agent_artifact_sha256": "ab" * 32,
+        "screened_image_sha256": "cd" * 32,
+        "run_manifest_sha256": run.run_manifest_sha256,
+        "task_set_manifest_sha256": run.task_set_manifest_sha256,
+        "authoring_evidence_sha256": digest,
+        "evidence": evidence.model_dump(mode="json"),
+        "authoring_transcript_object_key": transcript_key,
+        "authoring_transcript_bytes": _TRANSCRIPT_BYTES,
+        "authoring_event_count": _AUTHORING_EVENTS,
+        "frozen_submission_object_key": frozen_key,
+        "signature": _KEYPAIR.sign(message).hex(),
+    }
+    body = _json_body(payload)
+    await _finalize_authoring_request(
+        session_maker,
+        ticket_id=ticket.ticket_id,
+        evidence=evidence,
+        request_body=body,
+    )
+    response = await _post_json_body(
+        client,
         "/api/v1/validator/coding-shadow/authoring-freeze",
-        json={
-            "validator_hotkey": _VALIDATOR,
-            "agent_id": str(agent_id),
-            "bench_version": _BENCH,
-            "run_row_id": str(run.run_row_id),
-            "ticket_id": str(ticket.ticket_id),
-            "ticket_deadline": deadline.isoformat(),
-            "coding_run_id": run.coding_run_id,
-            "agent_artifact_sha256": "ab" * 32,
-            "screened_image_sha256": "cd" * 32,
-            "run_manifest_sha256": run.run_manifest_sha256,
-            "task_set_manifest_sha256": run.task_set_manifest_sha256,
-            "authoring_evidence_sha256": digest,
-            "evidence": evidence.model_dump(mode="json"),
-            "authoring_transcript_object_key": transcript_key,
-            "authoring_transcript_bytes": _TRANSCRIPT_BYTES,
-            "authoring_event_count": _AUTHORING_EVENTS,
-            "frozen_submission_object_key": frozen_key,
-            "signature": _KEYPAIR.sign(message).hex(),
-        },
+        body,
     )
     assert response.status_code == 409
     async with session_maker() as session:
@@ -749,6 +984,60 @@ async def test_infrastructure_result_can_close_without_authoring_freeze(
     assert inserted.row.scoreable_task_count == 0
 
 
+async def test_signed_infrastructure_result_binds_failure_evidence_set(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    _install(app, session_maker, monkeypatch)
+    agent_id, run, ticket, deadline = await _seed(session_maker)
+    evidence = _infrastructure_evidence(ticket.ticket_id)
+    digest = coding_run_evidence_digest(evidence)
+    message = coding_shadow_result_signing_message(
+        validator_hotkey=_VALIDATOR,
+        agent_id=agent_id,
+        run_row_id=run.run_row_id,
+        ticket_id=ticket.ticket_id,
+        bench_version=_BENCH,
+        ticket_deadline=deadline,
+        agent_artifact_sha256="ab" * 32,
+        screened_image_sha256="cd" * 32,
+        run_evidence_sha256=digest,
+    )
+    payload = {
+        "validator_hotkey": _VALIDATOR,
+        "bench_version": _BENCH,
+        "run_row_id": str(run.run_row_id),
+        "ticket_id": str(ticket.ticket_id),
+        "ticket_deadline": deadline.isoformat(),
+        "agent_artifact_sha256": "ab" * 32,
+        "screened_image_sha256": "cd" * 32,
+        "run_evidence_sha256": digest,
+        "evidence": evidence.model_dump(mode="json", by_alias=True),
+        "signature": _KEYPAIR.sign(message).hex(),
+    }
+    body = _json_body(payload)
+    url = f"/api/v1/validator/agent/{agent_id}/coding-shadow-result"
+    assert (await _post_json_body(client, url, body)).status_code == 409
+    await _finalize_terminal_request(
+        session_maker,
+        ticket_id=ticket.ticket_id,
+        request_body=body,
+        transcript_sha256="aa" * 32,
+    )
+    accepted = await _post_json_body(client, url, body)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["idempotent"] is False
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(CodingShadowAuthoringFreeze)
+            )
+            == 0
+        )
+
+
 async def test_signed_shadow_result_is_idempotent_visible_and_score_separate(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -763,7 +1052,7 @@ async def test_signed_shadow_result_is_idempotent_visible_and_score_separate(
     async with session_maker() as session, session.begin():
         stored_ticket = await session.get(CodingShadowTicket, ticket.ticket_id)
         assert stored_ticket is not None
-        await insert_coding_authoring_freeze(
+        freeze_insert = await insert_coding_authoring_freeze(
             session,
             ticket=stored_ticket,
             evidence=authoring,
@@ -776,6 +1065,7 @@ async def test_signed_shadow_result_is_idempotent_visible_and_score_separate(
             frozen_submission_object_key=f"sha256/{authoring.frozen_patch_sha256}",
             signature="98" * 64,
         )
+        assert isinstance(freeze_insert.row, CodingShadowAuthoringFreeze)
     message = coding_shadow_result_signing_message(
         validator_hotkey=_VALIDATOR,
         agent_id=agent_id,
@@ -800,11 +1090,24 @@ async def test_signed_shadow_result_is_idempotent_visible_and_score_separate(
         "signature": _KEYPAIR.sign(message).hex(),
     }
     url = f"/api/v1/validator/agent/{agent_id}/coding-shadow-result"
-    first = await client.post(url, json=payload)
+    body = _json_body(payload)
+    missing = await _post_json_body(client, url, body)
+    assert missing.status_code == 409
+    await _finalize_terminal_request(
+        session_maker,
+        ticket_id=ticket.ticket_id,
+        request_body=body,
+        transcript_sha256=authoring.authoring_transcript_sha256,
+        freeze=freeze_insert.row,
+        agent_id=agent_id,
+        coding_run_id=run.coding_run_id,
+        acknowledgement_idempotent=True,
+    )
+    first = await _post_json_body(client, url, body)
     assert first.status_code == 200, first.text
     assert first.json()["idempotent"] is False
     assert first.json()["weight_eligible"] is False
-    replay = await client.post(url, json=payload)
+    replay = await _post_json_body(client, url, body)
     assert replay.status_code == 200
     assert replay.json()["idempotent"] is True
 

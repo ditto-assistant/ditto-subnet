@@ -41,6 +41,10 @@ class CodingSealedEvidenceConflictError(RuntimeError):
     """A sealed-evidence identity attempted to change immutable bytes."""
 
 
+class CodingSealedEvidenceNotFinalizedError(CodingSealedEvidenceConflictError):
+    """A publication lacks its exact phase-required finalized evidence."""
+
+
 @dataclass(frozen=True)
 class CodingSealedEvidenceUploadReservation:
     upload: CodingSealedEvidenceUpload
@@ -58,6 +62,127 @@ class CodingSealedEvidenceFinalizationResult:
 class CodingSealedEvidenceFinalizationAuthority:
     upload: CodingSealedEvidenceUpload
     ticket: CodingShadowTicket
+
+
+@dataclass(frozen=True)
+class CodingSealedEvidenceIdentity:
+    sha256: str | None
+    size_bytes: int | None
+
+
+@dataclass(frozen=True)
+class CodingSealedEvidenceExpectation:
+    evidence_kind: CodingSealedEvidenceKind
+    identities: tuple[CodingSealedEvidenceIdentity, ...]
+
+
+async def require_coding_sealed_evidence_finalizations(
+    session: AsyncSession,
+    *,
+    ticket: CodingShadowTicket,
+    expectations: tuple[CodingSealedEvidenceExpectation, ...],
+) -> dict[CodingSealedEvidenceKind, CodingSealedEvidenceFinalization]:
+    """Lock and match the finalized evidence required by one publication.
+
+    A ``None`` digest or size is a deliberate wildcard for an identity that the
+    signed publication does not carry. Known values always match exactly.
+    """
+
+    if (
+        ticket.claim_generation < 1
+        or not expectations
+        or len(expectations) > len(CodingSealedEvidenceKind)
+    ):
+        raise CodingSealedEvidenceConflictError(
+            "coding publication evidence expectation is invalid"
+        )
+    kinds = tuple(expectation.evidence_kind for expectation in expectations)
+    if len(set(kinds)) != len(kinds):
+        raise CodingSealedEvidenceConflictError(
+            "coding publication evidence kinds are duplicated"
+        )
+    for expectation in expectations:
+        maximum = CODING_SEALED_EVIDENCE_MAX_BYTES[expectation.evidence_kind]
+        if not expectation.identities:
+            raise CodingSealedEvidenceConflictError(
+                "coding publication evidence identities are empty"
+            )
+        for identity in expectation.identities:
+            if (
+                identity.sha256 is not None
+                and _SHA256.fullmatch(identity.sha256) is None
+            ) or (
+                identity.size_bytes is not None
+                and not 1 <= identity.size_bytes <= maximum
+            ):
+                raise CodingSealedEvidenceConflictError(
+                    "coding publication evidence identity is invalid"
+                )
+
+    uploads = list(
+        await session.scalars(
+            select(CodingSealedEvidenceUpload)
+            .where(
+                CodingSealedEvidenceUpload.ticket_id == ticket.ticket_id,
+                CodingSealedEvidenceUpload.claim_generation == ticket.claim_generation,
+                CodingSealedEvidenceUpload.evidence_kind.in_(
+                    kind.value for kind in kinds
+                ),
+            )
+            .order_by(CodingSealedEvidenceUpload.evidence_kind)
+            .with_for_update()
+        )
+    )
+    finalizations = list(
+        await session.scalars(
+            select(CodingSealedEvidenceFinalization)
+            .where(
+                CodingSealedEvidenceFinalization.ticket_id == ticket.ticket_id,
+                CodingSealedEvidenceFinalization.claim_generation
+                == ticket.claim_generation,
+                CodingSealedEvidenceFinalization.evidence_kind.in_(
+                    kind.value for kind in kinds
+                ),
+            )
+            .order_by(CodingSealedEvidenceFinalization.evidence_kind)
+            .with_for_update()
+        )
+    )
+    uploads_by_kind = {upload.evidence_kind: upload for upload in uploads}
+    finalizations_by_kind = {
+        finalization.evidence_kind: finalization for finalization in finalizations
+    }
+    accepted: dict[
+        CodingSealedEvidenceKind,
+        CodingSealedEvidenceFinalization,
+    ] = {}
+    for expectation in expectations:
+        kind = expectation.evidence_kind.value
+        upload = uploads_by_kind.get(kind)
+        finalization = finalizations_by_kind.get(kind)
+        if (
+            upload is None
+            or finalization is None
+            or upload.upload_id != finalization.upload_id
+            or upload.sha256 != finalization.sha256
+            or upload.size_bytes != finalization.size_bytes
+            or upload.content_type != "application/octet-stream"
+            or upload.weight_eligible
+            or finalization.weight_eligible
+            or not any(
+                (identity.sha256 is None or identity.sha256 == finalization.sha256)
+                and (
+                    identity.size_bytes is None
+                    or identity.size_bytes == finalization.size_bytes
+                )
+                for identity in expectation.identities
+            )
+        ):
+            raise CodingSealedEvidenceNotFinalizedError(
+                f"coding publication evidence {kind} is not finalized"
+            )
+        accepted[expectation.evidence_kind] = finalization
+    return accepted
 
 
 async def replay_coding_sealed_evidence_finalization(
@@ -503,11 +628,15 @@ async def _database_now(session: AsyncSession) -> datetime:
 __all__ = [
     "CodingSealedEvidenceConflictError",
     "CodingSealedEvidenceFinalizationAuthority",
+    "CodingSealedEvidenceExpectation",
+    "CodingSealedEvidenceIdentity",
     "CodingSealedEvidenceFinalizationResult",
+    "CodingSealedEvidenceNotFinalizedError",
     "CodingSealedEvidenceNotAvailableError",
     "CodingSealedEvidenceUploadReservation",
     "authorize_coding_sealed_evidence_finalization",
     "finalize_coding_sealed_evidence_upload",
     "replay_coding_sealed_evidence_finalization",
+    "require_coding_sealed_evidence_finalizations",
     "reserve_coding_sealed_evidence_upload",
 ]

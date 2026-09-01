@@ -34,6 +34,8 @@ finalize the object. The worker calls it only inside the existing default-off
 shadow lane. Authoring evidence is finalized before freeze publication;
 terminal evidence is finalized before result publication; acknowledgement
 bytes are finalized immediately after their exact Platform response is stored.
+Platform independently requires those phase-valid finalization rows in the same
+transactions that accept the authoring freeze and terminal result.
 The authenticated outbox manifest supplies the frozen submission's exact byte
 size, which is intentionally absent from the signed freeze request. Worker
 integration uses that manifest and never reconstructs this value.

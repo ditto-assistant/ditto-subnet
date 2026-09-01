@@ -68,10 +68,11 @@ the fixed `coding-evidence/v1/<kind>/sha256/<digest>` key, exact size/type and
 bounded metadata from a reservation, then validates the short-lived PUT URL
 without retaining that bearer URL in the database.
 
-This layer still does not upload executor bytes or make a freeze/result
-scoreable. A trusted uploader must durably read the exact local outbox object,
-use the capability, and call finalization before a later binding layer may
-reference it.
+This layer still does not make a freeze/result scoreable. The trusted uploader
+durably reads the exact local outbox object, uses the capability, and calls
+finalization. Authoring-freeze and terminal-result acceptance now lock and bind
+the phase-required finalization rows in the same transaction as their
+append-only publication.
 
 The corresponding transport restrictions are in
 [`docs/coding-private-s3-data-plane.md`](../../../docs/coding-private-s3-data-plane.md).

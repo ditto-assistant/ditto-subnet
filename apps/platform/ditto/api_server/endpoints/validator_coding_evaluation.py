@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
@@ -11,10 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.coding_evaluation import (
+    SubmitCodingAuthoringFreezeResponse,
     SubmitCodingShadowResultRequest,
     SubmitCodingShadowResultResponse,
     coding_shadow_result_signing_message,
 )
+from ditto.api_models.coding_evidence_upload import CodingSealedEvidenceKind
 from ditto.api_server.attestation import verify_signature
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.endpoints.validator import (
@@ -25,6 +28,7 @@ from ditto.chain import ChainClient
 from ditto.db.models import (
     Agent,
     CodingCapabilityCertification,
+    CodingShadowAuthoringFreeze,
     CodingShadowResult,
     CodingShadowRun,
     CodingShadowTicket,
@@ -37,6 +41,12 @@ from ditto.db.queries.coding_evaluations import (
     coding_shadow_result_matches,
     insert_coding_shadow_result,
 )
+from ditto.db.queries.coding_evidence_uploads import (
+    CodingSealedEvidenceConflictError,
+    CodingSealedEvidenceExpectation,
+    CodingSealedEvidenceIdentity,
+    require_coding_sealed_evidence_finalizations,
+)
 
 router = APIRouter(prefix="/validator", tags=["validator"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -45,6 +55,39 @@ ChainDep = Annotated[ChainClient, Depends(get_chain_client)]
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _authoring_acknowledgement_identities(
+    freeze: CodingShadowAuthoringFreeze,
+    *,
+    agent_id: UUID,
+    coding_run_id: str,
+) -> tuple[CodingSealedEvidenceIdentity, ...]:
+    identities: list[CodingSealedEvidenceIdentity] = []
+    for idempotent in (False, True):
+        body = (
+            SubmitCodingAuthoringFreezeResponse(
+                freeze_id=freeze.freeze_id,
+                agent_id=agent_id,
+                run_row_id=freeze.run_row_id,
+                ticket_id=freeze.ticket_id,
+                coding_run_id=coding_run_id,
+                authoring_evidence_sha256=freeze.authoring_evidence_sha256,
+                frozen_at=freeze.created_at,
+                accepted=True,
+                idempotent=idempotent,
+                weight_eligible=False,
+            )
+            .model_dump_json(by_alias=True)
+            .encode()
+        )
+        identities.append(
+            CodingSealedEvidenceIdentity(
+                sha256=hashlib.sha256(body).hexdigest(),
+                size_bytes=len(body),
+            )
+        )
+    return tuple(identities)
 
 
 @router.post(
@@ -67,6 +110,8 @@ async def submit_coding_shadow_result(
     """Persist one signed repair result without touching ordinary scores."""
 
     response.headers["Cache-Control"] = "no-store"
+    raw_body = await request.body()
+    raw_body_sha256 = hashlib.sha256(raw_body).hexdigest()
     signed = coding_shadow_result_signing_message(
         validator_hotkey=payload.validator_hotkey,
         agent_id=agent_id,
@@ -146,6 +191,83 @@ async def submit_coding_shadow_result(
                 CodingShadowResult.ticket_id == ticket.ticket_id
             )
         )
+        freeze = await session.scalar(
+            select(CodingShadowAuthoringFreeze).where(
+                CodingShadowAuthoringFreeze.ticket_id == ticket.ticket_id
+            )
+        )
+        expectations = [
+            CodingSealedEvidenceExpectation(
+                evidence_kind=CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+                identities=(
+                    CodingSealedEvidenceIdentity(
+                        sha256=(
+                            freeze.authoring_transcript_sha256
+                            if freeze is not None
+                            else None
+                        ),
+                        size_bytes=(
+                            freeze.authoring_transcript_bytes
+                            if freeze is not None
+                            else None
+                        ),
+                    ),
+                ),
+            ),
+            CodingSealedEvidenceExpectation(
+                evidence_kind=CodingSealedEvidenceKind.TERMINAL_PUBLICATION_REQUEST,
+                identities=(
+                    CodingSealedEvidenceIdentity(
+                        sha256=raw_body_sha256,
+                        size_bytes=len(raw_body),
+                    ),
+                ),
+            ),
+        ]
+        if freeze is not None:
+            expectations[1:1] = [
+                CodingSealedEvidenceExpectation(
+                    evidence_kind=CodingSealedEvidenceKind.FROZEN_SUBMISSION,
+                    identities=(
+                        CodingSealedEvidenceIdentity(
+                            sha256=freeze.frozen_patch_sha256,
+                            size_bytes=None,
+                        ),
+                    ),
+                ),
+                CodingSealedEvidenceExpectation(
+                    evidence_kind=(
+                        CodingSealedEvidenceKind.AUTHORING_PUBLICATION_REQUEST
+                    ),
+                    identities=(
+                        CodingSealedEvidenceIdentity(
+                            sha256=None,
+                            size_bytes=None,
+                        ),
+                    ),
+                ),
+                CodingSealedEvidenceExpectation(
+                    evidence_kind=(
+                        CodingSealedEvidenceKind.AUTHORING_PUBLICATION_ACKNOWLEDGEMENT
+                    ),
+                    identities=_authoring_acknowledgement_identities(
+                        freeze,
+                        agent_id=agent_id,
+                        coding_run_id=run.coding_run_id,
+                    ),
+                ),
+            ]
+        try:
+            await require_coding_sealed_evidence_finalizations(
+                session,
+                ticket=ticket,
+                expectations=tuple(expectations),
+            )
+        except CodingSealedEvidenceConflictError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=str(error),
+            ) from None
         if existing is not None:
             if not coding_shadow_result_matches(
                 existing,

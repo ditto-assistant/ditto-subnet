@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
@@ -15,6 +16,7 @@ from ditto.api_models.coding_evaluation import (
     SubmitCodingAuthoringFreezeResponse,
     coding_authoring_freeze_signing_message,
 )
+from ditto.api_models.coding_evidence_upload import CodingSealedEvidenceKind
 from ditto.api_server.attestation import verify_signature
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.endpoints.validator import (
@@ -37,6 +39,12 @@ from ditto.db.queries.coding_evaluations import (
     CodingShadowConflictError,
     coding_authoring_freeze_matches,
     insert_coding_authoring_freeze,
+)
+from ditto.db.queries.coding_evidence_uploads import (
+    CodingSealedEvidenceConflictError,
+    CodingSealedEvidenceExpectation,
+    CodingSealedEvidenceIdentity,
+    require_coding_sealed_evidence_finalizations,
 )
 
 router = APIRouter(prefix="/validator", tags=["validator"])
@@ -88,6 +96,8 @@ async def submit_coding_authoring_freeze(
     """Persist authoring evidence without releasing any grader capability."""
 
     response.headers["Cache-Control"] = "no-store"
+    raw_body = await request.body()
+    raw_body_sha256 = hashlib.sha256(raw_body).hexdigest()
     agent_id = payload.agent_id
     signed = coding_authoring_freeze_signing_message(
         validator_hotkey=payload.validator_hotkey,
@@ -170,6 +180,47 @@ async def submit_coding_authoring_freeze(
                 CodingShadowAuthoringFreeze.ticket_id == ticket.ticket_id
             )
         )
+        try:
+            await require_coding_sealed_evidence_finalizations(
+                session,
+                ticket=ticket,
+                expectations=(
+                    CodingSealedEvidenceExpectation(
+                        evidence_kind=(CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT),
+                        identities=(
+                            CodingSealedEvidenceIdentity(
+                                sha256=evidence.authoring_transcript_sha256,
+                                size_bytes=payload.authoring_transcript_bytes,
+                            ),
+                        ),
+                    ),
+                    CodingSealedEvidenceExpectation(
+                        evidence_kind=CodingSealedEvidenceKind.FROZEN_SUBMISSION,
+                        identities=(
+                            CodingSealedEvidenceIdentity(
+                                sha256=evidence.frozen_patch_sha256,
+                                size_bytes=None,
+                            ),
+                        ),
+                    ),
+                    CodingSealedEvidenceExpectation(
+                        evidence_kind=(
+                            CodingSealedEvidenceKind.AUTHORING_PUBLICATION_REQUEST
+                        ),
+                        identities=(
+                            CodingSealedEvidenceIdentity(
+                                sha256=raw_body_sha256,
+                                size_bytes=len(raw_body),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        except CodingSealedEvidenceConflictError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=str(error),
+            ) from None
         if existing is not None:
             if not coding_authoring_freeze_matches(
                 existing,

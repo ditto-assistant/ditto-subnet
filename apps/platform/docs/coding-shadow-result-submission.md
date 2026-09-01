@@ -19,10 +19,21 @@ agent, run, ticket, and coding-run identities match the submitted evidence.
 Platform remains the durable idempotency authority: exact replay returns the
 same accepted result, while different evidence for one ticket conflicts.
 
+Result acceptance is evidence-gated in the insertion transaction. Every path
+requires the exact raw terminal request and a finalized ticket-generation
+transcript. A result with an accepted authoring freeze additionally requires
+the finalized frozen submission, authoring request, and exact authoring
+acknowledgement. The acknowledgement may be either canonical response body the
+worker could have received (`idempotent=false` initially or `idempotent=true`
+after transport recovery). No-freeze terminal infrastructure paths require only
+transcript plus terminal request. The post-response terminal acknowledgement is
+deliberately absent from this gate and completes the claim later.
+
 ## Activation
 
-No current validator worker calls this method. It does not claim a coding job,
+The default-off coding worker calls this method only after phase-valid evidence
+finalization. It does not independently claim a coding job,
 start the coding harness, fetch artifacts, invoke Luna, execute the pristine
 grader, write an ordinary score, affect rank, or set weights. It only completes
-the signed transport needed by a future shadow worker. Coding contract v1 and
+the signed shadow transport. Coding contract v1 and
 all submitted results remain permanently `weight_eligible=false`.
