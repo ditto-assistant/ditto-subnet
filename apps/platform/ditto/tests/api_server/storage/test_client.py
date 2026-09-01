@@ -221,6 +221,7 @@ class TestScreenedImageStorage:
             key="abc/screened-image.tar",
             size_bytes=123,
             metadata={"sha256": "ab" * 32},
+            checksum_sha256_b64="q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s=",
             expires_in=900,
         )
 
@@ -233,6 +234,7 @@ class TestScreenedImageStorage:
             "ContentLength": 123,
             "ContentType": "application/x-tar",
             "Metadata": {"sha256": "ab" * 32},
+            "ChecksumSHA256": "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s=",
         }
         assert call.kwargs["ExpiresIn"] == 900
 

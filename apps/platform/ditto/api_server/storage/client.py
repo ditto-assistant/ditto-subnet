@@ -211,6 +211,7 @@ class S3StorageClient:
         size_bytes: int,
         metadata: dict[str, str],
         content_type: str = "application/x-tar",
+        checksum_sha256_b64: str | None = None,
         expires_in: int = 300,
     ) -> str:
         """Return a pre-signed PUT constrained to size, type, and metadata."""
@@ -223,15 +224,18 @@ class S3StorageClient:
                 use_ssl=self._config.use_tls,
                 config=self._client_config,
             ) as s3:
+                params: dict[str, object] = {
+                    "Bucket": self._config.bucket,
+                    "Key": key,
+                    "ContentLength": size_bytes,
+                    "ContentType": content_type,
+                    "Metadata": metadata,
+                }
+                if checksum_sha256_b64 is not None:
+                    params["ChecksumSHA256"] = checksum_sha256_b64
                 return await s3.generate_presigned_url(
                     "put_object",
-                    Params={
-                        "Bucket": self._config.bucket,
-                        "Key": key,
-                        "ContentLength": size_bytes,
-                        "ContentType": content_type,
-                        "Metadata": metadata,
-                    },
+                    Params=params,
                     ExpiresIn=expires_in,
                 )
         except (ClientError, BotoCoreError) as error:

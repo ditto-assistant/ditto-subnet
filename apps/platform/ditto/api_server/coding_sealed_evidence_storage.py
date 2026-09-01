@@ -64,6 +64,7 @@ class CodingSealedEvidenceObjectStore(Protocol):
         size_bytes: int,
         metadata: dict[str, str],
         content_type: str,
+        checksum_sha256_b64: str,
         expires_in: int,
     ) -> str:
         """Mint one short-lived PUT capability for an exact immutable object."""
@@ -271,6 +272,9 @@ class CodingSealedEvidenceCapabilityMinter:
                     size_bytes=upload.size_bytes,
                     metadata={"sha256": upload.sha256, "evidence-kind": kind.value},
                     content_type=upload.content_type,
+                    checksum_sha256_b64=base64.b64encode(
+                        bytes.fromhex(upload.sha256)
+                    ).decode("ascii"),
                     expires_in=ttl,
                 )
         except TimeoutError:

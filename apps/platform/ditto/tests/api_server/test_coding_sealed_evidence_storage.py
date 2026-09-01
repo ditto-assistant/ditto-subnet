@@ -32,6 +32,7 @@ class _Store:
         size_bytes: int,
         metadata: dict[str, str],
         content_type: str,
+        checksum_sha256_b64: str,
         expires_in: int,
     ) -> str:
         self.calls.append(
@@ -40,6 +41,7 @@ class _Store:
                 "size_bytes": size_bytes,
                 "metadata": metadata,
                 "content_type": content_type,
+                "checksum_sha256_b64": checksum_sha256_b64,
                 "expires_in": expires_in,
             }
         )
@@ -124,6 +126,7 @@ async def test_minter_binds_exact_reservation_without_retaining_url() -> None:
                 "evidence-kind": "authoring-transcript",
             },
             "content_type": "application/octet-stream",
+            "checksum_sha256_b64": "q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s=",
             "expires_in": 120,
         }
     ]
