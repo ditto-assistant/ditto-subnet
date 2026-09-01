@@ -955,6 +955,20 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             size_bytes=_TRANSCRIPT_BYTES,
         )
     assert replayed_finalization.idempotent is True
+    with pytest.raises(CodingSealedEvidenceNotAvailableError, match="live started"):
+        async with session.begin():
+            await reserve_coding_sealed_evidence_upload(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id=instance_id,
+                ticket_id=ticket_id,
+                claim_generation=2,
+                evidence_kind=(
+                    CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
+                ),
+                sha256="e4" * 32,
+                size_bytes=4096,
+            )
     with pytest.raises(SAIntegrityError, match="append-only"):
         async with session.begin():
             stored_upload = await session.get(CodingSealedEvidenceUpload, upload_id)
@@ -1175,6 +1189,80 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
         )
     assert replayed.idempotent is True
 
+    for post_terminal_kind in CodingSealedEvidenceKind:
+        if (
+            post_terminal_kind
+            == CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
+        ):
+            continue
+        with pytest.raises(CodingSealedEvidenceNotAvailableError, match="live started"):
+            async with session.begin():
+                await reserve_coding_sealed_evidence_upload(
+                    session,
+                    validator_hotkey=_VALIDATOR,
+                    instance_id=instance_id,
+                    ticket_id=ticket_id,
+                    claim_generation=2,
+                    evidence_kind=post_terminal_kind,
+                    sha256="e3" * 32,
+                    size_bytes=4096,
+                )
+
+    terminal_ack_sha256 = "e4" * 32
+    async with session.begin():
+        terminal_ack_upload = await reserve_coding_sealed_evidence_upload(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=2,
+            evidence_kind=(
+                CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
+            ),
+            sha256=terminal_ack_sha256,
+            size_bytes=4096,
+        )
+    assert terminal_ack_upload.idempotent is False
+    async with session.begin():
+        terminal_ack_finalized = await finalize_coding_sealed_evidence_upload(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=2,
+            upload_id=terminal_ack_upload.upload.upload_id,
+            evidence_kind=(
+                CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
+            ),
+            sha256=terminal_ack_sha256,
+            size_bytes=4096,
+        )
+    assert terminal_ack_finalized.idempotent is False
+    assert terminal_ack_finalized.finalization.weight_eligible is False
+    async with session.begin():
+        terminal_ack_replay = await finalize_coding_sealed_evidence_upload(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=2,
+            upload_id=terminal_ack_upload.upload.upload_id,
+            evidence_kind=(
+                CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
+            ),
+            sha256=terminal_ack_sha256,
+            size_bytes=4096,
+        )
+    assert terminal_ack_replay.idempotent is True
+    async with session.begin():
+        assert (
+            await claim_next_coding_ticket(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id=instance_id,
+            )
+            is None
+        )
     with pytest.raises(CodingSealedEvidenceNotAvailableError, match="live started"):
         async with session.begin():
             await reserve_coding_sealed_evidence_upload(
@@ -1183,8 +1271,10 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
                 instance_id=instance_id,
                 ticket_id=ticket_id,
                 claim_generation=2,
-                evidence_kind=CodingSealedEvidenceKind.FROZEN_SUBMISSION,
-                sha256="e3" * 32,
+                evidence_kind=(
+                    CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT
+                ),
+                sha256=terminal_ack_sha256,
                 size_bytes=4096,
             )
 

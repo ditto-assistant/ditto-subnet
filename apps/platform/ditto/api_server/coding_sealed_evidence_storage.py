@@ -26,10 +26,6 @@ from ditto.api_models.coding_evidence_upload import (
     CodingSealedEvidenceKind,
     CodingSealedEvidenceUploadCapability,
 )
-from ditto.api_server.coding_artifact_capabilities import (
-    CodingArtifactCapabilityIntegrityError,
-    _validate_signed_url,
-)
 from ditto.api_server.errors import ApiServerConfigError
 from ditto.api_server.storage.client import S3StorageClient
 from ditto.api_server.storage.errors import (
@@ -301,6 +297,13 @@ class CodingSealedEvidenceCapabilityMinter:
                 "sealed coding evidence capability signer is unavailable"
             ) from None
         validated_at = _aware(self._clock())
+        # Import lazily so config import does not pull coding task queries back
+        # through the partially initialized assignment graph at process boot.
+        from ditto.api_server.coding_artifact_capabilities import (
+            CodingArtifactCapabilityIntegrityError,
+            _validate_signed_url,
+        )
+
         try:
             expires_at = _validate_signed_url(
                 url,

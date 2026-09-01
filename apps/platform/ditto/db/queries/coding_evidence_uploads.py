@@ -89,6 +89,9 @@ async def reserve_coding_sealed_evidence_upload(
         instance_id=instance_id,
         ticket_id=ticket_id,
         claim_generation=claim_generation,
+        terminal_result_required=(
+            kind == CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT.value
+        ),
     )
     existing = await session.scalar(
         select(CodingSealedEvidenceUpload)
@@ -181,6 +184,9 @@ async def authorize_coding_sealed_evidence_finalization(
         instance_id=instance_id,
         ticket_id=ticket_id,
         claim_generation=claim_generation,
+        terminal_result_required=(
+            kind == CodingSealedEvidenceKind.TERMINAL_PUBLICATION_ACKNOWLEDGEMENT.value
+        ),
     )
     upload = await session.get(
         CodingSealedEvidenceUpload,
@@ -305,6 +311,7 @@ async def _require_live_started_claim(
     instance_id: str,
     ticket_id: UUID,
     claim_generation: int,
+    terminal_result_required: bool,
 ) -> CodingShadowTicket:
     _validate_claim_identity(
         validator_hotkey=validator_hotkey,
@@ -333,7 +340,8 @@ async def _require_live_started_claim(
         or ticket.claim_expires_at is None
         or ticket.deadline <= now
         or ticket.claim_expires_at <= now
-        or terminal is not None
+        or (terminal_result_required and terminal is None)
+        or (not terminal_result_required and terminal is not None)
         or ticket.task_count != 1
         or run.task_count != 1
         or run.coding_contract_version != 1

@@ -26,8 +26,18 @@ changing the identity for an already-reserved kind is a conflict.
 Reservation and finalization require the same validator hotkey, stable worker
 instance, ticket, and current claim generation as a live **started** ticket
 claim. The lease and claim must still be unexpired, and the ticket may not
-already have a terminal result. A stale worker cannot reserve or finalize a
-different generation's evidence.
+already have a terminal result for five of the six evidence kinds. The sole
+exception is `terminal-publication-acknowledgement`: those bytes exist only
+after Platform accepts the terminal result, so that kind requires the exact
+ticket's terminal result to exist while the same started claim, generation,
+instance, and deadline are still live. No other evidence kind may cross that
+terminal boundary. A stale worker cannot reserve or finalize a different
+generation's evidence.
+
+The worker must complete that acknowledgement upload before polling for its
+next ticket. The ordinary claim-next transition clears a claim as soon as it
+observes the terminal result; the exception does not resurrect or extend a
+cleared or expired claim.
 
 The ledger does not treat an S3 PUT as final. The signed finalization route
 first locks the live claim and reservation, then checks the dedicated evidence
