@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.181.7 (2026-09-02)
+
+### Bug Fixes
+
+- **screener**: Drop superseded adjudication bindings
+  ([`e454400`](https://github.com/ditto-assistant/ditto-subnet/commit/e454400252a0a9d6c248b4f070660bedc47a936c))
+
+
 ## v0.181.6 (2026-09-02)
 
 ### Bug Fixes
