@@ -82,6 +82,26 @@ logger = logging.getLogger(__name__)
 
 EXACT_CROSS_MINER_DUPLICATE = "exact-cross-miner-duplicate"
 
+
+def _private_failure_feedback(detail: str, reason_code: str | None) -> str:
+    """Make a useful private failure message without exposing challenge bodies."""
+    if reason_code is None:
+        return detail
+    status = reason_code.removeprefix("challenge-http-")
+    if status.isdecimal() and len(status) == 3:
+        return (
+            "The isolated behavioral-oracle request to this submission's /run "
+            f"endpoint returned HTTP {status}. Ensure /run accepts the canonical "
+            "DittoBench request envelope."
+        )
+    if reason_code == "challenge-http-failure":
+        return (
+            "The isolated behavioral-oracle request to this submission's /run "
+            "endpoint failed before a usable HTTP response."
+        )
+    return detail
+
+
 # v6 adds the announced host specs (CPU/RAM/disk). A worker that cannot read
 # its own hardware still reports at v5 rather than going dark.
 _HEARTBEAT_PROTOCOL_VERSION = 6
@@ -686,20 +706,22 @@ class ScreenerWorker:
             )
             private_failure_detail: str | None = None
             private_failure_log_tail: str | None = None
-            if typed_outcome == ScreenResultOutcome.RETRYABLE_INFRA or reason_code in {
-                "docker-build",
-                "docker-build-infrastructure",
-            }:
+            if typed_outcome in {
+                ScreenResultOutcome.RETRYABLE_INFRA,
+                ScreenResultOutcome.INCONCLUSIVE,
+            } or reason_code in {"docker-build", "docker-build-infrastructure"}:
                 # The public reason stays generic. Preserve the exact bounded
-                # infrastructure diagnostic for the submission owner, with the
-                # same sanitizer Platform applies before durable storage.
-                # This includes policy-only canaries: their retained V10 score
-                # must not come at the cost of losing the V11 worker failure.
+                # diagnostic for the submission owner, with the same sanitizer
+                # Platform applies before durable storage. This includes an
+                # inconclusive private challenge: a parked result must explain
+                # its safe failure class rather than forcing operators to chase
+                # an opaque reason code in a worker log.
+                feedback = _private_failure_feedback(result.detail, reason_code)
                 private_failure_detail = private_failure_text(
-                    result.detail, limit=PRIVATE_FAILURE_DETAIL_LIMIT
+                    feedback, limit=PRIVATE_FAILURE_DETAIL_LIMIT
                 )
                 private_failure_log_tail = private_failure_text(
-                    result.detail, limit=PRIVATE_FAILURE_LOG_TAIL_LIMIT
+                    feedback, limit=PRIVATE_FAILURE_LOG_TAIL_LIMIT
                 )
             # The bounded review payloads ride along on quarantine so the
             # operator sees WHY, not just a digest. When a source-review

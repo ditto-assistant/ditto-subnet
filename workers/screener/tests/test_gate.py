@@ -1922,6 +1922,32 @@ async def test_private_challenge_observes_isolated_gateway_dataflow(
     assert observation.json_keys == ("final_text",)
 
 
+async def test_private_challenge_keeps_http_body_out_of_failure_code(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    state = tmp_path / "gateway-calls"
+
+    async def rejected(*_: Any, **__: Any) -> tuple[int, str]:
+        return 22, "HTTP 422: request body echoed-private-challenge-token"
+
+    gate._request_from_sidecar = rejected  # type: ignore[method-assign]
+    observation = await gate._run_private_challenge(
+        "v8-behavioral-oracle",
+        {"case_id": "private-control"},
+        5,
+        harness_base="http://harness:8080",
+        probe_container="probe",
+        gateway_response_token="nonce-token",
+        gateway_state_file=str(state),
+    )
+    await gate._client.aclose()
+
+    assert not observation.ok
+    assert observation.error_code == "challenge-http-422"
+    assert "echoed-private-challenge-token" not in observation.error_code
+
+
 async def test_private_challenge_scores_the_gateway_encoded_oracle(
     make_config: Callable[..., ScreenerConfig], tmp_path: Path
 ) -> None:

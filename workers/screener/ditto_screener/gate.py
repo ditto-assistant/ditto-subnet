@@ -640,6 +640,14 @@ def _log_tail(text: str) -> str:
     return "…" + trimmed[-_LOG_TAIL_BYTES:]
 
 
+def _challenge_http_error_code(output: str) -> str:
+    """Return a public-safe challenge error code without exposing its body."""
+    match = re.match(r"^HTTP\s+([1-5]\d{2})(?::|\b)", output.strip())
+    if match is None:
+        return "challenge-http-failure"
+    return f"challenge-http-{match.group(1)}"
+
+
 def _detail_tail(text: str) -> str:
     """Keep a result detail below the shared protocol's 4,000-char cap."""
     trimmed = text.strip()
@@ -2754,7 +2762,7 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                 ok=False,
                 response_digest=None,
                 elapsed_ms=elapsed_ms,
-                error_code="challenge-http-failure",
+                error_code=_challenge_http_error_code(out),
                 gateway_calls=gateway_calls,
             )
         body = out.encode()
