@@ -3998,6 +3998,29 @@ export const screeningAttemptSchema = z.object({
   duplicate_version: z.number().int().positive().nullish().default(null),
 })
 
+export const screeningFailureDiagnosticSchema = z.object({
+  agent_id: z.string().uuid(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  agent_status: z.string(),
+  attempt_id: z.string().uuid(),
+  policy_version: z.number().int().positive(),
+  attempt_status: z.enum([
+    'running',
+    'passed',
+    'rejected',
+    'failed',
+    'expired',
+    'quarantined',
+  ]),
+  started_at: z.string(),
+  deadline: z.string(),
+  finished_at: z.string().nullable(),
+  reason: z.string().nullable(),
+  reason_code: z.string().nullable(),
+  private_failure_detail: z.string().max(4_000).nullable(),
+  private_failure_log_tail: z.string().max(16_000).nullable(),
+})
+
 export const screeningImageBuildSchema = z.object({
   build_id: z.string().uuid(),
   attempt_id: z.string().uuid(),
@@ -4443,6 +4466,11 @@ export const screeningArtifactInputSchema = z.object({ agentId: z.string().uuid(
 
 export const screeningSubmissionLookupInputSchema = z.object({
   agentId: z.string().uuid(),
+})
+
+export const screeningFailureDiagnosticInputSchema = z.object({
+  agentId: z.string().uuid(),
+  attemptId: z.string().uuid(),
 })
 
 export const screeningArtifactSchema = z.object({
@@ -6415,6 +6443,9 @@ export type ScreeningQuarantineBatchPreview = z.infer<
 export type ScreeningDispute = z.infer<typeof screeningDisputeSchema>
 export type ScreeningDisputeResolution = z.infer<typeof screeningDisputeResolutionSchema>
 export type ScreeningSubmission = z.infer<typeof screeningSubmissionSchema>
+export type ScreeningFailureDiagnostic = z.infer<
+  typeof screeningFailureDiagnosticSchema
+>
 export type ScreeningEvidenceItem = z.infer<typeof screeningEvidenceItemSchema>
 export type SourceReviewFinding = z.infer<typeof sourceReviewFindingSchema>
 export type ScreeningQuarantineContext = z.infer<typeof screeningQuarantineContextSchema>

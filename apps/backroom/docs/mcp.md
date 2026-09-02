@@ -25,7 +25,7 @@ Three scopes, in ascending sensitivity:
 | Scope | Grants |
 |---|---|
 | `backroom:read` | Every read. Required for any connection. |
-| `backroom:artifact:read` | Miner-submitted source: tarball URLs, file listings, source search, copy and baseline diffs. |
+| `backroom:artifact:read` | Miner-submitted source and sensitive diagnostics: tarball URLs, file listings, source search, copy/baseline diffs, and sanitized private screening failure details. |
 | `backroom:write` | Mutations, including `set_burn_settings`, which moves TAO. |
 
 Two independent gates apply to every privileged call. The grant must carry the

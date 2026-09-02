@@ -1702,6 +1702,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-submissions/{agent_id}/attempts/{attempt_id}/failure-diagnostic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Screening Failure Diagnostic
+         * @description Return the sanitized private failure for one exact attempt.
+         *
+         *     The public submission history deliberately omits these fields. Backroom
+         *     exposes this route only through its separately scoped artifact-read tool.
+         */
+        get: operations["get_screening_failure_diagnostic_api_v1_admin_screening_submissions__agent_id__attempts__attempt_id__failure_diagnostic_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-submissions/{agent_id}/baseline-diff": {
         parameters: {
             query?: never;
@@ -8494,6 +8517,53 @@ export interface components {
             /** Agent Status */
             agent_status: string;
             dispute: components["schemas"]["AdminScreeningDisputeItem"];
+        };
+        /**
+         * AdminScreeningFailureDiagnostic
+         * @description Sensitive, sanitized diagnostic for one exact screening attempt.
+         */
+        AdminScreeningFailureDiagnostic: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Attempt Status
+             * @enum {string}
+             */
+            attempt_status: "running" | "passed" | "rejected" | "failed" | "expired" | "quarantined";
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /** Finished At */
+            finished_at: string | null;
+            /** Policy Version */
+            policy_version: number;
+            /** Private Failure Detail */
+            private_failure_detail?: string | null;
+            /** Private Failure Log Tail */
+            private_failure_log_tail?: string | null;
+            /** Reason */
+            reason: string | null;
+            /** Reason Code */
+            reason_code: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
         };
         /**
          * AdminScreeningFailureExample
@@ -28395,6 +28465,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArtifactResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_screening_failure_diagnostic_api_v1_admin_screening_submissions__agent_id__attempts__attempt_id__failure_diagnostic_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminScreeningFailureDiagnostic"];
                 };
             };
             /** @description Validation Error */

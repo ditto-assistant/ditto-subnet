@@ -138,6 +138,28 @@ class AdminScreeningAttempt(BaseModel):
     duplicate_version: int | None = None
 
 
+class AdminScreeningFailureDiagnostic(BaseModel):
+    """Sensitive, sanitized diagnostic for one exact screening attempt."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    artifact_sha256: str
+    agent_status: str
+    attempt_id: UUID
+    policy_version: int
+    attempt_status: Literal[
+        "running", "passed", "rejected", "failed", "expired", "quarantined"
+    ]
+    started_at: datetime
+    deadline: datetime
+    finished_at: datetime | None
+    reason: str | None
+    reason_code: str | None
+    private_failure_detail: Annotated[str | None, Field(max_length=4_000)] = None
+    private_failure_log_tail: Annotated[str | None, Field(max_length=16_000)] = None
+
+
 class AdminScreeningImageBuild(BaseModel):
     """Kaniko/runtime telemetry for one screening image build."""
 
@@ -884,6 +906,7 @@ __all__ = [
     "AdminScreeningDisputeResolveRequest",
     "AdminScreeningDisputeResolveResponse",
     "AdminScreeningFailureExample",
+    "AdminScreeningFailureDiagnostic",
     "AdminScreeningFailureGroup",
     "AdminScreeningFailureSummary",
     "AdminScreeningSubmission",
