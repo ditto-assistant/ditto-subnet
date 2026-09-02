@@ -116,6 +116,33 @@ Hippius's transparent encryption is defense in depth, not the secrecy
 boundary. The provider must never possess the client-side plaintext data key or
 external wrapping authority.
 
+The offline implementation begins with
+`apps/platform/scripts/prepare_hippius_private_inputs.py`. It reuses the
+canonical curator publication plan, encrypts each record with a fresh
+AES-256-GCM data key and 96-bit nonce, and wraps that key with
+RSA-OAEP-SHA256 to an RSA public key between 3072 and 8192 bits. Canonical AAD
+binds the catalog,
+publication, logical object, plaintext, task, and wrapping-public-key
+identities. The private wrapping key is structurally absent from this layer.
+
+The tool creates one new mode-`0700` local directory containing mode-`0600`
+ciphertext objects and a manifest written last. A partial directory without
+`manifest.json` is deliberately unpublishable and is retained for operator
+inspection; reruns require a new output path. The manifest is digest-bound but
+not yet curator-signed. Upload, manifest signature/registration, Hippius
+credentials, unwrap authority, and plaintext runtime delivery remain later
+reviews.
+
+```bash
+cd apps/platform
+uv run python scripts/prepare_hippius_private_inputs.py \
+  --commitment /protected/catalog/commitment.json \
+  --records-dir /protected/catalog/records \
+  --wrapping-public-key /protected/keys/coding-input-wrap-public.pem \
+  --output-dir /protected/catalog/encrypted-transport-new \
+  --confirm "ENCRYPT HIPPIUS CODING PRIVATE INPUTS"
+```
+
 ## Private-input retrieval
 
 Only Platform holds the private-input reader credential. The current Hippius

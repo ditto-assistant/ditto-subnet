@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import importlib.util
 import json
+import stat
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from ditto.api_models.coding_canonical import (
     coding_canonical_json_bytes,
@@ -23,7 +31,14 @@ from ditto.api_server.coding_catalog_publication import (
     _MAX_PLAN_BYTES,
     CodingCatalogPublicationError,
     plan_private_catalog_publication,
+    read_private_catalog_publication_object,
     write_private_catalog_publication_plan,
+)
+from ditto.api_server.coding_hippius_encryption import (
+    HIPPIUS_PRIVATE_INPUT_ENCRYPTION_CONFIRMATION,
+    HippiusPrivateInputEncryptionError,
+    hippius_private_input_aad_bytes,
+    prepare_hippius_private_input_transport,
 )
 from ditto.coding_selection import coding_catalog_leaf_hash
 
@@ -34,6 +49,17 @@ SELECTION = (
 EXECUTION = (
     ROOT / "packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json"
 )
+
+
+def _load_encryption_script() -> ModuleType:
+    path = ROOT / "apps/platform/scripts/prepare_hippius_private_inputs.py"
+    spec = importlib.util.spec_from_file_location(
+        "prepare_hippius_private_inputs", path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _canonical(value: dict[str, Any], *, label: str) -> bytes:
@@ -135,6 +161,216 @@ def test_curator_publication_plan_is_canonical_and_content_addressed(
             plan=replace(plan, publication_sha256="f" * 64),
             output=tmp_path / "forged-publication.json",
         )
+
+
+def _write_wrapping_public_key(
+    root: Path, *, key_size: int = 3072
+) -> tuple[rsa.RSAPrivateKey, Path]:
+    private_key = rsa.generate_private_key(public_exponent=65_537, key_size=key_size)
+    path = root / "wrapping-public-key.pem"
+    path.write_bytes(
+        private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    return private_key, path
+
+
+def test_hippius_private_input_transport_encrypts_and_binds_exact_record(
+    tmp_path: Path,
+) -> None:
+    commitment_path, records_dir = _write_fixture(tmp_path)
+    private_key, public_key_path = _write_wrapping_public_key(tmp_path)
+    output_dir = (tmp_path / "encrypted-transport").resolve()
+
+    manifest = prepare_hippius_private_input_transport(
+        commitment_path=commitment_path,
+        records_dir=records_dir,
+        wrapping_public_key_path=public_key_path,
+        output_dir=output_dir,
+    )
+
+    assert len(manifest.objects) == 1
+    item = manifest.objects[0]
+    plan = plan_private_catalog_publication(
+        commitment_path=commitment_path,
+        records_dir=records_dir,
+    )
+    aad = hippius_private_input_aad_bytes(
+        plan=plan,
+        item=plan.objects[0],
+        wrapping_key_sha256=manifest.wrapping_key_sha256,
+    )
+    assert hashlib.sha256(aad).hexdigest() == item.aad_sha256
+    data_key = private_key.decrypt(
+        base64.b64decode(item.wrapped_data_key_b64, validate=True),
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=bytes.fromhex(item.aad_sha256),
+        ),
+    )
+    ciphertext = (output_dir / item.ciphertext_relative_path).read_bytes()
+    plaintext = AESGCM(data_key).decrypt(
+        base64.b64decode(item.nonce_b64, validate=True),
+        ciphertext,
+        aad,
+    )
+    expected = (records_dir / "000000.json").read_bytes()
+    assert plaintext == expected
+    assert item.plaintext_sha256 == hashlib.sha256(expected).hexdigest()
+    assert item.ciphertext_sha256 == hashlib.sha256(ciphertext).hexdigest()
+    assert item.ciphertext_size_bytes == item.plaintext_size_bytes + 16
+    assert stat.S_IMODE(output_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE((output_dir / "objects").stat().st_mode) == 0o700
+    assert stat.S_IMODE((output_dir / "manifest.json").stat().st_mode) == 0o600
+    assert (
+        stat.S_IMODE((output_dir / item.ciphertext_relative_path).stat().st_mode)
+        == 0o600
+    )
+    manifest_text = (output_dir / "manifest.json").read_text()
+    manifest_document = json.loads(manifest_text)
+    manifest_projection = {
+        key: value
+        for key, value in manifest_document.items()
+        if key != "transport_manifest_sha256"
+    }
+    assert (
+        manifest.transport_manifest_sha256
+        == hashlib.sha256(
+            coding_canonical_json_bytes(
+                manifest_projection,
+                maximum_bytes=512 << 20,
+                label="test Hippius private-input transport manifest",
+            )
+        ).hexdigest()
+    )
+    assert "problem_statement" not in manifest_text
+    assert b"problem_statement" not in ciphertext
+    assert manifest.transport_manifest_sha256 in manifest_text
+
+    with pytest.raises(HippiusPrivateInputEncryptionError, match="must not exist"):
+        prepare_hippius_private_input_transport(
+            commitment_path=commitment_path,
+            records_dir=records_dir,
+            wrapping_public_key_path=public_key_path,
+            output_dir=output_dir,
+        )
+
+
+def test_publication_object_read_rejects_post_plan_drift(tmp_path: Path) -> None:
+    commitment_path, records_dir = _write_fixture(tmp_path)
+    plan = plan_private_catalog_publication(
+        commitment_path=commitment_path,
+        records_dir=records_dir,
+    )
+    record_path = records_dir / "000000.json"
+    record_path.write_bytes(record_path.read_bytes() + b" ")
+
+    with pytest.raises(CodingCatalogPublicationError, match="changed after planning"):
+        read_private_catalog_publication_object(
+            records_dir=records_dir,
+            item=plan.objects[0],
+        )
+
+
+def test_hippius_private_input_transport_rejects_weak_or_private_wrapping_key(
+    tmp_path: Path,
+) -> None:
+    commitment_path, records_dir = _write_fixture(tmp_path)
+    weak_private, weak_public_path = _write_wrapping_public_key(tmp_path, key_size=2048)
+    with pytest.raises(HippiusPrivateInputEncryptionError, match="RSA-3072"):
+        prepare_hippius_private_input_transport(
+            commitment_path=commitment_path,
+            records_dir=records_dir,
+            wrapping_public_key_path=weak_public_path,
+            output_dir=(tmp_path / "weak-output").resolve(),
+        )
+
+    private_path = tmp_path / "private-key.pem"
+    private_path.write_bytes(
+        weak_private.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    with pytest.raises(HippiusPrivateInputEncryptionError, match="invalid"):
+        prepare_hippius_private_input_transport(
+            commitment_path=commitment_path,
+            records_dir=records_dir,
+            wrapping_public_key_path=private_path,
+            output_dir=(tmp_path / "private-output").resolve(),
+        )
+
+
+def test_hippius_private_input_transport_keeps_incomplete_output_unpublishable(
+    tmp_path: Path,
+) -> None:
+    commitment_path, records_dir = _write_fixture(tmp_path)
+    _private_key, public_key_path = _write_wrapping_public_key(tmp_path)
+    output_dir = (tmp_path / "incomplete-output").resolve()
+
+    with pytest.raises(HippiusPrivateInputEncryptionError, match="entropy"):
+        prepare_hippius_private_input_transport(
+            commitment_path=commitment_path,
+            records_dir=records_dir,
+            wrapping_public_key_path=public_key_path,
+            output_dir=output_dir,
+            random_bytes=lambda size: b"x" * (size - 1),
+        )
+
+    assert output_dir.is_dir()
+    assert not (output_dir / "manifest.json").exists()
+    assert stat.S_IMODE(output_dir.stat().st_mode) == 0o700
+
+
+def test_hippius_private_input_cli_requires_confirmation_and_prepares_transport(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    script = _load_encryption_script()
+    with pytest.raises(SystemExit) as caught:
+        script.main(
+            [
+                "--commitment",
+                "missing",
+                "--records-dir",
+                "missing",
+                "--wrapping-public-key",
+                "missing",
+                "--output-dir",
+                str((tmp_path / "not-created").resolve()),
+                "--confirm",
+                "ENCRYPT CODING INPUTS",
+            ]
+        )
+    assert caught.value.code == 2
+    assert HIPPIUS_PRIVATE_INPUT_ENCRYPTION_CONFIRMATION in capsys.readouterr().err
+
+    commitment_path, records_dir = _write_fixture(tmp_path / "valid")
+    _private_key, public_key_path = _write_wrapping_public_key(tmp_path / "valid")
+    output_dir = (tmp_path / "valid/encrypted").resolve()
+    result = script.main(
+        [
+            "--commitment",
+            str(commitment_path),
+            "--records-dir",
+            str(records_dir),
+            "--wrapping-public-key",
+            str(public_key_path),
+            "--output-dir",
+            str(output_dir),
+            "--confirm",
+            HIPPIUS_PRIVATE_INPUT_ENCRYPTION_CONFIRMATION,
+        ]
+    )
+    assert result == 0
+    assert (output_dir / "manifest.json").is_file()
+    stdout = capsys.readouterr().out
+    assert "encrypted 1 private catalog records" in stdout
+    assert "transport_manifest_sha256=" in stdout
 
 
 def test_curator_publication_rejects_noncanonical_or_incomplete_records(
