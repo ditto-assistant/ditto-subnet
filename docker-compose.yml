@@ -286,6 +286,12 @@ services:
       VALIDATOR_CODING_SHADOW_INSTANCE_ID: ${VALIDATOR_CODING_SHADOW_INSTANCE_ID:-coding-shadow-primary}
       VALIDATOR_CODING_SHADOW_RUN_ID: ${VALIDATOR_CODING_SHADOW_RUN_ID:-}
       VALIDATOR_CODING_SHADOW_POLL_SECONDS: ${VALIDATOR_CODING_SHADOW_POLL_SECONDS:-10}
+      VALIDATOR_CODING_EXECUTOR_REMOTE_ENABLED: ${VALIDATOR_CODING_EXECUTOR_REMOTE_ENABLED:-false}
+      VALIDATOR_CODING_EXECUTOR_BASE_URL: ${VALIDATOR_CODING_EXECUTOR_BASE_URL:-}
+      VALIDATOR_CODING_EXECUTOR_CA_PATH: ${VALIDATOR_CODING_EXECUTOR_CA_PATH:-}
+      VALIDATOR_CODING_EXECUTOR_CLIENT_CERT_PATH: ${VALIDATOR_CODING_EXECUTOR_CLIENT_CERT_PATH:-}
+      VALIDATOR_CODING_EXECUTOR_CLIENT_KEY_PATH: ${VALIDATOR_CODING_EXECUTOR_CLIENT_KEY_PATH:-}
+      VALIDATOR_CODING_EXECUTOR_TIMEOUT_SECONDS: ${VALIDATOR_CODING_EXECUTOR_TIMEOUT_SECONDS:-}
       VALIDATOR_CODING_CANARY_ENABLED: ${VALIDATOR_CODING_CANARY_ENABLED:-false}
       VALIDATOR_CODING_CANARY_POLL_SECONDS: ${VALIDATOR_CODING_CANARY_POLL_SECONDS:-10}
       # The PINNED scorer revision links its identity into the binary, so the
@@ -405,6 +411,16 @@ services:
       - DAC_READ_SEARCH
     cap_drop:
       - ALL
+    secrets:
+      - source: coding-executor-validator-ca
+        target: coding-executor-validator-ca.pem
+        mode: 0400
+      - source: coding-executor-validator-client-cert
+        target: coding-executor-validator-client.pem
+        mode: 0400
+      - source: coding-executor-validator-client-key
+        target: coding-executor-validator-client-key.pem
+        mode: 0400
     volumes:
       # The root filesystem stays read-only. The updater gives every forced
       # candidate/rollback recreation a new token, so only that container's
@@ -426,3 +442,11 @@ volumes:
   dittobench-private-artifacts:
   sandbox-docker-rootful-data-v2:
   validator-update-bootstrap:
+
+secrets:
+  coding-executor-validator-ca:
+    file: ${VALIDATOR_CODING_EXECUTOR_CA_HOST_PATH:-/dev/null}
+  coding-executor-validator-client-cert:
+    file: ${VALIDATOR_CODING_EXECUTOR_CLIENT_CERT_HOST_PATH:-/dev/null}
+  coding-executor-validator-client-key:
+    file: ${VALIDATOR_CODING_EXECUTOR_CLIENT_KEY_HOST_PATH:-/dev/null}

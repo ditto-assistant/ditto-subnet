@@ -86,3 +86,5 @@ def test_scorer_mtls_transport_is_separate_default_off_and_source_bounded() -> N
     assert "IPAddressAllow={{ coding_executor_mtls_source_cidr }}" in unit
     assert "control-token" not in unit
     assert "SupplementaryGroups" not in unit
+    assert "coding_executor_mtls_bind_address }}" in TASKS
+    assert "IPAddress:$expected_ip" in MTLS_VERIFIER.read_text()

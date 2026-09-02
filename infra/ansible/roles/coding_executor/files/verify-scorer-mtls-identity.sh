@@ -5,6 +5,7 @@ identity_dir='/var/lib/ditto-coding-executor/mtls'
 ca="$identity_dir/validator-ca.pem"
 certificate="$identity_dir/scorer-server.pem"
 key="$identity_dir/scorer-server-key.pem"
+expected_ip="${1:-}"
 
 if [[ "$EUID" -ne 0 ]]; then
   echo 'scorer mTLS identity verifier must run as root' >&2
@@ -28,3 +29,17 @@ private_public_key="$(openssl pkey -in "$key" -pubout | sha256sum | awk '{print 
   exit 1
 }
 openssl x509 -in "$certificate" -noout -checkend 0 >/dev/null
+if [[ -n "$expected_ip" ]]; then
+  [[ "$expected_ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || {
+    echo 'scorer mTLS expected server address is invalid' >&2
+    exit 1
+  }
+  san="$(openssl x509 -in "$certificate" -noout -ext subjectAltName | tail -n +2 | tr -d '[:space:]')"
+  case ",$san," in
+    *",IPAddress:$expected_ip,"*) ;;
+    *)
+      echo 'scorer mTLS certificate does not cover its bind address' >&2
+      exit 1
+      ;;
+  esac
+fi

@@ -13,7 +13,7 @@ import math
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -78,6 +78,9 @@ TOP5_MAX_COHORT_SIZE = 25
 # still routes to burn rather than zeroing the chain.
 MINER_EMISSION_SHARE = 1.0
 FINNEY_BURN_HOTKEY = "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz"  # SN118 UID 0
+_CODING_EXECUTOR_PRIVATE_NETWORKS = tuple(
+    ip_network(value) for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+)
 
 
 # --- Lease-derived run bounds (not env-tunable, not a consensus knob) ---
@@ -151,6 +154,30 @@ def _is_local_subtensor_network(network: str) -> bool:
         return ip_address(hostname or "").is_loopback
     except ValueError:
         return False
+
+
+def _is_private_coding_executor_url(value: str) -> bool:
+    parsed = urlsplit(value)
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    if (
+        parsed.scheme != "https"
+        or port != 9443
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or not parsed.hostname
+    ):
+        return False
+    try:
+        address = ip_address(parsed.hostname)
+    except ValueError:
+        return False
+    return any(address in network for network in _CODING_EXECUTOR_PRIVATE_NETWORKS)
 
 
 @dataclass(frozen=True)
@@ -392,6 +419,24 @@ class ValidatorConfig:
     coding_shadow_poll_seconds: float = 10.0
     """Idle polling interval for the separate shadow coding queue."""
 
+    coding_executor_remote_enabled: bool = False
+    """Use the dedicated executor mTLS control plane. Disabled by default."""
+
+    coding_executor_base_url: str = ""
+    """Exact private IPv4 HTTPS executor origin on fixed port 9443."""
+
+    coding_executor_ca_path: str = ""
+    """Absolute path to the dedicated executor CA certificate."""
+
+    coding_executor_client_cert_path: str = ""
+    """Absolute path to the validator client certificate."""
+
+    coding_executor_client_key_path: str = ""
+    """Absolute path to the validator client private key."""
+
+    coding_executor_timeout_seconds: float = 30.0
+    """Hard transport timeout for the dedicated executor mTLS client."""
+
     coding_canary_enabled: bool = False
     """Run the public certification canary after a score commit. Disabled by default."""
 
@@ -558,6 +603,30 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         if coding_shadow_enabled
         else 10.0
     )
+    coding_executor_remote_enabled = (
+        os.environ.get("VALIDATOR_CODING_EXECUTOR_REMOTE_ENABLED", "false").lower()
+        in _truthy
+    )
+    coding_executor_base_url = os.environ.get(
+        "VALIDATOR_CODING_EXECUTOR_BASE_URL", ""
+    ).strip()
+    coding_executor_ca_path = os.environ.get(
+        "VALIDATOR_CODING_EXECUTOR_CA_PATH", ""
+    ).strip()
+    coding_executor_client_cert_path = os.environ.get(
+        "VALIDATOR_CODING_EXECUTOR_CLIENT_CERT_PATH", ""
+    ).strip()
+    coding_executor_client_key_path = os.environ.get(
+        "VALIDATOR_CODING_EXECUTOR_CLIENT_KEY_PATH", ""
+    ).strip()
+    coding_executor_timeout_raw = os.environ.get(
+        "VALIDATOR_CODING_EXECUTOR_TIMEOUT_SECONDS", ""
+    ).strip()
+    coding_executor_timeout_seconds = (
+        _parse_float("VALIDATOR_CODING_EXECUTOR_TIMEOUT_SECONDS", "30")
+        if coding_executor_remote_enabled
+        else 30.0
+    )
     coding_canary_enabled = (
         os.environ.get("VALIDATOR_CODING_CANARY_ENABLED", "false").lower() in _truthy
     )
@@ -628,6 +697,12 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         coding_shadow_instance_id=coding_shadow_instance_id,
         coding_shadow_run_id=coding_shadow_run_id,
         coding_shadow_poll_seconds=coding_shadow_poll_seconds,
+        coding_executor_remote_enabled=coding_executor_remote_enabled,
+        coding_executor_base_url=coding_executor_base_url,
+        coding_executor_ca_path=coding_executor_ca_path,
+        coding_executor_client_cert_path=coding_executor_client_cert_path,
+        coding_executor_client_key_path=coding_executor_client_key_path,
+        coding_executor_timeout_seconds=coding_executor_timeout_seconds,
         coding_canary_enabled=coding_canary_enabled,
         coding_canary_poll_seconds=coding_canary_poll_seconds,
     )
@@ -668,6 +743,32 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     ):
         raise ValidatorConfigError(
             "VALIDATOR_CODING_SHADOW_POLL_SECONDS must be in [1, 300]"
+        )
+    coding_executor_paths = (
+        config.coding_executor_ca_path,
+        config.coding_executor_client_cert_path,
+        config.coding_executor_client_key_path,
+    )
+    coding_executor_settings_present = bool(
+        config.coding_executor_base_url
+        or any(coding_executor_paths)
+        or coding_executor_timeout_raw
+    )
+    if not config.coding_executor_remote_enabled and coding_executor_settings_present:
+        raise ValidatorConfigError(
+            "coding executor settings require the explicit remote gate"
+        )
+    if config.coding_executor_remote_enabled and (
+        not config.coding_shadow_enabled
+        or not _is_private_coding_executor_url(config.coding_executor_base_url)
+        or any(not path or not os.path.isabs(path) for path in coding_executor_paths)
+        or len(set(coding_executor_paths)) != 3
+        or not math.isfinite(config.coding_executor_timeout_seconds)
+        or not 1 <= config.coding_executor_timeout_seconds <= 300
+    ):
+        raise ValidatorConfigError(
+            "enabled coding executor requires shadow coding, one private :9443 "
+            "origin, three distinct absolute mTLS paths, and timeout in [1, 300]"
         )
     if config.coding_canary_enabled and (
         not 32 <= len(config.dittobench_control_token.encode()) <= 256

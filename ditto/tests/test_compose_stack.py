@@ -199,7 +199,30 @@ def test_shadow_coding_worker_is_present_but_default_off_on_both_sides() -> None
     assert _compose_default(scorer["DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST"]) == ""
     assert _compose_default(validator["VALIDATOR_CODING_SHADOW_ENABLED"]) == "false"
     assert _compose_default(validator["VALIDATOR_CODING_SHADOW_RUN_ID"]) == ""
+    assert (
+        _compose_default(validator["VALIDATOR_CODING_EXECUTOR_REMOTE_ENABLED"])
+        == "false"
+    )
+    for key in (
+        "VALIDATOR_CODING_EXECUTOR_BASE_URL",
+        "VALIDATOR_CODING_EXECUTOR_CA_PATH",
+        "VALIDATOR_CODING_EXECUTOR_CLIENT_CERT_PATH",
+        "VALIDATOR_CODING_EXECUTOR_CLIENT_KEY_PATH",
+        "VALIDATOR_CODING_EXECUTOR_TIMEOUT_SECONDS",
+    ):
+        assert _compose_default(validator[key]) == ""
     assert _compose_default(validator["VALIDATOR_CODING_CANARY_ENABLED"]) == "false"
+    assert {item["source"] for item in services["ditto-subnet"]["secrets"]} == {
+        "coding-executor-validator-ca",
+        "coding-executor-validator-client-cert",
+        "coding-executor-validator-client-key",
+    }
+    for secret in (
+        "coding-executor-validator-ca",
+        "coding-executor-validator-client-cert",
+        "coding-executor-validator-client-key",
+    ):
+        assert _compose_default(compose["secrets"][secret]["file"]) == "/dev/null"
     assert scorer["DITTOBENCH_CODING_PRIVATE_ROOT"].startswith(
         "/var/lib/dittobench-private-artifacts/"
     )

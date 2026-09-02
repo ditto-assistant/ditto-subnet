@@ -89,10 +89,21 @@ retains its pre-claim loopback probe.
 three distinct absolute credential files, reject symlinks, writable or
 executable credentials, oversized inputs, and group/world-readable private
 keys, then construct a no-proxy, no-redirect TLS 1.3-only client. This client is
-deliberately not parsed from environment or constructed by validator startup
-yet. Both remote clients are therefore dormant. A later atomic PR must inject
-one protected mTLS client and the same private executor origin into supervisor
-and publication construction together; it must not make only one half remote.
+now constructed by validator startup only when the separate
+`VALIDATOR_CODING_EXECUTOR_REMOTE_ENABLED=true` gate has a complete private
+`:9443` origin and credential profile. One independently closed client is
+injected into both supervisor and publication construction; a partial profile
+or one-sided remote client is impossible. The ordinary validator HTTP client is
+not reused for coding control traffic; both local and remote coding clients
+ignore environment proxy settings.
+
+Compose exposes the pre-positioned CA, validator certificate, and validator key
+as three read-only secrets. With the remote gate off their sources resolve to
+`/dev/null`, all validator runtime settings stay empty, and no credential is
+opened. The production validator-stack role can separately verify root-owned
+mode-`0400` files, client purpose, chain, key match, expiration, and the exact
+`spiffe://dittobench.ai/validator/<hotkey>` URI. It never copies credential
+contents and never starts the worker or executor transport.
 
 ## Activation checklist
 
@@ -113,7 +124,9 @@ All of the following must be configured together:
   capability-only egress network, and an explicit allowlisting proxy;
 - validator: `VALIDATOR_CODING_SHADOW_ENABLED=true`, one exact
   `VALIDATOR_CODING_SHADOW_RUN_ID`, one stable instance ID, and the existing
-  private scorer control token.
+  private scorer control token. Dedicated execution additionally requires the
+  separate remote gate, private IPv4 `https://...:9443` origin, and the three
+  verified mTLS secret paths.
 
 The default-zero dedicated GCP executor cohort documented in
 `infra/docs/coding-executor-hosts.md` is the physical isolation foundation for

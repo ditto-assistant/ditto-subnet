@@ -98,6 +98,9 @@ for that later routing layer. An operator pre-positions a root-only validator
 CA certificate, scorer server certificate, and scorer key at fixed paths. The
 host verifies CA chain, server purpose, expiration, and certificate/key public
 key match, but identity staging alone does not start a listener.
+Immediately before transport startup the role re-runs that verifier with the
+private bind address and requires the server certificate to contain that exact
+IPv4 SAN, matching the validator client's hostname verification target.
 
 ## Default-off mTLS transport
 
@@ -121,9 +124,25 @@ The service binds only an explicitly configured RFC1918 IPv4 address on port
 private `/32`; the binary independently rejects a public or broader source
 range. Unix access remains available solely for the fixed downstream
 socket. The transport gate, bind address, and source CIDR ship empty/false, so
-merge or host convergence opens no listener. A later validator-client PR must
-present the matching certificate and signed envelope; this layer alone cannot
-execute a task.
+merge or host convergence opens no listener.
+
+## Default-off validator client
+
+The validator-stack role has a separate
+`validator_stack_coding_executor_identity_enabled` prerequisite. It accepts
+only three pre-positioned root-owned mode-`0400` files under
+`/var/lib/ditto-validator/coding-executor-mtls`, verifies the client chain,
+`sslclient` purpose, expiration, certificate/key match, and exact validator
+SPIFFE URI, and never copies their contents. Compose presents them as three
+read-only secrets; disabled stacks use `/dev/null` sources and leave every
+runtime path empty.
+
+`validator_stack_coding_executor_remote_enabled` remains independently false.
+When explicitly paired with the shadow worker and one exact run UUID, validator
+startup creates one no-proxy TLS 1.3 client and injects it into both signed
+supervisor and durable publication clients. Incomplete or one-sided remote
+configuration fails before a worker can claim a ticket. No committed host
+variable enables the client or the executor listener.
 
 ## Production runtime-bundle staging
 
