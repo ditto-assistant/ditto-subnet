@@ -2,6 +2,18 @@
 
 <!-- version list -->
 
+## v0.181.13 (2026-09-02)
+
+### Bug Fixes
+
+- **platform**: Backfill legacy payment USD rates
+  ([#1506](https://github.com/ditto-assistant/ditto-subnet/pull/1506),
+  [`62e59ac`](https://github.com/ditto-assistant/ditto-subnet/commit/62e59ac5a8eec3de27db5c2c75d8b8bab7f927cf))
+
+- **screener**: Mirror scorer provider fallback
+  ([`366ac4a`](https://github.com/ditto-assistant/ditto-subnet/commit/366ac4aa412b5a89d28526ec3a9a73df15f17917))
+
+
 ## v0.181.12 (2026-09-02)
 
 ### Bug Fixes
