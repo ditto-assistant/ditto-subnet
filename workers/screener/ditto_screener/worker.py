@@ -870,6 +870,25 @@ class ScreenerWorker:
         except PlatformError as e:
             # A late/conflicting verdict (409) or transient error: log + move on.
             logger.warning("verdict for agent_id=%s not applied: %s", agent_id, e)
+        except Exception as error:  # noqa: BLE001 - terminalize every local failure
+            logger.exception(
+                "screening crashed agent_id=%s; submitting retryable "
+                "infrastructure result",
+                agent_id,
+            )
+            try:
+                await self._report_unhandled_screening_failure(
+                    item=item,
+                    attempt_id=attempt_id,
+                    policy_version=policy_version,
+                    review_settings=effective_review_settings,
+                    error=error,
+                )
+            except Exception:  # noqa: BLE001 - preserve the worker loop on outage
+                logger.exception(
+                    "could not terminalize unhandled screening failure agent_id=%s",
+                    agent_id,
+                )
         finally:
             # A review can finish before a later build/image step raises. Do not
             # retain that attempt's private result in the long-lived worker.
@@ -888,6 +907,80 @@ class ScreenerWorker:
             if applied_canary_settings:
                 self._gate.apply_review_settings(normal_review_settings)
             await self._report_heartbeat("polling", force=True)
+
+    async def _report_unhandled_screening_failure(
+        self,
+        *,
+        item: ScreenerQueueItem,
+        attempt_id: UUID,
+        policy_version: int,
+        review_settings: EffectiveReviewSettings,
+        error: Exception,
+    ) -> None:
+        """Persist an unexpected local failure instead of orphaning its lease.
+
+        A worker may restart after a bad local dependency or malformed provider
+        response, but it must make the lease terminal when Platform is
+        reachable. Otherwise its final polling heartbeat hides the active job
+        and the next claim sweep mislabels it as a worker disappearance. Keep
+        the public status generic while returning the bounded diagnostic to the
+        submission owner through signed private feedback fields.
+        """
+        reason_code = "screener-unhandled-error"
+        private_detail = private_failure_text(
+            f"screener error: unhandled {type(error).__name__}: {error}",
+            limit=PRIVATE_FAILURE_DETAIL_LIMIT,
+        )
+        private_log_tail = private_failure_text(
+            f"{type(error).__name__}: {error}",
+            limit=PRIVATE_FAILURE_LOG_TAIL_LIMIT,
+        )
+        settings_bound = review_settings.revision >= 1
+        signature = sign_verdict(
+            self._keypair,
+            screener_hotkey=self._config.screener_hotkey,
+            agent_id=item.agent_id,
+            passed=False,
+            policy_version=policy_version,
+            attempt_id=attempt_id,
+            outcome=ScreenResultOutcome.RETRYABLE_INFRA,
+            deferred_source_review=item.deferred_source_review,
+            policy_only=item.policy_only,
+            review_settings_revision=(
+                review_settings.revision if settings_bound else None
+            ),
+            review_settings_instance_id=self._instance_id if settings_bound else None,
+            review_settings_scope=review_settings.scope if settings_bound else None,
+            review_settings_checksum=(
+                review_settings.checksum if settings_bound else None
+            ),
+            reason_code=reason_code,
+            private_failure_detail=private_detail,
+            private_failure_log_tail=private_log_tail,
+        )
+        await self._platform.submit_result(
+            item.agent_id,
+            signature=signature,
+            passed=False,
+            policy_version=policy_version,
+            detail="screener error: unhandled local worker failure",
+            attempt_id=attempt_id,
+            outcome=ScreenResultOutcome.RETRYABLE_INFRA,
+            review_settings_revision=(
+                review_settings.revision if settings_bound else None
+            ),
+            review_settings_instance_id=self._instance_id if settings_bound else None,
+            review_settings_scope=review_settings.scope if settings_bound else None,
+            review_settings_checksum=(
+                review_settings.checksum if settings_bound else None
+            ),
+            reason_code=reason_code,
+            private_failure_detail=private_detail,
+            private_failure_log_tail=private_log_tail,
+            build_only=item.build_only,
+            deferred_source_review=item.deferred_source_review,
+            policy_only=item.policy_only,
+        )
 
     async def _submit_shadow_review(
         self,

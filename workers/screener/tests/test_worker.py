@@ -914,6 +914,31 @@ async def test_verdict_platform_error_swallowed(
     assert platform.verdicts == []
 
 
+async def test_unhandled_local_failure_is_terminalized_with_private_feedback(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    agent = uuid4()
+    platform = _FakePlatform([])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+
+    async def crash(**_: Any) -> ScreeningDecision:
+        raise RuntimeError("L4 response serialization failed")
+
+    gate.screen = crash  # type: ignore[method-assign]
+    worker = _worker(make_config(), platform, gate)
+
+    await worker._screen_one(_item(agent), policy_version=SCREENING_POLICY_VERSION)
+
+    assert len(platform.verdicts) == 1
+    verdict = platform.verdicts[0]
+    assert verdict["agent_id"] == agent
+    assert verdict["passed"] is False
+    assert verdict["outcome"] == ScreenResultOutcome.RETRYABLE_INFRA
+    assert verdict["reason_code"] == "screener-unhandled-error"
+    assert "RuntimeError" in verdict["private_failure_detail"]
+    assert "serialization failed" in verdict["private_failure_log_tail"]
+
+
 async def test_heartbeat_failure_never_blocks_screening_or_verdict(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
