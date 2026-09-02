@@ -282,6 +282,41 @@ func TestAttachPlatformMiddleOut(t *testing.T) {
 	attachPlatformMiddleOut(nil, historicalChatRequestBodyBytes+1)
 }
 
+func TestAdaptProviderRequestCompatibilityDropsOnlyGroqJSONModeWithTools(t *testing.T) {
+	base := func() map[string]any {
+		return map[string]any{
+			"tools":           []any{map[string]any{"type": "function"}},
+			"tool_choice":     "auto",
+			"response_format": map[string]any{"type": "json_object"},
+		}
+	}
+
+	groq := base()
+	adaptProviderRequestCompatibility(groq, "Groq")
+	if _, present := groq["response_format"]; present {
+		t.Fatal("Groq JSON-object mode must be removed when tools are active")
+	}
+	if len(groq["tools"].([]any)) != 1 || groq["tool_choice"] != "auto" {
+		t.Fatalf("tool contract changed: %v", groq)
+	}
+
+	for name, tc := range map[string]struct {
+		payload  map[string]any
+		provider string
+	}{
+		"other provider":    {base(), "Amazon Bedrock"},
+		"tools disabled":    {map[string]any{"tools": []any{map[string]any{"type": "function"}}, "tool_choice": "none", "response_format": map[string]any{"type": "json_object"}}, "groq"},
+		"structured schema": {map[string]any{"tools": []any{map[string]any{"type": "function"}}, "tool_choice": "auto", "response_format": map[string]any{"type": "json_schema"}}, "groq"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			adaptProviderRequestCompatibility(tc.payload, tc.provider)
+			if _, present := tc.payload["response_format"]; !present {
+				t.Fatalf("response format unexpectedly removed: %v", tc.payload)
+			}
+		})
+	}
+}
+
 func TestEstimatedAndChargeableTokens(t *testing.T) {
 	if estimatedTokens([]byte{}) != 1 {
 		t.Fatalf("empty body estimate floors at 1")
