@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.181.4 (2026-09-02)
+
+### Bug Fixes
+
+- **screener**: Intercept hardcoded OpenRouter during screening
+  ([`d89efad`](https://github.com/ditto-assistant/ditto-subnet/commit/d89efad0275349aced30db2cffbc81aea9e19af7))
+
+
 ## v0.181.3 (2026-09-02)
 
 ### Bug Fixes
