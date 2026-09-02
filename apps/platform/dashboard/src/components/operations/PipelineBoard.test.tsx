@@ -367,12 +367,32 @@ describe("screening cross-feed and policy labels", () => {
       "Source review stage 1 of 4: Broad source scan (L1)",
     );
     expect(ladder?.querySelectorAll(".review-rung")).toHaveLength(4);
-    const serialReview = card?.querySelector(".pipeline-serial-review");
-    expect(serialReview?.textContent).toBe("Manual review · one at a time");
-    expect(serialReview).toHaveAttribute(
-      "title",
-      "Source integrity reviews are deliberately processed one submission at a time.",
+    expect(card?.querySelector(".pipeline-automated-adjudication")).toBeNull();
+  });
+
+  it("labels the screener's L4 verdict as automated final adjudication", () => {
+    const screeners: FleetReport = {
+      screeners: [
+        {
+          screener_hotkey: "5S",
+          instance_id: "screener-1",
+          active_agent_id: "in-adjudication",
+          screening_progress: { stage: "source_review_90", started_at: "2026-07-31T13:58:00Z" },
+        },
+      ],
+    };
+    const container = board(
+      [waiting({ agent_id: "in-adjudication", status: "screening", validator_queue_rank: null })],
+      { statusCounts: { screening: 1 }, screeners },
     );
+    const card = container.querySelector("#pipeline-admission .pipeline-item");
+    const adjudication = card?.querySelector(".pipeline-automated-adjudication");
+    expect(adjudication?.textContent).toBe("Automated final adjudication · running");
+    expect(adjudication).toHaveAttribute(
+      "title",
+      "The screener is automatically completing its final adjudication.",
+    );
+    expect(card?.textContent).not.toContain("Manual review");
   });
 
   it("shows no review ladder for a card that is not in source review", () => {
@@ -392,7 +412,7 @@ describe("screening cross-feed and policy labels", () => {
     });
     const card = container.querySelector("#pipeline-admission .pipeline-item");
     expect(card?.querySelector(".review-ladder")).toBeNull();
-    expect(card?.querySelector(".pipeline-serial-review")).toBeNull();
+    expect(card?.querySelector(".pipeline-automated-adjudication")).toBeNull();
     expect(card?.querySelector(".screener-progress-stage")?.textContent).toContain(
       "Building image",
     );

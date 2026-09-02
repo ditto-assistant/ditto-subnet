@@ -20,6 +20,7 @@ import {
   PipelineScreenerProgressView,
   ReviewStageLadder,
   admissionSteps,
+  reviewStageIndex,
   screenerStageLabel,
 } from "./progress";
 import {
@@ -160,11 +161,10 @@ function PipelineCard(props: {
     const active = screener();
     return active ? screenerStageLabel(active.screening_progress?.stage) : "";
   };
-  // Source review has deliberately serialized capacity. Make that policy
-  // explicit on the live submission rather than leaving the reader to infer
-  // it from a single pulsing step in the admission track.
-  const serialReview = () =>
-    /^source_review_\d+$/.test(screener()?.screening_progress?.stage ?? "");
+  // The screener heartbeat's L4 bucket is its final adjudication. It is an
+  // automated decision step, not an operator hold or a serial manual queue.
+  const automatedFinalAdjudication = () =>
+    reviewStageIndex(screener()?.screening_progress?.stage) === 3;
   const admissionLabel = () => {
     if (props.column !== "admission") return "";
     if (entry().status === "waiting_screening") return "Waiting for admission";
@@ -225,13 +225,13 @@ function PipelineCard(props: {
             wall-clock; the ladder opens that segment into the four stages
             the screener actually runs. */}
         <ReviewStageLadder stage={screener()?.screening_progress?.stage ?? null} />
-        <Show when={serialReview()}>
+        <Show when={automatedFinalAdjudication()}>
           <span
-            class="pipeline-serial-review"
+            class="pipeline-automated-adjudication"
             role="status"
-            title="Source integrity reviews are deliberately processed one submission at a time."
+            title="The screener is automatically completing its final adjudication."
           >
-            Manual review · one at a time
+            Automated final adjudication · running
           </span>
         </Show>
       </Show>
@@ -389,7 +389,7 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
           // active admission work visible if a delayed snapshot has the count
           // before its submission record; a blank lane would falsely read as
           // no work. Once the record arrives this notice is replaced by its
-          // normal card (and, for source review, the serial-review badge).
+          // normal card (and, during L4, the automated-adjudication status).
           const unlistedAdmissionWork = () => {
             if (column().def.status !== "admission" || props.unavailable || props.loading) {
               return 0;
