@@ -471,6 +471,7 @@ def test_root_runtime_changes_keep_full_verification(
         "docker-compose.yml",
         "release/components.toml",
         "scripts/build-stack-release.py",
+        "scripts/run-coding-executor-connectivity-canary.py",
         "scripts/release-plan.py",
     ],
 )
@@ -636,6 +637,10 @@ def test_non_runtime_changes_do_not_release(
         ),
         ("Dockerfile.pylon", {"validator_stack"}),
         (".dockerignore", {"validator_stack"}),
+        (
+            "scripts/run-coding-executor-connectivity-canary.py",
+            {"validator_stack"},
+        ),
     ],
 )
 def test_live_runtime_inputs_are_mapped(

@@ -118,6 +118,16 @@ no executor envelope, agent UUID, artifact digest, run ID, ticket ID, Platform
 request, candidate operation, or S3 access. Configuration rejects combining
 this canary with either shadow coding or remote execution.
 
+The validator-stack role has a third, separately false
+`validator_stack_coding_executor_connectivity_canary_run_enabled` control. It
+accepts only the updater-validated managed release, a digest-pinned validator
+image, exact source revision, canary-only Compose model, and three root-owned
+mode-`0400` credential files. A successful operator run writes one unsigned,
+mode-`0600` diagnostic receipt containing public release provenance and a hash
+of the private executor origin. See
+`infra/docs/coding-executor-connectivity-canary.md`; the receipt is never
+execution, certification, scoring, or emissions authority.
+
 ## Activation checklist
 
 Activation is deliberately a coordinated operator action, not a code default.

@@ -269,6 +269,7 @@ paths = [
   "scripts/render-coding-executor-scorer-manifest.py",
   "scripts/export-coding-executor-scorer-bundle.sh",
   "scripts/render-coding-executor-scorer-bundle.py",
+  "scripts/run-coding-executor-connectivity-canary.py",
   "scripts/publish-compat-runtime-index.sh",
   "scripts/release-plan.py",
   "scripts/test-validator-embedding-gateway.sh",

@@ -40,6 +40,11 @@ validator_stack_coding_shadow_poll_seconds: 10
 validator_stack_coding_executor_identity_enabled: false
 validator_stack_coding_executor_remote_enabled: false
 validator_stack_coding_executor_connectivity_canary_enabled: false
+validator_stack_coding_executor_connectivity_canary_run_enabled: false
+validator_stack_coding_executor_connectivity_canary_timeout_seconds: 120
+validator_stack_coding_executor_connectivity_canary_directory: /var/lib/ditto-validator/coding-executor-canary
+validator_stack_coding_executor_connectivity_canary_receipt_path: /var/lib/ditto-validator/coding-executor-canary/receipt.json
+validator_stack_coding_executor_managed_release_directory: "{{ validator_stack_checkout }}/.validator-stack-update/current"
 validator_stack_coding_executor_base_url: ""
 validator_stack_coding_executor_timeout_seconds: 30
 validator_stack_coding_executor_identity_directory: /var/lib/ditto-validator/coding-executor-mtls
