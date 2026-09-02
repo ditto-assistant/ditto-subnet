@@ -460,6 +460,8 @@ class ScreenerWorker:
         heartbeat_task = asyncio.create_task(
             self._heartbeat_while_active(heartbeat_stop)
         )
+        result_submission_started = False
+        result_applied = False
         normal_review_settings = normal_review_settings or bootstrap_review_settings(
             self._config
         )
@@ -804,6 +806,7 @@ class ScreenerWorker:
                 image_ref=screened_image.image_ref if screened_image else None,
                 image_upload_id=screened_image_upload_id,
             )
+            result_submission_started = True
             resp = await self._platform.submit_result(
                 agent_id,
                 signature=signature,
@@ -856,6 +859,7 @@ class ScreenerWorker:
                 deferred_source_review=item.deferred_source_review,
                 policy_only=item.policy_only,
             )
+            result_applied = True
             logger.info(
                 "screened agent_id=%s miner=%s outcome=%s passed=%s "
                 "elapsed_s=%d -> %s%s",
@@ -867,9 +871,45 @@ class ScreenerWorker:
                 resp.status,
                 f" detail={result.detail!r}" if result.detail else "",
             )
-        except PlatformError as e:
-            # A late/conflicting verdict (409) or transient error: log + move on.
-            logger.warning("verdict for agent_id=%s not applied: %s", agent_id, e)
+        except PlatformError as error:
+            if result_submission_started:
+                # A late/conflicting verdict (409) or exhausted transient retry:
+                # the original signed request may already have reached Platform.
+                # Never replace it with a different fallback verdict.
+                logger.warning(
+                    "verdict for agent_id=%s not applied: %s", agent_id, error
+                )
+            else:
+                # A claim is already durable. Returning to polling without a
+                # terminal result makes Platform infer worker-lease-orphaned
+                # five minutes later and discards the actionable cause. Park it
+                # immediately with an attempt-bound signed infrastructure result.
+                logger.warning(
+                    "screening request failed before verdict agent_id=%s: %s",
+                    agent_id,
+                    error,
+                )
+                await self._submit_claim_failure(
+                    item=item,
+                    attempt_id=attempt_id,
+                    policy_version=policy_version,
+                    effective_review_settings=effective_review_settings,
+                    reason_code="worker-platform-request-failed",
+                    error=error,
+                )
+        except Exception as error:  # noqa: BLE001 - one artifact cannot kill worker
+            logger.exception(
+                "unexpected screening worker failure agent_id=%s", agent_id
+            )
+            if not result_applied:
+                await self._submit_claim_failure(
+                    item=item,
+                    attempt_id=attempt_id,
+                    policy_version=policy_version,
+                    effective_review_settings=effective_review_settings,
+                    reason_code="worker-result-processing-failed",
+                    error=error,
+                )
         finally:
             # A review can finish before a later build/image step raises. Do not
             # retain that attempt's private result in the long-lived worker.
@@ -888,6 +928,96 @@ class ScreenerWorker:
             if applied_canary_settings:
                 self._gate.apply_review_settings(normal_review_settings)
             await self._report_heartbeat("polling", force=True)
+
+    async def _submit_claim_failure(
+        self,
+        *,
+        item: ScreenerQueueItem,
+        attempt_id: UUID,
+        policy_version: int,
+        effective_review_settings: EffectiveReviewSettings,
+        reason_code: str,
+        error: Exception,
+    ) -> None:
+        """Best-effort terminal result for a claimed pre-verdict failure.
+
+        This is deliberately a minimal retryable-infrastructure payload. It
+        carries no partially normalized policy evidence or image identity, so
+        a malformed result cannot poison the fallback that preserves its cause.
+        """
+        raw_detail = f"screener error: {type(error).__name__}: {error}"
+        detail = private_failure_text(raw_detail, limit=PRIVATE_FAILURE_DETAIL_LIMIT)
+        log_tail = private_failure_text(
+            raw_detail, limit=PRIVATE_FAILURE_LOG_TAIL_LIMIT
+        )
+        override = item.review_settings_override
+        if override is not None:
+            review_settings_revision = override.revision
+            review_settings_scope = override.scope
+            review_settings_checksum = override.checksum
+        elif effective_review_settings.revision >= 1:
+            review_settings_revision = effective_review_settings.revision
+            review_settings_scope = effective_review_settings.scope
+            review_settings_checksum = effective_review_settings.checksum
+        else:
+            review_settings_revision = None
+            review_settings_scope = None
+            review_settings_checksum = None
+        review_settings_instance_id = (
+            self._instance_id if review_settings_revision is not None else None
+        )
+        outcome = ScreenResultOutcome.RETRYABLE_INFRA
+        try:
+            signature = sign_verdict(
+                self._keypair,
+                screener_hotkey=self._config.screener_hotkey,
+                agent_id=item.agent_id,
+                passed=False,
+                policy_version=policy_version,
+                attempt_id=attempt_id,
+                outcome=outcome,
+                deferred_source_review=item.deferred_source_review,
+                policy_only=item.policy_only,
+                review_settings_revision=review_settings_revision,
+                review_settings_instance_id=review_settings_instance_id,
+                review_settings_scope=review_settings_scope,
+                review_settings_checksum=review_settings_checksum,
+                reason_code=reason_code,
+                private_failure_detail=detail,
+                private_failure_log_tail=log_tail,
+            )
+            response = await self._platform.submit_result(
+                item.agent_id,
+                signature=signature,
+                passed=False,
+                policy_version=policy_version,
+                detail=detail,
+                attempt_id=attempt_id,
+                outcome=outcome,
+                review_settings_revision=review_settings_revision,
+                review_settings_instance_id=review_settings_instance_id,
+                review_settings_scope=review_settings_scope,
+                review_settings_checksum=review_settings_checksum,
+                reason_code=reason_code,
+                private_failure_detail=detail,
+                private_failure_log_tail=log_tail,
+                build_only=item.build_only,
+                deferred_source_review=item.deferred_source_review,
+                policy_only=item.policy_only,
+            )
+        except Exception as submit_error:  # noqa: BLE001 - preserve worker liveness
+            logger.warning(
+                "fallback verdict for agent_id=%s not applied: %s",
+                item.agent_id,
+                submit_error,
+            )
+            return
+        logger.warning(
+            "parked claimed agent_id=%s after worker failure code=%s -> %s",
+            item.agent_id,
+            reason_code,
+            response.status,
+        )
 
     async def _submit_shadow_review(
         self,
