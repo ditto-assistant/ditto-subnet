@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.181.8 (2026-09-02)
+
+### Bug Fixes
+
+- **dashboard**: Group screener workers by host
+  ([#1453](https://github.com/ditto-assistant/ditto-subnet/pull/1453),
+  [`c17dc2e`](https://github.com/ditto-assistant/ditto-subnet/commit/c17dc2e35dcb3f2d6f7ea50a724ca705a1cb77c5))
+
+
 ## v0.181.7 (2026-09-02)
 
 ### Bug Fixes
