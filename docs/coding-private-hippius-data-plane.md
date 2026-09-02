@@ -179,7 +179,7 @@ curator public-key digest, probe-receipt digest, manifest identity, remote-key
 digest, ciphertext identity, and uploaded/reused outcome. It contains no
 endpoint, bucket, raw object key, access ID, secret, plaintext, URL, or object
 bytes. Publication still does not register or activate a catalog. Unwrap
-authority, private-key custody, and plaintext runtime delivery remain later
+service custody, registered-release wiring, and phase delivery remain later
 reviews.
 
 ## Private-input retrieval
@@ -206,6 +206,28 @@ trusted, the consumer must:
 The candidate receives only the phase-appropriate materialized workspace. No
 Hippius URL, credential, wrapping key, hidden grader bundle, or catalog identity
 enters the miner harness or model context.
+
+The default-off Platform primitive begins with
+`apps/platform/ditto/api_server/coding_hippius_retrieval.py`. It loads a
+canonical encrypted manifest and canonical ready publication receipt, verifies
+the external curator signature, and requires the runtime reader identity to
+reproduce the published authority fingerprint. One post-assignment authority
+binds the ticket, validator, run, assignment, run manifest, deadline, delivery
+phase, registered catalog, selected index, manifest, and publication receipt.
+
+The reader can derive only the corresponding manifest-addressed key. Its live
+adapter creates a 60-second exact-GET signature locally, rejects a changed
+origin or path, disables ambient proxies and redirects, streams within the
+manifest byte bound, and verifies the complete ciphertext digest before asking
+an external unwrap boundary for a data key. The unwrap request and response are
+digest-bound to the ticket and cannot outlive it. AES-GCM authentication,
+plaintext size/SHA-256, canonical JSON, catalog membership, task identity, and
+all record digests are rechecked before the in-memory record is returned.
+
+This primitive has no API route, lifespan construction, secret-manager or KMS
+implementation, registered-release loader, plaintext cache, worker caller, or
+activation flag. Those boundaries remain separate reviews; merging it cannot
+make the existing plaintext-compatible catalog source use Hippius ciphertext.
 
 ## Sealed-evidence publication
 
