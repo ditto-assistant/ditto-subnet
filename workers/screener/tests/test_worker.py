@@ -825,6 +825,34 @@ async def test_inconclusive_completes_attempt_without_mislabeling_infrastructure
     assert verdict["detail"] == "behavioral oracle inconclusive"
 
 
+async def test_inconclusive_challenge_keeps_safe_http_status_for_miner_feedback(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([])
+    gate = _FakeGate(
+        ScreeningDecision(
+            outcome=ScreeningOutcome.INCONCLUSIVE,
+            detail="private policy audit inconclusive",
+            manifest_digest="ab" * 32,
+            evidence=(
+                PolicyEvidence(
+                    "v8-behavioral-oracle",
+                    "challenge-http-422",
+                    "always-on behavioral oracle did not produce a usable result",
+                ),
+            ),
+        )
+    )
+    worker = _worker(make_config(), platform, gate)
+
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+
+    verdict = platform.verdicts[0]
+    assert verdict["private_failure_detail"] is not None
+    assert "HTTP 422" in verdict["private_failure_detail"]
+    assert verdict["private_failure_log_tail"] == verdict["private_failure_detail"]
+
+
 async def test_screen_passes_lease_deadline_budget_to_gate(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
