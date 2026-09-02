@@ -73,6 +73,12 @@ from ditto.api_models.coding_evaluation import (
     coding_run_evidence_digest,
     coding_shadow_result_signing_message,
 )
+from ditto.api_models.coding_evidence import (
+    CODING_SEALED_EVIDENCE_MAX_BYTES,
+    CodingSealedEvidenceIdentity,
+    CodingSealedEvidenceKind,
+    coding_sealed_evidence_identity_digest,
+)
 from ditto.api_models.core_qualification import (
     AdminCoreQualificationPolicyRequest,
     AdminCoreQualificationPolicyResponse,
@@ -317,6 +323,8 @@ __all__ = [
     "CodingCertificationStage",
     "CodingCertificationStatus",
     "CodingRunEvidence",
+    "CodingSealedEvidenceIdentity",
+    "CodingSealedEvidenceKind",
     "CodingSelectionAssignmentRecord",
     "CodingShadowResultRecord",
     "CodingShadowRunAuthority",
@@ -507,8 +515,10 @@ __all__ = [
     "UploadAgentResponse",
     "UploadCheckRequest",
     "UploadCheckResponse",
+    "CODING_SEALED_EVIDENCE_MAX_BYTES",
     "core_qualification_policy_checksum",
     "coding_run_evidence_digest",
+    "coding_sealed_evidence_identity_digest",
     "coding_catalog_commitment_digest",
     "coding_catalog_commitment_signing_message",
     "coding_shadow_result_signing_message",

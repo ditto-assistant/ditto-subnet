@@ -2182,6 +2182,133 @@ class CodingShadowTicket(Base):
     )
 
 
+class CodingSealedEvidenceReservation(Base):
+    """Append-only exact-byte authority committed before provider contact."""
+
+    __tablename__ = "coding_sealed_evidence_reservations"
+
+    reservation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    ticket_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    claim_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    instance_id: Mapped[str] = mapped_column(Text, nullable=False)
+    ticket_deadline: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    evidence_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    plaintext_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    plaintext_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    ciphertext_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    ciphertext_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    object_key_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    envelope_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    wrapping_key_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    aad_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    identity_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=text("clock_timestamp()"),
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["ticket_id"],
+            ["coding_shadow_tickets.ticket_id"],
+            ondelete="CASCADE",
+            name="coding_sealed_evidence_reservations_ticket_fkey",
+        ),
+        UniqueConstraint(
+            "ticket_id",
+            "claim_generation",
+            "evidence_kind",
+            name="coding_sealed_evidence_reservations_ticket_generation_kind_key",
+        ),
+        UniqueConstraint(
+            "reservation_id",
+            "identity_sha256",
+            name="coding_sealed_evidence_reservations_identity_key",
+        ),
+        UniqueConstraint(
+            "identity_sha256",
+            name="coding_sealed_evidence_reservations_identity_sha_key",
+        ),
+        CheckConstraint(
+            "claim_generation BETWEEN 1 AND 2147483647 "
+            "AND validator_hotkey ~ '^[1-9A-HJ-NP-Za-km-z]{47,48}$' "
+            "AND octet_length(instance_id) BETWEEN 1 AND 128 "
+            "AND instance_id !~ '[[:space:][:cntrl:]]' "
+            "AND plaintext_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND ciphertext_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND object_key_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND envelope_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND wrapping_key_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND aad_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND identity_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND ciphertext_size_bytes = plaintext_size_bytes + 16 "
+            "AND weight_eligible = false",
+            name="coding_sealed_evidence_reservations_authority_check",
+        ),
+        CheckConstraint(
+            "(evidence_kind = 'authoring-transcript' "
+            "AND plaintext_size_bytes BETWEEN 1 AND 536870912) OR "
+            "(evidence_kind = 'frozen-submission' "
+            "AND plaintext_size_bytes BETWEEN 1 AND 134217728) OR "
+            "(evidence_kind IN ('authoring-publication-request', "
+            "'terminal-publication-request') "
+            "AND plaintext_size_bytes BETWEEN 1 AND 4194304) OR "
+            "(evidence_kind IN ('authoring-publication-acknowledgement', "
+            "'terminal-publication-acknowledgement') "
+            "AND plaintext_size_bytes BETWEEN 1 AND 1048576)",
+            name="coding_sealed_evidence_reservations_kind_size_check",
+        ),
+        Index(
+            "coding_sealed_evidence_reservations_ticket_created_idx",
+            "ticket_id",
+            "created_at",
+        ),
+    )
+
+
+class CodingSealedEvidenceFinalization(Base):
+    """Append-only full-byte verification of one exact reservation."""
+
+    __tablename__ = "coding_sealed_evidence_finalizations"
+
+    reservation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    identity_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    storage_status: Mapped[str] = mapped_column(Text, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    finalized_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=text("clock_timestamp()"),
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["reservation_id", "identity_sha256"],
+            [
+                "coding_sealed_evidence_reservations.reservation_id",
+                "coding_sealed_evidence_reservations.identity_sha256",
+            ],
+            ondelete="CASCADE",
+            name="coding_sealed_evidence_finalizations_reservation_fkey",
+        ),
+        CheckConstraint(
+            "identity_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND storage_status IN ('uploaded', 'reused') "
+            "AND weight_eligible = false",
+            name="coding_sealed_evidence_finalizations_authority_check",
+        ),
+        Index(
+            "coding_sealed_evidence_finalizations_finalized_idx",
+            "finalized_at",
+        ),
+    )
+
+
 class CodingInferenceGrant(Base):
     """One locked Luna capability bound to one shadow coding ticket."""
 

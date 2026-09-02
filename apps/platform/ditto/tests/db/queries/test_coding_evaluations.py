@@ -26,6 +26,11 @@ from ditto.api_models.coding_evaluation import (
     coding_authoring_evidence_digest,
     coding_run_evidence_digest,
 )
+from ditto.api_models.coding_evidence import (
+    CodingSealedEvidenceIdentity,
+    CodingSealedEvidenceKind,
+    coding_sealed_evidence_identity_digest,
+)
 from ditto.api_models.core_qualification import CoreQualificationPolicy
 from ditto.chain.models import BlockInfo
 from ditto.db.models import (
@@ -33,6 +38,8 @@ from ditto.db.models import (
     CodingCapabilityCertification,
     CodingCatalogExposure,
     CodingCatalogRelease,
+    CodingSealedEvidenceFinalization,
+    CodingSealedEvidenceReservation,
     CodingSelectionAssignmentRow,
     CodingShadowAuthoringFreeze,
     CodingShadowResult,
@@ -69,6 +76,11 @@ from ditto.db.queries.coding_evaluations import (
     insert_coding_shadow_run,
     issue_coding_shadow_ticket,
 )
+from ditto.db.queries.coding_evidence import (
+    CodingSealedEvidenceConflictError,
+    finalize_coding_sealed_evidence,
+    reserve_coding_sealed_evidence,
+)
 from ditto.db.queries.core_qualification import (
     insert_core_qualification_policy,
     observe_core_qualification,
@@ -81,6 +93,42 @@ _BENCH = 12
 _VALIDATOR = "5" + "B" * 47
 _TRANSCRIPT_BYTES = 4096
 _AUTHORING_EVENTS = 4
+
+
+def _sealed_evidence_identity(
+    *,
+    ticket_id: UUID,
+    instance_id: str,
+    claim_generation: int,
+    ticket_deadline: datetime,
+) -> CodingSealedEvidenceIdentity:
+    values: dict[str, object] = {
+        "schema": "dittobench-coding-sealed-evidence-identity-v1",
+        "coding_contract_version": 1,
+        "weight_eligible": False,
+        "reservation_id": UUID("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"),
+        "ticket_id": ticket_id,
+        "claim_generation": claim_generation,
+        "validator_hotkey": _VALIDATOR,
+        "instance_id": instance_id,
+        "ticket_deadline": ticket_deadline,
+        "evidence_kind": CodingSealedEvidenceKind.AUTHORING_TRANSCRIPT,
+        "plaintext_sha256": "a1" * 32,
+        "plaintext_size_bytes": _TRANSCRIPT_BYTES,
+        "ciphertext_sha256": "a2" * 32,
+        "ciphertext_size_bytes": _TRANSCRIPT_BYTES + 16,
+        "object_key_sha256": "a3" * 32,
+        "envelope_sha256": "a4" * 32,
+        "wrapping_key_sha256": "a5" * 32,
+        "aad_sha256": "a6" * 32,
+        "identity_sha256": "0" * 64,
+    }
+    draft = CodingSealedEvidenceIdentity.model_construct(
+        _fields_set=set(values),
+        **values,
+    )
+    values["identity_sha256"] = coding_sealed_evidence_identity_digest(draft)
+    return CodingSealedEvidenceIdentity.model_validate(values)
 
 
 class _FinalizedBlocks:
@@ -878,6 +926,67 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             claim_generation=2,
         )
     assert started_replay.idempotent
+    sealed_identity = _sealed_evidence_identity(
+        ticket_id=ticket_id,
+        instance_id=instance_id,
+        claim_generation=2,
+        ticket_deadline=started.ticket.deadline,
+    )
+    async with session.begin():
+        reserved = await reserve_coding_sealed_evidence(
+            session,
+            identity=sealed_identity,
+        )
+    assert reserved.idempotent is False
+    assert reserved.reservation.weight_eligible is False
+    async with session.begin():
+        reserved_replay = await reserve_coding_sealed_evidence(
+            session,
+            identity=sealed_identity,
+        )
+    assert reserved_replay.idempotent is True
+    with pytest.raises(CodingSealedEvidenceConflictError, match="identity"):
+        async with session.begin():
+            await reserve_coding_sealed_evidence(
+                session,
+                identity=sealed_identity.model_copy(
+                    update={"ciphertext_sha256": "ff" * 32}
+                ),
+            )
+    async with session.begin():
+        finalized = await finalize_coding_sealed_evidence(
+            session,
+            identity=sealed_identity,
+            storage_status="uploaded",
+        )
+    assert finalized.idempotent is False
+    assert finalized.finalization.storage_status == "uploaded"
+    async with session.begin():
+        finalized_replay = await finalize_coding_sealed_evidence(
+            session,
+            identity=sealed_identity,
+            storage_status="reused",
+        )
+    assert finalized_replay.idempotent is True
+    assert finalized_replay.finalization.storage_status == "uploaded"
+    with pytest.raises(SAIntegrityError, match="append-only"):
+        async with session.begin():
+            stored_reservation = await session.get(
+                CodingSealedEvidenceReservation,
+                sealed_identity.reservation_id,
+            )
+            assert stored_reservation is not None
+            stored_reservation.ciphertext_sha256 = "ff" * 32
+            await session.flush()
+    with pytest.raises(SAIntegrityError, match="append-only"):
+        async with session.begin():
+            stored_finalization = await session.get(
+                CodingSealedEvidenceFinalization,
+                sealed_identity.reservation_id,
+            )
+            assert stored_finalization is not None
+            await session.delete(stored_finalization)
+            await session.flush()
     async with session.begin():
         heartbeat = await heartbeat_coding_ticket_claim(
             session,
