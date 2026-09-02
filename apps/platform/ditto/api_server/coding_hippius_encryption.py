@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -36,6 +37,7 @@ _MIN_RSA_BITS = 3072
 _MAX_RSA_BITS = 8192
 _MAX_PUBLIC_KEY_BYTES = 64 << 10
 _MAX_MANIFEST_BYTES = (1_000_000 * (12 << 10)) + (1 << 20)
+_MAX_CIPHERTEXT_BYTES = (2 << 20) + 16
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -202,6 +204,82 @@ def load_hippius_wrapping_public_key(
     return loaded, hashlib.sha256(der).hexdigest()
 
 
+def load_hippius_private_input_transport(
+    directory: Path,
+) -> HippiusPrivateInputTransportManifest:
+    """Load and fully verify one completed local encrypted transport."""
+
+    if directory.is_symlink() or not directory.is_dir():
+        raise HippiusPrivateInputEncryptionError(
+            "private-input transport directory is invalid"
+        )
+    manifest_path = directory / "manifest.json"
+    body = _read_bounded_regular_file(
+        manifest_path,
+        maximum_bytes=_MAX_MANIFEST_BYTES,
+        label="private-input transport manifest",
+    )
+    try:
+        raw = json.loads(body, object_pairs_hook=_unique_object)
+        if not isinstance(raw, dict):
+            raise ValueError("manifest root is not an object")
+        if raw.pop("schema") != _ENCRYPTION_SCHEMA:
+            raise ValueError("manifest schema is invalid")
+        if raw.pop("algorithm") != _ALGORITHM:
+            raise ValueError("manifest algorithm is invalid")
+        if raw.pop("wrapping_algorithm") != _WRAPPING_ALGORITHM:
+            raise ValueError("manifest wrapping algorithm is invalid")
+        if raw.pop("weight_eligible") is not False:
+            raise ValueError("manifest weight eligibility is invalid")
+        raw_objects = raw.pop("objects")
+        if not isinstance(raw_objects, list):
+            raise ValueError("manifest objects are invalid")
+        objects = tuple(_parse_manifest_object(item) for item in raw_objects)
+        manifest = HippiusPrivateInputTransportManifest(objects=objects, **raw)
+        manifest = _validated_manifest(manifest)
+        if _manifest_bytes(manifest) != body:
+            raise ValueError("manifest is not canonical")
+        for item in manifest.objects:
+            read_hippius_encrypted_private_input(directory=directory, item=item)
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        HippiusPrivateInputEncryptionError,
+    ) as error:
+        raise HippiusPrivateInputEncryptionError(
+            "private-input transport manifest is invalid"
+        ) from error
+    return manifest
+
+
+def read_hippius_encrypted_private_input(
+    *,
+    directory: Path,
+    item: HippiusEncryptedPrivateInputObject,
+) -> bytes:
+    """Read one ciphertext and recheck its manifest identity."""
+
+    expected_path = f"objects/{item.catalog_index:06d}.bin"
+    if item.ciphertext_relative_path != expected_path:
+        raise HippiusPrivateInputEncryptionError(
+            "private-input ciphertext path is invalid"
+        )
+    body = _read_bounded_regular_file(
+        directory / expected_path,
+        maximum_bytes=_MAX_CIPHERTEXT_BYTES,
+        label="private-input ciphertext",
+    )
+    if (
+        len(body) != item.ciphertext_size_bytes
+        or hashlib.sha256(body).hexdigest() != item.ciphertext_sha256
+    ):
+        raise HippiusPrivateInputEncryptionError(
+            "private-input ciphertext changed after preparation"
+        )
+    return body
+
+
 def hippius_private_input_aad_bytes(
     *,
     plan: CodingCatalogPublicationPlan,
@@ -260,7 +338,7 @@ def _build_manifest(
             label="Hippius private-input transport manifest",
         )
     ).hexdigest()
-    return replace(draft, transport_manifest_sha256=digest)
+    return _validated_manifest(replace(draft, transport_manifest_sha256=digest))
 
 
 def _manifest_projection(
@@ -281,6 +359,7 @@ def _manifest_projection(
 
 
 def _manifest_bytes(manifest: HippiusPrivateInputTransportManifest) -> bytes:
+    manifest = _validated_manifest(manifest)
     projection = _manifest_projection(manifest)
     try:
         expected = hashlib.sha256(
@@ -306,6 +385,108 @@ def _manifest_bytes(manifest: HippiusPrivateInputTransportManifest) -> bytes:
         raise HippiusPrivateInputEncryptionError(
             "private-input transport manifest exceeds bounds"
         ) from error
+
+
+def _validated_manifest(
+    manifest: HippiusPrivateInputTransportManifest,
+) -> HippiusPrivateInputTransportManifest:
+    if (
+        _SHA256.fullmatch(manifest.catalog_commitment_sha256) is None
+        or manifest.coding_contract_version != 1
+        or not manifest.corpus_release_id
+        or len(manifest.corpus_release_id.encode()) > 256
+        or any(character.isspace() for character in manifest.corpus_release_id)
+        or _SHA256.fullmatch(manifest.publication_sha256) is None
+        or _SHA256.fullmatch(manifest.wrapping_key_sha256) is None
+        or _SHA256.fullmatch(manifest.transport_manifest_sha256) is None
+        or not manifest.objects
+        or len(manifest.objects) > 1_000_000
+    ):
+        raise HippiusPrivateInputEncryptionError(
+            "private-input transport manifest authority is invalid"
+        )
+    logical_keys: set[str] = set()
+    task_versions: set[str] = set()
+    ciphertexts: set[str] = set()
+    for expected_index, item in enumerate(manifest.objects):
+        try:
+            nonce = base64.b64decode(item.nonce_b64, validate=True)
+            wrapped_key = base64.b64decode(item.wrapped_data_key_b64, validate=True)
+        except ValueError as error:
+            raise HippiusPrivateInputEncryptionError(
+                "private-input transport envelope is invalid"
+            ) from error
+        if (
+            item.catalog_index != expected_index
+            or item.ciphertext_relative_path != f"objects/{expected_index:06d}.bin"
+            or not item.logical_object_key
+            or len(item.logical_object_key.encode()) > 1024
+            or any(character.isspace() for character in item.logical_object_key)
+            or _SHA256.fullmatch(item.plaintext_sha256) is None
+            or not 1 <= item.plaintext_size_bytes <= 2 << 20
+            or _SHA256.fullmatch(item.ciphertext_sha256) is None
+            or item.ciphertext_size_bytes != item.plaintext_size_bytes + 16
+            or item.ciphertext_size_bytes > _MAX_CIPHERTEXT_BYTES
+            or len(nonce) != _NONCE_BYTES
+            or not 384 <= len(wrapped_key) <= 1024
+            or _SHA256.fullmatch(item.aad_sha256) is None
+            or _SHA256.fullmatch(item.task_commitment_sha256) is None
+            or not item.task_version_id
+            or len(item.task_version_id.encode()) > 256
+            or any(character.isspace() for character in item.task_version_id)
+            or item.logical_object_key in logical_keys
+            or item.task_version_id in task_versions
+            or item.ciphertext_sha256 in ciphertexts
+        ):
+            raise HippiusPrivateInputEncryptionError(
+                "private-input transport object is invalid"
+            )
+        logical_keys.add(item.logical_object_key)
+        task_versions.add(item.task_version_id)
+        ciphertexts.add(item.ciphertext_sha256)
+    expected_digest = hashlib.sha256(
+        coding_canonical_json_bytes(
+            _manifest_projection(manifest),
+            maximum_bytes=_MAX_MANIFEST_BYTES,
+            label="Hippius private-input transport manifest",
+        )
+    ).hexdigest()
+    if expected_digest != manifest.transport_manifest_sha256:
+        raise HippiusPrivateInputEncryptionError(
+            "private-input transport manifest digest is invalid"
+        )
+    return manifest
+
+
+def _parse_manifest_object(raw: object) -> HippiusEncryptedPrivateInputObject:
+    if not isinstance(raw, dict):
+        raise ValueError("manifest object is invalid")
+    expected = {
+        "aad_sha256",
+        "catalog_index",
+        "ciphertext_relative_path",
+        "ciphertext_sha256",
+        "ciphertext_size_bytes",
+        "logical_object_key",
+        "nonce_b64",
+        "plaintext_sha256",
+        "plaintext_size_bytes",
+        "task_commitment_sha256",
+        "task_version_id",
+        "wrapped_data_key_b64",
+    }
+    if set(raw) != expected:
+        raise ValueError("manifest object fields are invalid")
+    return HippiusEncryptedPrivateInputObject(**raw)
+
+
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON field")
+        result[key] = value
+    return result
 
 
 def _validate_new_output_directory(output_dir: Path) -> Path:
@@ -399,6 +580,8 @@ __all__ = [
     "HippiusPrivateInputEncryptionError",
     "HippiusPrivateInputTransportManifest",
     "hippius_private_input_aad_bytes",
+    "load_hippius_private_input_transport",
     "load_hippius_wrapping_public_key",
     "prepare_hippius_private_input_transport",
+    "read_hippius_encrypted_private_input",
 ]

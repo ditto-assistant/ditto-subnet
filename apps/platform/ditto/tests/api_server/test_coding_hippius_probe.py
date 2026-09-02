@@ -28,6 +28,8 @@ from ditto.api_server.coding_hippius_probe import (
     HippiusProbeObjectMetadata,
     HippiusProbeReceipt,
     HippiusProbeReceiptError,
+    hippius_private_input_authority_sha256,
+    load_hippius_probe_receipt,
     parse_hippius_probe_config,
     run_hippius_capability_probe,
     write_hippius_probe_receipt,
@@ -234,6 +236,15 @@ async def test_probe_accepts_expected_hippius_scope_and_records_list_behavior():
     assert receipt.retained_synthetic_objects == 2
     assert receipt.weight_eligible is False
     assert receipt.reviewed_hippius_revision == HIPPIUS_REVIEWED_REVISION
+    assert receipt.private_input_authority_sha256 == (
+        hippius_private_input_authority_sha256(
+            endpoint_url="https://s3.hippius.com",
+            region="decentralized",
+            bucket="coding-private-inputs",
+            curator_access_key="hip_curator_access",
+            reader_access_key="hip_reader_access",
+        )
+    )
     checks = {check.name: check for check in receipt.checks}
     assert checks["private_input_reader_list_scope"].status is (
         HippiusProbeCheckStatus.OBSERVED
@@ -360,6 +371,9 @@ async def test_receipt_is_exclusive_mode_0600_and_redacted(
     ).hexdigest()
     assert payload_sha256 == expected_payload_sha256
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    loaded, loaded_sha256 = load_hippius_probe_receipt(output)
+    assert loaded == receipt
+    assert loaded_sha256 == payload_sha256
     raw = output.read_text()
     for sensitive in (
         config.endpoint_url,
@@ -387,6 +401,8 @@ def test_receipt_requires_absolute_path(tmp_path: Path):
         reviewed_hippius_revision=HIPPIUS_REVIEWED_REVISION,
         checked_at="2026-09-02T15:00:00Z",
         provider="hippius",
+        private_input_authority_sha256="b" * 64,
+        sealed_evidence_authority_sha256="c" * 64,
         synthetic_only=True,
         retained_synthetic_objects=0,
         ready=False,

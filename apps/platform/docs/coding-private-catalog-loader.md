@@ -130,6 +130,12 @@ records, recomputes that plan, and prepares the encrypted local transport. It
 accepts only a public wrapping key and performs no Hippius request. Its
 digest-bound manifest is not registration or activation authority.
 
+The subsequent offline publisher requires an externally produced Ed25519
+signature, a fresh matching capability-probe receipt, separate curator and
+reader credentials, exact remote-byte replay, and full post-upload reader
+verification. Its publication receipt remains private evidence and does not
+enable this loader or register a catalog release.
+
 ## Record contract
 
 Each object uses `dittobench-coding-private-catalog-record-v1` and contains:
