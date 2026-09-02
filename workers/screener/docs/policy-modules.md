@@ -75,6 +75,15 @@ A missing call or missing dataflow token quarantines the attempt; it never
 creates a deterministic rejection. Embedding-only traffic does not satisfy the
 model-call check.
 
+Behavioral challenges use the scorer's provider sequence. The first container
+starts with the current `platform` selector and every historical base-URL alias
+points at the same isolated broker. If that exact challenge is unusable and
+records zero broker calls, the worker may restart the same immutable image once
+with the historical `chutes` selector and repeat it within the original timeout.
+A usable zero-call response remains policy evidence and is never retried.
+`chutes` is only a compatibility adapter name here: it never selects the public
+Chutes service and no provider credential enters the submitted container.
+
 The always-on behavioral oracle sends its `/run` shaped like a scored tool case.
 It carries a `user_id`, a `tools` catalog, and a `tool_endpoint` filled by the
 gate from the reachable gateway, with the system prompt drawn from a pool that

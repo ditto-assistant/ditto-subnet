@@ -43,6 +43,133 @@ def _tar_gz(files: dict[str, bytes]) -> bytes:
     return buffer.getvalue()
 
 
+def _provider_selector_harness(expected_provider: str) -> bytes:
+    server = textwrap.dedent(
+        f"""
+        import json
+        import os
+        import urllib.request
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        EXPECTED_PROVIDER = {expected_provider!r}
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def send_json(self, status, payload):
+                body = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path == "/health":
+                    self.send_json(200, {{"status": "ok"}})
+                else:
+                    self.send_json(404, {{"error": "not found"}})
+
+            def do_POST(self):
+                if self.path != "/run":
+                    self.send_json(404, {{"error": "not found"}})
+                    return
+                if os.environ.get("DITTOBENCH_PROVIDER") != EXPECTED_PROVIDER:
+                    self.send_json(503, {{"error": "provider selector unsupported"}})
+                    return
+                length = int(self.headers.get("Content-Length", "0"))
+                request = json.loads(self.rfile.read(length))
+                base_key = (
+                    "DITTOBENCH_INFERENCE_BASE_URL"
+                    if EXPECTED_PROVIDER == "platform"
+                    else "CHUTES_BASE_URL"
+                )
+                upstream = urllib.request.Request(
+                    os.environ[base_key].rstrip("/") + "/chat/completions",
+                    data=json.dumps({{
+                        "model": os.environ["DITTOBENCH_MODEL"],
+                        "messages": [
+                            {{"role": "system", "content": request["system_prompt"]}},
+                            {{"role": "user", "content": request["user_input"]}},
+                        ],
+                    }}).encode(),
+                    headers={{"Content-Type": "application/json"}},
+                )
+                response = json.loads(
+                    urllib.request.urlopen(upstream, timeout=10).read()
+                )
+                self.send_json(200, {{
+                    "final_text": response["choices"][0]["message"]["content"],
+                    "tool_calls": [],
+                    "prompt_tokens": 1,
+                    "output_tokens": 1,
+                    "latency_ms": 1,
+                }})
+
+        ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+        """
+    ).encode()
+    dockerfile = (
+        b"FROM python:3.12-alpine@sha256:"
+        b"6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df\n"
+        b"WORKDIR /app\n"
+        b"COPY server.py /app/server.py\n"
+        b"USER 65532:65532\n"
+        b'ENTRYPOINT ["python", "/app/server.py"]\n'
+    )
+    return _tar_gz({"Dockerfile": dockerfile, "server.py": server})
+
+
+async def _screen_provider_selector_harness(
+    make_config: Any, expected_provider: str
+) -> tuple[ScreeningOutcome, int]:
+    tarball = _provider_selector_harness(expected_provider)
+
+    def artifact(request: httpx.Request) -> httpx.Response:
+        assert request.url == httpx.URL("https://artifact.test/provider.tar.gz")
+        return httpx.Response(200, content=tarball)
+
+    oracle = BehavioralOracleModule(
+        module_id="v8-behavioral-oracle", timeout_seconds=30.0
+    )
+    manifest = PolicyManifest(
+        rotation_id="integration-provider-parity",
+        module_specs=({"kind": "behavioral_oracle"},),
+    )
+    config: ScreenerConfig = make_config(
+        build_timeout_seconds=600.0,
+        run_timeout_seconds=60.0,
+        max_tarball_bytes=20 * 1024 * 1024,
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(artifact))
+    gate = BuildGate(
+        config,
+        client,
+        policy=PolicyEngine(manifest, (oracle,)),
+        journal=ReviewJournal(None),
+    )
+    restart_count = 0
+    real_restart = gate._restart_harness_for_compatibility
+
+    async def observed_restart(*args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        nonlocal restart_count
+        restart_count += 1
+        return await real_restart(*args, **kwargs)
+
+    gate._restart_harness_for_compatibility = observed_restart  # type: ignore[method-assign]
+    async with client:
+        result = await gate.screen(
+            agent_id=uuid4(),
+            attempt_id=uuid4(),
+            bench_version=12,
+            miner_hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url="https://artifact.test/provider.tar.gz",
+        )
+    return result.outcome, restart_count
+
+
 @pytest.mark.integration
 async def test_current_starter_kit_builds_and_health_checks_without_run(
     make_config: Any, tmp_path: Path
@@ -257,18 +384,29 @@ async def test_current_starter_kit_passes_behavioral_oracle(
     ``challenge-http-failure`` → INCONCLUSIVE for every honest submission,
     which is exactly how policy v8 shipped broken).
     """
+    archive_raw = os.environ.get("DITTO_STARTER_KIT_ARCHIVE")
     starter_dir_raw = os.environ.get("DITTO_STARTER_KIT_DIR")
-    if not starter_dir_raw:
-        pytest.skip("set DITTO_STARTER_KIT_DIR to a current canonical checkout")
-    starter_dir = Path(starter_dir_raw).resolve()
-    archive = tmp_path / "dittobench-starter-kit-oracle.tar.gz"
-    with archive.open("wb") as output:
-        subprocess.run(
-            ["git", "-C", str(starter_dir), "archive", "--format=tar.gz", "HEAD"],
-            check=True,
-            stdout=output,
-        )
-    tarball = archive.read_bytes()
+    if archive_raw:
+        tarball = Path(archive_raw).resolve().read_bytes()
+    else:
+        if not starter_dir_raw:
+            pytest.skip("set DITTO_STARTER_KIT_ARCHIVE or DITTO_STARTER_KIT_DIR")
+        starter_dir = Path(starter_dir_raw).resolve()
+        archive = tmp_path / "dittobench-starter-kit-oracle.tar.gz"
+        with archive.open("wb") as output:
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(starter_dir),
+                    "archive",
+                    "--format=tar.gz",
+                    "HEAD",
+                ],
+                check=True,
+                stdout=output,
+            )
+        tarball = archive.read_bytes()
     # Generous timeout: this asserts the request CONTRACT, not prod timing
     # (the module default of 20s assumes prod-class hardware).
     oracle = BehavioralOracleModule(
@@ -310,6 +448,32 @@ async def test_current_starter_kit_passes_behavioral_oracle(
         f"RunRequest contract is likely broken again: {result.evidence}"
     )
     assert result.passed, result.detail
+
+
+@pytest.mark.integration
+async def test_platform_only_harness_clears_without_compatibility_restart(
+    make_config: Any,
+) -> None:
+    """Screening starts with the same provider selector as current scoring."""
+    outcome, restart_count = await _screen_provider_selector_harness(
+        make_config, "platform"
+    )
+
+    assert outcome == ScreeningOutcome.PASS
+    assert restart_count == 0
+
+
+@pytest.mark.integration
+async def test_chutes_only_harness_gets_one_compatibility_restart(
+    make_config: Any,
+) -> None:
+    """A zero-call primary probe receives the scorer's one legacy restart."""
+    outcome, restart_count = await _screen_provider_selector_harness(
+        make_config, "chutes"
+    )
+
+    assert outcome == ScreeningOutcome.PASS
+    assert restart_count == 1
 
 
 @pytest.mark.integration
