@@ -74,16 +74,25 @@ the durable claim's agent UUID and artifact SHA instead of inventing missing
 identity. The remote request sends only the signed envelope and JSON body—never
 the local scorer bearer.
 
+`CodingPublicationClient` now has the same explicit remote boundary. Its five
+publication operations carry the real claim's agent UUID, artifact digest,
+ticket, run, and deadline authority and sign their exact canonical JSON bytes.
+The executor ingress independently requires the signed agent, artifact,
+ticket, and run identities to match the publication command. Remote `open` is
+also constrained to that outbox record and remote `pending` is a
+non-enumerating readiness probe. Because a valid envelope cannot exist before
+a claim, remote mode claims a still-unstarted ticket, performs this probe, and
+only then requests leases or crosses the Platform start boundary. Local mode
+retains its pre-claim loopback probe.
+
 `CodingExecutorTLSConfig` and `create_coding_executor_http_client` validate
 three distinct absolute credential files, reject symlinks, writable or
 executable credentials, oversized inputs, and group/world-readable private
 keys, then construct a no-proxy, no-redirect TLS 1.3-only client. This client is
 deliberately not parsed from environment or constructed by validator startup
-yet. The publication/outbox client still uses the local bearer transport, so
-wiring only the supervisor remotely would strand durable evidence after
-candidate execution. A later atomic PR must move publication operations to the
-same signed mTLS authority before any deploy or worker gate can reference this
-client.
+yet. Both remote clients are therefore dormant. A later atomic PR must inject
+one protected mTLS client and the same private executor origin into supervisor
+and publication construction together; it must not make only one half remote.
 
 ## Activation checklist
 

@@ -130,7 +130,7 @@ func (ingress *Ingress) Handler() http.Handler {
 			writeError(response, http.StatusBadRequest)
 			return
 		}
-		if strings.HasPrefix(operation, "supervisor.") && !supervisorIdentityMatches(body, envelope) {
+		if !executorIdentityMatches(operation, body, envelope) {
 			writeError(response, http.StatusUnauthorized)
 			return
 		}
@@ -177,14 +177,21 @@ func parseEnvelope(values []string) (codingcontract.ExecutorControlEnvelope, boo
 	return envelope, true
 }
 
-func supervisorIdentityMatches(body []byte, envelope codingcontract.ExecutorControlEnvelope) bool {
+func executorIdentityMatches(operation string, body []byte, envelope codingcontract.ExecutorControlEnvelope) bool {
 	var identity struct {
-		TicketID    string `json:"ticket_id"`
-		CodingRunID string `json:"coding_run_id"`
+		AgentID             string `json:"agent_id"`
+		AgentArtifactSHA256 string `json:"agent_artifact_sha256"`
+		TicketID            string `json:"ticket_id"`
+		CodingRunID         string `json:"coding_run_id"`
 	}
-	return json.Unmarshal(body, &identity) == nil &&
-		identity.TicketID == envelope.TicketID &&
-		identity.CodingRunID == envelope.CodingRunID
+	if json.Unmarshal(body, &identity) != nil ||
+		identity.TicketID != envelope.TicketID ||
+		identity.CodingRunID != envelope.CodingRunID {
+		return false
+	}
+	return !strings.HasPrefix(operation, "publications.") ||
+		(identity.AgentID == envelope.AgentID &&
+			identity.AgentArtifactSHA256 == envelope.AgentArtifactSHA256)
 }
 
 func validToken(value string) bool {

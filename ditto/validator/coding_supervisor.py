@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
-import ipaddress
 import json
 import os
 import ssl
 import stat
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
@@ -39,9 +37,14 @@ from ditto.validator.coding_attempt import (
     CodingAuthoringOutcome,
     CodingGradingOutcome,
 )
+from ditto.validator.coding_executor_transport import (
+    CodingExecutorRequestAuthority,
+    private_executor_endpoint,
+    sign_coding_executor_request,
+    tls_or_loopback,
+)
 from ditto.validator.config import ValidatorConfig
 from ditto.validator.errors import ValidatorInfrastructureError
-from ditto.validator.signing import sign_coding_executor_control
 
 _REQUEST_SCHEMA = "dittobench-coding-attempt-supervisor-request-v1"
 _RESPONSE_SCHEMA = "dittobench-coding-attempt-supervisor-response-v1"
@@ -255,14 +258,14 @@ class CodingSupervisorRuntime:
         )
         parsed = urlsplit(base_url)
         if (
-            not _tls_or_loopback(parsed.scheme, parsed.hostname)
+            not tls_or_loopback(parsed.scheme, parsed.hostname)
             or not parsed.netloc
             or parsed.username is not None
             or parsed.password is not None
             or parsed.path not in {"", "/"}
             or parsed.query
             or parsed.fragment
-            or (remote and not _private_executor_endpoint(parsed))
+            or (remote and not private_executor_endpoint(parsed))
             or (not remote and not _valid_control_token(token))
             or (remote and keypair is None)
         ):
@@ -563,32 +566,25 @@ class CodingSupervisorRuntime:
             "Cache-Control": "no-store",
         }
         if self._remote:
-            issued_at = now.astimezone(UTC).replace(microsecond=0)
-            lifetime = min(
-                timedelta(minutes=1),
-                deadline.astimezone(UTC) - issued_at,
-            )
-            if lifetime <= timedelta(0) or self._keypair is None:
+            try:
+                headers["X-Dittobench-Coding-Control"] = sign_coding_executor_request(
+                    keypair=self._keypair,
+                    validator_hotkey=self._validator_hotkey,
+                    authority=CodingExecutorRequestAuthority(
+                        agent_id=agent_id,
+                        agent_artifact_sha256=agent_artifact_sha256,
+                        coding_run_id=coding_run_id,
+                        ticket_id=ticket_id,
+                        deadline=deadline,
+                    ),
+                    operation=_EXECUTOR_OPERATION[operation],
+                    body=body,
+                    now=now,
+                )
+            except ValueError as error:
                 raise CodingAttemptIntegrityError(
                     "coding executor signing authority expired"
-                )
-            envelope = sign_coding_executor_control(
-                self._keypair,
-                validator_hotkey=self._validator_hotkey,
-                agent_id=agent_id,
-                agent_artifact_sha256=agent_artifact_sha256,
-                coding_run_id=coding_run_id,
-                ticket_id=ticket_id,
-                operation=_EXECUTOR_OPERATION[operation],
-                request_body_sha256=hashlib.sha256(body).hexdigest(),
-                nonce=uuid4(),
-                issued_at=issued_at,
-                lifetime=lifetime,
-            )
-            encoded = envelope.model_dump_json(by_alias=True).encode()
-            headers["X-Dittobench-Coding-Control"] = (
-                base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
-            )
+                ) from error
         else:
             headers["Authorization"] = f"Bearer {self._token}"
         received = bytearray()
@@ -700,32 +696,6 @@ def _require_tls_file(value: str, *, private: bool) -> Path:
     ):
         raise ValueError("coding executor mTLS credential is unsafe")
     return path
-
-
-def _tls_or_loopback(scheme: str, hostname: str | None) -> bool:
-    if hostname is None or hostname == "":
-        return False
-    if scheme == "https":
-        return True
-    if scheme != "http":
-        return False
-    host = hostname.casefold()
-    if host in {"localhost", "localhost."}:
-        return True
-    try:
-        return ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        return False
-
-
-def _private_executor_endpoint(parsed: Any) -> bool:
-    if parsed.scheme != "https" or parsed.port != 9443 or not parsed.hostname:
-        return False
-    try:
-        address = ipaddress.ip_address(parsed.hostname)
-    except ValueError:
-        return False
-    return address.version == 4 and address.is_private and not address.is_loopback
 
 
 def _authoring_payload(authoring: CodingAuthoringOutcome) -> dict[str, Any]:
