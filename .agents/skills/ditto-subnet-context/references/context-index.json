@@ -249,6 +249,19 @@
       "related": ["dittobench-scoring", "research-adapters", "contracts", "platform-api", "release-delivery"]
     },
     {
+      "id": "coding-hippius-canary-operator",
+      "title": "One-shot Hippius Coding canary operator",
+      "keywords": ["Hippius canary operator", "run Hippius canary", "canary helper executable", "canary deployed source", "Hippius canary plan"],
+      "summary": "Run the single-validator synthetic canary only from exact clean deployed source through distinct protected unwrap, authoring, and grading helpers, then write a redacted receipt.",
+      "skills": ["ditto-subnet-platform", "ditto-subnet-benchmark", "ditto-subnet-release-ops"],
+      "owns": ["apps/platform/ditto/api_server/coding_hippius_canary_operator.py", "apps/platform/scripts/run_hippius_shadow_canary.py", "apps/platform/docs/coding-hippius-canary-operator.md"],
+      "read": ["apps/platform/docs/coding-hippius-canary-operator.md", "apps/platform/docs/coding-hippius-shadow-canary.md", "apps/platform/docs/coding-hippius-custody-recovery.md", "docs/coding-private-hippius-data-plane.md", "services/dittobench-api/docs/coding-private-runtime-adapters-shadow.md"],
+      "search": ["rg -n 'HippiusCanaryOperator|ProcessHippius|HIPPIUS_CANARY_OPERATOR_ENABLED' apps/platform", "rg -n 'CodingSupervisorRuntime|codingphase|codinghost' ditto/validator services/dittobench-api"],
+      "validate": ["cd apps/platform && make lint lint-copy typecheck test", "uv run pytest -q ditto/tests/test_runtime_deploy_workflows.py ditto/tests/test_release_plan.py", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
+      "invariants": ["The operator is disabled by default and has no HTTP or scheduler caller.", "Private unwrap keys remain outside Platform and helper environments receive no provider credential.", "Exact plan, deployed record, and clean repository source SHAs must agree before execution."],
+      "related": ["coding-hippius-canary", "coding-hippius-custody", "coding-shadow-worker", "release-delivery"]
+    },
+    {
       "id": "coding-hippius-canary",
       "title": "Hippius synthetic single-validator Coding canary",
       "keywords": ["Hippius canary", "single-validator canary", "synthetic Coding canary", "phase-separated canary", "Hippius canary receipt"],

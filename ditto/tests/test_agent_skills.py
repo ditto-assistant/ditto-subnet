@@ -216,6 +216,14 @@ def test_platform_backroom_query_routes_to_both_owners() -> None:
     assert {"platform-api", "backroom"} <= topic_ids
 
 
+def test_hippius_canary_operator_query_routes_to_operator_contract() -> None:
+    topic_ids = [
+        str(topic["id"])
+        for topic in lookup("run Hippius canary with protected helper executable")
+    ]
+    assert topic_ids[0] == "coding-hippius-canary-operator"
+
+
 def test_targon_query_routes_to_capacity_and_release() -> None:
     topic_ids = {
         str(topic["id"])

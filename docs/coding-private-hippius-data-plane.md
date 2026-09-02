@@ -397,6 +397,13 @@ receipt after sealing the authoring transcript, frozen submission, and terminal
 request. The module has no route, scheduler, production adapters, or caller;
 merging it is not a live canary and does not advance phase 7.
 
+The follow-up operator layer adds a default-off confirmation-gated command,
+protected canonical plan loading, exact clean deployed-source verification,
+one local execution fence, and fixed owner-only process adapters for external
+unwrap plus separate authoring and grading helpers. It does not ship the helper
+implementations or any activation setting. A green source/CI result therefore
+remains distinct from a live phase-6 receipt.
+
 Every worker, scorer, catalog, evidence, readiness, weight, and emission gate
 remains false through the contract and infrastructure layers. A later
 activation requires exact merged source, deployed identity, canary receipts,
