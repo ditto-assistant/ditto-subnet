@@ -1092,6 +1092,48 @@ async def test_later_inconclusive_module_drops_source_adjudication() -> None:
     ]
 
 
+async def test_l4_clear_settles_oracle_transport_failure() -> None:
+    """A no-response oracle transport failure cannot overturn an L4 clear."""
+
+    async def challenge(challenge_id, _request, _timeout):  # type: ignore[no-untyped-def]
+        return ChallengeObservation(
+            challenge_id=challenge_id,
+            ok=False,
+            response_digest=None,
+            elapsed_ms=327,
+            gateway_calls=0,
+            error_code="challenge-transport-failure",
+        )
+
+    adjudication = {
+        "decision": "clear",
+        "reason": "final source-review court decision",
+        "model": "z-ai/glm-5.3-flash",
+        "prompt_revision": "adjudicator-v2-policy-v10",
+        "notes_considered": 1,
+    }
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l3-adjudicator-incomplete",
+            failure_disposition="retryable_infra",
+            adjudication=adjudication,
+        )
+
+    decision = await load_policy_engine(None).evaluate(_context(challenge, review))
+
+    assert decision.outcome == ScreeningOutcome.PASS
+    assert decision.adjudication == adjudication
+    assert [item.code for item in decision.evidence] == [
+        "source-review-adjudicated",
+        "challenge-transport-failure",
+    ]
+
+
 async def test_clean_review_finding_is_kept_when_oracle_is_inconclusive() -> None:
     """A low-risk source review remains exculpatory on an inconclusive oracle."""
     finding = _finding_payload("low")

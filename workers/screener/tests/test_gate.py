@@ -49,6 +49,7 @@ from ditto_screener.policy import (
     ReviewJournal,
     ScreeningOutcome,
     SourceReviewObservation,
+    load_policy_engine,
 )
 
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
@@ -1068,6 +1069,50 @@ class _StubReviewer:
         )
 
 
+class _TransportSettlingReviewer(_StubReviewer):
+    """A completed L1 ledger which requires a later L4 transport settlement."""
+
+    def __init__(self, events: list[str]) -> None:
+        super().__init__(events)
+        self.settle_calls = 0
+
+    async def review(self, *_args: Any, **_kwargs: Any) -> SourceReviewObservation:
+        self._events.append("review_started")
+        self._events.append("review_finished")
+        return SourceReviewObservation(
+            ok=True,
+            risk_level="low",
+            finding_digest="a" * 64,
+            categories=("none",),
+            notes=(
+                {
+                    "kind": "observation",
+                    "category": "none",
+                    "path": "src/main.rs",
+                    "line": 1,
+                    "summary": "runtime path is model-backed",
+                },
+            ),
+        )
+
+    async def settle_oracle_transport_failure(
+        self, observation: SourceReviewObservation, **_kwargs: Any
+    ) -> SourceReviewObservation:
+        self.settle_calls += 1
+        return SourceReviewObservation(
+            **{
+                **observation.__dict__,
+                "adjudication": {
+                    "decision": "clear",
+                    "reason": "retained notes do not prove a source breach",
+                    "model": "z-ai/glm-5.3-flash",
+                    "prompt_revision": "adjudicator-v3-policy-v11",
+                    "notes_considered": len(observation.notes),
+                },
+            }
+        )
+
+
 def _review_engine() -> PolicyEngine:
     return PolicyEngine(
         PolicyManifest(
@@ -1126,6 +1171,36 @@ async def test_policy_only_rescreen_starts_source_review_without_runtime(
     assert result.outcome == ScreeningOutcome.PASS
     assert events == ["review_started", "review_finished"]
     assert not any(call[0] in {"build", "run", "exec"} for call in docker_calls)
+
+
+async def test_oracle_transport_failure_runs_l4_from_the_completed_source_ledger(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    """A clean L1 result is terminally settled only after a no-response fault."""
+    events: list[str] = []
+    tarball = _valid_tar()
+    gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
+    gate._policy = load_policy_engine(None)
+    reviewer = _TransportSettlingReviewer(events)
+    gate._source_reviewer = reviewer  # type: ignore[assignment]
+
+    async def no_response(_container: str, url: str, **_kwargs: Any) -> tuple[int, str]:
+        if url.endswith("/health"):
+            return 0, ""
+        return 24, "transport request failed"
+
+    gate._request_from_sidecar = no_response  # type: ignore[method-assign]
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert reviewer.settle_calls == 1
+    assert result.adjudication is not None
+    assert result.adjudication["decision"] == "clear"
+    assert [evidence.code for evidence in result.evidence][-2:] == [
+        "challenge-transport-failure",
+        "source-review-adjudicated",
+    ]
 
 
 async def test_source_review_is_not_started_when_the_build_fails(
@@ -1984,6 +2059,31 @@ async def test_private_challenge_keeps_http_body_out_of_failure_code(
     assert not observation.ok
     assert observation.error_code == "challenge-http-422"
     assert "echoed-private-challenge-token" not in observation.error_code
+
+
+async def test_private_challenge_classifies_transport_failures_without_traceback(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    state = tmp_path / "gateway-calls"
+
+    async def rejected(*_: Any, **__: Any) -> tuple[int, str]:
+        return 24, "transport request failed"
+
+    gate._request_from_sidecar = rejected  # type: ignore[method-assign]
+    observation = await gate._run_private_challenge(
+        "v8-behavioral-oracle",
+        {"case_id": "private-control"},
+        5,
+        harness_base="http://harness:8080",
+        probe_container="probe",
+        gateway_response_token="nonce-token",
+        gateway_state_file=str(state),
+    )
+    await gate._client.aclose()
+
+    assert not observation.ok
+    assert observation.error_code == "challenge-transport-failure"
 
 
 async def test_private_challenge_scores_the_gateway_encoded_oracle(

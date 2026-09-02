@@ -677,12 +677,14 @@ def _log_tail(text: str) -> str:
     return "…" + trimmed[-_LOG_TAIL_BYTES:]
 
 
-def _challenge_http_error_code(output: str) -> str:
+def _challenge_failure_code(output: str) -> str:
     """Return a public-safe challenge error code without exposing its body."""
     match = re.match(r"^HTTP\s+([1-5]\d{2})(?::|\b)", output.strip())
-    if match is None:
-        return "challenge-http-failure"
-    return f"challenge-http-{match.group(1)}"
+    if match is not None:
+        return f"challenge-http-{match.group(1)}"
+    if output.strip() == "transport request failed":
+        return "challenge-transport-failure"
+    return "challenge-http-failure"
 
 
 def _detail_tail(text: str) -> str:
@@ -1468,6 +1470,48 @@ class BuildGate:
                 deferred_source_review=deferred_source_review,
                 skip_challenges=targon_runtime_ok,
             )
+            if (
+                decision.outcome == ScreeningOutcome.INCONCLUSIVE
+                and review_task is not None
+                and any(
+                    evidence.code == "challenge-transport-failure"
+                    for evidence in decision.evidence
+                )
+            ):
+                # A no-response behavioral-oracle failure does not establish a
+                # harness defect. When the completed source review retained
+                # typed notes, ask L4 to make the terminal, decision-only call
+                # from that ledger instead of parking a clean submission for a
+                # retry that merely repeats the same evidence collection.
+                observation = await review_task
+                settled = await self._source_reviewer.settle_oracle_transport_failure(
+                    observation,
+                    archive_path=tmp_path,
+                    deadline=deadline,
+                    policy_version=policy_version,
+                )
+                if settled.adjudication is not None:
+                    source_decision = self._policy.preexecution_source_decision(settled)
+                    decision = ScreeningDecision(
+                        outcome=source_decision.outcome,
+                        detail=source_decision.detail,
+                        manifest_digest=decision.manifest_digest,
+                        evidence=(*decision.evidence, *source_decision.evidence),
+                        finding=(
+                            source_decision.finding
+                            if source_decision.finding is not None
+                            else decision.finding
+                        ),
+                        review_audit=(
+                            source_decision.review_audit
+                            if source_decision.review_audit is not None
+                            else decision.review_audit
+                        ),
+                        adjudication=source_decision.adjudication,
+                        review_notes=(
+                            source_decision.review_notes or decision.review_notes
+                        ),
+                    )
             if (
                 decision.outcome == ScreeningOutcome.PASS
                 and preflight_clearance is not None
@@ -2965,7 +3009,7 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                 ok=False,
                 response_digest=None,
                 elapsed_ms=elapsed_ms,
-                error_code=_challenge_http_error_code(out),
+                error_code=_challenge_failure_code(out),
                 gateway_calls=gateway_calls,
             )
         body = out.encode()
@@ -3042,6 +3086,12 @@ try:
     response = urllib.request.urlopen(request, timeout=float(timeout_raw))
 except urllib.error.HTTPError as error:
     response = error
+except (urllib.error.URLError, OSError, TimeoutError):
+    # Preserve the transport class without logging a traceback or response
+    # detail. The caller only needs to distinguish no response from a harness
+    # HTTP status, and the public result must not expose challenge data.
+    sys.stdout.write("transport request failed")
+    raise SystemExit(24)
 output = response.read({_MAX_CANARY_RESPONSE_BYTES + 1})
 if len(output) > {_MAX_CANARY_RESPONSE_BYTES}:
     sys.stdout.write("response exceeded safety cap")

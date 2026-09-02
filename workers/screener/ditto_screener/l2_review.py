@@ -4008,6 +4008,41 @@ class LayeredSourceReviewAgent:
         )
         return replace(observation, adjudication=adjudication.model_dump(mode="json"))
 
+    async def settle_oracle_transport_failure(
+        self,
+        observation: SourceReviewObservation,
+        *,
+        archive_path: str,
+        deadline: float | None = None,
+        policy_version: int = SCREENING_POLICY_VERSION,
+    ) -> SourceReviewObservation:
+        """Close a no-response oracle failure from the retained review ledger.
+
+        A certified low-risk L1 result normally avoids an unnecessary L4 call.
+        That is correct until the independent behavioral oracle cannot make an
+        HTTP request at all: without a response or gateway call, that failure
+        cannot outweigh the completed source review, but it would otherwise
+        leave the submission parked.  Run the decision-only court exactly in
+        that case, using its existing typed notes rather than repeating the
+        exploratory review or treating the transport failure as a pass.
+        """
+        if (
+            self._adjudicator is None
+            or observation.adjudication is not None
+            or not observation.notes
+        ):
+            return observation
+        adjudication = await self._adjudicator.adjudicate(
+            archive_path,
+            notes=observation.notes,
+            finding=observation.finding,
+            error_code="challenge-transport-failure",
+            deadline=deadline,
+            policy_version=policy_version,
+            ledger_final=True,
+        )
+        return replace(observation, adjudication=adjudication.model_dump(mode="json"))
+
     def _settle_gradient(
         self, observation: SourceReviewObservation
     ) -> SourceReviewObservation:
