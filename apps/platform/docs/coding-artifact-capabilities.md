@@ -28,7 +28,17 @@ miners build their own embeddings after seeding.
 `HEAD` is only a bounded signing preflight, not proof of downloaded bytes.
 Every future consumer must stream within the declared size bound, recompute the
 SHA-256 before extraction or use, and reject any mismatch with the capability
-digest. The object store must enforce immutable writes for this namespace.
+digest. The effective storage boundary must enforce immutable writes for this
+namespace.
+
+The selected Hippius provider does not yet supply the complete conditional
+create and WORM enforcement assumed by a direct writer. The
+[`Hippius-only data-plane contract`](../../../docs/coding-private-hippius-data-plane.md)
+therefore requires contract-derived read keys, never-reused opaque evidence
+keys, PostgreSQL reservations, Platform-only credentials, a one-time evidence
+mediator, and a full downloaded SHA-256 check before finalization. Until those
+compensating controls and their live canary exist, no Hippius-backed artifact
+or evidence path is eligible for activation.
 
 The complete capability set is server-internal and must never be serialized as
 one validator or miner response. A future orchestrator projects the visible

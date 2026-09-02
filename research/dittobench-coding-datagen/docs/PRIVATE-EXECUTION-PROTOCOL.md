@@ -139,8 +139,13 @@ row's immutable database insertion time predates its timestamp, then atomically
 inserts the selected run, irreversible exposures, and assignment-to-run link.
 
 Platform's private catalog transport resolves one selected record at a time
-from a separately credentialed, non-public S3-compatible store. Contract v1
-uses the fixed content-addressed object key:
+from a separately credentialed, non-public Hippius bucket. Hippius is the only
+remote object store for private Coding inputs and sealed evidence; its complete
+provider, client-side encryption, credential, mediation, and canary boundary is
+defined in
+[`docs/coding-private-hippius-data-plane.md`](../../../docs/coding-private-hippius-data-plane.md).
+This provider decision does not activate the existing loader. Contract v1 uses
+the fixed content-addressed logical object key:
 
 ```text
 coding-catalog/v1/<catalog-commitment-sha256>/records/<six-digit-index>.json
@@ -240,8 +245,13 @@ identities rather than presigned objects.
 
 Object metadata is only a signing preflight. The consuming validator service
 must stream within the declared bound and verify the full downloaded SHA-256
-before extracting or using bytes; the artifact namespace also requires
-immutable-write storage policy.
+before extracting or using bytes. Because the reviewed Hippius surface does
+not yet enforce conditional create-only writes or WORM retention, immutable
+artifact and evidence publication additionally requires contract-derived read
+keys, never-reused opaque evidence keys, a PostgreSQL reservation,
+Platform-only credentials, and one-time mediated upload followed by complete
+downloaded-byte verification. Direct executor write credentials and reusable
+presigned `PUT` URLs are forbidden.
 
 The complete capability set stays server-internal. Delivery projects each URL
 only to its trusted consumer: visible materializer, memory seed projector,
