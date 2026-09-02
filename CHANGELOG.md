@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.181.16 (2026-09-02)
+
+### Bug Fixes
+
+- **starter-kit**: Reserve save memory tool name
+  ([#1516](https://github.com/ditto-assistant/ditto-subnet/pull/1516),
+  [`9a6bb72`](https://github.com/ditto-assistant/ditto-subnet/commit/9a6bb72ba37540d79eb259e705af11ac6fd9cc09))
+
+
 ## v0.181.15 (2026-09-02)
 
 ### Bug Fixes
