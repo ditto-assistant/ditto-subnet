@@ -99,6 +99,11 @@ def _private_failure_feedback(detail: str, reason_code: str | None) -> str:
             "The isolated behavioral-oracle request to this submission's /run "
             "endpoint failed before a usable HTTP response."
         )
+    if reason_code == "challenge-transport-failure":
+        return (
+            "The isolated behavioral-oracle request could not reach this "
+            "submission's /run endpoint."
+        )
     return detail
 
 

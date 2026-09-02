@@ -4532,6 +4532,47 @@ async def test_a_clean_review_is_never_adjudicated() -> None:
 
     assert court.calls == 0
     assert result.adjudication is None
+    unsettled = await layered.settle_oracle_transport_failure(
+        result,
+        archive_path="unused",
+    )
+    assert court.calls == 0
+    assert unsettled.adjudication is None
+
+
+async def test_oracle_transport_failure_adjudicates_a_clean_review_ledger() -> None:
+    """A later no-response oracle fault receives L4, not a retry loop."""
+    notes = (
+        {
+            "kind": "observation",
+            "category": "none",
+            "path": "src/main.rs",
+            "line": 1,
+            "summary": "runtime path is model-backed",
+        },
+    )
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(replace(_l1("low", clearance_certified=True), notes=notes)),
+        l2=_FakeL2(_model_result(_safe())),
+        mode="enforce",
+        adjudicator=court,  # type: ignore[arg-type]
+    )
+
+    clean = await layered.review("unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT)
+    settled = await layered.settle_oracle_transport_failure(
+        clean,
+        archive_path="unused",
+        deadline=123.0,
+        policy_version=10,
+    )
+
+    assert clean.adjudication is None
+    assert court.calls == 1
+    assert court.seen_notes == notes
+    assert court.policy_version == 10
+    assert settled.adjudication is not None
+    assert settled.adjudication["decision"] == "clear"
 
 
 async def test_an_early_infrastructure_failure_is_finally_adjudicated() -> None:

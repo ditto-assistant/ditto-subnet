@@ -1115,6 +1115,32 @@ class PolicyEngine:
             review_notes = (*review_notes, *result.review_notes)
             terminal = _module_terminal(result.disposition)
             if terminal is not None:
+                # L4 may already have made a signed, evidence-bound clearance
+                # from the retained source-review ledger. A later transport
+                # failure in the auxiliary behavioral oracle has no response or
+                # gateway call to weigh against that verdict, so it must not
+                # park an otherwise-complete review for an operator retry.
+                #
+                # Keep this exception narrow: a usable oracle response with
+                # insufficient calls, a wrong token, or an implausibly fast
+                # answer remains a distinct observation on its normal
+                # inconclusive/quarantine path.
+                if (
+                    terminal == ScreeningOutcome.INCONCLUSIVE
+                    and isinstance(module, BehavioralOracleModule)
+                    and result.evidence
+                    and result.evidence[-1].code == "challenge-transport-failure"
+                    and adjudication is not None
+                    and adjudication.get("decision") == "clear"
+                ):
+                    return self._decision(
+                        ScreeningOutcome.PASS,
+                        evidence,
+                        finding,
+                        review_audit=review_audit,
+                        adjudication=adjudication,
+                        review_notes=review_notes,
+                    )
                 return self._decision(
                     terminal,
                     evidence,
