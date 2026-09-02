@@ -262,9 +262,10 @@ func marshalSeedRequest(req protocol.SeedRequest, benchVersion int) ([]byte, err
 // the user_id the case's memory graph was seeded under (multi-graph isolation).
 // The zero value reproduces self-report behavior (no endpoint, default user).
 type CaseOptions struct {
-	ToolEndpoint string
-	UserID       string
-	BenchVersion int
+	ToolEndpoint     string
+	UserID           string
+	BenchVersion     int
+	InferenceBaseURL string
 }
 
 // AttemptTelemetry is validator-observed execution evidence for one HTTP
@@ -408,7 +409,10 @@ func runOneWithTelemetry(ctx context.Context, harnessURL string, c protocol.Tool
 		ToolEndpoint: opts.ToolEndpoint,
 		UserID:       opts.UserID,
 	}
-	buf, err := json.Marshal(reqBody)
+	buf, err := json.Marshal(struct {
+		protocol.RunRequest
+		InferenceBaseURL string `json:"inference_base_url,omitempty"`
+	}{RunRequest: reqBody, InferenceBaseURL: opts.InferenceBaseURL})
 	if err != nil {
 		return finish("request_encode_error", fmt.Errorf("marshal run request: %w", err))
 	}
