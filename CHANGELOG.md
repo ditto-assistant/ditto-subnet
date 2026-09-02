@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.181.11 (2026-09-02)
+
+### Bug Fixes
+
+- **dashboard**: Label automated adjudication accurately
+  ([#1496](https://github.com/ditto-assistant/ditto-subnet/pull/1496),
+  [`792deb4`](https://github.com/ditto-assistant/ditto-subnet/commit/792deb4bf6c5a10665cc1f646a582bf4c3c67f8d))
+
+
 ## v0.181.10 (2026-09-02)
 
 ### Bug Fixes
