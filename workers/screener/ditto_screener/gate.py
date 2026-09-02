@@ -61,7 +61,7 @@ import time
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, BinaryIO, cast
+from typing import TYPE_CHECKING, Any, BinaryIO, Literal, cast
 from uuid import UUID
 
 import httpx
@@ -149,6 +149,9 @@ _VALIDATOR_SANDBOX_MEMORY = "3g"
 _VALIDATOR_SANDBOX_CPUS = "2"
 _VALIDATOR_SANDBOX_PIDS = "512"
 _VALIDATOR_SANDBOX_DB = "/tmp/dittobench.db"
+_PRIMARY_HARNESS_PROVIDER: Literal["platform"] = "platform"
+_COMPAT_HARNESS_PROVIDER: Literal["chutes"] = "chutes"
+_BROKER_PLACEHOLDER_KEY = "ticket"
 _DOCKER_INFRASTRUCTURE_MARKERS = (
     "cannot connect to the docker daemon",
     "error during connect",
@@ -288,6 +291,7 @@ class _AuditRuntime:
     gateway_response_token: str
     oracle_answer: str
     gateway_state_file: str
+    provider: Literal["platform", "chutes"] = _PRIMARY_HARNESS_PROVIDER
 
 
 # The fake gateway serves a benign `/tool` sink at the same host-container alias
@@ -314,6 +318,39 @@ def _with_tool_endpoint(request: Mapping[str, object]) -> dict[str, object]:
     if payload.get("tools") and not payload.get("tool_endpoint"):
         payload["tool_endpoint"] = _TOOL_ENDPOINT
     return payload
+
+
+def _gateway_runtime_env(
+    *,
+    provider: Literal["platform", "chutes"],
+    chat_gateway: str,
+    embed_gateway: str,
+) -> dict[str, str]:
+    """Build the scorer-equivalent locked inference environment.
+
+    ``chutes`` is only the scorer's bounded compatibility selector. Every URL
+    and placeholder key still targets the same isolated, ticket-shaped broker;
+    it never authorizes or selects the public Chutes service.
+    """
+    gateway = f"{chat_gateway.rstrip('/')}/v1"
+    return {
+        "DITTOBENCH_PROVIDER": provider,
+        "DITTOBENCH_MODEL": LOCKED_HARNESS_MODEL,
+        "DITTOBENCH_INFERENCE_BASE_URL": gateway,
+        "CHUTES_BASE_URL": gateway,
+        "CHUTES_API_KEY": _BROKER_PLACEHOLDER_KEY,
+        "OPENAI_BASE_URL": gateway,
+        "OPENAI_API_BASE": gateway,
+        "OPENROUTER_BASE_URL": gateway,
+        "OPENAI_API_KEY": _BROKER_PLACEHOLDER_KEY,
+        "OPENROUTER_API_KEY": _BROKER_PLACEHOLDER_KEY,
+        "OLLAMA_BASE_URL": embed_gateway,
+        "SSL_CERT_FILE": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
+        "REQUESTS_CA_BUNDLE": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
+        "CURL_CA_BUNDLE": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
+        "NODE_EXTRA_CA_CERTS": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
+        "DITTOBENCH_DB": _VALIDATOR_SANDBOX_DB,
+    }
 
 
 def dockerfile_at_root(member_names: list[str]) -> bool:
@@ -1374,6 +1411,7 @@ class BuildGate:
                 )
             if audit_runtime is None:
                 raise RuntimeError("healthy harness has no isolated audit runtime")
+            active_audit_runtime: _AuditRuntime = audit_runtime
 
             if review_factory is not None:
                 review_task = asyncio.create_task(review_factory())
@@ -1381,16 +1419,22 @@ class BuildGate:
             async def run_challenge(
                 challenge_id: str, request: Mapping[str, object], timeout: float
             ) -> ChallengeObservation:
-                return await self._run_private_challenge(
+                nonlocal active_audit_runtime
+                (
+                    observation,
+                    active_audit_runtime,
+                ) = await self._run_private_challenge_with_compatibility(
                     challenge_id,
                     request,
                     timeout,
-                    harness_base=audit_runtime.harness_base,
-                    probe_container=gateway_container,
-                    gateway_response_token=audit_runtime.gateway_response_token,
-                    oracle_answer=audit_runtime.oracle_answer,
-                    gateway_state_file=audit_runtime.gateway_state_file,
+                    audit_runtime=active_audit_runtime,
+                    tag=built_image_id,
+                    container=container,
+                    gateway_container=gateway_container,
+                    network=network,
+                    gateway_state_dir=gateway_state_dir,
                 )
+                return observation
 
             async def review_source():  # type: ignore[no-untyped-def]
                 nonlocal in_policy_phase
@@ -2424,7 +2468,6 @@ class BuildGate:
         progress: Callable[[ScreenerProgressStage], None] | None = None,
     ) -> tuple[_StageResult, _AuditRuntime | None]:
         """Run the image and await health against the isolated fake gateway."""
-        port = self._config.container_port
         # High-entropy, opaque tokens with no ``ditto``/``fake``/``screening``
         # marker: the first is the per-container nonce the gateway returns, the
         # second is the answer it returns only once the nonce is fed back on a
@@ -2441,8 +2484,60 @@ class BuildGate:
         if not started:
             return _StageResult(False, detail, retryable=True), None
 
+        serve_result = await self._start_harness(
+            tag,
+            container,
+            gateway_container=gateway_container,
+            network=network,
+            gateway_state_dir=gateway_state_dir,
+            provider=_PRIMARY_HARNESS_PROVIDER,
+            progress=progress,
+        )
+        if not serve_result.passed:
+            return serve_result, None
+
+        harness_base = f"http://{_HARNESS_ALIAS}:{self._config.container_port}"
+        # Production v6 intentionally stops here. No synthetic POST /run is
+        # issued unless a private policy selector explicitly chooses an audit.
+        return (
+            _StageResult(True, ""),
+            _AuditRuntime(
+                harness_base=harness_base,
+                gateway_response_token=response_text,
+                oracle_answer=oracle_answer,
+                gateway_state_file=str(Path(gateway_state_dir) / "model-called"),
+            ),
+        )
+
+    async def _start_harness(
+        self,
+        tag: str,
+        container: str,
+        *,
+        gateway_container: str,
+        network: str,
+        gateway_state_dir: str,
+        provider: Literal["platform", "chutes"],
+        timeout: float | None = None,
+        progress: Callable[[ScreenerProgressStage], None] | None = None,
+    ) -> _StageResult:
+        """Start one scorer-shaped harness process and await its health route."""
+        stage_timeout = self._config.run_timeout_seconds
+        if timeout is not None:
+            stage_timeout = min(stage_timeout, max(0.0, timeout))
+        if stage_timeout <= 0:
+            return _StageResult(
+                False,
+                "provider compatibility restart exhausted its challenge budget",
+            )
+
         chat_gateway = f"http://{_GATEWAY_ALIAS}:{_CHAT_GATEWAY_PORT}"
         embed_gateway = f"http://{_GATEWAY_ALIAS}:{_EMBED_GATEWAY_PORT}"
+        gateway_env = _gateway_runtime_env(
+            provider=provider,
+            chat_gateway=chat_gateway,
+            embed_gateway=embed_gateway,
+        )
         run_args = [
             "run",
             "-d",
@@ -2482,31 +2577,12 @@ class BuildGate:
             "compress=false",
         ]
         for key, value in self._config.smoke_env:
-            if key == "DITTOBENCH_DB":
+            if key in gateway_env:
                 continue
             run_args += ["-e", f"{key}={value}"]
-        # Mirror the production scorer's locked provider contract. These are
-        # appended last so an operator's legacy smoke env cannot bypass the
-        # fake gateway. SSL_* pins the compatibility CA for harnesses that
-        # compiled https://openrouter.ai/api/v1 instead of reading the
-        # injected ticket URL — the same door the scorer's OpenRouter shim
-        # presents at score time.
-        gateway_env = {
-            "DITTOBENCH_PROVIDER": "chutes",
-            "DITTOBENCH_MODEL": LOCKED_HARNESS_MODEL,
-            "CHUTES_BASE_URL": f"{chat_gateway}/v1",
-            "CHUTES_API_KEY": "relay",
-            "OPENAI_BASE_URL": f"{chat_gateway}/v1",
-            "OPENAI_API_KEY": "relay",
-            "OLLAMA_BASE_URL": embed_gateway,
-            "SSL_CERT_FILE": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
-            "REQUESTS_CA_BUNDLE": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
-            "CURL_CA_BUNDLE": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
-            "NODE_EXTRA_CA_CERTS": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
-            # The validator root filesystem is read-only. Its bounded /tmp
-            # tmpfs is the canonical writable location for the harness DB.
-            "DITTOBENCH_DB": _VALIDATOR_SANDBOX_DB,
-        }
+        # Apply the lock last so operator smoke settings cannot route around
+        # the isolated broker. The primary selector matches current scoring;
+        # ``chutes`` is used only by the bounded compatibility restart below.
         run_args += [
             "--mount",
             "type=bind,"
@@ -2516,48 +2592,33 @@ class BuildGate:
         for key, value in gateway_env.items():
             run_args += ["-e", f"{key}={value}"]
         run_args.append(tag)
-        code, out = await self._run(run_args, timeout=self._config.run_timeout_seconds)
+        code, out = await self._run(run_args, timeout=stage_timeout)
         if code != 0:
-            return (
-                _StageResult(
-                    False,
-                    f"container did not start: {_log_tail(out)}",
-                    retryable=_docker_infrastructure_failure(out),
-                ),
-                None,
+            return _StageResult(
+                False,
+                f"container did not start: {_log_tail(out)}",
+                retryable=_docker_infrastructure_failure(out),
             )
 
-        harness_base = f"http://{_HARNESS_ALIAS}:{port}"
+        harness_base = f"http://{_HARNESS_ALIAS}:{self._config.container_port}"
         if progress is not None:
             progress("health_check")
         healthy, detail = await self._wait_healthy(
             harness_base,
             probe_container=gateway_container,
             harness_container=container,
+            timeout=stage_timeout,
         )
         if not healthy:
-            return (
-                _StageResult(
-                    False,
-                    await self._with_container_logs(
-                        detail,
-                        harness_container=container,
-                        gateway_container=gateway_container,
-                    ),
+            return _StageResult(
+                False,
+                await self._with_container_logs(
+                    detail,
+                    harness_container=container,
+                    gateway_container=gateway_container,
                 ),
-                None,
             )
-        # Production v6 intentionally stops here. No synthetic POST /run is
-        # issued unless a private policy selector explicitly chooses an audit.
-        return (
-            _StageResult(True, ""),
-            _AuditRuntime(
-                harness_base=harness_base,
-                gateway_response_token=response_text,
-                oracle_answer=oracle_answer,
-                gateway_state_file=str(Path(gateway_state_dir) / "model-called"),
-            ),
-        )
+        return _StageResult(True, "")
 
     async def _start_fake_gateway(
         self,
@@ -2667,10 +2728,11 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
         *,
         probe_container: str | None = None,
         harness_container: str | None = None,
+        timeout: float | None = None,
     ) -> tuple[bool, str]:
         """Poll the submitted container's health endpoint until the deadline."""
         url = f"{harness_base}{self._config.health_path}"
-        deadline = self._config.run_timeout_seconds
+        deadline = self._config.run_timeout_seconds if timeout is None else timeout
         waited = 0.0
         last = "no response"
         while waited < deadline:
@@ -2710,6 +2772,147 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             await asyncio.sleep(_PROBE_INTERVAL_SECONDS)
             waited += _PROBE_INTERVAL_SECONDS
         return False, f"/health never healthy within {deadline:g}s ({last})"
+
+    async def _run_private_challenge_with_compatibility(
+        self,
+        challenge_id: str,
+        request: Mapping[str, object],
+        timeout: float,
+        *,
+        audit_runtime: _AuditRuntime,
+        tag: str,
+        container: str,
+        gateway_container: str,
+        network: str,
+        gateway_state_dir: str,
+    ) -> tuple[ChallengeObservation, _AuditRuntime]:
+        """Mirror the scorer's primary-then-compatibility provider sequence.
+
+        A usable primary response is authoritative, including a zero-call
+        response that policy may intentionally score as static behavior. Only
+        an unusable response that made zero broker calls can indicate that the
+        image implements the scorer's historical ``chutes`` adapter instead,
+        so restart the same immutable image at most once and repeat the exact
+        challenge within its original wall-clock budget.
+        """
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        deadline = started + min(timeout, self._config.run_timeout_seconds)
+        first = await self._run_private_challenge(
+            challenge_id,
+            request,
+            max(0.0, deadline - loop.time()),
+            harness_base=audit_runtime.harness_base,
+            probe_container=gateway_container,
+            gateway_response_token=audit_runtime.gateway_response_token,
+            oracle_answer=audit_runtime.oracle_answer,
+            gateway_state_file=audit_runtime.gateway_state_file,
+        )
+        if (
+            audit_runtime.provider != _PRIMARY_HARNESS_PROVIDER
+            or first.ok
+            or first.gateway_calls != 0
+        ):
+            return first, audit_runtime
+
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return first, audit_runtime
+        logger.info(
+            "private challenge %s made zero primary broker calls; "
+            "retrying the immutable image with compatibility provider",
+            challenge_id,
+        )
+        restarted = await self._restart_harness_for_compatibility(
+            tag,
+            container,
+            gateway_container=gateway_container,
+            network=network,
+            gateway_state_dir=gateway_state_dir,
+            timeout=remaining,
+        )
+        if not restarted.passed:
+            logger.warning(
+                "private challenge %s compatibility restart failed: %.400s",
+                challenge_id,
+                restarted.detail,
+            )
+            return (
+                ChallengeObservation(
+                    challenge_id=challenge_id,
+                    ok=False,
+                    response_digest=None,
+                    elapsed_ms=round((loop.time() - started) * 1000),
+                    error_code="challenge-compatibility-restart-failed",
+                    gateway_calls=0,
+                ),
+                audit_runtime,
+            )
+
+        compatibility_runtime = _AuditRuntime(
+            harness_base=audit_runtime.harness_base,
+            gateway_response_token=audit_runtime.gateway_response_token,
+            oracle_answer=audit_runtime.oracle_answer,
+            gateway_state_file=audit_runtime.gateway_state_file,
+            provider=_COMPAT_HARNESS_PROVIDER,
+        )
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return (
+                ChallengeObservation(
+                    challenge_id=challenge_id,
+                    ok=False,
+                    response_digest=None,
+                    elapsed_ms=round((loop.time() - started) * 1000),
+                    error_code="challenge-compatibility-timeout",
+                    gateway_calls=0,
+                ),
+                compatibility_runtime,
+            )
+        second = await self._run_private_challenge(
+            challenge_id,
+            request,
+            remaining,
+            harness_base=compatibility_runtime.harness_base,
+            probe_container=gateway_container,
+            gateway_response_token=compatibility_runtime.gateway_response_token,
+            oracle_answer=compatibility_runtime.oracle_answer,
+            gateway_state_file=compatibility_runtime.gateway_state_file,
+        )
+        return second, compatibility_runtime
+
+    async def _restart_harness_for_compatibility(
+        self,
+        tag: str,
+        container: str,
+        *,
+        gateway_container: str,
+        network: str,
+        gateway_state_dir: str,
+        timeout: float,
+    ) -> _StageResult:
+        """Replace the zero-call primary process with the legacy adapter once."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, timeout)
+        remove_timeout = min(30.0, max(0.0, deadline - loop.time()))
+        if remove_timeout <= 0:
+            return _StageResult(False, "compatibility restart budget exhausted")
+        code, output = await self._run(["rm", "-f", container], timeout=remove_timeout)
+        if code != 0:
+            return _StageResult(
+                False,
+                f"could not stop primary harness: {_log_tail(output)}",
+                retryable=_docker_infrastructure_failure(output),
+            )
+        return await self._start_harness(
+            tag,
+            container,
+            gateway_container=gateway_container,
+            network=network,
+            gateway_state_dir=gateway_state_dir,
+            provider=_COMPAT_HARNESS_PROVIDER,
+            timeout=max(0.0, deadline - loop.time()),
+        )
 
     async def _run_private_challenge(
         self,

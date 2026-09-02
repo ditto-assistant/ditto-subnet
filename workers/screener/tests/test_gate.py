@@ -31,6 +31,7 @@ from ditto_screener.gate import (
     _docker_infrastructure_failure,
     _format_stage_timings,
     _gateway_call_count,
+    _gateway_runtime_env,
     _log_tail,
     _normalized_build_context,
     _prepare_gateway_state,
@@ -1250,8 +1251,17 @@ async def test_fake_gateway_is_internal_and_resource_capped(
     harness = next(
         call for call in calls if call[0] == "run" and call[-1] == "sha256:" + "34" * 32
     )
+    assert "DITTOBENCH_PROVIDER=platform" in harness
+    assert (
+        "DITTOBENCH_INFERENCE_BASE_URL=http://host.docker.internal:11435/v1" in harness
+    )
     assert "CHUTES_BASE_URL=http://host.docker.internal:11435/v1" in harness
     assert "OPENAI_BASE_URL=http://host.docker.internal:11435/v1" in harness
+    assert "OPENAI_API_BASE=http://host.docker.internal:11435/v1" in harness
+    assert "OPENROUTER_BASE_URL=http://host.docker.internal:11435/v1" in harness
+    assert "CHUTES_API_KEY=ticket" in harness
+    assert "OPENAI_API_KEY=ticket" in harness
+    assert "OPENROUTER_API_KEY=ticket" in harness
     assert "OLLAMA_BASE_URL=http://host.docker.internal:11434" in harness
     assert "openrouter.ai" in gateway
     assert "DITTO_FAKE_GATEWAY_TLS_CERT=/state/leaf.crt" in gateway
@@ -1274,6 +1284,34 @@ async def test_fake_gateway_is_internal_and_resource_capped(
     assert {"--cap-drop", "ALL", "--security-opt", "no-new-privileges"} <= set(harness)
     assert harness.count("DITTOBENCH_DB=/tmp/dittobench.db") == 1
     assert "DITTOBENCH_DB=/app/attacker.db" not in harness
+    assert "OPENROUTER_API_KEY=dummy" not in harness
+
+
+def test_gateway_runtime_env_uses_one_broker_for_both_provider_selectors() -> None:
+    primary = _gateway_runtime_env(
+        provider="platform",
+        chat_gateway="http://broker:11435",
+        embed_gateway="http://broker:11434",
+    )
+    compatibility = _gateway_runtime_env(
+        provider="chutes",
+        chat_gateway="http://broker:11435",
+        embed_gateway="http://broker:11434",
+    )
+
+    assert primary.keys() == compatibility.keys()
+    assert primary["DITTOBENCH_PROVIDER"] == "platform"
+    assert compatibility["DITTOBENCH_PROVIDER"] == "chutes"
+    for key in (
+        "DITTOBENCH_INFERENCE_BASE_URL",
+        "CHUTES_BASE_URL",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "OPENROUTER_BASE_URL",
+    ):
+        assert primary[key] == compatibility[key] == "http://broker:11435/v1"
+    for key in ("CHUTES_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"):
+        assert primary[key] == compatibility[key] == "ticket"
 
 
 async def test_unloaded_buildx_result_is_retryable_infrastructure(
@@ -2003,6 +2041,109 @@ async def test_private_challenge_flags_wrong_oracle_answer(
     assert observation.ok
     assert observation.gateway_calls == 0
     assert not observation.oracle_answer_correct
+
+
+async def test_private_challenge_restarts_zero_call_primary_once(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    state = tmp_path / "gateway-calls"
+    state.write_text("")
+    attempts = 0
+    restarts = 0
+
+    async def challenge(*_: Any, **__: Any) -> gate_module.ChallengeObservation:
+        nonlocal attempts
+        attempts += 1
+        return gate_module.ChallengeObservation(
+            challenge_id="v8-behavioral-oracle",
+            ok=attempts == 2,
+            response_digest=None,
+            elapsed_ms=5,
+            error_code=None if attempts == 2 else "challenge-http-failure",
+            gateway_calls=1 if attempts == 2 else 0,
+        )
+
+    async def restart(*_: Any, **__: Any) -> gate_module._StageResult:
+        nonlocal restarts
+        restarts += 1
+        return gate_module._StageResult(True, "")
+
+    gate._run_private_challenge = challenge  # type: ignore[method-assign]
+    gate._restart_harness_for_compatibility = restart  # type: ignore[method-assign]
+    primary = gate_module._AuditRuntime(
+        harness_base="http://harness:8080",
+        gateway_response_token="nonce",
+        oracle_answer="answer",
+        gateway_state_file=str(state),
+    )
+
+    observation, runtime = await gate._run_private_challenge_with_compatibility(
+        "v8-behavioral-oracle",
+        {"case_id": "c", "tools": [{"name": "search_memories"}]},
+        5,
+        audit_runtime=primary,
+        tag="sha256:" + "34" * 32,
+        container="harness",
+        gateway_container="gateway",
+        network="network",
+        gateway_state_dir=str(tmp_path),
+    )
+    await gate._client.aclose()
+
+    assert observation.ok
+    assert observation.gateway_calls == 1
+    assert runtime.provider == "chutes"
+    assert attempts == 2
+    assert restarts == 1
+
+
+@pytest.mark.parametrize("gateway_calls", [0, 1])
+async def test_private_challenge_keeps_a_usable_primary_observation(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    gateway_calls: int,
+) -> None:
+    gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    state = tmp_path / "gateway-calls"
+    state.write_text("1\n" * gateway_calls)
+
+    async def challenge(*_: Any, **__: Any) -> gate_module.ChallengeObservation:
+        return gate_module.ChallengeObservation(
+            challenge_id="v8-behavioral-oracle",
+            ok=True,
+            response_digest="ab" * 32,
+            elapsed_ms=5,
+            gateway_calls=gateway_calls,
+        )
+
+    async def unexpected_restart(*_: Any, **__: Any) -> gate_module._StageResult:
+        raise AssertionError("a usable primary result must not trigger compatibility")
+
+    gate._run_private_challenge = challenge  # type: ignore[method-assign]
+    gate._restart_harness_for_compatibility = unexpected_restart  # type: ignore[method-assign]
+    primary = gate_module._AuditRuntime(
+        harness_base="http://harness:8080",
+        gateway_response_token="nonce",
+        oracle_answer="answer",
+        gateway_state_file=str(state),
+    )
+
+    observation, runtime = await gate._run_private_challenge_with_compatibility(
+        "v8-behavioral-oracle",
+        {"case_id": "c"},
+        5,
+        audit_runtime=primary,
+        tag="sha256:" + "34" * 32,
+        container="harness",
+        gateway_container="gateway",
+        network="network",
+        gateway_state_dir=str(tmp_path),
+    )
+    await gate._client.aclose()
+
+    assert observation.ok
+    assert runtime.provider == "platform"
 
 
 def test_with_tool_endpoint_fills_only_tool_declaring_requests() -> None:
