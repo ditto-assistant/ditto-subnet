@@ -568,6 +568,27 @@ func lockedUpstreamPayload(payload map[string]any, model string, maxTokens int, 
 	return upstream, nil
 }
 
+// adaptProviderRequestCompatibility removes only a provider-specific conflict
+// introduced by the platform's locked route. The public relay accepts both
+// JSON-object output and tools, but Groq rejects that combination even when
+// tool_choice is auto. Tool calling is the stronger behavioral contract, so
+// retain the declared tools and let the model return ordinary text when it
+// elects not to call one. Other providers and structured JSON schemas retain
+// the exact submitted shape.
+func adaptProviderRequestCompatibility(upstream map[string]any, provider string) {
+	if upstream == nil || !strings.EqualFold(strings.TrimSpace(provider), "groq") {
+		return
+	}
+	tools, ok := upstream["tools"].([]any)
+	if !ok || len(tools) == 0 || upstream["tool_choice"] == "none" {
+		return
+	}
+	responseFormat, ok := upstream["response_format"].(map[string]any)
+	if ok && responseFormat["type"] == "json_object" {
+		delete(upstream, "response_format")
+	}
+}
+
 // historicalChatRequestBodyBytes is the default that 413'd gate v11 finishers
 // at 256 KiB + 1. Bodies at or under it keep the historical upstream shape.
 // Larger bodies get a platform-owned OpenRouter middle-out transform so a
