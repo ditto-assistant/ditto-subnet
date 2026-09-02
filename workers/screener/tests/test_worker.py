@@ -39,6 +39,7 @@ from ditto_screening_protocol import (
     ScreenerQueueResponse,
     ScreenerReviewSettingsOverride,
     ScreenResultOutcome,
+    ScreenResultRequest,
     ScreenReviewAudit,
     SourceReviewFinding,
     SourceReviewNote,
@@ -156,6 +157,7 @@ class _FakePlatform:
         self.claimed_policy_versions: list[int] = []
         self.heartbeats: list[Any] = []
         self.heartbeat_error: Exception | None = None
+        self.artifact_error: Exception | None = None
         self.heartbeat_lease_deadline: datetime | None = None
         self.artifact_calls: list[tuple[UUID, UUID | None]] = []
         self.image_uploads: list[dict[str, Any]] = []
@@ -213,6 +215,8 @@ class _FakePlatform:
     async def get_artifact(
         self, agent_id: UUID, *, attempt_id: UUID | None = None
     ) -> ArtifactResponse:
+        if self.artifact_error is not None:
+            raise self.artifact_error
         self.artifact_calls.append((agent_id, attempt_id))
         return ArtifactResponse(
             agent_id=agent_id,
@@ -584,7 +588,7 @@ async def test_local_build_mode_keeps_source_review_in_the_worker(
     assert gate.remote_source_reviews == [None]
 
 
-async def test_build_only_quarantine_is_rejected_and_posts_no_verdict(
+async def test_build_only_quarantine_is_rejected_as_retryable_worker_failure(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
     # Defense in depth: a build-only run must never quarantine. If the gate
@@ -595,7 +599,11 @@ async def test_build_only_quarantine_is_rejected_and_posts_no_verdict(
     await worker._screen_one(
         _item(uuid4(), build_only=True), policy_version=SCREENING_POLICY_VERSION
     )
-    assert platform.verdicts == []
+    assert len(platform.verdicts) == 1
+    verdict = platform.verdicts[0]
+    assert verdict["outcome"] == ScreenResultOutcome.RETRYABLE_INFRA
+    assert verdict["reason_code"] == "worker-platform-request-failed"
+    assert "build-only screen produced a quarantine" in verdict["detail"]
 
 
 async def test_deferred_mechanical_oracle_quarantine_is_submitted(
@@ -697,7 +705,7 @@ async def test_passing_source_review_notes_keep_the_policy_manifest_binding(
     assert verdict["review_notes"] is not None
 
 
-async def test_passing_gate_without_verified_image_posts_no_verdict(
+async def test_passing_gate_without_verified_image_posts_retryable_worker_failure(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
     platform = _FakePlatform([])
@@ -711,7 +719,11 @@ async def test_passing_gate_without_verified_image_posts_no_verdict(
     worker = _worker(make_config(), platform, gate)
     await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
     assert platform.image_uploads == []
-    assert platform.verdicts == []
+    assert len(platform.verdicts) == 1
+    verdict = platform.verdicts[0]
+    assert verdict["outcome"] == ScreenResultOutcome.RETRYABLE_INFRA
+    assert verdict["reason_code"] == "worker-platform-request-failed"
+    assert "passing screen did not publish a prebuilt image" in verdict["detail"]
 
 
 async def test_screen_one_fail_forwards_detail(
@@ -912,6 +924,58 @@ async def test_verdict_platform_error_swallowed(
     # Must not raise (a 409/late verdict is logged and skipped).
     await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
     assert platform.verdicts == []
+
+
+async def test_pre_verdict_platform_error_posts_retryable_failure(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    agent_id = uuid4()
+    platform = _FakePlatform([])
+    platform.artifact_error = PlatformError("artifact rejected (503): unavailable")
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+    item = _item(agent_id)
+
+    await worker._screen_one(item, policy_version=SCREENING_POLICY_VERSION)
+
+    assert gate.calls == []
+    assert len(platform.verdicts) == 1
+    verdict = platform.verdicts[0]
+    assert verdict["agent_id"] == agent_id
+    assert verdict["attempt_id"] == item.attempt_id
+    assert verdict["outcome"] == ScreenResultOutcome.RETRYABLE_INFRA
+    assert verdict["reason_code"] == "worker-platform-request-failed"
+    assert "artifact rejected (503)" in verdict["private_failure_detail"]
+    ScreenResultRequest(
+        screener_hotkey=_MINER,
+        **{key: value for key, value in verdict.items() if key != "agent_id"},
+    )
+    assert worker._active_agent_id is None
+    assert platform.heartbeats[-1].state == "polling"
+
+
+async def test_unexpected_worker_error_posts_retryable_failure_without_escaping(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    agent_id = uuid4()
+    platform = _FakePlatform([])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+
+    async def crash(**_kwargs: Any) -> ScreeningDecision:
+        raise ValueError("malformed worker result")
+
+    gate.screen = crash  # type: ignore[method-assign]
+    worker = _worker(make_config(), platform, gate)
+
+    await worker._screen_one(_item(agent_id), policy_version=SCREENING_POLICY_VERSION)
+
+    assert len(platform.verdicts) == 1
+    verdict = platform.verdicts[0]
+    assert verdict["outcome"] == ScreenResultOutcome.RETRYABLE_INFRA
+    assert verdict["reason_code"] == "worker-result-processing-failed"
+    assert "malformed worker result" in verdict["private_failure_log_tail"]
+    assert worker._active_agent_id is None
+    assert platform.heartbeats[-1].state == "polling"
 
 
 async def test_heartbeat_failure_never_blocks_screening_or_verdict(
