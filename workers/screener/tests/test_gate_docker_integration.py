@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
 import subprocess
+import tarfile
+import textwrap
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -27,6 +30,17 @@ from ditto_screener.policy import (
     SourceFingerprintTriageModule,
     load_policy_engine,
 )
+
+
+def _tar_gz(files: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, contents in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(contents)
+            info.mode = 0o644
+            archive.addfile(info, io.BytesIO(contents))
+    return buffer.getvalue()
 
 
 @pytest.mark.integration
@@ -296,6 +310,153 @@ async def test_current_starter_kit_passes_behavioral_oracle(
         f"RunRequest contract is likely broken again: {result.evidence}"
     )
     assert result.passed, result.detail
+
+
+@pytest.mark.integration
+async def test_hardcoded_openrouter_https_reaches_isolated_gateway(
+    make_config: Any, tmp_path: Path
+) -> None:
+    """A valid direct-OpenRouter harness must see the same shim as scoring."""
+    server = textwrap.dedent(
+        """
+        import http.client
+        import json
+        import ssl
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def send_json(self, status, payload):
+                body = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                if self.path == "/health":
+                    self.send_json(200, {"status": "ok"})
+                else:
+                    self.send_json(404, {"error": "not found"})
+
+            def do_POST(self):
+                if self.path != "/run":
+                    self.send_json(404, {"error": "not found"})
+                    return
+                length = int(self.headers.get("Content-Length", "0"))
+                request = json.loads(self.rfile.read(length))
+                body = json.dumps({
+                    "model": "openai/gpt-oss-20b",
+                    "messages": [
+                        {"role": "system", "content": request["system_prompt"]},
+                        {"role": "user", "content": request["user_input"]},
+                    ],
+                })
+                connection = http.client.HTTPSConnection(
+                    "openrouter.ai",
+                    443,
+                    context=ssl.create_default_context(),
+                    timeout=10,
+                )
+                connection.request(
+                    "POST",
+                    "/api/v1/chat/completions",
+                    body=body,
+                    headers={
+                        "Authorization": "Bearer local",
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = json.loads(connection.getresponse().read())
+                connection.close()
+                self.send_json(200, {
+                    "final_text": response["choices"][0]["message"]["content"],
+                    "tool_calls": [],
+                    "prompt_tokens": 0,
+                    "output_tokens": 0,
+                    "latency_ms": 0,
+                })
+
+        ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+        """
+    ).encode()
+    dockerfile = (
+        b"FROM python:3.12-alpine@sha256:"
+        b"6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df\n"
+        b"WORKDIR /app\n"
+        b"COPY server.py /app/server.py\n"
+        b"USER 65532:65532\n"
+        b'ENTRYPOINT ["python", "/app/server.py"]\n'
+    )
+    tarball = _tar_gz({"Dockerfile": dockerfile, "server.py": server})
+    pack = tmp_path / "hardcoded-openrouter-pack.json"
+    pack.write_text(
+        json.dumps(
+            {
+                "challenges": [
+                    {
+                        "id": "hardcoded-openrouter-control",
+                        "request": {
+                            "case_id": "hardcoded-openrouter-control",
+                            "system_prompt": "Answer concisely.",
+                            "user_input": "Return a short acknowledgement.",
+                            "tools": [],
+                        },
+                        "timeout_seconds": 30,
+                        "required_response_keys": ["final_text", "tool_calls"],
+                        "require_model_call": True,
+                        "require_gateway_token": True,
+                    }
+                ]
+            }
+        )
+    )
+    selector = SourceFingerprintTriageModule(
+        module_id="hardcoded-openrouter-selector",
+        suspicious_path_suffixes=("server.py",),
+    )
+    challenge = BehavioralChallengePackModule(
+        module_id="hardcoded-openrouter-control", pack_path=pack
+    )
+    manifest = PolicyManifest(
+        rotation_id="integration-hardcoded-openrouter",
+        module_specs=(
+            {"kind": "source_fingerprint"},
+            {"kind": "behavioral_challenge_pack"},
+        ),
+    )
+
+    def artifact(request: httpx.Request) -> httpx.Response:
+        assert request.url == httpx.URL("https://artifact.test/hardcoded.tar.gz")
+        return httpx.Response(200, content=tarball)
+
+    config: ScreenerConfig = make_config(
+        build_timeout_seconds=600.0,
+        run_timeout_seconds=60.0,
+        max_tarball_bytes=20 * 1024 * 1024,
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(artifact))
+    gate = BuildGate(
+        config,
+        client,
+        policy=PolicyEngine(manifest, (selector, challenge)),
+        journal=ReviewJournal(None),
+    )
+    async with client:
+        result = await gate.screen(
+            agent_id=uuid4(),
+            attempt_id=uuid4(),
+            bench_version=12,
+            miner_hotkey="5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url="https://artifact.test/hardcoded.tar.gz",
+        )
+
+    assert result.passed, result.detail
+    assert any(item.code == "challenge-observed" for item in result.evidence)
 
 
 @pytest.mark.integration

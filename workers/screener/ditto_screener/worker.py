@@ -687,21 +687,17 @@ class ScreenerWorker:
             if typed_outcome == ScreenResultOutcome.RETRYABLE_INFRA or reason_code in {
                 "docker-build",
                 "docker-build-infrastructure",
-                "challenge-http-failure",
             }:
                 # The public reason stays generic. Preserve the exact bounded
                 # infrastructure diagnostic for the submission owner, with the
                 # same sanitizer Platform applies before durable storage.
                 # This includes policy-only canaries: their retained V10 score
                 # must not come at the cost of losing the V11 worker failure.
-                detail_source = result.detail
-                if reason_code == "challenge-http-failure" and result.evidence:
-                    detail_source = result.evidence[-1].summary
                 private_failure_detail = private_failure_text(
-                    detail_source, limit=PRIVATE_FAILURE_DETAIL_LIMIT
+                    result.detail, limit=PRIVATE_FAILURE_DETAIL_LIMIT
                 )
                 private_failure_log_tail = private_failure_text(
-                    detail_source, limit=PRIVATE_FAILURE_LOG_TAIL_LIMIT
+                    result.detail, limit=PRIVATE_FAILURE_LOG_TAIL_LIMIT
                 )
             # The bounded review payloads ride along on quarantine so the
             # operator sees WHY, not just a digest. When a source-review

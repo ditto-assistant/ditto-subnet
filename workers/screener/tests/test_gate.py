@@ -1240,9 +1240,12 @@ async def test_fake_gateway_is_internal_and_resource_capped(
         for call in calls
         if call[0] == "run" and "DITTO_FAKE_GATEWAY_RESPONSE=" in " ".join(call)
     )
-    assert {"--read-only", "--cap-drop", "NET_BIND_SERVICE", "no-new-privileges"} <= set(
-        gateway
-    )
+    assert {
+        "--read-only",
+        "--cap-drop",
+        "NET_BIND_SERVICE",
+        "no-new-privileges",
+    } <= set(gateway)
     assert {"max-size=2m", "max-file=1", "compress=false"} <= set(gateway)
     harness = next(
         call for call in calls if call[0] == "run" and call[-1] == "sha256:" + "34" * 32
@@ -1252,9 +1255,14 @@ async def test_fake_gateway_is_internal_and_resource_capped(
     assert "OLLAMA_BASE_URL=http://host.docker.internal:11434" in harness
     assert "openrouter.ai" in gateway
     assert "DITTO_FAKE_GATEWAY_TLS_CERT=/state/leaf.crt" in gateway
-    assert any(
-        arg.endswith("/run/dittobench/openrouter-shim-ca.pem:ro") for arg in harness
+    ca_mount = next(
+        harness[index + 1]
+        for index, arg in enumerate(harness[:-1])
+        if arg == "--mount"
+        and "dst=/run/dittobench/openrouter-shim-ca.pem" in harness[index + 1]
     )
+    assert ca_mount.startswith("type=bind,src=")
+    assert ca_mount.endswith(",readonly")
     assert "SSL_CERT_FILE=/run/dittobench/openrouter-shim-ca.pem" in harness
     assert "fake-gateway" not in " ".join(harness)
     assert {"--memory", "3g", "--pids-limit", "512"} <= set(harness)
@@ -1761,6 +1769,25 @@ async def test_gateway_start_failure_is_retryable_infrastructure(
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert result.detail.startswith("screener error:")
+
+
+async def test_gateway_certificate_failure_is_retryable_infrastructure(
+    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+
+    def cert_timeout(_state_dir: str) -> None:
+        raise gate_module.subprocess.TimeoutExpired("openssl", 15)
+
+    monkeypatch.setattr(gate_module, "_write_openrouter_shim_certs", cert_timeout)
+    gate = _gate_with(make_config(), _ok_run(calls), tarball=tarball)
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert "openrouter shim certs unavailable" in result.detail
+    assert not any(args[:2] == ["network", "create"] for args in calls)
 
 
 async def test_docker_daemon_build_failure_is_retryable_infrastructure(

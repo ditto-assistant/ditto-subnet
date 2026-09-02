@@ -59,6 +59,7 @@
           - dbus-user-session
           - iptables
           - git
+          - openssl
         state: present
         update_cache: true
       tags: [docker]

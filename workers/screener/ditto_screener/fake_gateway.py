@@ -424,6 +424,7 @@ def _sidecar_tls_context() -> ssl.SSLContext | None:
     if not cert or not key:
         return None
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(cert, key)
     return context
 

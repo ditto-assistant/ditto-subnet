@@ -349,7 +349,7 @@ from ditto.db.queries.scores import (
     v9_confirmation_public_projections,
 )
 from ditto.db.queries.screening import (
-    INFRASTRUCTURE_ADMISSION_REASON_CODES,
+    PROVIDER_BACKOFF_REASON_CODES,
     get_running_screening_attempts,
     list_screening_attempts,
 )
@@ -6098,8 +6098,7 @@ async def agent_pipeline(
         last_failure_infrastructure = bool(
             latest_attempt is not None
             and latest_attempt.status in ("failed", "expired")
-            and (latest_attempt.reason_code or "")
-            in INFRASTRUCTURE_ADMISSION_REASON_CODES
+            and (latest_attempt.reason_code or "") in PROVIDER_BACKOFF_REASON_CODES
         )
         next_retry_at: datetime | None = None
         if agent.status == AgentStatus.SCREENING:
