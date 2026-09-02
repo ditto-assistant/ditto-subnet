@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/ditto-assistant/model-relay/internal/config"
 )
 
 func parsePayload(t *testing.T, body string) map[string]any {
@@ -282,7 +284,7 @@ func TestAttachPlatformMiddleOut(t *testing.T) {
 	attachPlatformMiddleOut(nil, historicalChatRequestBodyBytes+1)
 }
 
-func TestAdaptProviderRequestCompatibilityDropsOnlyGroqJSONModeWithTools(t *testing.T) {
+func TestAdaptProviderRequestCompatibilityAvoidsGroqJSONModeWithTools(t *testing.T) {
 	base := func() map[string]any {
 		return map[string]any{
 			"tools":           []any{map[string]any{"type": "function"}},
@@ -292,28 +294,51 @@ func TestAdaptProviderRequestCompatibilityDropsOnlyGroqJSONModeWithTools(t *test
 	}
 
 	groq := base()
-	adaptProviderRequestCompatibility(groq, "Groq")
+	groqPreferences := providerPreferences(config.RoutingModeAdaptive, "Groq", "")
+	adaptProviderRequestCompatibility(groq, groqPreferences)
 	if _, present := groq["response_format"]; present {
-		t.Fatal("Groq JSON-object mode must be removed when tools are active")
+		t.Fatal("Groq-only JSON-object mode must be removed when tools are active")
 	}
 	if len(groq["tools"].([]any)) != 1 || groq["tool_choice"] != "auto" {
 		t.Fatalf("tool contract changed: %v", groq)
 	}
 
 	for name, tc := range map[string]struct {
-		payload  map[string]any
-		provider string
+		payload     map[string]any
+		preferences map[string]any
 	}{
-		"other provider":    {base(), "Amazon Bedrock"},
-		"tools disabled":    {map[string]any{"tools": []any{map[string]any{"type": "function"}}, "tool_choice": "none", "response_format": map[string]any{"type": "json_object"}}, "groq"},
-		"structured schema": {map[string]any{"tools": []any{map[string]any{"type": "function"}}, "tool_choice": "auto", "response_format": map[string]any{"type": "json_schema"}}, "groq"},
+		"other provider":    {base(), providerPreferences(config.RoutingModeAdaptive, "Amazon Bedrock", "")},
+		"tools disabled":    {map[string]any{"tools": []any{map[string]any{"type": "function"}}, "tool_choice": "none", "response_format": map[string]any{"type": "json_object"}}, groqPreferences},
+		"structured schema": {map[string]any{"tools": []any{map[string]any{"type": "function"}}, "tool_choice": "auto", "response_format": map[string]any{"type": "json_schema"}}, groqPreferences},
 	} {
 		t.Run(name, func(t *testing.T) {
-			adaptProviderRequestCompatibility(tc.payload, tc.provider)
+			adaptProviderRequestCompatibility(tc.payload, tc.preferences)
 			if _, present := tc.payload["response_format"]; !present {
 				t.Fatalf("response format unexpectedly removed: %v", tc.payload)
 			}
 		})
+	}
+
+	aggregate := base()
+	aggregatePreferences := providerPreferences(config.RoutingModeAggregateThroughput, "nebius", "")
+	adaptProviderRequestCompatibility(aggregate, aggregatePreferences)
+	if _, present := aggregate["response_format"]; !present {
+		t.Fatal("aggregate route should preserve JSON-object mode")
+	}
+	ignored, _ := aggregatePreferences["ignore"].([]string)
+	if !providerListIncludes(ignored, "groq") {
+		t.Fatalf("aggregate route must exclude Groq, got %v", aggregatePreferences)
+	}
+
+	reliability := base()
+	reliabilityPreferences := reliabilityProviderPreferences()
+	adaptProviderRequestCompatibility(reliability, reliabilityPreferences)
+	if _, present := reliability["response_format"]; !present {
+		t.Fatal("reliability route should preserve JSON-object mode")
+	}
+	order, _ := reliabilityPreferences["order"].([]string)
+	if len(order) != 1 || order[0] != "deepinfra" {
+		t.Fatalf("reliability route must remove only Groq, got %v", reliabilityPreferences)
 	}
 }
 

@@ -568,15 +568,13 @@ func lockedUpstreamPayload(payload map[string]any, model string, maxTokens int, 
 	return upstream, nil
 }
 
-// adaptProviderRequestCompatibility removes only a provider-specific conflict
-// introduced by the platform's locked route. The public relay accepts both
-// JSON-object output and tools, but Groq rejects that combination even when
-// tool_choice is auto. Tool calling is the stronger behavioral contract, so
-// retain the declared tools and let the model return ordinary text when it
-// elects not to call one. Other providers and structured JSON schemas retain
-// the exact submitted shape.
-func adaptProviderRequestCompatibility(upstream map[string]any, provider string) {
-	if upstream == nil || !strings.EqualFold(strings.TrimSpace(provider), "groq") {
+// adaptProviderRequestCompatibility removes Groq from a platform-owned route
+// when the request combines JSON-object output with active tools, which Groq
+// rejects. This preserves the complete public request contract whenever the
+// route has another provider. A Groq-only route keeps tool calling (the stronger
+// behavioral contract) and drops JSON-object mode as the last-resort fallback.
+func adaptProviderRequestCompatibility(upstream map[string]any, preferences map[string]any) {
+	if upstream == nil || preferences == nil {
 		return
 	}
 	tools, ok := upstream["tools"].([]any)
@@ -584,9 +582,47 @@ func adaptProviderRequestCompatibility(upstream map[string]any, provider string)
 		return
 	}
 	responseFormat, ok := upstream["response_format"].(map[string]any)
-	if ok && responseFormat["type"] == "json_object" {
-		delete(upstream, "response_format")
+	if !ok || responseFormat["type"] != "json_object" {
+		return
 	}
+	if only, ok := preferences["only"].([]string); ok {
+		if len(only) == 1 && strings.EqualFold(strings.TrimSpace(only[0]), "groq") {
+			delete(upstream, "response_format")
+		}
+		return
+	}
+	if order, ok := preferences["order"].([]string); ok {
+		compatible := providerListWithout(order, "groq")
+		if len(compatible) > 0 && len(compatible) != len(order) {
+			preferences["order"] = compatible
+		}
+		return
+	}
+	if preferences["sort"] == "throughput" {
+		ignored, _ := preferences["ignore"].([]string)
+		if !providerListIncludes(ignored, "groq") {
+			preferences["ignore"] = append(append([]string{}, ignored...), "groq")
+		}
+	}
+}
+
+func providerListIncludes(providers []string, provider string) bool {
+	for _, candidate := range providers {
+		if strings.EqualFold(strings.TrimSpace(candidate), provider) {
+			return true
+		}
+	}
+	return false
+}
+
+func providerListWithout(providers []string, excluded string) []string {
+	filtered := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		if !strings.EqualFold(strings.TrimSpace(provider), excluded) {
+			filtered = append(filtered, provider)
+		}
+	}
+	return filtered
 }
 
 // historicalChatRequestBodyBytes is the default that 413'd gate v11 finishers

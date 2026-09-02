@@ -1079,8 +1079,9 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 	for k, v := range payload {
 		primary[k] = v
 	}
-	adaptProviderRequestCompatibility(primary, expectedProvider)
-	primary["provider"] = providerPreferences(cfg.RoutingMode, expectedProvider, expectedQuantization)
+	preferences := providerPreferences(cfg.RoutingMode, expectedProvider, expectedQuantization)
+	adaptProviderRequestCompatibility(primary, preferences)
+	primary["provider"] = preferences
 	phases := []phaseSpec{{phase: 0, payload: primary}}
 	headers := openrouterHeaders(cfg.OpenRouterAPIKey, true)
 
