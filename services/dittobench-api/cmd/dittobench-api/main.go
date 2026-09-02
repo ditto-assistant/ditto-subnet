@@ -1542,6 +1542,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				s.store.Fail(runID, "inference session capability is unavailable")
 				return
 			}
+			s.broker.setHarnessBase(inferenceSessionID, env["DITTOBENCH_INFERENCE_BASE_URL"])
 		}
 		handle, runErr = s.sandbox.Run(ctx, image, env)
 		if runErr != nil {
@@ -1671,6 +1672,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			compatEnv, capabilityErr := harnessSandboxEnvWithCapability(
 				req.Env, req.BenchVersion, v8CompatLockedProvider, inferenceSessionID, sourceCapability,
 			)
+			if capabilityErr == nil {
+				s.broker.setHarnessBase(inferenceSessionID, compatEnv["DITTOBENCH_INFERENCE_BASE_URL"])
+			}
 			if capabilityErr != nil {
 				_ = s.broker.revokeSourceCapability(inferenceSessionID, runID, sourceCapability)
 				sourceCapability = ""

@@ -197,7 +197,10 @@ type brokerSession struct {
 	// attribution evidence for the inference trace capture only -- never an
 	// admission or accounting input -- and it is what lets a concurrent v10+
 	// run still tell the relay which cases a call could belong to.
-	runCases map[string]int
+	runCases      map[string]int
+	harnessBase   string
+	urlCases      map[string]string
+	urlCaseTokens map[string]string
 	// Session-scoped v10+ tool provenance. Concurrent /run opens no exclusive
 	// case windows, so every ordinary chat completion is admitted at
 	// caseGeneration 0: its model-emitted tool calls are recorded here,
@@ -2083,7 +2086,7 @@ func (a brokerConfirmationAuthorizer) Authorize(
 	session.mu.Lock()
 	grant, ok := session.confirmationGrants[lane]
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
-	traceCtx := traceContextLocked(session, session.activeCaseGeneration, lane, "")
+	traceCtx := traceContextLocked(session, session.activeCaseGeneration, lane, "", "")
 	active := session.confirmationSession && session.expiresAt.After(time.Now())
 	session.mu.Unlock()
 	if !ok || !active || request.URL.String() != grant.ProxyURL || len(privateKey) != ed25519.PrivateKeySize {
@@ -2814,6 +2817,7 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 	session := lease.session
 	rest := "/" + strings.TrimLeft(r.PathValue("rest"), "/")
 	caseGeneration := uint64(0)
+	urlCaseID := ""
 	if strings.HasPrefix(rest, "/cases/") {
 		parts := strings.SplitN(strings.TrimPrefix(rest, "/cases/"), "/", 2)
 		if len(parts) != 2 {
@@ -2822,8 +2826,9 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		session.mu.Lock()
 		caseGeneration = session.caseCapabilities[parts[0]]
+		urlCaseID = session.urlCases[parts[0]]
 		session.mu.Unlock()
-		if caseGeneration == 0 {
+		if caseGeneration == 0 && urlCaseID == "" {
 			writeError(w, http.StatusUnauthorized, "inference case capability unavailable")
 			return
 		}
@@ -2841,7 +2846,7 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "inference route not found")
 		return
 	}
-	b.handleChat(w, r, lease, caseGeneration)
+	b.handleChat(w, r, lease, urlCaseID, caseGeneration)
 }
 
 // handleOpenRouterShim is the HTTPS compatibility door for harnesses that
@@ -2865,11 +2870,11 @@ func (b *inferenceBroker) handleOpenRouterShim(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusUnauthorized, "inference session unavailable")
 		return
 	}
-	b.handleChat(w, r, lease)
+	b.handleChat(w, r, lease, "")
 }
 
 func (b *inferenceBroker) handleChat(
-	w http.ResponseWriter, r *http.Request, lease brokerSourceLease, explicitGeneration ...uint64,
+	w http.ResponseWriter, r *http.Request, lease brokerSourceLease, urlCaseID string, explicitGeneration ...uint64,
 ) {
 	session := lease.session
 	session.mu.Lock()
@@ -2973,7 +2978,7 @@ func (b *inferenceBroker) handleChat(
 		}
 		session.mu.Unlock()
 	}()
-	b.proxy(w, r, session, caseGeneration)
+	b.proxy(w, r, session, caseGeneration, urlCaseID)
 }
 
 type embeddingRequest struct {
@@ -3494,7 +3499,7 @@ func (b *inferenceBroker) forwardPlatformEmbedding(
 		dimensions = embeddingDimensions
 	}
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
-	traceCtx := traceContextLocked(session, session.activeCaseGeneration, "", "")
+	traceCtx := traceContextLocked(session, session.activeCaseGeneration, "", "", "")
 	session.mu.Unlock()
 	body, err := json.Marshal(platformEmbeddingRequest{
 		Model: model, Input: inputs,
@@ -3795,6 +3800,7 @@ func (b *inferenceBroker) proxy(
 	r *http.Request,
 	session *brokerSession,
 	caseGeneration uint64,
+	urlCaseID string,
 ) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, brokerBodyLimit+1))
 	if err != nil || len(body) > brokerBodyLimit {
@@ -3904,7 +3910,7 @@ func (b *inferenceBroker) proxy(
 	}
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
 	currentChargeUpperBound := platformChatChargeUpperBound(body, maxOutputTokens)
-	traceCtx := traceContextLocked(session, caseGeneration, "", r.Header.Get(harnessCaseHeader))
+	traceCtx := traceContextLocked(session, caseGeneration, "", r.Header.Get(harnessCaseHeader), urlCaseID)
 	session.requests++
 	if caseGeneration != 0 {
 		snapshot := session.caseSnapshots[caseGeneration]
@@ -4216,7 +4222,7 @@ func (b *inferenceBroker) trustedProbe(ctx context.Context, id string) error {
 	req.RemoteAddr = net.JoinHostPort(session.expectedSourceIP, "1")
 	session.mu.Unlock()
 	recorder := httptest.NewRecorder()
-	b.proxy(recorder, req, session, 0)
+	b.proxy(recorder, req, session, 0, "")
 	if recorder.Code < 200 || recorder.Code >= 300 {
 		return fmt.Errorf("ticket inference probe returned %d", recorder.Code)
 	}
@@ -4346,7 +4352,7 @@ type traceContext struct {
 }
 
 // traceContextLocked builds the header value. Caller holds session.mu.
-func traceContextLocked(session *brokerSession, caseGeneration uint64, lane, claimed string) string {
+func traceContextLocked(session *brokerSession, caseGeneration uint64, lane, claimed, urlCase string) string {
 	tc := traceContext{
 		Version:        1,
 		RunID:          session.boundRunID,
@@ -4375,6 +4381,8 @@ func traceContextLocked(session *brokerSession, caseGeneration uint64, lane, cla
 	switch {
 	case caseGeneration != 0 && session.activeCaseGeneration == caseGeneration && session.activeCaseID != "":
 		tc.CaseID, tc.CaseSource, tc.CaseVerified = session.activeCaseID, "window", true
+	case urlCase != "":
+		tc.CaseID, tc.CaseSource, tc.CaseVerified = urlCase, "url", true
 	case claimed != "" && session.runCases[claimed] > 0:
 		tc.CaseID, tc.CaseSource, tc.CaseVerified = claimed, "claim", true
 	case claimed != "":
@@ -4391,18 +4399,15 @@ func traceContextLocked(session *brokerSession, caseGeneration uint64, lane, cla
 	return string(encoded)
 }
 
-// beginRunCase marks caseID in flight on the session for trace attribution.
-// Returns false when the session is unknown (the scorer ignores that: the
-// run proceeds, the traces are merely less attributed).
-func (b *inferenceBroker) beginRunCase(id, caseID string) bool {
+func (b *inferenceBroker) beginRunCase(id, caseID string) (caseURL string, started bool) {
 	if caseID == "" {
-		return false
+		return "", false
 	}
 	b.mu.RLock()
 	session := b.sessions[id]
 	b.mu.RUnlock()
 	if session == nil {
-		return false
+		return "", false
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
@@ -4410,10 +4415,22 @@ func (b *inferenceBroker) beginRunCase(id, caseID string) bool {
 		session.runCases = make(map[string]int)
 	}
 	session.runCases[caseID]++
-	return true
+	token := session.urlCaseTokens[caseID]
+	if token == "" {
+		token = randomCaseToken()
+		if session.urlCases == nil {
+			session.urlCases = make(map[string]string)
+			session.urlCaseTokens = make(map[string]string)
+		}
+		session.urlCases[token] = caseID
+		session.urlCaseTokens[caseID] = token
+	}
+	if session.harnessBase != "" {
+		caseURL = session.harnessBase + "/cases/" + token
+	}
+	return caseURL, true
 }
 
-// endRunCase releases one beginRunCase.
 func (b *inferenceBroker) endRunCase(id, caseID string) {
 	b.mu.RLock()
 	session := b.sessions[id]
@@ -4425,9 +4442,37 @@ func (b *inferenceBroker) endRunCase(id, caseID string) {
 	defer session.mu.Unlock()
 	if session.runCases[caseID] <= 1 {
 		delete(session.runCases, caseID)
+		if token := session.urlCaseTokens[caseID]; token != "" {
+			delete(session.urlCases, token)
+			delete(session.urlCaseTokens, caseID)
+		}
 		return
 	}
 	session.runCases[caseID]--
+}
+
+func (b *inferenceBroker) setHarnessBase(id, base string) {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return
+	}
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return
+	}
+	session.mu.Lock()
+	session.harnessBase = base
+	session.mu.Unlock()
+}
+
+func randomCaseToken() string {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return fmt.Sprintf("t%dx%d", time.Now().UnixNano(), len(raw))
+	}
+	return hex.EncodeToString(raw[:])
 }
 
 func (b *inferenceBroker) beginCaseSnapshot(id string, caseIDs ...string) (uint64, brokerCaseSnapshot, error) {
