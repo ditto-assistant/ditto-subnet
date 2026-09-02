@@ -670,6 +670,7 @@ pub const USER_ID: &str = "miner";
 /// the model sees a duplicate function declaration (strict providers like
 /// Gemini reject that with a 400). The real tools represent these names.
 pub const MEMORY_TOOL_NAMES: &[&str] = &[
+    "save_memory",
     "search_memories",
     "fetch_memories",
     "search_subjects",
@@ -1122,6 +1123,20 @@ impl Baseline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reserves_every_real_memory_tool_name() {
+        assert_eq!(
+            MEMORY_TOOL_NAMES,
+            &[
+                "save_memory",
+                "search_memories",
+                "fetch_memories",
+                "search_subjects",
+                "search_memories_in_subjects",
+            ]
+        );
+    }
 
     #[test]
     fn ollama_provider_defaults_to_gpt_oss() {
