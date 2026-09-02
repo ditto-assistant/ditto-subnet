@@ -48,6 +48,14 @@ secret-delivery service. Bucket policy, encryption, retention, and curator
 upload are separate operator-reviewed controls and do not become active merely
 by merging this code.
 
+Developers who need the same bounded read-only identity for local Coding work
+are granted access to the two catalog-specific Secret Manager containers via
+the Terraform `coding_catalog_secret_users` allowlist. That allowlist grants
+no curator credential, bucket write/delete/list permission, or access to the
+upload, avatar, or trace credential pairs. Retrieve the values directly into
+the local S3 client's credential mechanism; do not print them or commit them to
+an env file.
+
 The reviewed activation sequence is:
 
 ```yaml

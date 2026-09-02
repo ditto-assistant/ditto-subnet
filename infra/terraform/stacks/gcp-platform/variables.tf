@@ -194,3 +194,11 @@ variable "local_openrouter_secret_users" {
     "user:brian@omniaura.ai",
   ]
 }
+
+variable "coding_catalog_secret_users" {
+  description = "Developers granted secretAccessor on the dedicated read-only private Coding catalog S3 credential pair. This does not grant curator write access or access to upload, avatar, or trace credentials."
+  type        = list(string)
+  default = [
+    "user:brian@omniaura.ai",
+  ]
+}
