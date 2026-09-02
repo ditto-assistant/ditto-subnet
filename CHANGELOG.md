@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.181.5 (2026-09-02)
+
+### Bug Fixes
+
+- **screener**: Settle pre-verdict worker failures
+  ([`852f760`](https://github.com/ditto-assistant/ditto-subnet/commit/852f7600c72f1b88ae5f966860832ebdbb6494d2))
+
+
 ## v0.181.4 (2026-09-02)
 
 ### Bug Fixes
