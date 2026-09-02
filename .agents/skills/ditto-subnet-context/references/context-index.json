@@ -249,6 +249,19 @@
       "related": ["dittobench-scoring", "research-adapters", "contracts", "platform-api", "release-delivery"]
     },
     {
+      "id": "coding-hippius-canary",
+      "title": "Hippius synthetic single-validator Coding canary",
+      "keywords": ["Hippius canary", "single-validator canary", "synthetic Coding canary", "phase-separated canary", "Hippius canary receipt"],
+      "summary": "Compose one exact-source synthetic private-input retrieval, phase-separated authoring and grading, and three sealed evidence publications into a redacted single-validator receipt without activating a worker.",
+      "skills": ["ditto-subnet-platform", "ditto-subnet-benchmark"],
+      "owns": ["apps/platform/ditto/api_server/coding_hippius_canary.py", "apps/platform/docs/coding-hippius-shadow-canary.md"],
+      "read": ["apps/platform/docs/coding-hippius-shadow-canary.md", "apps/platform/docs/coding-hippius-custody-recovery.md", "docs/coding-private-hippius-data-plane.md", "docs/coding-shadow-worker.md"],
+      "search": ["rg -n 'HippiusShadowCanary|run_hippius_shadow_canary' apps/platform", "rg -n 'CodingShadowWorker|coding_shadow_enabled' ditto/validator services/dittobench-api"],
+      "validate": ["cd apps/platform && make lint lint-copy typecheck test", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
+      "invariants": ["The canary accepts only a reserved synthetic corpus and one validator authority.", "Authoring and grading receive disjoint phase-specific projections.", "No ready receipt exists until all evidence is sealed and weight_eligible remains false."],
+      "related": ["coding-hippius-custody", "coding-hippius-evidence", "coding-shadow-worker", "coding-repair-research"]
+    },
+    {
       "id": "coding-hippius-custody",
       "title": "Hippius Coding custody and crash recovery",
       "keywords": ["Hippius custody", "evidence spool", "Hippius rotation", "evidence recovery", "wrapping key rotation", "coding evidence secrets"],

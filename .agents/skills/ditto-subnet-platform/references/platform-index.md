@@ -17,6 +17,7 @@
 | Shadow coding revocation adapter | `services/dittobench-api/internal/codinggrantrevoke/`, `services/dittobench-api/docs/coding-private-runtime-adapters-shadow.md` |
 | Hippius sealed Coding evidence | `apps/platform/ditto/api_server/coding_hippius_evidence.py`, `apps/platform/ditto/db/queries/coding_evidence.py`, `apps/platform/docs/coding-hippius-sealed-evidence-mediator.md` |
 | Hippius Coding custody/recovery | `apps/platform/ditto/api_server/coding_hippius_custody.py`, `apps/platform/docs/coding-hippius-custody-recovery.md` |
+| Hippius single-validator canary | `apps/platform/ditto/api_server/coding_hippius_canary.py`, `apps/platform/docs/coding-hippius-shadow-canary.md` |
 | Affected-component graph | `release/components.toml` |
 | Production DB and Targon logs (read-only) | `.agents/skills/gcloud-ditto-readonly/` |
 

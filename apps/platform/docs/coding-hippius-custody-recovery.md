@@ -75,5 +75,8 @@ ticket, task, or evidence content.
 
 This layer does not install probe/public-key file contents, add Secret Manager
 versions, apply Terraform, converge Ansible, register a private release, or
-enable a worker. Phase 6 remains a separately authorized synthetic
-single-validator canary using exact merged and deployed source.
+enable a worker. The phase-6 source contract composes this runtime with a
+ticket-bound retriever and separate authoring/grading executor interfaces. It
+still has no route, scheduler, deployed adapter, or invocation. A real phase-6
+result requires a separately authorized synthetic single-validator run using
+exact merged and deployed source and a reviewed redacted receipt.

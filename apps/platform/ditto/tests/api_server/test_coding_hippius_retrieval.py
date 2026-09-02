@@ -339,6 +339,7 @@ async def test_retrieval_fetches_one_exact_object_and_binds_unwrap_to_ticket(
     assert "wrapped_data_key" not in repr(request)
     assert request.wrapped_data_key not in repr(request).encode()
     assert retriever.timeout_seconds == 5.0
+    assert retriever.authority_sha256 == _retrieval_config().authority_sha256
 
 
 @pytest.mark.parametrize("mode", ["wrong-request", "late-expiry", "wrong-key"])
