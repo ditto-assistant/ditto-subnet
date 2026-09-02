@@ -75,7 +75,8 @@ whose sealed-evidence authority fingerprint matches the endpoint, bucket, and
 mediator access ID. Ordinary tests use fake transports, ledgers, and wrappers
 and never contact Hippius.
 
-The next layer owns protected outbox serialization, secret/KMS custody,
-credential rotation, audit, factory construction, and redacted operator
-verification. Until that review lands, no current endpoint or worker can call
-this mediator.
+The custody layer adds an owner-only Platform ciphertext spool, public-key-only
+wrapping, dedicated Secret Manager containers/Ansible boundaries, default-off
+factory construction, rotation-safe replay, and redacted readiness. No current
+endpoint or worker calls the resulting runtime; live operation still requires a
+separately reviewed synthetic canary.

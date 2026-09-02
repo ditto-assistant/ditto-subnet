@@ -18,7 +18,7 @@ boot are handled by the `platform_app` Ansible role.
 | `ditto-pg-platform` VM (`db-staging`, private) | holds `ditto_platform_dev` + `ditto_platform_prod` |
 | `ditto-platform-dev` / `ditto-platform-prod` app VMs (`app-small`, public IP) | one per deploy env |
 | `ditto-platform-agents-{dev,prod}` GCS buckets + one HMAC key | S3-interop blob storage |
-| Secret Manager: `platform-db-password`, `platform-storage-hmac-secret`, `platform-{dev,prod}-pylon-open-access-token`, `platform-github-deploy-key`, `platform-taostats-api-key` | values from `TF_VAR_*` (deploy key and optional Taostats key set out of band) |
+| Secret Manager: `platform-db-password`, `platform-storage-hmac-secret`, `platform-{dev,prod}-pylon-open-access-token`, `platform-github-deploy-key`, `platform-taostats-api-key`, and empty Coding Hippius credential containers | values from `TF_VAR_*`; deploy/provider credential versions are set out of band and never enter Terraform state |
 | _(not here)_ `DITTO_UPLOAD_PAYMENT_ADDRESS` | deploy-time from the ditto-subnet repo's GitHub env secret |
 | A records `platform-api[-dev].heyditto.ai` → app VM IPs (Cloudflare, DNS-only) | only when `manage_dns = true` |
 | Hosted deploy identities (`identity.tf`, `trusted-builds.tf`) | exact protected `dev`/`prod` environment principals for `ditto-subnet` |

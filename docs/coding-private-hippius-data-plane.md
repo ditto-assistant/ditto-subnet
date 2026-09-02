@@ -276,6 +276,16 @@ yet implement that outbox serialization, the external KMS adapter, secret
 custody, factory construction, an API route, or a worker caller. Merging it
 therefore cannot publish real evidence or activate Coding.
 
+The custody layer retains post-encryption replay bytes in a separate protected
+Platform spool rather than returning them to the validator. The existing Go
+outbox continues to retain signed source bytes; Platform's mode-`0700` spool
+retains ciphertext and its envelope. New writes use the currently configured
+RSA-OAEP-SHA256 public key, while old prepared objects retain their exact
+wrapping-key identity across rotation. Dedicated Hippius evidence credentials
+are loaded from out-of-band Secret Manager versions only when the independent
+default-off flag is enabled and are explicitly cleared from model-relay
+processes. No endpoint or worker uses the composed runtime yet.
+
 ## Credential boundary
 
 At minimum, provision three non-human, bucket-scoped Hippius credentials:

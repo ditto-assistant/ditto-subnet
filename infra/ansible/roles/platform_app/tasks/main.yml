@@ -439,6 +439,98 @@
       reconciliation and ticket-set issuance require a valid admin token. Keep
       their switches false until one named shadow run is approved.
   no_log: true
+- name: Validate Hippius Coding evidence custody activation
+  ansible.builtin.assert:
+    that:
+      - platform_coding_hippius_evidence_bucket | default('') | length > 0
+      - platform_coding_hippius_endpoint == 'https://s3.hippius.com'
+      - platform_coding_hippius_region == 'decentralized'
+      - platform_coding_hippius_evidence_bucket != platform_bucket
+      - platform_coding_hippius_evidence_bucket != (platform_hippius_bucket | default(''))
+      - platform_coding_hippius_evidence_bucket != (platform_coding_catalog_bucket | default(''))
+      - platform_coding_hippius_evidence_timeout_seconds | float >= 1
+      - platform_coding_hippius_evidence_timeout_seconds | float <= 60
+      - secret_coding_hippius_evidence_access_key != secret_hmac_secret
+      - secret_coding_hippius_evidence_secret_key != secret_hmac_secret
+      - secret_coding_hippius_evidence_access_key != secret_hippius_access_key_id
+      - secret_coding_hippius_evidence_secret_key != secret_hippius_secret_access_key
+      - secret_coding_hippius_evidence_access_key != secret_coding_catalog_access_key
+      - secret_coding_hippius_evidence_secret_key != secret_coding_catalog_secret_key
+      - secret_coding_hippius_evidence_access_key != secret_coding_hippius_evidence_secret_key
+    fail_msg: >-
+      Hippius Coding evidence custody requires its dedicated private bucket,
+      exact provider origin/region, bounded timeout, and distinct Secret Manager
+      identities. It may not reuse upload, avatar, trace, or catalog authority.
+  when: platform_coding_hippius_evidence_enabled | bool
+
+- name: Read Hippius Coding evidence access key from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_coding_hippius_evidence_access_key }} --project={{ gcp_project }}"
+  register: platform_coding_hippius_evidence_access_key_read
+  changed_when: false
+  no_log: true
+  when: platform_coding_hippius_evidence_enabled | bool
+
+- name: Read Hippius Coding evidence secret key from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_coding_hippius_evidence_secret_key }} --project={{ gcp_project }}"
+  register: platform_coding_hippius_evidence_secret_key_read
+  changed_when: false
+  no_log: true
+  when: platform_coding_hippius_evidence_enabled | bool
+
+- name: Validate Hippius Coding evidence credentials
+  ansible.builtin.assert:
+    that:
+      - platform_coding_hippius_evidence_access_key_read.stdout | default('') | regex_search('^hip_')
+      - platform_coding_hippius_evidence_secret_key_read.stdout | default('') | length > 0
+      - platform_coding_hippius_evidence_access_key_read.stdout != platform_coding_hippius_evidence_secret_key_read.stdout
+      - platform_coding_hippius_evidence_access_key_read.stdout != (platform_secrets.hmac_secret | default(''))
+      - platform_coding_hippius_evidence_secret_key_read.stdout != (platform_secrets.hmac_secret | default(''))
+      - platform_coding_hippius_evidence_access_key_read.stdout != (platform_secrets.hippius_access_key_id | default(''))
+      - platform_coding_hippius_evidence_secret_key_read.stdout != (platform_secrets.hippius_secret_access_key | default(''))
+      - platform_coding_hippius_evidence_access_key_read.stdout != (platform_secrets.coding_catalog_access_key | default(''))
+      - platform_coding_hippius_evidence_secret_key_read.stdout != (platform_secrets.coding_catalog_secret_key | default(''))
+    fail_msg: >-
+      Hippius Coding evidence credentials must be nonempty, provider-shaped,
+      and distinct from upload, avatar, trace, and private-catalog credentials.
+  when: platform_coding_hippius_evidence_enabled | bool
+  no_log: true
+
+- name: Verify protected Hippius Coding evidence authority files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ platform_coding_hippius_probe_receipt_path }}"
+    - "{{ platform_coding_hippius_evidence_wrapping_public_key_path }}"
+  register: platform_coding_hippius_authority_files
+  when: platform_coding_hippius_evidence_enabled | bool
+
+- name: Validate protected Hippius Coding evidence authority files
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.pw_name == platform_owner
+      - item.stat.mode in ['0400', '0600']
+    fail_msg: >-
+      Hippius probe receipt and evidence wrapping public key must be existing
+      regular files owned by the Platform user with mode 0400 or 0600.
+  loop: "{{ platform_coding_hippius_authority_files.results }}"
+  when: platform_coding_hippius_evidence_enabled | bool
+
+- name: Ensure protected Hippius Coding evidence spool
+  ansible.builtin.file:
+    path: "{{ platform_coding_hippius_evidence_spool_root }}"
+    state: directory
+    owner: "{{ platform_owner }}"
+    group: "{{ platform_group }}"
+    mode: "0700"
+  when: platform_coding_hippius_evidence_enabled | bool
+
+- name: Fold Hippius Coding evidence credentials into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'coding_hippius_evidence_access_key': platform_coding_hippius_evidence_access_key_read.stdout, 'coding_hippius_evidence_secret_key': platform_coding_hippius_evidence_secret_key_read.stdout}) }}"
+  no_log: true
+  when: platform_coding_hippius_evidence_enabled | bool
 
 - name: Render .env
   ansible.builtin.template:

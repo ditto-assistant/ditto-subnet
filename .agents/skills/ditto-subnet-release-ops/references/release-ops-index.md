@@ -13,6 +13,7 @@
 | Screening worker runtime | `workers/screener/` |
 | Production DB / Targon logs | `.agents/skills/gcloud-ditto-readonly/` |
 | GCP and Cloudflare state | `infra/terraform/stacks/` |
+| Hippius Coding secret containers | `infra/terraform/stacks/gcp-platform/main.tf`, `infra/ansible/roles/platform_app/` |
 | Host convergence | `infra/ansible/` |
 | Platform app VM disk | `.agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md`, `app_boot_disk_gb` |
 | Validator updater | `scripts/validator-stack-auto-update.sh` |

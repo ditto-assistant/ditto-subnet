@@ -215,3 +215,43 @@ def test_shadow_coding_deploy_controls_are_default_off_and_split_by_process() ->
         in ecosystem
     )
     assert "kill_timeout: relayKillTimeout" in ecosystem
+
+
+def test_hippius_coding_evidence_custody_is_default_off_and_relay_blind() -> None:
+    defaults_path = ROOT / "infra/ansible/roles/platform_app/defaults/main.yml"
+    defaults = yaml.safe_load(defaults_path.read_text())
+    template = (
+        ROOT / "infra/ansible/roles/platform_app/templates/platform.env.j2"
+    ).read_text()
+    tasks = (ROOT / "infra/ansible/roles/platform_app/tasks/main.yml").read_text()
+    terraform = (ROOT / "infra/terraform/stacks/gcp-platform/main.tf").read_text()
+    ecosystem = (ROOT / "apps/platform/scripts/ecosystem.config.js").read_text()
+
+    assert defaults["platform_coding_hippius_evidence_enabled"] is False
+    assert "DITTO_CODING_HIPPIUS_EVIDENCE_ENABLED=false" in template
+    assert "platform_secrets.coding_hippius_evidence_secret_key | quote" in template
+    assert "platform_coding_hippius_evidence_enabled | bool" in tasks
+    assert "platform_coding_hippius_evidence_bucket != platform_bucket" in tasks
+    assert (
+        "platform_coding_hippius_evidence_bucket != (platform_coding_catalog_bucket"
+        in tasks
+    )
+    assert (
+        "secret_coding_hippius_evidence_access_key != secret_hippius_access_key_id"
+        in tasks
+    )
+    assert "platform_coding_hippius_evidence_spool_root" in tasks
+    assert 'mode: "0700"' in tasks
+    for secret in (
+        "platform-coding-hippius-evidence-access-key",
+        "platform-coding-hippius-evidence-secret-key",
+    ):
+        assert secret in terraform
+    for key in (
+        "DITTO_CODING_HIPPIUS_EVIDENCE_MEDIATOR_ACCESS_KEY",
+        "DITTO_CODING_HIPPIUS_EVIDENCE_MEDIATOR_SECRET_KEY",
+        "DITTO_CODING_HIPPIUS_PROBE_RECEIPT_PATH",
+        "DITTO_CODING_HIPPIUS_EVIDENCE_SPOOL_ROOT",
+        "DITTO_CODING_HIPPIUS_EVIDENCE_WRAPPING_PUBLIC_KEY_PATH",
+    ):
+        assert f'{key}: ""' in ecosystem

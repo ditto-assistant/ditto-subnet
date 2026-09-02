@@ -181,6 +181,19 @@ platform_coding_shadow_inference_proxy_url: >-
 platform_coding_shadow_inference_revoke_url: >-
   {{ platform_inference_public_base_url }}/api/v1/validator/coding-shadow/inference-revoke-capability
 
+# Hippius-only sealed Coding evidence custody. Disabled until two dedicated
+# credential versions and the protected probe/public-key files are installed.
+platform_coding_hippius_evidence_enabled: false
+platform_coding_hippius_endpoint: "https://s3.hippius.com"
+platform_coding_hippius_region: decentralized
+platform_coding_hippius_evidence_bucket: ""
+platform_coding_hippius_evidence_timeout_seconds: 20
+platform_coding_hippius_probe_receipt_path: /etc/ditto-platform/coding/hippius-probe.json
+platform_coding_hippius_evidence_wrapping_public_key_path: /etc/ditto-platform/coding/evidence-wrap-public.pem
+platform_coding_hippius_evidence_spool_root: /var/lib/ditto-platform/coding-evidence-spool
+secret_coding_hippius_evidence_access_key: platform-coding-hippius-evidence-access-key
+secret_coding_hippius_evidence_secret_key: platform-coding-hippius-evidence-secret-key
+
 # Subnet / pricing config (mirrors .env.example defaults).
 platform_netuid: 118
 platform_subtensor_network: finney
