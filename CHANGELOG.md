@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.181.3 (2026-09-02)
+
+### Bug Fixes
+
+- **model-relay**: Verify trace uploads against their sha256 before trusting a 2xx
+  ([#1490](https://github.com/ditto-assistant/ditto-subnet/pull/1490),
+  [`4bb0527`](https://github.com/ditto-assistant/ditto-subnet/commit/4bb0527f66d82a258babe06f0c3dd40b6ccf73b1))
+
+### Documentation
+
+- **coding**: Select Hippius-only private data plane
+  ([`2800c83`](https://github.com/ditto-assistant/ditto-subnet/commit/2800c830cd19c4b429613f4aeba8b6f683d29f55))
+
+
 ## v0.181.2 (2026-09-02)
 
 ### Bug Fixes
