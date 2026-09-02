@@ -64,6 +64,7 @@ from ditto.api_models.admin_quarantine import (
     AdminScreeningDisputeList,
     AdminScreeningDisputeResolveRequest,
     AdminScreeningDisputeResolveResponse,
+    AdminScreeningFailureDiagnostic,
     AdminScreeningFailureExample,
     AdminScreeningFailureGroup,
     AdminScreeningFailureSummary,
@@ -1851,6 +1852,58 @@ async def get_screening_submission(
     ]
     return _screening_submission(
         agent, attempts_by_agent[agent_id], coldkey, image_builds
+    )
+
+
+@router.get(
+    "/screening-submissions/{agent_id}/attempts/{attempt_id}/failure-diagnostic",
+    response_model=AdminScreeningFailureDiagnostic,
+)
+async def get_screening_failure_diagnostic(
+    agent_id: UUID,
+    attempt_id: UUID,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminScreeningFailureDiagnostic:
+    """Return the sanitized private failure for one exact attempt.
+
+    The public submission history deliberately omits these fields. Backroom
+    exposes this route only through its separately scoped artifact-read tool.
+    """
+    if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    agent = await session.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="screening submission not found")
+    attempt = await session.get(ScreeningAttempt, attempt_id)
+    if attempt is None or attempt.agent_id != agent_id:
+        raise HTTPException(
+            status_code=404,
+            detail="screening attempt not found for submission",
+        )
+    logger.info(
+        "admin_actor=%s read screening failure diagnostic agent_id=%s "
+        "attempt_id=%s reason_code=%s",
+        x_admin_actor,
+        agent_id,
+        attempt_id,
+        attempt.reason_code,
+    )
+    return AdminScreeningFailureDiagnostic(
+        agent_id=agent_id,
+        artifact_sha256=agent.sha256,
+        agent_status=agent.status,
+        attempt_id=attempt.attempt_id,
+        policy_version=attempt.policy_version,
+        attempt_status=attempt.status,  # type: ignore[arg-type]
+        started_at=attempt.started_at,
+        deadline=attempt.deadline,
+        finished_at=attempt.finished_at,
+        reason=attempt.public_reason,
+        reason_code=attempt.reason_code,
+        private_failure_detail=attempt.private_failure_detail,
+        private_failure_log_tail=attempt.private_failure_log_tail,
     )
 
 

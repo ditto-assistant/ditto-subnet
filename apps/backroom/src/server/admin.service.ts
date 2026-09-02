@@ -47,6 +47,8 @@ import {
   screeningQuarantineListSchema,
   screeningArtifactInputSchema,
   screeningArtifactSchema,
+  screeningFailureDiagnosticInputSchema,
+  screeningFailureDiagnosticSchema,
   screeningSubmissionLookupInputSchema,
   screeningSubmissionSchema,
   screeningSubmissionListSchema,
@@ -1691,6 +1693,15 @@ export async function fetchScreeningSubmission(rawInput: unknown) {
     `/api/v1/admin/screening-submissions/${encodeURIComponent(input.agentId)}`,
   )
   return screeningSubmissionSchema.parse(payload)
+}
+
+export async function fetchScreeningFailureDiagnostic(rawInput: unknown, actor: string) {
+  const input = screeningFailureDiagnosticInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-submissions/${encodeURIComponent(input.agentId)}/attempts/${encodeURIComponent(input.attemptId)}/failure-diagnostic`,
+    { actor },
+  )
+  return screeningFailureDiagnosticSchema.parse(payload)
 }
 
 export async function fetchScreeningFailureSummary(rawInput: unknown = {}) {

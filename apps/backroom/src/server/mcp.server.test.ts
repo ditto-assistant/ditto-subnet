@@ -123,6 +123,7 @@ describe('Backroom MCP tools', () => {
         'get_screening_quarantine_context',
         'get_screening_quarantine_contexts',
         'get_screening_review_queue',
+        'get_screening_failure_diagnostic',
         'get_screening_submission',
         'get_source_release_policy',
         'get_owner_attestations',
@@ -4561,6 +4562,62 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+
+  it('gates exact screening failure diagnostics on artifact scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const attemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const diagnostic = {
+      agent_id: agentId,
+      artifact_sha256: 'ab'.repeat(32),
+      agent_status: 'screening_failed',
+      attempt_id: attemptId,
+      policy_version: 11,
+      attempt_status: 'failed',
+      started_at: '2026-09-02T16:53:47Z',
+      deadline: '2026-09-02T17:07:22Z',
+      finished_at: '2026-09-02T16:57:22Z',
+      reason: 'Screening was interrupted; manual retry required',
+      reason_code: 'worker-result-processing-failed',
+      private_failure_detail: 'screener error: ValidationError: malformed finding',
+      private_failure_log_tail: 'source_review: ValidationError: malformed finding',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(diagnostic))
+    vi.stubGlobal('fetch', fetchMock)
+
+    for (const scopes of [
+      [BACKROOM_READ_SCOPE],
+      [BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE],
+    ]) {
+      const refusedGrant = await connect(scopes)
+      const refused = await refusedGrant.client.callTool({
+        name: 'get_screening_failure_diagnostic',
+        arguments: { agentId, attemptId },
+      })
+      expect(refused.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      await refusedGrant.client.close()
+      await refusedGrant.server.close()
+    }
+
+    const granted = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    const allowed = await granted.client.callTool({
+      name: 'get_screening_failure_diagnostic',
+      arguments: { agentId, attemptId },
+    })
+    expect(allowed.isError).not.toBe(true)
+    expect(readJsonResult(allowed)).toEqual(diagnostic)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/attempts/${attemptId}/failure-diagnostic`,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+      }),
+    )
+    await granted.client.close()
+    await granted.server.close()
   })
 
   it('lists, reads, and guardedly removes hotkey-level upload bans', async () => {

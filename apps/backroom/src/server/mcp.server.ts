@@ -38,6 +38,7 @@ import {
   screeningQuarantineBatchPreviewInputSchema,
   screeningDisputeResolutionSchema,
   screeningArtifactInputSchema,
+  screeningFailureDiagnosticInputSchema,
   screeningSubmissionLookupInputSchema,
   sourceSearchInputSchema,
   ownerAttestationLookupInputSchema,
@@ -122,6 +123,7 @@ import {
   fetchScreeningQuarantineContexts,
   fetchScreeningQuarantines,
   fetchScreeningDisputes,
+  fetchScreeningFailureDiagnostic,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
   fetchScreeningFailureSummary,
@@ -290,6 +292,7 @@ export const WRITE_TOOL_NAMES = new Set([
 export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
+  ['get_screening_failure_diagnostic', BACKROOM_ARTIFACT_SCOPE],
   ['download_runtime_profile', BACKROOM_ARTIFACT_SCOPE],
   // Trace records carry miner prompts and full model responses, so anything
   // that discloses record CONTENT gates on the artifact scope. Listing object
@@ -530,13 +533,15 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   download_inference_trace: 'Presigned trace URL; artifact scope.',
   peek_inference_trace: 'Peek trace records; artifact scope.',
   get_owner_attestations:
-    'Read direct signed owner links for one hotkey. Links are symmetric, direct-only, non-transitive, and exempt only near-duplicate screening; evidence_grade is context, not a gate. Include revoked links when judging historical submissions. Requires backroom:read, not artifact access.',
+    'Read direct signed owner links, including revoked history. Direct-only, non-transitive, and limited to near-duplicate review.',
   list_lease_revocations:
     'Page newest-first through platform-ended validator leases. evidence is WHOLE AND UNTYPED validator_lease_audit context; response can include operator_evicted rows and preserve exact verdict strings. AN EMPTY RESULT IS A FINDING, NOT AN UNWIRED FEATURE. Use filters to narrow the audit.',
   list_stuck_submissions:
     'Page the current-benchmark platform triage order for stuck submissions. Pass generation=all only for a cross-benchmark audit. Returns ticket-state counts and silent_expiry_count; use get_validation_retry for one submission\'s complete ticket history, including infra_retry_grants. This urgency queue is intentionally not newest-first.',
   summarize_screening_failures:
     'Group active-benchmark screening / screening_failed agents by reason_code. Pass generation=all only for a cross-benchmark audit. Use get_screening_submission for one row.',
+  get_screening_failure_diagnostic:
+    'Private exact-attempt failure diagnostic; artifact scope.',
   reject_screening_submission:
     'Reject a screening row. Confirmation: REJECT SCREENING SUBMISSION. Requires backroom:write.',
   get_queue_policy_settings:
@@ -1009,6 +1014,21 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           attempts: { pin: ['attempt_id'] },
           image_builds: { pin: ['build_id'] },
         }),
+      ),
+  )
+
+  registerTool(
+    'get_screening_failure_diagnostic',
+    {
+      title: 'Get screening failure diagnostic',
+      description:
+        'Read the bounded, sanitized private failure detail and log tail retained for one exact screening attempt. Supply both the agent UUID and attempt UUID; Platform verifies that the attempt belongs to that submission and returns the artifact SHA-256, attempt status, policy version, reason code, and timestamps alongside the diagnostic. This is operator infrastructure evidence, not a policy verdict. Requires backroom:artifact:read because the text can contain miner-influenced build or runtime diagnostics.',
+      inputSchema: screeningFailureDiagnosticInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      artifact(() =>
+        fetchScreeningFailureDiagnostic(input, props.session.email),
       ),
   )
 

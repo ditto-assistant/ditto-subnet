@@ -6159,6 +6159,108 @@ class TestQuarantineAdmin:
             str(historical),
         }
 
+    async def test_reads_exact_sanitized_screening_failure_diagnostic(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING_FAILED,
+            name="failed-diagnostic",
+        )
+        other_agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING_FAILED,
+            name="other-failed-diagnostic",
+        )
+        attempt_id = uuid4()
+        other_attempt_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            for owner_id, owner_attempt_id in (
+                (agent_id, attempt_id),
+                (other_agent_id, other_attempt_id),
+            ):
+                session.add(
+                    ScreeningAttempt(
+                        attempt_id=owner_attempt_id,
+                        agent_id=owner_id,
+                        screener_hotkey=_SCREENER_HOTKEY,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        status="failed",
+                        started_at=now - timedelta(minutes=4),
+                        deadline=now + timedelta(minutes=6),
+                        finished_at=now,
+                        public_reason=(
+                            "Screening was interrupted; manual retry required"
+                        ),
+                        reason_code="worker-result-processing-failed",
+                        private_failure_detail=(
+                            "screener error: ValidationError: malformed finding"
+                        ),
+                        private_failure_log_tail=(
+                            "source_review: ValidationError: malformed finding"
+                        ),
+                    )
+                )
+        _install_db(app, session_maker)
+        headers = {
+            "Authorization": "Bearer test-admin-token-at-least-32-characters",
+            "X-Admin-Actor": "backroom:failure-reviewer",
+        }
+
+        diagnostic = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/attempts/"
+            f"{attempt_id}/failure-diagnostic",
+            headers=headers,
+        )
+        ordinary = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}", headers=headers
+        )
+        wrong_owner = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/attempts/"
+            f"{other_attempt_id}/failure-diagnostic",
+            headers=headers,
+        )
+        missing_actor = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/attempts/"
+            f"{attempt_id}/failure-diagnostic",
+            headers={"Authorization": headers["Authorization"]},
+        )
+
+        assert diagnostic.status_code == 200, diagnostic.text
+        assert diagnostic.json() == {
+            "agent_id": str(agent_id),
+            "artifact_sha256": _SHA256,
+            "agent_status": AgentStatus.SCREENING_FAILED,
+            "attempt_id": str(attempt_id),
+            "policy_version": SCREENING_POLICY_VERSION,
+            "attempt_status": "failed",
+            "started_at": (now - timedelta(minutes=4))
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "deadline": (now + timedelta(minutes=6)).isoformat().replace("+00:00", "Z"),
+            "finished_at": now.isoformat().replace("+00:00", "Z"),
+            "reason": "Screening was interrupted; manual retry required",
+            "reason_code": "worker-result-processing-failed",
+            "private_failure_detail": (
+                "screener error: ValidationError: malformed finding"
+            ),
+            "private_failure_log_tail": (
+                "source_review: ValidationError: malformed finding"
+            ),
+        }
+        assert "private_failure_detail" not in ordinary.json()["attempts"][0]
+        assert "private_failure_log_tail" not in ordinary.json()["attempts"][0]
+        assert wrong_owner.status_code == 404
+        assert missing_actor.status_code == 422
+
     async def test_screening_failure_summary_groups_live_pipeline_by_reason_code(
         self,
         app: FastAPI,

@@ -593,6 +593,26 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_ARTIFACT_SCOPE])
   })
 
+  it('recognizes private screening diagnostics as artifact-scoped reads', async () => {
+    const request = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'get_screening_failure_diagnostic',
+          arguments: {
+            agentId: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+            attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          },
+        },
+      }),
+    })
+    expect(await callsWriteTool(request)).toBe(false)
+    expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_ARTIFACT_SCOPE])
+  })
+
   it('gates source search on the artifact scope like an excerpt read', async () => {
     // A search returns the matching source lines themselves. Treating it as an
     // ordinary read because it "only" answers a location question would let a

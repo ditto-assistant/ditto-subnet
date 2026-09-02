@@ -11,6 +11,7 @@ import {
   fetchBenchmarkContractRefresh,
   fetchScreenedImageRebuild,
   fetchBenchmarkContractMigration,
+  fetchScreeningFailureDiagnostic,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
   fetchScreeningFailureSummary,
@@ -781,6 +782,45 @@ describe('screening submission admin service', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}`,
       expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('gets one exact screening failure diagnostic with operator attribution', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const attemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const diagnostic = {
+      agent_id: agentId,
+      artifact_sha256: 'ab'.repeat(32),
+      agent_status: 'screening_failed',
+      attempt_id: attemptId,
+      policy_version: 11,
+      attempt_status: 'failed',
+      started_at: '2026-09-02T16:53:47Z',
+      deadline: '2026-09-02T17:07:22Z',
+      finished_at: '2026-09-02T16:57:22Z',
+      reason: 'Screening was interrupted; manual retry required',
+      reason_code: 'worker-result-processing-failed',
+      private_failure_detail: 'screener error: ValidationError: malformed finding',
+      private_failure_log_tail: 'source_review: ValidationError: malformed finding',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(diagnostic))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      fetchScreeningFailureDiagnostic(
+        { agentId, attemptId },
+        'peyton@omniaura.ai',
+      ),
+    ).resolves.toEqual(diagnostic)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/attempts/${attemptId}/failure-diagnostic`,
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+      }),
     )
   })
 
