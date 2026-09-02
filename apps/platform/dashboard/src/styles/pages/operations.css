@@ -954,10 +954,9 @@
 .review-rung.current > b {
   color: var(--gold);
 }
-/* The review ladder names the active layer; this compact status names the
-   capacity policy behind it. It must remain distinct from ordinary image
-   admission, which can fan out across screeners. */
-.pipeline-serial-review {
+/* The source-review ladder names each automated layer; this compact status
+   makes L4's final adjudication explicit without implying an operator hold. */
+.pipeline-automated-adjudication {
   display: inline-flex;
   margin-top: 6px;
   color: var(--gold);
