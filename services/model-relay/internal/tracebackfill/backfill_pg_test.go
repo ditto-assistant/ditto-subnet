@@ -28,7 +28,7 @@ type memSink struct {
 func (m *memSink) Name() string                 { return m.name }
 func (m *memSink) Required() bool               { return true }
 func (m *memSink) Ensure(context.Context) error { return nil }
-func (m *memSink) Put(_ context.Context, key string, _ int64, _ string, open func() (io.ReadCloser, error)) error {
+func (m *memSink) Put(_ context.Context, key string, _ int64, _, _ string, open func() (io.ReadCloser, error)) error {
 	rc, err := open()
 	if err != nil {
 		return err

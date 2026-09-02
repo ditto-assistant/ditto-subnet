@@ -2,6 +2,8 @@ package traces
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -22,9 +24,12 @@ type Sink interface {
 	// Ensure verifies the destination is reachable and the bucket exists,
 	// creating it when the credentials allow. Called once at startup.
 	Ensure(ctx context.Context) error
-	// Put stores one object. open must return a fresh reader each call so a
-	// retry can replay the body.
-	Put(ctx context.Context, key string, size int64, contentType string, open func() (io.ReadCloser, error)) error
+	// Put stores one object and, when sha256Hex is non-empty, verifies the
+	// stored copy by reading it back before reporting success — a PUT the
+	// destination acknowledged but mangled is a FAILED put. open must return
+	// a fresh reader each call so a retry can replay the body. sha256Hex ""
+	// skips verification (callers without a precomputed digest).
+	Put(ctx context.Context, key string, size int64, contentType, sha256Hex string, open func() (io.ReadCloser, error)) error
 }
 
 // S3Config configures an S3-compatible sink (Hippius, Backblaze B2, AWS,
@@ -149,8 +154,14 @@ func (s *S3Sink) Ensure(ctx context.Context) error {
 
 // Put uploads with bounded retries on transport errors and on the status
 // family the Python client retries (429/5xx, plus Hippius' transient 402
-// billing-balance hiccup).
-func (s *S3Sink) Put(ctx context.Context, key string, size int64, contentType string, open func() (io.ReadCloser, error)) error {
+// billing-balance hiccup). A 2xx alone is not success: uploads are presigned
+// with UNSIGNED-PAYLOAD, so nothing on the wire protects the body, and the
+// bucket audit of 2026-09-02 found ~1.5% of stored objects stably corrupt
+// (mid-stream damage and truncation) across every day of the bucket's life.
+// When the caller supplies the object's sha256, each accepted PUT is read
+// back and hashed; a mismatch counts as a failed attempt and the body is
+// re-sent.
+func (s *S3Sink) Put(ctx context.Context, key string, size int64, contentType, sha256Hex string, open func() (io.ReadCloser, error)) error {
 	var lastErr error
 	for attempt := 1; attempt <= s3MaxAttempts; attempt++ {
 		if ctx.Err() != nil {
@@ -161,7 +172,14 @@ func (s *S3Sink) Put(ctx context.Context, key string, size int64, contentType st
 		case err != nil:
 			lastErr = err
 		case status >= 200 && status < 300:
-			return nil
+			if sha256Hex == "" {
+				return nil
+			}
+			verr := s.verifyObject(ctx, key, size, sha256Hex)
+			if verr == nil {
+				return nil
+			}
+			lastErr = verr
 		case shouldRetryStatus(status, body):
 			lastErr = fmt.Errorf("http %d %s", status, truncate(body, 200))
 		default:
@@ -180,6 +198,42 @@ func (s *S3Sink) Put(ctx context.Context, key string, size int64, contentType st
 		}
 	}
 	return fmt.Errorf("s3 sink %s: put %s: %w", s.cfg.Name, key, lastErr)
+}
+
+// verifyObject reads the object back and compares size and sha256 against
+// what was just sent. Any disagreement — wrong bytes, wrong length, or a
+// failure to read the copy at all — is returned as an error so the caller's
+// retry loop re-sends the body.
+func (s *S3Sink) verifyObject(ctx context.Context, key string, size int64, sha256Hex string) error {
+	signed, err := s.presign("GET", key)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, signed, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("verify %s: %w", key, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		text, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("verify %s: http %d %s", key, resp.StatusCode, truncate(string(text), 200))
+	}
+	hasher := sha256.New()
+	got, err := io.Copy(hasher, resp.Body)
+	if err != nil {
+		return fmt.Errorf("verify %s: read stored copy: %w", key, err)
+	}
+	if got != size {
+		return fmt.Errorf("verify %s: stored %d bytes, sent %d", key, got, size)
+	}
+	if sum := hex.EncodeToString(hasher.Sum(nil)); sum != sha256Hex {
+		return fmt.Errorf("verify %s: stored sha256 %s != sent %s", key, sum, sha256Hex)
+	}
+	return nil
 }
 
 // do issues one presigned request and returns status + a bounded body.
