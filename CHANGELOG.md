@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.181.14 (2026-09-02)
+
+### Bug Fixes
+
+- **model-relay**: Reject duplicate tool names
+  ([#1514](https://github.com/ditto-assistant/ditto-subnet/pull/1514),
+  [`95a8506`](https://github.com/ditto-assistant/ditto-subnet/commit/95a8506458b05277156669998e70c0c5fdd86373))
+
+
 ## v0.181.13 (2026-09-02)
 
 ### Bug Fixes
