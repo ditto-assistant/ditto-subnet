@@ -87,6 +87,8 @@ func TestValidateRequestSchema(t *testing.T) {
 		{"tools bad type", `{"tools":[{"type":"web","function":{"name":"f"}}],` + minimalMessages + `}`, "invalid function tool"},
 		{"tools extra key", `{"tools":[{"type":"function","extra":1,"function":{"name":"f"}}],` + minimalMessages + `}`, "function tools only"},
 		{"tools bad parameters", `{"tools":[{"type":"function","function":{"name":"f","parameters":[]}}],` + minimalMessages + `}`, "invalid function tool"},
+		{"tools empty name", `{"tools":[{"type":"function","function":{"name":""}}],` + minimalMessages + `}`, "invalid function tool"},
+		{"tools duplicate name", `{"tools":[{"type":"function","function":{"name":"f"}},{"type":"function","function":{"name":"f"}}],` + minimalMessages + `}`, "duplicate tool name"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

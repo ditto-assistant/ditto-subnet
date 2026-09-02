@@ -410,6 +410,7 @@ func validateTools(v any) *httpError {
 	if !ok {
 		return httpErrorf(400, "invalid tools")
 	}
+	seenNames := make(map[string]struct{}, len(tools))
 	for _, raw := range tools {
 		tool, ok := raw.(map[string]any)
 		if !ok {
@@ -431,9 +432,19 @@ func validateTools(v any) *httpError {
 				return httpErrorf(400, "invalid function tool")
 			}
 		}
-		if _, ok := fn["name"].(string); !ok {
+		name, ok := fn["name"].(string)
+		if !ok || name == "" {
 			return httpErrorf(400, "invalid function tool")
 		}
+		// A duplicate function name has no portable meaning: OpenRouter can
+		// select a route whose provider rejects it after the request has already
+		// reserved a ticket allowance. Refuse it at the relay boundary, before
+		// admission, so the scorer reports the harness-owned request error rather
+		// than parking the submission as provider infrastructure.
+		if _, duplicate := seenNames[name]; duplicate {
+			return httpErrorf(400, "duplicate tool name")
+		}
+		seenNames[name] = struct{}{}
 		if params, present := fn["parameters"]; present {
 			if _, ok := params.(map[string]any); !ok {
 				return httpErrorf(400, "invalid function tool")
