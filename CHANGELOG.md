@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.181.15 (2026-09-02)
+
+### Bug Fixes
+
+- **screener**: Settle L4 after oracle transport failure
+  ([#1515](https://github.com/ditto-assistant/ditto-subnet/pull/1515),
+  [`df0de82`](https://github.com/ditto-assistant/ditto-subnet/commit/df0de82222c46cbdc294c9b360d9f0fd7a100393))
+
+
 ## v0.181.14 (2026-09-02)
 
 ### Bug Fixes
