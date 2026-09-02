@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.181.9 (2026-09-02)
+
+### Bug Fixes
+
+- **model-relay**: Adapt Groq tool requests
+  ([#1508](https://github.com/ditto-assistant/ditto-subnet/pull/1508),
+  [`f30e01a`](https://github.com/ditto-assistant/ditto-subnet/commit/f30e01a91fc66803a9d36185a2d17954903399f0))
+
+
 ## v0.181.8 (2026-09-02)
 
 ### Bug Fixes
