@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ditto-assistant/dittobench-api/internal/codingcontrol"
+	"github.com/ditto-assistant/dittobench-api/internal/codingtransport"
 )
 
 func TestConfigurationIsDefaultOffAndPinsTheUnixSocket(t *testing.T) {
@@ -149,12 +152,26 @@ func TestScorerLoadsTheCanonicalLockedPolicy(t *testing.T) {
 	}
 }
 
-func TestControlMuxOnlyExposesConstantHealth(t *testing.T) {
+func TestControlMuxExposesConstantHealthAndAuthorityFreeReadiness(t *testing.T) {
 	mux := controlMux(nil)
 	health := httptest.NewRecorder()
 	mux.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
 	if health.Code != http.StatusNoContent || health.Body.Len() != 0 || health.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("health status=%d body=%q headers=%v", health.Code, health.Body.String(), health.Header())
+	}
+	notReady := httptest.NewRecorder()
+	mux.ServeHTTP(notReady, httptest.NewRequest(http.MethodGet, codingtransport.ReadinessPath, nil))
+	if notReady.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unconstructed readiness status=%d body=%q", notReady.Code, notReady.Body.String())
+	}
+	readyMux := controlMux(new(codingcontrol.Ingress))
+	ready := httptest.NewRecorder()
+	readyMux.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, codingtransport.ReadinessPath, nil))
+	expected := `{"schema":"dittobench-coding-executor-readiness-v1","coding_contract_version":1,"weight_eligible":false,"transport":"mtls","supervisor_ready":true,"publication_ready":true,"ticket_authority_used":false}` + "\n"
+	if ready.Code != http.StatusOK || ready.Body.String() != expected ||
+		ready.Header().Get("Cache-Control") != "no-store" ||
+		ready.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("ready status=%d body=%q headers=%v", ready.Code, ready.Body.String(), ready.Header())
 	}
 	unknown := httptest.NewRecorder()
 	mux.ServeHTTP(unknown, httptest.NewRequest(http.MethodPost, "/v1/coding/supervisor/start", nil))

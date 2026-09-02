@@ -1,6 +1,7 @@
 // Binary dittobench-coding-executor-scorer is the immutable, dedicated
 // artifact for a future coding executor host. It exposes a constant liveness
-// endpoint and validator-signed control requests on one private Unix socket.
+// endpoint, ticketless readiness, and validator-signed control requests on one
+// private Unix socket.
 // A separate default-off mode terminates the dedicated mTLS transport and
 // forwards only to that socket. It owns no wallet, provider or Platform
 // credential, assignment, or public listener.
@@ -138,6 +139,20 @@ func controlMux(ingress *codingcontrol.Ingress) *http.ServeMux {
 	mux.HandleFunc("GET /health", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")
 		response.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET "+codingtransport.ReadinessPath, func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Cache-Control", "no-store")
+		response.Header().Set("Content-Type", "application/json")
+		response.Header().Set("X-Content-Type-Options", "nosniff")
+		if ingress == nil {
+			response.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = response.Write([]byte(`{"error":"executor_not_ready"}` + "\n"))
+			return
+		}
+		body := []byte(`{"schema":"dittobench-coding-executor-readiness-v1","coding_contract_version":1,"weight_eligible":false,"transport":"mtls","supervisor_ready":true,"publication_ready":true,"ticket_authority_used":false}` + "\n")
+		response.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write(body)
 	})
 	if ingress != nil {
 		mux.Handle("/v1/coding/", ingress.Handler())

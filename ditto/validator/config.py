@@ -422,6 +422,9 @@ class ValidatorConfig:
     coding_executor_remote_enabled: bool = False
     """Use the dedicated executor mTLS control plane. Disabled by default."""
 
+    coding_executor_connectivity_canary_enabled: bool = False
+    """Run one ticketless dedicated-executor readiness probe at startup."""
+
     coding_executor_base_url: str = ""
     """Exact private IPv4 HTTPS executor origin on fixed port 9443."""
 
@@ -607,6 +610,12 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         os.environ.get("VALIDATOR_CODING_EXECUTOR_REMOTE_ENABLED", "false").lower()
         in _truthy
     )
+    coding_executor_connectivity_canary_enabled = (
+        os.environ.get(
+            "VALIDATOR_CODING_EXECUTOR_CONNECTIVITY_CANARY_ENABLED", "false"
+        ).lower()
+        in _truthy
+    )
     coding_executor_base_url = os.environ.get(
         "VALIDATOR_CODING_EXECUTOR_BASE_URL", ""
     ).strip()
@@ -624,7 +633,10 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     ).strip()
     coding_executor_timeout_seconds = (
         _parse_float("VALIDATOR_CODING_EXECUTOR_TIMEOUT_SECONDS", "30")
-        if coding_executor_remote_enabled
+        if (
+            coding_executor_remote_enabled
+            or coding_executor_connectivity_canary_enabled
+        )
         else 30.0
     )
     coding_canary_enabled = (
@@ -698,6 +710,9 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         coding_shadow_run_id=coding_shadow_run_id,
         coding_shadow_poll_seconds=coding_shadow_poll_seconds,
         coding_executor_remote_enabled=coding_executor_remote_enabled,
+        coding_executor_connectivity_canary_enabled=(
+            coding_executor_connectivity_canary_enabled
+        ),
         coding_executor_base_url=coding_executor_base_url,
         coding_executor_ca_path=coding_executor_ca_path,
         coding_executor_client_cert_path=coding_executor_client_cert_path,
@@ -754,21 +769,34 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         or any(coding_executor_paths)
         or coding_executor_timeout_raw
     )
-    if not config.coding_executor_remote_enabled and coding_executor_settings_present:
+    coding_executor_profile_enabled = (
+        config.coding_executor_remote_enabled
+        or config.coding_executor_connectivity_canary_enabled
+    )
+    if not coding_executor_profile_enabled and coding_executor_settings_present:
         raise ValidatorConfigError(
-            "coding executor settings require the explicit remote gate"
+            "coding executor settings require an explicit executor gate"
         )
-    if config.coding_executor_remote_enabled and (
-        not config.coding_shadow_enabled
-        or not _is_private_coding_executor_url(config.coding_executor_base_url)
+    if coding_executor_profile_enabled and (
+        not _is_private_coding_executor_url(config.coding_executor_base_url)
         or any(not path or not os.path.isabs(path) for path in coding_executor_paths)
         or len(set(coding_executor_paths)) != 3
         or not math.isfinite(config.coding_executor_timeout_seconds)
         or not 1 <= config.coding_executor_timeout_seconds <= 300
     ):
         raise ValidatorConfigError(
-            "enabled coding executor requires shadow coding, one private :9443 "
-            "origin, three distinct absolute mTLS paths, and timeout in [1, 300]"
+            "enabled coding executor profile requires one private :9443 origin, "
+            "three distinct absolute mTLS paths, and timeout in [1, 300]"
+        )
+    if config.coding_executor_remote_enabled and not config.coding_shadow_enabled:
+        raise ValidatorConfigError(
+            "remote coding execution requires the shadow coding gate"
+        )
+    if config.coding_executor_connectivity_canary_enabled and (
+        config.coding_executor_remote_enabled or config.coding_shadow_enabled
+    ):
+        raise ValidatorConfigError(
+            "coding executor connectivity canary must be ticketless and exclusive"
         )
     if config.coding_canary_enabled and (
         not 32 <= len(config.dittobench_control_token.encode()) <= 256

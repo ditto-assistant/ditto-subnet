@@ -167,6 +167,7 @@ class TestCodingShadowConfig:
         assert config.coding_shadow_enabled is False
         assert config.coding_shadow_run_id is None
         assert config.coding_executor_remote_enabled is False
+        assert config.coding_executor_connectivity_canary_enabled is False
         assert config.coding_executor_base_url == ""
 
     def test_enable_requires_stable_identity_and_control_token(
@@ -201,7 +202,7 @@ class TestCodingShadowConfig:
         monkeypatch.setenv(
             "VALIDATOR_CODING_EXECUTOR_BASE_URL", "https://10.23.0.10:9443"
         )
-        with pytest.raises(ValidatorConfigError, match="explicit remote gate"):
+        with pytest.raises(ValidatorConfigError, match="explicit executor gate"):
             parse_validator_config_from_env()
 
         monkeypatch.setenv("VALIDATOR_CODING_EXECUTOR_REMOTE_ENABLED", "true")
@@ -235,6 +236,48 @@ class TestCodingShadowConfig:
         assert config.coding_executor_remote_enabled is True
         assert config.coding_executor_base_url == "https://10.23.0.10:9443"
         assert config.coding_executor_timeout_seconds == 30.0
+
+    def test_connectivity_canary_is_ticketless_and_exclusive(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_EXECUTOR_CONNECTIVITY_CANARY_ENABLED", "true"
+        )
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_EXECUTOR_BASE_URL", "https://10.23.0.10:9443"
+        )
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_EXECUTOR_CA_PATH", "/run/secrets/executor-ca.pem"
+        )
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_EXECUTOR_CLIENT_CERT_PATH",
+            "/run/secrets/validator-client.pem",
+        )
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_EXECUTOR_CLIENT_KEY_PATH",
+            "/run/secrets/validator-client-key.pem",
+        )
+        config = parse_validator_config_from_env()
+        assert config.coding_executor_connectivity_canary_enabled is True
+        assert config.coding_executor_remote_enabled is False
+        assert config.coding_shadow_enabled is False
+        assert config.coding_shadow_run_id is None
+
+        monkeypatch.setenv("VALIDATOR_CODING_SHADOW_ENABLED", "true")
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_SHADOW_INSTANCE_ID", "coding-shadow-primary"
+        )
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_SHADOW_RUN_ID",
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        )
+        monkeypatch.setenv(
+            "VALIDATOR_DITTOBENCH_CONTROL_TOKEN",
+            "coding-shadow-control-token-0000000000000001",
+        )
+        with pytest.raises(ValidatorConfigError, match="ticketless and exclusive"):
+            parse_validator_config_from_env()
 
     @pytest.mark.parametrize(
         "value",

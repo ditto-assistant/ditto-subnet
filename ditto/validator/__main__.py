@@ -26,6 +26,7 @@ from ditto.chain import ChainConfig, create_chain_client
 from ditto.system_health import SystemMetricsCollector
 from ditto.validator.coding_canary import CodingCanaryWorker
 from ditto.validator.coding_canary_runtime import CodingCanaryRuntime
+from ditto.validator.coding_executor_canary import CodingExecutorConnectivityCanary
 from ditto.validator.coding_publication import CodingPublicationClient
 from ditto.validator.coding_supervisor import (
     CodingExecutorTLSConfig,
@@ -101,6 +102,13 @@ async def _amain() -> int:
     # SIGUSR1 action and terminate PID 1.
     write_update_state("starting")
     config = parse_validator_config_from_env()
+    if config.coding_executor_connectivity_canary_enabled:
+        try:
+            await _run_coding_executor_connectivity_canary(config)
+        finally:
+            write_update_state("stopping")
+        logger.info("coding executor connectivity canary passed")
+        return 0
     keypair = load_validator_keypair(config)
     logger.info(
         "validator worker starting hotkey=%s netuid=%d run_size=%s dittobench=%s",
@@ -243,12 +251,7 @@ async def _create_coding_shadow_worker(
     validator_hotkey: str | None = None
     if config.coding_executor_remote_enabled:
         executor_client = create_coding_executor_http_client(
-            CodingExecutorTLSConfig(
-                ca_path=config.coding_executor_ca_path,
-                client_cert_path=config.coding_executor_client_cert_path,
-                client_key_path=config.coding_executor_client_key_path,
-                timeout_seconds=config.coding_executor_timeout_seconds,
-            )
+            _coding_executor_tls_config(config)
         )
         coding_http = await resources.enter_async_context(executor_client)
         executor_base_url = config.coding_executor_base_url
@@ -292,6 +295,24 @@ async def _create_coding_shadow_worker(
         "remote" if config.coding_executor_remote_enabled else "local",
     )
     return worker
+
+
+async def _run_coding_executor_connectivity_canary(config: ValidatorConfig) -> None:
+    client = create_coding_executor_http_client(_coding_executor_tls_config(config))
+    async with client as canary_http:
+        await CodingExecutorConnectivityCanary(
+            base_url=config.coding_executor_base_url,
+            client=canary_http,
+        ).probe()
+
+
+def _coding_executor_tls_config(config: ValidatorConfig) -> CodingExecutorTLSConfig:
+    return CodingExecutorTLSConfig(
+        ca_path=config.coding_executor_ca_path,
+        client_cert_path=config.coding_executor_client_cert_path,
+        client_key_path=config.coding_executor_client_key_path,
+        timeout_seconds=config.coding_executor_timeout_seconds,
+    )
 
 
 class _ExtraWorker(Protocol):

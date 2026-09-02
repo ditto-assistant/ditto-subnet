@@ -107,6 +107,56 @@ func TestProxyBindsClientCertificateToEnvelopeAndForwardsOnlySafeHeaders(t *test
 	}
 }
 
+func TestProxyForwardsMTLSReadinessWithoutSyntheticTicketAuthority(t *testing.T) {
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.Path != ReadinessPath ||
+			request.Header.Get(codingcontrol.EnvelopeHeader) != "" || request.ContentLength != 0 {
+			t.Fatalf("readiness request=%s %s headers=%v length=%d", request.Method, request.URL, request.Header, request.ContentLength)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": {"application/json"}, "Cache-Control": {"no-store"}},
+			Body:       io.NopCloser(strings.NewReader(`{"schema":"ready"}` + "\n")),
+		}, nil
+	})
+	proxy, err := New(Config{
+		ValidatorHotkey: testHotkey, UnixSocketPath: ControlSocketPath,
+		RoundTripper: transport,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, ReadinessPath, nil)
+	request.TLS = tlsState(t, testHotkey)
+	response := httptest.NewRecorder()
+	proxy.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != `{"schema":"ready"}`+"\n" {
+		t.Fatalf("status=%d body=%q headers=%v", response.Code, response.Body.String(), response.Header())
+	}
+
+	for name, mutate := range map[string]func(*http.Request){
+		"no certificate": func(value *http.Request) { value.TLS = nil },
+		"wrong certificate": func(value *http.Request) {
+			value.TLS = tlsState(t, "5BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
+		},
+		"query": func(value *http.Request) { value.URL.RawQuery = "debug=1" },
+		"envelope": func(value *http.Request) {
+			value.Header.Set(codingcontrol.EnvelopeHeader, envelopeHeader(t, testHotkey))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := httptest.NewRequest(http.MethodGet, ReadinessPath, nil)
+			value.TLS = tlsState(t, testHotkey)
+			mutate(value)
+			rejected := httptest.NewRecorder()
+			proxy.Handler().ServeHTTP(rejected, value)
+			if rejected.Code == http.StatusOK {
+				t.Fatalf("readiness drift was accepted: %s", name)
+			}
+		})
+	}
+}
+
 func TestProxyRejectsCertificateEnvelopeAndRouteDrift(t *testing.T) {
 	called := false
 	proxy, err := New(Config{
