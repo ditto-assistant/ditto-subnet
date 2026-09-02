@@ -167,6 +167,11 @@ class ScreeningDecision:
             > _MAX_FINDING_BYTES
         ):
             raise ValueError("adjudication exceeds bounded size")
+        if self.adjudication is not None and self.outcome not in {
+            ScreeningOutcome.PASS,
+            ScreeningOutcome.QUARANTINE,
+        }:
+            raise ValueError("adjudication requires a pass or quarantine outcome")
         if len(self.review_notes) > 48:
             raise ValueError("review notes exceed bounded size")
         if (
@@ -1187,6 +1192,16 @@ class PolicyEngine:
             detail = "private policy audit inconclusive"
         elif outcome == ScreeningOutcome.PASS_INCONCLUSIVE:
             detail = "bounded source review inconclusive; admitted for scoring"
+        # An enforced source adjudication may clear its module before a later,
+        # independent module selects a different terminal outcome.  In that
+        # case the adjudication is no longer the authority for the overall
+        # result.  Keep its bounded evidence and notes, but do not bind the
+        # superseded adjudication to a wire outcome the shared protocol rejects.
+        if outcome not in {
+            ScreeningOutcome.PASS,
+            ScreeningOutcome.QUARANTINE,
+        }:
+            adjudication = None
         return ScreeningDecision(
             outcome=outcome,
             detail=detail,

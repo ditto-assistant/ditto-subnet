@@ -1051,6 +1051,47 @@ async def test_final_adjudication_crosses_the_local_policy_boundary(
     assert decision.adjudication == adjudication
 
 
+async def test_later_inconclusive_module_drops_source_adjudication() -> None:
+    """A source clear cannot bind an unrelated terminal oracle outcome."""
+
+    async def challenge(challenge_id, _request, _timeout):  # type: ignore[no-untyped-def]
+        return ChallengeObservation(
+            challenge_id=challenge_id,
+            ok=True,
+            response_digest="ab" * 32,
+            elapsed_ms=800,
+            gateway_calls=1,
+        )
+
+    adjudication = {
+        "decision": "clear",
+        "reason": "final source-review court decision",
+        "model": "z-ai/glm-5.3-flash",
+        "prompt_revision": "adjudicator-v2-policy-v10",
+        "notes_considered": 1,
+    }
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l3-adjudicator-incomplete",
+            failure_disposition="retryable_infra",
+            adjudication=adjudication,
+        )
+
+    decision = await load_policy_engine(None).evaluate(_context(challenge, review))
+
+    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert decision.adjudication is None
+    assert [item.code for item in decision.evidence] == [
+        "source-review-adjudicated",
+        "behavioral-oracle-insufficient-round-trips",
+    ]
+
+
 async def test_clean_review_finding_is_kept_when_oracle_is_inconclusive() -> None:
     """A low-risk source review remains exculpatory on an inconclusive oracle."""
     finding = _finding_payload("low")
