@@ -211,6 +211,7 @@ class ChallengeObservation:
     elapsed_ms: int
     json_keys: tuple[str, ...] = ()
     error_code: str | None = None
+    error_detail: str | None = None
     gateway_calls: int = 0
     gateway_token_observed: bool = False
     oracle_answer_correct: bool = False
@@ -948,13 +949,16 @@ class BehavioralOracleModule(_BaseModule):
                 observation.elapsed_ms,
                 observation.gateway_calls,
             )
+            summary = "always-on behavioral oracle did not produce a usable result"
+            if observation.error_detail:
+                summary = f"{summary}: {observation.error_detail[:240]}"
             return ModuleResult(
                 ModuleDisposition.INCONCLUSIVE,
                 (
                     PolicyEvidence(
                         self.module_id,
                         observation.error_code or "behavioral-oracle-inconclusive",
-                        "always-on behavioral oracle did not produce a usable result",
+                        summary,
                         observation.response_digest,
                     ),
                 ),

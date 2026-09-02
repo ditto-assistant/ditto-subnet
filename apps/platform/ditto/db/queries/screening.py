@@ -102,6 +102,13 @@ PROVIDER_BACKOFF_REASON_CODES = (
     # broken court, so hold the retry briefly before re-queueing.
     "source-review-retryable-infra",
 )
+# Ditto-owned admission failures that are not a provider backoff. Shown as
+# ``stuck`` on the public pipeline so operators do not treat a dropped
+# screener lease as a miner-side park.
+INFRASTRUCTURE_ADMISSION_REASON_CODES = (
+    *PROVIDER_BACKOFF_REASON_CODES,
+    _ORPHANED_ATTEMPT_REASON_CODE,
+)
 # How long a provider-backoff failure waits after its FAILURE before the agent
 # is claimable again, capped by the attempt deadline. Backing off to the full
 # 70-minute lease deadline stranded a review that died 20 minutes in for the

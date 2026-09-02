@@ -153,6 +153,30 @@ async def test_operator_override_reports_immediate_eligibility(
     assert retry["next_retry_at"] is None
 
 
+async def test_orphaned_screener_lease_reports_stuck(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name="lease-orphaned", status=AgentStatus.SCREENING_FAILED
+    )
+    now = datetime.now(UTC)
+    await _seed_failed_attempt(
+        maker,
+        agent_id=agent_id,
+        finished_at=now - timedelta(minutes=1),
+        deadline=now + timedelta(minutes=60),
+        reason_code="worker-lease-orphaned",
+    )
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    retry = response.json()["admission_retry"]
+    assert retry["state"] == "stuck"
+    assert retry["last_failure_infrastructure"] is True
+    assert retry["next_retry_at"] is None
+
+
 async def test_ditto_infrastructure_failure_reports_stuck(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:

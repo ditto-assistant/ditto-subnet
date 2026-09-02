@@ -2882,7 +2882,8 @@ class PublicAdmissionRetry(BaseModel):
 
     Failed cost-bearing attempts never retry automatically. ``parked`` names a
     source-review/provider failure (including OpenRouter throttling), while
-    ``stuck`` names another Ditto-owned infrastructure failure. Both require a
+    ``stuck`` names another Ditto-owned infrastructure failure, including a
+    dropped screener lease (``worker-lease-orphaned``). Both require a
     guarded Backroom retry. ``retry_queued`` means that exact retry has already
     been authorized and is waiting for a screener slot.
     """

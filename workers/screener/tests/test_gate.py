@@ -1240,7 +1240,9 @@ async def test_fake_gateway_is_internal_and_resource_capped(
         for call in calls
         if call[0] == "run" and "DITTO_FAKE_GATEWAY_RESPONSE=" in " ".join(call)
     )
-    assert {"--read-only", "--cap-drop", "no-new-privileges"} <= set(gateway)
+    assert {"--read-only", "--cap-drop", "NET_BIND_SERVICE", "no-new-privileges"} <= set(
+        gateway
+    )
     assert {"max-size=2m", "max-file=1", "compress=false"} <= set(gateway)
     harness = next(
         call for call in calls if call[0] == "run" and call[-1] == "sha256:" + "34" * 32
@@ -1248,6 +1250,12 @@ async def test_fake_gateway_is_internal_and_resource_capped(
     assert "CHUTES_BASE_URL=http://host.docker.internal:11435/v1" in harness
     assert "OPENAI_BASE_URL=http://host.docker.internal:11435/v1" in harness
     assert "OLLAMA_BASE_URL=http://host.docker.internal:11434" in harness
+    assert "openrouter.ai" in gateway
+    assert "DITTO_FAKE_GATEWAY_TLS_CERT=/state/leaf.crt" in gateway
+    assert any(
+        arg.endswith("/run/dittobench/openrouter-shim-ca.pem:ro") for arg in harness
+    )
+    assert "SSL_CERT_FILE=/run/dittobench/openrouter-shim-ca.pem" in harness
     assert "fake-gateway" not in " ".join(harness)
     assert {"--memory", "3g", "--pids-limit", "512"} <= set(harness)
     assert {"--init", "--user", "65532:65532", "--read-only"} <= set(harness)
