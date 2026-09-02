@@ -272,8 +272,8 @@ func (d *Deps) traceChatSettled(t chatTrace) {
 	})
 }
 
-// embeddingTrace is the embeddings counterpart; the provider call is a single
-// route (direct Perplexity or OpenRouter) with one result.
+// embeddingTrace is the embeddings counterpart. Most requests have one route;
+// a receipt-free direct backpressure response may authorize an OpenRouter phase.
 type embeddingTrace struct {
 	r           *http.Request
 	headers     *proxyHeaders
@@ -302,7 +302,9 @@ func (d *Deps) traceEmbeddingSettled(t embeddingTrace) {
 	strip := !d.Cfg.Traces.EmbeddingVectors
 	payload, _ := json.Marshal(map[string]any{"model": t.model, "input": t.inputs})
 	var phases []phaseTrace
-	if t.result != nil && t.result.result != nil {
+	if t.result != nil && len(t.result.phases) > 0 {
+		phases = embeddingProviderTracePhases(t.result, payload, t.outcome.terminalErrorCode.String)
+	} else if t.result != nil && t.result.result != nil {
 		route := "openrouter"
 		if t.result.direct {
 			route = "direct"
@@ -351,29 +353,56 @@ func (d *Deps) traceEmbeddingSettled(t embeddingTrace) {
 	})
 }
 
-// confirmationTrace covers both confirmation lanes; the provider call is one
-// frozen route with one result.
+func embeddingProviderTracePhases(result *embeddingProviderResult, payload []byte, terminal string) []phaseTrace {
+	phases := make([]phaseTrace, 0, len(result.phases))
+	for index, providerPhase := range result.phases {
+		phasePayload := providerPhase.payload
+		if len(phasePayload) == 0 {
+			phasePayload = payload
+		}
+		phase := phaseTrace{phase: index, route: providerPhase.route, payload: phasePayload}
+		if providerPhase.result != nil {
+			phase.status = providerPhase.result.status
+			phase.headers = providerPhase.result.header
+			phase.body = providerPhase.result.body
+			phase.attempts = providerPhase.result.attempts
+		}
+		if providerPhase.callErr != nil {
+			phase.attempts = providerPhase.callErr.attempts
+			phase.timedOut = providerPhase.callErr.timedOut
+		}
+		if index == len(result.phases)-1 {
+			phase.errorCode = terminal
+		}
+		phases = append(phases, phase)
+	}
+	return phases
+}
+
+// confirmationTrace covers both confirmation lanes. Chat uses one frozen
+// route; embeddings may carry a receipt-free direct backpressure fallback.
 type confirmationTrace struct {
-	r           *http.Request
-	headers     *proxyHeaders
-	kind        string
-	body        []byte
-	receivedAt  time.Time
-	grant       *postgres.ConfirmationInferenceGrant
-	payload     any // locked chat payload, or {"model","input"} for embeddings
-	outcome     *confirmationOutcome
-	result      *providerHTTPResult
-	route       string
-	callErr     *providerCallError
-	raw         []byte
-	started     time.Time
-	finished    time.Time
-	deliverable bool
-	failure     *httpError
-	settleErr   error
-	reserved    int64
-	chargeable  int64
-	admittedAt  time.Time
+	r               *http.Request
+	headers         *proxyHeaders
+	kind            string
+	body            []byte
+	receivedAt      time.Time
+	grant           *postgres.ConfirmationInferenceGrant
+	payload         any // locked chat payload, or {"model","input"} for embeddings
+	outcome         *confirmationOutcome
+	result          *providerHTTPResult
+	route           string
+	callErr         *providerCallError
+	embeddingResult *embeddingProviderResult
+	raw             []byte
+	started         time.Time
+	finished        time.Time
+	deliverable     bool
+	failure         *httpError
+	settleErr       error
+	reserved        int64
+	chargeable      int64
+	admittedAt      time.Time
 }
 
 func (d *Deps) traceConfirmationSettled(t confirmationTrace) {
@@ -394,6 +423,9 @@ func (d *Deps) traceConfirmationSettled(t confirmationTrace) {
 		phases = []phaseTrace{{phase: 0, route: t.route, payload: payload, attempts: t.callErr.attempts,
 			errorCode: terminal, timedOut: t.callErr.timedOut}}
 	}
+	if t.embeddingResult != nil && len(t.embeddingResult.phases) > 0 {
+		phases = embeddingProviderTracePhases(t.embeddingResult, payload, terminal)
+	}
 	raw := t.raw
 	if strip {
 		raw = stripEmbeddingVectors(raw)
@@ -403,6 +435,9 @@ func (d *Deps) traceConfirmationSettled(t confirmationTrace) {
 		attempts = t.result.attempts
 	} else if t.callErr != nil {
 		attempts = t.callErr.attempts
+	}
+	if t.embeddingResult != nil {
+		attempts = t.embeddingResult.attempts
 	}
 	model := ""
 	if t.grant != nil {
@@ -417,10 +452,16 @@ func (d *Deps) traceConfirmationSettled(t confirmationTrace) {
 			ReservedTokens: t.reserved, MaxChargeableTokens: t.chargeable, AdmittedAt: traces.TimePtr(t.admittedAt),
 		},
 		Upstream: &traces.Upstream{
-			Payload:           traces.RawJSON(payload),
-			Provider:          t.outcome.upstreamProvider.String,
-			Model:             model,
-			Attempts:          attempts,
+			Payload:  traces.RawJSON(payload),
+			Provider: t.outcome.upstreamProvider.String,
+			Model:    model,
+			Attempts: attempts,
+			FallbackPhase: func() int {
+				if t.embeddingResult != nil {
+					return t.embeddingResult.fallbackPhase
+				}
+				return 0
+			}(),
 			TimedOut:          t.callErr != nil && t.callErr.timedOut,
 			TerminalErrorCode: terminal,
 			StartedAt:         traces.TimePtr(t.started),

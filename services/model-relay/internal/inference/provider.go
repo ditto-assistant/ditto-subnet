@@ -1252,57 +1252,132 @@ phaseLoop:
 // --- embedding provider ------------------------------------------------
 
 type embeddingProviderResult struct {
-	result   *providerHTTPResult
-	attempts int
-	direct   bool
+	result        *providerHTTPResult
+	attempts      int
+	direct        bool
+	fallbackPhase int
+	phases        []embeddingProviderPhase
+}
+
+type embeddingProviderPhase struct {
+	route   string
+	payload []byte
+	result  *providerHTTPResult
+	callErr *providerCallError
+}
+
+func perplexityEmbeddingBackpressureIsReceiptFree(result *providerHTTPResult) bool {
+	if result == nil || result.status != http.StatusTooManyRequests ||
+		!providerIsBackpressure(result.status, result.header) ||
+		trimSpace(result.header.Get("Retry-After")) == "" {
+		return false
+	}
+	decoded, ok := decodeJSONNumbersRejectDuplicateKeys(result.body)
+	if !ok {
+		return false
+	}
+	payload, ok := decoded.(map[string]any)
+	if !ok || len(payload) != 1 || !onlyJSONKeys(payload, "error") {
+		return false
+	}
+	errorPayload, ok := payload["error"].(map[string]any)
+	if !ok || len(errorPayload) != 3 || !onlyJSONKeys(errorPayload, "code", "message", "type") {
+		return false
+	}
+	code, ok := errorPayload["code"].(json.Number)
+	if !ok {
+		return false
+	}
+	codeValue, err := code.Int64()
+	message, messageOK := errorPayload["message"].(string)
+	errorType, typeOK := errorPayload["type"].(string)
+	return err == nil && codeValue == http.StatusTooManyRequests &&
+		messageOK && strings.TrimSpace(message) != "" &&
+		typeOK && errorType == "request_rate_limit_exceeded"
 }
 
 // postEmbeddingProvider selects one configured route. It never falls through
-// to a second paid provider after the selected route fails.
+// after a possibly cost-bearing provider failure. An explicit backpressure
+// response is receipt-free, so the direct route may safely use the configured
+// OpenRouter path instead of parking an otherwise healthy scored run.
 func postEmbeddingProvider(ctx context.Context, client *http.Client, cfg config.InferenceProxyConfig,
 	inputs []string, sleep sleepFunc) (*embeddingProviderResult, *providerCallError) {
 
 	var direct *providerHTTPResult
 	var directErr *providerCallError
+	var directPayloadBytes []byte
 	if cfg.PerplexityAPIKey != "" {
+		directPayload := map[string]any{
+			"model":           pplxEmbedResponseModel,
+			"input":           inputs,
+			"dimensions":      cfg.EmbeddingDimensions,
+			"encoding_format": "base64_int8",
+		}
+		directPayloadBytes, _ = json.Marshal(directPayload)
 		direct, directErr = postProviderWithRetry(ctx, client, cfg.EmbeddingFallbackURL,
-			map[string]any{
-				"model":           pplxEmbedResponseModel,
-				"input":           inputs,
-				"dimensions":      cfg.EmbeddingDimensions,
-				"encoding_format": "base64_int8",
-			},
+			directPayload,
 			map[string]string{
 				"Authorization": "Bearer " + cfg.PerplexityAPIKey,
 				"Content-Type":  "application/json",
 			},
 			cfg.EmbeddingResponseBodyBytes, cfg.TimeoutSeconds, false, "", sleep)
-		if direct != nil {
-			return &embeddingProviderResult{result: direct, attempts: direct.attempts, direct: true}, nil
+		if direct != nil && !perplexityEmbeddingBackpressureIsReceiptFree(direct) {
+			return &embeddingProviderResult{
+				result: direct, attempts: direct.attempts, direct: true,
+				phases: []embeddingProviderPhase{{route: "direct", payload: directPayloadBytes, result: direct}},
+			}, nil
 		}
-		return nil, directErr
+		if directErr != nil {
+			return nil, directErr
+		}
 	}
-	openrouter, orErr := postProviderWithRetry(ctx, client, cfg.EmbeddingUpstreamURL,
-		map[string]any{
-			"model":           cfg.EmbeddingModel,
-			"input":           inputs,
-			"dimensions":      cfg.EmbeddingDimensions,
-			"encoding_format": "float",
-			"provider": map[string]any{
-				"order":           []string{cfg.EmbeddingProvider},
-				"allow_fallbacks": false,
-				"data_collection": "deny",
-			},
+	openRouterPayload := map[string]any{
+		"model":           cfg.EmbeddingModel,
+		"input":           inputs,
+		"dimensions":      cfg.EmbeddingDimensions,
+		"encoding_format": "float",
+		"provider": map[string]any{
+			"order":           []string{cfg.EmbeddingProvider},
+			"allow_fallbacks": false,
+			"data_collection": "deny",
 		},
+	}
+	openRouterPayloadBytes, _ := json.Marshal(openRouterPayload)
+	openrouter, orErr := postProviderWithRetry(ctx, client, cfg.EmbeddingUpstreamURL,
+		openRouterPayload,
 		openrouterHeaders(cfg.OpenRouterAPIKey, false),
 		cfg.EmbeddingResponseBodyBytes, cfg.TimeoutSeconds, false, "", sleep)
 	if orErr != nil {
+		if direct != nil {
+			attempts := direct.attempts + orErr.attempts
+			return &embeddingProviderResult{
+				attempts:      attempts,
+				fallbackPhase: 1,
+				phases: []embeddingProviderPhase{
+					{route: "direct", payload: directPayloadBytes, result: direct},
+					{route: "openrouter", payload: openRouterPayloadBytes, callErr: orErr},
+				},
+			}, &providerCallError{attempts: attempts, timedOut: orErr.timedOut}
+		}
 		return nil, orErr
+	}
+	phases := []embeddingProviderPhase{{route: "openrouter", payload: openRouterPayloadBytes, result: openrouter}}
+	attempts := openrouter.attempts
+	if direct != nil {
+		phases = append([]embeddingProviderPhase{{route: "direct", payload: directPayloadBytes, result: direct}}, phases...)
+		attempts += direct.attempts
 	}
 	return &embeddingProviderResult{
 		result:   openrouter,
-		attempts: openrouter.attempts,
+		attempts: attempts,
 		direct:   false,
+		fallbackPhase: func() int {
+			if direct != nil {
+				return 1
+			}
+			return 0
+		}(),
+		phases: phases,
 	}, nil
 }
 

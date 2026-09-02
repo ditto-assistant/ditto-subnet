@@ -1048,7 +1048,8 @@ func (d *Deps) handleConfirmationEmbeddings(w http.ResponseWriter, r *http.Reque
 		d.traceConfirmationSettled(confirmationTrace{
 			r: r, headers: headers, kind: traces.KindEmbedding, body: body, receivedAt: now, grant: &result.grant,
 			payload: map[string]any{"model": cfg.EmbeddingModel, "input": inputs}, outcome: outcome,
-			result: upstream, route: route, callErr: embErr, raw: raw, started: upstreamStarted, finished: time.Now(),
+			result: upstream, route: route, callErr: embErr, embeddingResult: embRes,
+			raw: raw, started: upstreamStarted, finished: time.Now(),
 			deliverable: deliverable, failure: providerFailure, settleErr: settleErr,
 			reserved: result.request.ReservedTokens, chargeable: result.request.MaxChargeableTokens, admittedAt: now,
 		})
