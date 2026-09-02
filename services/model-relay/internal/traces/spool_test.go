@@ -56,6 +56,19 @@ func newFakeS3(t *testing.T) *fakeS3 {
 			}
 			return
 		}
+		if r.Method == http.MethodGet {
+			if f.fail {
+				http.Error(w, "<Error>ServiceUnavailable</Error>", http.StatusServiceUnavailable)
+				return
+			}
+			body, ok := f.objects[bucket+"/"+parts[1]]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write(body)
+			return
+		}
 		if r.Method != http.MethodPut {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return

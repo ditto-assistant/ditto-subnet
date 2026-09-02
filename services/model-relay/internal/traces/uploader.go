@@ -208,7 +208,7 @@ func (u *Uploader) ship(ctx context.Context, rf *readyFile) error {
 		if _, done := side.Completed[sink.Name()]; done {
 			continue
 		}
-		err := sink.Put(ctx, side.Key, side.Bytes, "application/zstd", fileOpener(zstPath))
+		err := sink.Put(ctx, side.Key, side.Bytes, "application/zstd", side.SHA256, fileOpener(zstPath))
 		if err != nil {
 			u.opts.Metrics.UploadFail(sink.Name())
 			if firstErr == nil {
