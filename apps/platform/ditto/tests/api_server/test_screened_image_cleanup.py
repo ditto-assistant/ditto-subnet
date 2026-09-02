@@ -176,6 +176,9 @@ async def test_breaker_disables_cleanup_when_flag_enabled(
     assert result.deleted_superseded == 0
     assert result.deleted_orphans == 0
     assert "M0 emergency preservation mode active" in caplog.text
+    assert f"mode={flag.strip().lower()}" in caplog.text
+    assert "destructive_actions_enabled=false" in caplog.text
+    assert "mode=M0_EMERGENCY_PRESERVATION_MODE" not in caplog.text
 
 
 async def test_breaker_defaults_to_disabled_when_flag_absent(
@@ -190,6 +193,9 @@ async def test_breaker_defaults_to_disabled_when_flag_absent(
 
     assert result.preservation_mode is True
     assert "M0 emergency preservation mode active" in caplog.text
+    assert "mode=absent" in caplog.text
+    assert "destructive_actions_enabled=false" in caplog.text
+    assert "mode=M0_EMERGENCY_PRESERVATION_MODE" not in caplog.text
 
 
 @pytest.mark.parametrize("flag", ["maybe", "", "  ", "2", "disabled"])

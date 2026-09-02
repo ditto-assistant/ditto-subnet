@@ -30,16 +30,19 @@ class PreservationConfigError(RuntimeError):
     """Raised when the M0 preservation flag is set to an unrecognised value."""
 
 
+def _preservation_env_log_token() -> str:
+    """Resolved flag token for operator logs: absent, empty, or the normalized value."""
+    raw = os.environ.get(_PRESERVATION_ENV)
+    if raw is None:
+        return "absent"
+    return raw.strip().lower() or "<empty>"
+
+
 def emergency_preservation_enabled() -> bool:
-    """Whether the M0 emergency preservation breaker disables cleanup.
+    """Return True when screened-image cleanup must not run.
 
-    Fail-safe by construction: an ABSENT flag disables cleanup, because M0's
-    whole purpose is that a misconfigured host preserves rather than deletes.
-    An UNRECOGNISED value raises, and the caller also disables cleanup — the
-    one thing that must never happen is a config mistake resolving to "delete".
-
-    Plain truthiness is wrong here and dangerously so: ``bool("false")`` is
-    ``True``, which points the mistake in the destructive direction.
+    Absent or unrecognised values preserve. Tokens are matched explicitly
+    because ``bool("false")`` is ``True``.
     """
     raw = os.environ.get(_PRESERVATION_ENV)
     if raw is None:
@@ -59,10 +62,7 @@ def emergency_preservation_enabled() -> bool:
 class CleanupResult:
     """Counts emitted by one idempotent cleanup pass.
 
-    ``preservation_mode`` defaults to False so every existing construction and
-    assertion keeps working. It is True only when the M0 breaker short-circuited
-    the pass, so a monitor reading the result cannot mistake a breaker run for an
-    ordinary cleanup that happened to delete nothing.
+    ``preservation_mode`` is True only when the breaker skipped the pass.
     """
 
     aborted_multipart: int
@@ -119,7 +119,7 @@ async def cleanup_screened_images(
             "DISABLED. multipart abort, superseded detachment, superseded "
             "deletion and orphan deletion all skipped. mode=%s "
             "destructive_actions_enabled=false",
-            _PRESERVATION_ENV,
+            _preservation_env_log_token(),
         )
         return CleanupResult.preserved()
 
