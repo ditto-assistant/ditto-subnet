@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.181.2 (2026-09-02)
+
+### Bug Fixes
+
+- **model-relay**: Stop trace recovery stealing a live sibling's open file
+  ([#1471](https://github.com/ditto-assistant/ditto-subnet/pull/1471),
+  [`469c354`](https://github.com/ditto-assistant/ditto-subnet/commit/469c354accc69f44f6b5260cab2e5e358e6e1dce))
+
+
 ## v0.181.1 (2026-09-01)
 
 ### Bug Fixes
