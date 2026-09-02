@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.181.6 (2026-09-02)
+
+### Bug Fixes
+
+- **backroom**: Expose screening failure diagnostics
+  ([`c4c90e9`](https://github.com/ditto-assistant/ditto-subnet/commit/c4c90e93e8a7aa75a95b82446691e47d1682e5af))
+
+
 ## v0.181.5 (2026-09-02)
 
 ### Bug Fixes
