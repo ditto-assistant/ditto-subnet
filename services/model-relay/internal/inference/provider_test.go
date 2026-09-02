@@ -20,6 +20,133 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 	return f(request)
 }
 
+func TestEmbeddingBackpressureFallsThroughToOpenRouter(t *testing.T) {
+	var directCalls, routerCalls int
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		directCalls++
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited","type":"request_rate_limit_exceeded"}}`))
+	}))
+	defer direct.Close()
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		routerCalls++
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode router payload: %v", err)
+		}
+		if payload["model"] != "perplexity/pplx-embed-v1-0.6b" {
+			t.Fatalf("router model: %v", payload["model"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","model":"perplexity/pplx-embed-v1-0.6b","data":[],"usage":{"prompt_tokens":0,"total_tokens":0}}`))
+	}))
+	defer router.Close()
+
+	cfg := config.InferenceProxyConfig{
+		OpenRouterAPIKey:           "router-key",
+		PerplexityAPIKey:           "direct-key",
+		EmbeddingFallbackURL:       direct.URL,
+		EmbeddingUpstreamURL:       router.URL,
+		EmbeddingModel:             "perplexity/pplx-embed-v1-0.6b",
+		EmbeddingProvider:          "perplexity",
+		EmbeddingDimensions:        768,
+		EmbeddingResponseBodyBytes: 1024,
+		TimeoutSeconds:             5,
+	}
+	result, callErr := postEmbeddingProvider(
+		context.Background(), direct.Client(), cfg, []string{"memory"}, func(context.Context, time.Duration) {},
+	)
+	if callErr != nil || result == nil || result.direct || result.result.status != http.StatusOK {
+		t.Fatalf("result=%v error=%v", result, callErr)
+	}
+	if result.attempts != 2 || result.fallbackPhase != 1 || len(result.phases) != 2 ||
+		result.phases[0].route != "direct" || result.phases[0].result.status != http.StatusTooManyRequests ||
+		result.phases[1].route != "openrouter" || result.phases[1].result.status != http.StatusOK {
+		t.Fatalf("fallback provenance: %+v", result)
+	}
+	var directPayload, routerPayload map[string]any
+	if err := json.Unmarshal(result.phases[0].payload, &directPayload); err != nil {
+		t.Fatalf("decode direct trace payload: %v", err)
+	}
+	if err := json.Unmarshal(result.phases[1].payload, &routerPayload); err != nil {
+		t.Fatalf("decode router trace payload: %v", err)
+	}
+	if directPayload["model"] != pplxEmbedResponseModel || directPayload["encoding_format"] != "base64_int8" || directPayload["provider"] != nil {
+		t.Fatalf("direct trace payload: %v", directPayload)
+	}
+	provider, ok := routerPayload["provider"].(map[string]any)
+	if routerPayload["model"] != cfg.EmbeddingModel || routerPayload["encoding_format"] != "float" || !ok || provider["allow_fallbacks"] != false {
+		t.Fatalf("router trace payload: %v", routerPayload)
+	}
+	if directCalls != 1 || routerCalls != 1 {
+		t.Fatalf("calls direct=%d router=%d", directCalls, routerCalls)
+	}
+}
+
+func TestEmbeddingBackpressureFallbackTransportFailureKeepsProvenance(t *testing.T) {
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited","type":"request_rate_limit_exceeded"}}`))
+	}))
+	defer direct.Close()
+
+	client := direct.Client()
+	client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host == strings.TrimPrefix(direct.URL, "http://") {
+			return http.DefaultTransport.RoundTrip(request)
+		}
+		return nil, context.DeadlineExceeded
+	})
+	cfg := config.InferenceProxyConfig{
+		OpenRouterAPIKey: "router-key", PerplexityAPIKey: "direct-key",
+		EmbeddingFallbackURL: direct.URL, EmbeddingUpstreamURL: "http://router.invalid/embeddings",
+		EmbeddingModel: "perplexity/pplx-embed-v1-0.6b", EmbeddingProvider: "perplexity",
+		EmbeddingDimensions: 768, EmbeddingResponseBodyBytes: 1024, TimeoutSeconds: 5,
+	}
+	result, callErr := postEmbeddingProvider(
+		context.Background(), client, cfg, []string{"memory"}, func(context.Context, time.Duration) {},
+	)
+	if callErr == nil || result == nil || result.result != nil {
+		t.Fatalf("result=%v error=%v", result, callErr)
+	}
+	if result.attempts != 2 || result.fallbackPhase != 1 || len(result.phases) != 2 ||
+		result.phases[0].result == nil || result.phases[1].callErr == nil {
+		t.Fatalf("fallback provenance: %+v", result)
+	}
+}
+
+func TestEmbeddingBackpressureWithReceiptEvidenceDoesNotFallback(t *testing.T) {
+	var routerCalls int
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited","type":"request_rate_limit_exceeded"},"usage":{"prompt_tokens":1}}`))
+	}))
+	defer direct.Close()
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		routerCalls++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer router.Close()
+	cfg := config.InferenceProxyConfig{
+		OpenRouterAPIKey: "router-key", PerplexityAPIKey: "direct-key",
+		EmbeddingFallbackURL: direct.URL, EmbeddingUpstreamURL: router.URL,
+		EmbeddingModel: "perplexity/pplx-embed-v1-0.6b", EmbeddingProvider: "perplexity",
+		EmbeddingDimensions: 768, EmbeddingResponseBodyBytes: 1024, TimeoutSeconds: 5,
+	}
+	result, callErr := postEmbeddingProvider(
+		context.Background(), direct.Client(), cfg, []string{"memory"}, func(context.Context, time.Duration) {},
+	)
+	if callErr != nil || result == nil || !result.direct || result.result.status != http.StatusTooManyRequests {
+		t.Fatalf("result=%v error=%v", result, callErr)
+	}
+	if routerCalls != 0 {
+		t.Fatalf("receipt-bearing response triggered %d fallback calls", routerCalls)
+	}
+}
+
 func TestConfirmationReaderBackpressureDelay(t *testing.T) {
 	tests := map[string]struct {
 		retryAfter string

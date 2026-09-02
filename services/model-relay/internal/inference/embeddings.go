@@ -215,7 +215,10 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	var raw []byte
 	var requestFailure *httpError
 	providerResult, callErr := postEmbeddingProvider(ctx, d.Upstream, cfg, inputs, d.sleep())
-	if providerResult != nil && !providerResult.direct {
+	if providerResult != nil {
+		outcome.fallbackPhase = providerResult.fallbackPhase
+	}
+	if providerResult != nil && providerResult.result != nil && !providerResult.direct {
 		if receiptFreeResultOverload(
 			providerResult.result, cfg.EmbeddingModel, cfg.EmbeddingProvider,
 		) {
