@@ -139,6 +139,41 @@ func TestMTLSTransportIsDefaultOffAndRequiresPrivateBindAndCredentials(t *testin
 	}
 }
 
+func TestArtifactCanaryConfigurationIsSeparateAndDefaultOff(t *testing.T) {
+	if _, err := artifactCanaryConfigurationFromEnvironment(func(string) string { return "" }); err == nil {
+		t.Fatal("disabled artifact canary was accepted")
+	}
+	enabled := func(key string) string {
+		switch key {
+		case artifactCanaryEnvironment:
+			return "true"
+		case "CREDENTIALS_DIRECTORY":
+			return "/run/credentials/coding-artifact-canary"
+		default:
+			return ""
+		}
+	}
+	config, err := artifactCanaryConfigurationFromEnvironment(enabled)
+	if err != nil || config.capabilityPath != "/run/credentials/coding-artifact-canary/artifact-capability.json" {
+		t.Fatalf("config=%#v err=%v", config, err)
+	}
+	invalid := func(key string) string {
+		if key == artifactCanaryEnvironment {
+			return "true"
+		}
+		if key == "CREDENTIALS_DIRECTORY" {
+			return "/tmp/credentials"
+		}
+		return ""
+	}
+	if _, err := artifactCanaryConfigurationFromEnvironment(invalid); err == nil {
+		t.Fatal("alternate artifact credential directory was accepted")
+	}
+	if boolCount(true, true, false) != 2 || boolCount(false, false, false) != 0 {
+		t.Fatal("scorer mode count is invalid")
+	}
+}
+
 func TestScorerLoadsTheCanonicalLockedPolicy(t *testing.T) {
 	path, err := filepath.Abs(filepath.Join(
 		"..", "..", "..", "..", "packages", "dittobench-coding-contract",

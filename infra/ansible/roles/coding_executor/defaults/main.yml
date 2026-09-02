@@ -120,3 +120,13 @@ coding_executor_mtls_transport_unit: ditto-coding-executor-mtls-transport
 coding_executor_mtls_bind_address: ""
 coding_executor_mtls_port: 9443
 coding_executor_mtls_source_cidr: ""
+
+# One ticket-bound, visible-bundle-only S3 transport proof. The capability is
+# pre-positioned root-only and passed through a systemd credential. False keeps
+# the command, network request, and receipt completely dormant.
+coding_executor_artifact_canary_enabled: false
+coding_executor_artifact_canary_unit: ditto-coding-executor-artifact-canary
+coding_executor_artifact_canary_root: /var/lib/ditto-coding-executor/artifact-canary
+coding_executor_artifact_canary_temporary_directory: /var/lib/ditto-coding-executor/artifact-canary/tmp
+coding_executor_artifact_canary_receipt_path: /var/lib/ditto-coding-executor/artifact-canary/receipt.json
+coding_executor_artifact_canary_capability_path: /var/lib/ditto-coding-executor/credentials/artifact-capability.json

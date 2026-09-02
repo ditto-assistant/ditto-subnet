@@ -71,6 +71,8 @@ Archive extraction and tree verification remain owned by `codingrunner` and
 
 ## Activation boundary
 
-This package has no endpoint or composition-root wiring. It does not claim a
-validator job, deliver bytes to a miner, change a score, deploy a service, or
-make coding contract v1 weight-eligible.
+The default-off coding host composes this package behind its scorer gate. A
+separate false-by-default one-shot mode may also use it to verify exactly one
+authoring visible bundle and discard the bytes; see
+`coding-artifact-connectivity-canary.md`. Neither path claims a validator job,
+changes a score, or makes coding contract v1 weight-eligible.

@@ -160,6 +160,18 @@ It never enables either worker gate. The exact preconditions, command boundary,
 and receipt limitations are documented in
 `coding-executor-connectivity-canary.md`.
 
+## Ticket-bound S3 artifact canary
+
+After the validator connectivity receipt has been reviewed, the executor role
+offers a second independent false-by-default control:
+`coding_executor_artifact_canary_enabled`. It requires the attested scorer
+binary and one pre-positioned root-only visible-bundle capability, then starts
+an uninstalled one-shot systemd unit. The unit uses no Docker or scorer socket,
+fetches and verifies exactly one S3 object through the existing netguarded
+artifact fetcher, discards the bytes, and writes only a URL-redacted diagnostic
+receipt. See
+`services/dittobench-api/docs/coding-artifact-connectivity-canary.md`.
+
 ## Production runtime-bundle staging
 
 The public `Dockerfile.coding-supervisor` builds a synthetic certification
