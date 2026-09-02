@@ -19,6 +19,10 @@ export type PageName =
   | "ath"
   | "benchmark";
 
+export type OperationsView = "validators" | "screeners" | "builds";
+
+const OPERATIONS_VIEW_SET = new Set<OperationsView>(["validators", "screeners", "builds"]);
+
 // Sidebar pages (title, subtitle) in sidebar order. Deliberately mutable: the
 // benchmark subtitle is rewritten in place once the live bench version is
 // known.
@@ -71,6 +75,27 @@ export function pageFromPathname(pathname?: string): PageName | null {
 /** Crawlable pathname for a sidebar page. Overview canonicalizes to `/`. */
 export function pagePathname(page: string): string {
   return page === "overview" ? "/" : "/" + page;
+}
+
+/** `/operations` remains the short validator URL. Named child routes make a
+ * copied screener/build URL reopen the same view instead of silently landing
+ * on validators. */
+export function operationsViewFromPathname(pathname?: string): OperationsView {
+  const raw = (pathname ?? location.pathname).replace(/^\/+|\/+$/g, "");
+  const [page, view, extra] = raw.split("/");
+  if (page !== "operations" || extra || !view) return "validators";
+  return OPERATIONS_VIEW_SET.has(view as OperationsView) ? (view as OperationsView) : "validators";
+}
+
+export function operationsPathname(view: OperationsView): string {
+  return "/operations/" + view;
+}
+
+function recognizedOperationsPathname(pathname: string): string | null {
+  const normalized = "/" + pathname.replace(/^\/+|\/+$/g, "");
+  if (normalized === "/operations") return normalized;
+  const view = normalized.slice("/operations/".length);
+  return OPERATIONS_VIEW_SET.has(view as OperationsView) ? normalized : null;
 }
 
 export type EntityKind = "agent" | "miner" | "validator" | "screener";
@@ -201,7 +226,7 @@ export function configSearch(): string {
   return qs ? "?" + qs : "";
 }
 
-export function spaHref(page: string, query?: URLSearchParams): string {
+function spaHrefAtPath(pathname: string, query?: URLSearchParams): string {
   const search = new URLSearchParams();
   for (const key of CONFIG_KEYS) {
     const value = bootParams.get(key);
@@ -209,7 +234,17 @@ export function spaHref(page: string, query?: URLSearchParams): string {
   }
   if (query) copySpaParams(query, search);
   const qs = search.toString();
-  return pagePathname(page) + (qs ? "?" + qs : "");
+  return pathname + (qs ? "?" + qs : "");
+}
+
+export function spaHref(page: string, query?: URLSearchParams): string {
+  const operationsPath =
+    page === "operations" ? recognizedOperationsPathname(location.pathname) : null;
+  return spaHrefAtPath(operationsPath || pagePathname(page), query);
+}
+
+export function operationsHref(view: OperationsView, query?: URLSearchParams): string {
+  return spaHrefAtPath(operationsPathname(view), query);
 }
 
 // Pathname is canonical (`/leaderboard`). A leftover `#/page` still counts

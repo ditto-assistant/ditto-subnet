@@ -110,7 +110,8 @@ describe("accessible fleet status (row 15)", () => {
     expect(text("fleet-node-heading")).toBe("Validator");
 
     fireEvent.click(document.getElementById("operations-tab-screeners") as HTMLButtonElement);
-    await waitFor(() => expect(text("fleet-node-heading")).toBe("Screener"));
+    await waitFor(() => expect(text("fleet-node-heading")).toBe("Screener host"));
+    expect(location.pathname).toBe("/operations/screeners");
     expect(document.getElementById("operations-tab-screeners")).toHaveAttribute(
       "aria-selected",
       "true",
@@ -129,6 +130,7 @@ describe("accessible fleet status (row 15)", () => {
       "true",
     );
     expect(document.activeElement).toBe(document.getElementById("operations-tab-builds"));
+    expect(location.pathname).toBe("/operations/builds");
     expect(document.getElementById("fleet-table")).toBeNull();
 
     fireEvent.keyDown(document.activeElement as HTMLButtonElement, { key: "Home" });
@@ -136,6 +138,19 @@ describe("accessible fleet status (row 15)", () => {
       "aria-selected",
       "true",
     );
+    expect(location.pathname).toBe("/operations/validators");
+  });
+
+  it("opens named operations routes on their matching view", async () => {
+    history.replaceState(null, "", "/operations/screeners");
+    syncFromLocation();
+    await renderPage();
+
+    expect(document.getElementById("operations-tab-screeners")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(text("fleet-node-heading")).toBe("Screener host");
   });
 
   it("raises faults in the head and stays silent about sound nodes", async () => {
@@ -810,14 +825,24 @@ describe("accessible benchmark progress (row 22)", () => {
       ),
     );
     expect(document.getElementById("fleet-summary")?.textContent).toContain(
-      "2 local workers reporting across 1 host",
+      "2 worker processes reporting across 1 host",
     );
-    expect(document.querySelector("#fleet-rows")?.textContent).toContain(
-      "subnet-screener-1-worker-1",
+    const host = document.querySelector(".screener-host-group") as HTMLDetailsElement;
+    expect(host).toBeTruthy();
+    expect(host.open).toBe(true);
+    expect(host.querySelector(".screener-host-identity strong")?.textContent).toBe(
+      "subnet-screener-1",
     );
-    expect(document.querySelector("#fleet-rows")?.textContent).toContain(
-      "subnet-screener-1-worker-2",
-    );
+    expect(host.querySelector(".screener-host-toggle")?.textContent).toContain("2 workers");
+    expect(host.querySelectorAll(".screener-worker-table tbody tr")).toHaveLength(2);
+    expect(
+      host.querySelectorAll('.fleet-node-name[title="subnet-screener-1-worker-1"]'),
+    ).toHaveLength(1);
+    expect(
+      host.querySelectorAll('.fleet-node-name[title="subnet-screener-1-worker-2"]'),
+    ).toHaveLength(1);
+    expect(host.querySelectorAll(".fleet-worker-capacity")).toHaveLength(2);
+    expect(host.textContent).toContain("No per-worker CPU/RAM quota");
     expect(document.querySelector("#fleet-rows")?.textContent).toContain("Building image");
     expect(document.querySelector("#fleet-rows")?.textContent).toContain("Checking health");
   });

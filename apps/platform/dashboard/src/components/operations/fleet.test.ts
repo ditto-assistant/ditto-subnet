@@ -13,15 +13,47 @@ import {
   fleetWindowLabel,
   fleetWork,
   fundedSlotCount,
+  groupScreenerHosts,
   isInoperativeFleetEntry,
   offlineAwareFleetStatusFor,
   orphanedSlotView,
   slotCapacityTitle,
   sortFleetEntries,
+  screenerHostId,
+  screenerWorkerLabel,
   validatorAssignmentView,
   validatorSlotIds,
 } from "./fleet";
 import type { FleetEntryExt, ValidatorTelemetryCache } from "./fleet";
+
+describe("screener worker host grouping", () => {
+  const workers: FleetEntryExt[] = [
+    { screener_hotkey: "shared", instance_id: "subnet-screener-1-worker-2" },
+    { screener_hotkey: "shared", instance_id: "subnet-screener-1-worker-1" },
+    { screener_hotkey: "shared", instance_id: "subnet-screener-2-worker-1" },
+    { screener_hotkey: "shared", instance_id: "legacy-node" },
+  ];
+
+  it("uses the node prefix rather than the fleet-wide hotkey as the host boundary", () => {
+    expect(
+      groupScreenerHosts(workers).map((group) => [group.hostId, group.workers.length]),
+    ).toEqual([
+      ["subnet-screener-1", 2],
+      ["subnet-screener-2", 1],
+      ["legacy-node", 1],
+    ]);
+    expect(groupScreenerHosts(workers)[0]?.workers.map((worker) => worker.instance_id)).toEqual([
+      "subnet-screener-1-worker-1",
+      "subnet-screener-1-worker-2",
+    ]);
+  });
+
+  it("shortens only a recognized local worker suffix", () => {
+    expect(screenerHostId(workers[1]!)).toBe("subnet-screener-1");
+    expect(screenerWorkerLabel(workers[1]!, "subnet-screener-1")).toBe("Worker 1");
+    expect(screenerWorkerLabel(workers[3]!, "legacy-node")).toBe("legacy-node");
+  });
+});
 
 describe("slots dispatch funds, not advertised capacity (#540)", () => {
   const entry: FleetEntryExt = {

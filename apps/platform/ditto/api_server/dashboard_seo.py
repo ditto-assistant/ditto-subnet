@@ -102,10 +102,28 @@ CRAWLABLE_PAGES: tuple[tuple[str, str, str, str], ...] = (
         "/operations",
         "operations",
         "Validator fleet · Ditto SN118",
+        ("Live Ditto SN118 validator capacity, slot work, and health."),
+    ),
+    (
+        "/operations/validators",
+        "operations",
+        "Validator fleet · Ditto SN118",
+        "Live Ditto SN118 validator capacity, slot work, and health.",
+    ),
+    (
+        "/operations/screeners",
+        "operations",
+        "Screener fleet · Ditto SN118",
         (
-            "Live Ditto SN118 validator and screener fleet: capacity, slot "
-            "work, and trusted miner-image builds."
+            "Live Ditto SN118 screener hosts, shared capacity, worker process "
+            "state, and current screening work."
         ),
+    ),
+    (
+        "/operations/builds",
+        "operations",
+        "Trusted builds · Ditto SN118",
+        ("Live Ditto SN118 trusted miner-image build capacity and current build work."),
     ),
     (
         "/submissions",
@@ -288,7 +306,11 @@ def llms_txt(origin: str) -> str:
             f"- Leaderboard: {origin}/leaderboard",
             f"- Benchmark: {origin}/benchmark",
             f"- Submission pipeline: {origin}/pipeline",
-            f"- Validator fleet: {origin}/operations",
+            (
+                f"- Validator fleet: {origin}/operations "
+                f"(also {origin}/operations/validators)"
+            ),
+            f"- Screener fleet: {origin}/operations/screeners",
             f"- Recent submissions: {origin}/submissions",
             f"- ATH reviews: {origin}/ath",
             f"- Miner profile: {origin}/miner/{{hotkey}}",
@@ -403,6 +425,9 @@ def sitemap_xml(origin: str, snapshot: SeoSnapshot | None) -> str:
         (origin + "/benchmark", "0.7", "hourly"),
         (origin + "/pipeline", "0.6", "hourly"),
         (origin + "/operations", "0.6", "hourly"),
+        (origin + "/operations/validators", "0.6", "hourly"),
+        (origin + "/operations/screeners", "0.6", "hourly"),
+        (origin + "/operations/builds", "0.5", "hourly"),
         (origin + "/submissions", "0.5", "hourly"),
         (origin + "/ath", "0.4", "hourly"),
     ]

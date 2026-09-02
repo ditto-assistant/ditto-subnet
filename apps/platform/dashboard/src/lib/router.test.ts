@@ -17,6 +17,9 @@ import {
   dashboardHref,
   entityHref,
   fullEntityHref,
+  operationsHref,
+  operationsPathname,
+  operationsViewFromPathname,
   pageFromPathname,
   parseHashRoute,
   readEntityRoute,
@@ -190,6 +193,13 @@ describe("spaHref", () => {
     expect(spaHref("leaderboard")).toBe("/leaderboard");
   });
 
+  it("preserves a recognized operations child route", () => {
+    setLocation("/operations/screeners");
+    expect(spaHref("operations")).toBe("/operations/screeners");
+    setLocation("/operations/not-a-view");
+    expect(spaHref("operations")).toBe("/operations");
+  });
+
   it("appends overlay and filter params to the real query", () => {
     expect(spaHref("submissions", new URLSearchParams("status=rejected&page=2"))).toBe(
       "/submissions?status=rejected&page=2",
@@ -207,6 +217,23 @@ describe("spaHref", () => {
     expect(spaHref("operations")).toBe("/operations?api=x");
     expect(spaHref("operations", new URLSearchParams("validator=v1"))).toBe(
       "/operations?api=x&validator=v1",
+    );
+  });
+});
+
+describe("operations routes", () => {
+  it("keeps /operations as validators and accepts named child routes", () => {
+    expect(operationsViewFromPathname("/operations")).toBe("validators");
+    expect(operationsViewFromPathname("/operations/validators")).toBe("validators");
+    expect(operationsViewFromPathname("/operations/screeners/")).toBe("screeners");
+    expect(operationsViewFromPathname("/operations/builds")).toBe("builds");
+    expect(operationsViewFromPathname("/operations/nope")).toBe("validators");
+  });
+
+  it("mints explicit child URLs for tab navigation", () => {
+    expect(operationsPathname("validators")).toBe("/operations/validators");
+    expect(operationsHref("screeners", new URLSearchParams("screener=s1"))).toBe(
+      "/operations/screeners?screener=s1",
     );
   });
 });

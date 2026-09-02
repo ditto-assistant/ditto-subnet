@@ -10,7 +10,9 @@ import {
   entityReturnUrl,
   entityRoute,
   initRouteListeners,
+  navigateToOperationsView,
   navigateToPage,
+  operationsViewRoute,
   pushEntityRoute,
   syncFromLocation,
 } from "./routeStore";
@@ -58,6 +60,14 @@ describe("currentPage", () => {
     setLocation("/leaderboard");
     syncFromLocation();
     expect(currentPage()).toBe("leaderboard");
+  });
+
+  it("preserves named operations routes and exposes their selected view", () => {
+    setLocation("/operations/screeners");
+    syncFromLocation();
+    expect(currentPage()).toBe("operations");
+    expect(operationsViewRoute()).toBe("screeners");
+    expect(fullUrl()).toBe("/operations/screeners");
   });
 
   it("resolves unknown '#/…' routes to overview and normalizes the URL", () => {
@@ -109,6 +119,27 @@ describe("currentPage", () => {
     setLocation("/agent/a1");
     syncFromLocation();
     expect(currentPage()).toBe("submissions");
+  });
+});
+
+describe("navigateToOperationsView", () => {
+  it("pushes a named tab route and clears a mismatched entity", () => {
+    setLocation("/operations?validator=v1");
+    syncFromLocation();
+    navigateToOperationsView("screeners");
+    expect(fullUrl()).toBe("/operations/screeners");
+    expect(operationsViewRoute()).toBe("screeners");
+    expect(entityRoute()).toBeNull();
+  });
+
+  it("can replace while retaining a matching deep-link target", () => {
+    setLocation("/operations?screener=s1");
+    syncFromLocation();
+    const replace = vi.spyOn(history, "replaceState");
+    navigateToOperationsView("screeners", { replace: true, keepEntity: true });
+    expect(fullUrl()).toBe("/operations/screeners?screener=s1");
+    expect(replace).toHaveBeenCalled();
+    expect(entityRoute()).toMatchObject({ kind: "screener", id: "s1" });
   });
 });
 

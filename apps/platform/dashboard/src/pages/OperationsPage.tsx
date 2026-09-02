@@ -7,15 +7,21 @@
 // display names arrive on a separate feed and are optional untrusted
 // decoration: reset on every refetch, rendered as inert text, never a
 // substitute for the hotkey identity.
-import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { reconciledList } from "../data/reconciled";
-import { FleetLedger, FleetRow, RetiredFleetRow } from "../components/operations/FleetTable";
+import {
+  FleetLedger,
+  FleetRow,
+  RetiredFleetRow,
+  ScreenerHostGroup,
+} from "../components/operations/FleetTable";
 import { SubmissionBuildLane } from "../components/operations/SubmissionBuildLane";
 import {
   fleetLedgerCounts,
   fleetWindowLabel,
+  groupScreenerHosts,
   isInoperativeFleetEntry,
   preserveTransientValidatorTelemetry,
   sortFleetEntries,
@@ -25,6 +31,7 @@ import type {
   FleetLedgerKey,
   FleetReportExt,
   FleetSingular,
+  ScreenerHostGroup as ScreenerHostGroupView,
   SlotPolicy,
 } from "../components/operations/fleet";
 import { EmptyRow } from "../components/ui/States";
@@ -34,9 +41,10 @@ import { operationsResource } from "../data/operations";
 import { useEndpoint } from "../data/useEndpoint";
 import type { ResourceState } from "../data/useEndpoint";
 import { REFRESH_MS } from "../lib/config";
+import type { OperationsView } from "../lib/router";
 import { validatorWeightViews } from "../lib/scoring";
 import type { ValidatorWeightView } from "../lib/scoring";
-import { entityRoute } from "../stores/routeStore";
+import { entityRoute, navigateToOperationsView, operationsViewRoute } from "../stores/routeStore";
 import type { FleetReport, OperationsPayload, ValidatorNamesPayload } from "../types/fleet";
 import { latest, useOperationsSnapshot } from "./operations-shared";
 
@@ -54,8 +62,6 @@ interface FleetView {
   generatedAt: string | null;
 }
 
-type OperationsView = "validators" | "screeners" | "builds";
-
 const OPERATIONS_VIEWS: readonly OperationsView[] = ["validators", "screeners", "builds"];
 
 const OPERATIONS_VIEW_LABELS: Record<OperationsView, string> = {
@@ -63,6 +69,11 @@ const OPERATIONS_VIEW_LABELS: Record<OperationsView, string> = {
   screeners: "Screeners",
   builds: "Targon builds",
 };
+
+function selectOperationsView(view: OperationsView, focus = false): void {
+  navigateToOperationsView(view);
+  if (focus) document.getElementById("operations-tab-" + view)?.focus();
+}
 
 // Validators have one hotkey per row; screeners deliberately share a hotkey
 // across local processes, so the instance id must participate in their key or
@@ -113,7 +124,7 @@ export function OperationsPage(
   const ops = snap.ops;
   const opsUnavailable = snap.opsUnavailable;
 
-  const [operationsView, setOperationsView] = createSignal<OperationsView>("validators");
+  const operationsView = operationsViewRoute;
 
   // Applied once per payload, like the monolith's single mutation at load
   // time: empty slots inherit their prior signed progress through the
@@ -203,6 +214,10 @@ export function OperationsPage(
   // shut any open "inactive slots" disclosure and dropped focus and hover.
   const fleetEntries = reconciledList<FleetEntryExt>(() => fleet().entries, fleetKey);
   const fleetRetired = reconciledList<FleetEntryExt>(() => fleet().retired, fleetKey);
+  const screenerHosts = reconciledList<ScreenerHostGroupView>(
+    () => groupScreenerHosts(fleetEntries()),
+    "hostId",
+  );
 
   /** Exception-only: the head speaks when the reader cannot trust the table,
    * and is silent otherwise. Everything the old summary line stated is on the
@@ -215,16 +230,14 @@ export function OperationsPage(
     if (view.loading) return "Loading " + view.singular + " status…";
     if (!view.entries.length) return "No active " + view.kind + " reporting";
     if (view.singular === "screener" && view.entries.length > 1) {
-      const hosts = new Set(
-        view.entries.map((entry) => entry.screener_hotkey || entry.instance_id || "unknown"),
-      ).size;
+      const hosts = groupScreenerHosts(view.entries).length;
       return (
         String(view.entries.length) +
-        " local workers reporting across " +
+        " worker processes reporting across " +
         String(hosts) +
         " " +
         (hosts === 1 ? "host" : "hosts") +
-        " · each row is an independent worker process"
+        " · open a host to inspect its workers"
       );
     }
     return "";
@@ -289,13 +302,11 @@ export function OperationsPage(
   createEffect(() => {
     const entity = entityRoute();
     if (!entity || (entity.kind !== "validator" && entity.kind !== "screener")) return;
-    setOperationsView(entity.kind === "screener" ? "screeners" : "validators");
+    const target = entity.kind === "screener" ? "screeners" : "validators";
+    if (operationsView() !== target) {
+      navigateToOperationsView(target, { replace: true, keepEntity: true });
+    }
   });
-
-  function selectOperationsView(view: OperationsView, focus = false): void {
-    setOperationsView(view);
-    if (focus) document.getElementById("operations-tab-" + view)?.focus();
-  }
 
   function onOperationsTabKeyDown(ev: KeyboardEvent, view: OperationsView): void {
     const index = OPERATIONS_VIEWS.indexOf(view);
@@ -435,13 +446,13 @@ export function OperationsPage(
                   <thead>
                     <tr>
                       <th scope="col" id="fleet-node-heading" style="width:214px">
-                        {fleet().Kind}
+                        {fleet().singular === "screener" ? "Screener host" : fleet().Kind}
                       </th>
                       <th scope="col" class="fleet-work-col">
-                        Current work
+                        {fleet().singular === "screener" ? "Host size" : "Current work"}
                       </th>
                       <th scope="col" style="width:176px">
-                        Host
+                        {fleet().singular === "screener" ? "Load / workers" : "Host"}
                       </th>
                     </tr>
                   </thead>
@@ -456,6 +467,17 @@ export function OperationsPage(
                       <EmptyRow colspan={3}>
                         {"No active " + fleet().singular + " software reports."}
                       </EmptyRow>
+                    ) : fleet().singular === "screener" ? (
+                      <For each={screenerHosts()}>
+                        {(group) => (
+                          <ScreenerHostGroup
+                            group={group}
+                            names={nameData().names}
+                            benchVersion={benchVersion()}
+                            highlightId={highlightId()}
+                          />
+                        )}
+                      </For>
                     ) : (
                       <For each={fleetEntries()}>
                         {(entry) => (
