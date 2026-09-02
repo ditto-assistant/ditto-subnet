@@ -14,9 +14,33 @@ import json
 import os
 import random
 import secrets
+import ssl
 import time
 from pathlib import Path
 from types import TracebackType
+
+_CHAT_ROUTES = frozenset(
+    {
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/api/v1/chat/completions",
+    }
+)
+_RESPONSE_ROUTES = frozenset(
+    {
+        "/v1/responses",
+        "/responses",
+        "/api/v1/responses",
+    }
+)
+_EMBED_ROUTES = frozenset(
+    {
+        "/api/embed",
+        "/api/embeddings",
+        "/v1/embeddings",
+        "/api/v1/embeddings",
+    }
+)
 
 _MAX_HEADER_BYTES = 64 * 1024
 _MAX_BODY_BYTES = 1024 * 1024
@@ -53,6 +77,7 @@ class FakeModelGateway:
         state_file: str | None = None,
         latency_range: tuple[float, float] = (0.0, 0.0),
         surface: str = "all",
+        ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         self.response_text = response_text or secrets.token_hex(16)
         self._oracle_answer = oracle_answer
@@ -67,6 +92,7 @@ class FakeModelGateway:
         if low < 0 or high < low:
             raise ValueError("latency_range must be a non-negative (low, high) pair")
         self._latency_range = (low, high)
+        self._ssl_context = ssl_context
         self._server: asyncio.Server | None = None
 
     @property
@@ -75,10 +101,13 @@ class FakeModelGateway:
         if self._server is None or not self._server.sockets:
             raise RuntimeError("fake model gateway is not running")
         port = int(self._server.sockets[0].getsockname()[1])
-        return f"http://host.docker.internal:{port}"
+        scheme = "https" if self._ssl_context is not None else "http"
+        return f"{scheme}://host.docker.internal:{port}"
 
     async def __aenter__(self) -> FakeModelGateway:
-        self._server = await asyncio.start_server(self._handle, self._host, self._port)
+        self._server = await asyncio.start_server(
+            self._handle, self._host, self._port, ssl=self._ssl_context
+        )
         return self
 
     def _record_model_call(self) -> None:
@@ -165,6 +194,7 @@ class FakeModelGateway:
                 raise ValueError("headers too large")
             lines = raw_headers.decode("latin-1").split("\r\n")
             method, path, _version = lines[0].split(" ", 2)
+            path = _route_path(path)
             headers = {
                 key.strip().casefold(): value.strip()
                 for line in lines[1:]
@@ -196,11 +226,7 @@ class FakeModelGateway:
             if (
                 self._surface in {"all", "model"}
                 and method == "POST"
-                and path.rstrip("/")
-                in {
-                    "/v1/chat/completions",
-                    "/chat/completions",
-                }
+                and path in _CHAT_ROUTES
             ):
                 self._record_model_call()
                 await self._simulate_latency()
@@ -226,13 +252,7 @@ class FakeModelGateway:
                     },
                 }
             elif (
-                self._surface == "all"
-                and method == "POST"
-                and path.rstrip("/")
-                in {
-                    "/v1/responses",
-                    "/responses",
-                }
+                self._surface == "all" and method == "POST" and path in _RESPONSE_ROUTES
             ):
                 self._record_model_call()
                 await self._simulate_latency()
@@ -256,13 +276,13 @@ class FakeModelGateway:
             elif (
                 self._surface in {"all", "model"}
                 and method == "GET"
-                and path.rstrip("/") == "/health"
+                and path == "/health"
             ):
                 payload = {"status": "ok"}
             elif (
                 self._surface in {"all", "model"}
                 and method == "POST"
-                and path.rstrip("/") == "/tool"
+                and path == "/tool"
             ):
                 # Mock tool-execution sink for the behavioral oracle's
                 # tool-shaped RunRequest. It lets the harness's agent loop
@@ -277,12 +297,7 @@ class FakeModelGateway:
             elif (
                 self._surface in {"all", "embedding"}
                 and method == "POST"
-                and path.rstrip("/")
-                in {
-                    "/api/embed",
-                    "/api/embeddings",
-                    "/v1/embeddings",
-                }
+                and path in _EMBED_ROUTES
             ):
                 vector = [0.0] * _EMBED_DIMENSIONS
                 vector[0] = 1.0
@@ -377,6 +392,11 @@ class FakeModelGateway:
                 raise ValueError("malformed chunk terminator")
 
 
+def _route_path(path: str) -> str:
+    """Strip query-string and trailing slash for route matching."""
+    return path.split("?", 1)[0].rstrip("/") or "/"
+
+
 def _as_text(body: bytes) -> str:
     """Decode a request body loosely for substring checks; never raises."""
     return body.decode("utf-8", "replace")
@@ -397,18 +417,31 @@ def _sidecar_latency_range() -> tuple[float, float]:
     return (low, high)
 
 
+def _sidecar_tls_context() -> ssl.SSLContext | None:
+    """Load the per-screen OpenRouter leaf when the gate staged TLS files."""
+    cert = os.environ.get("DITTO_FAKE_GATEWAY_TLS_CERT")
+    key = os.environ.get("DITTO_FAKE_GATEWAY_TLS_KEY")
+    if not cert or not key:
+        return None
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(cert, key)
+    return context
+
+
 async def _serve_sidecar() -> None:
-    """Run production-shaped chat and embedding ports in the isolated sidecar."""
+    """Run production-shaped chat, embedding, and OpenRouter TLS ports."""
     response_text = os.environ["DITTO_FAKE_GATEWAY_RESPONSE"]
     oracle_answer = os.environ.get("DITTO_FAKE_GATEWAY_ORACLE_ANSWER") or None
     state_file = os.environ.get("DITTO_FAKE_GATEWAY_STATE_FILE")
+    latency = _sidecar_latency_range()
     chat_gateway = FakeModelGateway(
         response_text=response_text,
         oracle_answer=oracle_answer,
         host="0.0.0.0",
         port=11435,
         state_file=state_file,
-        latency_range=_sidecar_latency_range(),
+        latency_range=latency,
         surface="model",
     )
     embed_gateway = FakeModelGateway(
@@ -417,10 +450,29 @@ async def _serve_sidecar() -> None:
         host="0.0.0.0",
         port=11434,
         state_file=state_file,
-        latency_range=_sidecar_latency_range(),
+        latency_range=latency,
         surface="embedding",
     )
-    async with chat_gateway, embed_gateway:
+    tls_context = _sidecar_tls_context()
+    tls_gateway = (
+        FakeModelGateway(
+            response_text=response_text,
+            oracle_answer=oracle_answer,
+            host="0.0.0.0",
+            port=443,
+            state_file=state_file,
+            latency_range=latency,
+            surface="all",
+            ssl_context=tls_context,
+        )
+        if tls_context is not None
+        else None
+    )
+    async with contextlib.AsyncExitStack() as stack:
+        await stack.enter_async_context(chat_gateway)
+        await stack.enter_async_context(embed_gateway)
+        if tls_gateway is not None:
+            await stack.enter_async_context(tls_gateway)
         await asyncio.Event().wait()
 
 

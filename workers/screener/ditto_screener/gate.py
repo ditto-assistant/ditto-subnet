@@ -54,6 +54,7 @@ import re
 import secrets
 import shutil
 import signal
+import subprocess
 import tarfile
 import tempfile
 import time
@@ -134,7 +135,14 @@ _CANARY_IMAGE = (
 _GATEWAY_ALIAS = "host.docker.internal"
 _CHAT_GATEWAY_PORT = 11435
 _EMBED_GATEWAY_PORT = 11434
+_OPENROUTER_SHIM_HOST = "openrouter.ai"
+_OPENROUTER_SHIM_CA_BUNDLE_PATH = "/run/dittobench/openrouter-shim-ca.pem"
 _HARNESS_ALIAS = "harness"
+_SYSTEM_CA_BUNDLE_CANDIDATES = (
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/cert.pem",
+)
 _VALIDATOR_SANDBOX_USER = "65532:65532"
 _VALIDATOR_SANDBOX_TMPFS = "/tmp:rw,noexec,nosuid,nodev,size=512m"
 _VALIDATOR_SANDBOX_MEMORY = "3g"
@@ -467,6 +475,150 @@ def _prepare_gateway_state() -> tuple[str, str]:
         shutil.rmtree(state_dir, ignore_errors=True)
         raise
     return state_dir, state_file
+
+
+def _write_openrouter_shim_certs(state_dir: str) -> None:
+    """Mint an ephemeral CA and openrouter.ai leaf for isolated screening.
+
+    Scoring intercepts hardcoded ``https://openrouter.ai/api/v1`` with a
+    validator-local TLS shim. Screening must present the same compatibility
+    door or an honest OpenRouter client fails the private challenge with
+    ``challenge-http-failure`` on the isolated ``--internal`` network.
+    """
+    root = Path(state_dir)
+    ca_key = root / "ca.key"
+    ca_crt = root / "ca.crt"
+    leaf_key = root / "leaf.key"
+    leaf_csr = root / "leaf.csr"
+    leaf_crt = root / "leaf.crt"
+    leaf_ext = root / "leaf.ext"
+    bundle = root / "ca-bundle.pem"
+    leaf_ext.write_text(
+        "[leaf]\n"
+        "basicConstraints=critical,CA:FALSE\n"
+        "keyUsage=critical,digitalSignature\n"
+        "extendedKeyUsage=serverAuth\n"
+        "subjectAltName=DNS:openrouter.ai\n"
+        "subjectKeyIdentifier=hash\n"
+        "authorityKeyIdentifier=keyid,issuer\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-256",
+            "-days",
+            "5",
+            "-nodes",
+            "-subj",
+            "/CN=openrouter-shim-ca",
+            "-sha256",
+            "-addext",
+            "basicConstraints=critical,CA:TRUE,pathlen:0",
+            "-addext",
+            "keyUsage=critical,keyCertSign,cRLSign",
+            "-addext",
+            "subjectKeyIdentifier=hash",
+            "-keyout",
+            str(ca_key),
+            "-out",
+            str(ca_crt),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-new",
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:P-256",
+            "-nodes",
+            "-subj",
+            "/CN=openrouter.ai",
+            "-sha256",
+            "-keyout",
+            str(leaf_key),
+            "-out",
+            str(leaf_csr),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    subprocess.run(
+        [
+            "openssl",
+            "x509",
+            "-req",
+            "-in",
+            str(leaf_csr),
+            "-CA",
+            str(ca_crt),
+            "-CAkey",
+            str(ca_key),
+            "-CAcreateserial",
+            "-out",
+            str(leaf_crt),
+            "-days",
+            "5",
+            "-extfile",
+            str(leaf_ext),
+            "-extensions",
+            "leaf",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    subprocess.run(
+        [
+            "openssl",
+            "verify",
+            "-CAfile",
+            str(ca_crt),
+            "-purpose",
+            "sslserver",
+            "-verify_hostname",
+            _OPENROUTER_SHIM_HOST,
+            str(leaf_crt),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    bundle_parts = [ca_crt.read_bytes()]
+    for candidate in _SYSTEM_CA_BUNDLE_CANDIDATES:
+        try:
+            system_roots = Path(candidate).read_bytes()
+        except OSError:
+            continue
+        if system_roots.strip():
+            bundle_parts.append(system_roots)
+            break
+    bundle.write_bytes(b"\n".join(part.rstrip() + b"\n" for part in bundle_parts))
+    for private_input in (ca_key, leaf_csr, leaf_ext, root / "ca.srl"):
+        private_input.unlink(missing_ok=True)
+    for path, mode in (
+        (ca_crt, 0o444),
+        (leaf_key, 0o444),
+        (leaf_crt, 0o444),
+        (bundle, 0o444),
+    ):
+        os.chmod(path, mode)
 
 
 def _contains_string(value: object, needle: str) -> bool:
@@ -2327,7 +2479,10 @@ class BuildGate:
             run_args += ["-e", f"{key}={value}"]
         # Mirror the production scorer's locked provider contract. These are
         # appended last so an operator's legacy smoke env cannot bypass the
-        # fake gateway.
+        # fake gateway. SSL_* pins the compatibility CA for harnesses that
+        # compiled https://openrouter.ai/api/v1 instead of reading the
+        # injected ticket URL — the same door the scorer's OpenRouter shim
+        # presents at score time.
         gateway_env = {
             "DITTOBENCH_PROVIDER": "chutes",
             "DITTOBENCH_MODEL": LOCKED_HARNESS_MODEL,
@@ -2336,10 +2491,20 @@ class BuildGate:
             "OPENAI_BASE_URL": f"{chat_gateway}/v1",
             "OPENAI_API_KEY": "relay",
             "OLLAMA_BASE_URL": embed_gateway,
+            "SSL_CERT_FILE": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
+            "REQUESTS_CA_BUNDLE": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
+            "CURL_CA_BUNDLE": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
+            "NODE_EXTRA_CA_CERTS": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
             # The validator root filesystem is read-only. Its bounded /tmp
             # tmpfs is the canonical writable location for the harness DB.
             "DITTOBENCH_DB": _VALIDATOR_SANDBOX_DB,
         }
+        run_args += [
+            "--mount",
+            "type=bind,"
+            f"src={gateway_state_dir}/ca-bundle.pem,"
+            f"dst={_OPENROUTER_SHIM_CA_BUNDLE_PATH},readonly",
+        ]
         for key, value in gateway_env.items():
             run_args += ["-e", f"{key}={value}"]
         run_args.append(tag)
@@ -2396,6 +2561,11 @@ class BuildGate:
         state_dir: str,
     ) -> tuple[bool, str]:
         """Start the fake gateway beside the harness on an internal network."""
+        try:
+            _write_openrouter_shim_certs(state_dir)
+        except (OSError, subprocess.SubprocessError) as error:
+            return False, f"openrouter shim certs unavailable: {error}"
+
         code, out = await self._run(
             ["network", "create", "--internal", network], timeout=30.0
         )
@@ -2418,11 +2588,15 @@ class BuildGate:
                 network,
                 "--network-alias",
                 _GATEWAY_ALIAS,
+                "--network-alias",
+                _OPENROUTER_SHIM_HOST,
                 "--read-only",
                 "--ipc",
                 "none",
                 "--cap-drop",
                 "ALL",
+                "--cap-add",
+                "NET_BIND_SERVICE",
                 "--security-opt",
                 "no-new-privileges",
                 "--log-driver",
@@ -2443,6 +2617,10 @@ class BuildGate:
                 f"DITTO_FAKE_GATEWAY_ORACLE_ANSWER={oracle_answer}",
                 "-e",
                 "DITTO_FAKE_GATEWAY_STATE_FILE=/state/model-called",
+                "-e",
+                "DITTO_FAKE_GATEWAY_TLS_CERT=/state/leaf.crt",
+                "-e",
+                "DITTO_FAKE_GATEWAY_TLS_KEY=/state/leaf.key",
                 "-v",
                 f"{script}:/app/fake_gateway.py:ro",
                 "-v",
@@ -2458,8 +2636,13 @@ class BuildGate:
 
         probe = """\
 import socket
+import ssl
 for port in (11434, 11435):
     socket.create_connection(('127.0.0.1', port), 2).close()
+context = ssl.create_default_context(cafile='/state/ca.crt')
+with socket.create_connection(('127.0.0.1', 443), 2) as raw:
+    with context.wrap_socket(raw, server_hostname='openrouter.ai'):
+        pass
 """
         for _ in range(20):
             code, _ = await self._run(

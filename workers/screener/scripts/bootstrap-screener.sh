@@ -92,7 +92,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 # --- Base packages + Docker engine (the gate shells out to `docker`) ---------
 apt-get update -qq
-apt-get install -y -qq git curl ca-certificates gnupg
+apt-get install -y -qq git curl ca-certificates gnupg openssl
 
 if ! command -v docker >/dev/null; then
   install -m 0644 /dev/null /usr/share/keyrings/docker.asc

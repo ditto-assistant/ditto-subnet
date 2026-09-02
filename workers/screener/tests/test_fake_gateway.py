@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ssl
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 
 from ditto_screener.fake_gateway import FakeModelGateway
+from ditto_screener.gate import _write_openrouter_shim_certs
 
 
 async def test_chat_completion_is_counted_and_returns_offline_response(
@@ -290,6 +292,56 @@ async def test_text_only_caller_still_gets_a_plain_completion() -> None:
         message = response.json()["choices"][0]["message"]
         assert message["content"] == gateway.response_text
         assert "tool_calls" not in message
+
+
+async def test_openrouter_chat_path_is_a_model_call() -> None:
+    """Hardcoded OpenRouter clients POST /api/v1/chat/completions, not /v1."""
+    async with FakeModelGateway() as gateway:
+        local_url = gateway.gateway_url.replace("host.docker.internal", "127.0.0.1")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{local_url}/api/v1/chat/completions",
+                json={"model": "acme/reasoner-v3", "messages": []},
+            )
+        assert response.status_code == 200
+        content = response.json()["choices"][0]["message"]["content"]
+        assert content == gateway.response_text
+        assert gateway.model_calls == 1
+
+
+async def test_openrouter_tls_chat_path_is_a_model_call(tmp_path: Path) -> None:
+    """The isolated sidecar terminates HTTPS for openrouter.ai:443."""
+    _write_openrouter_shim_certs(str(tmp_path))
+    assert not (tmp_path / "ca.key").exists()
+    assert not (tmp_path / "leaf.csr").exists()
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(tmp_path / "leaf.crt", tmp_path / "leaf.key")
+    verify = ssl.create_default_context(cafile=str(tmp_path / "ca.crt"))
+    async with FakeModelGateway(ssl_context=context) as gateway:
+        port = urlsplit(gateway.gateway_url).port
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1",
+            port,
+            ssl=verify,
+            server_hostname="openrouter.ai",
+        )
+        body = json.dumps({"model": "acme/reasoner-v3", "messages": []}).encode()
+        writer.write(
+            b"POST /api/v1/chat/completions HTTP/1.1\r\n"
+            b"Host: openrouter.ai\r\n"
+            b"Content-Type: application/json\r\n"
+            + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+            + body
+        )
+        await writer.drain()
+        response = await reader.read()
+        writer.close()
+        await writer.wait_closed()
+
+        assert gateway.gateway_url.startswith("https://")
+        assert response.startswith(b"HTTP/1.1 200")
+        assert gateway.model_calls == 1
 
 
 async def test_tool_sink_returns_result_without_counting_a_model_call(
