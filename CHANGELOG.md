@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.181.12 (2026-09-02)
+
+### Bug Fixes
+
+- **model-relay**: Recover embedding backpressure
+  ([#1510](https://github.com/ditto-assistant/ditto-subnet/pull/1510),
+  [`cca85ee`](https://github.com/ditto-assistant/ditto-subnet/commit/cca85ee4ef8dbbc68694e13e4065086a6d36dfff))
+
+- **screener**: Retain safe oracle HTTP diagnostics
+  ([#1511](https://github.com/ditto-assistant/ditto-subnet/pull/1511),
+  [`e0ec3cc`](https://github.com/ditto-assistant/ditto-subnet/commit/e0ec3cc1097c8e392a372ca2d143ae2a1eb02d81))
+
+
 ## v0.181.11 (2026-09-02)
 
 ### Bug Fixes
