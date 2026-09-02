@@ -5,6 +5,13 @@ separately credentialed S3-compatible store. The loader is internal and
 shadow-only: it exposes no route, enumerates no catalog, issues no ticket, and
 never changes score or emissions.
 
+The selected production object provider is Hippius. The provider-specific
+secrecy, encryption, credential, exact-read, evidence-mediation, and canary
+requirements are fixed by
+[`docs/coding-private-hippius-data-plane.md`](../../../docs/coding-private-hippius-data-plane.md).
+This existing loader is not proof that those requirements are implemented or
+active.
+
 ## Storage boundary
 
 The loader is disabled unless every `DITTO_CODING_CATALOG_STORAGE_*` credential
@@ -36,25 +43,30 @@ creates only the empty secret containers
 `platform-coding-catalog-secret-key`; it never receives a credential value or
 creates a corpus object.
 
-The catalog identity must have only the permissions required by Platform:
-`GetObject` under `coding-catalog/v1/*`, with no list, write, delete, public
-read, or miner-upload-bucket access. It must be distinct from both the upload
-and avatar identities. The Ansible role supplies it to the Python Platform API
-through `DITTO_CODING_CATALOG_STORAGE_*`; the shared PM2 environment explicitly
-clears it for the Go model-relay slots, and validators and miners never receive
-it. The current app VM service account remains a host trust boundary: stronger
-per-process cloud-secret isolation requires a separate service account or
-secret-delivery service. Bucket policy, encryption, retention, and curator
-upload are separate operator-reviewed controls and do not become active merely
-by merging this code.
+The catalog identity must use the narrowest bucket-specific Hippius reader
+scope available. The reviewed provider scope may also permit bucket listing,
+so provider role names alone do not satisfy the application contract. Platform
+may issue only exact `GetObject` operations under `coding-catalog/v1/*` and
+must never list, write, delete, alter ACLs, or access another bucket. Audit and
+the provider canary must prove that behavior. The identity must be distinct
+from upload, avatar, trace, curator, and evidence identities.
+
+The Ansible role supplies it to the Python Platform API through
+`DITTO_CODING_CATALOG_STORAGE_*`; the shared PM2 environment explicitly clears
+it for the Go model-relay slots, and validators and miners never receive it.
+The current app VM service account remains a host trust boundary: stronger
+per-process secret isolation requires a separate service account or
+secret-delivery service. Client-side encryption, credential custody, provider
+capability verification, and curator upload are separate operator-reviewed
+controls and do not become active merely by merging this code.
 
 The reviewed activation sequence is:
 
 ```yaml
 # infra/ansible/host_vars/ditto-platform-<environment>.yml
 platform_coding_catalog_enabled: true
-platform_coding_catalog_endpoint: "https://<private-s3-origin>"
-platform_coding_catalog_region: "<region>"
+platform_coding_catalog_endpoint: "https://s3.hippius.com"
+platform_coding_catalog_region: "decentralized"
 platform_coding_catalog_bucket: "<private-coding-catalog-bucket>"
 ```
 
@@ -67,6 +79,11 @@ that reuse upload HMAC or avatar Hippius credentials. Leaving the flag false is
 the rollback; it omits every catalog variable from `.env` and leaves the source
 unavailable after rerunning `scripts/start.sh` or restarting/reloading with
 `--update-env`.
+
+That sequence remains blocked until the Hippius-only contract's client-side
+encryption, exact-object verification, non-human credential custody, and live
+provider canary are implemented. Do not activate this loader with a personal
+token or an existing avatar, trace, or general account credential.
 
 ## Curator publication preflight
 
