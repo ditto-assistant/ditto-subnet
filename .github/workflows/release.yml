@@ -1696,26 +1696,32 @@ jobs:
             org.opencontainers.image.version=${{ needs.release.outputs.version }}
             org.opencontainers.image.revision=${{ needs.prepare-dittobench.outputs.revision }}
             io.heyditto.dittobench.coding-executor-scorer-contract=1
+            io.heyditto.dittobench.coding-executor-locked-policy-sha256=b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6
 
       - name: Verify and sign the exact scorer release
         id: manifest
         env:
           DIGEST: ${{ steps.scorer.outputs.digest }}
           REVISION: ${{ needs.prepare-dittobench.outputs.revision }}
+          LOCKED_POLICY_SHA256: b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6
+          LOCKED_POLICY_FILE_SHA256: 6dd79225817b56ebf155f8344cd5faf752c8dd57802b21d6d2cbbae9cc2ff0b4
         run: |
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           exact="$CODING_EXECUTOR_SCORER_REPOSITORY@$DIGEST"
           docker pull "$exact"
           test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.dittobench.coding-executor-scorer-contract" }}' "$exact")" = 1
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.dittobench.coding-executor-locked-policy-sha256" }}' "$exact")" = "$LOCKED_POLICY_SHA256"
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")" = "$REVISION"
           test "$(docker image inspect --format '{{json .Config.User}}' "$exact")" = '"65532:65532"'
           test "$(docker image inspect --format '{{json .Config.Entrypoint}}' "$exact")" = '["/dittobench-coding-executor-scorer"]'
+          docker run --rm --platform linux/amd64 --entrypoint docker "$exact" --version | grep -Eq '^Docker version [0-9]+\.'
+          test "$(docker run --rm --platform linux/amd64 --entrypoint /bin/sh "$exact" -c 'sha256sum /opt/ditto/coding/coding_inference_policy_locked_v1.json | awk "{print \$1}"')" = "$LOCKED_POLICY_FILE_SHA256"
           test "$(docker run --rm --platform linux/amd64 "$exact" -version | jq -r .SourceRevision)" = "$REVISION"
           mkdir -p build/coding-executor-scorer
           python3 scripts/render-coding-executor-scorer-manifest.py \
             --image-reference "$exact" \
             --source-revision "$REVISION" \
-            --locked-policy-sha256 b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6 \
+            --locked-policy-sha256 "$LOCKED_POLICY_SHA256" \
             --output build/coding-executor-scorer/manifest.json
           manifest_sha256="$(sha256sum build/coding-executor-scorer/manifest.json | awk '{print $1}')"
           [[ "$manifest_sha256" =~ ^[0-9a-f]{64}$ ]]

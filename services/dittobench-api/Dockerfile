@@ -113,16 +113,26 @@ EXPOSE 8000
 ENTRYPOINT ["/dittobench-api", "-port", "8000"]
 
 # ---- dedicated coding executor scorer artifact ----
-# This target is intentionally not the normal DittoBench scorer and exposes no
-# TCP API. It is built and provenance-stamped now; a later reviewed release and
-# paired mTLS transport are required before it can be staged or receive work.
-FROM gcr.io/distroless/static-debian12:nonroot AS coding-executor-scorer
+# This target is intentionally not the normal DittoBench scorer. It contains the
+# Docker CLI needed to control only the dedicated rootless daemon and the locked
+# policy required by its candidate-capability router. A later reviewed service
+# profile must still supply the socket, token, private state, host network, and
+# narrowed firewall before it can receive work.
+FROM docker:28.3.3-cli-alpine3.22 AS coding-executor-scorer
 ARG DITTOBENCH_SOFTWARE_VERSION
 ARG DITTOBENCH_SOURCE_SHA
 LABEL io.heyditto.dittobench.coding-executor-scorer-contract="1"
+LABEL io.heyditto.dittobench.coding-executor-locked-policy-sha256="b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6"
 LABEL org.opencontainers.image.revision="${DITTOBENCH_SOURCE_SHA}"
 COPY --from=build /out/dittobench-coding-executor-scorer /dittobench-coding-executor-scorer
+COPY --chown=65532:65532 \
+    packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json \
+    /opt/ditto/coding/coding_inference_policy_locked_v1.json
+RUN chmod 0555 /opt/ditto /opt/ditto/coding && \
+    chmod 0444 /opt/ditto/coding/coding_inference_policy_locked_v1.json
+ENV HOME=/tmp
 ENV DITTOBENCH_SOFTWARE_VERSION=${DITTOBENCH_SOFTWARE_VERSION}
 ENV DITTOBENCH_SOURCE_SHA=${DITTOBENCH_SOURCE_SHA}
 USER 65532:65532
 ENTRYPOINT ["/dittobench-coding-executor-scorer"]
+CMD []

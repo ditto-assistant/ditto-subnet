@@ -107,6 +107,9 @@ def _loaded_image(manifest: dict[str, Any]) -> dict[str, Any]:
             "Healthcheck": None,
             "Labels": {
                 "io.heyditto.dittobench.coding-executor-scorer-contract": "1",
+                "io.heyditto.dittobench.coding-executor-locked-policy-sha256": (
+                    manifest["locked_policy_sha256"]
+                ),
                 "org.opencontainers.image.revision": manifest["source_revision"],
             },
             "User": "65532:65532",
@@ -216,6 +219,13 @@ def test_scorer_loader_attests_only_the_exact_safe_image(
         (
             lambda image: image["Config"].__setitem__("User", "0"),
             "fixed non-root identity",
+        ),
+        (
+            lambda image: image["Config"]["Labels"].__setitem__(
+                "io.heyditto.dittobench.coding-executor-locked-policy-sha256",
+                "3" * 64,
+            ),
+            "locked policy",
         ),
         (
             lambda image: image["Config"]["Labels"].__setitem__(
