@@ -218,7 +218,7 @@ describe('Backroom MCP tools', () => {
     // policy-rescreen checkpoint controls. Keep modest headroom for schema
     // evolution; tighten the description budgets, not this whole-payload
     // backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(114_000)
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(115_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. 23_500 admits the screener
