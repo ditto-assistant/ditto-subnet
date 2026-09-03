@@ -163,6 +163,12 @@ contract, and locked-policy digest. It rejects a tag or any malformed digest;
 a later protected release job must sign both the exact image and this canonical
 manifest before an operator can transfer an OCI archive through IAP.
 
+`scripts/export-coding-executor-scorer-bundle.sh` is the protected-operator
+export step. It verifies the release workflow's Cosign identity, pulls only the
+digest reference, refuses output overwrite, saves an OCI archive, and renders a
+bundle manifest binding both archive and signed release manifests. It does not
+contact an executor host or grant it registry access.
+
 Destroying a created cohort is intentionally not a routine rollback: the shared
 compute module has deletion protection. Rollback during the shadow phase means
 leave the hosts present and disable the later daemon/worker configuration; any
