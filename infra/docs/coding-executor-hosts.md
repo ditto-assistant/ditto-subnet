@@ -89,10 +89,7 @@ Every failed check is the same redacted rejection, and the constant health
 route remains body-free.
 
 The role default for `coding_executor_validator_hotkey` is empty and the scorer
-service gate remains false. Even with a hotkey configured, this layer cannot be
-reached from another host. The next transport PR must terminate the separately
-staged mTLS identity, bind its client identity to the same hotkey, and forward
-only the already-signed envelope to this Unix ingress.
+service gate remains false.
 
 ## Scorer mTLS identity staging
 
@@ -100,9 +97,33 @@ only the already-signed envelope to this Unix ingress.
 for that later routing layer. An operator pre-positions a root-only validator
 CA certificate, scorer server certificate, and scorer key at fixed paths. The
 host verifies CA chain, server purpose, expiration, and certificate/key public
-key match, but does not start a TLS listener or receive any validator request.
-The following transport-proxy PR must consume only this verified identity and
-must not bypass the signed Unix ingress.
+key match, but identity staging alone does not start a listener.
+
+## Default-off mTLS transport
+
+`coding_executor_mtls_transport_enabled` is a separate false-by-default gate
+that requires both the scorer service and staged mTLS identity. It runs a
+second mode of the same attested scorer binary, so there is no unsigned proxy
+artifact. The process accepts TLS 1.3 only, requires a client certificate from
+the staged validator CA, and requires exactly one URI SAN of the form
+`spiffe://dittobench.ai/validator/<validator-hotkey>`. That hotkey must equal
+both the host configuration and the signed envelope's validator identity.
+
+The proxy accepts only the fixed supervisor/publication POST paths, strips
+external authorization and cookie headers, and forwards the exact body plus
+signed envelope to `/run/ditto-coding-scorer/control.sock`. It has no scorer
+control token, Docker group, wallet, Platform/provider credential, task
+selector, or alternate upstream. The Unix ingress remains responsible for
+SR25519, body digest, operation, ticket/run, expiry, and nonce verification.
+
+The service binds only an explicitly configured RFC1918 IPv4 address on port
+9443. Its systemd unit denies all IP traffic except the reviewed validator's
+private `/32`; the binary independently rejects a public or broader source
+range. Unix access remains available solely for the fixed downstream
+socket. The transport gate, bind address, and source CIDR ship empty/false, so
+merge or host convergence opens no listener. A later validator-client PR must
+present the matching certificate and signed envelope; this layer alone cannot
+execute a task.
 
 ## Production runtime-bundle staging
 

@@ -91,6 +91,51 @@ func TestScorerSourceGatewayIsPinnedForCandidateRouting(t *testing.T) {
 	}
 }
 
+func TestMTLSTransportIsDefaultOffAndRequiresPrivateBindAndCredentials(t *testing.T) {
+	if _, err := mtlsConfigurationFromEnvironment(func(string) string { return "" }); err == nil {
+		t.Fatal("disabled mTLS transport was accepted")
+	}
+	valid := func(key string) string {
+		switch key {
+		case mtlsEnableEnvironment:
+			return "true"
+		case mtlsBindEnvironment:
+			return "10.30.0.8"
+		case validatorHotkeyEnvironment:
+			return "5" + strings.Repeat("A", 47)
+		case mtlsSourceCIDREnvironment:
+			return "10.30.0.9/32"
+		case "CREDENTIALS_DIRECTORY":
+			return "/run/credentials/ditto-coding-executor-mtls"
+		default:
+			return ""
+		}
+	}
+	config, err := mtlsConfigurationFromEnvironment(valid)
+	if err != nil || config.bindAddress != "10.30.0.8" || config.sourceCIDR != "10.30.0.9/32" ||
+		config.validatorHotkey == "" {
+		t.Fatalf("config=%#v err=%v", config, err)
+	}
+	public := func(key string) string {
+		if key == mtlsBindEnvironment {
+			return "203.0.113.8"
+		}
+		return valid(key)
+	}
+	if _, err := mtlsConfigurationFromEnvironment(public); err == nil {
+		t.Fatal("public mTLS bind address was accepted")
+	}
+	broadSource := func(key string) string {
+		if key == mtlsSourceCIDREnvironment {
+			return "10.30.0.0/24"
+		}
+		return valid(key)
+	}
+	if _, err := mtlsConfigurationFromEnvironment(broadSource); err == nil {
+		t.Fatal("broad validator source range was accepted")
+	}
+}
+
 func TestScorerLoadsTheCanonicalLockedPolicy(t *testing.T) {
 	path, err := filepath.Abs(filepath.Join(
 		"..", "..", "..", "..", "packages", "dittobench-coding-contract",

@@ -1,12 +1,15 @@
 // Binary dittobench-coding-executor-scorer is the immutable, dedicated
 // artifact for a future coding executor host. It exposes a constant liveness
-// endpoint and validator-signed control requests on one private Unix socket,
-// and refuses to start unless an operator enables its deployment profile. It
-// owns no wallet, provider or Platform credential, assignment, or TCP listener.
+// endpoint and validator-signed control requests on one private Unix socket.
+// A separate default-off mode terminates the dedicated mTLS transport and
+// forwards only to that socket. It owns no wallet, provider or Platform
+// credential, assignment, or public listener.
 package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -25,6 +28,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontrol"
 	"github.com/ditto-assistant/dittobench-api/internal/codinghost"
+	"github.com/ditto-assistant/dittobench-api/internal/codingtransport"
 	"github.com/ditto-assistant/dittobench-api/internal/release"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
 )
@@ -34,11 +38,18 @@ const (
 	enableEnvironment             = "DITTOBENCH_CODING_EXECUTOR_SCORER_ENABLED"
 	runtimeImageDigestEnvironment = "DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST"
 	validatorHotkeyEnvironment    = "DITTOBENCH_CODING_EXECUTOR_VALIDATOR_HOTKEY"
+	mtlsEnableEnvironment         = "DITTOBENCH_CODING_EXECUTOR_MTLS_TRANSPORT_ENABLED"
+	mtlsBindEnvironment           = "DITTOBENCH_CODING_EXECUTOR_MTLS_BIND_ADDRESS"
+	mtlsSourceCIDREnvironment     = "DITTOBENCH_CODING_EXECUTOR_MTLS_SOURCE_CIDR"
 	sourceGatewayEnvironment      = "DITTOBENCH_SANDBOX_HOST_GATEWAY_IP"
 	sourceHostname                = "host.docker.internal"
 	sourcePort                    = 11438
+	mtlsPort                      = 9443
 	policyFile                    = "/opt/ditto/coding/coding_inference_policy_locked_v1.json"
 	policySHA256                  = "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6"
+	mtlsCACredential              = "validator-ca.pem"
+	mtlsCertificateCredential     = "server-cert.pem"
+	mtlsKeyCredential             = "server-key.pem"
 )
 
 var sha256ImageDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -48,6 +59,13 @@ type configuration struct {
 	sourceGateway   string
 	validatorHotkey string
 	enabled         bool
+}
+
+type mtlsConfiguration struct {
+	bindAddress     string
+	sourceCIDR      string
+	validatorHotkey string
+	credentials     string
 }
 
 func configurationFromEnvironment(socketPath string, getenv func(string) string) (configuration, error) {
@@ -79,6 +97,32 @@ func sourceGatewayFromEnvironment(getenv func(string) string) (string, error) {
 		return "", errors.New("coding executor scorer source gateway is invalid")
 	}
 	return parsed.String(), nil
+}
+
+func mtlsConfigurationFromEnvironment(getenv func(string) string) (mtlsConfiguration, error) {
+	if !strings.EqualFold(strings.TrimSpace(getenv(mtlsEnableEnvironment)), "true") {
+		return mtlsConfiguration{}, errors.New("coding executor mTLS transport is disabled")
+	}
+	bind := net.ParseIP(strings.TrimSpace(getenv(mtlsBindEnvironment)))
+	sourceIP, sourceNetwork, sourceErr := net.ParseCIDR(
+		strings.TrimSpace(getenv(mtlsSourceCIDREnvironment)),
+	)
+	hotkey := strings.TrimSpace(getenv(validatorHotkeyEnvironment))
+	credentials := filepath.Clean(strings.TrimSpace(getenv("CREDENTIALS_DIRECTORY")))
+	prefix, bits := 0, 0
+	if sourceNetwork != nil {
+		prefix, bits = sourceNetwork.Mask.Size()
+	}
+	if bind == nil || bind.To4() == nil || !bind.IsPrivate() || bind.IsLoopback() ||
+		sourceErr != nil || sourceIP.To4() == nil || !sourceIP.IsPrivate() || prefix != 32 || bits != 32 ||
+		!codingcontrol.ValidValidatorHotkey(hotkey) || !filepath.IsAbs(credentials) ||
+		!strings.HasPrefix(credentials, "/run/credentials/") {
+		return mtlsConfiguration{}, errors.New("coding executor mTLS transport profile is invalid")
+	}
+	return mtlsConfiguration{
+		bindAddress: bind.String(), sourceCIDR: sourceNetwork.String(),
+		validatorHotkey: hotkey, credentials: credentials,
+	}, nil
 }
 
 func sourceListenerAddress(gateway string) string {
@@ -196,13 +240,66 @@ func listenUnix(path string) (net.Listener, error) {
 	return listener, nil
 }
 
+func runMTLSProxy(config mtlsConfiguration) error {
+	proxy, err := codingtransport.New(codingtransport.Config{
+		ValidatorHotkey: config.validatorHotkey,
+		UnixSocketPath:  codingtransport.ControlSocketPath,
+	})
+	if err != nil {
+		return errors.New("coding executor mTLS proxy is unavailable")
+	}
+	certificate, err := tls.LoadX509KeyPair(
+		filepath.Join(config.credentials, mtlsCertificateCredential),
+		filepath.Join(config.credentials, mtlsKeyCredential),
+	)
+	if err != nil {
+		return errors.New("coding executor mTLS server identity is unavailable")
+	}
+	ca, err := os.ReadFile(filepath.Join(config.credentials, mtlsCACredential))
+	if err != nil || len(ca) == 0 || len(ca) > 1<<20 {
+		return errors.New("coding executor mTLS validator CA is unavailable")
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM(ca) {
+		return errors.New("coding executor mTLS validator CA is invalid")
+	}
+	tlsConfig, err := codingtransport.ServerTLSConfig(certificate, clientCAs)
+	if err != nil {
+		return errors.New("coding executor mTLS configuration is invalid")
+	}
+	listener, err := net.Listen("tcp4", net.JoinHostPort(config.bindAddress, strconv.Itoa(mtlsPort)))
+	if err != nil {
+		return errors.New("coding executor mTLS listener is unavailable")
+	}
+	defer listener.Close()
+	server := &http.Server{
+		Handler: proxy.Handler(), ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout: 33 * time.Minute, WriteTimeout: 33 * time.Minute,
+		IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10,
+	}
+	return server.Serve(tls.NewListener(listener, tlsConfig))
+}
+
 func main() {
 	socketPath := flag.String("socket", defaultSocketPath, "fixed Unix control socket")
+	mtlsProxy := flag.Bool("mtls-proxy", false, "run the default-off mTLS transport proxy")
 	version := flag.Bool("version", false, "print immutable artifact provenance")
 	flag.Parse()
 	if *version {
 		if err := json.NewEncoder(os.Stdout).Encode(release.Resolve(os.Getenv)); err != nil {
 			fmt.Fprintln(os.Stderr, "coding executor scorer cannot report version")
+			os.Exit(111)
+		}
+		return
+	}
+	if *mtlsProxy {
+		config, err := mtlsConfigurationFromEnvironment(os.Getenv)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "coding executor mTLS transport is not enabled")
+			os.Exit(78)
+		}
+		if err := runMTLSProxy(config); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fmt.Fprintln(os.Stderr, "coding executor mTLS transport stopped")
 			os.Exit(111)
 		}
 		return

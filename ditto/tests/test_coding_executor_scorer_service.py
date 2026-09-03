@@ -11,6 +11,7 @@ ROLE = ROOT / "infra/ansible/roles/coding_executor"
 DEFAULTS = (ROLE / "defaults/main.yml").read_text()
 TASKS = (ROLE / "tasks/main.yml").read_text()
 UNIT = ROLE / "templates/ditto-coding-executor-scorer.service.j2"
+TRANSPORT_UNIT = ROLE / "templates/ditto-coding-executor-mtls-transport.service.j2"
 VERIFY_PATH = ROLE / "files/verify-scorer-service.py"
 RUNNER_PATH = ROLE / "files/run-scorer-service.py"
 MTLS_VERIFIER = ROLE / "files/verify-scorer-mtls-identity.sh"
@@ -65,3 +66,23 @@ def test_scorer_mtls_identity_is_default_off_and_never_listens() -> None:
     assert "openssl pkey" in text
     for forbidden in ("listen", "socat", "nc -l", "curl", "docker"):
         assert forbidden not in text
+
+
+def test_scorer_mtls_transport_is_separate_default_off_and_source_bounded() -> None:
+    unit = TRANSPORT_UNIT.read_text()
+    assert "coding_executor_mtls_transport_enabled: false" in DEFAULTS
+    assert "when: coding_executor_mtls_transport_enabled | bool" in TASKS
+    assert "coding_executor_scorer_service_enabled | bool" in TASKS
+    assert "coding_executor_mtls_identity_enabled | bool" in TASKS
+    assert "coding_executor_mtls_port | int == 9443" in TASKS
+    assert "Requires={{ coding_executor_scorer_service_unit }}.service" in unit
+    assert "ConditionPathIsSocket=/run/ditto-coding-scorer/control.sock" in unit
+    assert "--mtls-proxy" in unit
+    assert "DITTOBENCH_CODING_EXECUTOR_MTLS_SOURCE_CIDR=" in unit
+    assert "LoadCredential=validator-ca.pem:" in unit
+    assert "LoadCredential=server-cert.pem:" in unit
+    assert "LoadCredential=server-key.pem:" in unit
+    assert "IPAddressDeny=any" in unit
+    assert "IPAddressAllow={{ coding_executor_mtls_source_cidr }}" in unit
+    assert "control-token" not in unit
+    assert "SupplementaryGroups" not in unit

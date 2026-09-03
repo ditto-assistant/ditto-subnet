@@ -111,3 +111,12 @@ coding_executor_mtls_identity_directory: /var/lib/ditto-coding-executor/mtls
 coding_executor_mtls_ca_certificate_path: /var/lib/ditto-coding-executor/mtls/validator-ca.pem
 coding_executor_mtls_server_certificate_path: /var/lib/ditto-coding-executor/mtls/scorer-server.pem
 coding_executor_mtls_server_key_path: /var/lib/ditto-coding-executor/mtls/scorer-server-key.pem
+
+# Separate process mode of the same attested scorer binary. It terminates one
+# TLS 1.3 client-auth listener and forwards signed envelopes only to the fixed
+# scorer Unix socket. Empty addressing plus false keeps every host dark.
+coding_executor_mtls_transport_enabled: false
+coding_executor_mtls_transport_unit: ditto-coding-executor-mtls-transport
+coding_executor_mtls_bind_address: ""
+coding_executor_mtls_port: 9443
+coding_executor_mtls_source_cidr: ""
