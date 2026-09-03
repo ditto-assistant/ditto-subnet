@@ -763,3 +763,6 @@ def test_update_records_and_announces_the_deployed_commit(tmp_path: Path) -> Non
     assert record["result"] == "ok"
     assert record["stage"] == "done"
     assert record["target_commit"] == TARGET_SHA
+    deployed_source = tmp_path / "repo" / "logs" / "deployed-source.sha"
+    assert deployed_source.read_text() == f"{TARGET_SHA}\n"
+    assert deployed_source.stat().st_mode & 0o777 == 0o600

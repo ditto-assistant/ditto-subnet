@@ -79,6 +79,7 @@ deploy_rollback_source="" # where deploy_running_commit came from, for the log
 deploy_pm2_touched=0      # 1 once pm2 has been asked to start/reload/delete
 deploy_synced=0           # 1 once uv sync has rewritten .venv
 deploy_state_file="logs/last-deploy.json"
+deployed_source_file="logs/deployed-source.sha"
 health_snapshot=""
 
 # Extract one top-level string field from a JSON document on stdin. Empty when
@@ -666,6 +667,12 @@ for app in $oneshot_apps; do
     *) echo "    $app: $status (one-shot; not required to be online)" ;;
   esac
 done
+
+deploy_stage="source-record"
+next_deployed_source="$(mktemp "${deployed_source_file}.XXXXXX")"
+chmod 0600 "$next_deployed_source"
+printf '%s\n' "$deploy_target" > "$next_deployed_source"
+mv "$next_deployed_source" "$deployed_source_file"
 
 deploy_stage="done"
 echo "done. pm2 logs ditto-api"

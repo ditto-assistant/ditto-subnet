@@ -51,10 +51,12 @@ and resource profile, but no issue or other authoring material. Both outcomes
 must echo the execution and task digests; grading must also echo the frozen
 submission digest and prove pristine execution.
 
-The repository does not provide these protected helper implementations. They
-must adapt the already reviewed external unwrap boundary and phase-separated
-Coding supervisor. Test helpers are synthetic fixtures and are forbidden in a
-live run.
+The helper-proxy layer packages three distinct root-owned Unix-socket clients
+with socket-inode and Linux peer-credential checks. It does not provide the
+backend key or execution services. Those backends must adapt the already
+reviewed external unwrap boundary and phase-separated Coding supervisor. Test
+helpers are synthetic fixtures and are forbidden in a live run. See
+[`coding-hippius-canary-helper-proxies.md`](coding-hippius-canary-helper-proxies.md).
 
 ## Protected inputs
 
@@ -110,11 +112,12 @@ different validator, or a second synthetic record.
 
 ## Remaining activation boundary
 
-This PR creates no plan, synthetic release, helper executable, unwrap key,
-credential value, provider object, deployment configuration, or live receipt.
-It does not enable Platform's ordinary Coding worker or catalog, and it does
-not apply Terraform, converge Ansible, restart a service, score a result, or
-change weights or emissions.
+The helper-proxy layer adds default-off installation for the three fixed client
+executables but creates no plan, synthetic release, backend service, unwrap
+key, credential value, provider object, host-variable enablement, or live
+receipt. It does not enable Platform's ordinary Coding worker or catalog, and
+it does not apply Terraform, converge Ansible, restart a service, score a
+result, or change weights or emissions.
 
 Phase 6 becomes operationally complete only when the owner reviews a ready
 receipt produced by this command from exact merged and deployed source. Phase 7

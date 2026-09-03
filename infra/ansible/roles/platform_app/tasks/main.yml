@@ -532,6 +532,201 @@
   no_log: true
   when: platform_coding_hippius_evidence_enabled | bool
 
+- name: Resolve Platform owner uid for Hippius canary helper isolation
+  ansible.builtin.command:
+    argv: [id, -u, "{{ platform_owner }}"]
+  register: platform_coding_hippius_canary_owner_lookup
+  changed_when: false
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Resolve Platform group gid for Hippius canary helper sockets
+  ansible.builtin.command:
+    argv: [getent, group, "{{ platform_group }}"]
+  register: platform_coding_hippius_canary_group_record
+  changed_when: false
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Extract Platform group gid for Hippius canary helper sockets
+  ansible.builtin.set_fact:
+    platform_coding_hippius_canary_group_gid: "{{ platform_coding_hippius_canary_group_record.stdout.split(':')[2] }}"
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Validate Hippius canary helper activation
+  ansible.builtin.assert:
+    that:
+      - platform_coding_catalog_enabled | bool
+      - platform_coding_hippius_evidence_enabled | bool
+      - platform_coding_hippius_private_input_curator_access_key.startswith('hip_')
+      - platform_coding_hippius_private_input_curator_access_key != platform_secrets.coding_catalog_access_key
+      - platform_coding_hippius_canary_helper_timeout_seconds | int >= 1
+      - platform_coding_hippius_canary_helper_timeout_seconds | int <= 7200
+      - platform_coding_hippius_canary_install_root.startswith('/')
+      - platform_coding_hippius_canary_config_root == '/etc/ditto-platform/coding/hippius-canary'
+      - platform_coding_hippius_canary_work_root.startswith('/')
+      - platform_coding_hippius_canary_operator_env_path.startswith('/')
+      - platform_coding_hippius_canary_install_root != platform_coding_hippius_canary_config_root
+      - platform_coding_hippius_canary_install_root != platform_coding_hippius_canary_work_root
+      - platform_coding_hippius_canary_config_root != platform_coding_hippius_canary_work_root
+      - platform_coding_hippius_canary_plan_path.startswith('/')
+      - platform_coding_hippius_canary_deployed_source_path.startswith('/')
+      - platform_coding_hippius_private_input_manifest_path.startswith('/')
+      - platform_coding_hippius_private_input_publication_receipt_path.startswith('/')
+      - platform_coding_hippius_curator_public_key_path.startswith('/')
+      - platform_coding_hippius_canary_unwrap_socket.startswith('/run/')
+      - platform_coding_hippius_canary_authoring_socket.startswith('/run/')
+      - platform_coding_hippius_canary_grading_socket.startswith('/run/')
+      - platform_coding_hippius_canary_unwrap_socket != platform_coding_hippius_canary_authoring_socket
+      - platform_coding_hippius_canary_unwrap_socket != platform_coding_hippius_canary_grading_socket
+      - platform_coding_hippius_canary_authoring_socket != platform_coding_hippius_canary_grading_socket
+      - platform_coding_hippius_canary_unwrap_uid | int > 0
+      - platform_coding_hippius_canary_authoring_uid | int > 0
+      - platform_coding_hippius_canary_grading_uid | int > 0
+      - platform_coding_hippius_canary_unwrap_uid | int != platform_coding_hippius_canary_authoring_uid | int
+      - platform_coding_hippius_canary_unwrap_uid | int != platform_coding_hippius_canary_grading_uid | int
+      - platform_coding_hippius_canary_authoring_uid | int != platform_coding_hippius_canary_grading_uid | int
+      - platform_coding_hippius_canary_unwrap_uid | int != platform_coding_hippius_canary_owner_lookup.stdout | int
+      - platform_coding_hippius_canary_authoring_uid | int != platform_coding_hippius_canary_owner_lookup.stdout | int
+      - platform_coding_hippius_canary_grading_uid | int != platform_coding_hippius_canary_owner_lookup.stdout | int
+    fail_msg: >-
+      Hippius canary helpers require enabled private-input/evidence boundaries,
+      one distinct curator identity, three absolute /run sockets, three backend
+      service UIDs distinct from Platform and each other, and bounded paths and
+      timeouts.
+  no_log: true
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Inspect Hippius canary proxy source
+  ansible.builtin.stat:
+    path: "{{ platform_root }}/scripts/hippius_canary_helper_proxy.py"
+  register: platform_coding_hippius_canary_proxy_source
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Validate Hippius canary proxy source
+  ansible.builtin.assert:
+    that:
+      - platform_coding_hippius_canary_proxy_source.stat.exists
+      - platform_coding_hippius_canary_proxy_source.stat.isreg
+      - platform_coding_hippius_canary_proxy_source.stat.pw_name == platform_owner
+      - platform_coding_hippius_canary_proxy_source.stat.mode == '0644'
+    fail_msg: >-
+      The checked-out canary proxy must be a regular Platform-owned mode-0644
+      source file before root-owned installation.
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Inspect protected Hippius canary authority files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ platform_coding_hippius_canary_plan_path }}"
+    - "{{ platform_coding_hippius_canary_deployed_source_path }}"
+    - "{{ platform_coding_hippius_private_input_manifest_path }}"
+    - "{{ platform_coding_hippius_private_input_publication_receipt_path }}"
+    - "{{ platform_coding_hippius_curator_public_key_path }}"
+  register: platform_coding_hippius_canary_authority_files
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Validate protected Hippius canary source and authority files
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.pw_name == platform_owner
+      - item.stat.mode in ['0400', '0600']
+    fail_msg: >-
+      Every canary authority file must be regular, Platform-owned, and mode
+      0400 or 0600.
+  loop: "{{ platform_coding_hippius_canary_authority_files.results }}"
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Inspect Hippius canary backend sockets
+  ansible.builtin.stat:
+    path: "{{ item.socket }}"
+  loop:
+    - { role: unwrap, socket: "{{ platform_coding_hippius_canary_unwrap_socket }}", uid: "{{ platform_coding_hippius_canary_unwrap_uid }}" }
+    - { role: authoring, socket: "{{ platform_coding_hippius_canary_authoring_socket }}", uid: "{{ platform_coding_hippius_canary_authoring_uid }}" }
+    - { role: grading, socket: "{{ platform_coding_hippius_canary_grading_socket }}", uid: "{{ platform_coding_hippius_canary_grading_uid }}" }
+  register: platform_coding_hippius_canary_sockets
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Validate Hippius canary backend socket authorities
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.issock
+      - item.stat.uid | int == item.item.uid | int
+      - item.stat.gid | int == platform_coding_hippius_canary_group_gid | int
+      - item.stat.mode == '0660'
+    fail_msg: >-
+      Each canary backend must expose one mode-0660 Unix socket owned by its
+      configured service UID and the Platform group.
+  loop: "{{ platform_coding_hippius_canary_sockets.results }}"
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Ensure Hippius canary helper installation directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ platform_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ platform_coding_hippius_canary_install_root }}", owner: root, mode: "0750" }
+    - { path: "{{ platform_coding_hippius_canary_install_root }}/bin", owner: root, mode: "0750" }
+    - { path: "{{ platform_coding_hippius_canary_config_root }}", owner: root, mode: "0750" }
+    - { path: "{{ platform_coding_hippius_canary_work_root }}", owner: "{{ platform_owner }}", mode: "0700" }
+    - { path: "{{ platform_coding_hippius_canary_work_root }}/unwrap", owner: "{{ platform_owner }}", mode: "0700" }
+    - { path: "{{ platform_coding_hippius_canary_work_root }}/authoring", owner: "{{ platform_owner }}", mode: "0700" }
+    - { path: "{{ platform_coding_hippius_canary_work_root }}/grading", owner: "{{ platform_owner }}", mode: "0700" }
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Install distinct root-owned Hippius canary helper proxies
+  ansible.builtin.copy:
+    src: "{{ platform_root }}/scripts/hippius_canary_helper_proxy.py"
+    dest: "{{ platform_coding_hippius_canary_install_root }}/bin/hippius-canary-{{ item }}"
+    remote_src: true
+    owner: root
+    group: "{{ platform_group }}"
+    mode: "0550"
+  loop: [unwrap, authoring, grading]
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Render Hippius canary helper proxy configurations
+  ansible.builtin.template:
+    src: coding-hippius-canary-helper.json.j2
+    dest: "{{ platform_coding_hippius_canary_config_root }}/{{ item.role }}.json"
+    owner: root
+    group: "{{ platform_group }}"
+    mode: "0440"
+  loop:
+    - { role: unwrap, socket: "{{ platform_coding_hippius_canary_unwrap_socket }}", uid: "{{ platform_coding_hippius_canary_unwrap_uid }}", request_bytes: 65536, response_bytes: 65536 }
+    - { role: authoring, socket: "{{ platform_coding_hippius_canary_authoring_socket }}", uid: "{{ platform_coding_hippius_canary_authoring_uid }}", request_bytes: 16777216, response_bytes: 25165824 }
+    - { role: grading, socket: "{{ platform_coding_hippius_canary_grading_socket }}", uid: "{{ platform_coding_hippius_canary_grading_uid }}", request_bytes: 16777216, response_bytes: 25165824 }
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Render protected Hippius canary operator environment
+  ansible.builtin.template:
+    src: coding-hippius-canary-operator.env.j2
+    dest: "{{ platform_coding_hippius_canary_operator_env_path }}"
+    owner: root
+    group: "{{ platform_group }}"
+    mode: "0440"
+  no_log: true
+  when: platform_coding_hippius_canary_helpers_enabled | bool
+
+- name: Remove disabled Hippius canary helper entry points
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ platform_coding_hippius_canary_operator_env_path }}"
+    - "{{ platform_coding_hippius_canary_config_root }}/unwrap.json"
+    - "{{ platform_coding_hippius_canary_config_root }}/authoring.json"
+    - "{{ platform_coding_hippius_canary_config_root }}/grading.json"
+    - "{{ platform_coding_hippius_canary_install_root }}/bin/hippius-canary-unwrap"
+    - "{{ platform_coding_hippius_canary_install_root }}/bin/hippius-canary-authoring"
+    - "{{ platform_coding_hippius_canary_install_root }}/bin/hippius-canary-grading"
+  when: not (platform_coding_hippius_canary_helpers_enabled | bool)
+
 - name: Render .env
   ansible.builtin.template:
     src: platform.env.j2

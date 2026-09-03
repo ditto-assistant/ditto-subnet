@@ -404,6 +404,13 @@ unwrap plus separate authoring and grading helpers. It does not ship the helper
 implementations or any activation setting. A green source/CI result therefore
 remains distinct from a live phase-6 receipt.
 
+The helper packaging layer adds three distinct root-owned local proxy clients,
+pins each to one mode-`0660` Unix socket and expected backend UID/GID, and
+verifies the connected Linux peer credentials. The proxies carry only bounded
+canonical helper messages and do not implement a key service or execution
+backend. Their Ansible gate remains false and installs no service or secret by
+default.
+
 Every worker, scorer, catalog, evidence, readiness, weight, and emission gate
 remains false through the contract and infrastructure layers. A later
 activation requires exact merged source, deployed identity, canary receipts,

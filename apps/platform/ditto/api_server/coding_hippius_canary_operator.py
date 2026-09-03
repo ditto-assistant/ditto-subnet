@@ -819,11 +819,16 @@ def _validate_protected_executable(path: Path) -> None:
         raise HippiusCanaryOperatorError(
             "canary helper executable is unavailable"
         ) from error
-    if (
-        not stat.S_ISREG(info.st_mode)
-        or info.st_uid != os.getuid()
-        or stat.S_IMODE(info.st_mode) not in {0o500, 0o700}
-    ):
+    self_owned = info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) in {
+        0o500,
+        0o700,
+    }
+    root_group_owned = (
+        info.st_uid == 0
+        and info.st_gid in os.getgroups()
+        and stat.S_IMODE(info.st_mode) == 0o550
+    )
+    if not stat.S_ISREG(info.st_mode) or not (self_owned or root_group_owned):
         raise HippiusCanaryOperatorError("canary helper executable is unsafe")
 
 
