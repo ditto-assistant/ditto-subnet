@@ -411,6 +411,14 @@ canonical helper messages and do not implement a key service or execution
 backend. Their Ansible gate remains false and installs no service or secret by
 default.
 
+The isolated unwrap layer adds a no-network, systemd-socket-activated service
+for the synthetic canary only. A protected authority derived from the canary
+plan and encrypted manifest permits exactly the authoring and grading request
+digests for one wrapped key. The service recomputes each canonical request and
+verifies its private key's public digest before RSA-OAEP-SHA256 decryption; it
+is not a general unwrap or signing oracle. Both installation and activation
+remain false by default.
+
 Every worker, scorer, catalog, evidence, readiness, weight, and emission gate
 remains false through the contract and infrastructure layers. A later
 activation requires exact merged source, deployed identity, canary receipts,

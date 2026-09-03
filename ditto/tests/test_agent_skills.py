@@ -232,6 +232,14 @@ def test_hippius_canary_helper_query_routes_to_proxy_packaging() -> None:
     assert topic_ids[0] == "coding-hippius-canary-helpers"
 
 
+def test_hippius_canary_unwrap_query_routes_to_isolated_service() -> None:
+    topic_ids = [
+        str(topic["id"])
+        for topic in lookup("prepare exact Hippius canary unwrap authority")
+    ]
+    assert topic_ids[0] == "coding-hippius-canary-unwrap"
+
+
 def test_targon_query_routes_to_capacity_and_release() -> None:
     topic_ids = {
         str(topic["id"])

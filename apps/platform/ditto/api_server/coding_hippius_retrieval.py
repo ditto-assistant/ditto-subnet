@@ -737,6 +737,23 @@ def _build_unwrap_request(
     )
 
 
+def build_hippius_private_input_unwrap_request(
+    *,
+    authority: HippiusPrivateInputTicketAuthority,
+    manifest: HippiusPrivateInputTransportManifest,
+    item: HippiusEncryptedPrivateInputObject,
+    publication_receipt_payload_sha256: str,
+) -> HippiusPrivateInputUnwrapRequest:
+    """Build the canonical request identity without contacting an unwrap service."""
+
+    return _build_unwrap_request(
+        authority=authority,
+        manifest=manifest,
+        item=item,
+        publication_receipt_payload_sha256=publication_receipt_payload_sha256,
+    )
+
+
 def _validated_unwrap_result(
     *,
     request: HippiusPrivateInputUnwrapRequest,
@@ -905,4 +922,5 @@ __all__ = [
     "HippiusPrivateInputUnwrapResult",
     "HippiusPrivateInputUnwrapper",
     "parse_hippius_private_input_retrieval_config",
+    "build_hippius_private_input_unwrap_request",
 ]

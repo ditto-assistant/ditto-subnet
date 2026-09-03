@@ -532,30 +532,215 @@
   no_log: true
   when: platform_coding_hippius_evidence_enabled | bool
 
+- name: Ensure isolated Hippius canary unwrap service group
+  ansible.builtin.group:
+    name: "{{ platform_coding_hippius_canary_unwrap_group }}"
+    system: true
+    state: present
+  when: platform_coding_hippius_canary_unwrap_installed | bool
+
+- name: Ensure isolated Hippius canary unwrap service user
+  ansible.builtin.user:
+    name: "{{ platform_coding_hippius_canary_unwrap_user }}"
+    group: "{{ platform_coding_hippius_canary_unwrap_group }}"
+    shell: /usr/sbin/nologin
+    home: /nonexistent
+    create_home: false
+    system: true
+    state: present
+  when: platform_coding_hippius_canary_unwrap_installed | bool
+
+- name: Resolve isolated Hippius canary unwrap uid
+  ansible.builtin.command:
+    argv: [id, -u, "{{ platform_coding_hippius_canary_unwrap_user }}"]
+  register: platform_coding_hippius_canary_unwrap_uid_lookup
+  changed_when: false
+  when: platform_coding_hippius_canary_unwrap_installed | bool
+
+- name: Resolve isolated Hippius canary unwrap gid
+  ansible.builtin.command:
+    argv: [id, -g, "{{ platform_coding_hippius_canary_unwrap_user }}"]
+  register: platform_coding_hippius_canary_unwrap_gid_lookup
+  changed_when: false
+  when: platform_coding_hippius_canary_unwrap_installed | bool
+
+- name: Bind helper peer identity to the installed unwrap service
+  ansible.builtin.set_fact:
+    platform_coding_hippius_canary_unwrap_uid: "{{ platform_coding_hippius_canary_unwrap_uid_lookup.stdout }}"
+    platform_coding_hippius_canary_unwrap_gid: "{{ platform_coding_hippius_canary_unwrap_gid_lookup.stdout }}"
+  when: platform_coding_hippius_canary_unwrap_installed | bool
+
 - name: Resolve Platform owner uid for Hippius canary helper isolation
   ansible.builtin.command:
     argv: [id, -u, "{{ platform_owner }}"]
   register: platform_coding_hippius_canary_owner_lookup
   changed_when: false
-  when: platform_coding_hippius_canary_helpers_enabled | bool
+  when: >-
+    platform_coding_hippius_canary_helpers_enabled | bool or
+    platform_coding_hippius_canary_unwrap_installed | bool
+
+- name: Resolve Platform owner primary gid for Hippius canary unwrap peer checks
+  ansible.builtin.command:
+    argv: [id, -g, "{{ platform_owner }}"]
+  register: platform_coding_hippius_canary_owner_primary_gid
+  changed_when: false
+  when: platform_coding_hippius_canary_unwrap_installed | bool
 
 - name: Resolve Platform group gid for Hippius canary helper sockets
   ansible.builtin.command:
     argv: [getent, group, "{{ platform_group }}"]
   register: platform_coding_hippius_canary_group_record
   changed_when: false
-  when: platform_coding_hippius_canary_helpers_enabled | bool
+  when: >-
+    platform_coding_hippius_canary_helpers_enabled | bool or
+    platform_coding_hippius_canary_unwrap_installed | bool
 
 - name: Extract Platform group gid for Hippius canary helper sockets
   ansible.builtin.set_fact:
     platform_coding_hippius_canary_group_gid: "{{ platform_coding_hippius_canary_group_record.stdout.split(':')[2] }}"
-  when: platform_coding_hippius_canary_helpers_enabled | bool
+  when: >-
+    platform_coding_hippius_canary_helpers_enabled | bool or
+    platform_coding_hippius_canary_unwrap_installed | bool
+
+- name: Validate isolated Hippius canary unwrap installation
+  ansible.builtin.assert:
+    that:
+      - platform_coding_hippius_canary_unwrap_user != platform_owner
+      - platform_coding_hippius_canary_unwrap_group != platform_group
+      - platform_coding_hippius_canary_unwrap_socket.startswith('/run/')
+      - platform_coding_hippius_canary_unwrap_authority_path.startswith('/')
+      - platform_coding_hippius_canary_unwrap_private_key_path.startswith('/')
+      - platform_coding_hippius_canary_unwrap_service_path.startswith('/')
+      - platform_coding_hippius_canary_unwrap_service_env_path.startswith('/')
+      - platform_coding_hippius_canary_unwrap_openssl_path == '/usr/bin/openssl'
+      - platform_coding_hippius_canary_unwrap_socket_timeout_seconds | int >= 1
+      - platform_coding_hippius_canary_unwrap_socket_timeout_seconds | int <= 300
+      - not (platform_coding_hippius_canary_unwrap_service_enabled | bool) or (platform_coding_hippius_canary_unwrap_installed | bool)
+    fail_msg: >-
+      The canary unwrap package requires a dedicated user/group, absolute
+      protected paths, the fixed root-owned OpenSSL binary, and bounded socket
+      timeouts. Service activation cannot precede installation.
+  when: >-
+    platform_coding_hippius_canary_unwrap_installed | bool or
+    platform_coding_hippius_canary_unwrap_service_enabled | bool
+
+- name: Ensure isolated Hippius canary unwrap installation directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ platform_coding_hippius_canary_install_root }}", owner: root, group: "{{ platform_group }}", mode: "0750" }
+    - { path: "{{ platform_coding_hippius_canary_install_root }}/backend", owner: root, group: "{{ platform_coding_hippius_canary_unwrap_group }}", mode: "0750" }
+    - { path: "{{ platform_coding_hippius_canary_config_root }}", owner: root, group: "{{ platform_group }}", mode: "0750" }
+    - { path: "{{ platform_coding_hippius_canary_config_root }}/unwrap-service", owner: root, group: "{{ platform_coding_hippius_canary_unwrap_group }}", mode: "0750" }
+  when: platform_coding_hippius_canary_unwrap_installed | bool
+
+- name: Install isolated Hippius canary unwrap service executable
+  ansible.builtin.copy:
+    src: "{{ platform_root }}/scripts/hippius_canary_unwrap_service.py"
+    dest: "{{ platform_coding_hippius_canary_unwrap_service_path }}"
+    remote_src: true
+    owner: root
+    group: "{{ platform_coding_hippius_canary_unwrap_group }}"
+    mode: "0550"
+  when: platform_coding_hippius_canary_unwrap_installed | bool
+
+- name: Render isolated Hippius canary unwrap service environment
+  ansible.builtin.template:
+    src: hippius-canary-unwrap-service.env.j2
+    dest: "{{ platform_coding_hippius_canary_unwrap_service_env_path }}"
+    owner: root
+    group: "{{ platform_coding_hippius_canary_unwrap_group }}"
+    mode: "0440"
+  when: platform_coding_hippius_canary_unwrap_installed | bool
+
+- name: Install isolated Hippius canary unwrap systemd service
+  ansible.builtin.template:
+    src: ditto-hippius-canary-unwrap.service.j2
+    dest: /etc/systemd/system/ditto-hippius-canary-unwrap.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: platform_coding_hippius_canary_unwrap_service_unit
+  when: platform_coding_hippius_canary_unwrap_installed | bool
+
+- name: Install isolated Hippius canary unwrap systemd socket
+  ansible.builtin.template:
+    src: ditto-hippius-canary-unwrap.socket.j2
+    dest: /etc/systemd/system/ditto-hippius-canary-unwrap.socket
+    owner: root
+    group: root
+    mode: "0644"
+  register: platform_coding_hippius_canary_unwrap_socket_unit
+  when: platform_coding_hippius_canary_unwrap_installed | bool
+
+- name: Reload systemd for isolated Hippius canary unwrap units
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: >-
+    platform_coding_hippius_canary_unwrap_installed | bool and
+    (platform_coding_hippius_canary_unwrap_service_unit.changed or
+    platform_coding_hippius_canary_unwrap_socket_unit.changed)
+
+- name: Inspect isolated Hippius canary unwrap key and authority
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ platform_coding_hippius_canary_unwrap_private_key_path }}"
+    - "{{ platform_coding_hippius_canary_unwrap_authority_path }}"
+  register: platform_coding_hippius_canary_unwrap_private_files
+  when: platform_coding_hippius_canary_unwrap_service_enabled | bool
+
+- name: Validate isolated Hippius canary unwrap key and authority
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.pw_name == platform_coding_hippius_canary_unwrap_user
+      - item.stat.gr_name == platform_coding_hippius_canary_unwrap_group
+      - item.stat.mode == '0400'
+      - item.stat.nlink == 1
+    fail_msg: >-
+      The canary unwrap authority and private key must be existing single-link
+      mode-0400 files owned only by the isolated unwrap identity.
+  loop: "{{ platform_coding_hippius_canary_unwrap_private_files.results }}"
+  no_log: true
+  when: platform_coding_hippius_canary_unwrap_service_enabled | bool
+
+- name: Enable isolated Hippius canary unwrap socket
+  ansible.builtin.systemd:
+    name: ditto-hippius-canary-unwrap.socket
+    enabled: true
+    state: started
+  when: platform_coding_hippius_canary_unwrap_service_enabled | bool
+
+- name: Disable isolated Hippius canary unwrap socket
+  ansible.builtin.systemd:
+    name: ditto-hippius-canary-unwrap.socket
+    enabled: false
+    state: stopped
+  when: >-
+    platform_coding_hippius_canary_unwrap_installed | bool and
+    not (platform_coding_hippius_canary_unwrap_service_enabled | bool)
+
+- name: Disable isolated Hippius canary unwrap service
+  ansible.builtin.systemd:
+    name: ditto-hippius-canary-unwrap.service
+    enabled: false
+    state: stopped
+  when: >-
+    platform_coding_hippius_canary_unwrap_installed | bool and
+    not (platform_coding_hippius_canary_unwrap_service_enabled | bool)
 
 - name: Validate Hippius canary helper activation
   ansible.builtin.assert:
     that:
       - platform_coding_catalog_enabled | bool
       - platform_coding_hippius_evidence_enabled | bool
+      - platform_coding_hippius_canary_unwrap_service_enabled | bool
       - platform_coding_hippius_private_input_curator_access_key.startswith('hip_')
       - platform_coding_hippius_private_input_curator_access_key != platform_secrets.coding_catalog_access_key
       - platform_coding_hippius_canary_helper_timeout_seconds | int >= 1
@@ -581,6 +766,15 @@
       - platform_coding_hippius_canary_unwrap_uid | int > 0
       - platform_coding_hippius_canary_authoring_uid | int > 0
       - platform_coding_hippius_canary_grading_uid | int > 0
+      - platform_coding_hippius_canary_unwrap_gid | int > 0
+      - platform_coding_hippius_canary_authoring_gid | int > 0
+      - platform_coding_hippius_canary_grading_gid | int > 0
+      - platform_coding_hippius_canary_unwrap_gid | int != platform_coding_hippius_canary_group_gid | int
+      - platform_coding_hippius_canary_authoring_gid | int != platform_coding_hippius_canary_group_gid | int
+      - platform_coding_hippius_canary_grading_gid | int != platform_coding_hippius_canary_group_gid | int
+      - platform_coding_hippius_canary_unwrap_gid | int != platform_coding_hippius_canary_authoring_gid | int
+      - platform_coding_hippius_canary_unwrap_gid | int != platform_coding_hippius_canary_grading_gid | int
+      - platform_coding_hippius_canary_authoring_gid | int != platform_coding_hippius_canary_grading_gid | int
       - platform_coding_hippius_canary_unwrap_uid | int != platform_coding_hippius_canary_authoring_uid | int
       - platform_coding_hippius_canary_unwrap_uid | int != platform_coding_hippius_canary_grading_uid | int
       - platform_coding_hippius_canary_authoring_uid | int != platform_coding_hippius_canary_grading_uid | int
@@ -698,9 +892,9 @@
     group: "{{ platform_group }}"
     mode: "0440"
   loop:
-    - { role: unwrap, socket: "{{ platform_coding_hippius_canary_unwrap_socket }}", uid: "{{ platform_coding_hippius_canary_unwrap_uid }}", request_bytes: 65536, response_bytes: 65536 }
-    - { role: authoring, socket: "{{ platform_coding_hippius_canary_authoring_socket }}", uid: "{{ platform_coding_hippius_canary_authoring_uid }}", request_bytes: 16777216, response_bytes: 25165824 }
-    - { role: grading, socket: "{{ platform_coding_hippius_canary_grading_socket }}", uid: "{{ platform_coding_hippius_canary_grading_uid }}", request_bytes: 16777216, response_bytes: 25165824 }
+    - { role: unwrap, socket: "{{ platform_coding_hippius_canary_unwrap_socket }}", uid: "{{ platform_coding_hippius_canary_unwrap_uid }}", gid: "{{ platform_coding_hippius_canary_unwrap_gid }}", request_bytes: 65536, response_bytes: 65536 }
+    - { role: authoring, socket: "{{ platform_coding_hippius_canary_authoring_socket }}", uid: "{{ platform_coding_hippius_canary_authoring_uid }}", gid: "{{ platform_coding_hippius_canary_authoring_gid }}", request_bytes: 16777216, response_bytes: 25165824 }
+    - { role: grading, socket: "{{ platform_coding_hippius_canary_grading_socket }}", uid: "{{ platform_coding_hippius_canary_grading_uid }}", gid: "{{ platform_coding_hippius_canary_grading_gid }}", request_bytes: 16777216, response_bytes: 25165824 }
   when: platform_coding_hippius_canary_helpers_enabled | bool
 
 - name: Render protected Hippius canary operator environment

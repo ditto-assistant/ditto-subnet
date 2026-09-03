@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 _CONFIG_ROOT = Path("/etc/ditto-platform/coding/hippius-canary")
-_CONFIG_SCHEMA = "dittobench-coding-hippius-canary-helper-proxy-config-v1"
+_CONFIG_SCHEMA = "dittobench-coding-hippius-canary-helper-proxy-config-v2"
 _ROLE_BY_NAME = {
     "hippius-canary-unwrap": "unwrap",
     "hippius-canary-authoring": "authoring",
@@ -53,7 +53,7 @@ def proxy_request(*, role: str, config_path: Path, body: bytes) -> bytes:
     _validate_socket_path(
         socket_path,
         expected_uid=config["expected_peer_uid"],
-        expected_gid=config["expected_peer_gid"],
+        socket_gid=config["socket_gid"],
     )
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
@@ -132,6 +132,7 @@ def _load_config(path: Path, *, role: str) -> dict[str, Any]:
         "role",
         "schema",
         "socket_path",
+        "socket_gid",
         "timeout_seconds",
     }:
         raise HelperProxyError("helper proxy configuration fields are invalid")
@@ -145,6 +146,7 @@ def _load_config(path: Path, *, role: str) -> dict[str, Any]:
         or len(socket_path.encode()) > 100
         or not _strict_int(config["expected_peer_uid"], minimum=1)
         or not _strict_int(config["expected_peer_gid"], minimum=1)
+        or not _strict_int(config["socket_gid"], minimum=1)
         or not _strict_int(
             config["max_request_bytes"], minimum=1, maximum=_MAX_FRAME_BYTES
         )
@@ -190,7 +192,7 @@ def _read_protected_config(path: Path) -> bytes:
     return body
 
 
-def _validate_socket_path(path: Path, *, expected_uid: int, expected_gid: int) -> None:
+def _validate_socket_path(path: Path, *, expected_uid: int, socket_gid: int) -> None:
     try:
         info = path.lstat()
     except OSError as error:
@@ -199,7 +201,7 @@ def _validate_socket_path(path: Path, *, expected_uid: int, expected_gid: int) -
         not path.is_absolute()
         or not stat.S_ISSOCK(info.st_mode)
         or info.st_uid != expected_uid
-        or info.st_gid != expected_gid
+        or info.st_gid != socket_gid
         or stat.S_IMODE(info.st_mode) != 0o660
     ):
         raise HelperProxyError("helper socket authority is unsafe")

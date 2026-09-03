@@ -16,6 +16,7 @@
 | Hippius Coding secret containers | `infra/terraform/stacks/gcp-platform/main.tf`, `infra/ansible/roles/platform_app/` |
 | Hippius canary one-shot operator | `apps/platform/ditto/api_server/coding_hippius_canary_operator.py`, `apps/platform/scripts/run_hippius_shadow_canary.py` |
 | Hippius canary helper packaging | `apps/platform/scripts/hippius_canary_helper_proxy.py`, `infra/ansible/roles/platform_app/` |
+| Hippius canary unwrap service | `apps/platform/scripts/hippius_canary_unwrap_service.py`, `infra/ansible/roles/platform_app/` |
 | Host convergence | `infra/ansible/` |
 | Platform app VM disk | `.agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md`, `app_boot_disk_gb` |
 | Validator updater | `scripts/validator-stack-auto-update.sh` |

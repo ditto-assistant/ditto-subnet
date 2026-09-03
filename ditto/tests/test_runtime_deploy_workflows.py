@@ -299,3 +299,49 @@ def test_hippius_canary_helpers_are_default_off_identity_bound_and_relay_blind()
     assert "socket.AF_UNIX" in proxy
     assert 'deployed_source_file="logs/deployed-source.sha"' in updater
     assert 'chmod 0600 "$next_deployed_source"' in updater
+
+
+def test_hippius_canary_unwrap_service_is_default_off_and_socket_activated() -> None:
+    defaults = yaml.safe_load(
+        (ROOT / "infra/ansible/roles/platform_app/defaults/main.yml").read_text()
+    )
+    tasks = (ROOT / "infra/ansible/roles/platform_app/tasks/main.yml").read_text()
+    service_unit = (
+        ROOT / "infra/ansible/roles/platform_app/templates/"
+        "ditto-hippius-canary-unwrap.service.j2"
+    ).read_text()
+    socket_unit = (
+        ROOT / "infra/ansible/roles/platform_app/templates/"
+        "ditto-hippius-canary-unwrap.socket.j2"
+    ).read_text()
+    service_env = (
+        ROOT / "infra/ansible/roles/platform_app/templates/"
+        "hippius-canary-unwrap-service.env.j2"
+    ).read_text()
+    service = (
+        ROOT / "apps/platform/scripts/hippius_canary_unwrap_service.py"
+    ).read_text()
+
+    assert defaults["platform_coding_hippius_canary_unwrap_installed"] is False
+    assert defaults["platform_coding_hippius_canary_unwrap_service_enabled"] is False
+    assert "platform_coding_hippius_canary_unwrap_user != platform_owner" in tasks
+    assert "item.stat.mode == '0400'" in tasks
+    assert "item.stat.nlink == 1" in tasks
+    assert "platform_coding_hippius_canary_unwrap_service_enabled | bool" in tasks
+    assert "PrivateNetwork=true" in service_unit
+    assert "RestrictAddressFamilies=AF_UNIX" in service_unit
+    assert "MemoryDenyWriteExecute=true" in service_unit
+    assert "SocketMode=0660" in socket_unit
+    assert "SocketGroup={{ platform_group }}" in socket_unit
+    assert "DirectoryMode=0711" in socket_unit
+    assert "CapabilityBoundingSet=" in service_unit
+    assert "AmbientCapabilities=" in service_unit
+    assert 'mode: "0550"' in tasks
+    assert "DITTO_HIPPIUS_CANARY_UNWRAP_REQUIRE_SOCKET_ACTIVATION=true" in service_env
+    for forbidden in ("ACCESS_KEY", "SECRET_KEY", "STORAGE_BUCKET", "PRIVATE_KEY="):
+        assert forbidden not in service_env
+    assert "rsa_padding_mode:oaep" in service
+    assert "rsa_oaep_md:sha256" in service
+    assert "rsa_mgf1_md:sha256" in service
+    assert "dittobench-coding-hippius-private-input-unwrap-v1" in service
+    assert "len(self._responses) >= 2" in service
