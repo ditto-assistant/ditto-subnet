@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hippius Token Lifecycle"
+  short_description: "Audit and safely renew Hippius scoped tokens"
+  default_prompt: "Use $hippius-token-lifecycle to audit Hippius token age and safely renew any expiring scoped credentials."

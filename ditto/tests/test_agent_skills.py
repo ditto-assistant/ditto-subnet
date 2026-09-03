@@ -224,6 +224,12 @@ def test_hippius_canary_operator_query_routes_to_operator_contract() -> None:
     assert topic_ids[0] == "coding-hippius-canary-operator"
 
 
+def test_hippius_token_expiry_query_routes_to_lifecycle_skill() -> None:
+    topics = lookup("audit Hippius token age before expiry and rotate credentials")
+    infra_cloud = next(topic for topic in topics if topic["id"] == "infra-cloud")
+    assert "hippius-token-lifecycle" in topic_list(infra_cloud, "skills")
+
+
 def test_hippius_canary_helper_query_routes_to_proxy_packaging() -> None:
     topic_ids = [
         str(topic["id"])
