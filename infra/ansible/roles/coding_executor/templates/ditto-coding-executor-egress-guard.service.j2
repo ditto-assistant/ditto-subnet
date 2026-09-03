@@ -6,6 +6,8 @@ Wants=network-pre.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+Environment=CODING_EXECUTOR_CAPABILITY_GATEWAY={{ coding_executor_capability_gateway if (coding_executor_capability_egress_enabled | bool) else '' }}
+Environment=CODING_EXECUTOR_CAPABILITY_PORT={{ coding_executor_capability_port }}
 ExecStart=/usr/local/lib/ditto-coding-executor/executor-egress-guard.sh
 
 [Install]

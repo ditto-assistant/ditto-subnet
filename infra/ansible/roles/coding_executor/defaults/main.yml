@@ -75,3 +75,10 @@ coding_executor_scorer_runtime_materialize_enabled: false
 coding_executor_scorer_runtime_binary_path: /usr/local/lib/ditto-coding-executor/dittobench-coding-executor-scorer
 coding_executor_scorer_runtime_policy_path: /opt/ditto/coding/coding_inference_policy_locked_v1.json
 coding_executor_scorer_runtime_attestation_path: /var/lib/ditto-coding-executor/attestations/scorer-runtime-attestation.json
+
+# The rootless daemon starts default-deny. A later scorer may explicitly allow
+# only its fixed capability gateway and port; this control never opens general
+# Internet, Platform, validator, metadata, or peer-container access.
+coding_executor_capability_egress_enabled: false
+coding_executor_capability_gateway: ""
+coding_executor_capability_port: 11438
