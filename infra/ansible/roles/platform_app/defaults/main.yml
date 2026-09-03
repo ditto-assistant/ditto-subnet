@@ -208,13 +208,30 @@ platform_coding_hippius_private_input_manifest_path: /etc/ditto-platform/coding/
 platform_coding_hippius_private_input_publication_receipt_path: /etc/ditto-platform/coding/hippius-canary/private-input-publication.json
 platform_coding_hippius_curator_public_key_path: /etc/ditto-platform/coding/hippius-canary/curator-public.pem
 platform_coding_hippius_private_input_curator_access_key: ""
-platform_coding_hippius_canary_unwrap_socket: ""
+platform_coding_hippius_canary_unwrap_socket: /run/ditto-hippius-canary-unwrap/unwrap.sock
 platform_coding_hippius_canary_authoring_socket: ""
 platform_coding_hippius_canary_grading_socket: ""
 platform_coding_hippius_canary_unwrap_uid: 0
 platform_coding_hippius_canary_authoring_uid: 0
 platform_coding_hippius_canary_grading_uid: 0
+platform_coding_hippius_canary_unwrap_gid: 0
+platform_coding_hippius_canary_authoring_gid: 0
+platform_coding_hippius_canary_grading_gid: 0
 platform_coding_hippius_canary_helper_timeout_seconds: 7200
+
+# Isolated unwrap backend. Installation and socket activation are separate so
+# the service identity can exist before operators install its mode-0400 key and
+# one-shot authority file. Both gates ship false.
+platform_coding_hippius_canary_unwrap_installed: false
+platform_coding_hippius_canary_unwrap_service_enabled: false
+platform_coding_hippius_canary_unwrap_user: ditto-canary-unwrap
+platform_coding_hippius_canary_unwrap_group: ditto-canary-unwrap
+platform_coding_hippius_canary_unwrap_service_path: "{{ platform_coding_hippius_canary_install_root }}/backend/hippius-canary-unwrap-service"
+platform_coding_hippius_canary_unwrap_authority_path: "{{ platform_coding_hippius_canary_config_root }}/unwrap-service/authority.json"
+platform_coding_hippius_canary_unwrap_private_key_path: "{{ platform_coding_hippius_canary_config_root }}/unwrap-service/private-key.pem"
+platform_coding_hippius_canary_unwrap_service_env_path: "{{ platform_coding_hippius_canary_config_root }}/unwrap-service/service.env"
+platform_coding_hippius_canary_unwrap_openssl_path: /usr/bin/openssl
+platform_coding_hippius_canary_unwrap_socket_timeout_seconds: 30
 
 # Subnet / pricing config (mirrors .env.example defaults).
 platform_netuid: 118

@@ -61,7 +61,8 @@ def _write_config(
                 "max_request_bytes": 4096,
                 "max_response_bytes": max_response_bytes,
                 "role": role,
-                "schema": ("dittobench-coding-hippius-canary-helper-proxy-config-v1"),
+                "schema": ("dittobench-coding-hippius-canary-helper-proxy-config-v2"),
+                "socket_gid": os.getgid(),
                 "socket_path": str(socket_path),
                 "timeout_seconds": 5,
             }

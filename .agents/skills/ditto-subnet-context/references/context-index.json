@@ -249,6 +249,19 @@
       "related": ["dittobench-scoring", "research-adapters", "contracts", "platform-api", "release-delivery"]
     },
     {
+      "id": "coding-hippius-canary-unwrap",
+      "title": "Isolated Hippius canary unwrap service",
+      "keywords": ["Hippius canary unwrap", "canary unwrap authority", "RSA OAEP canary", "socket activated unwrap", "prepare unwrap authority"],
+      "summary": "Package a default-off, no-network unwrap backend that releases one data key only for the exact authoring and grading requests derived from a protected synthetic-canary authority.",
+      "skills": ["ditto-subnet-platform", "ditto-subnet-benchmark", "ditto-subnet-release-ops"],
+      "owns": ["apps/platform/ditto/api_server/coding_hippius_canary_unwrap.py", "apps/platform/scripts/hippius_canary_unwrap_service.py", "apps/platform/scripts/prepare_hippius_canary_unwrap_authority.py", "apps/platform/docs/coding-hippius-canary-unwrap-service.md", "infra/ansible/roles/platform_app"],
+      "read": ["apps/platform/docs/coding-hippius-canary-unwrap-service.md", "apps/platform/docs/coding-hippius-canary-helper-proxies.md", "apps/platform/docs/coding-hippius-canary-operator.md", "docs/coding-private-hippius-data-plane.md"],
+      "search": ["rg -n 'CANARY_UNWRAP|canary-unwrap|rsa_oaep' apps/platform infra/ansible", "rg -n 'build_hippius_private_input_unwrap_request|private-input-unwrap-v1' apps/platform"],
+      "validate": ["cd apps/platform && make lint lint-copy typecheck test", "uv run pytest -q ditto/tests/test_runtime_deploy_workflows.py ditto/tests/test_release_plan.py", "uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check infra/ansible/playbooks/gcp-platform-app.yml", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
+      "invariants": ["Installation and socket activation remain independently default-off.", "The service has no network credential or address family and accepts only the authority's exact two phase-bound requests.", "Private keys remain service-owned mode-0400 single-link files and never enter Platform or Terraform state."],
+      "related": ["coding-hippius-canary-helpers", "coding-hippius-canary-operator", "coding-hippius-canary", "coding-hippius-custody", "release-delivery"]
+    },
+    {
       "id": "coding-hippius-canary-helpers",
       "title": "Protected Hippius canary helper proxy packaging",
       "keywords": ["Hippius canary helper proxy", "canary backend socket", "canary SO_PEERCRED", "package canary helpers", "canary helper UID"],
@@ -259,7 +272,7 @@
       "search": ["rg -n 'SO_PEERCRED|hippius-canary-(unwrap|authoring|grading)' apps/platform infra/ansible", "rg -n 'CodingSupervisorRuntime|codingphase|codinghost' ditto/validator services/dittobench-api"],
       "validate": ["cd apps/platform && make lint lint-copy typecheck test", "uv run pytest -q ditto/tests/test_runtime_deploy_workflows.py ditto/tests/test_release_plan.py", "uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check infra/ansible/playbooks/gcp-platform-app.yml", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
       "invariants": ["Proxy installation is default-off and no backend service is created.", "Each proxy verifies a distinct socket inode and connected Linux peer UID/GID.", "Reduced canary requests never authorize a backend to fabricate missing supervisor leases, harnesses, grants, or outbox state."],
-      "related": ["coding-hippius-canary-operator", "coding-attempt-supervisor", "coding-hippius-custody", "release-delivery"]
+      "related": ["coding-hippius-canary-unwrap", "coding-hippius-canary-operator", "coding-attempt-supervisor", "coding-hippius-custody", "release-delivery"]
     },
     {
       "id": "coding-hippius-canary-operator",

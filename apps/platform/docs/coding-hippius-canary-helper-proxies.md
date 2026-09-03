@@ -28,11 +28,11 @@ configured paths resolve to distinct device/inode identities. The executable
 basename fixes its role; arguments and role selection from the environment are
 rejected.
 
-Each proxy loads one root-owned, group-readable mode-`0440` canonical config
+Each proxy loads one root-owned, group-readable mode-`0440` canonical v2 config
 from `/etc/ditto-platform/coding/hippius-canary`. The config fixes:
 
 - the role-specific absolute Unix socket;
-- the expected backend effective UID and GID;
+- the socket-file GID and expected backend effective UID/GID separately;
 - request and response byte limits; and
 - a timeout no greater than the canary ticket deadline.
 
@@ -51,18 +51,19 @@ The proxy prints no payload or backend detail on failure.
 
 The proxies are clients, not key or execution services:
 
-- the unwrap backend runs under its own UID and owns the external private-key
-  or KMS authority;
+- the isolated unwrap-service layer implements the unwrap backend under its own
+  UID/GID with an exact two-request authority and systemd socket activation;
 - the authoring backend runs under a second UID and may adapt only the reviewed
   authoring supervisor boundary; and
 - the grading backend runs under a third UID and may adapt only the reviewed
   pristine-grading boundary.
 
-All three UIDs must be non-root, mutually distinct, and different from the
-Platform operator UID. Test fixture programs are not backend implementations
-and are forbidden in a live run. The existing Coding supervisor still requires
-complete lease, harness, inference-grant, and durable-outbox authority; a
-backend must not fabricate those fields from the reduced canary request.
+All three UIDs and primary GIDs must be non-root, mutually distinct, and
+different from the Platform operator identity and socket-access group. Test
+fixture programs are not backend implementations and are forbidden in a live
+run. The existing Coding supervisor still requires complete lease, harness,
+inference-grant, and durable-outbox authority; an execution backend must not
+fabricate those fields from the reduced canary request.
 
 ## Deployment record and operator environment
 
@@ -86,9 +87,10 @@ secret value and starts no backend service.
 
 ## Activation boundary
 
-This PR does not add backend service users, private keys, KMS permissions,
-socket services, synthetic objects, credentials, host-variable enablement,
-Terraform apply, Ansible converge, deployment, or live canary execution.
+The separately reviewed unwrap layer adds a default-off service package but no
+private key, prepared authority, host-variable enablement, Ansible converge,
+socket activation, provider operation, or live unwrap. Authoring and grading
+backend services remain absent.
 
 Phase 6 remains incomplete until separately reviewed backend implementations
 are installed, the default-off gate is explicitly enabled, exact merged source

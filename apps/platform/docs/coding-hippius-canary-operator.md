@@ -113,11 +113,13 @@ different validator, or a second synthetic record.
 ## Remaining activation boundary
 
 The helper-proxy layer adds default-off installation for the three fixed client
-executables but creates no plan, synthetic release, backend service, unwrap
-key, credential value, provider object, host-variable enablement, or live
-receipt. It does not enable Platform's ordinary Coding worker or catalog, and
-it does not apply Terraform, converge Ansible, restart a service, score a
-result, or change weights or emissions.
+executables. The isolated unwrap layer adds a separately default-off backend
+package and exact-authority builder, but creates no plan, synthetic release,
+unwrap key, prepared authority, credential value, provider object,
+host-variable enablement, or live receipt. Authoring and grading backends are
+still absent. None of these layers enables Platform's ordinary Coding worker
+or catalog, applies Terraform, converges Ansible, restarts a service, scores a
+result, or changes weights or emissions.
 
 Phase 6 becomes operationally complete only when the owner reviews a ready
 receipt produced by this command from exact merged and deployed source. Phase 7

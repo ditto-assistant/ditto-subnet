@@ -1,0 +1,31 @@
+[Unit]
+Description=Ditto Hippius synthetic-canary unwrap backend
+Requires=ditto-hippius-canary-unwrap.socket
+After=ditto-hippius-canary-unwrap.socket
+
+[Service]
+Type=simple
+User={{ platform_coding_hippius_canary_unwrap_user }}
+Group={{ platform_coding_hippius_canary_unwrap_group }}
+EnvironmentFile={{ platform_coding_hippius_canary_unwrap_service_env_path }}
+ExecStart={{ platform_coding_hippius_canary_unwrap_service_path }}
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateNetwork=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+UMask=0077
+StandardOutput=null
+StandardError=journal
