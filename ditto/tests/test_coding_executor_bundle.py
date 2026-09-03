@@ -6,6 +6,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
 RENDER = ROOT / "scripts/render-coding-executor-scorer-bundle.py"
+EXPORT = ROOT / "scripts/export-coding-executor-scorer-bundle.sh"
+
+
+def test_export_requires_the_exact_verified_release_attestation() -> None:
+    source = EXPORT.read_text()
+    assert "cosign verify-attestation" in source
+    assert "--output json" in source
+    assert "base64.b64decode" in source
+    assert "canonical == release" in source
+    assert "release manifest is not the exact verified scorer attestation predicate" in source
 
 
 def test_bundle_manifest_binds_the_release_manifest_and_archive(tmp_path: Path) -> None:

@@ -34,10 +34,40 @@ image_reference="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]
   echo 'release manifest image reference is invalid' >&2
   exit 1
 }
-cosign verify \
+verified_attestation="$(mktemp)"
+trap 'rm -f "$verified_attestation"' EXIT
+cosign verify-attestation \
+  --output json \
+  --type io.heyditto.dittobench.coding-executor-scorer-release.v1 \
   --certificate-identity-regexp '^https://github.com/ditto-assistant/ditto-subnet/.github/workflows/release.yml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  "$image_reference" >/dev/null
+  "$image_reference" >"$verified_attestation"
+python3 - "$release_manifest" "$verified_attestation" <<'PY'
+import base64
+import json
+import sys
+from pathlib import Path
+
+release = Path(sys.argv[1]).read_bytes()
+records = json.loads(Path(sys.argv[2]).read_bytes())
+if isinstance(records, dict):
+    records = [records]
+if not isinstance(records, list):
+    raise SystemExit("verified scorer attestation output is invalid")
+for record in records:
+    if not isinstance(record, dict) or not isinstance(record.get("payload"), str):
+        continue
+    try:
+        statement = json.loads(base64.b64decode(record["payload"], validate=True))
+        predicate = statement["predicate"]
+        canonical = (json.dumps(predicate, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        continue
+    if statement.get("predicateType") == "io.heyditto.dittobench.coding-executor-scorer-release.v1" and canonical == release:
+        break
+else:
+    raise SystemExit("release manifest is not the exact verified scorer attestation predicate")
+PY
 docker pull "$image_reference" >/dev/null
 archive="$output_dir/coding-executor-scorer.oci.tar"
 bundle_manifest="$output_dir/coding-executor-scorer.bundle.json"
