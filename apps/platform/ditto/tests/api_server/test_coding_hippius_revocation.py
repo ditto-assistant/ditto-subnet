@@ -105,6 +105,18 @@ def _entropy() -> Callable[[int], bytes]:
     return generate
 
 
+def _monotonic() -> Callable[[], float]:
+    instant = 10.0
+
+    def tick() -> float:
+        nonlocal instant
+        value = instant
+        instant += 0.1
+        return value
+
+    return tick
+
+
 def test_revocation_observation_records_first_denial_and_cleans_up() -> None:
     storage = _Storage()
     management = _Management(storage)
@@ -119,6 +131,7 @@ def test_revocation_observation_records_first_denial_and_cleans_up() -> None:
             provider_profile_payload_sha256="b" * 64,
             now=_clock(),
             synthetic_bytes=_entropy(),
+            monotonic=_monotonic(),
         )
     )
 
@@ -164,6 +177,7 @@ def test_revocation_observation_fails_when_target_is_not_usable() -> None:
                 provider_profile_payload_sha256="b" * 64,
                 now=_clock(),
                 synthetic_bytes=_entropy(),
+                monotonic=_monotonic(),
             )
         )
 
@@ -180,6 +194,7 @@ def test_revocation_receipt_is_redacted_and_exclusive(tmp_path: Path) -> None:
             provider_profile_payload_sha256="b" * 64,
             now=_clock(),
             synthetic_bytes=_entropy(),
+            monotonic=_monotonic(),
         )
     )
     output = tmp_path / "receipt.json"
@@ -196,9 +211,9 @@ def test_revocation_receipt_is_redacted_and_exclusive(tmp_path: Path) -> None:
 
 
 def test_management_configuration_is_pinned_to_the_management_origin() -> None:
-    config = HippiusRevocationManagementConfig(access_token="management-token")
+    config = HippiusRevocationManagementConfig(access_token="x")
     assert config.endpoint_url == HIPPIUS_MANAGEMENT_API_ORIGIN
     with pytest.raises(HippiusProbeConfigurationError, match="unsafe"):
         HippiusRevocationManagementConfig(
-            access_token="management-token", endpoint_url="https://api.invalid"
+            access_token="x", endpoint_url="https://api.invalid"
         )

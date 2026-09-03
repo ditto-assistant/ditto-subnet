@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import stat
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -96,7 +97,6 @@ class HippiusRevocationReceipt:
     source_sha: str
     provider_profile_payload_sha256: str
     target_token_sha256: str
-    target_credential_sha256: str
     observed_at: str
     revoked_at: str
     rejected_at: str
@@ -114,11 +114,12 @@ class HippiusRevocationReceipt:
                 for value in (
                     self.provider_profile_payload_sha256,
                     self.target_token_sha256,
-                    self.target_credential_sha256,
                 )
             )
-            or self.rejection_delay_milliseconds < 0
-            or not 1 <= self.post_revoke_attempts <= 241
+            or not 0
+            <= self.rejection_delay_milliseconds
+            <= int(HIPPIUS_REVOCATION_MAX_WAIT.total_seconds() * 1000)
+            or not 1 <= self.post_revoke_attempts <= 601
             or self.synthetic_only is not True
             or self.weight_eligible is not False
         ):
@@ -134,12 +135,6 @@ class HippiusRevocationReceipt:
         if not observed_at <= revoked_at <= rejected_at:
             raise HippiusProbeReceiptError(
                 "Hippius revocation receipt timestamps are inconsistent"
-            )
-        if int((rejected_at - revoked_at).total_seconds() * 1000) != (
-            self.rejection_delay_milliseconds
-        ):
-            raise HippiusProbeReceiptError(
-                "Hippius revocation receipt delay is inconsistent"
             )
 
 
@@ -210,6 +205,7 @@ async def run_hippius_revocation_observation(
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     synthetic_bytes: Callable[[int], bytes] = secrets.token_bytes,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
     poll_interval_seconds: float = 0.25,
 ) -> HippiusRevocationReceipt:
     """Revoke a disposable target and measure first observed S3 rejection.
@@ -250,10 +246,10 @@ async def run_hippius_revocation_observation(
             raise HippiusProbeTransportError(
                 "Hippius revocation target was not usable before revocation"
             )
-        revoked_at = _require_time(now())
         await management.revoke_sub_token(token_id=target.token_id)
+        revoked_at = _require_time(now())
+        revoked_tick = monotonic()
         attempts = 0
-        deadline = revoked_at + HIPPIUS_REVOCATION_MAX_WAIT
         while True:
             attempts += 1
             outcome = await _get_outcome(
@@ -263,6 +259,11 @@ async def run_hippius_revocation_observation(
                 key=key,
             )
             rejected_at = _require_time(now())
+            elapsed_seconds = monotonic() - revoked_tick
+            if elapsed_seconds < 0:
+                raise HippiusProbeConfigurationError(
+                    "Hippius revocation monotonic clock moved backwards"
+                )
             if outcome == "denied":
                 return HippiusRevocationReceipt(
                     schema=HIPPIUS_REVOCATION_RECEIPT_SCHEMA,
@@ -271,20 +272,18 @@ async def run_hippius_revocation_observation(
                     target_token_sha256=hashlib.sha256(
                         target.token_id.encode("ascii")
                     ).hexdigest(),
-                    target_credential_sha256=hashlib.sha256(
-                        target.credential.access_key.encode("utf-8")
-                    ).hexdigest(),
                     observed_at=_format_time(observed_at),
                     revoked_at=_format_time(revoked_at),
                     rejected_at=_format_time(rejected_at),
-                    rejection_delay_milliseconds=int(
-                        (rejected_at - revoked_at).total_seconds() * 1000
-                    ),
+                    rejection_delay_milliseconds=round(elapsed_seconds * 1000),
                     post_revoke_attempts=attempts,
                     synthetic_only=True,
                     weight_eligible=False,
                 )
-            if outcome != "allowed" or rejected_at >= deadline:
+            if (
+                outcome != "allowed"
+                or elapsed_seconds >= HIPPIUS_REVOCATION_MAX_WAIT.total_seconds()
+            ):
                 raise HippiusProbeTransportError(
                     "Hippius revocation did not produce an authentication denial"
                 )
