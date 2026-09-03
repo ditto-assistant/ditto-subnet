@@ -38,6 +38,15 @@
       Scorer-image loading requires the verified scorer-bundle control. It
       cannot pull from a registry or load an unverified archive.
 
+- name: Reject scorer-runtime materialization without an attested scorer image
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_scorer_runtime_materialize_enabled | bool) or coding_executor_scorer_image_load_enabled | bool
+    fail_msg: >-
+      Scorer-runtime materialization requires the attested scorer-image
+      control. It cannot extract an unverified image or fetch a runtime from a
+      registry.
+
 - name: Report that the coding executor daemon is deliberately disabled
   ansible.builtin.debug:
     msg: >-
@@ -202,6 +211,7 @@
       loop:
         - load-scorer-bundle.py
         - load-runtime-bundle.py
+        - materialize-scorer-runtime.py
         - stage-runtime-bundle.sh
         - verify-runtime-bundle.py
         - verify-scorer-bundle.py
@@ -273,6 +283,35 @@
               - "{{ coding_executor_scorer_image_attestation_path }}"
           register: coding_executor_scorer_image_load
           changed_when: "'changed=true' in coding_executor_scorer_image_load.stdout"
+
+    - name: Materialize the attested scorer runtime without starting it
+      when: coding_executor_scorer_runtime_materialize_enabled | bool
+      block:
+        - name: Require the fixed scorer-runtime materialization profile
+          ansible.builtin.assert:
+            that:
+              - coding_executor_scorer_runtime_binary_path == '/usr/local/lib/ditto-coding-executor/dittobench-coding-executor-scorer'
+              - coding_executor_scorer_runtime_policy_path == '/opt/ditto/coding/coding_inference_policy_locked_v1.json'
+              - coding_executor_scorer_runtime_attestation_path == '/var/lib/ditto-coding-executor/attestations/scorer-runtime-attestation.json'
+            fail_msg: >-
+              Scorer runtime files and their attestation must remain at fixed
+              root-owned paths. Do not make a caller-selected binary or policy
+              authoritative.
+
+        - name: Create the fixed scorer policy directory
+          ansible.builtin.file:
+            path: /opt/ditto/coding
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Materialize the exact scorer binary and locked policy
+          ansible.builtin.command:
+            argv:
+              - /usr/local/lib/ditto-coding-executor/materialize-scorer-runtime.py
+          register: coding_executor_scorer_runtime_materialize
+          changed_when: "'changed=true' in coding_executor_scorer_runtime_materialize.stdout"
 
     - name: Verify a protected staged coding runtime bundle without loading it
       when: coding_executor_runtime_bundle_enabled | bool

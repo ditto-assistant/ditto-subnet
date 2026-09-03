@@ -214,6 +214,23 @@ same content leaves the attestation unchanged. Loading still does not replace
 the client guard, install or start the scorer, deliver a token, open a network
 path, route a validator, claim a ticket, or enable any coding gate.
 
+## Scorer runtime materialization
+
+`coding_executor_scorer_runtime_materialize_enabled` is a separate default-off
+step after scorer-image loading. It revalidates the fixed scorer-image
+attestation and rootless daemon, creates one stopped `--network none` temporary
+container from the exact image ID, copies only the fixed scorer binary and
+locked-policy file, and removes that container again. It validates the binary
+as a bounded linux/amd64 ELF, verifies the raw locked-policy file hash, then
+atomically installs both files at fixed root-owned host paths and writes a
+content-addressed runtime attestation.
+
+This is a distribution transition, not a service transition: it does not create
+a scorer identity, systemd unit, token, Docker client, listener, firewall rule,
+validator route, task, or capability. The later scorer-service and
+candidate-firewall PR must consume this runtime attestation before it can start
+the host process.
+
 Destroying a created cohort is intentionally not a routine rollback: the shared
 compute module has deletion protection. Rollback during the shadow phase means
 leave the hosts present and disable the later daemon/worker configuration; any
