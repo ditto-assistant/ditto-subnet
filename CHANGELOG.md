@@ -2,6 +2,51 @@
 
 <!-- version list -->
 
+## v0.192.0 (2026-09-03)
+
+### Features
+
+- **coding**: Add Hippius storage capability probe
+  ([#1497](https://github.com/ditto-assistant/ditto-subnet/pull/1497),
+  [`cb077dd`](https://github.com/ditto-assistant/ditto-subnet/commit/cb077ddf73083644250c61288b25525053cb8b25))
+
+- **coding**: Bind Hippius custody and recovery
+  ([#1507](https://github.com/ditto-assistant/ditto-subnet/pull/1507),
+  [`3751439`](https://github.com/ditto-assistant/ditto-subnet/commit/37514399bcf924704b013e573c778654f1694169))
+
+- **coding**: Encrypt Hippius private input transport
+  ([#1499](https://github.com/ditto-assistant/ditto-subnet/pull/1499),
+  [`d3e3407`](https://github.com/ditto-assistant/ditto-subnet/commit/d3e3407f8b9a705cbf5daba9be614ce17627a3f6))
+
+- **coding**: Isolate Hippius canary unwrap
+  ([#1525](https://github.com/ditto-assistant/ditto-subnet/pull/1525),
+  [`5a4f954`](https://github.com/ditto-assistant/ditto-subnet/commit/5a4f954342fd22ce89b3239dbf1c980a644689e8))
+
+- **coding**: Mediate sealed Hippius evidence
+  ([#1504](https://github.com/ditto-assistant/ditto-subnet/pull/1504),
+  [`1256a0c`](https://github.com/ditto-assistant/ditto-subnet/commit/1256a0cbba24069694d79d3f9d7693a0a25615a1))
+
+- **coding**: Package Hippius canary helpers
+  ([#1524](https://github.com/ditto-assistant/ditto-subnet/pull/1524),
+  [`4a6df88`](https://github.com/ditto-assistant/ditto-subnet/commit/4a6df88b4ed9838c8913d83c3571efdb1166d6de))
+
+- **coding**: Publish encrypted Hippius private inputs
+  ([#1501](https://github.com/ditto-assistant/ditto-subnet/pull/1501),
+  [`1ab3c65`](https://github.com/ditto-assistant/ditto-subnet/commit/1ab3c65d39709cb973bfebdcaae4729a4257ffee))
+
+- **coding**: Retrieve ticket-bound Hippius private inputs
+  ([#1503](https://github.com/ditto-assistant/ditto-subnet/pull/1503),
+  [`93a25ed`](https://github.com/ditto-assistant/ditto-subnet/commit/93a25edf27939fd460e6c58cfa8e507ffc75d0c4))
+
+- **coding**: Stage Hippius single-validator canary
+  ([#1513](https://github.com/ditto-assistant/ditto-subnet/pull/1513),
+  [`dea5a6a`](https://github.com/ditto-assistant/ditto-subnet/commit/dea5a6aa2a29c379df1ff62e1f83be1cee61893e))
+
+- **coding**: Wire Hippius canary operator
+  ([#1517](https://github.com/ditto-assistant/ditto-subnet/pull/1517),
+  [`3369e4a`](https://github.com/ditto-assistant/ditto-subnet/commit/3369e4a2f393bfaa00c73be11a64beec7c43ab0d))
+
+
 ## v0.191.0 (2026-09-03)
 
 ### Features
