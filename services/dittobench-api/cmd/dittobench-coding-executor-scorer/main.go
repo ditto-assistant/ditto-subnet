@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -27,11 +28,14 @@ import (
 )
 
 const (
-	defaultSocketPath = "/run/ditto-coding-scorer/control.sock"
-	enableEnvironment = "DITTOBENCH_CODING_EXECUTOR_SCORER_ENABLED"
-	policyFile        = "/opt/ditto/coding/coding_inference_policy_locked_v1.json"
-	policySHA256      = "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6"
+	defaultSocketPath             = "/run/ditto-coding-scorer/control.sock"
+	enableEnvironment             = "DITTOBENCH_CODING_EXECUTOR_SCORER_ENABLED"
+	runtimeImageDigestEnvironment = "DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST"
+	policyFile                    = "/opt/ditto/coding/coding_inference_policy_locked_v1.json"
+	policySHA256                  = "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6"
 )
+
+var sha256ImageDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type configuration struct {
 	socketPath string
@@ -88,7 +92,8 @@ func buildHost() (*codinghost.Host, net.Listener, error) {
 	tokenPath := strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_EXECUTOR_CONTROL_TOKEN_FILE"))
 	privateRoot := strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_EXECUTOR_PRIVATE_ROOT"))
 	imageRepository := strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY"))
-	if !filepath.IsAbs(tokenPath) || !filepath.IsAbs(privateRoot) || imageRepository == "" ||
+	imageDigest := strings.TrimSpace(os.Getenv(runtimeImageDigestEnvironment))
+	if !filepath.IsAbs(tokenPath) || !filepath.IsAbs(privateRoot) || imageRepository == "" || !sha256ImageDigest.MatchString(imageDigest) ||
 		!strings.EqualFold(strings.TrimSpace(os.Getenv("DITTOBENCH_REQUIRE_ROOTLESS_DOCKER")), "true") ||
 		!strings.EqualFold(strings.TrimSpace(os.Getenv("DITTOBENCH_REQUIRE_ISOLATED_DOCKER_DAEMON")), "true") ||
 		strings.TrimSpace(os.Getenv("DOCKER_HOST")) != "unix:///run/ditto-coding-executor/docker.sock" {
@@ -109,7 +114,7 @@ func buildHost() (*codinghost.Host, net.Listener, error) {
 	host, err := codinghost.New(codinghost.Config{
 		ControlToken: strings.TrimSpace(string(token)), PrivateRoot: privateRoot,
 		SourceListener: source, SourcePublicBaseURL: "http://127.0.0.1:11438", Policy: policy,
-		RuntimeImageRepository: imageRepository, Docker: sandbox.NewLocalDocker(),
+		RuntimeImageRepository: imageRepository, RuntimeImageDigest: imageDigest, Docker: sandbox.NewLocalDocker(),
 		CandidateUID: 65532, CandidateGID: 65532, MaxTotalBytes: 16 << 30,
 		JournalMaxTotalBytes: 3 << 30, MaxAttempts: 64, Now: time.Now,
 	})

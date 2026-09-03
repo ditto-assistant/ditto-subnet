@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -16,6 +17,17 @@ func TestConfigurationIsDefaultOffAndPinsTheUnixSocket(t *testing.T) {
 	config, err := configurationFromEnvironment(defaultSocketPath, func(string) string { return "true" })
 	if err != nil || !config.enabled || config.socketPath != defaultSocketPath {
 		t.Fatalf("config=%#v err=%v", config, err)
+	}
+}
+
+func TestRuntimeImageDigestIsAnExactImmutableAuthority(t *testing.T) {
+	if !sha256ImageDigest.MatchString("sha256:" + strings.Repeat("a", 64)) {
+		t.Fatal("full lowercase digest was rejected")
+	}
+	for _, value := range []string{"", "latest", "sha256:" + strings.Repeat("A", 64), "sha256:" + strings.Repeat("a", 63)} {
+		if sha256ImageDigest.MatchString(value) {
+			t.Fatalf("mutable or malformed digest was accepted: %q", value)
+		}
 	}
 }
 
