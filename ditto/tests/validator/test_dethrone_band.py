@@ -967,6 +967,15 @@ class TestComputeWeightsWithConfirmations:
 
 
 class TestEntrySeedComposites:
+    def test_legacy_history_is_bounded_by_current_compiled_cap(self) -> None:
+        entry = _e(
+            "legacy",
+            0.8,
+            wave_scores={seed: [seed / 100] for seed in range(32)},
+        )
+
+        assert _entry_seed_composites(entry) == {seed: seed / 100 for seed in range(15)}
+
     def test_none_without_seeds(self) -> None:
         # confirmations present but no aligned seeds -> not pairable.
         assert _entry_seed_composites(_e("a", 0.8, confirmations=[0.8, 0.82])) is None

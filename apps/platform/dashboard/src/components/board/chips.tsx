@@ -25,9 +25,9 @@ import { rankMoveState } from "./board-state";
 /**
  * The seed-round / retained-sample chip (continualScoreChip, 5607–5628). The
  * per-sample dot plot that used to sit here was a debugging view of the
- * continual mean's spread; the seed-round count is the number a miner acts
- * on, so the chip carries it and the mean's full composition lives in the
- * tooltip; per-score values remain in row detail.
+ * continual mean's spread; the active/recorded depth is the number a miner
+ * acts on, so the chip carries it and the mean's full composition lives in
+ * the tooltip; per-score values remain in row detail.
  */
 export function RetestSeedChip(props: { count: number }): JSX.Element {
   const count = (): number => Math.max(0, Number(props.count) || 0);
@@ -60,24 +60,30 @@ export function ContinualScoreChip(props: { entry: BoardEntry }): JSX.Element {
     >
       {(() => {
         const waves = (): number => continualWaves(props.entry);
-        const seeds = (): number => Number(props.entry.confirmation_seed_depth) || 0;
+        const recordedSeeds = (): number => Number(props.entry.confirmation_seed_depth) || 0;
         const samples = (): number => continualSampleCount(props.entry);
+        const label = (): string =>
+          recordedSeeds() > waves()
+            ? waves() + " active / " + recordedSeeds() + " recorded"
+            : recordedSeeds() + (recordedSeeds() === 1 ? " seed" : " seeds");
         const title = (): string =>
           "Current leaderboard score: arithmetic mean of " +
           samples() +
           " scores — the original three validator scores plus " +
           waves() +
-          " retained per-seed " +
+          " active per-seed " +
           (waves() === 1 ? "sample" : "samples") +
-          " from " +
-          seeds() +
-          " continual-retest seed " +
-          (seeds() === 1 ? "round" : "rounds") +
-          ". Scheduling cohort changes never remove an accepted sample; KOTH comparisons pair " +
+          ". This submission has " +
+          recordedSeeds() +
+          " accepted continual-retest " +
+          (recordedSeeds() === 1 ? "seed" : "seeds") +
+          " in its audit history; the current scoring cap selects at most " +
+          waves() +
+          ". KOTH comparisons pair " +
           "agents only on seed identities they share.";
         return (
           <TipTarget class="rollout-chip settled seed-rounds-chip tip" tabindex={0} text={title()}>
-            {seeds() + (seeds() === 1 ? " seed" : " seeds")}
+            {label()}
           </TipTarget>
         );
       })()}

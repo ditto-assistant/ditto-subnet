@@ -1267,6 +1267,42 @@ describe("registration-aware crown clarity", () => {
 
 // ── Row 1 (chip vocabulary slice): the composite cell chips ──
 describe("composite cell chips (row 1 slice)", () => {
+  it("distinguishes the active seed window from legacy recorded history", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index === 0
+              ? {
+                  ...entry,
+                  aggregate_method: "continual_mean",
+                  completed_wave_count: 15,
+                  retained_sample_count: 15,
+                  aggregate_sample_count: 18,
+                  confirmation_seed_depth: 32,
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+
+    const chip = await waitFor(() => {
+      const value = Array.from(
+        document.querySelectorAll(".rollout-chip.settled.seed-rounds-chip.tip"),
+      ).find((candidate) => candidate.textContent === "15 active / 32 recorded");
+      expect(value).toBeTruthy();
+      return value as Element;
+    });
+    expect(chip?.getAttribute("data-tooltip")).toContain(
+      "32 accepted continual-retest seeds in its audit history",
+    );
+  });
+
   it("carries the continual seed-round chip (the dot plot stays retired)", async () => {
     // The per-sample dot plot was a debugging view; the row now carries the
     // seed-round count and keeps the mean's composition in the tooltip.
@@ -1274,7 +1310,7 @@ describe("composite cell chips (row 1 slice)", () => {
     await waitForBoard();
     const chip = document.querySelector(".rollout-chip.settled.seed-rounds-chip.tip");
     expect(chip).toBeTruthy();
-    expect(chip?.textContent).toMatch(/^\d+ seeds?$/);
+    expect(chip?.textContent).toMatch(/^\d+ (?:seeds?|active \/ \d+ recorded)$/);
     expect(chip?.getAttribute("data-tooltip")).toContain("arithmetic mean of");
   });
 

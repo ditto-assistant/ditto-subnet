@@ -30,6 +30,7 @@ from ditto.validator.config import (
     KOTH_BAND_DECAY_START_COMPOSITE,
     KOTH_CEILING_HEADROOM_SHARE,
     KOTH_STATISTICAL_BAND_CAP_MULTIPLE,
+    TOP5_MAX_CONFIRMATION_SEEDS,
     TOP5_MIN_CONFIRMATION_SEEDS,
 )
 from ditto.validator.crn import confirmation_seeds
@@ -605,7 +606,12 @@ def _entry_confirmation_history(entry: LedgerEntry) -> dict[int, float] | None:
         grouped.setdefault(seed, []).append(float(composite))
     if not grouped:
         return None
-    return {seed: _median(values) for seed, values in grouped.items()}
+    collapsed = {seed: _median(values) for seed, values in grouped.items()}
+    # Platform normally serves only its active bounded window. Enforce the
+    # compiled ceiling independently so a stale or malformed platform cannot
+    # make one validator fold a legacy 32-seed history while current peers fold
+    # at most 15. The database rows remain untouched and publicly auditable.
+    return dict(sorted(collapsed.items())[:TOP5_MAX_CONFIRMATION_SEEDS])
 
 
 def _efficiency_curve_version(entry: LedgerEntry) -> int:
@@ -719,9 +725,9 @@ def _continual_composite(entry: LedgerEntry) -> float:
     per-agent seed result is accepted, appends exactly one median aggregate for
     that seed. The arithmetic mean therefore moves once per retained sample.
     Scheduling cohort membership is irrelevant to accepted evidence: the
-    platform serves the agent's complete append-only ``confirmation_history``.
-    Cross-agent decisions stay paired because :func:`_paired_dethrone` separately
-    intersects the two agents' seed maps.
+    platform serves the current bounded window selected from the append-only
+    history. Cross-agent decisions stay paired because :func:`_paired_dethrone`
+    separately intersects the two agents' seed maps.
 
     Before the platform sends the additive activation marker, retain the legacy
     confirmation median byte-for-byte. This makes the client-first v14 rollout

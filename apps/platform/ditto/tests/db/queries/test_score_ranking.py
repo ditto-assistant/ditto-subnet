@@ -45,6 +45,7 @@ from ditto.db.queries.confirmation_scores import (
 )
 from ditto.db.queries.score_ranking import (
     EfficiencyFactorRequesterNotReady,
+    completed_wave_data,
     dedupe_owner_rows,
     official_composites,
     resolve_efficiency_adjustments,
@@ -114,6 +115,26 @@ def _uuid(nibble: str) -> UUID:
 
 
 class TestComparator:
+    def test_current_seed_cap_overrides_legacy_recorded_depth(self) -> None:
+        legacy = _FinalRow(_uuid("1"), "5" + "a" * 47, _BASE, 0.8)
+        current = _FinalRow(_uuid("2"), "5" + "b" * 47, _BASE, 0.7)
+        shared = dict.fromkeys(range(17, 32), 0.75)
+        recorded = {
+            legacy.agent_id: dict.fromkeys(range(32), 0.8),
+            current.agent_id: shared,
+        }
+
+        _, active, depths = completed_wave_data(
+            [legacy, current],
+            stderrs={},
+            confirmation_by_seed=recorded,
+            confirmation_depth={legacy.agent_id: 32, current.agent_id: 15},
+        )
+
+        assert active[legacy.agent_id] == dict.fromkeys(shared, 0.8)
+        assert active[current.agent_id] == shared
+        assert depths == {legacy.agent_id: 15, current.agent_id: 15}
+
     def test_ranks_by_score_descending(self) -> None:
         low = _Row(_uuid("1"), _BASE, 0.10)
         high = _Row(_uuid("2"), _BASE, 0.90)

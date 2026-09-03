@@ -1,10 +1,28 @@
 from uuid import uuid4
 
 from ditto.api_server.crn import (
+    active_confirmation_seed_set,
     bounded_continual_seed_set,
     champion_anchored_seeds,
     elastic_confirmation_seed_ceiling,
 )
+
+
+def test_active_confirmation_seed_set_caps_legacy_history_by_coverage() -> None:
+    legacy = uuid4()
+    current_a = uuid4()
+    current_b = uuid4()
+    shared = range(17, 32)
+
+    active = active_confirmation_seed_set(
+        {
+            legacy: range(32),
+            current_a: shared,
+            current_b: shared,
+        }
+    )
+
+    assert active == tuple(shared)
 
 
 def test_elastic_confirmation_seed_ceiling_is_bounded_by_variance() -> None:

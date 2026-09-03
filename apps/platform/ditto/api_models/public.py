@@ -869,8 +869,9 @@ class PublicLeaderboardEntry(BaseModel):
             ge=0,
             description=(
                 "Raw count of distinct seeds this submission has accepted "
-                "continual-retest evidence for. This is append-only and equals "
-                "retained_sample_count while the continual aggregate is active."
+                "continual-retest evidence for. This is append-only and may "
+                "exceed retained_sample_count when a newer scoring cap narrows "
+                "the active evidence window."
             ),
         ),
     ] = 0

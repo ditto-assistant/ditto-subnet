@@ -233,19 +233,33 @@ def completed_wave_data(
     wave_membership: WaveMembership = DEFAULT_WAVE_MEMBERSHIP,
     anchor_version: int | None = None,
 ) -> tuple[list[F], dict[UUID, dict[int, float]], dict[UUID, int]]:
-    """Return candidates plus every accepted per-agent confirmation sample.
+    """Return candidates plus the current bounded confirmation sample window.
 
-    ``wave_membership`` and ``anchor_version`` remain accepted for wire/source
-    compatibility, but scheduling policy no longer filters score evidence. A
-    seed accepted for an agent remains in that agent's mean permanently. Shared
-    seed identity is still preserved in ``by_seed`` for the pairwise dethrone
-    statistic; it is not a global admission gate.
+    Accepted rows remain append-only audit history, but the compiled current
+    seed cap also bounds the official mean. When an older policy recorded more
+    seeds, prefer the most widely shared evidence so the active window preserves
+    maximum cross-agent comparability.
     """
     del stderrs, wave_membership, anchor_version
 
-    by_seed: dict[UUID, dict[int, float]] = {
+    from ditto.api_server.crn import active_confirmation_seed_set
+
+    raw_by_seed: dict[UUID, dict[int, float]] = {
         agent_id: dict(values)
         for agent_id, values in (confirmation_by_seed or {}).items()
+    }
+    active_seeds = frozenset(
+        active_confirmation_seed_set(
+            {agent_id: values.keys() for agent_id, values in raw_by_seed.items()}
+        )
+    )
+    by_seed = {
+        agent_id: {
+            seed: composite
+            for seed, composite in values.items()
+            if seed in active_seeds
+        }
+        for agent_id, values in raw_by_seed.items()
     }
     depths = dict(confirmation_depth or {})
     candidates = rank_submissions(

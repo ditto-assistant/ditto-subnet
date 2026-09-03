@@ -18577,7 +18577,7 @@ export interface components {
             confirmation_seed_composites?: number[];
             /**
              * Confirmation Seed Depth
-             * @description Raw count of distinct seeds this submission has accepted continual-retest evidence for. This is append-only and equals retained_sample_count while the continual aggregate is active.
+             * @description Raw count of distinct seeds this submission has accepted continual-retest evidence for. This is append-only and may exceed retained_sample_count when a newer scoring cap narrows the active evidence window.
              * @default 0
              */
             confirmation_seed_depth: number;

@@ -172,6 +172,30 @@ def bounded_continual_seed_set(
     return tuple(targets)
 
 
+def active_confirmation_seed_set(
+    seeds_by_agent: Mapping[UUID, Iterable[int]],
+    *,
+    max_seeds: int = TOP5_MAX_CONFIRMATION_SEEDS,
+) -> tuple[int, ...]:
+    """The bounded recorded evidence window used by the current fold.
+
+    Accepted rows are immutable audit history, but a historical, larger work
+    budget must not keep buying a deeper official mean after the compiled cap
+    shrinks. Prefer the seeds held by the most agents so the bounded window
+    retains as much paired evidence as possible; seed order is the deterministic
+    tie-break shared by Platform and every validator ledger projection.
+    """
+    coverage: dict[int, int] = {}
+    for seeds in seeds_by_agent.values():
+        for seed in set(seeds):
+            coverage[int(seed)] = coverage.get(int(seed), 0) + 1
+    return tuple(
+        sorted(coverage, key=lambda seed: (-coverage[seed], seed))[
+            : max(0, int(max_seeds))
+        ]
+    )
+
+
 def fold_seed_bound(
     *,
     champion_agent_id: UUID,
@@ -179,37 +203,21 @@ def fold_seed_bound(
     seeds_by_agent: Mapping[UUID, Iterable[int]],
     max_seeds: int = TOP5_MAX_CONFIRMATION_SEEDS,
 ) -> tuple[int, ...]:
-    """The seeds the fold may consider: the live anchor plus everything recorded.
+    """The seeds the fold may consider under the current compiled work cap.
 
-    The fold has to be bounded by the same set issuance leases against, or the
-    lane pays for runs the fold then ignores. ditto-platform#547 widened issuance
-    to ``anchor | universe`` -- catch-up sends every cohort member to any seed a
-    peer holds, including seeds from an earlier reign -- but left the fold on the
-    champion's anchor alone. That is the worst of both: validators converge the
-    cohort onto a seed and the fold refuses to count it.
-
-    It also silently narrowed what already worked. The anchor is keyed on the
-    champion's agent id, so it describes ONE reign of at most ``max_seeds``
-    seeds. Scoping the fold to it discards every cross-reign seed the cohort
-    genuinely shares: on the 2026-07-28 board the fold fell from ten shared seeds
-    to four while the shallowest member of the raw top five held sixteen. Those
-    six were not noise -- they were datasets every member had been scored on.
-
-    Cross-reign seeds are valid paired evidence. A seed IS a dataset, and two
-    agents holding it were measured on the same one whatever anchored it. The
-    dethrone test has always relied on exactly this, pairing over shared seeds
-    with no anchor filter at all (``koth._paired_statistic``). The anchor's job
-    is to introduce NEW unpredictable seeds, which it still does -- it is the
-    growth frontier, not the window.
-
-    The anchor stays in the bound even though the universe is derived from
-    recorded rows: a freshly crowned champion's seeds are in nobody's history
-    yet, and the first one to land has to be foldable immediately.
+    Cross-reign seeds remain valid paired evidence, but only the most widely
+    shared ``max_seeds`` recorded datasets are active. This makes a reduced
+    current cap authoritative over a larger historical policy without deleting
+    its audit trail. The live anchor fills unused slots so a fresh reign can
+    still introduce unpredictable seeds until the active window is full.
     """
-    universe: set[int] = set()
-    for seeds in seeds_by_agent.values():
-        universe.update(seeds)
+    active = list(active_confirmation_seed_set(seeds_by_agent, max_seeds=max_seeds))
+    selected = set(active)
     anchor = champion_anchored_seeds(
         champion_agent_id, version=anchor_version, max_seeds=max_seeds
     )
-    return (*anchor, *sorted(universe.difference(anchor)))
+    for seed in anchor:
+        if seed not in selected and len(active) < max_seeds:
+            active.append(seed)
+            selected.add(seed)
+    return tuple(active)
