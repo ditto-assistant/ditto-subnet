@@ -145,11 +145,14 @@ transport.
 ## Dedicated scorer artifact
 
 `Dockerfile` now has a separately built `coding-executor-scorer` target. Its
-`dittobench-coding-executor-scorer` binary is provenance-stamped and supports
-only a fixed Unix-domain constant-health endpoint when a future deployment
-profile explicitly enables it. Its default is fail-closed; it has no TCP
-listener, supervisor/publication route, Docker client, ticket, wallet, secret,
-or provider/Platform authority. CI builds this artifact without publishing or
+`dittobench-coding-executor-scorer` binary is provenance-stamped and stays
+disabled until a future deployment profile supplies the fixed rootless Docker
+socket, locked policy, root-owned control-token file, private state root, and
+attested runtime image identity. Only then does it compose the reviewed coding
+host behind its fixed Unix socket, exposing constant health plus the existing
+supervisor/publication handlers. It has no TCP listener, canary route, ordinary
+scorer route, broker, ticket, wallet, secret in the artifact, or
+provider/Platform authority. CI builds this artifact without publishing or
 deploying it. A later signed release/staging slice must add the real scorer
 configuration and another later paired mTLS slice may connect a validator.
 

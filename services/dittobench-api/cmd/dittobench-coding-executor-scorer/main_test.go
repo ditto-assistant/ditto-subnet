@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -19,8 +20,19 @@ func TestConfigurationIsDefaultOffAndPinsTheUnixSocket(t *testing.T) {
 	}
 }
 
+func TestRuntimeImageDigestIsAnExactImmutableAuthority(t *testing.T) {
+	if !sha256ImageDigest.MatchString("sha256:" + strings.Repeat("a", 64)) {
+		t.Fatal("full lowercase digest was rejected")
+	}
+	for _, value := range []string{"", "latest", "sha256:" + strings.Repeat("A", 64), "sha256:" + strings.Repeat("a", 63)} {
+		if sha256ImageDigest.MatchString(value) {
+			t.Fatalf("mutable or malformed digest was accepted: %q", value)
+		}
+	}
+}
+
 func TestControlMuxOnlyExposesConstantHealth(t *testing.T) {
-	mux := controlMux()
+	mux := controlMux(nil)
 	health := httptest.NewRecorder()
 	mux.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
 	if health.Code != http.StatusNoContent || health.Body.Len() != 0 || health.Header().Get("Cache-Control") != "no-store" {
