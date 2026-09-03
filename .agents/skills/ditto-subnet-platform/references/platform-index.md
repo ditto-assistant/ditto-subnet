@@ -19,6 +19,7 @@
 | Hippius Coding custody/recovery | `apps/platform/ditto/api_server/coding_hippius_custody.py`, `apps/platform/docs/coding-hippius-custody-recovery.md` |
 | Hippius single-validator canary | `apps/platform/ditto/api_server/coding_hippius_canary.py`, `apps/platform/docs/coding-hippius-shadow-canary.md` |
 | Hippius canary operator | `apps/platform/ditto/api_server/coding_hippius_canary_operator.py`, `apps/platform/scripts/run_hippius_shadow_canary.py`, `apps/platform/docs/coding-hippius-canary-operator.md` |
+| Hippius canary helper proxies | `apps/platform/scripts/hippius_canary_helper_proxy.py`, `infra/ansible/roles/platform_app/`, `apps/platform/docs/coding-hippius-canary-helper-proxies.md` |
 | Affected-component graph | `release/components.toml` |
 | Production DB and Targon logs (read-only) | `.agents/skills/gcloud-ditto-readonly/` |
 

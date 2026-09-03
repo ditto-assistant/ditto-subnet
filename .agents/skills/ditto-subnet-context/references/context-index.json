@@ -249,6 +249,19 @@
       "related": ["dittobench-scoring", "research-adapters", "contracts", "platform-api", "release-delivery"]
     },
     {
+      "id": "coding-hippius-canary-helpers",
+      "title": "Protected Hippius canary helper proxy packaging",
+      "keywords": ["Hippius canary helper proxy", "canary backend socket", "canary SO_PEERCRED", "package canary helpers", "canary helper UID"],
+      "summary": "Install three default-off root-owned proxy clients that bind canonical canary helper exchanges to distinct protected Unix sockets and backend identities without starting any backend service.",
+      "skills": ["ditto-subnet-platform", "ditto-subnet-benchmark", "ditto-subnet-release-ops"],
+      "owns": ["apps/platform/scripts/hippius_canary_helper_proxy.py", "infra/ansible/roles/platform_app", "apps/platform/scripts/update.sh", "apps/platform/docs/coding-hippius-canary-helper-proxies.md"],
+      "read": ["apps/platform/docs/coding-hippius-canary-helper-proxies.md", "apps/platform/docs/coding-hippius-canary-operator.md", "services/dittobench-api/docs/coding-private-runtime-adapters-shadow.md", "services/dittobench-api/docs/coding-supervisor-phase-runner-shadow.md"],
+      "search": ["rg -n 'SO_PEERCRED|hippius-canary-(unwrap|authoring|grading)' apps/platform infra/ansible", "rg -n 'CodingSupervisorRuntime|codingphase|codinghost' ditto/validator services/dittobench-api"],
+      "validate": ["cd apps/platform && make lint lint-copy typecheck test", "uv run pytest -q ditto/tests/test_runtime_deploy_workflows.py ditto/tests/test_release_plan.py", "uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check infra/ansible/playbooks/gcp-platform-app.yml", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
+      "invariants": ["Proxy installation is default-off and no backend service is created.", "Each proxy verifies a distinct socket inode and connected Linux peer UID/GID.", "Reduced canary requests never authorize a backend to fabricate missing supervisor leases, harnesses, grants, or outbox state."],
+      "related": ["coding-hippius-canary-operator", "coding-attempt-supervisor", "coding-hippius-custody", "release-delivery"]
+    },
+    {
       "id": "coding-hippius-canary-operator",
       "title": "One-shot Hippius Coding canary operator",
       "keywords": ["Hippius canary operator", "run Hippius canary", "canary helper executable", "canary deployed source", "Hippius canary plan"],

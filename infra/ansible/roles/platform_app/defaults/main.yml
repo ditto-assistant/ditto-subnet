@@ -194,6 +194,28 @@ platform_coding_hippius_evidence_spool_root: /var/lib/ditto-platform/coding-evid
 secret_coding_hippius_evidence_access_key: platform-coding-hippius-evidence-access-key
 secret_coding_hippius_evidence_secret_key: platform-coding-hippius-evidence-secret-key
 
+# Protected one-shot Hippius canary helper proxies. This independent gate
+# installs no backend service and is false until three separate service
+# identities expose reviewed local Unix sockets.
+platform_coding_hippius_canary_helpers_enabled: false
+platform_coding_hippius_canary_install_root: /opt/ditto-platform-canary
+platform_coding_hippius_canary_config_root: /etc/ditto-platform/coding/hippius-canary
+platform_coding_hippius_canary_work_root: /var/lib/ditto-platform/coding-canary
+platform_coding_hippius_canary_operator_env_path: /etc/ditto-platform/coding/hippius-canary/operator.env
+platform_coding_hippius_canary_plan_path: /etc/ditto-platform/coding/hippius-canary/plan.json
+platform_coding_hippius_canary_deployed_source_path: "{{ platform_root }}/logs/deployed-source.sha"
+platform_coding_hippius_private_input_manifest_path: /etc/ditto-platform/coding/hippius-canary/private-input-manifest.json
+platform_coding_hippius_private_input_publication_receipt_path: /etc/ditto-platform/coding/hippius-canary/private-input-publication.json
+platform_coding_hippius_curator_public_key_path: /etc/ditto-platform/coding/hippius-canary/curator-public.pem
+platform_coding_hippius_private_input_curator_access_key: ""
+platform_coding_hippius_canary_unwrap_socket: ""
+platform_coding_hippius_canary_authoring_socket: ""
+platform_coding_hippius_canary_grading_socket: ""
+platform_coding_hippius_canary_unwrap_uid: 0
+platform_coding_hippius_canary_authoring_uid: 0
+platform_coding_hippius_canary_grading_uid: 0
+platform_coding_hippius_canary_helper_timeout_seconds: 7200
+
 # Subnet / pricing config (mirrors .env.example defaults).
 platform_netuid: 118
 platform_subtensor_network: finney

@@ -255,3 +255,47 @@ def test_hippius_coding_evidence_custody_is_default_off_and_relay_blind() -> Non
         "DITTO_CODING_HIPPIUS_EVIDENCE_WRAPPING_PUBLIC_KEY_PATH",
     ):
         assert f'{key}: ""' in ecosystem
+
+
+def test_hippius_canary_helpers_are_default_off_identity_bound_and_relay_blind() -> (
+    None
+):
+    defaults = yaml.safe_load(
+        (ROOT / "infra/ansible/roles/platform_app/defaults/main.yml").read_text()
+    )
+    tasks = (ROOT / "infra/ansible/roles/platform_app/tasks/main.yml").read_text()
+    operator_template = (
+        ROOT / "infra/ansible/roles/platform_app/templates/"
+        "coding-hippius-canary-operator.env.j2"
+    ).read_text()
+    platform_template = (
+        ROOT / "infra/ansible/roles/platform_app/templates/platform.env.j2"
+    ).read_text()
+    ecosystem = (ROOT / "apps/platform/scripts/ecosystem.config.js").read_text()
+    proxy = (ROOT / "apps/platform/scripts/hippius_canary_helper_proxy.py").read_text()
+    updater = (ROOT / "apps/platform/scripts/update.sh").read_text()
+
+    assert defaults["platform_coding_hippius_canary_helpers_enabled"] is False
+    assert "platform_coding_hippius_canary_helpers_enabled | bool" in tasks
+    assert (
+        "platform_coding_hippius_canary_config_root == "
+        "'/etc/ditto-platform/coding/hippius-canary'" in tasks
+    )
+    assert "item.stat.issock" in tasks
+    assert "item.stat.uid | int == item.item.uid | int" in tasks
+    assert "item.stat.mode == '0660'" in tasks
+    assert 'mode: "0550"' in tasks
+    assert "state: absent" in tasks
+    assert "DITTO_CODING_HIPPIUS_CANARY_ENABLED=true" in operator_template
+    assert "platform_secrets.coding_catalog_secret_key" in operator_template
+    assert "DITTO_CODING_HIPPIUS_CANARY_ENABLED" not in platform_template
+    for key in (
+        "DITTO_CODING_HIPPIUS_CANARY_ENABLED",
+        "DITTO_CODING_HIPPIUS_PRIVATE_INPUT_READER_ACCESS_KEY",
+        "DITTO_CODING_HIPPIUS_PRIVATE_INPUT_READER_SECRET_KEY",
+    ):
+        assert f'{key}: ""' in ecosystem or f'{key}: "false"' in ecosystem
+    assert "socket.SO_PEERCRED" in proxy
+    assert "socket.AF_UNIX" in proxy
+    assert 'deployed_source_file="logs/deployed-source.sha"' in updater
+    assert 'chmod 0600 "$next_deployed_source"' in updater

@@ -224,6 +224,14 @@ def test_hippius_canary_operator_query_routes_to_operator_contract() -> None:
     assert topic_ids[0] == "coding-hippius-canary-operator"
 
 
+def test_hippius_canary_helper_query_routes_to_proxy_packaging() -> None:
+    topic_ids = [
+        str(topic["id"])
+        for topic in lookup("package canary helpers with SO_PEERCRED backend sockets")
+    ]
+    assert topic_ids[0] == "coding-hippius-canary-helpers"
+
+
 def test_targon_query_routes_to_capacity_and_release() -> None:
     topic_ids = {
         str(topic["id"])
