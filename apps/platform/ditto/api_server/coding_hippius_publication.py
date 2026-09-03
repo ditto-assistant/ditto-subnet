@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import re
 import stat
@@ -611,6 +612,57 @@ def write_hippius_private_input_publication_receipt(
     return payload_sha256
 
 
+def load_hippius_private_input_publication_receipt(
+    path: Path,
+) -> tuple[HippiusPrivateInputPublicationReceipt, str]:
+    """Load one canonical ready publication receipt and its payload digest."""
+
+    body = _read_bounded_regular_file(
+        path,
+        maximum_bytes=_MAX_RECEIPT_BYTES,
+        label="Hippius private-input publication receipt",
+    )
+    try:
+        raw = json.loads(body, object_pairs_hook=_unique_object)
+        if not isinstance(raw, dict):
+            raise ValueError("receipt root is not an object")
+        payload_sha256 = str(raw.pop("receipt_payload_sha256"))
+        raw_objects = raw.pop("objects")
+        if not isinstance(raw_objects, list):
+            raise ValueError("receipt objects are not a list")
+        objects = tuple(_parse_receipt_object(item) for item in raw_objects)
+        receipt = _validated_receipt(
+            HippiusPrivateInputPublicationReceipt(objects=objects, **raw)
+        )
+        payload = asdict(receipt)
+        payload_bytes = coding_canonical_json_bytes(
+            payload,
+            maximum_bytes=_MAX_RECEIPT_BYTES,
+            label="Hippius private-input publication receipt",
+        )
+        if (
+            _SHA256.fullmatch(payload_sha256) is None
+            or hashlib.sha256(payload_bytes).hexdigest() != payload_sha256
+            or coding_canonical_json_bytes(
+                {**payload, "receipt_payload_sha256": payload_sha256},
+                maximum_bytes=_MAX_RECEIPT_BYTES,
+                label="Hippius private-input publication receipt",
+            )
+            != body
+        ):
+            raise ValueError("receipt digest or canonical bytes are invalid")
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        HippiusPrivateInputPublicationError,
+    ) as error:
+        raise HippiusPrivateInputPublicationError(
+            "private-input publication receipt is invalid or not ready"
+        ) from error
+    return receipt, payload_sha256
+
+
 def _validated_receipt(
     receipt: HippiusPrivateInputPublicationReceipt,
 ) -> HippiusPrivateInputPublicationReceipt:
@@ -663,6 +715,33 @@ def _validated_receipt(
         remote_keys.add(item.remote_object_key_sha256)
         ciphertexts.add(item.ciphertext_sha256)
     return receipt
+
+
+def _parse_receipt_object(raw: object) -> HippiusPrivateInputPublicationObject:
+    if not isinstance(raw, dict) or set(raw) != {
+        "catalog_index",
+        "remote_object_key_sha256",
+        "ciphertext_sha256",
+        "ciphertext_size_bytes",
+        "status",
+    }:
+        raise ValueError("receipt object fields are invalid")
+    return HippiusPrivateInputPublicationObject(
+        catalog_index=raw["catalog_index"],
+        remote_object_key_sha256=raw["remote_object_key_sha256"],
+        ciphertext_sha256=raw["ciphertext_sha256"],
+        ciphertext_size_bytes=raw["ciphertext_size_bytes"],
+        status=HippiusPrivateInputPublicationStatus(raw["status"]),
+    )
+
+
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON field")
+        result[key] = value
+    return result
 
 
 def _verify_remote_ciphertext(
@@ -831,6 +910,7 @@ __all__ = [
     "hippius_private_input_remote_key",
     "hippius_private_input_signing_message",
     "load_curator_signing_public_key",
+    "load_hippius_private_input_publication_receipt",
     "parse_hippius_private_input_publication_config",
     "publish_hippius_private_inputs",
     "write_hippius_private_input_publication_receipt",

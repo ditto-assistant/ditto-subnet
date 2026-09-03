@@ -213,7 +213,24 @@ def load_hippius_private_input_transport(
         raise HippiusPrivateInputEncryptionError(
             "private-input transport directory is invalid"
         )
-    manifest_path = directory / "manifest.json"
+    manifest = load_hippius_private_input_transport_manifest(
+        directory / "manifest.json"
+    )
+    try:
+        for item in manifest.objects:
+            read_hippius_encrypted_private_input(directory=directory, item=item)
+    except HippiusPrivateInputEncryptionError as error:
+        raise HippiusPrivateInputEncryptionError(
+            "private-input transport manifest is invalid"
+        ) from error
+    return manifest
+
+
+def load_hippius_private_input_transport_manifest(
+    manifest_path: Path,
+) -> HippiusPrivateInputTransportManifest:
+    """Load one canonical manifest without requiring local ciphertext objects."""
+
     body = _read_bounded_regular_file(
         manifest_path,
         maximum_bytes=_MAX_MANIFEST_BYTES,
@@ -239,8 +256,6 @@ def load_hippius_private_input_transport(
         manifest = _validated_manifest(manifest)
         if _manifest_bytes(manifest) != body:
             raise ValueError("manifest is not canonical")
-        for item in manifest.objects:
-            read_hippius_encrypted_private_input(directory=directory, item=item)
     except (
         KeyError,
         TypeError,
@@ -292,16 +307,69 @@ def hippius_private_input_aad_bytes(
         raise HippiusPrivateInputEncryptionError(
             "wrapping public key identity is invalid"
         )
+    return _hippius_private_input_aad_bytes(
+        catalog_commitment_sha256=plan.commitment.commitment_sha256,
+        catalog_index=item.catalog_index,
+        logical_object_key=item.object_key,
+        plaintext_sha256=item.record_sha256,
+        plaintext_size_bytes=item.record_size_bytes,
+        publication_sha256=plan.publication_sha256,
+        task_commitment_sha256=item.task_commitment_sha256,
+        task_version_id=item.task_version_id,
+        wrapping_key_sha256=wrapping_key_sha256,
+    )
+
+
+def hippius_private_input_manifest_aad_bytes(
+    *,
+    manifest: HippiusPrivateInputTransportManifest,
+    item: HippiusEncryptedPrivateInputObject,
+) -> bytes:
+    """Rebuild the exact AAD for one verified remote transport object."""
+
+    manifest = _validated_manifest(manifest)
+    if (
+        item.catalog_index >= len(manifest.objects)
+        or manifest.objects[item.catalog_index] != item
+    ):
+        raise HippiusPrivateInputEncryptionError(
+            "private-input object is not part of its transport manifest"
+        )
+    return _hippius_private_input_aad_bytes(
+        catalog_commitment_sha256=manifest.catalog_commitment_sha256,
+        catalog_index=item.catalog_index,
+        logical_object_key=item.logical_object_key,
+        plaintext_sha256=item.plaintext_sha256,
+        plaintext_size_bytes=item.plaintext_size_bytes,
+        publication_sha256=manifest.publication_sha256,
+        task_commitment_sha256=item.task_commitment_sha256,
+        task_version_id=item.task_version_id,
+        wrapping_key_sha256=manifest.wrapping_key_sha256,
+    )
+
+
+def _hippius_private_input_aad_bytes(
+    *,
+    catalog_commitment_sha256: str,
+    catalog_index: int,
+    logical_object_key: str,
+    plaintext_sha256: str,
+    plaintext_size_bytes: int,
+    publication_sha256: str,
+    task_commitment_sha256: str,
+    task_version_id: str,
+    wrapping_key_sha256: str,
+) -> bytes:
     projection = {
         "aad_schema": _AAD_SCHEMA,
-        "catalog_commitment_sha256": plan.commitment.commitment_sha256,
-        "catalog_index": item.catalog_index,
-        "logical_object_key": item.object_key,
-        "plaintext_sha256": item.record_sha256,
-        "plaintext_size_bytes": item.record_size_bytes,
-        "publication_sha256": plan.publication_sha256,
-        "task_commitment_sha256": item.task_commitment_sha256,
-        "task_version_id": item.task_version_id,
+        "catalog_commitment_sha256": catalog_commitment_sha256,
+        "catalog_index": catalog_index,
+        "logical_object_key": logical_object_key,
+        "plaintext_sha256": plaintext_sha256,
+        "plaintext_size_bytes": plaintext_size_bytes,
+        "publication_sha256": publication_sha256,
+        "task_commitment_sha256": task_commitment_sha256,
+        "task_version_id": task_version_id,
         "wrapping_key_sha256": wrapping_key_sha256,
     }
     try:
@@ -580,7 +648,9 @@ __all__ = [
     "HippiusPrivateInputEncryptionError",
     "HippiusPrivateInputTransportManifest",
     "hippius_private_input_aad_bytes",
+    "hippius_private_input_manifest_aad_bytes",
     "load_hippius_private_input_transport",
+    "load_hippius_private_input_transport_manifest",
     "load_hippius_wrapping_public_key",
     "prepare_hippius_private_input_transport",
     "read_hippius_encrypted_private_input",

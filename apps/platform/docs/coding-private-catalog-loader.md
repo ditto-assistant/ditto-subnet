@@ -87,10 +87,11 @@ the rollback; it omits every catalog variable from `.env` and leaves the source
 unavailable after rerunning `scripts/start.sh` or restarting/reloading with
 `--update-env`.
 
-That sequence remains blocked until the Hippius-only contract's client-side
-encryption, exact-object verification, non-human credential custody, and live
-provider canary are implemented. Do not activate this loader with a personal
-token or an existing avatar, trace, or general account credential.
+That sequence remains blocked until the Hippius-only encrypted retrieval
+primitive is wired to registered releases and database-derived ticket authority,
+non-human reader and unwrap credentials have reviewed custody, and the live
+provider canary passes. Do not activate this loader with a personal token or an
+existing avatar, trace, or general account credential.
 
 The provider canary begins with the confirmation-gated
 `scripts/probe_hippius_coding_storage.py` operator tool. Its successful receipt
@@ -135,6 +136,29 @@ signature, a fresh matching capability-probe receipt, separate curator and
 reader credentials, exact remote-byte replay, and full post-upload reader
 verification. Its publication receipt remains private evidence and does not
 enable this loader or register a catalog release.
+
+## Encrypted Hippius retrieval primitive
+
+`ditto.api_server.coding_hippius_retrieval` is the default-off successor
+primitive for one encrypted selected record. It verifies the canonical
+transport manifest, canonical ready publication receipt, external curator
+signature, runtime reader authority, manifest-derived remote key, full
+ciphertext byte count/SHA-256, ticket-bound unwrap response, AES-GCM tag,
+plaintext identity, canonical record bytes, catalog membership, and task
+identity. The reader exposes no list, write, delete, arbitrary-key, redirect,
+proxy, plaintext-disk, or credential-forwarding surface.
+
+An unwrap request binds the ticket, validator, run, assignment, run manifest,
+deadline, authoring-or-grading phase, catalog commitment/index, registered
+transport and publication receipt, wrapping key, AAD, ciphertext, and wrapped
+key identity. The external unwrap implementation is intentionally absent; its
+response must name the exact request digest and expire no later than the ticket.
+
+This module is not constructed by the API lifespan and is not substituted for
+`S3CodingPrivateCatalogSource`. Registration-to-manifest resolution,
+Secret Manager/KMS custody, database-derived ticket-authority construction, and
+phase-delivery wiring remain the next reviewed layer. No current endpoint can
+invoke the encrypted retriever merely because its files are present.
 
 ## Record contract
 
