@@ -13,6 +13,7 @@ TASKS = (ROLE / "tasks/main.yml").read_text()
 UNIT = ROLE / "templates/ditto-coding-executor-scorer.service.j2"
 VERIFY_PATH = ROLE / "files/verify-scorer-service.py"
 RUNNER_PATH = ROLE / "files/run-scorer-service.py"
+MTLS_VERIFIER = ROLE / "files/verify-scorer-mtls-identity.sh"
 SPEC = importlib.util.spec_from_file_location("verify_scorer_service", VERIFY_PATH)
 assert SPEC is not None and SPEC.loader is not None
 VERIFY = importlib.util.module_from_spec(SPEC)
@@ -51,3 +52,13 @@ def test_scorer_service_derives_only_a_digest_pinned_runtime_repository() -> Non
         VERIFY.runtime_repository(
             {"image_reference": "registry.invalid/runtime:latest"}
         )
+
+
+def test_scorer_mtls_identity_is_default_off_and_never_listens() -> None:
+    text = MTLS_VERIFIER.read_text().lower()
+    assert "coding_executor_mtls_identity_enabled: false" in DEFAULTS
+    assert "when: coding_executor_mtls_identity_enabled | bool" in TASKS
+    assert "openssl verify -purpose sslserver" in text
+    assert "openssl pkey" in text
+    for forbidden in ("listen", "socat", "nc -l", "curl", "docker"):
+        assert forbidden not in text

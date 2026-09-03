@@ -82,6 +82,15 @@ This service is still local-only: it creates no validator transport, mTLS
 identity, ticket route, task assignment, or coding gate. Those require the next
 reviewed routing layer.
 
+## Scorer mTLS identity staging
+
+`coding_executor_mtls_identity_enabled` is a separate default-off prerequisite
+for that later routing layer. An operator pre-positions a root-only validator
+CA certificate, scorer server certificate, and scorer key at fixed paths. The
+host verifies CA chain, server purpose, expiration, and certificate/key public
+key match, but does not start a TLS listener or receive any validator request.
+The following transport-proxy PR must consume only this verified identity.
+
 ## Production runtime-bundle staging
 
 The public `Dockerfile.coding-supervisor` builds a synthetic certification

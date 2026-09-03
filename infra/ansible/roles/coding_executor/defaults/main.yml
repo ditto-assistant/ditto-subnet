@@ -99,3 +99,12 @@ coding_executor_scorer_service_unit: ditto-coding-executor-scorer
 coding_executor_scorer_token_directory: /var/lib/ditto-coding-executor/credentials
 coding_executor_scorer_token_source_path: /var/lib/ditto-coding-executor/credentials/scorer-control-token
 coding_executor_scorer_private_root: /var/lib/ditto-coding-scorer/private
+
+# Future validator transport identities are staged and verified independently
+# from any listener. The private key never enters Ansible variables or an
+# environment file, and the transport remains disabled until a later proxy PR.
+coding_executor_mtls_identity_enabled: false
+coding_executor_mtls_identity_directory: /var/lib/ditto-coding-executor/mtls
+coding_executor_mtls_ca_certificate_path: /var/lib/ditto-coding-executor/mtls/validator-ca.pem
+coding_executor_mtls_server_certificate_path: /var/lib/ditto-coding-executor/mtls/scorer-server.pem
+coding_executor_mtls_server_key_path: /var/lib/ditto-coding-executor/mtls/scorer-server-key.pem
