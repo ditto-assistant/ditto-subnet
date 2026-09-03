@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.185.1 (2026-09-03)
+
+### Bug Fixes
+
+- **coding**: Complete scorer runtime image
+  ([#1446](https://github.com/ditto-assistant/ditto-subnet/pull/1446),
+  [`5420021`](https://github.com/ditto-assistant/ditto-subnet/commit/542002184c2a58c1d0245291c08f0ba70114d34d))
+
+
 ## v0.185.0 (2026-09-03)
 
 ### Features
