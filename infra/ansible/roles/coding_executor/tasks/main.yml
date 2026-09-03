@@ -30,6 +30,14 @@
       - not (coding_executor_scorer_bundle_enabled | bool) or coding_executor_daemon_enabled | bool
     fail_msg: Scorer-bundle staging requires the dedicated coding executor host.
 
+- name: Reject scorer-image loading without a verified staged bundle
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_scorer_image_load_enabled | bool) or coding_executor_scorer_bundle_enabled | bool
+    fail_msg: >-
+      Scorer-image loading requires the verified scorer-bundle control. It
+      cannot pull from a registry or load an unverified archive.
+
 - name: Report that the coding executor daemon is deliberately disabled
   ansible.builtin.debug:
     msg: >-
@@ -52,6 +60,7 @@
           - coding_executor_home == '/var/lib/ditto-coding-executor'
           - coding_executor_runtime_dir == '/run/ditto-coding-executor'
           - coding_executor_docker_host == 'unix:///run/ditto-coding-executor/docker.sock'
+          - coding_executor_attestation_dir == '/var/lib/ditto-coding-executor/attestations'
           - coding_executor_daemon_memory_max == '24G'
           - coding_executor_daemon_tasks_max | int == 8192
           - coding_executor_docker_apt_arch == 'amd64'
@@ -175,6 +184,14 @@
         group: root
         mode: "0700"
 
+    - name: Create the root-owned client-readable attestation directory
+      ansible.builtin.file:
+        path: "{{ coding_executor_attestation_dir }}"
+        state: directory
+        owner: root
+        group: "{{ coding_executor_client_group }}"
+        mode: "0750"
+
     - name: Install the credential-free runtime-bundle staging helpers
       ansible.builtin.copy:
         src: "{{ item }}"
@@ -183,6 +200,7 @@
         group: root
         mode: "0755"
       loop:
+        - load-scorer-bundle.py
         - load-runtime-bundle.py
         - stage-runtime-bundle.sh
         - verify-runtime-bundle.py
@@ -199,6 +217,9 @@
               - coding_executor_scorer_bundle_manifest_path == '/var/lib/ditto-coding-executor/scorer-staged/scorer.bundle.json'
               - coding_executor_scorer_archive_path == '/var/lib/ditto-coding-executor/scorer-staged/scorer.oci.tar'
               - coding_executor_scorer_bundle_manifest_sha256 is match('^[0-9a-f]{64}$')
+            fail_msg: >-
+              Scorer-bundle staging requires the fixed root-only paths and a
+              complete protected bundle-manifest SHA-256.
 
         - name: Create the root-owned scorer-bundle staging directory
           ansible.builtin.file:
@@ -221,6 +242,37 @@
               - --expected-bundle-sha256
               - "{{ coding_executor_scorer_bundle_manifest_sha256 }}"
           changed_when: false
+
+    - name: Load and attest the verified coding executor scorer image
+      when: coding_executor_scorer_image_load_enabled | bool
+      block:
+        - name: Require the fixed scorer-image attestation profile
+          ansible.builtin.assert:
+            that:
+              - coding_executor_attestation_dir == '/var/lib/ditto-coding-executor/attestations'
+              - coding_executor_scorer_image_attestation_path == '/var/lib/ditto-coding-executor/attestations/scorer-image-attestation.json'
+            fail_msg: >-
+              Scorer-image attestation must remain in the fixed root-owned,
+              client-readable attestation directory.
+
+        - name: Load and attest the verified scorer image without starting it
+          ansible.builtin.command:
+            argv:
+              - /usr/local/lib/ditto-coding-executor/load-scorer-bundle.py
+              - --release-manifest
+              - "{{ coding_executor_scorer_release_manifest_path }}"
+              - --bundle-manifest
+              - "{{ coding_executor_scorer_bundle_manifest_path }}"
+              - --archive
+              - "{{ coding_executor_scorer_archive_path }}"
+              - --expected-bundle-sha256
+              - "{{ coding_executor_scorer_bundle_manifest_sha256 }}"
+              - --docker-host
+              - "{{ coding_executor_docker_host }}"
+              - --attestation
+              - "{{ coding_executor_scorer_image_attestation_path }}"
+          register: coding_executor_scorer_image_load
+          changed_when: "'changed=true' in coding_executor_scorer_image_load.stdout"
 
     - name: Verify a protected staged coding runtime bundle without loading it
       when: coding_executor_runtime_bundle_enabled | bool
@@ -256,11 +308,12 @@
         - name: Require the fixed runtime-image attestation path
           ansible.builtin.assert:
             that:
-              - coding_executor_runtime_image_attestation_path == '/var/lib/ditto-coding-executor/staged/runtime-image-attestation.json'
+              - coding_executor_attestation_dir == '/var/lib/ditto-coding-executor/attestations'
+              - coding_executor_runtime_image_attestation_path == '/var/lib/ditto-coding-executor/attestations/runtime-image-attestation.json'
             fail_msg: >-
-              Runtime-image attestation must remain in the fixed root-owned
-              staging directory. Do not make an unreviewed image or attestation
-              path authoritative.
+              Runtime-image attestation must remain in the fixed root-owned,
+              client-readable attestation directory. Do not make an unreviewed
+              image or attestation path authoritative.
 
         - name: Load and attest the verified runtime image
           ansible.builtin.command:
@@ -288,7 +341,8 @@
               - coding_executor_scorer_group == 'ditto-coding-scorer'
               - coding_executor_scorer_home == '/var/lib/ditto-coding-scorer'
               - coding_executor_client_guard_unit == 'ditto-coding-executor-client-guard'
-              - coding_executor_runtime_image_attestation_path == '/var/lib/ditto-coding-executor/staged/runtime-image-attestation.json'
+              - coding_executor_attestation_dir == '/var/lib/ditto-coding-executor/attestations'
+              - coding_executor_runtime_image_attestation_path == '/var/lib/ditto-coding-executor/attestations/runtime-image-attestation.json'
             fail_msg: >-
               The first dedicated Docker client is pinned to the narrow scorer
               identity and rootless runtime attestation. Do not repurpose a

@@ -113,13 +113,15 @@ supervisor entrypoint, and these labels:
 - `org.opencontainers.image.revision` matching the manifest source revision
 
 Only after all checks does it atomically write the root-owned `0640`
-`runtime-image-attestation.json` beside the staged inputs. Its only non-root
-reader is the otherwise-empty `ditto-coding-client` group. A bundle that does
-not restore the exact repository digest fails closed; no fallback pull, local
-tag, registry credential, task-serving scorer, or candidate process is
-introduced. The client guard below consumes and revalidates this attestation;
-future scorer code must do the same rather than treating image presence as
-authority.
+`runtime-image-attestation.json` below the fixed
+`/var/lib/ditto-coding-executor/attestations` directory. That directory is
+root-owned `0750`; its only non-root traversal authority is the otherwise-empty
+`ditto-coding-client` group. The bundle inputs remain in their separate
+root-only staging directory. A bundle that does not restore the exact
+repository digest fails closed; no fallback pull, local tag, registry
+credential, task-serving scorer, or candidate process is introduced. The
+client guard below consumes and revalidates this attestation; future scorer
+code must do the same rather than treating image presence as authority.
 
 ## Attestation-bound client guard
 
@@ -152,28 +154,59 @@ attested runtime image identity. Only then does it compose the reviewed coding
 host behind its fixed Unix socket, exposing constant health plus the existing
 supervisor/publication handlers. It has no TCP listener, canary route, ordinary
 scorer route, broker, ticket, wallet, secret in the artifact, or
-provider/Platform authority. CI builds this artifact without publishing or
-deploying it. A later signed release/staging slice must add the real scorer
-configuration and another later paired mTLS slice may connect a validator.
+provider/Platform authority. The protected release workflow publishes and
+signs the dedicated image, but no deployment consumes it automatically. A
+later scorer-service slice must add the real configuration and another later
+paired mTLS slice may connect a validator.
 
 The release boundary is frozen by
 `scripts/render-coding-executor-scorer-manifest.py`. It emits only the exact
 image repository/digest, source revision, `linux/amd64` platform, scorer
 contract, and locked-policy digest. It rejects a tag or any malformed digest;
-a later protected release job must sign both the exact image and this canonical
-manifest before an operator can transfer an OCI archive through IAP.
+the protected release job signs both the exact image and this canonical
+manifest before an operator can transfer an archive through IAP.
 
 `scripts/export-coding-executor-scorer-bundle.sh` is the protected-operator
 export step. It verifies the release workflow's Cosign identity, pulls only the
 digest reference, refuses output overwrite, saves an OCI archive, and renders a
-bundle manifest binding both archive and signed release manifests. It does not
-contact an executor host or grant it registry access.
+bundle manifest binding the archive, exported image ID, and signed release
+manifest. It does not contact an executor host or grant it registry access. The
+image ID lets a fresh offline daemon address the restored image without relying
+on a repository-digest name surviving `docker image save` and
+`docker image load`.
 
 `coding_executor_scorer_bundle_enabled` is a separate default-off host control.
 It verifies root-owned IAP-transferred scorer release/bundle manifests and the
 OCI archive against one protected bundle-manifest SHA. It cross-checks source,
 image, platform, contract, and policy identity, but does not load the image,
 replace the client guard, start the scorer, or enable any transport or ticket.
+
+## Scorer-image load attestation
+
+`coding_executor_scorer_image_load_enabled` is another independent default-off
+control and may be true only after scorer-bundle verification is enabled. Its
+root-only loader re-verifies all three staged files, rejects non-regular or
+oversized tar members, and contacts only the fixed rootless Docker Unix socket.
+It performs `docker image load` but never creates or starts a container.
+
+The protected export records the pulled image ID before saving the digest-only
+image; Docker archives do not reliably restore a repository-digest lookup on a
+fresh offline daemon. The host therefore loads the archive and inspects that
+exact exported image ID, while the bundle still binds it to the signed
+`ghcr.io/ditto-assistant/dittobench-coding-executor-scorer@sha256:...`
+release reference. The image must also prove its `linux/amd64` platform,
+`65532:65532` user, fixed `/dittobench-coding-executor-scorer` entrypoint,
+scorer-contract and source-revision labels, no volume, no port, no embedded
+healthcheck or command, and no credential-shaped environment. A tag, wrong
+repository, alternate socket, root user, or configuration drift fails closed.
+
+Only after those checks does the loader atomically write the root-owned `0640`
+`scorer-image-attestation.json` in the common attestation directory. It binds
+the image ID/reference to the release-manifest, bundle-manifest, archive,
+locked-policy, source, platform, and scorer-contract digests. Re-converging the
+same content leaves the attestation unchanged. Loading still does not replace
+the client guard, install or start the scorer, deliver a token, open a network
+path, route a validator, claim a ticket, or enable any coding gate.
 
 Destroying a created cohort is intentionally not a routine rollback: the shared
 compute module has deletion protection. Rollback during the shadow phase means

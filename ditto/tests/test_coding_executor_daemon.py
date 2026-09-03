@@ -119,6 +119,21 @@ def test_client_guard_is_default_off_and_cannot_execute_or_listen() -> None:
         assert command not in text
 
 
+def test_attestations_are_reachable_without_exposing_staged_bundles() -> None:
+    attestation_directory = "/var/lib/ditto-coding-executor/attestations"
+    assert f"coding_executor_attestation_dir: {attestation_directory}" in DEFAULTS
+    assert (
+        "coding_executor_runtime_image_attestation_path: "
+        f"{attestation_directory}/runtime-image-attestation.json"
+    ) in DEFAULTS
+    assert 'group: "{{ coding_executor_client_group }}"' in TASKS
+    assert 'mode: "0750"' in TASKS
+    assert "/var/lib/ditto-coding-executor/staged/runtime-manifest.json" in DEFAULTS
+    assert 'mode: "0700"' in TASKS
+    assert attestation_directory in RUNTIME_LOADER.read_text()
+    assert attestation_directory in CLIENT_GUARD.read_text()
+
+
 def test_rootless_daemon_is_pinned_to_the_isolated_empty_identity() -> None:
     assert '"io.heyditto.dittobench.isolated=true"' in DAEMON
     assert "no-new-privileges" in DAEMON
@@ -396,7 +411,7 @@ def test_runtime_loader_requires_a_safe_exact_image_and_writes_attestation(
     monkeypatch.setattr(LOADER, "EXPECTED_MANIFEST_PATH", manifest_path)
     monkeypatch.setattr(LOADER, "EXPECTED_ARCHIVE_PATH", archive)
     monkeypatch.setattr(LOADER, "EXPECTED_ATTESTATION_PATH", attestation_path)
-    monkeypatch.setattr(LOADER, "secure_root_owned_directory", lambda _path: None)
+    monkeypatch.setattr(LOADER, "secure_attestation_directory", lambda _path: None)
 
     def fake_docker_output(
         docker_host: str,

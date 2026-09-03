@@ -25,6 +25,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release-manifest", required=True, type=Path)
     parser.add_argument("--archive-sha256", required=True)
+    parser.add_argument("--image-id", required=True)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     raw = args.release_manifest.read_bytes()
@@ -44,11 +45,14 @@ def main() -> int:
         or "@sha256:" not in release["image_reference"]
         or not digest_fields_valid
         or not SHA256.fullmatch(args.archive_sha256)
+        or not args.image_id.startswith("sha256:")
+        or not SHA256.fullmatch(args.image_id.removeprefix("sha256:"))
     ):
         raise SystemExit("bundle manifest digest input is invalid")
     value = {
         "archive_sha256": args.archive_sha256,
         "image_digest": release["image_digest"],
+        "image_id": args.image_id,
         "image_reference": release["image_reference"],
         "locked_policy_sha256": release["locked_policy_sha256"],
         "platform": "linux/amd64",
