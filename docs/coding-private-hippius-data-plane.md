@@ -129,9 +129,7 @@ The tool creates one new mode-`0700` local directory containing mode-`0600`
 ciphertext objects and a manifest written last. A partial directory without
 `manifest.json` is deliberately unpublishable and is retained for operator
 inspection; reruns require a new output path. The manifest is digest-bound but
-not yet curator-signed. Upload, manifest signature/registration, Hippius
-credentials, unwrap authority, and plaintext runtime delivery remain later
-reviews.
+not yet curator-signed.
 
 ```bash
 cd apps/platform
@@ -142,6 +140,47 @@ uv run python scripts/prepare_hippius_private_inputs.py \
   --output-dir /protected/catalog/encrypted-transport-new \
   --confirm "ENCRYPT HIPPIUS CODING PRIVATE INPUTS"
 ```
+
+`scripts/plan_hippius_private_input_signature.py` combines that manifest with
+a successful canonical probe receipt and an Ed25519 curator public key. It
+writes the exact mode-`0600` message for an external KMS, hardware signer, or
+other protected curator signer; no private signing key enters this repository
+tooling. The detached raw 64-byte signature is then consumed by
+`scripts/publish_hippius_private_inputs.py`.
+
+Publication requires the same private-input endpoint, bucket, curator access
+ID, and reader access ID fingerprint observed in a probe receipt no more than
+24 hours old. It checks for the manifest-derived remote key using only the
+reader, reuses exact bytes idempotently, refuses conflicting bytes, uploads a
+missing object with only the curator, and performs a complete reader download
+and SHA-256 verification afterward. The exact confirmation is
+`PUBLISH HIPPIUS CODING PRIVATE INPUTS`.
+
+```bash
+cd apps/platform
+uv run python scripts/plan_hippius_private_input_signature.py \
+  --transport-dir /protected/catalog/encrypted-transport \
+  --probe-receipt /protected/receipts/hippius-probe.json \
+  --curator-public-key /protected/keys/curator-signing-public.pem \
+  --output /protected/catalog/private-input-signing-message.bin
+
+# Sign the exact message bytes outside this repository process, then:
+uv run python scripts/publish_hippius_private_inputs.py \
+  --transport-dir /protected/catalog/encrypted-transport \
+  --probe-receipt /protected/receipts/hippius-probe.json \
+  --curator-public-key /protected/keys/curator-signing-public.pem \
+  --curator-signature /protected/catalog/curator-signature.bin \
+  --receipt-output /protected/receipts/private-input-publication-new.json \
+  --confirm "PUBLISH HIPPIUS CODING PRIVATE INPUTS"
+```
+
+The redacted mode-`0600` publication receipt retains the detached signature,
+curator public-key digest, probe-receipt digest, manifest identity, remote-key
+digest, ciphertext identity, and uploaded/reused outcome. It contains no
+endpoint, bucket, raw object key, access ID, secret, plaintext, URL, or object
+bytes. Publication still does not register or activate a catalog. Unwrap
+authority, private-key custody, and plaintext runtime delivery remain later
+reviews.
 
 ## Private-input retrieval
 

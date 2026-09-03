@@ -30,6 +30,7 @@ _BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 _SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SYNTHETIC_BYTES = 4096
 _MAX_DOWNLOAD_BYTES = _SYNTHETIC_BYTES + 1
+_MAX_RECEIPT_BYTES = 1 << 20
 _PROBE_PREFIX = "coding-capability-probe/v1"
 
 
@@ -197,6 +198,8 @@ class HippiusProbeReceipt:
     reviewed_hippius_revision: str
     checked_at: str
     provider: str
+    private_input_authority_sha256: str
+    sealed_evidence_authority_sha256: str
     synthetic_only: bool
     retained_synthetic_objects: int
     ready: bool
@@ -209,6 +212,8 @@ class HippiusProbeReceipt:
             or _SOURCE_SHA.fullmatch(self.source_sha) is None
             or self.reviewed_hippius_revision != HIPPIUS_REVIEWED_REVISION
             or self.provider != "hippius"
+            or _SHA256.fullmatch(self.private_input_authority_sha256) is None
+            or _SHA256.fullmatch(self.sealed_evidence_authority_sha256) is None
             or self.synthetic_only is not True
             or self.weight_eligible is not False
             or not 0 <= self.retained_synthetic_objects <= 5
@@ -1006,6 +1011,19 @@ async def run_hippius_capability_probe(
         reviewed_hippius_revision=HIPPIUS_REVIEWED_REVISION,
         checked_at=checked_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         provider="hippius",
+        private_input_authority_sha256=hippius_private_input_authority_sha256(
+            endpoint_url=config.endpoint_url,
+            region=config.region,
+            bucket=config.private_input_bucket,
+            curator_access_key=config.private_input_curator.access_key,
+            reader_access_key=config.private_input_reader.access_key,
+        ),
+        sealed_evidence_authority_sha256=_hippius_sealed_evidence_authority_sha256(
+            endpoint_url=config.endpoint_url,
+            region=config.region,
+            bucket=config.sealed_evidence_bucket,
+            mediator_access_key=config.evidence_mediator.access_key,
+        ),
         synthetic_only=True,
         retained_synthetic_objects=retained,
         ready=ready,
@@ -1053,6 +1071,50 @@ def parse_hippius_probe_config(
         ),
         timeout_seconds=timeout_seconds,
     )
+
+
+def hippius_private_input_authority_sha256(
+    *,
+    endpoint_url: str,
+    region: str,
+    bucket: str,
+    curator_access_key: str,
+    reader_access_key: str,
+) -> str:
+    """Bind the non-secret private-input authority without disclosing it."""
+
+    return hashlib.sha256(
+        _canonical_json(
+            {
+                "bucket": bucket,
+                "curator_access_key": curator_access_key,
+                "endpoint_url": endpoint_url.rstrip("/"),
+                "reader_access_key": reader_access_key,
+                "region": region,
+                "schema": "dittobench-coding-hippius-private-input-authority-v1",
+            }
+        )
+    ).hexdigest()
+
+
+def _hippius_sealed_evidence_authority_sha256(
+    *,
+    endpoint_url: str,
+    region: str,
+    bucket: str,
+    mediator_access_key: str,
+) -> str:
+    return hashlib.sha256(
+        _canonical_json(
+            {
+                "bucket": bucket,
+                "endpoint_url": endpoint_url.rstrip("/"),
+                "mediator_access_key": mediator_access_key,
+                "region": region,
+                "schema": "dittobench-coding-hippius-sealed-evidence-authority-v1",
+            }
+        )
+    ).hexdigest()
 
 
 def resolve_repository_source_sha(repository_root: Path) -> str:
@@ -1113,6 +1175,51 @@ def write_hippius_probe_receipt(*, receipt: HippiusProbeReceipt, output: Path) -
     return payload_sha256
 
 
+def load_hippius_probe_receipt(path: Path) -> tuple[HippiusProbeReceipt, str]:
+    """Load one canonical successful receipt without exposing its source path."""
+
+    body = _read_bounded_regular_file(
+        path,
+        maximum_bytes=_MAX_RECEIPT_BYTES,
+        label="Hippius probe receipt",
+    )
+    try:
+        raw = json.loads(body, object_pairs_hook=_unique_object)
+        if not isinstance(raw, dict):
+            raise ValueError("receipt root is not an object")
+        payload_sha256 = str(raw.pop("receipt_payload_sha256"))
+        raw_checks = raw.pop("checks")
+        if not isinstance(raw_checks, list):
+            raise ValueError("receipt checks are not a list")
+        checks = tuple(
+            HippiusProbeCheck(
+                name=str(item["name"]),
+                status=HippiusProbeCheckStatus(str(item["status"])),
+                detail=str(item["detail"]),
+            )
+            for item in raw_checks
+            if isinstance(item, dict) and set(item) == {"name", "status", "detail"}
+        )
+        if len(checks) != len(raw_checks):
+            raise ValueError("receipt check shape is invalid")
+        receipt = HippiusProbeReceipt(checks=checks, **raw)
+        payload = asdict(receipt)
+        if (
+            _SHA256.fullmatch(payload_sha256) is None
+            or hashlib.sha256(_canonical_json(payload)).hexdigest() != payload_sha256
+            or _canonical_json({**payload, "receipt_payload_sha256": payload_sha256})
+            + b"\n"
+            != body
+            or receipt.ready is not True
+        ):
+            raise ValueError("receipt digest or readiness is invalid")
+    except (KeyError, TypeError, ValueError, HippiusProbeReceiptError) as error:
+        raise HippiusProbeReceiptError(
+            "Hippius probe receipt is invalid or not ready"
+        ) from error
+    return receipt, payload_sha256
+
+
 def _canonical_json(value: object) -> bytes:
     return json.dumps(
         value,
@@ -1121,6 +1228,44 @@ def _canonical_json(value: object) -> bytes:
         ensure_ascii=False,
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _read_bounded_regular_file(path: Path, *, maximum_bytes: int, label: str) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise HippiusProbeReceiptError(f"{label} is unreadable") from error
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or not 1 <= info.st_size <= maximum_bytes:
+            raise HippiusProbeReceiptError(f"{label} is outside safe bounds")
+        chunks = bytearray()
+        while len(chunks) < maximum_bytes + 1:
+            chunk = os.read(descriptor, maximum_bytes + 1 - len(chunks))
+            if not chunk:
+                break
+            chunks.extend(chunk)
+    except HippiusProbeReceiptError:
+        raise
+    except OSError as error:
+        raise HippiusProbeReceiptError(f"{label} is unreadable") from error
+    finally:
+        os.close(descriptor)
+    if not chunks or len(chunks) > maximum_bytes:
+        raise HippiusProbeReceiptError(f"{label} is outside safe bounds")
+    return bytes(chunks)
+
+
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON field")
+        result[key] = value
+    return result
 
 
 def _safe_secret(value: str, *, maximum_bytes: int) -> bool:
@@ -1233,6 +1378,8 @@ __all__ = [
     "HippiusProbeTransport",
     "HippiusProbeTransportError",
     "parse_hippius_probe_config",
+    "load_hippius_probe_receipt",
+    "hippius_private_input_authority_sha256",
     "resolve_repository_source_sha",
     "run_hippius_capability_probe",
     "write_hippius_probe_receipt",

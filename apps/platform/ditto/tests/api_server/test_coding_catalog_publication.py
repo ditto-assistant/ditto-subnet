@@ -38,6 +38,7 @@ from ditto.api_server.coding_hippius_encryption import (
     HIPPIUS_PRIVATE_INPUT_ENCRYPTION_CONFIRMATION,
     HippiusPrivateInputEncryptionError,
     hippius_private_input_aad_bytes,
+    load_hippius_private_input_transport,
     prepare_hippius_private_input_transport,
 )
 from ditto.coding_selection import coding_catalog_leaf_hash
@@ -192,6 +193,7 @@ def test_hippius_private_input_transport_encrypts_and_binds_exact_record(
     )
 
     assert len(manifest.objects) == 1
+    assert load_hippius_private_input_transport(output_dir) == manifest
     item = manifest.objects[0]
     plan = plan_private_catalog_publication(
         commitment_path=commitment_path,
@@ -324,6 +326,25 @@ def test_hippius_private_input_transport_keeps_incomplete_output_unpublishable(
     assert output_dir.is_dir()
     assert not (output_dir / "manifest.json").exists()
     assert stat.S_IMODE(output_dir.stat().st_mode) == 0o700
+
+
+def test_hippius_private_input_transport_loader_rejects_ciphertext_drift(
+    tmp_path: Path,
+) -> None:
+    commitment_path, records_dir = _write_fixture(tmp_path)
+    _private_key, public_key_path = _write_wrapping_public_key(tmp_path)
+    output_dir = (tmp_path / "encrypted").resolve()
+    manifest = prepare_hippius_private_input_transport(
+        commitment_path=commitment_path,
+        records_dir=records_dir,
+        wrapping_public_key_path=public_key_path,
+        output_dir=output_dir,
+    )
+    ciphertext_path = output_dir / manifest.objects[0].ciphertext_relative_path
+    ciphertext_path.write_bytes(ciphertext_path.read_bytes() + b"x")
+
+    with pytest.raises(HippiusPrivateInputEncryptionError, match="manifest"):
+        load_hippius_private_input_transport(output_dir)
 
 
 def test_hippius_private_input_cli_requires_confirmation_and_prepares_transport(
