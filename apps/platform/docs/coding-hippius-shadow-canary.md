@@ -83,11 +83,16 @@ RUN HIPPIUS CODING SHADOW CANARY
 
 ## Remaining activation boundary
 
-This PR does not supply an unwrap service, executor adapter, synthetic release,
-credential value, probe/public-key file, route, or operator invocation. It does
-not apply Terraform, converge Ansible, restart Platform, enable the existing
-Coding worker, register a real private release, or change scoring, weights, or
-emissions.
+The separately reviewed operator layer adds a default-off one-shot command and
+fixed protected-process adapters for an external unwrap boundary and distinct
+authoring/grading helpers. It still supplies no helper implementation,
+synthetic release, credential value, probe/public-key file, route, scheduler,
+deployment, or live invocation. See
+[`coding-hippius-canary-operator.md`](coding-hippius-canary-operator.md).
+
+Neither layer applies Terraform, converges Ansible, restarts Platform, enables
+the existing Coding worker, registers a real private release, or changes
+scoring, weights, or emissions.
 
 Phase 7 remains blocked until an owner reviews a ready receipt produced by one
 explicit validator from exact merged and deployed source. Phase 7 then requires

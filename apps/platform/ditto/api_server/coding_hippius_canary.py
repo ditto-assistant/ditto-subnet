@@ -110,6 +110,7 @@ class HippiusShadowCanaryGradingMaterial:
     execution_authority_sha256: str
     task_commitment_sha256: str
     ticket_deadline: datetime
+    frozen_submission: bytes
     frozen_submission_sha256: str
     grader_plan: CodingCatalogGraderPlan
     resource_profile: CodingCatalogResourceProfile
@@ -302,6 +303,7 @@ async def run_hippius_shadow_canary(
         execution_authority_sha256=execution_authority_sha256,
         task_commitment_sha256=task_commitment_sha256,
         ticket_deadline=plan.private_input.ticket_deadline,
+        frozen_submission=authoring_outcome.frozen_submission,
         frozen_submission_sha256=frozen_submission_sha256,
         grader_plan=grading_record.grader_plan,
         resource_profile=grading_record.grader_resource_profile,

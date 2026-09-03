@@ -306,6 +306,7 @@ async def test_canary_runs_two_separated_phases_and_seals_three_objects(
     assert not hasattr(authoring.material, "grader_plan")
     assert grading.material is not None
     assert not hasattr(grading.material, "issue")
+    assert grading.material.frozen_submission == b"synthetic frozen patch"
     assert (
         authoring.material.execution_authority_sha256
         == grading.material.execution_authority_sha256

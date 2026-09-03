@@ -14,6 +14,7 @@
 | Production DB / Targon logs | `.agents/skills/gcloud-ditto-readonly/` |
 | GCP and Cloudflare state | `infra/terraform/stacks/` |
 | Hippius Coding secret containers | `infra/terraform/stacks/gcp-platform/main.tf`, `infra/ansible/roles/platform_app/` |
+| Hippius canary one-shot operator | `apps/platform/ditto/api_server/coding_hippius_canary_operator.py`, `apps/platform/scripts/run_hippius_shadow_canary.py` |
 | Host convergence | `infra/ansible/` |
 | Platform app VM disk | `.agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md`, `app_boot_disk_gb` |
 | Validator updater | `scripts/validator-stack-auto-update.sh` |
