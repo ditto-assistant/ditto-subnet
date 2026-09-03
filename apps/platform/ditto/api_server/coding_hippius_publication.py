@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import NoReturn, Protocol
+from typing import Any, NoReturn, Protocol
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -213,7 +213,7 @@ class AiobotoHippiusPrivateInputPublicationTransport:
     ) -> None:
         await self._http.aclose()
 
-    def _client(self, session: object):
+    def _client(self, session: Any) -> Any:
         return session.client(
             "s3",
             endpoint_url=self._config.endpoint_url,
