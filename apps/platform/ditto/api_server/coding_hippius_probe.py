@@ -13,7 +13,7 @@ import stat
 import subprocess
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import NoReturn, Protocol, TypeVar
@@ -24,6 +24,8 @@ import httpx
 HIPPIUS_PROBE_CONFIRMATION = "PROBE HIPPIUS CODING STORAGE"
 HIPPIUS_REVIEWED_REVISION = "1fa2066a366a0b839e83be60f8ab643153a772f6"
 HIPPIUS_REGION = "decentralized"
+HIPPIUS_PROVIDER_PROFILE_SCHEMA = "dittobench-coding-hippius-provider-profile-v1"
+HIPPIUS_PROVIDER_PROFILE_MAX_AGE = timedelta(hours=24)
 _CONFIG_PREFIX = "DITTO_CODING_HIPPIUS_"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
@@ -236,6 +238,62 @@ class HippiusProbeReceipt:
             raise HippiusProbeReceiptError(
                 "Hippius probe receipt timestamp must be timezone-aware"
             )
+
+
+@dataclass(frozen=True)
+class HippiusProviderProfile:
+    """Redacted, expiry-bound identity derived from one successful probe."""
+
+    schema: str
+    source_sha: str
+    provider: str
+    reviewed_hippius_revision: str
+    probe_receipt_payload_sha256: str
+    private_input_authority_sha256: str
+    sealed_evidence_authority_sha256: str
+    operation_profile_sha256: str
+    observed_at: str
+    expires_at: str
+    synthetic_only: bool
+    weight_eligible: bool
+
+    def __post_init__(self) -> None:
+        if (
+            self.schema != HIPPIUS_PROVIDER_PROFILE_SCHEMA
+            or _SOURCE_SHA.fullmatch(self.source_sha) is None
+            or self.provider != "hippius"
+            or self.reviewed_hippius_revision != HIPPIUS_REVIEWED_REVISION
+            or any(
+                _SHA256.fullmatch(value) is None
+                for value in (
+                    self.probe_receipt_payload_sha256,
+                    self.private_input_authority_sha256,
+                    self.sealed_evidence_authority_sha256,
+                    self.operation_profile_sha256,
+                )
+            )
+            or self.synthetic_only is not True
+            or self.weight_eligible is not False
+        ):
+            raise HippiusProbeReceiptError("Hippius provider profile is invalid")
+        try:
+            observed_at = datetime.fromisoformat(
+                self.observed_at.replace("Z", "+00:00")
+            )
+            expires_at = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise HippiusProbeReceiptError(
+                "Hippius provider profile timestamp is invalid"
+            ) from error
+        if (
+            observed_at.tzinfo is None
+            or observed_at.utcoffset() is None
+            or expires_at.tzinfo is None
+            or expires_at.utcoffset() is None
+            or expires_at.astimezone(UTC)
+            != observed_at.astimezone(UTC) + HIPPIUS_PROVIDER_PROFILE_MAX_AGE
+        ):
+            raise HippiusProbeReceiptError("Hippius provider profile expiry is invalid")
 
 
 class HippiusProbeTransport(Protocol):
@@ -1117,6 +1175,146 @@ def hippius_sealed_evidence_authority_sha256(
     ).hexdigest()
 
 
+def hippius_provider_operation_profile_sha256(
+    receipt: HippiusProbeReceipt,
+) -> str:
+    """Bind the observed operation matrix without publishing probe details."""
+
+    return hashlib.sha256(
+        _canonical_json(
+            {
+                "checks": [
+                    {"name": check.name, "status": check.status.value}
+                    for check in receipt.checks
+                ],
+                "schema": "dittobench-coding-hippius-operation-profile-v1",
+            }
+        )
+    ).hexdigest()
+
+
+def build_hippius_provider_profile(
+    *,
+    receipt: HippiusProbeReceipt,
+    probe_receipt_payload_sha256: str,
+) -> HippiusProviderProfile:
+    """Derive one fixed-lifetime provider profile from a ready probe receipt."""
+
+    if (
+        receipt.ready is not True
+        or _SHA256.fullmatch(probe_receipt_payload_sha256) is None
+    ):
+        raise HippiusProbeReceiptError("Hippius provider profile requires ready probe")
+    try:
+        observed_at = datetime.fromisoformat(receipt.checked_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise HippiusProbeReceiptError(
+            "Hippius provider profile probe timestamp is invalid"
+        ) from error
+    if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+        raise HippiusProbeReceiptError(
+            "Hippius provider profile probe timestamp is invalid"
+        )
+    observed_at = observed_at.astimezone(UTC)
+    expires_at = observed_at + HIPPIUS_PROVIDER_PROFILE_MAX_AGE
+    return HippiusProviderProfile(
+        schema=HIPPIUS_PROVIDER_PROFILE_SCHEMA,
+        source_sha=receipt.source_sha,
+        provider=receipt.provider,
+        reviewed_hippius_revision=receipt.reviewed_hippius_revision,
+        probe_receipt_payload_sha256=probe_receipt_payload_sha256,
+        private_input_authority_sha256=receipt.private_input_authority_sha256,
+        sealed_evidence_authority_sha256=receipt.sealed_evidence_authority_sha256,
+        operation_profile_sha256=hippius_provider_operation_profile_sha256(receipt),
+        observed_at=observed_at.isoformat().replace("+00:00", "Z"),
+        expires_at=expires_at.isoformat().replace("+00:00", "Z"),
+        synthetic_only=True,
+        weight_eligible=False,
+    )
+
+
+def write_hippius_provider_profile(
+    *, profile: HippiusProviderProfile, output: Path
+) -> str:
+    """Write one mode-0600 redacted provider-profile receipt."""
+
+    if not output.is_absolute():
+        raise HippiusProbeReceiptError("provider profile output must be absolute")
+    payload = asdict(profile)
+    payload_sha256 = hashlib.sha256(_canonical_json(payload)).hexdigest()
+    encoded = (
+        _canonical_json({**payload, "profile_payload_sha256": payload_sha256}) + b"\n"
+    )
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(output, flags, 0o600)
+    except OSError as error:
+        raise HippiusProbeReceiptError(
+            "provider profile output must be new and safely creatable"
+        ) from error
+    try:
+        os.fchmod(descriptor, 0o600)
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_nlink != 1:
+            raise HippiusProbeReceiptError(
+                "provider profile output is not an exclusive regular file"
+            )
+        view = memoryview(encoded)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("provider profile short write")
+            view = view[written:]
+        os.fsync(descriptor)
+    except Exception:
+        try:
+            output.unlink(missing_ok=True)
+        finally:
+            os.close(descriptor)
+        raise
+    os.close(descriptor)
+    return payload_sha256
+
+
+def load_hippius_provider_profile(
+    path: Path,
+    *,
+    now: datetime,
+) -> tuple[HippiusProviderProfile, str]:
+    """Load one current profile without exposing its path or raw authority."""
+
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise HippiusProbeReceiptError("provider profile clock is invalid")
+    body = _read_bounded_regular_file(
+        path,
+        maximum_bytes=_MAX_RECEIPT_BYTES,
+        label="Hippius provider profile",
+    )
+    try:
+        raw = json.loads(body, object_pairs_hook=_unique_object)
+        if not isinstance(raw, dict):
+            raise ValueError("profile root is not an object")
+        payload_sha256 = str(raw.pop("profile_payload_sha256"))
+        profile = HippiusProviderProfile(**raw)
+        payload = asdict(profile)
+        if (
+            _SHA256.fullmatch(payload_sha256) is None
+            or hashlib.sha256(_canonical_json(payload)).hexdigest() != payload_sha256
+            or _canonical_json({**payload, "profile_payload_sha256": payload_sha256})
+            + b"\n"
+            != body
+        ):
+            raise ValueError("profile digest is invalid")
+        expires_at = datetime.fromisoformat(profile.expires_at.replace("Z", "+00:00"))
+        if now.astimezone(UTC) >= expires_at.astimezone(UTC):
+            raise ValueError("profile expired")
+    except (KeyError, TypeError, ValueError, HippiusProbeReceiptError) as error:
+        raise HippiusProbeReceiptError(
+            "Hippius provider profile is invalid or expired"
+        ) from error
+    return profile, payload_sha256
+
+
 def resolve_repository_source_sha(repository_root: Path) -> str:
     try:
         value = subprocess.run(
@@ -1361,6 +1559,8 @@ def _raise_safe_provider_error(error: Exception) -> NoReturn:
 __all__ = [
     "AiobotoHippiusProbeTransport",
     "HIPPIUS_PROBE_CONFIRMATION",
+    "HIPPIUS_PROVIDER_PROFILE_MAX_AGE",
+    "HIPPIUS_PROVIDER_PROFILE_SCHEMA",
     "HIPPIUS_REVIEWED_REVISION",
     "HippiusCredentialRole",
     "HippiusProbeAccessDenied",
@@ -1373,15 +1573,20 @@ __all__ = [
     "HippiusProbeHttpResponse",
     "HippiusProbeNotFound",
     "HippiusProbeObjectMetadata",
+    "HippiusProviderProfile",
     "HippiusProbeReceipt",
     "HippiusProbeReceiptError",
     "HippiusProbeTransport",
     "HippiusProbeTransportError",
+    "build_hippius_provider_profile",
+    "hippius_provider_operation_profile_sha256",
     "parse_hippius_probe_config",
+    "load_hippius_provider_profile",
     "load_hippius_probe_receipt",
     "hippius_private_input_authority_sha256",
     "hippius_sealed_evidence_authority_sha256",
     "resolve_repository_source_sha",
     "run_hippius_capability_probe",
+    "write_hippius_provider_profile",
     "write_hippius_probe_receipt",
 ]
