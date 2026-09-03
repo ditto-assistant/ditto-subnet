@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.189.0 (2026-09-03)
+
+### Features
+
+- **validator**: Add coding executor connectivity canary
+  ([#1488](https://github.com/ditto-assistant/ditto-subnet/pull/1488),
+  [`f621ea1`](https://github.com/ditto-assistant/ditto-subnet/commit/f621ea1e51840c28b460e5e269f4f2206328a0cf))
+
+
 ## v0.188.0 (2026-09-03)
 
 ### Features
