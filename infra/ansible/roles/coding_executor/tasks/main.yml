@@ -64,6 +64,24 @@
       Capability egress accepts only one reviewed IPv4 gateway on the fixed
       scorer capability port. The guard rejects every other daemon destination.
 
+- name: Reject capability ingress before matching egress
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_capability_ingress_enabled | bool) or coding_executor_capability_egress_enabled | bool
+    fail_msg: >-
+      Capability ingress requires the matching default-deny egress control. It
+      cannot expose a scorer capability listener on its own.
+
+- name: Reject an invalid capability ingress configuration
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_capability_ingress_enabled | bool) or coding_executor_capability_gateway is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}$')
+      - not (coding_executor_capability_ingress_enabled | bool) or coding_executor_capability_source_cidr is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}/([0-9]|[12][0-9]|3[0-2])$')
+      - not (coding_executor_capability_ingress_enabled | bool) or coding_executor_capability_port | int == 11438
+    fail_msg: >-
+      Capability ingress accepts only one reviewed private IPv4 candidate CIDR
+      on the fixed scorer capability port.
+
 - name: Report that the coding executor daemon is deliberately disabled
   ansible.builtin.debug:
     msg: >-
@@ -144,6 +162,7 @@
         group: root
         mode: "0755"
       loop:
+        - executor-capability-ingress-guard.sh
         - executor-egress-guard.sh
         - install-rootless-docker.sh
       register: coding_executor_policy_files
@@ -165,6 +184,22 @@
         group: root
         mode: "0644"
       register: coding_executor_guard_unit
+
+    - name: Install the scorer capability ingress-guard service
+      ansible.builtin.template:
+        src: ditto-coding-executor-capability-ingress-guard.service.j2
+        dest: "/etc/systemd/system/{{ coding_executor_capability_ingress_guard_unit }}.service"
+        owner: root
+        group: root
+        mode: "0644"
+      register: coding_executor_ingress_guard_unit
+
+    - name: Enable the scorer capability ingress guard
+      ansible.builtin.systemd_service:
+        name: "{{ coding_executor_capability_ingress_guard_unit }}.service"
+        enabled: true
+        state: restarted
+        daemon_reload: true
 
     - name: Install and verify the dedicated rootless daemon
       ansible.builtin.command:

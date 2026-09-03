@@ -82,3 +82,10 @@ coding_executor_scorer_runtime_attestation_path: /var/lib/ditto-coding-executor/
 coding_executor_capability_egress_enabled: false
 coding_executor_capability_gateway: ""
 coding_executor_capability_port: 11438
+
+# The host-side counterpart rejects every inbound capability connection unless
+# an operator supplies the rootless candidate CIDR for the same fixed gateway.
+# It cannot expose the scorer without the egress control above.
+coding_executor_capability_ingress_enabled: false
+coding_executor_capability_source_cidr: ""
+coding_executor_capability_ingress_guard_unit: ditto-coding-executor-capability-ingress-guard
