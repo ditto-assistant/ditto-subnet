@@ -506,6 +506,10 @@ async def test_live_reader_uses_one_bounded_nonredirecting_exact_get() -> None:
     assert len(requests) == 1
     assert requests[0].method == "GET"
     assert requests[0].url.host == "s3.hippius.com"
+    with pytest.raises(HippiusPrivateInputRetrievalIntegrity, match="exact-read"):
+        await reader.get_object(key="../secret", max_bytes=17)
+    with pytest.raises(HippiusPrivateInputRetrievalIntegrity, match="exact-read"):
+        await reader.get_object(key=key + ".bak", max_bytes=17)
 
     def redirect(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"location": "https://evil.example/leak"})
