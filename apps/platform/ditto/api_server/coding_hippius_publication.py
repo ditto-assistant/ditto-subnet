@@ -299,7 +299,7 @@ class AiobotoHippiusPrivateInputPublicationTransport:
             "Content-Type": "application/octet-stream",
             "Content-MD5": content_md5,
         }
-        signed_metadata = {name: value for name, value in metadata.items()}
+        signed_metadata = dict(metadata)
         for name, value in signed_metadata.items():
             headers[f"x-amz-meta-{name.lower()}"] = value
         try:
