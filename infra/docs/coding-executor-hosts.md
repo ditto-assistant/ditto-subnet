@@ -156,6 +156,13 @@ provider/Platform authority. CI builds this artifact without publishing or
 deploying it. A later signed release/staging slice must add the real scorer
 configuration and another later paired mTLS slice may connect a validator.
 
+The release boundary is frozen by
+`scripts/render-coding-executor-scorer-manifest.py`. It emits only the exact
+image repository/digest, source revision, `linux/amd64` platform, scorer
+contract, and locked-policy digest. It rejects a tag or any malformed digest;
+a later protected release job must sign both the exact image and this canonical
+manifest before an operator can transfer an OCI archive through IAP.
+
 Destroying a created cohort is intentionally not a routine rollback: the shared
 compute module has deletion protection. Rollback during the shadow phase means
 leave the hosts present and disable the later daemon/worker configuration; any
