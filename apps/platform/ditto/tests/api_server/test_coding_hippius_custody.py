@@ -119,6 +119,30 @@ async def test_spool_rejects_drift_partial_state_and_unsafe_modes(
         HippiusEvidenceSpool(unsafe)
 
 
+async def test_spool_store_retries_after_incomplete_identity_directory(
+    tmp_path: Path,
+) -> None:
+    wrapper = RsaOaepHippiusEvidenceKeyWrapper(
+        _public_key(tmp_path, "evidence-wrap.pem")
+    )
+    spool = _spool(tmp_path)
+    prepared = await prepare_hippius_sealed_evidence(
+        authority=_authority(),
+        plaintext=b"retryable spool persist",
+        key_wrapper=wrapper,
+        reservation_id=UUID("44444444-4444-4444-8444-444444444444"),
+        random_bytes=lambda size: b"r" * size,
+    )
+    incomplete = tmp_path / "spool" / prepared.identity.identity_sha256
+    incomplete.mkdir(mode=0o700)
+    (incomplete / "ciphertext.bin").write_bytes(b"partial")
+    recovered = spool.store(prepared)
+    assert recovered == prepared
+    assert (incomplete / "ciphertext.bin").read_bytes() == prepared.ciphertext
+    assert (incomplete / "manifest.json").is_file()
+    assert spool.store(prepared) == prepared
+
+
 async def test_rotation_changes_new_wrap_identity_without_breaking_old_spool(
     tmp_path: Path,
 ) -> None:

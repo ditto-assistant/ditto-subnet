@@ -132,36 +132,51 @@ class HippiusEvidenceSpool:
         if _SHA256.fullmatch(identity_sha256) is None:
             raise HippiusEvidenceCustodyError("evidence spool identity is invalid")
         directory = self._root / identity_sha256
-        if directory.exists() or directory.is_symlink():
-            existing = self.load(identity_sha256)
-            if existing != prepared:
-                raise HippiusEvidenceCustodyError(
-                    "evidence spool identity already contains different bytes"
+        for _attempt in range(2):
+            existing = self._existing_prepared(directory, identity_sha256)
+            if existing is not None:
+                if existing != prepared:
+                    raise HippiusEvidenceCustodyError(
+                        "evidence spool identity already contains different bytes"
+                    )
+                return existing
+            try:
+                directory.mkdir(mode=0o700)
+                os.chmod(directory, 0o700)
+                _write_exclusive(
+                    directory / "ciphertext.bin",
+                    prepared.ciphertext,
                 )
-            return existing
-        try:
-            directory.mkdir(mode=0o700)
-            os.chmod(directory, 0o700)
-            _write_exclusive(
-                directory / "ciphertext.bin",
-                prepared.ciphertext,
-            )
-            _sync_directory(directory)
-            _write_exclusive(
-                directory / "manifest.json",
-                _spool_manifest_bytes(prepared),
-            )
-            _sync_directory(directory)
-            _sync_directory(self._root)
-        except FileExistsError as error:
-            raise HippiusEvidenceCustodyError(
-                "evidence spool identity raced with another writer"
-            ) from error
-        except OSError as error:
-            raise HippiusEvidenceCustodyError(
-                "evidence spool persistence failed"
-            ) from error
-        return self.load(identity_sha256)
+                _sync_directory(directory)
+                _write_exclusive(
+                    directory / "manifest.json",
+                    _spool_manifest_bytes(prepared),
+                )
+                _sync_directory(directory)
+                _sync_directory(self._root)
+            except FileExistsError:
+                continue
+            except OSError as error:
+                _discard_incomplete_identity(directory)
+                raise HippiusEvidenceCustodyError(
+                    "evidence spool persistence failed"
+                ) from error
+            return self.load(identity_sha256)
+        raise HippiusEvidenceCustodyError(
+            "evidence spool identity raced with another writer"
+        )
+
+    def _existing_prepared(
+        self, directory: Path, identity_sha256: str
+    ) -> HippiusSealedEvidencePreparedObject | None:
+        if directory.is_symlink():
+            raise HippiusEvidenceCustodyError("evidence spool entry is unavailable")
+        if not directory.exists():
+            return None
+        if (directory / "manifest.json").is_file():
+            return self.load(identity_sha256)
+        _discard_incomplete_identity(directory)
+        return None
 
     def load(self, identity_sha256: str) -> HippiusSealedEvidencePreparedObject:
         if _SHA256.fullmatch(identity_sha256) is None:
@@ -385,6 +400,18 @@ def _read_regular_file(path: Path, *, maximum_bytes: int, label: str) -> bytes:
     if not body or len(body) > maximum_bytes:
         raise HippiusEvidenceCustodyError(f"{label} exceeds bounds")
     return bytes(body)
+
+
+def _discard_incomplete_identity(directory: Path) -> None:
+    if directory.is_symlink() or not directory.is_dir():
+        return
+    if (directory / "manifest.json").exists():
+        return
+    for child in directory.iterdir():
+        if child.is_symlink() or not child.is_file():
+            raise HippiusEvidenceCustodyError("evidence spool entry is unsafe")
+        child.unlink(missing_ok=True)
+    directory.rmdir()
 
 
 def _write_exclusive(path: Path, body: bytes) -> None:
