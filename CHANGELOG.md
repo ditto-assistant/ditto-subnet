@@ -2,6 +2,35 @@
 
 <!-- version list -->
 
+## v0.182.0 (2026-09-03)
+
+### Features
+
+- **coding**: Fence shadow workers to an exact run
+  ([#1418](https://github.com/ditto-assistant/ditto-subnet/pull/1418),
+  [`e500b78`](https://github.com/ditto-assistant/ditto-subnet/commit/e500b785b39f755f948d275f9e1d66713bff1fb0))
+
+- **infra**: Add default-off coding executor hosts
+  ([#1424](https://github.com/ditto-assistant/ditto-subnet/pull/1424),
+  [`6f74b23`](https://github.com/ditto-assistant/ditto-subnet/commit/6f74b239a29a7f54d8ff3e5685c881957336f213))
+
+- **infra**: Add default-off coding shadow controls
+  ([#1421](https://github.com/ditto-assistant/ditto-subnet/pull/1421),
+  [`123c5e3`](https://github.com/ditto-assistant/ditto-subnet/commit/123c5e324e571d21e2ef48ce942f9c55bc1482c0))
+
+- **infra**: Add rootless coding executor daemon
+  ([#1426](https://github.com/ditto-assistant/ditto-subnet/pull/1426),
+  [`03872b1`](https://github.com/ditto-assistant/ditto-subnet/commit/03872b186a5137a34aac9e0bc9081ac78abdd199))
+
+- **infra**: Attest loaded coding runtime image
+  ([#1429](https://github.com/ditto-assistant/ditto-subnet/pull/1429),
+  [`1c90385`](https://github.com/ditto-assistant/ditto-subnet/commit/1c90385052a1307ade7a871f7efa72a953726199))
+
+- **infra**: Stage verified coding runtime bundles
+  ([#1427](https://github.com/ditto-assistant/ditto-subnet/pull/1427),
+  [`19d4ab8`](https://github.com/ditto-assistant/ditto-subnet/commit/19d4ab80170f37e64d2e5457bf8ecec41fb300d0))
+
+
 ## v0.181.16 (2026-09-02)
 
 ### Bug Fixes
