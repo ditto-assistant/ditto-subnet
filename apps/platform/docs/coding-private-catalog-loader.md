@@ -125,6 +125,11 @@ Supersession is one Platform transaction: it appends the signed replacement and
 the predecessor's retirement tombstone together, or appends neither. It never
 updates or deletes a release, retirement, exposure, or private problem object.
 
+`scripts/prepare_hippius_private_inputs.py` consumes the same commitment and
+records, recomputes that plan, and prepares the encrypted local transport. It
+accepts only a public wrapping key and performs no Hippius request. Its
+digest-bound manifest is not registration or activation authority.
+
 ## Record contract
 
 Each object uses `dittobench-coding-private-catalog-record-v1` and contains:

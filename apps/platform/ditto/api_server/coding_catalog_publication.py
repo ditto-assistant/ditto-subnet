@@ -190,6 +190,35 @@ def write_private_catalog_publication_plan(
     return output
 
 
+def read_private_catalog_publication_object(
+    *,
+    records_dir: Path,
+    item: CodingCatalogPublicationObject,
+) -> bytes:
+    """Read one canonical record and recheck its publication-plan identity."""
+
+    if records_dir.is_symlink() or not records_dir.is_dir():
+        raise CodingCatalogPublicationError("catalog records directory is invalid")
+    if not 0 <= item.catalog_index <= 999_999:
+        raise CodingCatalogPublicationError("catalog publication object is invalid")
+    path = records_dir / f"{item.catalog_index:06d}.json"
+    if path.is_symlink() or not path.is_file():
+        raise CodingCatalogPublicationError("catalog publication object is unavailable")
+    body = _read_bounded_regular_file(
+        path,
+        maximum_bytes=_MAX_RECORD_BYTES,
+        label="private catalog record",
+    )
+    if (
+        len(body) != item.record_size_bytes
+        or hashlib.sha256(body).hexdigest() != item.record_sha256
+    ):
+        raise CodingCatalogPublicationError(
+            "catalog publication object changed after planning"
+        )
+    return body
+
+
 def _load_canonical_model(
     path: Path,
     model: type[ModelT],
