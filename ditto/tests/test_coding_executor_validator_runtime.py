@@ -21,6 +21,10 @@ def test_validator_executor_runtime_and_identity_are_independently_default_off()
     assert (
         DEFAULTS["validator_stack_coding_executor_connectivity_canary_enabled"] is False
     )
+    assert (
+        DEFAULTS["validator_stack_coding_executor_connectivity_canary_run_enabled"]
+        is False
+    )
     assert DEFAULTS["validator_stack_coding_executor_base_url"] == ""
     assert "validator_stack_coding_executor_identity_enabled | bool" in TASKS
     assert "validator_stack_coding_executor_remote_enabled | bool" in TASKS
@@ -28,6 +32,8 @@ def test_validator_executor_runtime_and_identity_are_independently_default_off()
         TASKS
     )
     assert "validator_stack_coding_shadow_enabled | bool" in TASKS
+    assert "run-coding-executor-connectivity-canary.py" in TASKS
+    assert "validator_stack_coding_executor_managed_release_directory" in TASKS
 
 
 def test_validator_executor_identity_is_prepositioned_fixed_and_spiffe_bound() -> None:

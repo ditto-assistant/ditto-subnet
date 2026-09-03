@@ -154,6 +154,12 @@ host constructed both supervisor and publication services without creating a
 signed ticket envelope, touching Platform, opening the outbox, selecting a
 task, or executing candidate code.
 
+An additional false-by-default operator control may run that canary from the
+updater-validated managed release and commit a root-only diagnostic receipt.
+It never enables either worker gate. The exact preconditions, command boundary,
+and receipt limitations are documented in
+`coding-executor-connectivity-canary.md`.
+
 ## Production runtime-bundle staging
 
 The public `Dockerfile.coding-supervisor` builds a synthetic certification
