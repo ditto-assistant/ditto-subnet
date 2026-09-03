@@ -39,6 +39,7 @@ validator_stack_coding_shadow_run_id: ""
 validator_stack_coding_shadow_poll_seconds: 10
 validator_stack_coding_executor_identity_enabled: false
 validator_stack_coding_executor_remote_enabled: false
+validator_stack_coding_executor_connectivity_canary_enabled: false
 validator_stack_coding_executor_base_url: ""
 validator_stack_coding_executor_timeout_seconds: 30
 validator_stack_coding_executor_identity_directory: /var/lib/ditto-validator/coding-executor-mtls

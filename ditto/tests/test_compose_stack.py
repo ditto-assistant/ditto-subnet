@@ -203,6 +203,12 @@ def test_shadow_coding_worker_is_present_but_default_off_on_both_sides() -> None
         _compose_default(validator["VALIDATOR_CODING_EXECUTOR_REMOTE_ENABLED"])
         == "false"
     )
+    assert (
+        _compose_default(
+            validator["VALIDATOR_CODING_EXECUTOR_CONNECTIVITY_CANARY_ENABLED"]
+        )
+        == "false"
+    )
     for key in (
         "VALIDATOR_CODING_EXECUTOR_BASE_URL",
         "VALIDATOR_CODING_EXECUTOR_CA_PATH",

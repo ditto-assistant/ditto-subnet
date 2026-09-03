@@ -105,6 +105,19 @@ mode-`0400` files, client purpose, chain, key match, expiration, and the exact
 `spiffe://dittobench.ai/validator/<hotkey>` URI. It never copies credential
 contents and never starts the worker or executor transport.
 
+Before any ticket-bearing rollout, the mutually exclusive
+`VALIDATOR_CODING_EXECUTOR_CONNECTIVITY_CANARY_ENABLED=true` mode can perform
+one startup probe through that same TLS client and then exit. It runs before
+the validator loads its signing key or constructs Platform, Pylon, telemetry,
+ordinary worker, or coding-worker clients. The transport requires the
+validator client certificate, forwards `GET /v1/coding/ready` to the private
+Unix control process, and accepts a fixed response only when the scorer host
+has atomically constructed both supervisor and publication services. The
+response explicitly records `ticket_authority_used=false`; the probe carries
+no executor envelope, agent UUID, artifact digest, run ID, ticket ID, Platform
+request, candidate operation, or S3 access. Configuration rejects combining
+this canary with either shadow coding or remote execution.
+
 ## Activation checklist
 
 Activation is deliberately a coordinated operator action, not a code default.

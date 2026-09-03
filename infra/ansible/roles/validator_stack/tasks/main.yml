@@ -12,16 +12,18 @@
       - validator_stack_longmem_capacity | int >= 0
       - validator_stack_longmem_capacity | int <= 4
       - validator_stack_longmem_capacity | int <= ((validator_stack_benchmark_capacity | int) + 1) // 2
-      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_executor_identity_enabled | bool
+      - not ((validator_stack_coding_executor_remote_enabled | bool) or (validator_stack_coding_executor_connectivity_canary_enabled | bool)) or validator_stack_coding_executor_identity_enabled | bool
       - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_shadow_enabled | bool
+      - not (validator_stack_coding_executor_connectivity_canary_enabled | bool) or not (validator_stack_coding_executor_remote_enabled | bool)
+      - not (validator_stack_coding_executor_connectivity_canary_enabled | bool) or not (validator_stack_coding_shadow_enabled | bool)
       - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_shadow_instance_id is match('^[!-~]{1,128}$')
       - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_shadow_run_id is match('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
       - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_shadow_run_id != '00000000-0000-0000-0000-000000000000'
       - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_shadow_poll_seconds | float >= 1
       - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_shadow_poll_seconds | float <= 300
-      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_executor_base_url is match('^https://(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}):9443$')
-      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_executor_timeout_seconds | float >= 1
-      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_executor_timeout_seconds | float <= 300
+      - not ((validator_stack_coding_executor_remote_enabled | bool) or (validator_stack_coding_executor_connectivity_canary_enabled | bool)) or validator_stack_coding_executor_base_url is match('^https://(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}):9443$')
+      - not ((validator_stack_coding_executor_remote_enabled | bool) or (validator_stack_coding_executor_connectivity_canary_enabled | bool)) or validator_stack_coding_executor_timeout_seconds | float >= 1
+      - not ((validator_stack_coding_executor_remote_enabled | bool) or (validator_stack_coding_executor_connectivity_canary_enabled | bool)) or validator_stack_coding_executor_timeout_seconds | float <= 300
     fail_msg: >-
       Set VALIDATOR_STACK_REVISION to the reviewed 40-character main SHA and
       VALIDATOR_PROD_HOTKEY plus VALIDATOR_PROD_HOTKEY_SECRET_VERSION to the

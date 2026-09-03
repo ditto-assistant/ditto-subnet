@@ -13,6 +13,11 @@ from uuid import UUID, uuid4
 from ditto.api_models.coding_executor_control import CodingExecutorOperation
 from ditto.validator.signing import sign_coding_executor_control
 
+_PRIVATE_EXECUTOR_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+)
+
 
 @dataclass(frozen=True, repr=False)
 class CodingExecutorRequestAuthority:
@@ -106,7 +111,7 @@ def private_executor_endpoint(parsed: Any) -> bool:
         address = ipaddress.ip_address(parsed.hostname)
     except ValueError:
         return False
-    return address.version == 4 and address.is_private and not address.is_loopback
+    return any(address in network for network in _PRIVATE_EXECUTOR_NETWORKS)
 
 
 __all__ = [

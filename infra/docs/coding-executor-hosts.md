@@ -144,6 +144,16 @@ supervisor and durable publication clients. Incomplete or one-sided remote
 configuration fails before a worker can claim a ticket. No committed host
 variable enables the client or the executor listener.
 
+The separate
+`validator_stack_coding_executor_connectivity_canary_enabled` flag is also
+false and is mutually exclusive with both the worker and remote-execution gate.
+It sends one mTLS-authenticated, ticketless readiness request through the TCP
+transport to the Unix control process and exits before constructing Platform,
+Pylon, or worker clients. That fixed response proves the scorer
+host constructed both supervisor and publication services without creating a
+signed ticket envelope, touching Platform, opening the outbox, selecting a
+task, or executing candidate code.
+
 ## Production runtime-bundle staging
 
 The public `Dockerfile.coding-supervisor` builds a synthetic certification

@@ -19,6 +19,7 @@ def _config(*, remote: bool) -> Any:
         coding_shadow_instance_id="coding-shadow-primary",
         coding_shadow_poll_seconds=10.0,
         coding_executor_remote_enabled=remote,
+        coding_executor_connectivity_canary_enabled=False,
         coding_executor_base_url=("https://10.23.0.10:9443" if remote else ""),
         coding_executor_ca_path=("/run/secrets/executor-ca.pem" if remote else ""),
         coding_executor_client_cert_path=(
@@ -143,3 +144,90 @@ async def test_remote_runtime_closes_client_when_atomic_construction_fails(
                 resources=resources,
             )
     assert executor_http.is_closed is True
+
+
+async def test_connectivity_canary_uses_no_ticket_or_platform_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "application/json", "Cache-Control": "no-store"},
+            json={
+                "schema": "dittobench-coding-executor-readiness-v1",
+                "coding_contract_version": 1,
+                "weight_eligible": False,
+                "transport": "mtls",
+                "supervisor_ready": True,
+                "publication_ready": True,
+                "ticket_authority_used": False,
+            },
+        )
+
+    canary_http = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), trust_env=False
+    )
+    monkeypatch.setattr(
+        validator_main,
+        "create_coding_executor_http_client",
+        lambda _: canary_http,
+    )
+    config = _config(remote=False)
+    config.coding_shadow_enabled = False
+    config.coding_executor_connectivity_canary_enabled = True
+    config.coding_executor_base_url = "https://10.23.0.10:9443"
+    config.coding_executor_ca_path = "/run/secrets/executor-ca.pem"
+    config.coding_executor_client_cert_path = "/run/secrets/validator-client.pem"
+    config.coding_executor_client_key_path = "/run/secrets/validator-client-key.pem"
+    await validator_main._run_coding_executor_connectivity_canary(config)
+    assert canary_http.is_closed is True
+    assert len(observed) == 1
+    assert observed[0].method == "GET"
+    assert "X-Dittobench-Coding-Control" not in observed[0].headers
+
+
+async def test_connectivity_canary_exits_before_keypair_platform_and_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(remote=False)
+    config.coding_shadow_enabled = False
+    config.coding_executor_connectivity_canary_enabled = True
+    events: list[str] = []
+    monkeypatch.setattr(
+        validator_main, "bootstrap_should_start_drained", lambda _: False
+    )
+    monkeypatch.setattr(
+        validator_main, "_install_signal_handlers", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        validator_main, "parse_validator_config_from_env", lambda: config
+    )
+    monkeypatch.setattr(
+        validator_main,
+        "_run_coding_executor_connectivity_canary",
+        lambda _: _record_async(events, "probe"),
+    )
+    monkeypatch.setattr(
+        validator_main,
+        "write_update_state",
+        lambda state: events.append(state),
+    )
+    monkeypatch.setattr(
+        validator_main,
+        "load_validator_keypair",
+        lambda _: pytest.fail("keypair loaded"),
+    )
+    monkeypatch.setattr(
+        validator_main,
+        "build_telemetry",
+        lambda *_a, **_k: pytest.fail("telemetry constructed"),
+    )
+    assert await validator_main._amain() == 0
+    assert events == ["starting", "probe", "stopping"]
+
+
+async def _record_async(events: list[str], value: str) -> None:
+    events.append(value)

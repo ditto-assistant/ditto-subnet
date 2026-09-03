@@ -21,6 +21,7 @@ import (
 
 const (
 	ControlSocketPath    = "/run/ditto-coding-scorer/control.sock"
+	ReadinessPath        = "/v1/coding/ready"
 	validatorURIPrefix   = "spiffe://dittobench.ai/validator/"
 	maximumRequestBytes  = 8 << 20
 	maximumResponseBytes = 32 << 20
@@ -83,20 +84,34 @@ func (proxy *Proxy) Handler() http.Handler {
 			writeError(response, http.StatusServiceUnavailable)
 			return
 		}
+		readiness := request.Method == http.MethodGet &&
+			request.URL.Path == ReadinessPath && request.URL.RawQuery == ""
 		if _, ok := codingcontrol.OperationForRequest(
 			request.Method, request.URL.Path, request.URL.RawQuery,
-		); !ok {
+		); !ok && !readiness {
 			writeError(response, http.StatusNotFound)
 			return
 		}
-		hotkey, envelopeOK := codingcontrol.EnvelopeValidatorHotkey(
-			request.Header.Values(codingcontrol.EnvelopeHeader),
-		)
 		certificateHotkey, certificateOK := validatorCertificateHotkey(request.TLS)
-		if !envelopeOK || !certificateOK || hotkey != proxy.hotkey ||
-			certificateHotkey != proxy.hotkey {
+		if !certificateOK || certificateHotkey != proxy.hotkey {
 			writeError(response, http.StatusUnauthorized)
 			return
+		}
+		if readiness {
+			if len(request.Header.Values(codingcontrol.EnvelopeHeader)) != 0 ||
+				request.Header.Get("Authorization") != "" || request.Header.Get("Cookie") != "" ||
+				request.ContentLength != 0 || request.Header.Get("Content-Encoding") != "" {
+				writeError(response, http.StatusBadRequest)
+				return
+			}
+		} else {
+			hotkey, envelopeOK := codingcontrol.EnvelopeValidatorHotkey(
+				request.Header.Values(codingcontrol.EnvelopeHeader),
+			)
+			if !envelopeOK || hotkey != proxy.hotkey {
+				writeError(response, http.StatusUnauthorized)
+				return
+			}
 		}
 		if request.ContentLength > maximumRequestBytes {
 			writeError(response, http.StatusRequestEntityTooLarge)
@@ -107,8 +122,14 @@ func (proxy *Proxy) Handler() http.Handler {
 			writeError(response, http.StatusRequestEntityTooLarge)
 			return
 		}
+		upstreamContext := request.Context()
+		if readiness {
+			var cancel context.CancelFunc
+			upstreamContext, cancel = context.WithTimeout(upstreamContext, 5*time.Second)
+			defer cancel()
+		}
 		upstream, err := http.NewRequestWithContext(
-			request.Context(), http.MethodPost,
+			upstreamContext, request.Method,
 			"http://coding-executor.internal"+request.URL.Path,
 			bytes.NewReader(body),
 		)
@@ -116,9 +137,11 @@ func (proxy *Proxy) Handler() http.Handler {
 			writeError(response, http.StatusBadGateway)
 			return
 		}
-		copyRequestHeader(upstream.Header, request.Header, "Content-Type")
-		copyRequestHeader(upstream.Header, request.Header, "Content-Encoding")
-		copyRequestHeader(upstream.Header, request.Header, codingcontrol.EnvelopeHeader)
+		if !readiness {
+			copyRequestHeader(upstream.Header, request.Header, "Content-Type")
+			copyRequestHeader(upstream.Header, request.Header, "Content-Encoding")
+			copyRequestHeader(upstream.Header, request.Header, codingcontrol.EnvelopeHeader)
+		}
 		upstream.ContentLength = int64(len(body))
 		result, err := proxy.client.Do(upstream)
 		if err != nil {
@@ -126,8 +149,12 @@ func (proxy *Proxy) Handler() http.Handler {
 			return
 		}
 		defer result.Body.Close()
-		resultBody, err := io.ReadAll(io.LimitReader(result.Body, maximumResponseBytes+1))
-		if err != nil || len(resultBody) > maximumResponseBytes {
+		responseLimit := maximumResponseBytes
+		if readiness {
+			responseLimit = 4 << 10
+		}
+		resultBody, err := io.ReadAll(io.LimitReader(result.Body, int64(responseLimit+1)))
+		if err != nil || len(resultBody) > responseLimit {
 			writeError(response, http.StatusBadGateway)
 			return
 		}
