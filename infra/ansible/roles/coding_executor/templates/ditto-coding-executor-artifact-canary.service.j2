@@ -1,0 +1,36 @@
+[Unit]
+Description=Ditto coding executor ticket-bound S3 artifact canary
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists={{ coding_executor_scorer_runtime_binary_path }}
+ConditionPathExists={{ coding_executor_artifact_canary_capability_path }}
+
+[Service]
+Type=oneshot
+User={{ coding_executor_scorer_user }}
+Group={{ coding_executor_scorer_group }}
+Environment=HOME={{ coding_executor_scorer_home }}
+Environment=DITTOBENCH_CODING_EXECUTOR_ARTIFACT_CANARY_ENABLED=true
+LoadCredential=artifact-capability.json:{{ coding_executor_artifact_canary_capability_path }}
+ExecStart={{ coding_executor_scorer_runtime_binary_path }} --artifact-canary
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+ReadWritePaths={{ coding_executor_artifact_canary_root }}
+InaccessiblePaths=-/run/ditto-coding-executor/docker.sock -/run/ditto-coding-scorer/control.sock
+UMask=0077

@@ -111,6 +111,14 @@
       The mTLS transport requires the signed Unix-ingress scorer and verified
       mTLS identity. It cannot expose an independent executor path.
 
+- name: Reject artifact canary before the attested scorer binary exists
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_artifact_canary_enabled | bool) or coding_executor_scorer_runtime_materialize_enabled | bool
+    fail_msg: >-
+      The artifact canary requires the materialized attested scorer binary. It
+      cannot run from an unverified checkout build or alternate executable.
+
 - name: Reject an invalid mTLS transport profile
   ansible.builtin.assert:
     that:
@@ -704,10 +712,73 @@
             state: restarted
             daemon_reload: true
 
+    - name: Run the default-off ticket-bound S3 artifact canary
+      when: coding_executor_artifact_canary_enabled | bool
+      block:
+        - name: Require the fixed artifact canary profile
+          ansible.builtin.assert:
+            that:
+              - coding_executor_artifact_canary_unit == 'ditto-coding-executor-artifact-canary'
+              - coding_executor_artifact_canary_root == '/var/lib/ditto-coding-executor/artifact-canary'
+              - coding_executor_artifact_canary_temporary_directory == '/var/lib/ditto-coding-executor/artifact-canary/tmp'
+              - coding_executor_artifact_canary_receipt_path == '/var/lib/ditto-coding-executor/artifact-canary/receipt.json'
+              - coding_executor_artifact_canary_capability_path == '/var/lib/ditto-coding-executor/credentials/artifact-capability.json'
+            fail_msg: >-
+              Artifact canary input, staging, receipt, unit, and binary paths
+              are fixed. Do not make a caller-selected bearer file authoritative.
+
+        - name: Create private artifact canary directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            owner: "{{ coding_executor_scorer_user }}"
+            group: "{{ coding_executor_scorer_group }}"
+            mode: "0700"
+          loop:
+            - "{{ coding_executor_artifact_canary_root }}"
+            - "{{ coding_executor_artifact_canary_temporary_directory }}"
+
+        - name: Inspect the pre-positioned artifact capability
+          ansible.builtin.stat:
+            path: "{{ coding_executor_artifact_canary_capability_path }}"
+            follow: false
+          register: coding_executor_artifact_canary_capability
+
+        - name: Require a root-only bounded artifact capability
+          ansible.builtin.assert:
+            that:
+              - coding_executor_artifact_canary_capability.stat.exists
+              - coding_executor_artifact_canary_capability.stat.isreg
+              - not coding_executor_artifact_canary_capability.stat.islnk
+              - coding_executor_artifact_canary_capability.stat.uid == 0
+              - coding_executor_artifact_canary_capability.stat.gid == 0
+              - coding_executor_artifact_canary_capability.stat.mode == '0400'
+              - coding_executor_artifact_canary_capability.stat.size | int > 0
+              - coding_executor_artifact_canary_capability.stat.size | int <= 32768
+            fail_msg: >-
+              The ticket-bound S3 capability must be a pre-positioned root-only
+              regular file. Ansible never reads or copies its bearer URL.
+
+        - name: Install the artifact canary one-shot unit
+          ansible.builtin.template:
+            src: ditto-coding-executor-artifact-canary.service.j2
+            dest: "/etc/systemd/system/{{ coding_executor_artifact_canary_unit }}.service"
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Execute the artifact canary once
+          ansible.builtin.systemd_service:
+            name: "{{ coding_executor_artifact_canary_unit }}.service"
+            enabled: false
+            state: started
+            daemon_reload: true
+
     - name: Report that task-serving scorer and worker activation remain disabled
       when:
         - not (coding_executor_scorer_service_enabled | bool)
         - not (coding_executor_mtls_transport_enabled | bool)
+        - not (coding_executor_artifact_canary_enabled | bool)
       ansible.builtin.debug:
         msg: >-
           Dedicated rootless daemon is ready on {{ coding_executor_docker_host }},

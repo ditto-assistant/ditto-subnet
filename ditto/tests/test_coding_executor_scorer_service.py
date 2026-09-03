@@ -12,6 +12,9 @@ DEFAULTS = (ROLE / "defaults/main.yml").read_text()
 TASKS = (ROLE / "tasks/main.yml").read_text()
 UNIT = ROLE / "templates/ditto-coding-executor-scorer.service.j2"
 TRANSPORT_UNIT = ROLE / "templates/ditto-coding-executor-mtls-transport.service.j2"
+ARTIFACT_CANARY_UNIT = (
+    ROLE / "templates/ditto-coding-executor-artifact-canary.service.j2"
+)
 VERIFY_PATH = ROLE / "files/verify-scorer-service.py"
 RUNNER_PATH = ROLE / "files/run-scorer-service.py"
 MTLS_VERIFIER = ROLE / "files/verify-scorer-mtls-identity.sh"
@@ -88,3 +91,19 @@ def test_scorer_mtls_transport_is_separate_default_off_and_source_bounded() -> N
     assert "SupplementaryGroups" not in unit
     assert "coding_executor_mtls_bind_address }}" in TASKS
     assert "IPAddress:$expected_ip" in MTLS_VERIFIER.read_text()
+
+
+def test_ticket_bound_s3_canary_is_one_shot_default_off_and_docker_blind() -> None:
+    unit = ARTIFACT_CANARY_UNIT.read_text()
+    assert "coding_executor_artifact_canary_enabled: false" in DEFAULTS
+    assert "when: coding_executor_artifact_canary_enabled | bool" in TASKS
+    assert "coding_executor_scorer_runtime_materialize_enabled | bool" in TASKS
+    assert "Ansible never reads or copies its bearer URL" in TASKS
+    assert "Type=oneshot" in unit
+    assert "LoadCredential=artifact-capability.json:" in unit
+    assert "--artifact-canary" in unit
+    assert "RestrictAddressFamilies=AF_INET AF_INET6" in unit
+    assert "InaccessiblePaths=-/run/ditto-coding-executor/docker.sock" in unit
+    assert "SupplementaryGroups" not in unit
+    assert "DOCKER_HOST" not in unit
+    assert "VALIDATOR" not in unit

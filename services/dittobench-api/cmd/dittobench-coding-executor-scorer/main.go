@@ -3,8 +3,9 @@
 // endpoint, ticketless readiness, and validator-signed control requests on one
 // private Unix socket.
 // A separate default-off mode terminates the dedicated mTLS transport and
-// forwards only to that socket. It owns no wallet, provider or Platform
-// credential, assignment, or public listener.
+// forwards only to that socket. Another one-shot mode verifies one ticket-bound
+// S3 artifact without constructing the scorer host. It owns no wallet, provider
+// or Platform credential, assignment, or public listener.
 package main
 
 import (
@@ -26,6 +27,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ditto-assistant/dittobench-api/internal/codingartifactcanary"
+	"github.com/ditto-assistant/dittobench-api/internal/codingartifacts"
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontrol"
 	"github.com/ditto-assistant/dittobench-api/internal/codinghost"
@@ -42,6 +45,7 @@ const (
 	mtlsEnableEnvironment         = "DITTOBENCH_CODING_EXECUTOR_MTLS_TRANSPORT_ENABLED"
 	mtlsBindEnvironment           = "DITTOBENCH_CODING_EXECUTOR_MTLS_BIND_ADDRESS"
 	mtlsSourceCIDREnvironment     = "DITTOBENCH_CODING_EXECUTOR_MTLS_SOURCE_CIDR"
+	artifactCanaryEnvironment     = "DITTOBENCH_CODING_EXECUTOR_ARTIFACT_CANARY_ENABLED"
 	sourceGatewayEnvironment      = "DITTOBENCH_SANDBOX_HOST_GATEWAY_IP"
 	sourceHostname                = "host.docker.internal"
 	sourcePort                    = 11438
@@ -51,9 +55,16 @@ const (
 	mtlsCACredential              = "validator-ca.pem"
 	mtlsCertificateCredential     = "server-cert.pem"
 	mtlsKeyCredential             = "server-key.pem"
+	artifactCapabilityCredential  = "artifact-capability.json"
 )
 
 var sha256ImageDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+const (
+	artifactCanaryRoot      = "/var/lib/ditto-coding-executor/artifact-canary"
+	artifactCanaryTemporary = artifactCanaryRoot + "/tmp"
+	artifactCanaryReceipt   = artifactCanaryRoot + "/receipt.json"
+)
 
 type configuration struct {
 	socketPath      string
@@ -67,6 +78,10 @@ type mtlsConfiguration struct {
 	sourceCIDR      string
 	validatorHotkey string
 	credentials     string
+}
+
+type artifactCanaryConfiguration struct {
+	capabilityPath string
 }
 
 func configurationFromEnvironment(socketPath string, getenv func(string) string) (configuration, error) {
@@ -123,6 +138,19 @@ func mtlsConfigurationFromEnvironment(getenv func(string) string) (mtlsConfigura
 	return mtlsConfiguration{
 		bindAddress: bind.String(), sourceCIDR: sourceNetwork.String(),
 		validatorHotkey: hotkey, credentials: credentials,
+	}, nil
+}
+
+func artifactCanaryConfigurationFromEnvironment(getenv func(string) string) (artifactCanaryConfiguration, error) {
+	if !strings.EqualFold(strings.TrimSpace(getenv(artifactCanaryEnvironment)), "true") {
+		return artifactCanaryConfiguration{}, errors.New("coding artifact canary is disabled")
+	}
+	credentials := filepath.Clean(strings.TrimSpace(getenv("CREDENTIALS_DIRECTORY")))
+	if !filepath.IsAbs(credentials) || !strings.HasPrefix(credentials, "/run/credentials/") {
+		return artifactCanaryConfiguration{}, errors.New("coding artifact canary profile is invalid")
+	}
+	return artifactCanaryConfiguration{
+		capabilityPath: filepath.Join(credentials, artifactCapabilityCredential),
 	}, nil
 }
 
@@ -295,11 +323,43 @@ func runMTLSProxy(config mtlsConfiguration) error {
 	return server.Serve(tls.NewListener(listener, tlsConfig))
 }
 
+func runArtifactCanary(config artifactCanaryConfiguration) error {
+	fetcher, err := codingartifacts.New(codingartifacts.Config{
+		RequestTimeout:     2 * time.Minute,
+		TemporaryDirectory: artifactCanaryTemporary,
+		AllowLoopback:      false,
+		Now:                time.Now,
+	})
+	if err != nil {
+		return errors.New("coding artifact canary fetcher is unavailable")
+	}
+	canary, err := codingartifactcanary.New(codingartifactcanary.Config{
+		Artifacts:      fetcher,
+		CapabilityPath: config.capabilityPath,
+		ReceiptPath:    artifactCanaryReceipt,
+		Now:            time.Now,
+	})
+	if err != nil {
+		return errors.New("coding artifact canary is unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if err := canary.Run(ctx); err != nil {
+		return errors.New("coding artifact canary fetch failed")
+	}
+	return nil
+}
+
 func main() {
 	socketPath := flag.String("socket", defaultSocketPath, "fixed Unix control socket")
 	mtlsProxy := flag.Bool("mtls-proxy", false, "run the default-off mTLS transport proxy")
+	artifactCanary := flag.Bool("artifact-canary", false, "run the default-off S3 artifact canary")
 	version := flag.Bool("version", false, "print immutable artifact provenance")
 	flag.Parse()
+	if boolCount(*version, *mtlsProxy, *artifactCanary) > 1 {
+		fmt.Fprintln(os.Stderr, "coding executor scorer mode is ambiguous")
+		os.Exit(64)
+	}
 	if *version {
 		if err := json.NewEncoder(os.Stdout).Encode(release.Resolve(os.Getenv)); err != nil {
 			fmt.Fprintln(os.Stderr, "coding executor scorer cannot report version")
@@ -315,6 +375,18 @@ func main() {
 		}
 		if err := runMTLSProxy(config); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintln(os.Stderr, "coding executor mTLS transport stopped")
+			os.Exit(111)
+		}
+		return
+	}
+	if *artifactCanary {
+		config, err := artifactCanaryConfigurationFromEnvironment(os.Getenv)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "coding artifact canary is not enabled")
+			os.Exit(78)
+		}
+		if err := runArtifactCanary(config); err != nil {
+			fmt.Fprintln(os.Stderr, "coding artifact canary failed")
 			os.Exit(111)
 		}
 		return
@@ -350,4 +422,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "coding executor scorer stopped")
 		os.Exit(111)
 	}
+}
+
+func boolCount(values ...bool) int {
+	count := 0
+	for _, value := range values {
+		if value {
+			count++
+		}
+	}
+	return count
 }
