@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v0.187.0 (2026-09-03)
+
+### Features
+
+- **coding**: Enforce signed executor control ingress
+  ([#1481](https://github.com/ditto-assistant/ditto-subnet/pull/1481),
+  [`00c5866`](https://github.com/ditto-assistant/ditto-subnet/commit/00c5866a26c30fda68b728b1e4cb2de6b022830c))
+
+- **infra**: Add coding executor mTLS transport
+  ([#1483](https://github.com/ditto-assistant/ditto-subnet/pull/1483),
+  [`c68f645`](https://github.com/ditto-assistant/ditto-subnet/commit/c68f6455538ef6ee9e3b94ded2e7a617b81f03f5))
+
+- **validator**: Add coding executor mTLS supervisor client
+  ([#1484](https://github.com/ditto-assistant/ditto-subnet/pull/1484),
+  [`f623dfe`](https://github.com/ditto-assistant/ditto-subnet/commit/f623dfece048112f8f76ad80c895e6ac970ea628))
+
+
 ## v0.186.0 (2026-09-03)
 
 ### Bug Fixes
