@@ -2,6 +2,31 @@
 
 <!-- version list -->
 
+## v0.183.0 (2026-09-03)
+
+### Features
+
+- **coding**: Add executor scorer artifact
+  ([#1432](https://github.com/ditto-assistant/ditto-subnet/pull/1432),
+  [`a89f542`](https://github.com/ditto-assistant/ditto-subnet/commit/a89f54214949b243e7cb37ef2cebce510b902cf1))
+
+- **coding**: Wire executor scorer host
+  ([#1434](https://github.com/ditto-assistant/ditto-subnet/pull/1434),
+  [`2ea135f`](https://github.com/ditto-assistant/ditto-subnet/commit/2ea135fdea2a4fa929ae059e1142eb4b019dfb4d))
+
+- **infra**: Add attested coding executor client guard
+  ([#1430](https://github.com/ditto-assistant/ditto-subnet/pull/1430),
+  [`43360e1`](https://github.com/ditto-assistant/ditto-subnet/commit/43360e10abecca14a265c2259796a28ae9343bb7))
+
+- **release**: Add scorer release manifest
+  ([#1436](https://github.com/ditto-assistant/ditto-subnet/pull/1436),
+  [`9274dbf`](https://github.com/ditto-assistant/ditto-subnet/commit/9274dbfde46fcb1d2c2b8f11e97ae56fe8f8833a))
+
+- **release**: Publish signed scorer image
+  ([#1439](https://github.com/ditto-assistant/ditto-subnet/pull/1439),
+  [`45e3b46`](https://github.com/ditto-assistant/ditto-subnet/commit/45e3b46d2db8780ceca4cbd26e5434d558c26113))
+
+
 ## v0.182.0 (2026-09-03)
 
 ### Features
