@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.188.0 (2026-09-03)
+
+### Features
+
+- **validator**: Add coding executor mTLS publication client
+  ([#1485](https://github.com/ditto-assistant/ditto-subnet/pull/1485),
+  [`22198fd`](https://github.com/ditto-assistant/ditto-subnet/commit/22198fd5354a5ab313a40315a23847eeadd4acb3))
+
+- **validator**: Wire coding executor mTLS runtime
+  ([#1487](https://github.com/ditto-assistant/ditto-subnet/pull/1487),
+  [`78d20ef`](https://github.com/ditto-assistant/ditto-subnet/commit/78d20ef0754d780566a16999c5a5129f0b758f63))
+
+
 ## v0.187.0 (2026-09-03)
 
 ### Features
