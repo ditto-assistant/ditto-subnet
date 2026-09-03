@@ -1,8 +1,8 @@
 // Binary dittobench-coding-executor-scorer is the immutable, dedicated
-// artifact for a future coding executor host. It deliberately exposes only a
-// Unix-domain liveness endpoint and refuses to start unless an operator enables
-// its future deployment profile. It owns no ticket, wallet, provider, Platform
-// credential, Docker client, scorer run, or TCP listener.
+// artifact for a future coding executor host. It exposes a constant liveness
+// endpoint and validator-signed control requests on one private Unix socket,
+// and refuses to start unless an operator enables its deployment profile. It
+// owns no wallet, provider or Platform credential, assignment, or TCP listener.
 package main
 
 import (
@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
+	"github.com/ditto-assistant/dittobench-api/internal/codingcontrol"
 	"github.com/ditto-assistant/dittobench-api/internal/codinghost"
 	"github.com/ditto-assistant/dittobench-api/internal/release"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
@@ -32,6 +33,7 @@ const (
 	defaultSocketPath             = "/run/ditto-coding-scorer/control.sock"
 	enableEnvironment             = "DITTOBENCH_CODING_EXECUTOR_SCORER_ENABLED"
 	runtimeImageDigestEnvironment = "DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST"
+	validatorHotkeyEnvironment    = "DITTOBENCH_CODING_EXECUTOR_VALIDATOR_HOTKEY"
 	sourceGatewayEnvironment      = "DITTOBENCH_SANDBOX_HOST_GATEWAY_IP"
 	sourceHostname                = "host.docker.internal"
 	sourcePort                    = 11438
@@ -42,9 +44,10 @@ const (
 var sha256ImageDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type configuration struct {
-	socketPath    string
-	sourceGateway string
-	enabled       bool
+	socketPath      string
+	sourceGateway   string
+	validatorHotkey string
+	enabled         bool
 }
 
 func configurationFromEnvironment(socketPath string, getenv func(string) string) (configuration, error) {
@@ -56,7 +59,14 @@ func configurationFromEnvironment(socketPath string, getenv func(string) string)
 		if err != nil {
 			return configuration{}, err
 		}
-		return configuration{socketPath: socketPath, sourceGateway: gateway, enabled: true}, nil
+		hotkey := strings.TrimSpace(getenv(validatorHotkeyEnvironment))
+		if !codingcontrol.ValidValidatorHotkey(hotkey) {
+			return configuration{}, errors.New("coding executor scorer validator authority is invalid")
+		}
+		return configuration{
+			socketPath: socketPath, sourceGateway: gateway,
+			validatorHotkey: hotkey, enabled: true,
+		}, nil
 	}
 	return configuration{}, errors.New("coding executor scorer is disabled")
 }
@@ -79,12 +89,20 @@ func sourcePublicBaseURL() string {
 	return "http://" + sourceHostname + ":" + strconv.Itoa(sourcePort)
 }
 
-func controlMux(host *codinghost.Host) *http.ServeMux {
+func controlMux(ingress *codingcontrol.Ingress) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Cache-Control", "no-store")
 		response.WriteHeader(http.StatusNoContent)
 	})
+	if ingress != nil {
+		mux.Handle("/v1/coding/", ingress.Handler())
+	}
+	return mux
+}
+
+func privateControlRoutes(host *codinghost.Host) http.Handler {
+	mux := http.NewServeMux()
 	mux.Handle("POST /v1/coding/supervisor/{operation}", host.SupervisorHandler())
 	mux.Handle("POST /v1/coding/publications/{operation}", host.PublicationHandler())
 	return mux
@@ -115,7 +133,7 @@ func loadPolicy(path string) (codingcontract.InferencePolicy, error) {
 	return policy, nil
 }
 
-func buildHost(config configuration) (*codinghost.Host, net.Listener, error) {
+func buildHost(config configuration) (*codinghost.Host, net.Listener, string, error) {
 	tokenPath := strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_EXECUTOR_CONTROL_TOKEN_FILE"))
 	privateRoot := strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_EXECUTOR_PRIVATE_ROOT"))
 	imageRepository := strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY"))
@@ -124,19 +142,19 @@ func buildHost(config configuration) (*codinghost.Host, net.Listener, error) {
 		!strings.EqualFold(strings.TrimSpace(os.Getenv("DITTOBENCH_REQUIRE_ROOTLESS_DOCKER")), "true") ||
 		!strings.EqualFold(strings.TrimSpace(os.Getenv("DITTOBENCH_REQUIRE_ISOLATED_DOCKER_DAEMON")), "true") ||
 		strings.TrimSpace(os.Getenv("DOCKER_HOST")) != "unix:///run/ditto-coding-executor/docker.sock" {
-		return nil, nil, errors.New("coding executor scorer runtime profile is incomplete")
+		return nil, nil, "", errors.New("coding executor scorer runtime profile is incomplete")
 	}
 	token, err := os.ReadFile(tokenPath)
 	if err != nil || len(strings.TrimSpace(string(token))) < 32 {
-		return nil, nil, errors.New("coding executor scorer token is unavailable")
+		return nil, nil, "", errors.New("coding executor scorer token is unavailable")
 	}
 	policy, err := loadPolicy(policyFile)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	source, err := net.Listen("tcp4", sourceListenerAddress(config.sourceGateway))
 	if err != nil {
-		return nil, nil, errors.New("coding executor scorer source listener is unavailable")
+		return nil, nil, "", errors.New("coding executor scorer source listener is unavailable")
 	}
 	docker := sandbox.NewLocalDocker()
 	docker.HostGatewayIP = config.sourceGateway
@@ -149,9 +167,9 @@ func buildHost(config configuration) (*codinghost.Host, net.Listener, error) {
 	})
 	if err != nil {
 		_ = source.Close()
-		return nil, nil, errors.New("coding executor scorer host is unavailable")
+		return nil, nil, "", errors.New("coding executor scorer host is unavailable")
 	}
-	return host, source, nil
+	return host, source, strings.TrimSpace(string(token)), nil
 }
 
 func listenUnix(path string) (net.Listener, error) {
@@ -194,20 +212,29 @@ func main() {
 		fmt.Fprintln(os.Stderr, "coding executor scorer is not enabled")
 		os.Exit(78)
 	}
-	host, source, err := buildHost(config)
+	host, source, controlToken, err := buildHost(config)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "coding executor scorer runtime is unavailable")
 		os.Exit(78)
 	}
 	defer source.Close()
 	defer func() { _ = host.Close(context.Background()) }()
+	ingress, err := codingcontrol.New(codingcontrol.Config{
+		Downstream: privateControlRoutes(host), ControlToken: controlToken,
+		ValidatorHotkey: config.validatorHotkey, Now: time.Now,
+		VerifySignature: codingcontract.VerifyExecutorSR25519, MaximumNonces: 65536,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "coding executor scorer control ingress is unavailable")
+		os.Exit(78)
+	}
 	listener, err := listenUnix(config.socketPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "coding executor scorer socket is unavailable")
 		os.Exit(111)
 	}
 	defer listener.Close()
-	if err := http.Serve(listener, controlMux(host)); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := http.Serve(listener, controlMux(ingress)); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, "coding executor scorer stopped")
 		os.Exit(111)
 	}

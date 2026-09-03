@@ -22,13 +22,31 @@ func TestConfigurationIsDefaultOffAndPinsTheUnixSocket(t *testing.T) {
 			return "true"
 		case sourceGatewayEnvironment:
 			return "192.0.2.44"
+		case validatorHotkeyEnvironment:
+			return "5" + strings.Repeat("A", 47)
 		default:
 			return ""
 		}
 	}
 	config, err := configurationFromEnvironment(defaultSocketPath, enabled)
-	if err != nil || !config.enabled || config.socketPath != defaultSocketPath || config.sourceGateway != "192.0.2.44" {
+	if err != nil || !config.enabled || config.socketPath != defaultSocketPath ||
+		config.sourceGateway != "192.0.2.44" || config.validatorHotkey == "" {
 		t.Fatalf("config=%#v err=%v", config, err)
+	}
+	malformed := func(key string) string {
+		if key == enableEnvironment {
+			return "true"
+		}
+		if key == sourceGatewayEnvironment {
+			return "192.0.2.44"
+		}
+		if key == validatorHotkeyEnvironment {
+			return "not-an-ss58-hotkey"
+		}
+		return ""
+	}
+	if _, err := configurationFromEnvironment(defaultSocketPath, malformed); err == nil {
+		t.Fatal("malformed validator authority was accepted")
 	}
 }
 

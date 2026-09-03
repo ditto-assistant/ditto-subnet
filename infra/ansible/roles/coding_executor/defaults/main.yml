@@ -96,6 +96,9 @@ coding_executor_capability_ingress_guard_unit: ditto-coding-executor-capability-
 # placing its value in Ansible, an environment file, or process arguments.
 coding_executor_scorer_service_enabled: false
 coding_executor_scorer_service_unit: ditto-coding-executor-scorer
+# Non-secret identity of the sole validator authorized to sign this host's
+# control envelopes. Empty keeps the already-default-off scorer unstartable.
+coding_executor_validator_hotkey: ""
 coding_executor_scorer_token_directory: /var/lib/ditto-coding-executor/credentials
 coding_executor_scorer_token_source_path: /var/lib/ditto-coding-executor/credentials/scorer-control-token
 coding_executor_scorer_private_root: /var/lib/ditto-coding-scorer/private

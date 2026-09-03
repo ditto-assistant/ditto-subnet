@@ -33,6 +33,9 @@ def test_scorer_service_is_default_off_and_credential_bound() -> None:
     ):
         assert dependency in TASKS
     assert "LoadCredential=control-token:" in unit
+    assert 'coding_executor_validator_hotkey: ""' in DEFAULTS
+    assert "coding_executor_validator_hotkey is match" in TASKS
+    assert "DITTOBENCH_CODING_EXECUTOR_VALIDATOR_HOTKEY=" in unit
     assert "CREDENTIALS_DIRECTORY" in RUNNER_PATH.read_text()
     assert "EnvironmentFile=" not in unit
     assert "AF_UNIX AF_INET" in unit
