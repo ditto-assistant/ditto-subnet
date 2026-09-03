@@ -142,6 +142,17 @@ or network listener. The next functional scorer slice needs its own immutable
 release artifact and a separately reviewed paired mTLS validator-to-executor
 transport.
 
+## Dedicated scorer artifact
+
+`Dockerfile` now has a separately built `coding-executor-scorer` target. Its
+`dittobench-coding-executor-scorer` binary is provenance-stamped and supports
+only a fixed Unix-domain constant-health endpoint when a future deployment
+profile explicitly enables it. Its default is fail-closed; it has no TCP
+listener, supervisor/publication route, Docker client, ticket, wallet, secret,
+or provider/Platform authority. CI builds this artifact without publishing or
+deploying it. A later signed release/staging slice must add the real scorer
+configuration and another later paired mTLS slice may connect a validator.
+
 Destroying a created cohort is intentionally not a routine rollback: the shared
 compute module has deletion protection. Rollback during the shadow phase means
 leave the hosts present and disable the later daemon/worker configuration; any

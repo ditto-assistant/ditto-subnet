@@ -48,6 +48,11 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
       -X 'github.com/ditto-assistant/dittobench-api/internal/release.sourceRevision=${DITTOBENCH_SOURCE_SHA}' \
       -X 'github.com/ditto-assistant/dittobench-api/internal/release.softwareVersion=${DITTOBENCH_SOFTWARE_VERSION}'" \
     -o /out/dittobench-api ./cmd/dittobench-api && \
+    CGO_ENABLED=1 GOOS=linux go build \
+    -ldflags="-s -w -linkmode external -extldflags '-static' \
+      -X 'github.com/ditto-assistant/dittobench-api/internal/release.sourceRevision=${DITTOBENCH_SOURCE_SHA}' \
+      -X 'github.com/ditto-assistant/dittobench-api/internal/release.softwareVersion=${DITTOBENCH_SOFTWARE_VERSION}'" \
+    -o /out/dittobench-coding-executor-scorer ./cmd/dittobench-coding-executor-scorer && \
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" \
       -o /out/updater-bootstrap ./cmd/updater-bootstrap
 
@@ -106,3 +111,18 @@ ENV DITTOBENCH_SOFTWARE_VERSION=${DITTOBENCH_SOFTWARE_VERSION}
 ENV DITTOBENCH_SOURCE_SHA=${DITTOBENCH_SOURCE_SHA}
 EXPOSE 8000
 ENTRYPOINT ["/dittobench-api", "-port", "8000"]
+
+# ---- dedicated coding executor scorer artifact ----
+# This target is intentionally not the normal DittoBench scorer and exposes no
+# TCP API. It is built and provenance-stamped now; a later reviewed release and
+# paired mTLS transport are required before it can be staged or receive work.
+FROM gcr.io/distroless/static-debian12:nonroot AS coding-executor-scorer
+ARG DITTOBENCH_SOFTWARE_VERSION
+ARG DITTOBENCH_SOURCE_SHA
+LABEL io.heyditto.dittobench.coding-executor-scorer-contract="1"
+LABEL org.opencontainers.image.revision="${DITTOBENCH_SOURCE_SHA}"
+COPY --from=build /out/dittobench-coding-executor-scorer /dittobench-coding-executor-scorer
+ENV DITTOBENCH_SOFTWARE_VERSION=${DITTOBENCH_SOFTWARE_VERSION}
+ENV DITTOBENCH_SOURCE_SHA=${DITTOBENCH_SOURCE_SHA}
+USER 65532:65532
+ENTRYPOINT ["/dittobench-coding-executor-scorer"]
