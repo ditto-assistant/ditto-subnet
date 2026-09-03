@@ -1,0 +1,19 @@
+{
+  "builder": {
+    "gc": {
+      "enabled": true,
+      "defaultKeepStorage": "40GB"
+    }
+  },
+  "labels": [
+    "io.heyditto.dittobench.isolated=true"
+  ],
+  "log-driver": "local",
+  "log-opts": {
+    "compress": "false",
+    "max-size": "8m",
+    "max-file": "1"
+  },
+  "ipv6": false,
+  "no-new-privileges": true
+}
