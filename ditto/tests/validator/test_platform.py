@@ -477,6 +477,7 @@ async def test_coding_certification_harness_client_posts_signed_lease_request() 
 async def test_coding_claim_client_signs_claim_start_and_heartbeat() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     ticket_id = UUID("33333333-3333-4333-8333-333333333333")
+    run_row_id = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
     instance_id = "coding-worker-instance-001"
     calls = 0
 
@@ -512,6 +513,7 @@ async def test_coding_claim_client_signs_claim_start_and_heartbeat() -> None:
             message = coding_claim_next_signing_message(
                 validator_hotkey=payload.validator_hotkey,
                 instance_id=payload.instance_id,
+                run_row_id=payload.run_row_id,
                 nonce=payload.nonce,
                 requested_at=payload.requested_at,
             )
@@ -525,6 +527,7 @@ async def test_coding_claim_client_signs_claim_start_and_heartbeat() -> None:
                 action=action,
                 validator_hotkey=payload.validator_hotkey,
                 instance_id=payload.instance_id,
+                run_row_id=payload.run_row_id,
                 ticket_id=payload.ticket_id,
                 claim_generation=payload.claim_generation,
                 nonce=payload.nonce,
@@ -550,7 +553,7 @@ async def test_coding_claim_client_signs_claim_start_and_heartbeat() -> None:
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
-        claim = await client.claim_next_coding_ticket(instance_id)
+        claim = await client.claim_next_coding_ticket(instance_id, run_row_id)
         assert claim is not None
         started = await client.start_coding_ticket_claim(claim)
         await client.heartbeat_coding_ticket_claim(started)
@@ -571,7 +574,10 @@ async def test_coding_claim_client_treats_no_store_404_as_empty_queue() -> None:
             ),  # type: ignore[arg-type]
             http,
             keypair,
-        ).claim_next_coding_ticket("coding-worker-instance-001")
+        ).claim_next_coding_ticket(
+            "coding-worker-instance-001",
+            UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        )
     assert claim is None
 
 

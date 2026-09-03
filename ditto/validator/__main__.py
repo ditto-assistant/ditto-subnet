@@ -170,6 +170,8 @@ async def _amain() -> int:
                 )
                 coding_worker: CodingShadowWorker | None = None
                 if config.coding_shadow_enabled:
+                    if config.coding_shadow_run_id is None:  # pragma: no cover
+                        raise RuntimeError("shadow coding run fence is unavailable")
                     publication = CodingPublicationClient(
                         base_url=config.dittobench_api_url,
                         control_token=config.dittobench_control_token,
@@ -181,11 +183,13 @@ async def _amain() -> int:
                         runtime=coding_runtime,
                         publication=publication,
                         instance_id=config.coding_shadow_instance_id,
+                        run_row_id=config.coding_shadow_run_id,
                         poll_seconds=config.coding_shadow_poll_seconds,
                     )
                     logger.info(
-                        "shadow coding worker enabled instance=%s",
+                        "shadow coding worker enabled instance=%s run=%s",
                         config.coding_shadow_instance_id,
+                        config.coding_shadow_run_id,
                     )
                 _apply_ditto_logging()  # re-assert: bittensor has initialised
 

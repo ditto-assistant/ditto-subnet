@@ -68,12 +68,14 @@ def _next_payload(**updates) -> dict:
     request = CodingClaimNextRequest(
         validator_hotkey=_VALIDATOR,
         instance_id=_INSTANCE,
+        run_row_id=_RUN,
         nonce=nonce,
         requested_at=requested_at,
         signature=_KEYPAIR.sign(
             coding_claim_next_signing_message(
                 validator_hotkey=_VALIDATOR,
                 instance_id=_INSTANCE,
+                run_row_id=_RUN,
                 nonce=nonce,
                 requested_at=requested_at,
             )
@@ -89,6 +91,7 @@ def _action_payload(action: str, **updates) -> dict:
     request = CodingClaimActionRequest(
         validator_hotkey=_VALIDATOR,
         instance_id=_INSTANCE,
+        run_row_id=_RUN,
         ticket_id=_TICKET,
         claim_generation=1,
         nonce=nonce,
@@ -98,6 +101,7 @@ def _action_payload(action: str, **updates) -> dict:
                 action=action,  # type: ignore[arg-type]
                 validator_hotkey=_VALIDATOR,
                 instance_id=_INSTANCE,
+                run_row_id=_RUN,
                 ticket_id=_TICKET,
                 claim_generation=1,
                 nonce=nonce,
@@ -176,6 +180,9 @@ async def test_claim_next_start_and_heartbeat_are_signed_and_no_store(
     assert mocks.start.await_count == 1
     assert mocks.heartbeat.await_count == 1
     assert mocks.consume.await_count == 3
+    assert mocks.claim.await_args.kwargs["run_row_id"] == _RUN
+    assert mocks.start.await_args.kwargs["run_row_id"] == _RUN
+    assert mocks.heartbeat.await_args.kwargs["run_row_id"] == _RUN
 
 
 async def test_claim_endpoints_reject_forgery_replay_mismatch_and_empty_queue(
@@ -190,6 +197,13 @@ async def test_claim_endpoints_reject_forgery_replay_mismatch_and_empty_queue(
         await client.post(
             "/api/v1/validator/coding-shadow/claims/next",
             json=forged,
+        )
+    ).status_code == 401
+    run_forgery = _next_payload(run_row_id=str(uuid4()))
+    assert (
+        await client.post(
+            "/api/v1/validator/coding-shadow/claims/next",
+            json=run_forgery,
         )
     ).status_code == 401
     mocks.consume.side_effect = ValidatorRequestReplayError("replay")

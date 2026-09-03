@@ -397,6 +397,7 @@ def sign_coding_claim_next(
     *,
     validator_hotkey: str,
     instance_id: str,
+    run_row_id: UUID,
     nonce: UUID,
     requested_at: datetime,
 ) -> str:
@@ -404,6 +405,7 @@ def sign_coding_claim_next(
         coding_claim_next_signing_message(
             validator_hotkey=validator_hotkey,
             instance_id=instance_id,
+            run_row_id=run_row_id,
             nonce=nonce,
             requested_at=requested_at,
         )
@@ -417,6 +419,7 @@ def sign_coding_claim_action(
     action: Literal["start", "heartbeat"],
     validator_hotkey: str,
     instance_id: str,
+    run_row_id: UUID,
     ticket_id: UUID,
     claim_generation: int,
     nonce: UUID,
@@ -427,6 +430,7 @@ def sign_coding_claim_action(
             action=action,
             validator_hotkey=validator_hotkey,
             instance_id=instance_id,
+            run_row_id=run_row_id,
             ticket_id=ticket_id,
             claim_generation=claim_generation,
             nonce=nonce,

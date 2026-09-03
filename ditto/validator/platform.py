@@ -474,6 +474,7 @@ class PlatformClient:
     async def claim_next_coding_ticket(
         self,
         instance_id: str,
+        run_row_id: UUID,
     ) -> CodingClaimResponse | None:
         """Claim or recover the one shadow coding ticket for this instance."""
 
@@ -482,12 +483,14 @@ class PlatformClient:
         payload = CodingClaimNextRequest(
             validator_hotkey=self._config.validator_hotkey,
             instance_id=instance_id,
+            run_row_id=run_row_id,
             nonce=nonce,
             requested_at=requested_at,
             signature=sign_coding_claim_next(
                 self._keypair,
                 validator_hotkey=self._config.validator_hotkey,
                 instance_id=instance_id,
+                run_row_id=run_row_id,
                 nonce=nonce,
                 requested_at=requested_at,
             ),
@@ -497,6 +500,7 @@ class PlatformClient:
             payload=payload,
             allow_empty=True,
             expected_instance_id=instance_id,
+            expected_run_row_id=run_row_id,
         )
 
     async def start_coding_ticket_claim(
@@ -525,6 +529,7 @@ class PlatformClient:
         payload = CodingClaimActionRequest(
             validator_hotkey=self._config.validator_hotkey,
             instance_id=claim.instance_id,
+            run_row_id=claim.run_row_id,
             ticket_id=claim.ticket_id,
             claim_generation=claim.claim_generation,
             nonce=nonce,
@@ -534,6 +539,7 @@ class PlatformClient:
                 action=action,
                 validator_hotkey=self._config.validator_hotkey,
                 instance_id=claim.instance_id,
+                run_row_id=claim.run_row_id,
                 ticket_id=claim.ticket_id,
                 claim_generation=claim.claim_generation,
                 nonce=nonce,
@@ -545,6 +551,7 @@ class PlatformClient:
             payload=payload,
             allow_empty=False,
             expected_instance_id=claim.instance_id,
+            expected_run_row_id=claim.run_row_id,
             expected_ticket_id=claim.ticket_id,
             expected_generation=claim.claim_generation,
         )
@@ -559,6 +566,7 @@ class PlatformClient:
         payload: CodingClaimNextRequest,
         allow_empty: bool,
         expected_instance_id: str,
+        expected_run_row_id: UUID,
         expected_ticket_id: UUID | None = None,
         expected_generation: int | None = None,
     ) -> CodingClaimResponse | None:
@@ -609,6 +617,7 @@ class PlatformClient:
         if (
             claim.validator_hotkey != self._config.validator_hotkey
             or claim.instance_id != expected_instance_id
+            or claim.run_row_id != expected_run_row_id
             or (
                 expected_ticket_id is not None and claim.ticket_id != expected_ticket_id
             )
