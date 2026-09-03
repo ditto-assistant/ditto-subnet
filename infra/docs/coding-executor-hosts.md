@@ -45,6 +45,56 @@ scorer process, join only that process to the client group, prove the complete
 candidate proxy policy, and retain every coding feature gate false until a
 reviewed canary activation.
 
+## Production runtime-bundle staging
+
+The public `Dockerfile.coding-supervisor` builds a synthetic certification
+fixture. Its fixture label is rejected by normal executor preflight, so it is
+never a production runtime input. A repository-specific supervisor and trusted
+test driver remain a private-artifact deliverable; this repository does not
+invent a production image digest or driver identity.
+
+After that artifact has an approved immutable manifest, an operator may use the
+separate `coding_executor_runtime_bundle_enabled=true` control. It stays false
+by default and requires a root-owned `0600` (or stricter) manifest and OCI
+archive at the fixed staging paths below, plus the complete raw manifest
+SHA-256 in protected host configuration:
+
+```text
+/var/lib/ditto-coding-executor/staged/runtime-manifest.json
+/var/lib/ditto-coding-executor/staged/supervisor.oci.tar
+```
+
+The exact v1 manifest field set is `schema`, `source_revision`, `platform`,
+`supervisor_contract`, `image_repository`, `image_digest`,
+`trusted_test_driver_digest`, `archive_sha256`, and `fixture`. It fixes the
+schema to `dittobench-coding-runtime-manifest-v1`, platform to `linux/amd64`,
+supervisor contract to `1`, and `fixture` to JSON `false`; the source revision
+is a full lowercase Git SHA and every artifact field is a lowercase SHA-256
+pin. Unknown or duplicate fields are rejected rather than becoming future
+authority by accident.
+
+The verifier rejects symlinks, non-root-readable files, mutable/missing pins,
+fixture declarations, non-`linux/amd64` manifests, incorrect supervisor
+contract, archive drift, and malformed or duplicate-key JSON. The raw manifest
+hash is the root of trust for this staging layer; it binds the source revision,
+exact image and trusted-test-driver digests, and archive SHA-256. The host does
+not receive Artifact Registry, Secret Manager, provider, Platform, wallet, or
+validator access to fetch the bundle itself.
+
+An operator transfers the manifest/archive pair through the protected IAP or
+release path, then runs the root-only `stage-runtime-bundle.sh` helper with
+absolute source paths and the approved manifest SHA-256. The helper copies to a
+root-owned temporary directory, verifies the copied pair before it is
+published to the fixed paths, and never contacts a registry or Docker. It does
+not accept a caller-selected destination or manifest bytes through Ansible.
+
+Verification does **not** load the archive into Docker, inspect an image,
+install a scorer, add a socket consumer, or start any candidate process. A
+later separately reviewed slice must prove the loaded image's exact digest,
+platform, labels—including rejection of the certification fixture—and driver
+identity before the dedicated scorer client can receive socket access. All
+coding gates remain false through this staging step.
+
 Destroying a created cohort is intentionally not a routine rollback: the shared
 compute module has deletion protection. Rollback during the shadow phase means
 leave the hosts present and disable the later daemon/worker configuration; any
