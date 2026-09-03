@@ -129,7 +129,11 @@ class HippiusObjectLockTransport(Protocol):
 
     async def enable_versioning(self, *, bucket: str) -> None: ...
 
+    async def versioning_enabled(self, *, bucket: str) -> bool: ...
+
     async def configure_compliance_retention(self, *, bucket: str) -> None: ...
+
+    async def compliance_retention_days(self, *, bucket: str) -> int | None: ...
 
     async def put_object(self, *, bucket: str, key: str, body: bytes) -> str: ...
 
@@ -186,6 +190,14 @@ class AiobotoHippiusObjectLockTransport:
         except Exception as error:
             _raise_safe(error)
 
+    async def versioning_enabled(self, *, bucket: str) -> bool:
+        try:
+            async with self._client() as s3:
+                response = await s3.get_bucket_versioning(Bucket=bucket)
+        except Exception as error:
+            _raise_safe(error)
+        return response.get("Status") == "Enabled"
+
     async def configure_compliance_retention(self, *, bucket: str) -> None:
         try:
             async with self._client() as s3:
@@ -198,6 +210,21 @@ class AiobotoHippiusObjectLockTransport:
                 )
         except Exception as error:
             _raise_safe(error)
+
+    async def compliance_retention_days(self, *, bucket: str) -> int | None:
+        try:
+            async with self._client() as s3:
+                response = await s3.get_object_lock_configuration(Bucket=bucket)
+        except Exception as error:
+            _raise_safe(error)
+        try:
+            retention = response["ObjectLockConfiguration"]["Rule"]["DefaultRetention"]
+            if retention.get("Mode") != "COMPLIANCE":
+                return None
+            days = retention.get("Days")
+            return days if isinstance(days, int) else None
+        except (KeyError, TypeError):
+            return None
 
     async def put_object(self, *, bucket: str, key: str, body: bytes) -> str:
         try:
@@ -276,7 +303,15 @@ async def run_hippius_object_lock_canary(
         )
     await transport.create_disposable_bucket(bucket=bucket)
     await transport.enable_versioning(bucket=bucket)
+    if not await transport.versioning_enabled(bucket=bucket):
+        raise HippiusProbeTransportError(
+            "Hippius Object Lock versioning readback was inconsistent"
+        )
     await transport.configure_compliance_retention(bucket=bucket)
+    if await transport.compliance_retention_days(bucket=bucket) != 1:
+        raise HippiusProbeTransportError(
+            "Hippius Object Lock retention readback was inconsistent"
+        )
     first_version = await transport.put_object(
         bucket=bucket, key=_OBJECT_KEY, body=first_body
     )
@@ -297,19 +332,19 @@ async def run_hippius_object_lock_canary(
         raise HippiusProbeTransportError(
             "Hippius Object Lock allowed permanent deletion of a locked version"
         )
-    readback = await transport.get_version(
-        bucket=bucket, key=_OBJECT_KEY, version_id=first_version
-    )
-    if readback != first_body:
-        raise HippiusProbeTransportError(
-            "Hippius Object Lock locked-version readback was inconsistent"
-        )
     delete_marker_created = await transport.delete_current(
         bucket=bucket, key=_OBJECT_KEY
     )
     if not delete_marker_created:
         raise HippiusProbeTransportError(
             "Hippius Object Lock delete did not create a delete marker"
+        )
+    readback = await transport.get_version(
+        bucket=bucket, key=_OBJECT_KEY, version_id=first_version
+    )
+    if readback != first_body:
+        raise HippiusProbeTransportError(
+            "Hippius Object Lock locked version was unavailable after delete marker"
         )
     return HippiusObjectLockReceipt(
         schema=HIPPIUS_OBJECT_LOCK_RECEIPT_SCHEMA,

@@ -26,7 +26,7 @@ def _config(**overrides: object) -> HippiusObjectLockCanaryConfig:
     values: dict[str, object] = {
         "endpoint_url": "https://s3.hippius.com",
         "master_credential": HippiusProbeCredential(
-            access_key="hip_object_lock_access", secret_key="object-lock-secret"
+            "hip_object_lock_access", "object-lock-value"
         ),
     }
     values.update(overrides)
@@ -49,9 +49,17 @@ class _Transport:
         assert bucket == self.bucket
         self.versioning = True
 
+    async def versioning_enabled(self, *, bucket: str) -> bool:
+        assert bucket == self.bucket
+        return self.versioning
+
     async def configure_compliance_retention(self, *, bucket: str) -> None:
         assert bucket == self.bucket and self.versioning
         self.retention = True
+
+    async def compliance_retention_days(self, *, bucket: str) -> int | None:
+        assert bucket == self.bucket
+        return 1 if self.retention else None
 
     async def put_object(self, *, bucket: str, key: str, body: bytes) -> str:
         assert bucket == self.bucket and key == "canary.bin" and self.retention
@@ -104,6 +112,25 @@ def test_object_lock_canary_rejects_permanent_deletion() -> None:
             run_hippius_object_lock_canary(
                 config=_config(),
                 transport=_Transport(delete_allowed=True),
+                source_sha="a" * 40,
+                provider_profile_payload_sha256="b" * 64,
+                now=_clock(),
+                synthetic_bytes=lambda size: b"x" * size,
+            )
+        )
+
+
+def test_object_lock_canary_requires_configuration_readback() -> None:
+    class _UnobservableVersioning(_Transport):
+        async def versioning_enabled(self, *, bucket: str) -> bool:
+            assert bucket == self.bucket
+            return False
+
+    with pytest.raises(HippiusProbeTransportError, match="versioning readback"):
+        asyncio.run(
+            run_hippius_object_lock_canary(
+                config=_config(),
+                transport=_UnobservableVersioning(),
                 source_sha="a" * 40,
                 provider_profile_payload_sha256="b" * 64,
                 now=_clock(),
