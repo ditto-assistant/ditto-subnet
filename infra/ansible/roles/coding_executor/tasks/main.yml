@@ -8,6 +8,14 @@
       explicitly enabled in reviewed host configuration. It cannot be enabled
       as a standalone image-staging path.
 
+- name: Reject runtime-image loading without a verified staged bundle
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_runtime_image_load_enabled | bool) or coding_executor_runtime_bundle_enabled | bool
+    fail_msg: >-
+      Runtime-image loading requires the verified runtime-bundle control. It
+      cannot pull from a registry or load an unverified archive.
+
 - name: Report that the coding executor daemon is deliberately disabled
   ansible.builtin.debug:
     msg: >-
@@ -161,6 +169,7 @@
         group: root
         mode: "0755"
       loop:
+        - load-runtime-bundle.py
         - stage-runtime-bundle.sh
         - verify-runtime-bundle.py
 
@@ -192,10 +201,38 @@
               - "{{ coding_executor_runtime_manifest_sha256 }}"
           changed_when: false
 
+    - name: Load and attest a verified coding runtime image without starting it
+      when: coding_executor_runtime_image_load_enabled | bool
+      block:
+        - name: Require the fixed runtime-image attestation path
+          ansible.builtin.assert:
+            that:
+              - coding_executor_runtime_image_attestation_path == '/var/lib/ditto-coding-executor/staged/runtime-image-attestation.json'
+            fail_msg: >-
+              Runtime-image attestation must remain in the fixed root-owned
+              staging directory. Do not make an unreviewed image or attestation
+              path authoritative.
+
+        - name: Load and attest the verified runtime image
+          ansible.builtin.command:
+            argv:
+              - /usr/local/lib/ditto-coding-executor/load-runtime-bundle.py
+              - --manifest
+              - "{{ coding_executor_runtime_manifest_path }}"
+              - --archive
+              - "{{ coding_executor_runtime_archive_path }}"
+              - --expected-manifest-sha256
+              - "{{ coding_executor_runtime_manifest_sha256 }}"
+              - --docker-host
+              - "{{ coding_executor_docker_host }}"
+              - --attestation
+              - "{{ coding_executor_runtime_image_attestation_path }}"
+          changed_when: true
+
     - name: Report that scorer and worker activation remain disabled
       ansible.builtin.debug:
         msg: >-
           Dedicated rootless daemon is ready on {{ coding_executor_docker_host }},
-          and an optional staged bundle may be hash-verified without loading,
-          but no scorer, validator, wallet, image, Platform control, ticket,
-          or coding gate has been installed or enabled.
+          and an optional staged bundle may be hash-verified and attested after
+          loading, but no scorer, validator, wallet, image consumer, Platform
+          control, ticket, or coding gate has been installed or enabled.
