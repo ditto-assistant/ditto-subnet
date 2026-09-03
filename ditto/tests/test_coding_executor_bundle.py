@@ -15,7 +15,10 @@ def test_export_requires_the_exact_verified_release_attestation() -> None:
     assert "--output json" in source
     assert "base64.b64decode" in source
     assert "canonical == release" in source
-    assert "release manifest is not the exact verified scorer attestation predicate" in source
+    assert (
+        "release manifest is not the exact verified scorer attestation predicate"
+        in source
+    )
 
 
 def test_bundle_manifest_binds_the_release_manifest_and_archive(tmp_path: Path) -> None:
