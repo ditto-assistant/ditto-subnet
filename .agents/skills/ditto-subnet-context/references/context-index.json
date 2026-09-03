@@ -547,13 +547,13 @@
     {
       "id": "infra-cloud",
       "title": "GCP, Cloudflare, Terraform, Ansible, and secrets",
-      "keywords": ["infra", "terraform", "ansible", "gcp", "gcloud", "cloudflare", "secret", "wif", "iam", "oauth", "domain", "vm"],
+      "keywords": ["infra", "terraform", "ansible", "gcp", "gcloud", "cloudflare", "secret", "wif", "iam", "oauth", "domain", "vm", "Hippius token", "token age", "token expiry", "rotate Hippius", "renew Hippius"],
       "summary": "Terraform owns reviewed cloud state; GitHub OIDC identities deploy applications; Ansible converges hosts; secrets stay in provider stores.",
-      "skills": ["ditto-subnet-release-ops"],
-      "owns": ["infra/terraform", "infra/ansible", "infra/docs"],
-      "read": ["infra/docs/ci-bootstrap.md", "infra/docs/screener-scaling.md", "apps/backroom/docs/oauth.md"],
+      "skills": ["ditto-subnet-release-ops", "hippius-token-lifecycle"],
+      "owns": ["infra/terraform", "infra/ansible", "infra/docs", ".agents/skills/hippius-token-lifecycle"],
+      "read": ["infra/docs/ci-bootstrap.md", "infra/docs/screener-scaling.md", "apps/backroom/docs/oauth.md", ".agents/skills/hippius-token-lifecycle/SKILL.md"],
       "search": ["rg -n 'workload_identity|service_account|secret|cloudflare' infra/terraform", "rg -n 'deploy|systemd|pm2|worker' infra/ansible .github/workflows"],
-      "validate": ["terraform -chdir=infra/terraform/stacks/gcp-platform fmt -check", "terraform -chdir=infra/terraform/stacks/gcp-platform validate", "terraform -chdir=infra/terraform/stacks/cloudflare-dittobench validate"],
+      "validate": ["terraform -chdir=infra/terraform/stacks/gcp-platform fmt -check", "terraform -chdir=infra/terraform/stacks/gcp-platform validate", "terraform -chdir=infra/terraform/stacks/cloudflare-dittobench validate", "bash -n .agents/skills/hippius-token-lifecycle/scripts/audit_gcp_secret_versions.sh"],
       "invariants": ["Never read, print, or persist provider secret values while testing integrations.", "Automatic app deploys and protected infrastructure apply are separate authority boundaries."],
       "related": ["release-delivery", "screener-capacity", "backroom", "preview-channels", "platform-host-disk"]
     },
