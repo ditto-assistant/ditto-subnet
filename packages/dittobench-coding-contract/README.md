@@ -4,6 +4,11 @@ This directory is the language-neutral public authority for DittoBench Coding
 wire examples and canonical digest vectors. Contract v1 is shadow-only and
 hard-codes `weight_eligible=false`.
 
+`counterfactual_v2.go` introduces separate, shadow-only types for matched
+V0–V4 execution. Miner-facing assignments carry only opaque group and condition
+commitments; grader-private results carry the condition class. They do not
+modify v1 wires or make any result weight-eligible.
+
 Consumers verify the vectors they are authorized to see. Python and Go verify
 run manifests, evidence, grader plans, resource profiles, and ordered execution
 receipts. The Rust miner verifies only miner-facing seed/run and memory vectors;
