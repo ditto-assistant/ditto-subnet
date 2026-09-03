@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.185.0 (2026-09-03)
+
+### Features
+
+- **infra**: Load and attest scorer image
+  ([#1444](https://github.com/ditto-assistant/ditto-subnet/pull/1444),
+  [`be1cadc`](https://github.com/ditto-assistant/ditto-subnet/commit/be1cadc03bd366e13dcbf69615e1bb54a567c44c))
+
+- **infra**: Stage verified scorer bundle
+  ([#1442](https://github.com/ditto-assistant/ditto-subnet/pull/1442),
+  [`b3412ec`](https://github.com/ditto-assistant/ditto-subnet/commit/b3412ecb4bd53a28c676ccb6dc0b0432814f0b7c))
+
+
 ## v0.184.0 (2026-09-03)
 
 ### Features
