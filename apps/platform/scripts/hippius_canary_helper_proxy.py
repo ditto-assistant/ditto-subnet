@@ -172,7 +172,7 @@ def _read_protected_config(path: Path) -> bytes:
         }
         root_group_owned = (
             info.st_uid == 0
-            and info.st_gid in os.getgroups()
+            and info.st_gid in {*os.getgroups(), os.getgid()}
             and stat.S_IMODE(info.st_mode) == 0o440
         )
         if (

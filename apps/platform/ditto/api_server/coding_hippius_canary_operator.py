@@ -825,7 +825,7 @@ def _validate_protected_executable(path: Path) -> None:
     }
     root_group_owned = (
         info.st_uid == 0
-        and info.st_gid in os.getgroups()
+        and info.st_gid in {*os.getgroups(), os.getgid()}
         and stat.S_IMODE(info.st_mode) == 0o550
     )
     if not stat.S_ISREG(info.st_mode) or not (self_owned or root_group_owned):
