@@ -1,0 +1,44 @@
+[Unit]
+Description=Ditto attestation-bound coding executor scorer
+After={{ coding_executor_unit }}.service {{ coding_executor_egress_guard_unit }}.service {{ coding_executor_capability_ingress_guard_unit }}.service
+Requires={{ coding_executor_unit }}.service {{ coding_executor_egress_guard_unit }}.service {{ coding_executor_capability_ingress_guard_unit }}.service
+ConditionPathExists={{ coding_executor_scorer_runtime_binary_path }}
+
+[Service]
+Type=simple
+User={{ coding_executor_scorer_user }}
+Group={{ coding_executor_scorer_group }}
+SupplementaryGroups={{ coding_executor_client_group }}
+Environment=HOME={{ coding_executor_scorer_home }}
+Environment=DOCKER_HOST={{ coding_executor_docker_host }}
+Environment=DITTOBENCH_CODING_EXECUTOR_SCORER_ENABLED=true
+Environment=DITTOBENCH_REQUIRE_ROOTLESS_DOCKER=true
+Environment=DITTOBENCH_REQUIRE_ISOLATED_DOCKER_DAEMON=true
+Environment=DITTOBENCH_SANDBOX_HOST_GATEWAY_IP={{ coding_executor_capability_gateway }}
+Environment=DITTOBENCH_CODING_EXECUTOR_PRIVATE_ROOT={{ coding_executor_scorer_private_root }}
+LoadCredential=control-token:{{ coding_executor_scorer_token_source_path }}
+RuntimeDirectory=ditto-coding-scorer
+RuntimeDirectoryMode=0750
+ExecStartPre=/usr/local/lib/ditto-coding-executor/coding-executor-client-guard.py --once
+ExecStartPre=/usr/local/lib/ditto-coding-executor/verify-scorer-service.py
+ExecStart=/usr/local/lib/ditto-coding-executor/run-scorer-service.py
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths={{ coding_executor_scorer_private_root }} /run/ditto-coding-scorer
+RestrictAddressFamilies=AF_UNIX AF_INET
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

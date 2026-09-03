@@ -66,6 +66,22 @@ rootless candidate CIDR. Gateway, source CIDR, and port are validated before
 the systemd unit is rendered. The guard leaves no broad VPC, public, or
 peer-container capability path.
 
+## Attestation-bound scorer service
+
+`coding_executor_scorer_service_enabled` remains false until the materialized
+runtime and both capability guards are explicitly enabled. The host process runs
+as the dedicated scorer identity, executes the fixed root-owned binary, and
+receives the pre-positioned root-only control token through systemd
+`LoadCredential`; neither Ansible nor an environment file receives its value.
+Before each start, the temporary runtime-image client guard and the service
+preflight verify the runtime/scorer attestation chain, binary and policy hashes,
+credential path, rootless socket, and capability gateway. Only after a healthy
+service start does Ansible stop the temporary guard.
+
+This service is still local-only: it creates no validator transport, mTLS
+identity, ticket route, task assignment, or coding gate. Those require the next
+reviewed routing layer.
+
 ## Production runtime-bundle staging
 
 The public `Dockerfile.coding-supervisor` builds a synthetic certification
