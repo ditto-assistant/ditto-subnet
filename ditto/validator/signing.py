@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, localcontext
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
@@ -48,6 +48,11 @@ from ditto.api_models.coding_certification_leases import (
 from ditto.api_models.coding_claims import (
     coding_claim_action_signing_message,
     coding_claim_next_signing_message,
+)
+from ditto.api_models.coding_executor_control import (
+    CodingExecutorControlEnvelope,
+    CodingExecutorOperation,
+    coding_executor_control_signing_message,
 )
 from ditto.api_models.coding_harness import coding_harness_launch_signing_message
 from ditto.api_models.coding_inference_grants import (
@@ -1681,3 +1686,39 @@ def sign_heartbeat(
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()
+
+
+def sign_coding_executor_control(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    agent_artifact_sha256: str,
+    coding_run_id: str,
+    ticket_id: UUID,
+    operation: CodingExecutorOperation,
+    request_body_sha256: str,
+    nonce: UUID,
+    issued_at: datetime,
+    lifetime: timedelta = timedelta(minutes=1),
+) -> CodingExecutorControlEnvelope:
+    """Sign one short-lived, POST-only executor operation."""
+    unsigned = CodingExecutorControlEnvelope(
+        schema="dittobench-coding-executor-control-v1",
+        coding_contract_version=1,
+        weight_eligible=False,
+        validator_hotkey=validator_hotkey,
+        agent_id=agent_id,
+        agent_artifact_sha256=agent_artifact_sha256,
+        coding_run_id=coding_run_id,
+        ticket_id=ticket_id,
+        operation=operation,
+        method="POST",
+        request_body_sha256=request_body_sha256,
+        nonce=nonce,
+        issued_at=issued_at,
+        expires_at=issued_at + lifetime,
+        signature="0" * 128,
+    )
+    signature: bytes = keypair.sign(coding_executor_control_signing_message(unsigned))
+    return unsigned.model_copy(update={"signature": signature.hex()})
