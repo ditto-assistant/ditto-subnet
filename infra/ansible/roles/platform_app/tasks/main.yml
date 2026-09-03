@@ -645,7 +645,7 @@
     remote_src: true
     owner: root
     group: "{{ platform_coding_hippius_canary_unwrap_group }}"
-    mode: "0555"
+    mode: "0550"
   when: platform_coding_hippius_canary_unwrap_installed | bool
 
 - name: Render isolated Hippius canary unwrap service environment

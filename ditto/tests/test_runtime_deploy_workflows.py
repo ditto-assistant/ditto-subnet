@@ -333,6 +333,10 @@ def test_hippius_canary_unwrap_service_is_default_off_and_socket_activated() -> 
     assert "MemoryDenyWriteExecute=true" in service_unit
     assert "SocketMode=0660" in socket_unit
     assert "SocketGroup={{ platform_group }}" in socket_unit
+    assert "DirectoryMode=0711" in socket_unit
+    assert "CapabilityBoundingSet=" in service_unit
+    assert "AmbientCapabilities=" in service_unit
+    assert 'mode: "0550"' in tasks
     assert "DITTO_HIPPIUS_CANARY_UNWRAP_REQUIRE_SOCKET_ACTIVATION=true" in service_env
     for forbidden in ("ACCESS_KEY", "SECRET_KEY", "STORAGE_BUCKET", "PRIVATE_KEY="):
         assert forbidden not in service_env
