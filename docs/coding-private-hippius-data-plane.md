@@ -261,6 +261,21 @@ provider authority may be broader than the application contract, so credential
 custody, request audit, exact-operation tests, and the PostgreSQL append-only
 ledger are mandatory compensating controls.
 
+The default-off implementation begins with
+`apps/platform/ditto/api_server/coding_hippius_evidence.py` and the append-only
+`coding_sealed_evidence_reservations` /
+`coding_sealed_evidence_finalizations` tables. It encrypts with a fresh
+AES-256-GCM key and nonce, delegates data-key wrapping through an external
+interface, binds the complete plaintext/ciphertext/envelope/key identity before
+provider I/O, refuses conflicting remote bytes, performs a complete verifying
+download, and only then appends finalization.
+
+The caller must durably retain the returned prepared ciphertext and envelope in
+the existing protected evidence outbox before mediation. This layer does not
+yet implement that outbox serialization, the external KMS adapter, secret
+custody, factory construction, an API route, or a worker caller. Merging it
+therefore cannot publish real evidence or activate Coding.
+
 ## Credential boundary
 
 At minimum, provision three non-human, bucket-scoped Hippius credentials:

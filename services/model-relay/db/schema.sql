@@ -1068,6 +1068,48 @@ CREATE TABLE public.coding_inference_requests (
 
 
 --
+-- Name: coding_sealed_evidence_finalizations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_sealed_evidence_finalizations (
+    reservation_id uuid NOT NULL,
+    identity_sha256 text NOT NULL,
+    storage_status text NOT NULL,
+    weight_eligible boolean NOT NULL,
+    finalized_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_sealed_evidence_finalizations_coding_sealed_e_8fc9 CHECK (((identity_sha256 ~ '^[0-9a-f]{64}$'::text) AND (storage_status = ANY (ARRAY['uploaded'::text, 'reused'::text])) AND (weight_eligible = false)))
+);
+
+
+--
+-- Name: coding_sealed_evidence_reservations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_sealed_evidence_reservations (
+    reservation_id uuid NOT NULL,
+    ticket_id uuid NOT NULL,
+    claim_generation integer NOT NULL,
+    validator_hotkey text NOT NULL,
+    instance_id text NOT NULL,
+    ticket_deadline timestamp with time zone NOT NULL,
+    evidence_kind text NOT NULL,
+    plaintext_sha256 text NOT NULL,
+    plaintext_size_bytes bigint NOT NULL,
+    ciphertext_sha256 text NOT NULL,
+    ciphertext_size_bytes bigint NOT NULL,
+    object_key_sha256 text NOT NULL,
+    envelope_sha256 text NOT NULL,
+    wrapping_key_sha256 text NOT NULL,
+    aad_sha256 text NOT NULL,
+    identity_sha256 text NOT NULL,
+    weight_eligible boolean NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_sealed_evidence_reservations_coding_sealed_ev_820f CHECK ((((claim_generation >= 1) AND (claim_generation <= 2147483647)) AND (validator_hotkey ~ '^[1-9A-HJ-NP-Za-km-z]{47,48}$'::text) AND ((octet_length(instance_id) >= 1) AND (octet_length(instance_id) <= 128)) AND (instance_id !~ '[[:space:][:cntrl:]]'::text) AND (plaintext_sha256 ~ '^[0-9a-f]{64}$'::text) AND (ciphertext_sha256 ~ '^[0-9a-f]{64}$'::text) AND (object_key_sha256 ~ '^[0-9a-f]{64}$'::text) AND (envelope_sha256 ~ '^[0-9a-f]{64}$'::text) AND (wrapping_key_sha256 ~ '^[0-9a-f]{64}$'::text) AND (aad_sha256 ~ '^[0-9a-f]{64}$'::text) AND (identity_sha256 ~ '^[0-9a-f]{64}$'::text) AND (ciphertext_size_bytes = (plaintext_size_bytes + 16)) AND (weight_eligible = false))),
+    CONSTRAINT ck_coding_sealed_evidence_reservations_coding_sealed_ev_dfab CHECK ((((evidence_kind = 'authoring-transcript'::text) AND ((plaintext_size_bytes >= 1) AND (plaintext_size_bytes <= 536870912))) OR ((evidence_kind = 'frozen-submission'::text) AND ((plaintext_size_bytes >= 1) AND (plaintext_size_bytes <= 134217728))) OR ((evidence_kind = ANY (ARRAY['authoring-publication-request'::text, 'terminal-publication-request'::text])) AND ((plaintext_size_bytes >= 1) AND (plaintext_size_bytes <= 4194304))) OR ((evidence_kind = ANY (ARRAY['authoring-publication-acknowledgement'::text, 'terminal-publication-acknowledgement'::text])) AND ((plaintext_size_bytes >= 1) AND (plaintext_size_bytes <= 1048576)))))
+);
+
+
+--
 -- Name: coding_selection_assignments; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3936,6 +3978,46 @@ ALTER TABLE ONLY public.coding_inference_requests
 
 
 --
+-- Name: coding_sealed_evidence_finalizations coding_sealed_evidence_finalizations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_sealed_evidence_finalizations
+    ADD CONSTRAINT coding_sealed_evidence_finalizations_pkey PRIMARY KEY (reservation_id);
+
+
+--
+-- Name: coding_sealed_evidence_reservations coding_sealed_evidence_reservations_identity_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_sealed_evidence_reservations
+    ADD CONSTRAINT coding_sealed_evidence_reservations_identity_key UNIQUE (reservation_id, identity_sha256);
+
+
+--
+-- Name: coding_sealed_evidence_reservations coding_sealed_evidence_reservations_identity_sha_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_sealed_evidence_reservations
+    ADD CONSTRAINT coding_sealed_evidence_reservations_identity_sha_key UNIQUE (identity_sha256);
+
+
+--
+-- Name: coding_sealed_evidence_reservations coding_sealed_evidence_reservations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_sealed_evidence_reservations
+    ADD CONSTRAINT coding_sealed_evidence_reservations_pkey PRIMARY KEY (reservation_id);
+
+
+--
+-- Name: coding_sealed_evidence_reservations coding_sealed_evidence_reservations_ticket_generation_kind_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_sealed_evidence_reservations
+    ADD CONSTRAINT coding_sealed_evidence_reservations_ticket_generation_kind_key UNIQUE (ticket_id, claim_generation, evidence_kind);
+
+
+--
 -- Name: coding_selection_assignments coding_selection_assignments_artifact_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5429,6 +5511,20 @@ CREATE INDEX coding_inference_requests_grant_status_idx ON public.coding_inferen
 
 
 --
+-- Name: coding_sealed_evidence_finalizations_finalized_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_sealed_evidence_finalizations_finalized_idx ON public.coding_sealed_evidence_finalizations USING btree (finalized_at);
+
+
+--
+-- Name: coding_sealed_evidence_reservations_ticket_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_sealed_evidence_reservations_ticket_created_idx ON public.coding_sealed_evidence_reservations USING btree (ticket_id, created_at);
+
+
+--
 -- Name: coding_selection_assignments_agent_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6136,6 +6232,20 @@ CREATE TRIGGER coding_catalog_retirements_append_only_guard BEFORE DELETE OR UPD
 
 
 --
+-- Name: coding_sealed_evidence_finalizations coding_sealed_evidence_finalizations_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_sealed_evidence_finalizations_append_only BEFORE DELETE OR UPDATE ON public.coding_sealed_evidence_finalizations FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_sealed_evidence_reservations coding_sealed_evidence_reservations_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_sealed_evidence_reservations_append_only BEFORE DELETE OR UPDATE ON public.coding_sealed_evidence_reservations FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
 -- Name: coding_selection_assignments coding_selection_assignments_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -6323,6 +6433,22 @@ ALTER TABLE ONLY public.coding_inference_grants
 
 ALTER TABLE ONLY public.coding_inference_requests
     ADD CONSTRAINT coding_inference_requests_grant_fkey FOREIGN KEY (grant_id, ticket_id) REFERENCES public.coding_inference_grants(grant_id, ticket_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_sealed_evidence_finalizations coding_sealed_evidence_finalizations_reservation_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_sealed_evidence_finalizations
+    ADD CONSTRAINT coding_sealed_evidence_finalizations_reservation_fkey FOREIGN KEY (reservation_id, identity_sha256) REFERENCES public.coding_sealed_evidence_reservations(reservation_id, identity_sha256) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_sealed_evidence_reservations coding_sealed_evidence_reservations_ticket_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_sealed_evidence_reservations
+    ADD CONSTRAINT coding_sealed_evidence_reservations_ticket_fkey FOREIGN KEY (ticket_id) REFERENCES public.coding_shadow_tickets(ticket_id) ON DELETE CASCADE;
 
 
 --

@@ -1018,7 +1018,7 @@ async def run_hippius_capability_probe(
             curator_access_key=config.private_input_curator.access_key,
             reader_access_key=config.private_input_reader.access_key,
         ),
-        sealed_evidence_authority_sha256=_hippius_sealed_evidence_authority_sha256(
+        sealed_evidence_authority_sha256=hippius_sealed_evidence_authority_sha256(
             endpoint_url=config.endpoint_url,
             region=config.region,
             bucket=config.sealed_evidence_bucket,
@@ -1097,7 +1097,7 @@ def hippius_private_input_authority_sha256(
     ).hexdigest()
 
 
-def _hippius_sealed_evidence_authority_sha256(
+def hippius_sealed_evidence_authority_sha256(
     *,
     endpoint_url: str,
     region: str,
@@ -1380,6 +1380,7 @@ __all__ = [
     "parse_hippius_probe_config",
     "load_hippius_probe_receipt",
     "hippius_private_input_authority_sha256",
+    "hippius_sealed_evidence_authority_sha256",
     "resolve_repository_source_sha",
     "run_hippius_capability_probe",
     "write_hippius_probe_receipt",
