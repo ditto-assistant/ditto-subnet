@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.191.0 (2026-09-03)
+
+### Features
+
+- **coding**: Add ticket-bound S3 artifact canary
+  ([#1492](https://github.com/ditto-assistant/ditto-subnet/pull/1492),
+  [`ce875e2`](https://github.com/ditto-assistant/ditto-subnet/commit/ce875e29f5a77986ea6963e13c1e2da6ba6411fe))
+
+
 ## v0.190.0 (2026-09-03)
 
 ### Features
