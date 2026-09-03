@@ -183,6 +183,14 @@ func TestPublicationServiceDurablyPreparesReplaysAndAcknowledges(t *testing.T) {
 		pending.Pending[0].Request != *prepared.Artifact {
 		t.Fatalf("pending=%#v status=%d", pending, response.Code)
 	}
+	response = invoke(t, fixture.service, "pending", map[string]any{
+		"schema": commandSchema, "limit": 10, "ticket_id": fixture.ticketID,
+		"agent_id": fixture.authority.AgentID, "agent_artifact_sha256": strings.Repeat("a", 64),
+		"coding_run_id": fixture.authority.CodingRunID,
+	}, fixtureControlToken)
+	if remotePending := decodeResult(t, response); response.Code != http.StatusOK || len(remotePending.Pending) != 0 {
+		t.Fatalf("remote pending=%#v status=%d", remotePending, response.Code)
+	}
 	response = invoke(t, fixture.service, "open", map[string]any{
 		"schema": commandSchema, "record_id": prepared.RecordID,
 		"stage": codingoutbox.PublicationTerminalResult, "acknowledgement": false,
@@ -191,6 +199,24 @@ func TestPublicationServiceDurablyPreparesReplaysAndAcknowledges(t *testing.T) {
 	raw, err := base64.StdEncoding.Strict().DecodeString(opened.BodyBase64)
 	if err != nil || !bytes.Equal(raw, fixture.request) {
 		t.Fatalf("open err=%v", err)
+	}
+	response = invoke(t, fixture.service, "open", map[string]any{
+		"schema": commandSchema, "record_id": prepared.RecordID,
+		"stage": codingoutbox.PublicationTerminalResult, "acknowledgement": false,
+		"agent_id": fixture.authority.AgentID, "agent_artifact_sha256": strings.Repeat("a", 64),
+		"ticket_id": fixture.ticketID, "coding_run_id": fixture.authority.CodingRunID,
+	}, fixtureControlToken)
+	if response.Code != http.StatusOK {
+		t.Fatalf("remote open status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = invoke(t, fixture.service, "open", map[string]any{
+		"schema": commandSchema, "record_id": prepared.RecordID,
+		"stage": codingoutbox.PublicationTerminalResult, "acknowledgement": false,
+		"agent_id": fixture.authority.AgentID, "agent_artifact_sha256": strings.Repeat("a", 64),
+		"ticket_id": fixture.ticketID, "coding_run_id": "coding-run-other",
+	}, fixtureControlToken)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("drifted remote open status=%d body=%s", response.Code, response.Body.String())
 	}
 	response = invoke(t, fixture.service, "acknowledge", map[string]any{
 		"schema": commandSchema, "ticket_id": fixture.ticketID,

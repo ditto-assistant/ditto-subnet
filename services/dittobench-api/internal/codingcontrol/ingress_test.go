@@ -130,6 +130,33 @@ func TestIngressVerifiesEnvelopeBindsBodyAndInjectsOnlyLocalToken(t *testing.T) 
 	}
 }
 
+func TestIngressBindsPublicationTicketAndRunIdentity(t *testing.T) {
+	allowed := newSigner(t)
+	called := false
+	ingress := newIngress(t, allowed, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		called = true
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	body := []byte(`{"schema":"dittobench-coding-publication-command-v1","agent_id":"10000000-0000-4000-8000-000000000001","agent_artifact_sha256":"1111111111111111111111111111111111111111111111111111111111111111","ticket_id":"20000000-0000-4000-8000-000000000002","coding_run_id":"coding-run-001","limit":1}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/coding/publications/pending", strings.NewReader(string(body)))
+	request.Header.Set(EnvelopeHeader, allowed.header(t, body, "publications.pending", uuid.NewString()))
+	response := httptest.NewRecorder()
+	ingress.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || !called {
+		t.Fatalf("status=%d called=%t", response.Code, called)
+	}
+
+	called = false
+	drifted := []byte(`{"schema":"dittobench-coding-publication-command-v1","agent_id":"10000000-0000-4000-8000-000000000001","agent_artifact_sha256":"1111111111111111111111111111111111111111111111111111111111111111","ticket_id":"40000000-0000-4000-8000-000000000004","coding_run_id":"coding-run-001","limit":1}`)
+	request = httptest.NewRequest(http.MethodPost, "/v1/coding/publications/pending", strings.NewReader(string(drifted)))
+	request.Header.Set(EnvelopeHeader, allowed.header(t, drifted, "publications.pending", uuid.NewString()))
+	response = httptest.NewRecorder()
+	ingress.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || called {
+		t.Fatalf("status=%d called=%t", response.Code, called)
+	}
+}
+
 func TestIngressRejectsAuthorityDriftBeforeDownstream(t *testing.T) {
 	allowed := newSigner(t)
 	other := newSigner(t)

@@ -69,15 +69,23 @@ type acknowledgeCommand struct {
 }
 
 type pendingCommand struct {
-	Schema string `json:"schema"`
-	Limit  int    `json:"limit"`
+	Schema              string `json:"schema"`
+	Limit               int    `json:"limit"`
+	AgentID             string `json:"agent_id"`
+	AgentArtifactSHA256 string `json:"agent_artifact_sha256"`
+	TicketID            string `json:"ticket_id"`
+	CodingRunID         string `json:"coding_run_id"`
 }
 
 type openCommand struct {
-	Schema          string                        `json:"schema"`
-	RecordID        string                        `json:"record_id"`
-	Stage           codingoutbox.PublicationStage `json:"stage"`
-	Acknowledgement bool                          `json:"acknowledgement"`
+	Schema              string                        `json:"schema"`
+	RecordID            string                        `json:"record_id"`
+	Stage               codingoutbox.PublicationStage `json:"stage"`
+	Acknowledgement     bool                          `json:"acknowledgement"`
+	AgentID             string                        `json:"agent_id"`
+	AgentArtifactSHA256 string                        `json:"agent_artifact_sha256"`
+	TicketID            string                        `json:"ticket_id"`
+	CodingRunID         string                        `json:"coding_run_id"`
 }
 
 type lookupCommand struct {
@@ -252,6 +260,16 @@ func (service *Service) execute(ctx context.Context, operation string, body []by
 		if decodeRequired(body, &command, "schema", "limit") != nil || command.Schema != commandSchema {
 			return result{}, ErrInvalid
 		}
+		// A remote validator uses pending only as a pre-start transport probe.
+		// Its signed ticket identity must not grant a global journal listing.
+		if command.AgentID != "" || command.AgentArtifactSHA256 != "" || command.TicketID != "" || command.CodingRunID != "" {
+			if !validTicketID(command.AgentID) || !validSHA256(command.AgentArtifactSHA256) ||
+				!validTicketID(command.TicketID) || !validIdentifier(command.CodingRunID, 256) {
+				return result{}, ErrInvalid
+			}
+			base.Pending = []pendingResult{}
+			return base, nil
+		}
 		pending, err := service.store.PendingPublications(ctx, command.Limit)
 		if err != nil {
 			return result{}, err
@@ -269,6 +287,26 @@ func (service *Service) execute(ctx context.Context, operation string, body []by
 		if decodeRequired(body, &command, "schema", "record_id", "stage", "acknowledgement") != nil ||
 			command.Schema != commandSchema || !validStage(command.Stage) {
 			return result{}, ErrInvalid
+		}
+		if command.AgentID != "" || command.AgentArtifactSHA256 != "" || command.TicketID != "" || command.CodingRunID != "" {
+			if !validTicketID(command.AgentID) || !validSHA256(command.AgentArtifactSHA256) ||
+				!validTicketID(command.TicketID) || !validIdentifier(command.CodingRunID, 256) {
+				return result{}, ErrInvalid
+			}
+			attempt, record, err := service.store.Lookup(ctx, codingoutbox.PurposeShadowAttempt, command.TicketID)
+			if err != nil || attempt.ID() != command.RecordID {
+				return result{}, errors.Join(codingoutbox.ErrState, err)
+			}
+			publication := record.AuthoringPublication
+			if command.Stage == codingoutbox.PublicationTerminalResult {
+				publication = record.TerminalPublication
+			}
+			if publication == nil || publication.Stage != command.Stage ||
+				publication.Authority.AgentID != command.AgentID ||
+				publication.Authority.CodingRunID != command.CodingRunID ||
+				record.Binding.AgentArtifactSHA256 != command.AgentArtifactSHA256 {
+				return result{}, codingoutbox.ErrState
+			}
 		}
 		var reader io.ReadCloser
 		var err error
@@ -391,6 +429,18 @@ func decodeBody(value string, maximum int64) ([]byte, error) {
 func validTicketID(value string) bool {
 	parsed, err := uuid.Parse(value)
 	return err == nil && parsed != uuid.Nil && parsed.String() == value
+}
+
+func validSHA256(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func validStage(stage codingoutbox.PublicationStage) bool {

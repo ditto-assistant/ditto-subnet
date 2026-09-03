@@ -32,6 +32,7 @@ from ditto.validator.coding_attempt import (
     CodingAuthoringOutcome,
 )
 from ditto.validator.coding_publication import (
+    CodingExecutorRequestAuthority,
     CodingPublicationClient,
     PreparedCodingPublication,
     PublicationArtifact,
@@ -150,11 +151,13 @@ class DurableCodingAttemptPlatform:
     async def publish(
         self, prepared: PreparedCodingPublication
     ) -> SubmitCodingAuthoringFreezeResponse | SubmitCodingShadowResultResponse:
+        executor_authority = _publication_authority(prepared)
         _, request = await self._publication.prepare(
             ticket_id=str(prepared.ticket_id),
             stage=prepared.stage,
             authority=prepared.authority,
             body=prepared.body,
+            executor_authority=executor_authority,
         )
         _validate_artifact(request, prepared.body)
         (
@@ -166,6 +169,7 @@ class DurableCodingAttemptPlatform:
             stage=prepared.stage,
             request_sha256=request.sha256,
             body=acknowledgement,
+            executor_authority=executor_authority,
         )
         _validate_artifact(stored, acknowledgement)
         return accepted
@@ -258,7 +262,8 @@ class CodingShadowWorker:
     async def run_once(self) -> bool:
         # Prove the scorer-side outbox/supervisor host exists before taking any
         # Platform work. The host constructs both services atomically.
-        await self._publication.pending(limit=1)
+        if not self._publication.remote:
+            await self._publication.pending(limit=1)
         if self._drain_requested is not None and self._drain_requested.is_set():
             return False
         claim = await self._platform.claim_next_coding_ticket(
@@ -267,6 +272,13 @@ class CodingShadowWorker:
         if claim is None:
             return False
         _validate_claim(claim, self._instance_id, self._run_row_id, now=self._now())
+        if self._publication.remote:
+            # A remote envelope must carry real ticket authority. The claim is
+            # still unstarted and transferable when this transport check fails.
+            await self._publication.pending(
+                limit=1,
+                executor_authority=_claim_publication_authority(claim),
+            )
         if claim.claim_started_at is None:
             authoring_lease = await self._platform.request_coding_authoring_lease(
                 claim.ticket_id
@@ -401,6 +413,7 @@ class CodingShadowWorker:
         record = await self._publication.lookup(
             ticket_id=str(claim.ticket_id),
             stage=recovery.publication_stage,
+            executor_authority=_claim_publication_authority(claim),
         )
         if record.request.sha256 != recovery.request_sha256:
             raise CodingAttemptIntegrityError(
@@ -410,11 +423,14 @@ class CodingShadowWorker:
             record_id=record.record_id,
             stage=record.stage,
             expected=record.request,
+            executor_authority=_claim_publication_authority(claim),
         )
         prepared = PreparedCodingPublication(
             stage=record.stage,
             ticket_id=record.ticket_id,
             agent_id=record.authority.agent_id,
+            agent_artifact_sha256=claim.agent_artifact_sha256,
+            ticket_deadline=claim.ticket_deadline,
             authority=record.authority,
             body=body,
         )
@@ -424,6 +440,7 @@ class CodingShadowWorker:
                 stage=record.stage,
                 expected=record.acknowledgement,
                 acknowledgement=True,
+                executor_authority=_claim_publication_authority(claim),
             )
             return _parse_acknowledgement(record, acknowledgement)
         return await self._durable.publish(prepared)
@@ -441,11 +458,13 @@ class CodingShadowWorker:
         record = await self._publication.lookup(
             ticket_id=str(claim.ticket_id),
             stage="authoring_freeze",
+            executor_authority=_claim_publication_authority(claim),
         )
         body = await self._publication.open(
             record_id=record.record_id,
             stage=record.stage,
             expected=record.request,
+            executor_authority=_claim_publication_authority(claim),
         )
         try:
             request = SubmitCodingAuthoringFreezeRequest.model_validate_json(body)
@@ -548,6 +567,30 @@ def _ticket(claim: CodingClaimResponse) -> CodingAttemptTicket:
         agent_artifact_sha256=claim.agent_artifact_sha256,
         screened_image_sha256=claim.screened_image_sha256,
         weight_eligible=False,
+    )
+
+
+def _publication_authority(
+    prepared: PreparedCodingPublication,
+) -> CodingExecutorRequestAuthority:
+    return CodingExecutorRequestAuthority(
+        agent_id=prepared.agent_id,
+        agent_artifact_sha256=prepared.agent_artifact_sha256,
+        coding_run_id=prepared.authority.coding_run_id,
+        ticket_id=prepared.ticket_id,
+        deadline=prepared.ticket_deadline,
+    )
+
+
+def _claim_publication_authority(
+    claim: CodingClaimResponse,
+) -> CodingExecutorRequestAuthority:
+    return CodingExecutorRequestAuthority(
+        agent_id=claim.agent_id,
+        agent_artifact_sha256=claim.agent_artifact_sha256,
+        coding_run_id=claim.coding_run_id,
+        ticket_id=claim.ticket_id,
+        deadline=claim.ticket_deadline,
     )
 
 

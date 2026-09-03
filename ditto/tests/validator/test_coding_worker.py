@@ -79,6 +79,7 @@ class _Runtime:
 
 class _Publication:
     def __init__(self) -> None:
+        self.remote = False
         request_sha = hashlib.sha256(_BODY).hexdigest()
         self.record = PublicationRecord(
             record_id="11" * 32,
@@ -247,6 +248,51 @@ async def test_new_claim_starts_before_coordinator_and_executes_once() -> None:
         "execute",
     ]
     assert publication.preflights == 1
+
+
+async def test_remote_publication_preflight_uses_unstarted_claim_authority() -> None:
+    platform = _Platform(_claim(started=False))
+    publication = _Publication()
+    publication.remote = True
+
+    async def pending(**values: Any) -> list[Any]:
+        authority = values["executor_authority"]
+        assert authority.agent_id == _AGENT
+        assert authority.agent_artifact_sha256 == "aa" * 32
+        assert authority.coding_run_id == "coding-run-001"
+        assert authority.ticket_id == _TICKET
+        assert authority.deadline == _NOW + timedelta(hours=1)
+        platform.events.append("publication_preflight")
+        return []
+
+    publication.pending = pending  # type: ignore[method-assign]
+    worker = CodingShadowWorker(
+        platform=platform,
+        runtime=_Runtime("released"),  # type: ignore[arg-type]
+        publication=publication,  # type: ignore[arg-type]
+        instance_id=_INSTANCE,
+        run_row_id=_RUN,
+        clock=lambda: _NOW,
+    )
+
+    async def execute_prepared(ticket: Any, **_: Any) -> object:
+        platform.events.append("execute")
+        return ticket
+
+    worker._coordinator = SimpleNamespace(  # type: ignore[assignment]
+        execute_prepared=execute_prepared,
+        validate_preflight=lambda *_args, **_kwargs: None,
+    )
+    assert await worker.run_once() is True
+    assert platform.events == [
+        "claim",
+        "publication_preflight",
+        "authoring_lease",
+        "harness",
+        "grant",
+        "start",
+        "execute",
+    ]
 
 
 async def test_started_ambiguous_claim_never_reruns_candidate() -> None:

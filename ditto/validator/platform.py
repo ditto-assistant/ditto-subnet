@@ -892,6 +892,8 @@ class PlatformClient:
             stage="authoring_freeze",
             ticket_id=ticket_id,
             agent_id=agent_id,
+            agent_artifact_sha256=agent_artifact_sha256,
+            ticket_deadline=ticket_deadline,
             authority=PublicationAuthority(
                 agent_id=agent_id,
                 bench_version=bench_version,
@@ -962,6 +964,8 @@ class PlatformClient:
             stage="terminal_result",
             ticket_id=ticket_id,
             agent_id=agent_id,
+            agent_artifact_sha256=agent_artifact_sha256,
+            ticket_deadline=ticket_deadline,
             authority=PublicationAuthority(
                 agent_id=agent_id,
                 bench_version=bench_version,
@@ -999,6 +1003,9 @@ class PlatformClient:
                     != prepared.authority.bench_version
                     or authoring_request.coding_run_id
                     != prepared.authority.coding_run_id
+                    or authoring_request.agent_artifact_sha256
+                    != prepared.agent_artifact_sha256
+                    or authoring_request.ticket_deadline != prepared.ticket_deadline
                     or authoring_request.screened_image_sha256
                     != prepared.authority.screened_image_sha256
                     or authoring_request.run_manifest_sha256
@@ -1021,6 +1028,9 @@ class PlatformClient:
                     or terminal_request.run_row_id != prepared.authority.run_row_id
                     or terminal_request.bench_version
                     != prepared.authority.bench_version
+                    or terminal_request.agent_artifact_sha256
+                    != prepared.agent_artifact_sha256
+                    or terminal_request.ticket_deadline != prepared.ticket_deadline
                     or terminal_request.screened_image_sha256
                     != prepared.authority.screened_image_sha256
                     or terminal_request.evidence.coding_run_id
