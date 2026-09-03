@@ -28,9 +28,7 @@ from ditto.api_server.coding_hippius_revocation import (
 
 
 def _credential(name: str) -> HippiusProbeCredential:
-    return HippiusProbeCredential(
-        access_key=f"hip_{name}_access", secret_key=f"{name}-secret"
-    )
+    return HippiusProbeCredential(f"hip_{name}_access", f"{name}-value")
 
 
 def _config() -> HippiusProbeConfig:
@@ -47,8 +45,7 @@ def _config() -> HippiusProbeConfig:
 
 def _target() -> HippiusRevocationTarget:
     return HippiusRevocationTarget(
-        token_id="1814e363-0e24-4e22-855a-425b4dc43f94",
-        credential=_credential("temporary"),
+        "1814e363-0e24-4e22-855a-425b4dc43f94", _credential("temporary")
     )
 
 
