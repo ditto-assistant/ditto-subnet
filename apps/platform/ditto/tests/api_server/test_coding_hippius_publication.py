@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 
+import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -27,6 +28,7 @@ from ditto.api_server.coding_hippius_probe import (
     write_hippius_probe_receipt,
 )
 from ditto.api_server.coding_hippius_publication import (
+    AiobotoHippiusPrivateInputPublicationTransport,
     HippiusPrivateInputConflict,
     HippiusPrivateInputNotFound,
     HippiusPrivateInputPublicationConfig,
@@ -394,3 +396,85 @@ def test_publication_scripts_plan_message_and_gate_live_call(
     stderr = capsys.readouterr().err
     assert "required Hippius publication setting is missing" in stderr
     assert "Traceback" not in stderr
+
+
+class _PresigningClient:
+    def __init__(self, url: str) -> None:
+        self._url = url
+
+    async def __aenter__(self) -> _PresigningClient:
+        return self
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+    async def generate_presigned_url(self, *_args: object, **_kwargs: object) -> str:
+        return self._url
+
+
+class _PresigningSession:
+    def __init__(self, url: str) -> None:
+        self._url = url
+
+    def client(self, *_args: object, **_kwargs: object) -> _PresigningClient:
+        return _PresigningClient(self._url)
+
+
+@pytest.mark.asyncio
+async def test_live_publication_transport_rejects_redirects_and_ambient_proxies() -> (
+    None
+):
+    config = _config()
+    key = "coding-private-inputs/v1/" + "a" * 64 + "/objects/000000.bin"
+    url = f"https://s3.hippius.com/{config.bucket}/{key}?X-Amz-Signature=abc"
+    requests: list[httpx.Request] = []
+
+    def success(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, content=b"x" * 17)
+        return httpx.Response(200)
+
+    transport = AiobotoHippiusPrivateInputPublicationTransport(
+        config,
+        http_transport=httpx.MockTransport(success),
+    )
+    transport._reader_session = _PresigningSession(url)  # type: ignore[assignment]
+    transport._curator_session = _PresigningSession(url)  # type: ignore[assignment]
+    try:
+        assert await transport.get_object(key=key, max_bytes=17) == b"x" * 17
+        await transport.put_object(key=key, body=b"x" * 17, metadata={"k": "v"})
+    finally:
+        await transport.__aexit__(None, None, None)
+    assert [request.method for request in requests] == ["GET", "PUT"]
+    assert all(request.url.host == "s3.hippius.com" for request in requests)
+
+    def redirect(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(307, headers={"location": "https://evil.example/leak"})
+
+    transport = AiobotoHippiusPrivateInputPublicationTransport(
+        config,
+        http_transport=httpx.MockTransport(redirect),
+    )
+    transport._reader_session = _PresigningSession(url)  # type: ignore[assignment]
+    transport._curator_session = _PresigningSession(url)  # type: ignore[assignment]
+    try:
+        with pytest.raises(HippiusPrivateInputPublicationError, match="redirect"):
+            await transport.get_object(key=key, max_bytes=17)
+        with pytest.raises(HippiusPrivateInputPublicationError, match="redirect"):
+            await transport.put_object(key=key, body=b"x" * 17, metadata={})
+    finally:
+        await transport.__aexit__(None, None, None)
+
+    escaped = "https://evil.example/leak?X-Amz-Signature=abc"
+    transport = AiobotoHippiusPrivateInputPublicationTransport(
+        config,
+        http_transport=httpx.MockTransport(success),
+    )
+    transport._reader_session = _PresigningSession(escaped)  # type: ignore[assignment]
+    transport._curator_session = _PresigningSession(escaped)  # type: ignore[assignment]
+    try:
+        with pytest.raises(HippiusPrivateInputPublicationError, match="origin"):
+            await transport.get_object(key=key, max_bytes=17)
+    finally:
+        await transport.__aexit__(None, None, None)

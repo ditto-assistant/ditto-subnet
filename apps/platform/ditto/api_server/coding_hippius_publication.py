@@ -13,8 +13,9 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import NoReturn, Protocol
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
+import httpx
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -165,19 +166,40 @@ class HippiusPrivateInputPublicationTransport(Protocol):
 class AiobotoHippiusPrivateInputPublicationTransport:
     """Separate curator-write and reader-verify clients with redacted errors."""
 
-    def __init__(self, config: HippiusPrivateInputPublicationConfig) -> None:
+    def __init__(
+        self,
+        config: HippiusPrivateInputPublicationConfig,
+        *,
+        http_transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         import aioboto3
         from botocore.config import Config
 
         self._config = config
-        self._aioboto3 = aioboto3
         self._client_config = Config(
             signature_version="s3v4",
             connect_timeout=config.timeout_seconds,
             read_timeout=config.timeout_seconds,
             retries={"max_attempts": 1, "mode": "standard"},
             request_checksum_calculation="when_required",
+            proxies={},
             s3={"addressing_style": "path"},
+        )
+        self._curator_session = aioboto3.Session(
+            aws_access_key_id=config.curator.access_key,
+            aws_secret_access_key=config.curator.secret_key,
+            region_name=config.region,
+        )
+        self._reader_session = aioboto3.Session(
+            aws_access_key_id=config.reader.access_key,
+            aws_secret_access_key=config.reader.secret_key,
+            region_name=config.region,
+        )
+        self._http = httpx.AsyncClient(
+            follow_redirects=False,
+            trust_env=False,
+            timeout=httpx.Timeout(config.timeout_seconds),
+            transport=http_transport,
         )
 
     async def __aenter__(self) -> AiobotoHippiusPrivateInputPublicationTransport:
@@ -189,14 +211,9 @@ class AiobotoHippiusPrivateInputPublicationTransport:
         _exc: BaseException | None,
         _tb: object,
     ) -> None:
-        return None
+        await self._http.aclose()
 
-    def _client(self, credential: HippiusProbeCredential):
-        session = self._aioboto3.Session(
-            aws_access_key_id=credential.access_key,
-            aws_secret_access_key=credential.secret_key,
-            region_name=self._config.region,
-        )
+    def _client(self, session: object):
         return session.client(
             "s3",
             endpoint_url=self._config.endpoint_url,
@@ -205,25 +222,56 @@ class AiobotoHippiusPrivateInputPublicationTransport:
         )
 
     async def get_object(self, *, key: str, max_bytes: int) -> bytes:
+        if (
+            not key
+            or len(key.encode()) > 2048
+            or any(character.isspace() for character in key)
+            or not 1 <= max_bytes <= _MAX_CIPHERTEXT_BYTES
+        ):
+            raise HippiusPrivateInputPublicationError(
+                "Hippius publication exact-read authority is invalid"
+            )
         try:
-            async with self._client(self._config.reader) as s3:
-                response = await s3.get_object(Bucket=self._config.bucket, Key=key)
-                stream = response["Body"]
+            async with self._client(self._reader_session) as s3:
+                url = await s3.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": self._config.bucket, "Key": key},
+                    ExpiresIn=60,
+                )
+            _validate_presigned_object_url(config=self._config, key=key, url=url)
+            async with self._http.stream("GET", url) as response:
+                if 300 <= response.status_code < 400:
+                    raise HippiusPrivateInputPublicationError(
+                        "Hippius publication read returned a redirect"
+                    )
+                if response.status_code == 404:
+                    raise HippiusPrivateInputNotFound(
+                        "Hippius private-input object is unavailable"
+                    )
+                if response.status_code != 200:
+                    raise HippiusPrivateInputPublicationError(
+                        "Hippius publication exact read failed"
+                    )
                 chunks: list[bytes] = []
                 size = 0
-                while True:
-                    chunk = await stream.read(min(64 << 10, max_bytes + 1 - size))
-                    if not chunk:
-                        break
+                async for chunk in response.aiter_bytes(64 << 10):
                     size += len(chunk)
                     if size > max_bytes:
                         raise HippiusPrivateInputPublicationError(
                             "Hippius publication download exceeded its bound"
                         )
                     chunks.append(chunk)
+                if size < 1:
+                    raise HippiusPrivateInputPublicationError(
+                        "Hippius publication exact read returned an empty object"
+                    )
                 return b"".join(chunks)
         except HippiusPrivateInputPublicationError:
             raise
+        except httpx.HTTPError as error:
+            raise HippiusPrivateInputPublicationError(
+                "Hippius publication exact read failed"
+            ) from error
         except Exception as error:
             _raise_safe_provider_error(error)
 
@@ -234,18 +282,55 @@ class AiobotoHippiusPrivateInputPublicationTransport:
         body: bytes,
         metadata: Mapping[str, str],
     ) -> None:
+        if (
+            not key
+            or len(key.encode()) > 2048
+            or any(character.isspace() for character in key)
+            or not body
+            or len(body) > _MAX_CIPHERTEXT_BYTES
+        ):
+            raise HippiusPrivateInputPublicationError(
+                "Hippius publication exact-write authority is invalid"
+            )
+        content_md5 = base64.b64encode(
+            hashlib.md5(body, usedforsecurity=False).digest()
+        ).decode("ascii")
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "Content-MD5": content_md5,
+        }
+        signed_metadata = {name: value for name, value in metadata.items()}
+        for name, value in signed_metadata.items():
+            headers[f"x-amz-meta-{name.lower()}"] = value
         try:
-            async with self._client(self._config.curator) as s3:
-                await s3.put_object(
-                    Bucket=self._config.bucket,
-                    Key=key,
-                    Body=body,
-                    ContentType="application/octet-stream",
-                    ContentMD5=base64.b64encode(
-                        hashlib.md5(body, usedforsecurity=False).digest()
-                    ).decode("ascii"),
-                    Metadata=dict(metadata),
+            async with self._client(self._curator_session) as s3:
+                url = await s3.generate_presigned_url(
+                    "put_object",
+                    Params={
+                        "Bucket": self._config.bucket,
+                        "Key": key,
+                        "ContentType": "application/octet-stream",
+                        "ContentMD5": content_md5,
+                        "Metadata": signed_metadata,
+                    },
+                    ExpiresIn=60,
                 )
+            _validate_presigned_object_url(config=self._config, key=key, url=url)
+            response = await self._http.put(url, content=body, headers=headers)
+            if 300 <= response.status_code < 400:
+                raise HippiusPrivateInputPublicationError(
+                    "Hippius publication write returned a redirect"
+                )
+            if response.status_code not in {200, 204}:
+                raise HippiusPrivateInputPublicationError(
+                    "Hippius publication exact write failed"
+                )
+        except HippiusPrivateInputPublicationError:
+            raise
+        except httpx.HTTPError as error:
+            raise HippiusPrivateInputPublicationError(
+                "Hippius publication exact write failed"
+            ) from error
         except Exception as error:
             _raise_safe_provider_error(error)
 
@@ -667,6 +752,34 @@ def _write_exclusive_file(*, path: Path, body: bytes) -> None:
         path.unlink(missing_ok=True)
         raise
     os.close(descriptor)
+
+
+def _validate_presigned_object_url(
+    *, config: HippiusPrivateInputPublicationConfig, key: str, url: str
+) -> None:
+    try:
+        endpoint = urlparse(config.endpoint_url)
+        parsed = urlparse(url)
+        endpoint_port = endpoint.port or 443
+        parsed_port = parsed.port or 443
+    except ValueError as error:
+        raise HippiusPrivateInputPublicationError(
+            "Hippius publication URL is invalid"
+        ) from error
+    expected_path = f"/{quote(config.bucket, safe='')}/{quote(key, safe='/')}"
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != endpoint.hostname
+        or parsed_port != endpoint_port
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != expected_path
+        or not parsed.query
+        or parsed.fragment
+    ):
+        raise HippiusPrivateInputPublicationError(
+            "Hippius publication URL escaped its registered origin"
+        )
 
 
 def _raise_safe_provider_error(error: Exception) -> NoReturn:
