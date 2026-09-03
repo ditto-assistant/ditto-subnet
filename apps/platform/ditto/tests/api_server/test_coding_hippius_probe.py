@@ -6,7 +6,7 @@ import json
 import os
 import stat
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 
@@ -14,6 +14,8 @@ import pytest
 
 from ditto.api_server.coding_hippius_probe import (
     HIPPIUS_PROBE_CONFIRMATION,
+    HIPPIUS_PROVIDER_PROFILE_MAX_AGE,
+    HIPPIUS_PROVIDER_PROFILE_SCHEMA,
     HIPPIUS_REVIEWED_REVISION,
     AiobotoHippiusProbeTransport,
     HippiusCredentialRole,
@@ -28,11 +30,14 @@ from ditto.api_server.coding_hippius_probe import (
     HippiusProbeObjectMetadata,
     HippiusProbeReceipt,
     HippiusProbeReceiptError,
+    build_hippius_provider_profile,
     hippius_private_input_authority_sha256,
     load_hippius_probe_receipt,
+    load_hippius_provider_profile,
     parse_hippius_probe_config,
     run_hippius_capability_probe,
     write_hippius_probe_receipt,
+    write_hippius_provider_profile,
 )
 
 _PLATFORM_ROOT = Path(__file__).resolve().parents[3]
@@ -391,6 +396,50 @@ async def test_receipt_is_exclusive_mode_0600_and_redacted(
         assert sensitive not in raw
     with pytest.raises(HippiusProbeReceiptError):
         write_hippius_probe_receipt(receipt=receipt, output=output)
+
+
+async def test_provider_profile_is_redacted_expiry_bound_and_digest_bound(
+    tmp_path: Path,
+):
+    config = _config()
+    receipt = await _run_probe(_FakeTransport())
+    probe_output = (tmp_path / "probe.json").resolve()
+    probe_payload_sha256 = write_hippius_probe_receipt(
+        receipt=receipt,
+        output=probe_output,
+    )
+    profile = build_hippius_provider_profile(
+        receipt=receipt,
+        probe_receipt_payload_sha256=probe_payload_sha256,
+    )
+    assert profile.schema == HIPPIUS_PROVIDER_PROFILE_SCHEMA
+    observed_at = datetime.fromisoformat(profile.observed_at.replace("Z", "+00:00"))
+    expires_at = datetime.fromisoformat(profile.expires_at.replace("Z", "+00:00"))
+    assert expires_at - observed_at == HIPPIUS_PROVIDER_PROFILE_MAX_AGE
+
+    output = (tmp_path / "profile.json").resolve()
+    profile_payload_sha256 = write_hippius_provider_profile(
+        profile=profile,
+        output=output,
+    )
+    loaded, loaded_sha256 = load_hippius_provider_profile(
+        output,
+        now=observed_at + timedelta(seconds=1),
+    )
+    assert loaded == profile
+    assert loaded_sha256 == profile_payload_sha256
+    raw = output.read_text()
+    for sensitive in (
+        config.endpoint_url,
+        config.private_input_bucket,
+        config.sealed_evidence_bucket,
+        config.private_input_curator.access_key,
+        config.private_input_reader.access_key,
+        config.evidence_mediator.access_key,
+    ):
+        assert sensitive not in raw
+    with pytest.raises(HippiusProbeReceiptError, match="expired"):
+        load_hippius_provider_profile(output, now=expires_at)
 
 
 def test_receipt_requires_absolute_path(tmp_path: Path):
