@@ -30,6 +30,22 @@ validator_stack_disk_percent_ceiling: 90
 validator_stack_memory_percent_ceiling: 90
 validator_stack_cpu_percent_ceiling: 0
 
+# Dedicated coding execution remains independently double-gated. Identity
+# staging verifies only pre-positioned root-owned files; Ansible never copies
+# certificate or key contents. Every runtime value ships false/empty.
+validator_stack_coding_shadow_enabled: false
+validator_stack_coding_shadow_instance_id: coding-shadow-primary
+validator_stack_coding_shadow_run_id: ""
+validator_stack_coding_shadow_poll_seconds: 10
+validator_stack_coding_executor_identity_enabled: false
+validator_stack_coding_executor_remote_enabled: false
+validator_stack_coding_executor_base_url: ""
+validator_stack_coding_executor_timeout_seconds: 30
+validator_stack_coding_executor_identity_directory: /var/lib/ditto-validator/coding-executor-mtls
+validator_stack_coding_executor_ca_path: /var/lib/ditto-validator/coding-executor-mtls/executor-ca.pem
+validator_stack_coding_executor_client_cert_path: /var/lib/ditto-validator/coding-executor-mtls/validator-client.pem
+validator_stack_coding_executor_client_key_path: /var/lib/ditto-validator/coding-executor-mtls/validator-client-key.pem
+
 validator_stack_cosign_version: v3.0.6
 validator_stack_cosign_linux_amd64_sha256: c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
 validator_stack_uv_bin: /usr/local/bin/uv

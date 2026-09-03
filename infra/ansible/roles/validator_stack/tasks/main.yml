@@ -12,10 +12,32 @@
       - validator_stack_longmem_capacity | int >= 0
       - validator_stack_longmem_capacity | int <= 4
       - validator_stack_longmem_capacity | int <= ((validator_stack_benchmark_capacity | int) + 1) // 2
+      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_executor_identity_enabled | bool
+      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_shadow_enabled | bool
+      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_shadow_instance_id is match('^[!-~]{1,128}$')
+      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_shadow_run_id is match('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_shadow_run_id != '00000000-0000-0000-0000-000000000000'
+      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_shadow_poll_seconds | float >= 1
+      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_shadow_poll_seconds | float <= 300
+      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_executor_base_url is match('^https://(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3}|192\.168\.[0-9]{1,3}\.[0-9]{1,3}):9443$')
+      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_executor_timeout_seconds | float >= 1
+      - not (validator_stack_coding_executor_remote_enabled | bool) or validator_stack_coding_executor_timeout_seconds | float <= 300
     fail_msg: >-
       Set VALIDATOR_STACK_REVISION to the reviewed 40-character main SHA and
       VALIDATOR_PROD_HOTKEY plus VALIDATOR_PROD_HOTKEY_SECRET_VERSION to the
       generated public SS58 address and its recorded numeric secret version.
+
+- name: Validate the fixed coding executor client identity profile
+  ansible.builtin.assert:
+    that:
+      - validator_stack_coding_executor_identity_directory == '/var/lib/ditto-validator/coding-executor-mtls'
+      - validator_stack_coding_executor_ca_path == '/var/lib/ditto-validator/coding-executor-mtls/executor-ca.pem'
+      - validator_stack_coding_executor_client_cert_path == '/var/lib/ditto-validator/coding-executor-mtls/validator-client.pem'
+      - validator_stack_coding_executor_client_key_path == '/var/lib/ditto-validator/coding-executor-mtls/validator-client-key.pem'
+    fail_msg: >-
+      Dedicated executor client identity paths are fixed and root-only. Do not
+      make a caller-selected certificate or key authoritative.
+  when: validator_stack_coding_executor_identity_enabled | bool
 
 - name: Require the production amd64 host profile
   ansible.builtin.assert:
@@ -121,6 +143,57 @@
     - { path: "{{ validator_stack_root }}", mode: "0750" }
     - { path: "{{ validator_stack_wallet_root }}", mode: "0700" }
     - { path: "{{ validator_stack_wallets_dir }}/{{ validator_stack_wallet_name }}/hotkeys", mode: "0700" }
+
+- name: Verify the pre-positioned coding executor client identity
+  when: validator_stack_coding_executor_identity_enabled | bool
+  block:
+    - name: Ensure the fixed validator mTLS directory exists
+      ansible.builtin.file:
+        path: "{{ validator_stack_coding_executor_identity_directory }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Inspect pre-positioned validator mTLS files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - "{{ validator_stack_coding_executor_ca_path }}"
+        - "{{ validator_stack_coding_executor_client_cert_path }}"
+        - "{{ validator_stack_coding_executor_client_key_path }}"
+      register: validator_stack_coding_executor_identity_files
+
+    - name: Require root-only validator mTLS files
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - not item.stat.islnk
+          - item.stat.uid == 0
+          - item.stat.gid == 0
+          - item.stat.mode == '0400'
+          - item.stat.size | int > 0
+        fail_msg: >-
+          The executor CA, validator client certificate, and client key must
+          already be root-only regular files. Ansible never copies their contents.
+      loop: "{{ validator_stack_coding_executor_identity_files.results }}"
+
+    - name: Install the validator mTLS identity verifier
+      ansible.builtin.copy:
+        src: verify-coding-executor-client-identity.sh
+        dest: /usr/local/bin/verify-coding-executor-client-identity
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Verify validator mTLS chain, key, purpose, and SPIFFE identity
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/verify-coding-executor-client-identity
+          - "{{ validator_stack_hotkey }}"
+      changed_when: false
 
 - name: Clone the public monorepo at the reviewed revision
   ansible.builtin.git:

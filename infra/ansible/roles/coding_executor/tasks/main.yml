@@ -682,6 +682,13 @@
     - name: Install the default-off scorer mTLS transport
       when: coding_executor_mtls_transport_enabled | bool
       block:
+        - name: Re-verify scorer certificate against the private bind address
+          ansible.builtin.command:
+            argv:
+              - /usr/local/lib/ditto-coding-executor/verify-scorer-mtls-identity.sh
+              - "{{ coding_executor_mtls_bind_address }}"
+          changed_when: false
+
         - name: Install the fixed scorer mTLS transport unit
           ansible.builtin.template:
             src: ditto-coding-executor-mtls-transport.service.j2

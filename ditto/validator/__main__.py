@@ -13,7 +13,8 @@ import contextlib
 import logging
 import os
 import signal
-from typing import Protocol
+from contextlib import AsyncExitStack
+from typing import Any, Protocol
 
 import httpx
 
@@ -26,9 +27,13 @@ from ditto.system_health import SystemMetricsCollector
 from ditto.validator.coding_canary import CodingCanaryWorker
 from ditto.validator.coding_canary_runtime import CodingCanaryRuntime
 from ditto.validator.coding_publication import CodingPublicationClient
-from ditto.validator.coding_supervisor import CodingSupervisorRuntime
+from ditto.validator.coding_supervisor import (
+    CodingExecutorTLSConfig,
+    CodingSupervisorRuntime,
+    create_coding_executor_http_client,
+)
 from ditto.validator.coding_worker import CodingShadowWorker
-from ditto.validator.config import parse_validator_config_from_env
+from ditto.validator.config import ValidatorConfig, parse_validator_config_from_env
 from ditto.validator.dittobench import DittobenchClient
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import load_validator_keypair, sign_coding_certification
@@ -168,70 +173,125 @@ async def _amain() -> int:
                         coding_canary.offer if coding_canary is not None else None
                     ),
                 )
-                coding_worker: CodingShadowWorker | None = None
-                if config.coding_shadow_enabled:
-                    if config.coding_shadow_run_id is None:  # pragma: no cover
-                        raise RuntimeError("shadow coding run fence is unavailable")
-                    publication = CodingPublicationClient(
-                        base_url=config.dittobench_api_url,
-                        control_token=config.dittobench_control_token,
-                        client=http,
-                    )
-                    coding_runtime = CodingSupervisorRuntime(config, http, platform)
-                    coding_worker = CodingShadowWorker(
+                async with AsyncExitStack() as coding_resources:
+                    coding_worker = await _create_coding_shadow_worker(
+                        config=config,
                         platform=platform,
-                        runtime=coding_runtime,
-                        publication=publication,
-                        instance_id=config.coding_shadow_instance_id,
-                        run_row_id=config.coding_shadow_run_id,
-                        poll_seconds=config.coding_shadow_poll_seconds,
+                        keypair=keypair,
+                        resources=coding_resources,
                     )
-                    logger.info(
-                        "shadow coding worker enabled instance=%s run=%s",
-                        config.coding_shadow_instance_id,
-                        config.coding_shadow_run_id,
-                    )
-                _apply_ditto_logging()  # re-assert: bittensor has initialised
+                    _apply_ditto_logging()  # re-assert: bittensor has initialised
 
-                async def run_ordinary_worker() -> None:
-                    await worker.run_forever(
-                        stop,
-                        drain_requested=drain_requested,
-                        bootstrap_resume=(
-                            mark_bootstrap_resumed if bootstrap_drain_pending else None
-                        ),
-                        extra_busy=_extra_busy(coding_worker, coding_canary),
-                    )
+                    async def run_ordinary_worker() -> None:
+                        await worker.run_forever(
+                            stop,
+                            drain_requested=drain_requested,
+                            bootstrap_resume=(
+                                mark_bootstrap_resumed
+                                if bootstrap_drain_pending
+                                else None
+                            ),
+                            extra_busy=_extra_busy(coding_worker, coding_canary),
+                        )
 
-                extras: list[tuple[str, _ExtraWorker]] = []
-                if coding_worker is not None:
-                    extras.append(("validator-coding-shadow-worker", coding_worker))
-                if coding_canary is not None:
-                    extras.append(("validator-coding-canary-worker", coding_canary))
-                try:
-                    if not extras:
-                        await run_ordinary_worker()
-                    else:
-                        async with asyncio.TaskGroup() as group:
-                            group.create_task(
-                                run_ordinary_worker(),
-                                name="validator-ordinary-worker",
-                            )
-                            for name, extra_worker in extras:
+                    extras: list[tuple[str, _ExtraWorker]] = []
+                    if coding_worker is not None:
+                        extras.append(("validator-coding-shadow-worker", coding_worker))
+                    if coding_canary is not None:
+                        extras.append(("validator-coding-canary-worker", coding_canary))
+                    try:
+                        if not extras:
+                            await run_ordinary_worker()
+                        else:
+                            async with asyncio.TaskGroup() as group:
                                 group.create_task(
-                                    extra_worker.run_forever(
-                                        stop,
-                                        drain_requested=drain_requested,
-                                    ),
-                                    name=name,
+                                    run_ordinary_worker(),
+                                    name="validator-ordinary-worker",
                                 )
-                finally:
-                    stop.set()
+                                for name, extra_worker in extras:
+                                    group.create_task(
+                                        extra_worker.run_forever(
+                                            stop,
+                                            drain_requested=drain_requested,
+                                        ),
+                                        name=name,
+                                    )
+                    finally:
+                        stop.set()
     finally:
         write_update_state("stopping")
         telemetry.close()
     logger.info("validator worker stopped")
     return 0
+
+
+async def _create_coding_shadow_worker(
+    *,
+    config: ValidatorConfig,
+    platform: PlatformClient,
+    keypair: Any,
+    resources: AsyncExitStack,
+) -> CodingShadowWorker | None:
+    if not config.coding_shadow_enabled:
+        return None
+    if config.coding_shadow_run_id is None:  # pragma: no cover - config guard
+        raise RuntimeError("shadow coding run fence is unavailable")
+
+    coding_http: httpx.AsyncClient
+    executor_base_url: str | None = None
+    client_keypair: Any | None = None
+    validator_hotkey: str | None = None
+    if config.coding_executor_remote_enabled:
+        executor_client = create_coding_executor_http_client(
+            CodingExecutorTLSConfig(
+                ca_path=config.coding_executor_ca_path,
+                client_cert_path=config.coding_executor_client_cert_path,
+                client_key_path=config.coding_executor_client_key_path,
+                timeout_seconds=config.coding_executor_timeout_seconds,
+            )
+        )
+        coding_http = await resources.enter_async_context(executor_client)
+        executor_base_url = config.coding_executor_base_url
+        client_keypair = keypair
+        validator_hotkey = config.validator_hotkey
+    else:
+        coding_http = await resources.enter_async_context(
+            httpx.AsyncClient(
+                timeout=config.http_timeout_seconds,
+                trust_env=False,
+            )
+        )
+
+    publication = CodingPublicationClient(
+        base_url=config.dittobench_api_url,
+        control_token=config.dittobench_control_token,
+        client=coding_http,
+        keypair=client_keypair,
+        validator_hotkey=validator_hotkey,
+        executor_base_url=executor_base_url,
+    )
+    coding_runtime = CodingSupervisorRuntime(
+        config,
+        coding_http,
+        platform,
+        keypair=client_keypair,
+        executor_base_url=executor_base_url,
+    )
+    worker = CodingShadowWorker(
+        platform=platform,
+        runtime=coding_runtime,
+        publication=publication,
+        instance_id=config.coding_shadow_instance_id,
+        run_row_id=config.coding_shadow_run_id,
+        poll_seconds=config.coding_shadow_poll_seconds,
+    )
+    logger.info(
+        "shadow coding worker enabled instance=%s run=%s executor=%s",
+        config.coding_shadow_instance_id,
+        config.coding_shadow_run_id,
+        "remote" if config.coding_executor_remote_enabled else "local",
+    )
+    return worker
 
 
 class _ExtraWorker(Protocol):
