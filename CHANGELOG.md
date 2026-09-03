@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.190.0 (2026-09-03)
+
+### Features
+
+- **infra**: Add coding executor canary runner
+  ([#1489](https://github.com/ditto-assistant/ditto-subnet/pull/1489),
+  [`e197d01`](https://github.com/ditto-assistant/ditto-subnet/commit/e197d01fd36948f82075cc19b85c10420c92334a))
+
+
 ## v0.189.0 (2026-09-03)
 
 ### Features
