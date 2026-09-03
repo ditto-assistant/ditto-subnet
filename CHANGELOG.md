@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.184.0 (2026-09-03)
+
+### Features
+
+- **release**: Export scorer OCI bundle
+  ([#1440](https://github.com/ditto-assistant/ditto-subnet/pull/1440),
+  [`a017c76`](https://github.com/ditto-assistant/ditto-subnet/commit/a017c767c3b855128aa0f5923bad2bba1c43a25a))
+
+
 ## v0.183.0 (2026-09-03)
 
 ### Features
