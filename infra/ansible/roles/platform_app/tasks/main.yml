@@ -199,18 +199,22 @@
     platform_secrets: "{{ dict(platform_secret_reads.results | map(attribute='item.key') | zip(platform_secret_reads.results | map(attribute='stdout'))) }}"
   no_log: true
 
-- name: Read platform OpenRouter key when ticket inference is enabled
+- name: Read platform OpenRouter key when a Platform inference lane is enabled
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_platform_openrouter_key }} --project={{ gcp_project }}"
   register: platform_openrouter_read
   changed_when: false
   no_log: true
-  when: platform_inference_proxy_enabled | bool
+  when: >-
+    platform_inference_proxy_enabled | bool or
+    platform_coding_shadow_enabled | bool
 
 - name: Fold the platform OpenRouter key into the secrets map
   ansible.builtin.set_fact:
     platform_secrets: "{{ platform_secrets | combine({'openrouter_api_key': platform_openrouter_read.stdout}) }}"
   no_log: true
-  when: platform_inference_proxy_enabled | bool
+  when: >-
+    platform_inference_proxy_enabled | bool or
+    platform_coding_shadow_enabled | bool
 
 - name: Read platform Perplexity key when ticket inference is enabled
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_platform_perplexity_key }} --project={{ gcp_project }}"
@@ -377,6 +381,64 @@
     platform_secrets: "{{ platform_secrets | combine({'coding_catalog_access_key': platform_coding_catalog_access_key_read.stdout, 'coding_catalog_secret_key': platform_coding_catalog_secret_key_read.stdout}) }}"
   no_log: true
   when: platform_coding_catalog_enabled | bool
+
+- name: Inspect the locked shadow coding inference policy
+  ansible.builtin.stat:
+    path: "{{ platform_coding_shadow_inference_policy_file }}"
+    checksum_algorithm: sha256
+  register: platform_coding_shadow_policy
+  changed_when: false
+  when: platform_coding_shadow_enabled | bool
+
+- name: Validate shadow coding transport activation
+  ansible.builtin.assert:
+    that:
+      - platform_inference_relay_ports | sort == [8010, 8011]
+      - platform_coding_shadow_policy.stat.exists
+      - not platform_coding_shadow_policy.stat.isdir
+      - >-
+        platform_coding_shadow_policy.stat.checksum ==
+        platform_coding_shadow_inference_policy_sha256
+      - >-
+        platform_coding_shadow_inference_exchange_url is match(
+        '^https://[^/@?#:]+(?::443)?/api/v1/validator/coding-shadow/inference-exchange$')
+      - >-
+        platform_coding_shadow_inference_proxy_url is match(
+        '^https://[^/@?#:]+(?::443)?/api/v1/inference/coding/chat/completions$')
+      - >-
+        platform_coding_shadow_inference_revoke_url is match(
+        '^https://[^/@?#:]+(?::443)?/api/v1/validator/coding-shadow/inference-revoke-capability$')
+      - platform_secrets.openrouter_api_key | default('') | length >= 32
+    fail_msg: >-
+      Shadow coding transport requires a deployed relay pool, the exact locked
+      policy bytes from this checkout, the three reviewed HTTPS URLs, and the
+      server-only OpenRouter credential. Leave platform_coding_shadow_enabled
+      false until the whole profile has been reviewed.
+  when: platform_coding_shadow_enabled | bool
+  no_log: true
+
+- name: Validate shadow coding admin controls
+  ansible.builtin.assert:
+    that:
+      - >-
+        platform_coding_shadow_selection_delay_blocks | int >= 1 and
+        platform_coding_shadow_selection_delay_blocks | int <= 10000
+      - >-
+        platform_coding_shadow_ticket_lease_seconds | int >= 60 and
+        platform_coding_shadow_ticket_lease_seconds | int <= 7200
+      - >-
+        not (platform_coding_shadow_reconciliation_enabled | bool) or
+        (platform_coding_catalog_enabled | bool)
+      - >-
+        not (
+          platform_coding_shadow_reconciliation_enabled | bool or
+          platform_coding_shadow_ticket_set_enabled | bool
+        ) or platform_secrets.admin_api_token | default('') | length >= 32
+    fail_msg: >-
+      Shadow coding reconciliation requires the separate private catalog; both
+      reconciliation and ticket-set issuance require a valid admin token. Keep
+      their switches false until one named shadow run is approved.
+  no_log: true
 
 - name: Render .env
   ansible.builtin.template:

@@ -39,6 +39,13 @@ const root = path.resolve(__dirname, "..");
 // `uv sync` always materializes this; it is the same interpreter `uv run` would
 // have selected, minus the intervening shim process.
 const venvPython = path.join(root, ".venv", "bin", "python");
+const codingInferenceEnabled = ["1", "true", "yes", "on"].includes(
+  (process.env.DITTO_CODING_INFERENCE_ENABLED || "").trim().toLowerCase(),
+);
+// The coding relay drains for up to 305 seconds. PM2 must outlive that bound
+// when the independently default-off coding handler is enabled, otherwise a
+// rolling restart can cut off a settled provider attempt mid-response.
+const relayKillTimeout = codingInferenceEnabled ? 315000 : 135000;
 
 // --- Inference relay pool -------------------------------------------------
 //
@@ -127,10 +134,12 @@ const relayApp = (port, index) => ({
     // set together" -- which is the config layer failing loudly, as intended.
     DITTO_TAOSTATS_VALIDATOR_NAMES_URL: "",
     DITTO_TAOSTATS_API_KEY: "",
-    // The private Coding catalog credential belongs exclusively to the Python
-    // Platform API. The Ansible-owned .env is otherwise shared by every PM2
-    // process, so clear every part here rather than letting the model relay
-    // inherit a credential it neither reads nor needs.
+    // The private Coding catalog plus Platform-only shadow controls belong
+    // exclusively to the Python API. The relay retains only its own coding
+    // inference enablement, guardrail, concurrency, and server-only OpenRouter
+    // key; it must not inherit catalog credentials, admin authority, or grant
+    // mint/exchange configuration from the shared Ansible-owned .env.
+    DITTO_ADMIN_API_TOKEN: "",
     DITTO_CODING_CATALOG_STORAGE_ENDPOINT_URL: "",
     DITTO_CODING_CATALOG_STORAGE_BUCKET: "",
     DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY: "",
@@ -139,6 +148,15 @@ const relayApp = (port, index) => ({
     DITTO_CODING_CATALOG_STORAGE_USE_TLS: "",
     DITTO_CODING_CATALOG_MAX_RECORD_BYTES: "",
     DITTO_CODING_CATALOG_TIMEOUT_SECONDS: "",
+    DITTO_CODING_SHADOW_ENABLED: "false",
+    DITTO_CODING_SHADOW_RECONCILIATION_ENABLED: "false",
+    DITTO_CODING_SHADOW_SELECTION_DELAY_BLOCKS: "",
+    DITTO_CODING_SHADOW_TICKET_SET_ENABLED: "false",
+    DITTO_CODING_SHADOW_TICKET_LEASE_SECONDS: "",
+    DITTO_CODING_INFERENCE_POLICY_FILE: "",
+    DITTO_CODING_INFERENCE_EXCHANGE_URL: "",
+    DITTO_CODING_INFERENCE_PROXY_URL: "",
+    DITTO_CODING_INFERENCE_REVOKE_URL: "",
   },
   autorestart: true,
   max_restarts: 10,
@@ -146,8 +164,9 @@ const relayApp = (port, index) => ({
   restart_delay: 2000,
   // Provider reads can legitimately run for up to 120s. Once SIGINT closes
   // this slot to new work, let its existing requests finish while Caddy sends
-  // new calls to the sibling relay.
-  kill_timeout: 135000,
+  // new calls to the sibling relay. The default-off coding profile extends the
+  // bound above its locked 305-second drain.
+  kill_timeout: relayKillTimeout,
   max_memory_restart: "3072M",
   out_file: path.join(root, "logs", `ditto-api-relay-${index + 1}.out.log`),
   error_file: path.join(root, "logs", `ditto-api-relay-${index + 1}.err.log`),

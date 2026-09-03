@@ -161,6 +161,26 @@ platform_coding_catalog_timeout_seconds: 10
 secret_coding_catalog_access_key: platform-coding-catalog-access-key
 secret_coding_catalog_secret_key: platform-coding-catalog-secret-key
 
+# Shadow coding transport and its two caller-driven admin controls. They are
+# deliberately independent: the transport also serves the public capability
+# canary, while reconciliation and k=3 ticket issuance remain explicit admin
+# actions. Every switch ships false; changing a host var and converging is the
+# only way this role can render an active value.
+platform_coding_shadow_enabled: false
+platform_coding_shadow_reconciliation_enabled: false
+platform_coding_shadow_ticket_set_enabled: false
+platform_coding_shadow_selection_delay_blocks: 20
+platform_coding_shadow_ticket_lease_seconds: 3600
+platform_coding_shadow_inference_policy_file: >-
+  {{ platform_checkout_root }}/packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json
+platform_coding_shadow_inference_policy_sha256: "6dd79225817b56ebf155f8344cd5faf752c8dd57802b21d6d2cbbae9cc2ff0b4"
+platform_coding_shadow_inference_exchange_url: >-
+  {{ platform_inference_public_base_url }}/api/v1/validator/coding-shadow/inference-exchange
+platform_coding_shadow_inference_proxy_url: >-
+  {{ platform_inference_public_base_url }}/api/v1/inference/coding/chat/completions
+platform_coding_shadow_inference_revoke_url: >-
+  {{ platform_inference_public_base_url }}/api/v1/validator/coding-shadow/inference-revoke-capability
+
 # Subnet / pricing config (mirrors .env.example defaults).
 platform_netuid: 118
 platform_subtensor_network: finney

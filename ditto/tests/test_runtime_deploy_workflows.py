@@ -148,3 +148,62 @@ def test_private_coding_catalog_deploy_is_default_off_and_relay_blind() -> None:
         "DITTO_CODING_CATALOG_STORAGE_SECRET_KEY",
     ):
         assert f'{key}: ""' in ecosystem
+
+
+def test_shadow_coding_deploy_controls_are_default_off_and_split_by_process() -> None:
+    """A reviewed host profile cannot enable coding by accident or leak control.
+
+    The Python API owns grant minting and confirmed admin actions. The Go relay
+    needs only its narrow dispatch gate plus the provider credential; inheriting
+    any Platform-side catalog, admin, or exchange authority would widen that
+    process unnecessarily.
+    """
+    defaults = yaml.safe_load(
+        (ROOT / "infra/ansible/roles/platform_app/defaults/main.yml").read_text()
+    )
+    template = (
+        ROOT / "infra/ansible/roles/platform_app/templates/platform.env.j2"
+    ).read_text()
+    tasks = (ROOT / "infra/ansible/roles/platform_app/tasks/main.yml").read_text()
+    ecosystem = (ROOT / "apps/platform/scripts/ecosystem.config.js").read_text()
+    relay_release = (ROOT / "apps/platform/scripts/deploy-relay-release.sh").read_text()
+
+    for key in (
+        "platform_coding_shadow_enabled",
+        "platform_coding_shadow_reconciliation_enabled",
+        "platform_coding_shadow_ticket_set_enabled",
+    ):
+        assert defaults[key] is False
+    assert defaults["platform_coding_shadow_inference_policy_sha256"] == (
+        "6dd79225817b56ebf155f8344cd5faf752c8dd57802b21d6d2cbbae9cc2ff0b4"
+    )
+    assert "DITTO_CODING_SHADOW_ENABLED={{ 'true'" in template
+    assert "DITTO_CODING_INFERENCE_ENABLED={{ 'true'" in template
+    assert (
+        "DITTO_CODING_INFERENCE_ACCOUNT_GUARDRAIL=openrouter_private_account_v1"
+        in template
+    )
+    assert "platform_coding_shadow_inference_policy_file | quote" in template
+    assert "platform_coding_shadow_reconciliation_enabled else 'false'" in template
+    assert "platform_coding_shadow_ticket_set_enabled else 'false'" in template
+    assert "platform_inference_relay_ports | sort == [8010, 8011]" in tasks
+    assert "platform_coding_shadow_policy.stat.checksum" in tasks
+    assert "platform_secrets.openrouter_api_key" in tasks
+    assert "platform_coding_catalog_enabled | bool" in tasks
+    for key in (
+        "DITTO_ADMIN_API_TOKEN",
+        "DITTO_CODING_SHADOW_ENABLED",
+        "DITTO_CODING_SHADOW_RECONCILIATION_ENABLED",
+        "DITTO_CODING_SHADOW_TICKET_SET_ENABLED",
+        "DITTO_CODING_INFERENCE_POLICY_FILE",
+        "DITTO_CODING_INFERENCE_EXCHANGE_URL",
+        "DITTO_CODING_INFERENCE_PROXY_URL",
+        "DITTO_CODING_INFERENCE_REVOKE_URL",
+    ):
+        assert f"{key}: " in ecosystem
+        assert f"export {key}=" in relay_release
+    assert (
+        "const relayKillTimeout = codingInferenceEnabled ? 315000 : 135000;"
+        in ecosystem
+    )
+    assert "kill_timeout: relayKillTimeout" in ecosystem

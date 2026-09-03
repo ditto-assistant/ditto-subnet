@@ -68,8 +68,12 @@ process-local session tombstone.
 Activation is deliberately a coordinated operator action, not a code default.
 All of the following must be configured together:
 
-- Platform: `DITTO_CODING_SHADOW_ENABLED=true`, the canonical locked policy
-  file, and exact HTTPS exchange, proxy, and revocation URLs;
+- Platform: an explicit Ansible
+  `platform_coding_shadow_enabled: true`, which renders
+  `DITTO_CODING_SHADOW_ENABLED=true`, the relay's separate coding gate, the
+  canonical locked policy file, and exact HTTPS exchange, proxy, and
+  revocation URLs. The reconciler and k=3 ticket-set admin gates remain
+  separate false-by-default controls;
 - scorer: `DITTOBENCH_CODING_SHADOW_ENABLED=true`, an euid-owned mode-0700
   private root, the canonical locked policy file, the source-bound port/base
   URL, and the reviewed runtime-image repository with every selected immutable
