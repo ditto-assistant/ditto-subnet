@@ -8,6 +8,7 @@ import fcntl
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 from collections.abc import Iterator, Mapping
@@ -672,6 +673,16 @@ def resolve_clean_repository_source_sha(repository_root: Path) -> str:
     return source_sha
 
 
+def _kill_helper_group(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is not None or process.pid is None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        if process.returncode is None:
+            process.kill()
+
+
 async def _run_helper_process(
     *,
     executable: Path,
@@ -691,50 +702,61 @@ async def _run_helper_process(
         )
     except OSError as error:
         raise HippiusCanaryOperatorError("canary helper could not start") from error
+
+    async def write_stdin() -> None:
+        assert process.stdin is not None
+        process.stdin.write(body)
+        await process.stdin.drain()
+        process.stdin.close()
+        await process.stdin.wait_closed()
+
+    async def read_stdout() -> bytes:
+        assert process.stdout is not None
+        chunks: list[bytes] = []
+        size = 0
+        while True:
+            chunk = await process.stdout.read(64 << 10)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > _MAX_HELPER_RESPONSE_BYTES:
+                raise HippiusCanaryOperatorError(
+                    "canary helper response exceeded its bound"
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
+
     try:
         async with asyncio.timeout(timeout_seconds):
-            assert process.stdin is not None
-            assert process.stdout is not None
-            process.stdin.write(body)
-            await process.stdin.drain()
-            process.stdin.close()
-            await process.stdin.wait_closed()
-            chunks: list[bytes] = []
-            size = 0
-            while True:
-                chunk = await process.stdout.read(64 << 10)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > _MAX_HELPER_RESPONSE_BYTES:
-                    raise HippiusCanaryOperatorError(
-                        "canary helper response exceeded its bound"
-                    )
-                chunks.append(chunk)
+            _stdin_task = asyncio.create_task(write_stdin())
+            _stdout_task = asyncio.create_task(read_stdout())
+            try:
+                _, output = await asyncio.gather(_stdin_task, _stdout_task)
+            finally:
+                if not _stdin_task.done():
+                    _stdin_task.cancel()
+                if not _stdout_task.done():
+                    _stdout_task.cancel()
             return_code = await process.wait()
     except asyncio.CancelledError:
-        if process.returncode is None:
-            process.kill()
-            await process.wait()
+        _kill_helper_group(process)
+        await process.wait()
         raise
     except TimeoutError as error:
-        if process.returncode is None:
-            process.kill()
-            await process.wait()
+        _kill_helper_group(process)
+        await process.wait()
         raise HippiusCanaryOperatorError("canary helper timed out") from error
     except HippiusCanaryOperatorError:
-        if process.returncode is None:
-            process.kill()
-            await process.wait()
+        _kill_helper_group(process)
+        await process.wait()
         raise
     except (BrokenPipeError, OSError) as error:
-        if process.returncode is None:
-            process.kill()
-            await process.wait()
+        _kill_helper_group(process)
+        await process.wait()
         raise HippiusCanaryOperatorError("canary helper transport failed") from error
     if return_code != 0:
         raise HippiusCanaryOperatorError("canary helper failed")
-    return b"".join(chunks)
+    return output
 
 
 def _parse_private_input_authority(raw: object) -> HippiusPrivateInputTicketAuthority:

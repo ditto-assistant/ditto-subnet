@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import importlib.util
+import os
 import subprocess
 import sys
+import time
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,6 +26,7 @@ from ditto.api_server.coding_hippius_canary_operator import (
     ProcessHippiusCanaryGradingExecutor,
     ProcessHippiusPrivateInputUnwrapper,
     ProtectedCanonicalHelper,
+    _run_helper_process,
     load_hippius_shadow_canary_plan,
     parse_hippius_canary_operator_config,
     resolve_clean_repository_source_sha,
@@ -365,3 +369,46 @@ def test_operator_script_requires_confirmation(monkeypatch: pytest.MonkeyPatch) 
         )
         == 0
     )
+
+
+@pytest.mark.asyncio
+async def test_helper_timeout_kills_forked_process_group(tmp_path: Path) -> None:
+    work_root = _protected_directory(tmp_path / "work")
+    child_pid_path = work_root / "child.pid"
+    executable = _write_executable(
+        tmp_path / "forking-helper",
+        f"""#!{sys.executable}
+import os
+import time
+
+child = os.fork()
+if child == 0:
+    time.sleep(30)
+    os._exit(0)
+with open({str(child_pid_path)!r}, "w", encoding="ascii") as handle:
+    handle.write(str(child))
+time.sleep(30)
+""",
+    )
+    with pytest.raises(HippiusCanaryOperatorError, match="timed out"):
+        await _run_helper_process(
+            executable=executable,
+            work_root=work_root,
+            body=b"{}",
+            timeout_seconds=1.0,
+        )
+    deadline = time.monotonic() + 2
+    child_pid = None
+    while time.monotonic() < deadline:
+        if child_pid_path.exists():
+            child_pid = int(child_pid_path.read_text())
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("forked helper child survived operator timeout")
+    if child_pid is not None:
+        with pytest.raises(ProcessLookupError):
+            os.kill(child_pid, 0)
