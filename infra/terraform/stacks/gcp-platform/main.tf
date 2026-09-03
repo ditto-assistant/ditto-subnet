@@ -55,6 +55,8 @@ locals {
       google_secret_manager_secret.backblaze_application_key.secret_id,
       google_secret_manager_secret.coding_catalog_access_key.secret_id,
       google_secret_manager_secret.coding_catalog_secret_key.secret_id,
+      google_secret_manager_secret.coding_evidence_access_key.secret_id,
+      google_secret_manager_secret.coding_evidence_secret_key.secret_id,
     ],
     [for s in google_secret_manager_secret.pylon_open_access_token : s.secret_id],
   )
@@ -438,6 +440,32 @@ import {
 import {
   to = google_secret_manager_secret.coding_catalog_curator_secret_key
   id = "projects/${var.project}/secrets/platform-coding-catalog-curator-secret-key"
+}
+
+# Dedicated Hippius sealed-evidence mediator identity. Containers only: the
+# operator adds and rotates versions out of band so no provider credential ever
+# enters Terraform state. This identity is distinct from catalog reads, avatar
+# storage, traces, and miner uploads.
+resource "google_secret_manager_secret" "coding_evidence_access_key" {
+  project   = var.project
+  secret_id = "platform-coding-hippius-evidence-access-key"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_secret_manager_secret" "coding_evidence_secret_key" {
+  project   = var.project
+  secret_id = "platform-coding-hippius-evidence-secret-key"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Operators may create these containers out of band when adding the first

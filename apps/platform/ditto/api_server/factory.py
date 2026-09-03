@@ -26,6 +26,9 @@ from ditto.api_server.burn_settings import BurnSettingsResolver
 from ditto.api_server.coding_artifact_capabilities import (
     CodingArtifactCapabilityMinter,
 )
+from ditto.api_server.coding_hippius_custody import (
+    create_hippius_evidence_runtime_from_env,
+)
 from ditto.api_server.coding_private_catalog import (
     create_coding_private_catalog_source,
 )
@@ -238,6 +241,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             stack.push_async_callback(engine.dispose)
             app.state.engine = engine
             app.state.session_maker = create_session_maker(engine)
+            app.state.coding_hippius_evidence_runtime = (
+                create_hippius_evidence_runtime_from_env(
+                    session_maker=app.state.session_maker
+                )
+                if _process_role() == PLATFORM_ROLE
+                else None
+            )
 
             chain = await stack.enter_async_context(create_chain_client(config.chain))
             app.state.chain = chain
@@ -488,6 +498,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # This internal source has no HTTP route and is absent unless Platform has
     # a separate least-privilege private-catalog credential set.
     app.state.coding_private_catalog_source = None
+    app.state.coding_hippius_evidence_runtime = None
     app.state.coding_artifact_capability_minter = None
     app.state.coding_inference_grant_transport = None
     # Hot-swappable efficiency-bonus policy: the compute path resolves the

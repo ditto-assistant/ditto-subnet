@@ -249,6 +249,19 @@
       "related": ["dittobench-scoring", "research-adapters", "contracts", "platform-api", "release-delivery"]
     },
     {
+      "id": "coding-hippius-custody",
+      "title": "Hippius Coding custody and crash recovery",
+      "keywords": ["Hippius custody", "evidence spool", "Hippius rotation", "evidence recovery", "wrapping key rotation", "coding evidence secrets"],
+      "summary": "Keep exact encrypted evidence in an owner-only Platform spool, load dedicated Hippius credentials from out-of-band Secret Manager versions, support wrapping-key rotation, and keep every runtime caller disabled.",
+      "skills": ["ditto-subnet-platform", "ditto-subnet-release-ops"],
+      "owns": ["apps/platform/ditto/api_server/coding_hippius_custody.py", "apps/platform/ditto/api_server/factory.py", "apps/platform/scripts/ecosystem.config.js", "infra/ansible/roles/platform_app", "infra/terraform/stacks/gcp-platform/main.tf", "apps/platform/docs/coding-hippius-custody-recovery.md"],
+      "read": ["apps/platform/docs/coding-hippius-custody-recovery.md", "apps/platform/docs/coding-hippius-sealed-evidence-mediator.md", "docs/coding-private-hippius-data-plane.md"],
+      "search": ["rg -n 'HippiusEvidenceSpool|create_hippius_evidence_runtime' apps/platform", "rg -n 'coding_hippius_evidence|DITTO_CODING_HIPPIUS' infra/ansible infra/terraform apps/platform/scripts"],
+      "validate": ["cd apps/platform && make lint lint-copy typecheck test", "uv run pytest -q ditto/tests/test_runtime_deploy_workflows.py ditto/tests/test_release_plan.py", "terraform -chdir=infra/terraform/stacks/gcp-platform fmt -check", "terraform -chdir=infra/terraform/stacks/gcp-platform validate"],
+      "invariants": ["Prepared ciphertext never returns to validators or untrusted runtimes.", "Secret values are populated out of band and never enter Terraform state.", "Every runtime caller remains disabled until a separately reviewed canary."],
+      "related": ["coding-hippius-evidence", "coding-repair-research", "release-delivery"]
+    },
+    {
       "id": "coding-hippius-evidence",
       "title": "Hippius sealed Coding evidence mediation",
       "keywords": ["Hippius sealed evidence", "sealed Coding evidence", "evidence mediator", "full-byte finalization", "evidence reservation", "coding evidence finalization"],
