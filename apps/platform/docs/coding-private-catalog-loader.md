@@ -92,6 +92,11 @@ encryption, exact-object verification, non-human credential custody, and live
 provider canary are implemented. Do not activate this loader with a personal
 token or an existing avatar, trace, or general account credential.
 
+The provider canary begins with the confirmation-gated
+`scripts/probe_hippius_coding_storage.py` operator tool. Its successful receipt
+proves only the synthetic capability checks recorded there; it neither enables
+this loader nor certifies private-data secrecy.
+
 ## Curator publication preflight
 
 The public repository contains a no-upload curator preflight:

@@ -220,6 +220,48 @@ Canary receipts are mode-`0600`, content-addressed, redacted, and reviewed
 before any activation change. A provider status page, unit test, green CI run,
 or successful local upload is not a substitute.
 
+The first provider probe is
+`apps/platform/scripts/probe_hippius_coding_storage.py`. Ordinary CI exercises
+its transport protocol against synthetic fakes and never contacts Hippius. A
+live run requires three distinct non-human credentials, two pre-existing
+distinct private buckets, an absolute new receipt path, and the exact
+confirmation `PROBE HIPPIUS CODING STORAGE`.
+
+The probe writes and retains two random 4 KiB objects so the receipt describes
+real stored bytes without deleting or overwriting prior state. It may retain up
+to three additional small synthetic objects only when it detects an unexpected
+input-reader or cross-bucket write, in which case `ready=false`. It never
+creates or deletes a bucket, reads a private task, lists outside its fresh
+random prefix, or returns an endpoint, bucket, key, access ID, secret, URL, or
+object byte. The operator reviews the redacted receipt before any later
+implementation layer treats the observed provider behavior as evidence.
+
+A live operator must inject these variables from a protected secret boundary
+without printing or persisting their values. This layer does not add a secret
+retrieval wrapper:
+
+```text
+DITTO_CODING_HIPPIUS_ENDPOINT_URL
+DITTO_CODING_HIPPIUS_REGION
+DITTO_CODING_HIPPIUS_PRIVATE_INPUT_BUCKET
+DITTO_CODING_HIPPIUS_SEALED_EVIDENCE_BUCKET
+DITTO_CODING_HIPPIUS_PRIVATE_INPUT_CURATOR_ACCESS_KEY
+DITTO_CODING_HIPPIUS_PRIVATE_INPUT_CURATOR_SECRET_KEY
+DITTO_CODING_HIPPIUS_PRIVATE_INPUT_READER_ACCESS_KEY
+DITTO_CODING_HIPPIUS_PRIVATE_INPUT_READER_SECRET_KEY
+DITTO_CODING_HIPPIUS_EVIDENCE_MEDIATOR_ACCESS_KEY
+DITTO_CODING_HIPPIUS_EVIDENCE_MEDIATOR_SECRET_KEY
+```
+
+Do not pass credentials as command-line arguments or store them in a repository
+environment file. From `apps/platform`, the confirmed live entry point is:
+
+```bash
+uv run python scripts/probe_hippius_coding_storage.py \
+  --confirm "PROBE HIPPIUS CODING STORAGE" \
+  --output /protected/new-hippius-probe-receipt.json
+```
+
 ## Activation order
 
 Implementation must remain in independently reviewable, default-off layers:
