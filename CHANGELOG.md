@@ -2,6 +2,37 @@
 
 <!-- version list -->
 
+## v0.186.0 (2026-09-03)
+
+### Bug Fixes
+
+- **coding**: Land reviewed executor control envelope on main
+  ([#1527](https://github.com/ditto-assistant/ditto-subnet/pull/1527),
+  [`e1fdb3a`](https://github.com/ditto-assistant/ditto-subnet/commit/e1fdb3a609bf9daf7bc63954945ccbd0a28b689c))
+
+### Features
+
+- **infra**: Add capability egress guard
+  ([#1448](https://github.com/ditto-assistant/ditto-subnet/pull/1448),
+  [`2bdc9f3`](https://github.com/ditto-assistant/ditto-subnet/commit/2bdc9f3af4ea57f6d593d1635a43b28e26991e1d))
+
+- **infra**: Add capability ingress guard
+  ([#1449](https://github.com/ditto-assistant/ditto-subnet/pull/1449),
+  [`012e6ba`](https://github.com/ditto-assistant/ditto-subnet/commit/012e6ba515cac8abd0bc8d3c3a59a6914f5aa179))
+
+- **infra**: Install attested scorer service
+  ([#1450](https://github.com/ditto-assistant/ditto-subnet/pull/1450),
+  [`03c8f4e`](https://github.com/ditto-assistant/ditto-subnet/commit/03c8f4ea4c2101e46b8f970a42e8461d128f2c45))
+
+- **infra**: Materialize scorer runtime
+  ([#1447](https://github.com/ditto-assistant/ditto-subnet/pull/1447),
+  [`f3ca0bb`](https://github.com/ditto-assistant/ditto-subnet/commit/f3ca0bb67bf51ef4a71f213102bcaaf741aa50e9))
+
+- **infra**: Stage scorer mtls identity
+  ([#1452](https://github.com/ditto-assistant/ditto-subnet/pull/1452),
+  [`fb18066`](https://github.com/ditto-assistant/ditto-subnet/commit/fb18066368c65192023c3dc68df04ba678393632))
+
+
 ## v0.185.1 (2026-09-03)
 
 ### Bug Fixes
