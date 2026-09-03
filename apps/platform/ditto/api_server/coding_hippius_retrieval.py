@@ -385,6 +385,12 @@ class HippiusPrivateInputRetriever:
     def timeout_seconds(self) -> float:
         return self._config.timeout_seconds
 
+    @property
+    def authority_sha256(self) -> str:
+        """Return the redacted identity bound by the registered transport."""
+
+        return self._config.authority_sha256
+
     async def get_task_material(
         self,
         *,

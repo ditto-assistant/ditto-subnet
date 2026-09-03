@@ -388,6 +388,15 @@ Implementation must remain in independently reviewable, default-off layers:
 7. one settlement-bound artifact across three independent validators; and
 8. owner-reviewed real private release registration.
 
+The phase-6 source contract is implemented by
+`apps/platform/ditto/api_server/coding_hippius_canary.py`. It requires one
+reserved synthetic corpus, exact matching source/deployment SHAs, one validator,
+separate authoring and grading executors, the ticket-bound encrypted retriever,
+and the protected evidence runtime. It emits only a content-addressed redacted
+receipt after sealing the authoring transcript, frozen submission, and terminal
+request. The module has no route, scheduler, production adapters, or caller;
+merging it is not a live canary and does not advance phase 7.
+
 Every worker, scorer, catalog, evidence, readiness, weight, and emission gate
 remains false through the contract and infrastructure layers. A later
 activation requires exact merged source, deployed identity, canary receipts,
