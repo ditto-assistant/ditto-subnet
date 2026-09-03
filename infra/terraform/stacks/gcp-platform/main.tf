@@ -393,6 +393,53 @@ resource "google_secret_manager_secret" "coding_catalog_secret_key" {
   }
 }
 
+# The first credential versions are installed out of band from the Hippius
+# console. Adopt those exact containers without ever placing values in state.
+import {
+  to = google_secret_manager_secret.coding_catalog_access_key
+  id = "projects/${var.project}/secrets/platform-coding-catalog-access-key"
+}
+
+import {
+  to = google_secret_manager_secret.coding_catalog_secret_key
+  id = "projects/${var.project}/secrets/platform-coding-catalog-secret-key"
+}
+
+# Curator upload credentials are a distinct read-write identity. They are
+# intentionally absent from local.platform_secret_ids, so the Platform app VM
+# cannot read them; operators use them only for reviewed offline publication.
+resource "google_secret_manager_secret" "coding_catalog_curator_access_key" {
+  project   = var.project
+  secret_id = "platform-coding-catalog-curator-access-key"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_secret_manager_secret" "coding_catalog_curator_secret_key" {
+  project   = var.project
+  secret_id = "platform-coding-catalog-curator-secret-key"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+import {
+  to = google_secret_manager_secret.coding_catalog_curator_access_key
+  id = "projects/${var.project}/secrets/platform-coding-catalog-curator-access-key"
+}
+
+import {
+  to = google_secret_manager_secret.coding_catalog_curator_secret_key
+  id = "projects/${var.project}/secrets/platform-coding-catalog-curator-secret-key"
+}
+
 # Operators may create these containers out of band when adding the first
 # version. Adopt them on the next gcp-platform apply.
 import {

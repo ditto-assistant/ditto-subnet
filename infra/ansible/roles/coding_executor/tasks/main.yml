@@ -16,6 +16,14 @@
       Runtime-image loading requires the verified runtime-bundle control. It
       cannot pull from a registry or load an unverified archive.
 
+- name: Reject client guard without an attested runtime image
+  ansible.builtin.assert:
+    that:
+      - not (coding_executor_client_guard_enabled | bool) or coding_executor_runtime_image_load_enabled | bool
+    fail_msg: >-
+      The dedicated Docker client guard requires the attested runtime-image
+      control. It cannot treat an unverified image as a scorer authority.
+
 - name: Report that the coding executor daemon is deliberately disabled
   ansible.builtin.debug:
     msg: >-
@@ -229,10 +237,76 @@
               - "{{ coding_executor_runtime_image_attestation_path }}"
           changed_when: true
 
-    - name: Report that scorer and worker activation remain disabled
+    - name: Install the attestation-bound dedicated Docker client guard
+      when: coding_executor_client_guard_enabled | bool
+      block:
+        - name: Require the fixed client-guard identity and attestation profile
+          ansible.builtin.assert:
+            that:
+              - coding_executor_scorer_user == 'ditto-coding-scorer'
+              - coding_executor_scorer_group == 'ditto-coding-scorer'
+              - coding_executor_scorer_home == '/var/lib/ditto-coding-scorer'
+              - coding_executor_client_guard_unit == 'ditto-coding-executor-client-guard'
+              - coding_executor_runtime_image_attestation_path == '/var/lib/ditto-coding-executor/staged/runtime-image-attestation.json'
+            fail_msg: >-
+              The first dedicated Docker client is pinned to the narrow scorer
+              identity and rootless runtime attestation. Do not repurpose a
+              validator, Platform, screener, or operator identity as a client.
+
+        - name: Create the dedicated scorer primary group
+          ansible.builtin.group:
+            name: "{{ coding_executor_scorer_group }}"
+            system: true
+
+        - name: Create the dedicated scorer identity with only Docker client access
+          ansible.builtin.user:
+            name: "{{ coding_executor_scorer_user }}"
+            group: "{{ coding_executor_scorer_group }}"
+            groups: "{{ coding_executor_client_group }}"
+            append: true
+            system: true
+            create_home: true
+            home: "{{ coding_executor_scorer_home }}"
+            shell: /usr/sbin/nologin
+
+        - name: Install the dedicated Docker client guard
+          ansible.builtin.copy:
+            src: coding-executor-client-guard.py
+            dest: /usr/local/lib/ditto-coding-executor/coding-executor-client-guard.py
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Install the dedicated Docker client guard unit
+          ansible.builtin.template:
+            src: ditto-coding-executor-client-guard.service.j2
+            dest: "/etc/systemd/system/{{ coding_executor_client_guard_unit }}.service"
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: Prove the dedicated client guard accepts only the attested image
+          ansible.builtin.command:
+            argv:
+              - runuser
+              - -u
+              - "{{ coding_executor_scorer_user }}"
+              - --
+              - /usr/local/lib/ditto-coding-executor/coding-executor-client-guard.py
+              - --once
+          changed_when: false
+
+        - name: Enable the attestation-bound dedicated Docker client guard
+          ansible.builtin.systemd_service:
+            name: "{{ coding_executor_client_guard_unit }}.service"
+            enabled: true
+            state: restarted
+            daemon_reload: true
+
+    - name: Report that task-serving scorer and worker activation remain disabled
       ansible.builtin.debug:
         msg: >-
           Dedicated rootless daemon is ready on {{ coding_executor_docker_host }},
-          and an optional staged bundle may be hash-verified and attested after
-          loading, but no scorer, validator, wallet, image consumer, Platform
-          control, ticket, or coding gate has been installed or enabled.
+          and an optional local guard may inspect an attested image, but no
+          task-serving scorer, validator, wallet, Platform control, ticket,
+          network listener, or coding gate has been installed or enabled.

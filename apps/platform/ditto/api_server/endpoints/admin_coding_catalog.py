@@ -13,6 +13,7 @@ from ditto.api_models.coding_catalog import (
     AdminCodingCatalogResponse,
     AdminRegisterCodingCatalogRequest,
     AdminRetireCodingCatalogRequest,
+    AdminSupersedeCodingCatalogRequest,
     CodingCatalogCommitment,
     CodingCatalogReleaseRecord,
     coding_catalog_commitment_signing_message,
@@ -40,6 +41,41 @@ def _register_confirmation(corpus_release_id: str) -> str:
 
 def _retire_confirmation(corpus_release_id: str) -> str:
     return f"RETIRE SHADOW CODING CATALOG {corpus_release_id}"
+
+
+def _supersede_confirmation(previous: str, replacement: str) -> str:
+    return f"SUPERSEDE SHADOW CODING CATALOG {previous} WITH {replacement}"
+
+
+def _validate_commitment_authority(
+    *, commitment: CodingCatalogCommitment, signature: str, request: Request
+) -> None:
+    if datetime.fromtimestamp(commitment.committed_at_unix, UTC) > (
+        datetime.now(UTC) + _MAX_COMMITMENT_CLOCK_SKEW
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="coding catalog commitment is too far in the future",
+        )
+    configured_hotkeys = request.app.state.config.coding_catalog_curator_hotkeys
+    if commitment.curator_hotkey not in configured_hotkeys:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "coding catalog curator is not configured"
+                if configured_hotkeys
+                else "coding catalog registration is disabled"
+            ),
+        )
+    if not verify_signature(
+        signer=commitment.curator_hotkey,
+        payload=coding_catalog_commitment_signing_message(commitment),
+        signature_hex=signature,
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="coding catalog curator signature did not verify",
+        )
 
 
 async def _response(
@@ -108,32 +144,9 @@ async def register_coding_catalog_release(
             status_code=422,
             detail=f'confirmation must equal "{expected_confirmation}"',
         )
-    if datetime.fromtimestamp(commitment.committed_at_unix, UTC) > (
-        datetime.now(UTC) + _MAX_COMMITMENT_CLOCK_SKEW
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="coding catalog commitment is too far in the future",
-        )
-    configured_hotkeys = request.app.state.config.coding_catalog_curator_hotkeys
-    if commitment.curator_hotkey not in configured_hotkeys:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "coding catalog curator is not configured"
-                if configured_hotkeys
-                else "coding catalog registration is disabled"
-            ),
-        )
-    if not verify_signature(
-        signer=commitment.curator_hotkey,
-        payload=coding_catalog_commitment_signing_message(commitment),
-        signature_hex=payload.signature,
-    ):
-        raise HTTPException(
-            status_code=401,
-            detail="coding catalog curator signature did not verify",
-        )
+    _validate_commitment_authority(
+        commitment=commitment, signature=payload.signature, request=request
+    )
     try:
         async with session.begin():
             await insert_coding_catalog_release(
@@ -149,6 +162,62 @@ async def register_coding_catalog_release(
         raise HTTPException(
             status_code=409,
             detail="coding catalog registration changed concurrently",
+        ) from error
+    return await _response(session, limit=50)
+
+
+@router.post("/supersede", response_model=AdminCodingCatalogResponse)
+async def supersede_coding_catalog(
+    payload: AdminSupersedeCodingCatalogRequest,
+    request: Request,
+    response: Response,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> AdminCodingCatalogResponse:
+    """Advance the WAL with one replacement release and one retirement row."""
+
+    response.headers["Cache-Control"] = "no-store"
+    replacement = payload.replacement_commitment
+    expected_confirmation = _supersede_confirmation(
+        payload.previous_corpus_release_id,
+        replacement.corpus_release_id,
+    )
+    if payload.confirmation != expected_confirmation:
+        raise HTTPException(
+            status_code=422,
+            detail=f'confirmation must equal "{expected_confirmation}"',
+        )
+    _validate_commitment_authority(
+        commitment=replacement,
+        signature=payload.replacement_signature,
+        request=request,
+    )
+    try:
+        async with session.begin():
+            await retire_coding_catalog_release(
+                session,
+                corpus_release_id=payload.previous_corpus_release_id,
+                expected_commitment_sha256=(
+                    payload.expected_previous_commitment_sha256
+                ),
+                reason=payload.reason,
+                actor=payload.actor,
+            )
+            await insert_coding_catalog_release(
+                session,
+                commitment=replacement,
+                signature=payload.replacement_signature,
+                reason=payload.reason,
+                actor=payload.actor,
+            )
+    except CodingCatalogConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except CodingCatalogInactiveError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except SAIntegrityError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="coding catalog supersession changed concurrently",
         ) from error
     return await _response(session, limit=50)
 
