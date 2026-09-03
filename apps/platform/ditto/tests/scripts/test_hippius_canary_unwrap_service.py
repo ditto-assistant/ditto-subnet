@@ -36,7 +36,7 @@ def _load(path: Path, name: str) -> ModuleType:
 service = _load(SERVICE_PATH, "hippius_canary_unwrap_service")
 proxy = _load(PROXY_PATH, "hippius_canary_helper_proxy_for_unwrap")
 
-_NOW = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
+_NOW = datetime.now(UTC).replace(microsecond=0)
 _DEADLINE = _NOW + timedelta(hours=1)
 _DATA_KEY = b"k" * 32
 _VALIDATOR = "5" + "A" * 47
