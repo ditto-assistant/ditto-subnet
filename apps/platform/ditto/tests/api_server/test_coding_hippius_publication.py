@@ -260,6 +260,7 @@ async def test_publication_rejects_probe_drift_signature_and_remote_conflict(
         tmp_path, config
     )
     transport = _FakePublicationTransport()
+    valid_now = datetime(2026, 9, 2, 16, 0, tzinfo=UTC)
 
     with pytest.raises(HippiusPrivateInputPublicationError, match="freshness"):
         await publish_hippius_private_inputs(
@@ -282,6 +283,7 @@ async def test_publication_rejects_probe_drift_signature_and_remote_conflict(
             curator_public_key_path=public_path,
             curator_signature_path=signature_path,
             source_sha="c" * 40,
+            now=valid_now,
         )
 
     signature_path.write_bytes(b"x" * 64)
@@ -294,6 +296,7 @@ async def test_publication_rejects_probe_drift_signature_and_remote_conflict(
             curator_public_key_path=public_path,
             curator_signature_path=signature_path,
             source_sha="c" * 40,
+            now=valid_now,
         )
 
     # Restore a valid signature, then pre-position different bytes at the exact
@@ -316,6 +319,7 @@ async def test_publication_rejects_probe_drift_signature_and_remote_conflict(
             curator_public_key_path=public_path,
             curator_signature_path=signature_path,
             source_sha="c" * 40,
+            now=valid_now,
         )
     assert transport.put_count == 0
 
