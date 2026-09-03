@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.192.1 (2026-09-03)
+
+### Bug Fixes
+
+- **tests**: Refresh Hippius unwrap fixture clock
+  ([#1528](https://github.com/ditto-assistant/ditto-subnet/pull/1528),
+  [`3acb5ee`](https://github.com/ditto-assistant/ditto-subnet/commit/3acb5eee1fc5f5b5dc3b957be7acd31c16b73e4c))
+
+
 ## v0.192.0 (2026-09-03)
 
 ### Features
