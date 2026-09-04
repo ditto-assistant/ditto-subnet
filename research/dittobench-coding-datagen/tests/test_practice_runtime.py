@@ -689,6 +689,24 @@ def test_evaluator_rejects_non_loopback_harness() -> None:
         )
 
 
+def test_tool_request_accepts_opaque_id_length_case_and_profile() -> None:
+    payload = {
+        "coding_contract_version": 1,
+        "case_id": "c" * 256,
+        "profile_capability_id": "p" * 256,
+        "call_id": "call-1",
+        "name": "git.status",
+        "arguments": {},
+    }
+    parsed = ToolRequest.from_json(payload)
+    assert parsed.case_id == "c" * 256
+    assert parsed.profile_capability_id == "p" * 256
+    with pytest.raises(CorpusError, match="case_id"):
+        ToolRequest.from_json({**payload, "case_id": "c" * 257})
+    with pytest.raises(CorpusError, match="profile_capability_id"):
+        ToolRequest.from_json({**payload, "profile_capability_id": "p" * 257})
+
+
 def test_capability_url_is_unforgeable_by_path_guessing() -> None:
     with (
         PracticeWorkspaceSession(PACK, "PRACTICE-LEDGER-001") as session,
