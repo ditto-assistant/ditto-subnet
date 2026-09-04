@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.205.0 (2026-09-04)
+
+### Features
+
+- **coding-datagen**: Audit private corpus progress
+  ([#1603](https://github.com/ditto-assistant/ditto-subnet/pull/1603),
+  [`5e228e6`](https://github.com/ditto-assistant/ditto-subnet/commit/5e228e67f65d2b30af352ade960aa56cf1c43697))
+
+
 ## v0.204.0 (2026-09-04)
 
 ### Features
