@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -15,11 +16,18 @@ from dittobench_coding_datagen.private_authoring import (
 )
 
 
-def _source(path: Path, *, seeded_bytes: object = 4096) -> Path:
+def _source(
+    path: Path,
+    *,
+    seeded_bytes: object = 4096,
+    memory_digests: dict[str, str] | None = None,
+) -> Path:
     arms = [
         {
             "condition": condition,
-            "memory_bundle_sha256": fill * 64,
+            "memory_bundle_sha256": (
+                memory_digests[condition] if memory_digests else fill * 64
+            ),
             "memory_volume_tier": "medium",
             "seeded_memory_bytes": seeded_bytes,
         }
@@ -50,12 +58,30 @@ def _source(path: Path, *, seeded_bytes: object = 4096) -> Path:
     return path
 
 
+def _memories(root: Path) -> dict[str, str]:
+    root.mkdir(mode=0o700)
+    digests: dict[str, str] = {}
+    for condition in (
+        "v0_none",
+        "v1_relevant",
+        "v2_irrelevant",
+        "v3_stale_conflict",
+        "v4_current_override",
+    ):
+        memories = [] if condition == "v0_none" else [{"content": condition}]
+        body = canonical_json_bytes({"memories": memories})
+        (root / f"{condition}.json").write_bytes(body)
+        digests[condition] = hashlib.sha256(body).hexdigest()
+    return digests
+
+
 def test_private_authoring_cli_builds_and_audits_create_only_outputs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     protected = tmp_path / "protected"
     protected.mkdir(mode=0o700)
-    source = _source(protected / "source.json")
+    memories = protected / "memories"
+    source = _source(protected / "source.json", memory_digests=_memories(memories))
     manifest = protected / "manifest.json"
     assert (
         main(
@@ -90,6 +116,8 @@ def test_private_authoring_cli_builds_and_audits_create_only_outputs(
                 str(visible),
                 "--hidden-grader",
                 str(grader),
+                "--memory-bundles",
+                str(memories),
                 "--overlap-review-sha256",
                 "b" * 64,
                 "--output",

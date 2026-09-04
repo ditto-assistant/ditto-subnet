@@ -139,6 +139,7 @@ uv run dittobench-coding-datagen audit-private-group \
   --manifest /protected/coding-private-v2/group-manifest.json \
   --visible-snapshot /protected/coding-private-v2/visible \
   --hidden-grader /protected/coding-private-v2/grader \
+  --memory-bundles /protected/coding-private-v2/memory \
   --overlap-review-sha256 <review-sha256> \
   --output /protected/coding-private-v2/group-audit.json
 

@@ -65,6 +65,7 @@ def _groups(root: Path, *, count: int = 50, unbalanced: bool = False) -> Path:
         audit = {
             "group_manifest_sha256": manifest.manifest_sha256(),
             "hidden_grader_tree_sha256": _sha(f"grader-tree-{index}"),
+            "memory_bundle_set_sha256": _sha(f"memory-set-{index}"),
             "overlap_review_sha256": _sha(f"overlap-{index}"),
             "passed": True,
             "schema": "dittobench-coding-private-input-audit-v2",
