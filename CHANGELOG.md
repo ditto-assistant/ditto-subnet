@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.208.0 (2026-09-04)
+
+### Features
+
+- **preview**: Deploy bounded stack previews
+  ([#1263](https://github.com/ditto-assistant/ditto-subnet/pull/1263),
+  [`14f93fc`](https://github.com/ditto-assistant/ditto-subnet/commit/14f93fc7b8f6f544bae405419c652ad43ae81b71))
+
+
 ## v0.207.1 (2026-09-04)
 
 ### Bug Fixes
