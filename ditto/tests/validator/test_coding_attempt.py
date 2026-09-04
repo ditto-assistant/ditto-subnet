@@ -164,6 +164,7 @@ def _ticket() -> CodingAttemptTicket:
         ticket_deadline=lease.ticket_deadline,
         agent_artifact_sha256="55" * 32,
         screened_image_sha256="66" * 32,
+        claim_instance_id="coding-attempt-worker-001",
     )
 
 
@@ -230,6 +231,7 @@ class _Platform:
         **kwargs: Any,
     ) -> CodingGradingLeaseResponse:
         assert kwargs["freeze_id"] == self.freeze_response.freeze_id
+        assert kwargs["claim_instance_id"] == _ticket().claim_instance_id
         assert kwargs["expected_frozen_patch_sha256"] == "bb" * 32
         self.events.append("request_grading")
         return self.grading_lease
@@ -505,4 +507,20 @@ def test_ticket_rejects_boolean_version_and_zero_identity() -> None:
             ticket_deadline=valid.ticket_deadline,
             agent_artifact_sha256=valid.agent_artifact_sha256,
             screened_image_sha256=valid.screened_image_sha256,
+            claim_instance_id=valid.claim_instance_id,
+        )
+
+
+def test_ticket_rejects_empty_claim_instance_id() -> None:
+    valid = _ticket()
+    with pytest.raises(CodingAttemptIntegrityError, match="ticket"):
+        CodingAttemptTicket(
+            agent_id=valid.agent_id,
+            bench_version=valid.bench_version,
+            run_row_id=valid.run_row_id,
+            ticket_id=valid.ticket_id,
+            ticket_deadline=valid.ticket_deadline,
+            agent_artifact_sha256=valid.agent_artifact_sha256,
+            screened_image_sha256=valid.screened_image_sha256,
+            claim_instance_id="",
         )
