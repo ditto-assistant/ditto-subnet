@@ -20,6 +20,11 @@ signing-message digest, and a synthetic private-exposure projection. The
 exposure contains only opaque IDs and content digests; it is a contract vector,
 not a usable task, repository, memory bundle, grader, or Merkle proof.
 
+`coding_private_catalog_v2.json` freezes one shadow-only, condition-specific
+private-group leaf. It binds the private release, group, V0-V4 condition,
+snapshot/grader/memory identities, semantic review, OCI calibration profile,
+and task commitment. It is additive and cannot activate the existing v1 reader.
+
 `coding_selection_v1.json` freezes the synthetic finalized anchor and
 future-height assignment,
 position-bound catalog membership proof, deterministic selected probe, private

@@ -79,6 +79,11 @@ from ditto.api_models.coding_evidence import (
     CodingSealedEvidenceKind,
     coding_sealed_evidence_identity_digest,
 )
+from ditto.api_models.coding_private_catalog_v2 import (
+    CodingMemoryConditionV2,
+    CodingPrivateCatalogV2Task,
+    coding_private_catalog_v2_task_digest,
+)
 from ditto.api_models.core_qualification import (
     AdminCoreQualificationPolicyRequest,
     AdminCoreQualificationPolicyResponse,
@@ -310,6 +315,8 @@ __all__ = [
     "CodingCatalogCommitment",
     "CodingCatalogReleaseRecord",
     "CodingCatalogTaskExposure",
+    "CodingMemoryConditionV2",
+    "CodingPrivateCatalogV2Task",
     "CodingCertificationLeaseAbortRequest",
     "CodingCertificationLeaseAuthority",
     "CodingCertificationLeaseClaimRequest",
@@ -520,6 +527,7 @@ __all__ = [
     "coding_run_evidence_digest",
     "coding_sealed_evidence_identity_digest",
     "coding_catalog_commitment_digest",
+    "coding_private_catalog_v2_task_digest",
     "coding_catalog_commitment_signing_message",
     "coding_shadow_result_signing_message",
 ]
