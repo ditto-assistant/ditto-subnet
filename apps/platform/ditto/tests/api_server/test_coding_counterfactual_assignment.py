@@ -17,6 +17,7 @@ def _authority() -> CounterfactualArmAuthority:
         repository_epoch="repo@abc",
         memory_bundle_sha256="d" * 64,
         seeded_memory_bytes=4096,
+        model_visible_memory_token_budget=2048,
         memory_volume_tier="large",
     )
 
@@ -29,6 +30,18 @@ def test_assignment_is_deterministic_blinded_and_shadow_only() -> None:
         authority=_authority(), replicate_id=1, assignment_key=b"k" * 32
     )
     assert result["weight_eligible"] is False
+    assert set(result) == {
+        "agent_artifact_sha256",
+        "coding_contract_version",
+        "memory_bundle_sha256",
+        "memory_volume_tier",
+        "model_visible_memory_token_budget",
+        "opaque_assignment_id",
+        "repository_epoch",
+        "schema",
+        "seeded_memory_bytes",
+        "weight_eligible",
+    }
     assert {
         "condition",
         "private_condition_commitment",

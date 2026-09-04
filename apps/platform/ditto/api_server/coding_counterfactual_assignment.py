@@ -20,6 +20,7 @@ class CounterfactualArmAuthority:
     repository_epoch: str
     memory_bundle_sha256: str
     seeded_memory_bytes: int
+    model_visible_memory_token_budget: int
     memory_volume_tier: str
 
 
@@ -33,6 +34,7 @@ def issue_blinded_assignment(
         or replicate_id <= 0
         or authority.memory_volume_tier not in {"small", "medium", "large"}
         or authority.seeded_memory_bytes <= 0
+        or authority.model_visible_memory_token_budget <= 0
         or any(
             len(value) != 64 or any(char not in "0123456789abcdef" for char in value)
             for value in (
@@ -62,11 +64,16 @@ def issue_blinded_assignment(
     ).encode("utf-8")
     assignment_id = hmac.new(assignment_key, preimage, hashlib.sha256).hexdigest()
     return {
+        "agent_artifact_sha256": authority.artifact_sha256,
         "coding_contract_version": 2,
         "memory_bundle_sha256": authority.memory_bundle_sha256,
         "memory_volume_tier": authority.memory_volume_tier,
+        "model_visible_memory_token_budget": (
+            authority.model_visible_memory_token_budget
+        ),
         "opaque_assignment_id": assignment_id,
         "repository_epoch": authority.repository_epoch,
+        "schema": "dittobench-coding-counterfactual-assignment-v2",
         "seeded_memory_bytes": authority.seeded_memory_bytes,
         "weight_eligible": False,
     }
