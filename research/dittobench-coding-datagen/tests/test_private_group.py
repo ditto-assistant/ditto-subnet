@@ -42,6 +42,21 @@ def test_private_group_manifest_is_complete_and_shadow_only() -> None:
     assert manifest.weight_eligible is False
     assert len(manifest.arms) == 5
     assert len(manifest.manifest_sha256()) == 64
+    shuffled = build_private_group_manifest(
+        opaque_group_id="group-1",
+        opaque_repository_stratum_id="stratum-1",
+        repository_epoch="epoch-1",
+        snapshot_manifest_sha256="a" * 64,
+        visible_issue_sha256="b" * 64,
+        runtime_policy_sha256="c" * 64,
+        hidden_grader_sha256="d" * 64,
+        resource_profile_sha256="e" * 64,
+        arms=tuple(reversed(_arms())),
+    )
+    assert shuffled.manifest_sha256() == manifest.manifest_sha256()
+    assert [arm.condition for arm in shuffled.arms] == [
+        arm.condition for arm in manifest.arms
+    ]
 
 
 def test_private_group_manifest_rejects_missing_condition() -> None:

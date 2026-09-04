@@ -70,7 +70,6 @@ class CounterfactualGroup:
                 ).hexdigest(),
                 "repository_epoch": self.repository_epoch,
                 "seeded_memory_bytes": arm.seeded_memory_bytes,
-                "visible_bundle_sha256": arm.visible_bundle_sha256,
             }
             for arm in self.arms
         )
@@ -100,7 +99,9 @@ def compile_counterfactual_group(
             "counterfactual group digests are invalid or visible task drifted"
         )
     if any(
-        arm.seeded_memory_bytes <= 0 or arm.memory_volume_tier not in _TIERS
+        type(arm.seeded_memory_bytes) is not int
+        or arm.seeded_memory_bytes <= 0
+        or arm.memory_volume_tier not in _TIERS
         for arm in arms
     ):
         raise CorpusError("counterfactual memory volume is invalid")
@@ -127,7 +128,8 @@ def _valid_identifier(value: str) -> bool:
         bool(value)
         and len(encoded) <= 256
         and not any(
-            character.isspace() or unicodedata.category(character) == "Cc"
+            character.isspace()
+            or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
             for character in value
         )
     )
