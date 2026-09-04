@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import unicodedata
 from dataclasses import dataclass
 
 
@@ -44,7 +45,7 @@ def issue_blinded_assignment(
                 authority.memory_bundle_sha256,
             )
         )
-        or not authority.repository_epoch
+        or not _valid_identifier(authority.repository_epoch, maximum_bytes=256)
     ):
         raise CounterfactualAssignmentError(
             "counterfactual assignment authority invalid"
@@ -77,3 +78,18 @@ def issue_blinded_assignment(
         "seeded_memory_bytes": authority.seeded_memory_bytes,
         "weight_eligible": False,
     }
+
+
+def _valid_identifier(value: str, *, maximum_bytes: int) -> bool:
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return (
+        bool(value)
+        and len(encoded) <= maximum_bytes
+        and not any(
+            character.isspace() or unicodedata.category(character) == "Cc"
+            for character in value
+        )
+    )

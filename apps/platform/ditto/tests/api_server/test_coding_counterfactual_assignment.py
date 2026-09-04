@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from ditto.api_server.coding_counterfactual_assignment import (
@@ -56,4 +58,9 @@ def test_assignment_rejects_unsafe_authority() -> None:
     with pytest.raises(CounterfactualAssignmentError, match="invalid"):
         issue_blinded_assignment(
             authority=_authority(), replicate_id=0, assignment_key=b"short"
+        )
+    invalid = replace(_authority(), repository_epoch="repo epoch")
+    with pytest.raises(CounterfactualAssignmentError, match="invalid"):
+        issue_blinded_assignment(
+            authority=invalid, replicate_id=1, assignment_key=b"k" * 32
         )
