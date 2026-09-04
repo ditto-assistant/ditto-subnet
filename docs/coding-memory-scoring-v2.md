@@ -67,6 +67,13 @@ repository epoch, and condition authority. Quorum validators reproduce a
 condition; they do not share one agent attempt. Condition labels and matched
 group identifiers remain grader-private.
 
+The initial private release contains 50 complete matched base-task groups. For
+one immutable artifact, Platform selects six groups only after the artifact is
+frozen, using the committed release root and a designated future finalized
+block. Every V0–V4 arm in each selected group is executed, producing exactly 30
+isolated attempts: six per condition. Selecting 30 unrelated groups with one
+arm each is not equivalent and cannot feed the matched-group metric below.
+
 Treatment concealment is defense in depth, not the incentive defense: an empty
 bundle or a useful record can be recognized. Bundles therefore use placebo
 padding and balanced approximate context sizes, while reward monotonicity makes
