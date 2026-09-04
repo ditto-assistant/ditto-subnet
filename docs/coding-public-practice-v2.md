@@ -134,9 +134,11 @@ fields are invalid. V0 contains no records and V1-V4 contain at least one.
 
 The runtime policy binds one immutable `linux/amd64` image digest, `network =
 none`, normalized edit/create/delete paths, resource limits, and argv-only
-commands. Shells, Git, inline Python, mutable `npx`, online Cargo, incomplete
-offline pip installation, URLs, and credential-shaped environment variables
-fail closed.
+commands. Shells, Git, inline Python, mutable `npx`, Cargo without `--offline`,
+incomplete offline pip installation, URLs, and credential-shaped environment
+variables fail closed. `--locked` is permitted but not required because a
+historical snapshot may need the pinned runtime image's Cargo to refresh its
+lockfile from the image-local cache.
 
 The grader binds the same runtime image, ordered fail-to-pass and pass-to-pass
 groups, distinct validator-only command IDs, and exact mode-aware files. Grader
