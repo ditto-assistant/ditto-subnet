@@ -105,9 +105,11 @@ cargo run --locked -- \
   --allow-direct-openrouter
 ```
 
-The binary deliberately does not load dotenv files. Keep the credential in an
-ignored external file and export it as uppercase `OPENROUTER_API_KEY` only for
-the local process.
+The coding-only binary deliberately does not load dotenv files. Keep the
+credential in an ignored external file and export it as uppercase
+`OPENROUTER_API_KEY` only for the local process. The unified image `serve`
+command still loads a working-directory `.env` for normal DittoBench
+configuration; do not package that file in a submission archive.
 
 That mode fixes `openai/gpt-5.6-luna`, Chat Completions, medium reasoning,
 serial tool-call execution, the current `azure/eu` ZDR route, no
