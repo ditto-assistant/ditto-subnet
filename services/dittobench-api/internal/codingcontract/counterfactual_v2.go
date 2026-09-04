@@ -18,19 +18,16 @@ const (
 	CounterfactualV4 CounterfactualCondition = "v4_current_override"
 )
 
-// CounterfactualAssignmentV2 is miner-facing. Condition class and base-group
-// linkage are deliberately represented only by opaque commitments here.
+// CounterfactualAssignmentV2 is miner-facing. Condition, group, quorum, and
+// replicate linkage are structurally absent and remain grader-private.
 type CounterfactualAssignmentV2 struct {
 	Schema                        string `json:"schema"`
 	CodingContractVersion         int    `json:"coding_contract_version"`
 	WeightEligible                bool   `json:"weight_eligible"`
 	AgentArtifactSHA256           string `json:"agent_artifact_sha256"`
 	OpaqueAssignmentID            string `json:"opaque_assignment_id"`
-	OpaqueBaseTaskGroupCommitment string `json:"opaque_base_task_group_commitment"`
-	PrivateConditionCommitment    string `json:"private_condition_commitment"`
 	RepositoryEpoch               string `json:"repository_epoch"`
-	QuorumGroupID                 string `json:"quorum_group_id"`
-	ReplicateID                   uint32 `json:"replicate_id"`
+	MemoryBundleSHA256            string `json:"memory_bundle_sha256"`
 	SeededMemoryBytes             uint64 `json:"seeded_memory_bytes"`
 	ModelVisibleMemoryTokenBudget uint64 `json:"model_visible_memory_token_budget"`
 	MemoryVolumeTier              string `json:"memory_volume_tier"`
@@ -43,18 +40,15 @@ func (assignment CounterfactualAssignmentV2) Validate() error {
 		return errors.New("counterfactual assignment is not shadow-only v2")
 	}
 	for label, value := range map[string]string{
-		"agent_artifact_sha256":             assignment.AgentArtifactSHA256,
-		"opaque_base_task_group_commitment": assignment.OpaqueBaseTaskGroupCommitment,
-		"private_condition_commitment":      assignment.PrivateConditionCommitment,
+		"agent_artifact_sha256": assignment.AgentArtifactSHA256,
+		"opaque_assignment_id":  assignment.OpaqueAssignmentID,
+		"memory_bundle_sha256":  assignment.MemoryBundleSHA256,
 	} {
 		if !validSHA256(value) {
 			return fmt.Errorf("%s is not lowercase SHA-256", label)
 		}
 	}
-	if !validIdentifier(assignment.OpaqueAssignmentID, 256) ||
-		!validIdentifier(assignment.RepositoryEpoch, 256) ||
-		!validIdentifier(assignment.QuorumGroupID, 256) ||
-		assignment.ReplicateID == 0 ||
+	if !validIdentifier(assignment.RepositoryEpoch, 256) ||
 		assignment.ModelVisibleMemoryTokenBudget == 0 ||
 		assignment.SeededMemoryBytes == 0 ||
 		assignment.MemoryVolumeTier != "small" &&

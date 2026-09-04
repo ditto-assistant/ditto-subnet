@@ -1,18 +1,19 @@
 package codingcontract
 
-import "testing"
+import (
+	"bytes"
+	"encoding/json"
+	"testing"
+)
 
 func TestCounterfactualV2RemainsShadowOnlyAndBlinded(t *testing.T) {
 	assignment := CounterfactualAssignmentV2{
 		Schema:                        "dittobench-coding-counterfactual-assignment-v2",
 		CodingContractVersion:         CounterfactualV2Version,
 		AgentArtifactSHA256:           repeat("a", 64),
-		OpaqueAssignmentID:            "assignment-1",
-		OpaqueBaseTaskGroupCommitment: repeat("b", 64),
-		PrivateConditionCommitment:    repeat("c", 64),
+		OpaqueAssignmentID:            repeat("b", 64),
 		RepositoryEpoch:               "epoch-1",
-		QuorumGroupID:                 "quorum-1",
-		ReplicateID:                   1,
+		MemoryBundleSHA256:            repeat("c", 64),
 		SeededMemoryBytes:             1,
 		ModelVisibleMemoryTokenBudget: 1,
 		MemoryVolumeTier:              "large",
@@ -22,6 +23,18 @@ func TestCounterfactualV2RemainsShadowOnlyAndBlinded(t *testing.T) {
 	}
 	if assignment.WeightEligible {
 		t.Fatal("v2 assignment must stay shadow-only")
+	}
+	body, err := json.Marshal(assignment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range [][]byte{
+		[]byte(`"condition"`), []byte(`"base_task_group"`),
+		[]byte(`"quorum_group"`), []byte(`"replicate_id"`),
+	} {
+		if bytes.Contains(body, forbidden) {
+			t.Fatalf("miner assignment exposed %s", forbidden)
+		}
 	}
 }
 
