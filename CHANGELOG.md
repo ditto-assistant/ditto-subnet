@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.200.0 (2026-09-04)
+
+### Features
+
+- **coding-datagen**: Expose public v2 release CLI
+  ([#1595](https://github.com/ditto-assistant/ditto-subnet/pull/1595),
+  [`245b30c`](https://github.com/ditto-assistant/ditto-subnet/commit/245b30c4b50c392a1e99c624b85133b59dee8ef5))
+
+
 ## v0.199.1 (2026-09-04)
 
 ### Bug Fixes
