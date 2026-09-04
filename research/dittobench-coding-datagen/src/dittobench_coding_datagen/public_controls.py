@@ -326,9 +326,9 @@ def _commands(value: object, label: str) -> list[dict[str, object]]:
         if executable == "cargo" and (
             len(argv) < 2
             or argv[1] not in {"check", "test"}
-            or not {"--locked", "--offline"}.issubset(argv[2:])
+            or "--offline" not in argv[2:]
         ):
-            raise CorpusError("public task Cargo command must be locked and offline")
+            raise CorpusError("public task Cargo command must be offline")
         if executable == "go" and (len(argv) < 2 or argv[1] not in {"test", "vet"}):
             raise CorpusError("public task Go command is forbidden")
         if (

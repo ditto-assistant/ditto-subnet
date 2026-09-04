@@ -114,6 +114,49 @@ def test_public_controls_reject_unsafe_runtime_commands(tmp_path: Path) -> None:
             workspace=workspace,
         )
 
+
+def test_public_controls_allow_pinned_offline_cargo_lock_refresh(
+    tmp_path: Path,
+) -> None:
+    task, workspace = _task(tmp_path)
+    policy = task / "runtime-policy.json"
+    grader = task / "grader" / "manifest.json"
+
+    def use_offline_cargo(value: dict[str, object]) -> None:
+        commands = value["test_commands"]
+        assert isinstance(commands, list) and isinstance(commands[0], dict)
+        commands[0]["argv"] = ["cargo", "test", "--offline"]
+
+    def use_offline_cargo_grader(value: dict[str, object]) -> None:
+        groups = value["test_groups"]
+        assert isinstance(groups, list)
+        for group in groups:
+            assert isinstance(group, dict) and isinstance(group["command"], dict)
+            group["command"]["argv"] = ["cargo", "test", "--offline"]
+
+    _rewrite(policy, use_offline_cargo)
+    _rewrite(grader, use_offline_cargo_grader)
+    validate_public_task_controls(
+        task_root=task,
+        task_id="PUBLIC-V2-CONTROLS",
+        condition="v1_relevant",
+        workspace=workspace,
+    )
+
+    def remove_offline(value: dict[str, object]) -> None:
+        commands = value["test_commands"]
+        assert isinstance(commands, list) and isinstance(commands[0], dict)
+        commands[0]["argv"] = ["cargo", "test"]
+
+    _rewrite(policy, remove_offline)
+    with pytest.raises(CorpusError, match="Cargo command must be offline"):
+        validate_public_task_controls(
+            task_root=task,
+            task_id="PUBLIC-V2-CONTROLS",
+            condition="v1_relevant",
+            workspace=workspace,
+        )
+
     task, workspace = _task(tmp_path / "npx")
     policy = task / "runtime-policy.json"
 
