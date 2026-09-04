@@ -22,6 +22,10 @@ from dittobench_coding_datagen.public_release import (
     verify_public_practice_release,
 )
 from dittobench_coding_datagen.public_result_runner import aggregate_public_v2_results
+from dittobench_coding_datagen.public_task_runner import (
+    run_public_v2_controls,
+    run_public_v2_task,
+)
 from dittobench_coding_datagen.snapshot_archive import (
     build_snapshot_archive,
     verify_snapshot_archive,
@@ -129,6 +133,29 @@ def _parser() -> argparse.ArgumentParser:
     controls_parser.add_argument(
         "--condition", choices=sorted(PUBLIC_CONDITIONS), required=True
     )
+
+    task_runner_parser = subcommands.add_parser(
+        "run-public-task",
+        help="grade one local workspace against a public v2 task",
+    )
+    task_runner_parser.add_argument("--pack", type=Path, required=True)
+    task_runner_parser.add_argument("--task", required=True)
+    task_runner_parser.add_argument("--workspace", type=Path, required=True)
+    task_runner_parser.add_argument("--image", required=True)
+    task_runner_parser.add_argument("--output", type=Path)
+
+    controls_runner_parser = subcommands.add_parser(
+        "run-public-controls",
+        help="grade one external public v2 curator control set",
+    )
+    controls_runner_parser.add_argument("--task-root", type=Path, required=True)
+    controls_runner_parser.add_argument("--task", required=True)
+    controls_runner_parser.add_argument(
+        "--condition", choices=sorted(PUBLIC_CONDITIONS), required=True
+    )
+    controls_runner_parser.add_argument("--workspace", type=Path, required=True)
+    controls_runner_parser.add_argument("--image", required=True)
+    controls_runner_parser.add_argument("--output", type=Path)
     return parser
 
 
@@ -221,6 +248,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(canonical_json_bytes(authority.as_json()).decode("utf-8"), end="")
             return 0
+        if args.command == "run-public-task":
+            task_result = run_public_v2_task(
+                pack=args.pack,
+                task_id=args.task,
+                workspace=args.workspace,
+                image=args.image,
+            )
+            body = canonical_json_bytes(task_result.as_json())
+            if args.output is not None:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_bytes(body)
+            print(body.decode("utf-8"), end="")
+            return 0 if task_result.resolved else 1
+        if args.command == "run-public-controls":
+            control_result = run_public_v2_controls(
+                task_root=args.task_root,
+                task_id=args.task,
+                condition=args.condition,
+                workspace=args.workspace,
+                image=args.image,
+            )
+            body = canonical_json_bytes(control_result.as_json())
+            if args.output is not None:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_bytes(body)
+            print(body.decode("utf-8"), end="")
+            return 0 if control_result.resolved else 1
         raise CorpusError(f"unknown command: {args.command}")
     except CorpusError as error:
         print(json.dumps({"error": str(error)}, sort_keys=True), file=sys.stderr)
