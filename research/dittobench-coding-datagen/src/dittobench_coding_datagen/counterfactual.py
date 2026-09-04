@@ -44,10 +44,10 @@ class CounterfactualGroup:
     repository_epoch: str
     arms: tuple[CounterfactualArm, ...]
 
-    def miner_assignments(
+    def blinded_arm_projections(
         self, *, assignment_key: bytes
     ) -> tuple[dict[str, object], ...]:
-        """Return keyed opaque projections with treatment linkage removed."""
+        """Return private-to-Platform arm projections, not final assignments."""
 
         if len(assignment_key) < 32:
             raise CorpusError("counterfactual assignment key is too short")
@@ -55,7 +55,7 @@ class CounterfactualGroup:
             {
                 "memory_bundle_sha256": arm.memory_bundle_sha256,
                 "memory_volume_tier": arm.memory_volume_tier,
-                "opaque_variant_id": hmac.new(
+                "opaque_arm_id": hmac.new(
                     assignment_key,
                     canonical_json_bytes(
                         {

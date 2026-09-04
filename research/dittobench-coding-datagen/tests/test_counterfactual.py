@@ -38,7 +38,7 @@ def test_compiler_emits_blinded_complete_group() -> None:
             )
         ),
     )
-    assignments = group.miner_assignments(assignment_key=b"k" * 32)
+    assignments = group.blinded_arm_projections(assignment_key=b"k" * 32)
     assert len(assignments) == 5
     assert all(
         forbidden not in assignment
@@ -49,8 +49,8 @@ def test_compiler_emits_blinded_complete_group() -> None:
             "private_condition_commitment",
         )
     )
-    assert len({assignment["opaque_variant_id"] for assignment in assignments}) == 5
-    assert assignments != group.miner_assignments(assignment_key=b"z" * 32)
+    assert len({assignment["opaque_arm_id"] for assignment in assignments}) == 5
+    assert assignments != group.blinded_arm_projections(assignment_key=b"z" * 32)
 
 
 def test_compiler_rejects_short_assignment_key() -> None:
@@ -73,7 +73,7 @@ def test_compiler_rejects_short_assignment_key() -> None:
         ),
     )
     with pytest.raises(CorpusError, match="key is too short"):
-        group.miner_assignments(assignment_key=b"short")
+        group.blinded_arm_projections(assignment_key=b"short")
 
 
 def test_compiler_rejects_incomplete_or_visible_drifting_groups() -> None:
