@@ -7,7 +7,15 @@ from statistics import mean
 from typing import Literal
 
 Condition = Literal["v0", "v1", "v2", "v3", "v4"]
-_WEIGHTS: dict[Condition, int] = {"v0": 15, "v1": 30, "v2": 15, "v3": 20, "v4": 20}
+_CONDITIONS: tuple[Condition, ...] = ("v0", "v1", "v2", "v3", "v4")
+_SELECTIVE_CONDITIONS: tuple[Condition, ...] = ("v1", "v2", "v3", "v4")
+_WEIGHTS: dict[Condition, int] = {
+    "v0": 15,
+    "v1": 30,
+    "v2": 15,
+    "v3": 20,
+    "v4": 20,
+}
 
 
 @dataclass(frozen=True)
@@ -20,6 +28,10 @@ class CounterfactualTerminalResult:
 
 @dataclass(frozen=True)
 class CounterfactualTerminalAggregate:
+    expected_group_count: int
+    quarantined_group_count: int
+    missing_result_count: int
+    untrusted_result_count: int
     p0: float
     p1: float
     p2: float
@@ -35,32 +47,52 @@ class CounterfactualTerminalAggregate:
 
 def aggregate_counterfactual_results(
     results: tuple[CounterfactualTerminalResult, ...],
+    *,
+    expected_group_ids: tuple[str, ...],
+    quarantined_group_ids: frozenset[str] = frozenset(),
 ) -> CounterfactualTerminalAggregate:
-    """Aggregate only complete trusted groups; diagnostics never affect reward."""
+    """Score expected groups fail-closed; quarantine requires explicit authority."""
 
-    groups: dict[str, dict[Condition, bool]] = {}
+    expected = set(expected_group_ids)
+    if (
+        not 1 <= len(expected_group_ids) <= 100
+        or len(expected) != len(expected_group_ids)
+        or any(not group_id for group_id in expected)
+        or not quarantined_group_ids <= expected
+        or quarantined_group_ids == expected
+    ):
+        raise ValueError("counterfactual expected-group authority is invalid")
+    active = expected - quarantined_group_ids
+    groups: dict[str, dict[Condition, bool]] = {group_id: {} for group_id in active}
+    untrusted = 0
     for result in results:
-        if not result.trusted or not result.group_id:
+        if result.group_id not in expected or result.condition not in _WEIGHTS:
+            raise ValueError("counterfactual result is outside expected authority")
+        if result.group_id in quarantined_group_ids:
             continue
-        group = groups.setdefault(result.group_id, {})
+        group = groups[result.group_id]
         if result.condition in group:
             raise ValueError("duplicate counterfactual result")
-        group[result.condition] = result.resolved
-    complete = [group for group in groups.values() if set(group) == set(_WEIGHTS)]
-    if not complete:
-        raise ValueError("no complete trusted counterfactual groups")
+        if not result.trusted:
+            untrusted += 1
+        group[result.condition] = result.resolved if result.trusted else False
+    missing = sum(len(_CONDITIONS) - len(group) for group in groups.values())
     rates = {
-        condition: mean(float(group[condition]) for group in complete)
-        for condition in _WEIGHTS
+        condition: mean(float(group.get(condition, False)) for group in groups.values())
+        for condition in _CONDITIONS
     }
     absolute = (
         sum(rates[condition] * weight for condition, weight in _WEIGHTS.items()) / 100
     )
     selective = mean(
-        float(all(group[condition] for condition in ("v1", "v2", "v3", "v4")))
-        for group in complete
+        float(all(group.get(condition, False) for condition in _SELECTIVE_CONDITIONS))
+        for group in groups.values()
     )
     return CounterfactualTerminalAggregate(
+        expected_group_count=len(expected),
+        quarantined_group_count=len(quarantined_group_ids),
+        missing_result_count=missing,
+        untrusted_result_count=untrusted,
         p0=rates["v0"],
         p1=rates["v1"],
         p2=rates["v2"],
