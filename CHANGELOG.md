@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.193.0 (2026-09-04)
+
+### Documentation
+
+- **coding**: Define Hippius operational profiles
+  ([#1531](https://github.com/ditto-assistant/ditto-subnet/pull/1531),
+  [`fcd4535`](https://github.com/ditto-assistant/ditto-subnet/commit/fcd453579fbbdbb5529665fcb44a848d7b327633))
+
+### Features
+
+- **agents**: Add Hippius token lifecycle skill
+  ([#1545](https://github.com/ditto-assistant/ditto-subnet/pull/1545),
+  [`517314d`](https://github.com/ditto-assistant/ditto-subnet/commit/517314db8395a0c5b0f4867ab381fab36ca55113))
+
+- **coding**: Version Hippius provider profile receipts
+  ([#1532](https://github.com/ditto-assistant/ditto-subnet/pull/1532),
+  [`09d2457`](https://github.com/ditto-assistant/ditto-subnet/commit/09d24576e43db860e4bc2ce2df356f4e4f4451bb))
+
+
 ## v0.192.1 (2026-09-03)
 
 ### Bug Fixes
