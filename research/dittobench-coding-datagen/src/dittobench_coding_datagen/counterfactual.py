@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import unicodedata
 from dataclasses import dataclass
 from typing import Literal
 
@@ -80,7 +81,11 @@ def compile_counterfactual_group(
 ) -> CounterfactualGroup:
     """Validate a complete V0–V4 group before private catalog publication."""
 
-    if not opaque_group_id or not repository_epoch or len(arms) != len(_CONDITIONS):
+    if (
+        not _valid_identifier(opaque_group_id)
+        or not _valid_identifier(repository_epoch)
+        or len(arms) != len(_CONDITIONS)
+    ):
         raise CorpusError("counterfactual group identity or arm count is invalid")
     conditions = {arm.condition for arm in arms}
     if conditions != _CONDITIONS:
@@ -110,4 +115,19 @@ def compile_counterfactual_group(
         raise CorpusError("counterfactual memory bundle sizes are not balanced")
     return CounterfactualGroup(
         opaque_group_id=opaque_group_id, repository_epoch=repository_epoch, arms=arms
+    )
+
+
+def _valid_identifier(value: str) -> bool:
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return (
+        bool(value)
+        and len(encoded) <= 256
+        and not any(
+            character.isspace() or unicodedata.category(character) == "Cc"
+            for character in value
+        )
     )

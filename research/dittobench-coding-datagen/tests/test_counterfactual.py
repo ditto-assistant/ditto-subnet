@@ -131,3 +131,25 @@ def test_compiler_rejects_unbalanced_bundle_sizes() -> None:
             repository_epoch="repo@abc",
             arms=tuple(arms),
         )
+
+
+def test_compiler_rejects_unsafe_group_identity() -> None:
+    with pytest.raises(CorpusError, match="identity"):
+        compile_counterfactual_group(
+            opaque_group_id="opaque group",
+            repository_epoch="repo@abc",
+            arms=tuple(
+                _arm(condition, memory)
+                for condition, memory in zip(
+                    (
+                        "v0_none",
+                        "v1_relevant",
+                        "v2_irrelevant",
+                        "v3_stale_conflict",
+                        "v4_current_override",
+                    ),
+                    ("b", "c", "d", "e", "f"),
+                    strict=True,
+                )
+            ),
+        )
