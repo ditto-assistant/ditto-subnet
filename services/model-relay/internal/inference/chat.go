@@ -386,7 +386,9 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			outcome.upstreamProvider = textValue(exhausted.upstreamProvider)
 		}
 		outcome.routeObservable = exhausted.routeObservable
-		providerFailure = chatProviderFailure(exhausted)
+		providerFailure = chatProviderFailure(
+			exhausted, model, reservedGrant.RouteProvider.String,
+		)
 	} else {
 		raw = recovered.raw
 		outcome.status = "completed"
@@ -425,7 +427,7 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(raw)
 }
 
-func chatProviderFailure(exhausted *chatProviderExhausted) *httpError {
+func chatProviderFailure(exhausted *chatProviderExhausted, expectedModel, expectedProvider string) *httpError {
 	if exhausted.timedOut {
 		return httpErrorf(504, "inference provider timed out")
 	}
@@ -436,6 +438,11 @@ func chatProviderFailure(exhausted *chatProviderExhausted) *httpError {
 		// to the miner instead of discarding the whole ticket.
 		failure.headers = map[string]string{
 			minerRecoverableFailureHeader: minerRecoverableGeneration,
+		}
+	} else if receiptFreeGatewayFailure(exhausted.phases, expectedModel, expectedProvider) {
+		failure.headers = map[string]string{
+			minerRecoverableFailureHeader: relayRecoverableGateway,
+			"Retry-After":                 "5",
 		}
 	}
 	return failure
