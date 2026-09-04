@@ -27,10 +27,12 @@ The plan identity needs read access to Terraform state and managed resources,
 create-only access under the private
 `gs://ditto-app-dev-tfstate/ci-plans/` prefix, and create/delete access only to
 the exact `gcp-platform/default.tflock`, `gcp-preview/default.tflock`, and
-`cloudflare-dittobench-ai/default.tflock` objects. It must not be able to write
-any state object. The preview lock grant is managed by the already-live
-`gcp-platform` root so the preview root does not require an out-of-band
-bootstrap.
+`cloudflare-dittobench-ai/default.tflock` objects. It also has create-only
+access to the exact initial `gcp-preview/default.tfstate` object because the GCS
+backend creates an empty state during its first initialization; it cannot
+overwrite or delete that object. The preview grants are managed by the
+already-live `gcp-platform` root so the preview root does not require an
+out-of-band bootstrap.
 
 ## `infra-apply`
 
