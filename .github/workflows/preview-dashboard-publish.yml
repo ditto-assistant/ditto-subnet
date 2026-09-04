@@ -32,6 +32,10 @@ on:
         description: Exact 40-character head SHA
         required: true
         type: string
+    secrets:
+      cloudflare_api_token:
+        description: Pages-only token forwarded explicitly by the caller
+        required: false
 
 permissions: {}
 
@@ -56,17 +60,20 @@ jobs:
         id: check
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare_api_token }}
         run: |
           set -euo pipefail
-          if [ -n "$CLOUDFLARE_ACCOUNT_ID" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+          missing=()
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || missing+=(CLOUDFLARE_ACCOUNT_ID)
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || missing+=(CLOUDFLARE_API_TOKEN)
+          if [ "${#missing[@]}" -eq 0 ]; then
             echo 'configured=true' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo 'configured=false' >> "$GITHUB_OUTPUT"
           title='Dashboard preview not published'
-          body='The preview environment has no CLOUDFLARE_ACCOUNT_ID and'
-          body="$body CLOUDFLARE_API_TOKEN, so no Cloudflare Pages deployment"
+          missing_csv="$(IFS=,; echo "${missing[*]}")"
+          body="The preview environment is missing ${missing_csv}, so no Cloudflare Pages deployment"
           body="$body was created for this PR. Set both on the preview"
           body="$body environment to turn previews back on; no workflow change"
           body="$body is needed."
@@ -210,8 +217,8 @@ jobs:
       contents: read
       pull-requests: write
     env:
-      PAGES_PROJECT: ditto-subnet-dashboard-preview
-      PREVIEW_BRANCH: ${{ needs.inspect.outputs.branch }}
+      PAGES_PROJECT: ditto-subnet-dashboard-pr-${{ needs.inspect.outputs.pr }}
+      PREVIEW_BRANCH: main
       PREVIEW_PR: ${{ needs.inspect.outputs.pr }}
       PREVIEW_SHA: ${{ needs.inspect.outputs.sha }}
       PUBLISH_MESSAGE: dashboard-preview-${{ github.run_id }}-${{ github.run_attempt }}
@@ -252,10 +259,30 @@ jobs:
           test "$(jq -r .state <<<"$pr_json")" = open
           test "$(jq -r .head.sha <<<"$pr_json")" = "$PREVIEW_SHA"
 
+      - name: Ensure this PR has an isolated Pages project
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+        run: |
+          set -euo pipefail
+          endpoint="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}"
+          body="$(mktemp)"
+          http_code="$(curl --silent --show-error --write-out '%{http_code}' --output "$body" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "$endpoint")"
+          if [ "$http_code" = 404 ]; then
+            ./apps/backroom/node_modules/.bin/wrangler pages project create \
+              "$PAGES_PROJECT" --production-branch main
+          else
+            test "$http_code" = 200
+            jq -e '.success == true' "$body" >/dev/null
+          fi
+          rm -f "$body"
+
       - name: Publish the exact-SHA Pages deployment
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare_api_token }}
         run: |
           set -euo pipefail
           : "${CLOUDFLARE_ACCOUNT_ID:?preview environment is missing CLOUDFLARE_ACCOUNT_ID}"
@@ -272,7 +299,7 @@ jobs:
         id: deployment
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare_api_token }}
         run: |
           set -euo pipefail
           endpoint="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments"
@@ -280,7 +307,7 @@ jobs:
           for _ in {1..12}; do
             response="$(curl --fail-with-body --silent --show-error \
               -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              "${endpoint}?env=preview&per_page=100&page=1")"
+              "${endpoint}?env=production&per_page=20&page=1")"
             jq -e '.success == true' <<<"$response" >/dev/null
             current="$(jq -c --arg branch "$PREVIEW_BRANCH" --arg sha "$PREVIEW_SHA" --arg message "$PUBLISH_MESSAGE" \
               '[.result[] | select(.deployment_trigger.metadata.branch == $branch and .deployment_trigger.metadata.commit_hash == $sha and .deployment_trigger.metadata.commit_message == $message)] | sort_by(.created_on) | last // empty' \
@@ -290,8 +317,7 @@ jobs:
           done
           [ -n "$current" ]
           current_id="$(jq -r .id <<<"$current")"
-          url="$(jq -r .url <<<"$current")"
-          [[ "$url" == https://*.pages.dev ]]
+          url="https://${PAGES_PROJECT}.pages.dev"
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
           stale_ids=()
@@ -300,7 +326,7 @@ jobs:
             if [ "$page" -gt 1 ]; then
               response="$(curl --fail-with-body --silent --show-error \
                 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                "${endpoint}?env=preview&per_page=100&page=${page}")"
+                "${endpoint}?env=production&per_page=20&page=${page}")"
               jq -e '.success == true' <<<"$response" >/dev/null
             fi
             mapfile -t page_ids < <(jq -r --arg branch "$PREVIEW_BRANCH" --arg current "$current_id" \
@@ -324,15 +350,19 @@ jobs:
         run: |
           set -euo pipefail
           ready=false
+          health_body="$(mktemp)"
           for _ in {1..18}; do
-            if curl --fail --silent --show-error \
-              "$PREVIEW_URL/__preview/health" | jq -e \
-              '.status == "ok" and .mode == "untrusted-read-only-dashboard-preview"' >/dev/null; then
+            http_code="$(curl --silent --show-error --output "$health_body" \
+              --write-out '%{http_code}' "$PREVIEW_URL/__preview/health" || true)"
+            if [ "$http_code" = 200 ] && jq -e \
+              '.status == "ok" and .mode == "untrusted-read-only-dashboard-preview"' \
+              "$health_body" >/dev/null; then
               ready=true
               break
             fi
             sleep 5
           done
+          rm -f "$health_body"
           [ "$ready" = true ]
           root="$(curl --fail --silent --show-error "$PREVIEW_URL/")"
           grep -q '<div id="root"' <<<"$root"
@@ -383,8 +413,8 @@ jobs:
       contents: read
       pull-requests: write
     env:
-      PAGES_PROJECT: ditto-subnet-dashboard-preview
-      PREVIEW_BRANCH: ${{ needs.inspect.outputs.branch }}
+      PAGES_PROJECT: ditto-subnet-dashboard-pr-${{ needs.inspect.outputs.pr }}
+      PREVIEW_BRANCH: main
       PREVIEW_PR: ${{ needs.inspect.outputs.pr }}
       PREVIEW_SHA: ${{ needs.inspect.outputs.sha }}
       RETIRE_REASON: ${{ needs.inspect.outputs.reason }}
@@ -393,7 +423,7 @@ jobs:
         id: existing
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare_api_token }}
         run: |
           set -euo pipefail
           endpoint="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments"
@@ -405,7 +435,7 @@ jobs:
             http_code="$(curl --silent --show-error --write-out '%{http_code}' \
               --output "$body" \
               -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              "${endpoint}?env=preview&per_page=100&page=${page}")"
+              "${endpoint}?env=production&per_page=20&page=${page}")"
             # A missing project (404) means this PR never had a dashboard
             # preview, so there is nothing to retire; treat it as an empty
             # result instead of failing the retirement.
@@ -438,7 +468,7 @@ jobs:
             [ "$(jq -r '.deployment_trigger.metadata.commit_hash' <<<"$latest")" = "$PREVIEW_SHA" ] && \
             [[ "$(jq -r '.deployment_trigger.metadata.commit_message' <<<"$latest")" == dashboard-preview-* ]]; then
             deployment_current=true
-            current_url="$(jq -r .url <<<"$latest")"
+            current_url="https://${PAGES_PROJECT}.pages.dev"
           fi
           echo "deployment_current=$deployment_current" >> "$GITHUB_OUTPUT"
           echo "current_url=$current_url" >> "$GITHUB_OUTPUT"
@@ -533,7 +563,7 @@ jobs:
           steps.current.outputs.current == 'true'
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare_api_token }}
           RETIRE_MESSAGE: retire-dashboard-preview-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
@@ -551,7 +581,7 @@ jobs:
           steps.current.outputs.current == 'true'
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare_api_token }}
           RETIRE_MESSAGE: retire-dashboard-preview-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
@@ -560,7 +590,7 @@ jobs:
           for _ in {1..12}; do
             response="$(curl --fail-with-body --silent --show-error \
               -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              "${endpoint}?env=preview&per_page=100&page=1")"
+              "${endpoint}?env=production&per_page=20&page=1")"
             jq -e '.success == true' <<<"$response" >/dev/null
             tombstone="$(jq -c --arg branch "$PREVIEW_BRANCH" --arg message "$RETIRE_MESSAGE" \
               '[.result[] | select(.deployment_trigger.metadata.branch == $branch and .deployment_trigger.metadata.commit_message == $message)] | sort_by(.created_on) | last // empty' \
@@ -576,7 +606,7 @@ jobs:
             if [ "$page" -gt 1 ]; then
               response="$(curl --fail-with-body --silent --show-error \
                 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                "${endpoint}?env=preview&per_page=100&page=${page}")"
+                "${endpoint}?env=production&per_page=20&page=${page}")"
               jq -e '.success == true' <<<"$response" >/dev/null
             fi
             mapfile -t page_ids < <(jq -r --arg branch "$PREVIEW_BRANCH" \
@@ -588,11 +618,7 @@ jobs:
             page=$((page + 1))
           done
           tombstone_id="$(jq -r .id <<<"$tombstone")"
-          tombstone_url="$(jq -r .url <<<"$tombstone")"
-          tombstone_alias="$(jq -r --arg branch "$PREVIEW_BRANCH" \
-            '[.aliases[]? | select(contains("://" + $branch + "."))] | first // empty' \
-            <<<"$tombstone")"
-          [ -n "$tombstone_alias" ]
+          tombstone_url="https://${PAGES_PROJECT}.pages.dev"
           for deployment_id in "${deployment_ids[@]}"; do
             [ "$deployment_id" = "$tombstone_id" ] && continue
             deleted="$(curl --fail-with-body --silent --show-error -X DELETE \
@@ -601,7 +627,21 @@ jobs:
             jq -e '.success == true' <<<"$deleted" >/dev/null
           done
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' "$tombstone_url")" = 410
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' "$tombstone_alias")" = 410
+
+      - name: Delete the isolated project after PR close
+        if: >-
+          steps.existing.outputs.found == 'true' &&
+          steps.current.outputs.current == 'true' &&
+          needs.inspect.outputs.reason == 'retire-closed'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+        run: |
+          set -euo pipefail
+          endpoint="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}"
+          response="$(curl --fail-with-body --silent --show-error -X DELETE \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$endpoint")"
+          jq -e '.success == true' <<<"$response" >/dev/null
 
       - name: Mark the preview retired
         if: >-

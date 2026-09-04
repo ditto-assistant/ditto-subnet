@@ -33,7 +33,7 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     assert "pull-requests: read" in text
     assert "gh api --paginate" in text
     assert "ref: ${{ needs.plan.outputs.sha }}" in text
-    assert "CLOUDFLARE_API_TOKEN" not in text
+    assert text.count("CLOUDFLARE_PREVIEW_API_TOKEN") == 1
     assert "actions/upload-artifact@" in text
     assert (
         "node --test apps/platform/dashboard/preview/cloudflare-pages-worker.test.mjs"
@@ -71,6 +71,10 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     assert publish["with"]["bundle_result"] == "${{ needs.dashboard-bundle.result }}"
     assert publish["with"]["proof_result"] == "${{ needs.cheatcodes.result }}"
     assert publish["with"]["sha"] == "${{ github.event.pull_request.head.sha }}"
+    assert publish["secrets"] == {
+        "cloudflare_api_token": "${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}"
+    }
+    assert "inherit" not in publish["secrets"]
 
 
 def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
@@ -90,6 +94,12 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
         "repo",
         "sha",
     }
+    assert triggers["workflow_call"]["secrets"] == {
+        "cloudflare_api_token": {
+            "description": "Pages-only token forwarded explicitly by the caller",
+            "required": False,
+        }
+    }
     assert set(workflow["jobs"]) == {"preflight", "inspect", "publish", "retire"}
     preflight = workflow["jobs"]["preflight"]
     inspect = workflow["jobs"]["inspect"]
@@ -108,6 +118,10 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     assert preflight["outputs"] == {
         "configured": "${{ steps.check.outputs.configured }}"
     }
+    preflight_script = preflight["steps"][0]["run"]
+    assert "missing+=(CLOUDFLARE_ACCOUNT_ID)" in preflight_script
+    assert "missing+=(CLOUDFLARE_API_TOKEN)" in preflight_script
+    assert 'missing_csv="$(IFS=,; echo "${missing[*]}")"' in preflight_script
     assert "environment" not in inspect
     assert inspect["permissions"] == {
         "actions": "read",
@@ -175,7 +189,24 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     assert "deployment_trigger.metadata.branch" in text
     assert "${endpoint}/${deployment_id}?force=true" in text
     assert ".result_info.total_pages // 1" in text
-    assert "jq -r .url" in text
+    assert "per_page=100" not in text
+    assert text.count("per_page=20") == 5
+    assert "ditto-subnet-dashboard-pr-${{ needs.inspect.outputs.pr }}" in text
+    assert "pages project create" in text
+    assert "https://${PAGES_PROJECT}.pages.dev" in text
+    assert "env=preview" not in text
+    assert publish["env"]["PREVIEW_BRANCH"] == "main"
+    assert retire["env"]["PREVIEW_BRANCH"] == "main"
+    assert "--write-out '%{http_code}'" in text
+    assert 'if [ "$http_code" = 200 ] && jq -e' in text
+    delete_project = next(
+        step
+        for step in retire_steps
+        if step.get("name") == "Delete the isolated project after PR close"
+    )
+    assert "needs.inspect.outputs.reason == 'retire-closed'" in delete_project["if"]
+    assert 'pages/projects/${PAGES_PROJECT}"' in delete_project["run"]
+    assert "-X DELETE" in delete_project["run"]
     assert "This page contains untrusted PR code. Do not enter credentials." in text
     assert "production-public-read-only" in text
     assert 'has("generated_at") and has("miners")' in text
