@@ -1,6 +1,7 @@
 package traces
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -191,6 +192,18 @@ func (u *Uploader) ship(ctx context.Context, rf *readyFile) error {
 	if err != nil {
 		return err
 	}
+	if side != nil && fileExists(zstPath) {
+		if verr := validCompressed(zstPath, side); verr != nil {
+			u.opts.Logger.Error("trace artifact unusable; rebuilding from the retained source",
+				slog.String("file", filepath.Base(zstPath)), slog.String("error", verr.Error()))
+			if info, serr := os.Stat(zstPath); serr == nil {
+				u.spool.releaseBytes(info.Size())
+			}
+			_ = os.Remove(zstPath)
+			_ = os.Remove(sidePath)
+			side = nil
+		}
+	}
 	if side == nil || !fileExists(zstPath) {
 		sum, size, err := compressFile(rf.path, zstPath)
 		if err != nil {
@@ -201,6 +214,9 @@ func (u *Uploader) ship(ctx context.Context, rf *readyFile) error {
 		if err := writeSidecar(sidePath, side); err != nil {
 			return err
 		}
+	}
+	if err := validCompressed(zstPath, side); err != nil {
+		return fmt.Errorf("refusing to upload %s: %w", side.Key, err)
 	}
 	var missingRequired []string
 	var firstErr error
@@ -252,6 +268,36 @@ func (u *Uploader) ship(ctx context.Context, rf *readyFile) error {
 //
 // dt/hour come from the FIRST record in the file, so a file never straddles
 // the partition its name claims by more than one rotation interval.
+const minZstdFrameBytes = 13
+
+var zstdFrameMagic = []byte{0x28, 0xb5, 0x2f, 0xfd}
+
+func validCompressed(path string, side *sidecar) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.Size() != side.Bytes {
+		return fmt.Errorf("artifact is %d bytes, sidecar says %d", info.Size(), side.Bytes)
+	}
+	if info.Size() < minZstdFrameBytes {
+		return fmt.Errorf("artifact is %d bytes, smaller than any zstd frame", info.Size())
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	magic := make([]byte, len(zstdFrameMagic))
+	if _, err := io.ReadFull(f, magic); err != nil {
+		return fmt.Errorf("read frame header: %w", err)
+	}
+	if !bytes.Equal(magic, zstdFrameMagic) {
+		return fmt.Errorf("artifact does not start with a zstd frame header")
+	}
+	return nil
+}
+
 func objectKey(prefix string, rf *readyFile) string {
 	first := rf.firstAt.UTC()
 	name := fmt.Sprintf("%s-%s-%s-%s.jsonl.zst", rf.instance,
