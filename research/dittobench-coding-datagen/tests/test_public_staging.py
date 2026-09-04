@@ -10,6 +10,7 @@ from dittobench_coding_datagen.canonical import canonical_json_bytes, tree_ident
 from dittobench_coding_datagen.model import CorpusError
 from dittobench_coding_datagen.public_source import load_public_source_intake
 from dittobench_coding_datagen.public_staging import validate_public_task_staging
+from dittobench_coding_datagen.snapshot import SNAPSHOT_SCHEMA
 
 
 def _sha(body: bytes) -> str:
@@ -21,7 +22,17 @@ def _write_task(root: Path, task_id: str) -> tuple[str, str]:
     workspace = task / "snapshot" / "workspace"
     workspace.mkdir(parents=True)
     (workspace / "app.txt").write_text(task_id, encoding="utf-8")
-    snapshot_manifest = canonical_json_bytes({"snapshot": task_id})
+    identities = [item.as_json() for item in tree_identities(workspace)]
+    workspace_tree = _sha(canonical_json_bytes(identities))
+    snapshot_manifest = canonical_json_bytes(
+        {
+            "excluded_root_entries": [],
+            "files": identities,
+            "schema": SNAPSHOT_SCHEMA,
+            "snapshot_tree_sha256": workspace_tree,
+            "source_tree_sha256": workspace_tree,
+        }
+    )
     (task / "snapshot" / "manifest.json").write_bytes(snapshot_manifest)
     grader = task / "grader"
     grader.mkdir()
@@ -95,4 +106,13 @@ def test_staging_rejects_grader_drift(tmp_path: Path) -> None:
         "drift", encoding="utf-8"
     )
     with pytest.raises(CorpusError, match="grader does not match"):
+        validate_public_task_staging(root=tmp_path, intake=intake)
+
+
+def test_staging_rejects_workspace_drift_from_snapshot_manifest(tmp_path: Path) -> None:
+    intake = load_public_source_intake(_intake(tmp_path))
+    (
+        tmp_path / "tasks" / "PUBLIC-V2-00" / "snapshot" / "workspace" / "extra.txt"
+    ).write_text("drift", encoding="utf-8")
+    with pytest.raises(CorpusError, match="snapshot does not match workspace"):
         validate_public_task_staging(root=tmp_path, intake=intake)
