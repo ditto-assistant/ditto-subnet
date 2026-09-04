@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import stat
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,21 @@ _CONDITIONS = (
 )
 _GROUP_COUNT = 50
 _TASK_COUNT = _GROUP_COUNT * len(_CONDITIONS)
+_OPAQUE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_GROUP_KEYS = {
+    "audit_sha256",
+    "calibration_sha256",
+    "group_manifest_sha256",
+    "hidden_grader_tree_sha256",
+    "memory_bundle_set_sha256",
+    "opaque_group_id",
+    "opaque_repository_stratum_id",
+    "overlap_review_sha256",
+    "runner_profile_sha256",
+    "semantic_family_id",
+    "semantic_review_sha256",
+    "visible_snapshot_tree_sha256",
+}
 
 
 class PrivateCatalogV2CompileError(ValueError):
@@ -207,12 +223,18 @@ def verify_private_catalog_v2(directory: Path) -> dict[str, Any]:
             directory / "records" / f"{index:06d}.json", "private v2 catalog record"
         )
         task = CodingPrivateCatalogV2Task.model_validate(record)
+        record_path = directory / "records" / f"{index:06d}.json"
         if (
             task.catalog_index != index
             or task.task_version_id != item.get("task_version_id")
             or task.task_commitment_sha256 != item.get("task_commitment_sha256")
-            or _file_sha256(directory / "records" / f"{index:06d}.json")
-            != item.get("record_sha256")
+            or _file_sha256(record_path) != item.get("record_sha256")
+            or coding_canonical_json_bytes(
+                task.model_dump(mode="json", by_alias=True),
+                maximum_bytes=64 << 10,
+                label="private v2 catalog task",
+            )
+            != record_path.read_bytes()
         ):
             raise PrivateCatalogV2CompileError("private v2 catalog record drifted")
         proof = _canonical_object(
@@ -257,21 +279,20 @@ def _compile_group(
 ) -> list[dict[str, Any]]:
     if not isinstance(group, dict):
         raise PrivateCatalogV2CompileError("private release group is invalid")
-    required = {
-        "opaque_group_id",
-        "group_manifest_sha256",
-        "visible_snapshot_tree_sha256",
-        "hidden_grader_tree_sha256",
-        "memory_bundle_set_sha256",
-        "calibration_sha256",
-        "semantic_review_sha256",
-        "runner_profile_sha256",
-    }
-    if not required <= set(group) or any(
-        not _sha256(group[key]) for key in required - {"opaque_group_id"}
+    if set(group) != _GROUP_KEYS or any(
+        not _sha256(group[key])
+        for key in _GROUP_KEYS
+        - {
+            "opaque_group_id",
+            "opaque_repository_stratum_id",
+            "semantic_family_id",
+        }
     ):
         raise PrivateCatalogV2CompileError("private release group is invalid")
-    root = groups_root / group["opaque_group_id"]
+    group_id = _safe_path_id(group["opaque_group_id"])
+    _safe_path_id(group["opaque_repository_stratum_id"])
+    _safe_path_id(group["semantic_family_id"])
+    root = groups_root / group_id
     manifest = _canonical_object(
         root / "authority/group-manifest.json", "private group manifest"
     )
@@ -294,8 +315,8 @@ def _compile_group(
             weight_eligible=False,
             corpus_release_id=corpus_release_id,
             catalog_index=index,
-            task_version_id=f"{group['opaque_group_id']}-{arm['condition']}",
-            base_task_group_id=group["opaque_group_id"],
+            task_version_id=f"{group_id}-{arm['condition']}",
+            base_task_group_id=group_id,
             condition=CodingMemoryConditionV2(arm["condition"]),
             repository_epoch=manifest["repository_epoch"],
             private_release_sha256=release_sha256,
@@ -365,6 +386,12 @@ def _sha256(value: object) -> bool:
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def _safe_path_id(value: object) -> str:
+    if not isinstance(value, str) or not _OPAQUE_ID.fullmatch(value):
+        raise PrivateCatalogV2CompileError("private group identity is unsafe")
+    return value
 
 
 def _digest(value: dict[str, Any], label: str) -> str:

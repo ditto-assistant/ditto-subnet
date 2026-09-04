@@ -5,8 +5,11 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 
+import pytest
+
 from ditto.api_models.coding_canonical import coding_canonical_json_bytes
 from ditto.api_server.coding_private_catalog_v2_compile import (
+    PrivateCatalogV2CompileError,
     compile_private_catalog_v2,
     verify_private_catalog_v2,
 )
@@ -57,14 +60,18 @@ def _fixture(root: Path) -> tuple[Path, Path]:
         manifest_sha = _write(authority / "group-manifest.json", manifest)
         groups.append(
             {
-                "opaque_group_id": group_id,
+                "audit_sha256": _sha(f"audit-{index}"),
+                "calibration_sha256": _sha(f"calibration-{index}"),
                 "group_manifest_sha256": manifest_sha,
-                "visible_snapshot_tree_sha256": _sha(f"visible-{index}"),
                 "hidden_grader_tree_sha256": _sha(f"grader-{index}"),
                 "memory_bundle_set_sha256": _sha(f"memory-set-{index}"),
-                "calibration_sha256": _sha(f"calibration-{index}"),
-                "semantic_review_sha256": _sha(f"semantic-{index}"),
+                "opaque_group_id": group_id,
+                "opaque_repository_stratum_id": f"stratum-{index // 5:02d}",
+                "overlap_review_sha256": _sha(f"overlap-{index}"),
                 "runner_profile_sha256": _sha(f"runner-{index}"),
+                "semantic_family_id": f"family-{index:03d}",
+                "semantic_review_sha256": _sha(f"semantic-{index}"),
+                "visible_snapshot_tree_sha256": _sha(f"visible-{index}"),
             }
         )
     projection = {
@@ -109,3 +116,46 @@ def test_private_v2_compiler_emits_all_condition_leaves(tmp_path: Path) -> None:
     assert first["condition"] == "v0_none"
     assert final["condition"] == "v4_current_override"
     assert verify_private_catalog_v2(output) == authority
+
+
+def test_private_v2_compiler_rejects_private_grouping_and_path_escape(
+    tmp_path: Path,
+) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    release, groups = _fixture(protected)
+    extra = json.loads(release.read_bytes())
+    extra["groups"][0]["condition"] = "v1_relevant"
+    extra["release_sha256"] = hashlib.sha256(
+        coding_canonical_json_bytes(
+            {key: value for key, value in extra.items() if key != "release_sha256"},
+            maximum_bytes=4 << 20,
+            label="private release authority",
+        )
+    ).hexdigest()
+    hostile = protected / "hostile-release.json"
+    _write(hostile, extra)
+    with pytest.raises(PrivateCatalogV2CompileError, match="group is invalid"):
+        compile_private_catalog_v2(
+            release_authority=hostile,
+            groups_root=groups,
+            output=protected / "catalog-extra",
+        )
+
+    escaped = json.loads(release.read_bytes())
+    escaped["groups"][0]["opaque_group_id"] = "../outside"
+    escaped["release_sha256"] = hashlib.sha256(
+        coding_canonical_json_bytes(
+            {key: value for key, value in escaped.items() if key != "release_sha256"},
+            maximum_bytes=4 << 20,
+            label="private release authority",
+        )
+    ).hexdigest()
+    escaped_path = protected / "escaped-release.json"
+    _write(escaped_path, escaped)
+    with pytest.raises(PrivateCatalogV2CompileError, match="unsafe"):
+        compile_private_catalog_v2(
+            release_authority=escaped_path,
+            groups_root=groups,
+            output=protected / "catalog-escape",
+        )
