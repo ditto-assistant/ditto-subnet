@@ -59,4 +59,28 @@ describe("codingMemoryShadowSummary", () => {
       }),
     ).toThrow("invalid aggregate");
   });
+
+  it("rejects runtime attempts to mark shadow evidence weight eligible", () => {
+    const value = {
+      p0: 0,
+      p1: 0,
+      p2: 0,
+      p3: 0,
+      p4: 0,
+      usefulLift: 0,
+      staleDelta: 0,
+      irrelevantDelta: 0,
+      monotoneShadowScore: 0,
+      expectedGroupCount: 1,
+      quarantinedGroupCount: 0,
+      missingResultCount: 5,
+      untrustedResultCount: 0,
+      weightEligible: true,
+    };
+    expect(() =>
+      codingMemoryShadowSummary(
+        value as unknown as Parameters<typeof codingMemoryShadowSummary>[0],
+      ),
+    ).toThrow("invalid aggregate");
+  });
 });

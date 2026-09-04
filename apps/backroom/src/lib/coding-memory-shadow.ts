@@ -31,6 +31,7 @@ export function codingMemoryShadowSummary(
     counts.some((count) => !Number.isSafeInteger(count) || count < 0) ||
     value.expectedGroupCount === 0 ||
     value.quarantinedGroupCount >= value.expectedGroupCount ||
+    value.weightEligible !== false ||
     rates.some((rate) => !Number.isFinite(rate) || rate < 0 || rate > 1) ||
     [value.usefulLift, value.staleDelta, value.irrelevantDelta].some(
       (delta) => !Number.isFinite(delta) || delta < -1 || delta > 1,
