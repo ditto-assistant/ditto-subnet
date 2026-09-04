@@ -209,10 +209,8 @@ def verify_private_v2_payload(directory: Path) -> dict[str, Any]:
             or artifacts["resource_profile"] != task.resource_profile_sha256
             or hashlib.sha256(memory_body).hexdigest() != task.memory_bundle_sha256
             or hashlib.sha256(runtime_body).hexdigest() != task.runtime_policy_sha256
-            or hashlib.sha256(resource_body).hexdigest()
-            != task.resource_profile_sha256
-            or _tree_digest_from_tar(visible_body)
-            != task.visible_snapshot_tree_sha256
+            or hashlib.sha256(resource_body).hexdigest() != task.resource_profile_sha256
+            or _tree_digest_from_tar(visible_body) != task.visible_snapshot_tree_sha256
             or _tree_digest_from_tar(grader_body) != task.hidden_grader_tree_sha256
         ):
             raise PrivateV2PayloadError("private v2 payload artifacts drifted")
