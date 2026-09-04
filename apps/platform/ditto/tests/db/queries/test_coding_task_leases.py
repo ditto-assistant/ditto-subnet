@@ -12,6 +12,10 @@ from uuid import uuid4
 import pytest
 
 from ditto.api_models.coding_catalog import CodingCatalogCommitment
+from ditto.api_models.coding_evaluation import (
+    CodingAuthoringEvidence,
+    coding_authoring_evidence_digest,
+)
 from ditto.api_models.coding_selection import (
     CodingCatalogMembershipProof,
     CodingCatalogTaskVersion,
@@ -475,7 +479,7 @@ async def test_grading_authorization_requires_complete_immutable_freeze() -> Non
         "zero events",
         "no changed paths",
         "protected paths changed",
-        "model usage incomplete",
+        "model usage truncated",
         "evidence nonobject",
         "evidence field drift",
         "weighted run",
@@ -494,12 +498,12 @@ async def test_grading_authorization_rejects_ungradeable_freeze(drift: str) -> N
         fixture.freeze.changed_path_count = 0
     elif drift == "protected paths changed":
         fixture.freeze.protected_paths_intact = False
-    elif drift == "model usage incomplete":
+    elif drift == "model usage truncated":
         fixture.freeze.evidence = {
             **fixture.freeze.evidence,
             "model": {
                 **fixture.freeze.evidence["model"],
-                "usage_status": "provider_failure",
+                "usage_status": "truncated",
             },
         }
     elif drift == "evidence nonobject":
@@ -524,6 +528,45 @@ async def test_grading_authorization_rejects_ungradeable_freeze(drift: str) -> N
             authoring_evidence_sha256=requested_digest,
             claim_instance_id=fixture.ticket.claim_instance_id,
         )
+
+
+async def test_grading_authorization_accepts_not_invoked_empty_patch() -> None:
+    fixture = _fixture()
+    evidence = {
+        **fixture.freeze.evidence,
+        "model": {
+            **fixture.freeze.evidence["model"],
+            "usage_status": "not_invoked",
+            "provider_receipt_set_sha256": None,
+            "requests": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd_micros": 0,
+            "retry_count": 0,
+        },
+        "changed_path_count": 0,
+        "changed_bytes": 0,
+    }
+    parsed = CodingAuthoringEvidence.model_validate(evidence)
+    fixture.freeze.evidence = evidence
+    fixture.freeze.changed_path_count = 0
+    fixture.freeze.changed_bytes = 0
+    fixture.freeze.authoring_transcript_bytes = 0
+    fixture.freeze.authoring_event_count = 0
+    fixture.freeze.authoring_evidence_sha256 = coding_authoring_evidence_digest(parsed)
+    authority = await authorize_coding_shadow_grading_delivery(
+        _GradingAuthorizationSession(fixture),  # type: ignore[arg-type]
+        validator_hotkey=fixture.ticket.validator_hotkey,
+        agent_id=fixture.run.agent_id,
+        run_row_id=fixture.run.run_row_id,
+        ticket_id=fixture.ticket.ticket_id,
+        freeze_id=fixture.freeze.freeze_id,
+        authoring_evidence_sha256=fixture.freeze.authoring_evidence_sha256,
+        claim_instance_id=fixture.ticket.claim_instance_id,
+    )
+    assert authority.freeze_id == fixture.freeze.freeze_id
+    assert authority.frozen_patch_sha256 == fixture.freeze.frozen_patch_sha256
 
 
 async def test_grading_authorization_hides_wrong_owner_or_expired_ticket() -> None:

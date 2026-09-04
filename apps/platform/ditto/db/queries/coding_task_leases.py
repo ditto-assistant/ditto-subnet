@@ -297,12 +297,24 @@ async def authorize_coding_shadow_grading_delivery(
         or evidence.changed_path_count != freeze.changed_path_count
         or evidence.changed_bytes != freeze.changed_bytes
         or evidence.protected_paths_intact != freeze.protected_paths_intact
-        or freeze.authoring_transcript_bytes <= 0
-        or freeze.authoring_event_count <= 0
-        or freeze.changed_path_count <= 0
+        or freeze.authoring_transcript_bytes < 0
+        or freeze.authoring_event_count < 0
+        or freeze.changed_path_count < 0
         or not freeze.protected_paths_intact
         or evidence.model.usage_status
-        is not CodingCertificationModelUsageStatus.COMPLETE
+        not in {
+            CodingCertificationModelUsageStatus.COMPLETE,
+            CodingCertificationModelUsageStatus.NOT_INVOKED,
+            CodingCertificationModelUsageStatus.PROVIDER_FAILURE,
+        }
+        or (
+            evidence.model.usage_status
+            is not CodingCertificationModelUsageStatus.NOT_INVOKED
+            and (
+                freeze.authoring_transcript_bytes <= 0
+                or freeze.authoring_event_count <= 0
+            )
+        )
         or result_exists is not None
     ):
         raise CodingTaskLeaseIntegrityError(
