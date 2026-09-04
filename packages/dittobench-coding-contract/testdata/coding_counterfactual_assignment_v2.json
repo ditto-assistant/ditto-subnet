@@ -1,0 +1,12 @@
+{
+  "schema": "dittobench-coding-counterfactual-assignment-v2",
+  "coding_contract_version": 2,
+  "weight_eligible": false,
+  "agent_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "opaque_assignment_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "repository_epoch": "epoch-1",
+  "memory_bundle_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "seeded_memory_bytes": 1024,
+  "model_visible_memory_token_budget": 2048,
+  "memory_volume_tier": "medium"
+}
