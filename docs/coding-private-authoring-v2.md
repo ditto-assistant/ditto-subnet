@@ -81,6 +81,14 @@ Before release registration, every group MUST pass:
 Failure of any gate quarantines the group. Quarantined groups are absent from
 selection and cannot improve a candidate score by reducing a denominator.
 
+Release admission requires a canonical calibration authority compiled from two
+base and two reference observations under one immutable runner profile. Both
+base runs must build and pass every visible regression test while failing at
+least one hidden test. Both reference runs must build and pass all visible and
+hidden tests. Test counts and outcomes must be stable across replicates. The
+receipt binds observation digests; it does not make private task material
+public or make the task weight-eligible.
+
 The private input audit opens all five canonical memory-bundle files, verifies
 their manifest-bound SHA-256 values, requires an empty V0 bundle and non-empty
 V1-V4 bundles, rejects credential-like content, and binds the complete memory

@@ -17,6 +17,7 @@ from dittobench_coding_datagen.private_authoring import (
     load_private_group_manifest,
     write_private_authoring_output,
 )
+from dittobench_coding_datagen.private_calibration import load_private_calibration
 
 PRIVATE_RELEASE_SCHEMA = "dittobench-coding-private-release-v2"
 _GROUP_COUNT = 50
@@ -42,11 +43,13 @@ def compile_private_release(
         raise CorpusError("private release requires exactly fifty groups")
     groups: list[dict[str, object]] = []
     strata: dict[str, int] = {}
+    runner_profiles: set[str] = set()
     for directory in directories:
         if directory.is_symlink() or not directory.is_dir():
             raise CorpusError("private release group directory is unsafe")
         if {path.name for path in directory.iterdir()} != {
             "group-audit.json",
+            "group-calibration.json",
             "group-manifest.json",
         }:
             raise CorpusError("private release group directory has unexpected files")
@@ -59,17 +62,24 @@ def compile_private_release(
         audit, audit_body = _load_audit(audit_path)
         if audit["group_manifest_sha256"] != manifest_sha256:
             raise CorpusError("private release group audit does not match manifest")
+        calibration, calibration_body = load_private_calibration(
+            directory / "group-calibration.json",
+            group_manifest_sha256=manifest_sha256,
+        )
+        runner_profiles.add(str(calibration["runner_profile_sha256"]))
         stratum = manifest.opaque_repository_stratum_id
         strata[stratum] = strata.get(stratum, 0) + 1
         groups.append(
             {
                 "audit_sha256": sha256_hex(audit_body),
+                "calibration_sha256": sha256_hex(calibration_body),
                 "group_manifest_sha256": manifest_sha256,
                 "hidden_grader_tree_sha256": audit["hidden_grader_tree_sha256"],
                 "memory_bundle_set_sha256": audit["memory_bundle_set_sha256"],
                 "opaque_group_id": manifest.opaque_group_id,
                 "opaque_repository_stratum_id": stratum,
                 "overlap_review_sha256": audit["overlap_review_sha256"],
+                "runner_profile_sha256": calibration["runner_profile_sha256"],
                 "visible_snapshot_tree_sha256": audit["visible_snapshot_tree_sha256"],
             }
         )
@@ -81,6 +91,8 @@ def compile_private_release(
         != _GROUP_COUNT
     ):
         raise CorpusError("private release repository strata are not balanced")
+    if len(runner_profiles) != 1:
+        raise CorpusError("private release runner profile drifted")
     projection = {
         "coding_contract_version": 2,
         "corpus_release_id": release_id,
@@ -122,6 +134,7 @@ def load_private_release(path: Path) -> dict[str, Any]:
         or raw["repository_stratum_count"] != _STRATUM_COUNT
         or not isinstance(raw["groups"], list)
         or len(raw["groups"]) != _GROUP_COUNT
+        or not _valid_release_groups(raw["groups"])
     ):
         raise CorpusError("private release authority is invalid")
     projection = dict(raw)
@@ -133,6 +146,51 @@ def load_private_release(path: Path) -> dict[str, Any]:
     ):
         raise CorpusError("private release authority is invalid")
     return raw
+
+
+def _valid_release_groups(value: list[object]) -> bool:
+    expected = {
+        "audit_sha256",
+        "calibration_sha256",
+        "group_manifest_sha256",
+        "hidden_grader_tree_sha256",
+        "memory_bundle_set_sha256",
+        "opaque_group_id",
+        "opaque_repository_stratum_id",
+        "overlap_review_sha256",
+        "runner_profile_sha256",
+        "visible_snapshot_tree_sha256",
+    }
+    group_ids: list[str] = []
+    manifests: set[str] = set()
+    runner_profiles: set[str] = set()
+    strata: dict[str, int] = {}
+    for item in value:
+        if not isinstance(item, dict) or set(item) != expected:
+            return False
+        digest_fields = expected - {
+            "opaque_group_id",
+            "opaque_repository_stratum_id",
+        }
+        if any(not _sha256(item[field]) for field in digest_fields):
+            return False
+        try:
+            group_id = safe_opaque_id(item["opaque_group_id"])
+            stratum = safe_opaque_id(item["opaque_repository_stratum_id"])
+        except (TypeError, ValueError):
+            return False
+        group_ids.append(group_id)
+        manifests.add(str(item["group_manifest_sha256"]))
+        runner_profiles.add(str(item["runner_profile_sha256"]))
+        strata[stratum] = strata.get(stratum, 0) + 1
+    return (
+        group_ids == sorted(group_ids)
+        and len(set(group_ids)) == _GROUP_COUNT
+        and len(manifests) == _GROUP_COUNT
+        and len(runner_profiles) == 1
+        and len(strata) == _STRATUM_COUNT
+        and all(count == _GROUPS_PER_STRATUM for count in strata.values())
+    )
 
 
 def _load_audit(path: Path) -> tuple[dict[str, Any], bytes]:
