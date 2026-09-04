@@ -63,7 +63,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
 # fetch inside a deterministic RUN layer instead of remote ADD: remote ADD asks
 # the origin to revalidate on every build, while this layer can be restored from
 # the architecture-specific release cache after its first verified download.
-FROM alpine:3.22 AS confirmation-assets
+FROM alpine:3.24 AS confirmation-assets
 RUN wget -q -O /longmemeval_s_cleaned.json \
       https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/98d7416c24c778c2fee6e6f3006e7a073259d48f/longmemeval_s_cleaned.json && \
     echo "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442  /longmemeval_s_cleaned.json" \
