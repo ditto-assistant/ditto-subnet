@@ -12,13 +12,13 @@ from typing import Any
 
 from dittobench_coding_datagen.canonical import (
     canonical_json_bytes,
+    normalized_tree_identities,
+    normalized_tree_sha256,
     safe_relative_path,
-    sha256_hex,
-    tree_identities,
 )
 from dittobench_coding_datagen.model import CorpusError
 
-SNAPSHOT_SCHEMA = "dittobench-coding-sanitized-snapshot-v1"
+SNAPSHOT_SCHEMA = "dittobench-coding-sanitized-snapshot-v2"
 _ROOT_CONTROL_EXCLUSIONS = frozenset({".git", ".github"})
 _CACHE_DIRECTORIES = frozenset(
     {
@@ -71,10 +71,8 @@ def export_sanitized_snapshot(source: Path, output: Path) -> SanitizedSnapshot:
         workspace = staged / "workspace"
         workspace.mkdir(parents=True)
         excluded = _copy_source(source, workspace)
-        identities = tuple(
-            identity.as_json() for identity in tree_identities(workspace)
-        )
-        source_tree_sha256 = sha256_hex(canonical_json_bytes(list(identities)))
+        identities = tuple(normalized_tree_identities(workspace))
+        source_tree_sha256 = normalized_tree_sha256(workspace)
         snapshot = SanitizedSnapshot(
             schema=SNAPSHOT_SCHEMA,
             source_tree_sha256=source_tree_sha256,
@@ -83,7 +81,9 @@ def export_sanitized_snapshot(source: Path, output: Path) -> SanitizedSnapshot:
             snapshot_tree_sha256=source_tree_sha256,
         )
         manifest = canonical_json_bytes(snapshot.as_json())
-        (staged / "manifest.json").write_bytes(manifest)
+        manifest_path = staged / "manifest.json"
+        manifest_path.write_bytes(manifest)
+        manifest_path.chmod(0o644)
         os.replace(staged, output)
     return snapshot
 

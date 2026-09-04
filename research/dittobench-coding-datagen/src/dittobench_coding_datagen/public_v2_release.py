@@ -13,10 +13,10 @@ from typing import Any
 
 from dittobench_coding_datagen.canonical import (
     canonical_json_bytes,
+    normalized_tree_identities,
     safe_opaque_id,
     safe_relative_path,
     sha256_hex,
-    tree_identities,
 )
 from dittobench_coding_datagen.model import CorpusError
 from dittobench_coding_datagen.public_pack_v2 import validate_public_v2_pack
@@ -124,11 +124,11 @@ def _write_archive(pack: Path, archive: Path, *, release_id: str) -> None:
             errors="strict",
         ) as tar,
     ):
-        for identity in tree_identities(pack):
-            relative = safe_relative_path(identity.path)
+        for identity in normalized_tree_identities(pack):
+            relative = safe_relative_path(str(identity["path"]))
             info = tarfile.TarInfo(f"{_ARCHIVE_ROOT}/{release_id}/{relative}")
-            info.size = identity.size_bytes
-            info.mode = 0o644
+            info.size = int(identity["size_bytes"])
+            info.mode = int(identity["mode"])
             info.mtime = 0
             info.uid = 0
             info.gid = 0
@@ -148,7 +148,7 @@ def _extract_archive(archive: Path, *, destination: Path, release_id: str) -> No
                 not member.isfile()
                 or member.name in seen
                 or not member.name.startswith(prefix)
-                or member.mode != 0o644
+                or member.mode not in {0o644, 0o755}
                 or member.mtime != 0
                 or member.uid != 0
                 or member.gid != 0
@@ -169,7 +169,7 @@ def _extract_archive(archive: Path, *, destination: Path, release_id: str) -> No
                 copied = _copy_exact(source, sink, member.size)
             if copied != member.size:
                 raise CorpusError("public v2 archive member size is invalid")
-            target.chmod(0o644)
+            target.chmod(member.mode)
             total += copied
             seen.add(member.name)
     if not seen:
