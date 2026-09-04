@@ -180,7 +180,9 @@ def test_private_release_loader_rejects_rehashed_group_projection_drift(
         load_private_release(release_path)
 
 
-def test_private_release_rejects_runner_profile_drift(tmp_path: Path) -> None:
+def test_private_release_allows_task_bound_runner_profile_diversity(
+    tmp_path: Path,
+) -> None:
     protected = tmp_path / "protected"
     protected.mkdir(mode=0o700)
     groups = _groups(protected / "groups")
@@ -188,9 +190,9 @@ def test_private_release_rejects_runner_profile_drift(tmp_path: Path) -> None:
     calibration = json.loads(calibration_path.read_bytes())
     calibration["runner_profile_sha256"] = _sha("other-runner-profile")
     calibration_path.write_bytes(canonical_json_bytes(calibration))
-    with pytest.raises(CorpusError, match="runner profile"):
-        compile_private_release(
-            groups_dir=groups,
-            corpus_release_id="coding-private-v2-runner-drift",
-            output=protected / "runner-drift.json",
-        )
+    compiled = compile_private_release(
+        groups_dir=groups,
+        corpus_release_id="coding-private-v2-runner-diversity",
+        output=protected / "runner-diversity.json",
+    )
+    assert len({group["runner_profile_sha256"] for group in compiled["groups"]}) == 2

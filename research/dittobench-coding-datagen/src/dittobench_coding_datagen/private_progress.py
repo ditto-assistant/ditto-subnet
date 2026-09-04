@@ -63,7 +63,6 @@ def audit_private_corpus_progress(groups_dir: Path) -> PrivateCorpusProgress:
         raise CorpusError("private corpus group count is invalid")
 
     strata: Counter[str] = Counter()
-    runner_profiles: set[str] = set()
     identities: list[dict[str, str]] = []
     for directory in directories:
         if (
@@ -105,7 +104,6 @@ def audit_private_corpus_progress(groups_dir: Path) -> PrivateCorpusProgress:
         )
         stratum = manifest.opaque_repository_stratum_id
         strata[stratum] += 1
-        runner_profiles.add(str(calibration["runner_profile_sha256"]))
         identities.append(
             {
                 "audit_sha256": sha256_hex(audit_body),
@@ -126,8 +124,6 @@ def audit_private_corpus_progress(groups_dir: Path) -> PrivateCorpusProgress:
         count > _GROUPS_PER_STRATUM for count in strata.values()
     ):
         raise CorpusError("private corpus repository strata are invalid")
-    if len(runner_profiles) != 1:
-        raise CorpusError("private corpus runner profile drifted")
     _require_unique_authorities(identities)
     complete_strata = sum(count == _GROUPS_PER_STRATUM for count in strata.values())
     ready = (

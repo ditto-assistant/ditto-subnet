@@ -43,7 +43,6 @@ def compile_private_release(
         raise CorpusError("private release requires exactly fifty groups")
     groups: list[dict[str, object]] = []
     strata: dict[str, int] = {}
-    runner_profiles: set[str] = set()
     for directory in directories:
         if directory.is_symlink() or not directory.is_dir():
             raise CorpusError("private release group directory is unsafe")
@@ -66,7 +65,6 @@ def compile_private_release(
             directory / "group-calibration.json",
             group_manifest_sha256=manifest_sha256,
         )
-        runner_profiles.add(str(calibration["runner_profile_sha256"]))
         stratum = manifest.opaque_repository_stratum_id
         strata[stratum] = strata.get(stratum, 0) + 1
         groups.append(
@@ -91,8 +89,6 @@ def compile_private_release(
         != _GROUP_COUNT
     ):
         raise CorpusError("private release repository strata are not balanced")
-    if len(runner_profiles) != 1:
-        raise CorpusError("private release runner profile drifted")
     projection = {
         "coding_contract_version": 2,
         "corpus_release_id": release_id,
@@ -163,7 +159,6 @@ def _valid_release_groups(value: list[object]) -> bool:
     }
     group_ids: list[str] = []
     manifests: set[str] = set()
-    runner_profiles: set[str] = set()
     strata: dict[str, int] = {}
     for item in value:
         if not isinstance(item, dict) or set(item) != expected:
@@ -181,13 +176,11 @@ def _valid_release_groups(value: list[object]) -> bool:
             return False
         group_ids.append(group_id)
         manifests.add(str(item["group_manifest_sha256"]))
-        runner_profiles.add(str(item["runner_profile_sha256"]))
         strata[stratum] = strata.get(stratum, 0) + 1
     return (
         group_ids == sorted(group_ids)
         and len(set(group_ids)) == _GROUP_COUNT
         and len(manifests) == _GROUP_COUNT
-        and len(runner_profiles) == 1
         and len(strata) == _STRATUM_COUNT
         and all(count == _GROUPS_PER_STRATUM for count in strata.values())
     )
