@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.202.0 (2026-09-04)
+
+### Bug Fixes
+
+- **scoring**: Enforce current continual seed cap
+  ([#1526](https://github.com/ditto-assistant/ditto-subnet/pull/1526),
+  [`295a901`](https://github.com/ditto-assistant/ditto-subnet/commit/295a90154568569538d24251e1faeac55b902282))
+
+### Features
+
+- **coding-datagen**: Add private authoring CLI
+  ([#1597](https://github.com/ditto-assistant/ditto-subnet/pull/1597),
+  [`3d3c37c`](https://github.com/ditto-assistant/ditto-subnet/commit/3d3c37c5cf808982416fcb065bafcb38444f04fa))
+
+
 ## v0.201.0 (2026-09-04)
 
 ### Features
