@@ -26,9 +26,11 @@ Use the Platform-owned inference routes in normal validator operation:
 cargo run --locked -- serve --port 8080
 ```
 
-The normal harness reads its existing `DITTOBENCH_*` configuration. Do not add
-an API key or `.env` file to the submitted archive. The coding route uses the
-ticket-scoped `inference_base_url` sent on each `/coding/run` request.
+The normal harness reads its existing `DITTOBENCH_*` configuration. Local
+`serve` loads a working-directory `.env` the same way the normal starter does.
+Do not add an API key or `.env` file to the submitted archive. The coding-only
+binary does not load dotenv; the coding route uses the ticket-scoped
+`inference_base_url` sent on each `/coding/run` request.
 
 ## Package one submission archive
 
