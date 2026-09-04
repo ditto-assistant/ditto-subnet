@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.196.0 (2026-09-04)
+
+### Documentation
+
+- **coding**: Propose immutable weighted activation
+  ([#1544](https://github.com/ditto-assistant/ditto-subnet/pull/1544),
+  [`04a75e8`](https://github.com/ditto-assistant/ditto-subnet/commit/04a75e8db952caf2fe78224b3c50cac5dcf16165))
+
+### Features
+
+- **backroom**: Expose coding-memory shadow diagnostics
+  ([#1542](https://github.com/ditto-assistant/ditto-subnet/pull/1542),
+  [`567fcbb`](https://github.com/ditto-assistant/ditto-subnet/commit/567fcbb257813b54a86bcee7085b3013449ab99d))
+
+- **coding**: Add adversarial scoring baselines
+  ([#1543](https://github.com/ditto-assistant/ditto-subnet/pull/1543),
+  [`09a433e`](https://github.com/ditto-assistant/ditto-subnet/commit/09a433ed2b41661d3d5a651bfc6889c7c55bff76))
+
+
 ## v0.195.0 (2026-09-04)
 
 ### Features
