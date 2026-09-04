@@ -13,6 +13,7 @@ from typing import Any
 
 from dittobench_coding_datagen.canonical import (
     canonical_json_bytes,
+    safe_opaque_id,
     safe_relative_path,
     sha256_hex,
     tree_identities,
@@ -23,6 +24,7 @@ from dittobench_coding_datagen.public_pack_v2 import validate_public_v2_pack
 PUBLIC_V2_RELEASE_SCHEMA = "dittobench-coding-public-release-v2"
 _ARCHIVE_ROOT = "dittobench-public-v2"
 _MAX_ARCHIVE_BYTES = 2 << 30
+_MAX_DESCRIPTOR_BYTES = 1 << 20
 _MAX_MEMBERS = 100_000
 
 
@@ -32,7 +34,7 @@ def build_public_v2_release(
     """Build a deterministic public release directory from a validated v2 pack."""
 
     manifest = validate_public_v2_pack(pack)
-    release_id = str(manifest["public_release_id"])
+    release_id = safe_opaque_id(manifest["public_release_id"])
     if output.is_symlink() or output.resolve().is_relative_to(pack.resolve()):
         raise CorpusError("public v2 release output is unsafe")
     if output.exists():
@@ -86,11 +88,16 @@ def verify_public_v2_release(*, archive: Path, descriptor: Path) -> dict[str, An
     if not archive_body or len(archive_body) > _MAX_ARCHIVE_BYTES:
         raise CorpusError("public v2 archive size is outside bounds")
     try:
-        value = json.loads(descriptor.read_bytes())
+        descriptor_body = descriptor.read_bytes()
+        if len(descriptor_body) > _MAX_DESCRIPTOR_BYTES:
+            raise CorpusError("public v2 release descriptor is invalid")
+        value = json.loads(descriptor_body)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise CorpusError("public v2 release descriptor is invalid") from error
+    if canonical_json_bytes(value) != descriptor_body:
+        raise CorpusError("public v2 release descriptor is invalid")
     _validate_descriptor(value, archive_body)
-    release_id = value["public_release_id"]
+    release_id = safe_opaque_id(value["public_release_id"])
     with tempfile.TemporaryDirectory(prefix="dittobench-public-v2-verify-") as raw:
         destination = Path(raw) / "pack"
         _extract_archive(archive, destination=destination, release_id=release_id)
@@ -198,9 +205,8 @@ def _validate_descriptor(value: object, archive: bytes) -> None:
         value["schema"] != PUBLIC_V2_RELEASE_SCHEMA
         or value["local_result_schema"] != "dittobench-coding-local-practice-result-v2"
         or value["weight_eligible"] is not False
-        or not isinstance(value["public_release_id"], str)
-        or not value["public_release_id"]
-        or value["archive_name"] != f"{value['public_release_id']}.tar.gz"
+        or value["archive_name"]
+        != f"{safe_opaque_id(value['public_release_id'])}.tar.gz"
         or value["archive_size_bytes"] != len(archive)
         or value["archive_sha256"] != sha256_hex(archive)
         or any(
