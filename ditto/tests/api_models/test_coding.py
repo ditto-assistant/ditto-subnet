@@ -835,3 +835,10 @@ def test_null_collections_and_excessive_nesting_fail_closed() -> None:
             CodingRunManifest,
             _body(manifest_at_value_depth(boundaries["reject_json_depth"])),
         )
+
+
+def test_opaque_id_rejects_format_control_characters() -> None:
+    seed = copy.deepcopy(_vectors()["seed_request"])
+    seed["case_id"] = "case\u200b001"
+    with pytest.raises(ValidationError, match="control characters"):
+        parse_canonical_json(CodingSeedRequest, _body(seed))

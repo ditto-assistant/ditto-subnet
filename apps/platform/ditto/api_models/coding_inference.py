@@ -116,7 +116,8 @@ def _bounded_utf8(value: str, maximum: int, label: str) -> str:
 def _bounded_identifier(value: str, maximum: int, label: str) -> str:
     value = _bounded_utf8(value, maximum, label)
     if any(
-        character.isspace() or unicodedata.category(character) == "Cc"
+        character.isspace()
+        or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
         for character in value
     ):
         raise ValueError(f"{label} contains whitespace or control characters")

@@ -23,7 +23,8 @@ _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 def _bounded_identifier(value: str, maximum: int) -> str:
     if len(value.encode()) > maximum or any(
-        character.isspace() or unicodedata.category(character) == "Cc"
+        character.isspace()
+        or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
         for character in value
     ):
         raise ValueError("coding claim identity is invalid")

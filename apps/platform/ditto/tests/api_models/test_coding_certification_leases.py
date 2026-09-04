@@ -104,3 +104,17 @@ def test_qualified_certification_lease_response_requires_image_identity() -> Non
                 "weight_eligible": False,
             }
         )
+
+
+def test_certification_lease_image_id_rejects_format_control() -> None:
+    with pytest.raises(ValueError, match="identifier is invalid"):
+        CodingCertificationLeaseResponse.model_validate(
+            {
+                "authority": _authority(),
+                "status": CodingCertificationLeaseStatus.ISSUED,
+                "screened_image_id": "image\u200bid",
+                "screened_image_ref": "ditto-screen/coding-cert-lease:latest",
+                "screened_image_upload_id": uuid4(),
+                "weight_eligible": False,
+            }
+        )

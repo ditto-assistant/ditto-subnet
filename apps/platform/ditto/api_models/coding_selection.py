@@ -25,7 +25,7 @@ _ALLOWED_TEXT_CONTROLS = frozenset({"\t", "\n", "\r"})
 
 def _contains_unsafe_control(value: str) -> bool:
     return any(
-        unicodedata.category(character) == "Cc"
+        unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
         and character not in _ALLOWED_TEXT_CONTROLS
         for character in value
     )
@@ -37,7 +37,10 @@ def _validate_relative_path(value: str) -> str:
         or value.startswith("/")
         or "\\" in value
         or any(part in {"", ".", "..", ".git"} for part in value.split("/"))
-        or any(unicodedata.category(character) == "Cc" for character in value)
+        or any(
+            unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
+            for character in value
+        )
     ):
         raise ValueError("editable path must be a safe workspace-relative POSIX path")
     return value
@@ -45,7 +48,8 @@ def _validate_relative_path(value: str) -> str:
 
 def _validate_command_id(value: str) -> str:
     if len(value.encode()) > 80 or any(
-        character.isspace() or unicodedata.category(character) == "Cc"
+        character.isspace()
+        or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
         for character in value
     ):
         raise ValueError("command ID is outside coding contract bounds")
@@ -153,7 +157,8 @@ class CodingCatalogCommand(CodingEvaluationModel):
             or "/" in executable
             or "\\" in executable
             or any(
-                character.isspace() or unicodedata.category(character) == "Cc"
+                character.isspace()
+                or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
                 for character in executable
             )
             or executable.casefold()

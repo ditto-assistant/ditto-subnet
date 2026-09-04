@@ -79,7 +79,8 @@ class CodingAttemptTicket:
             or not isinstance(self.claim_instance_id, str)
             or not 1 <= len(self.claim_instance_id.encode()) <= 128
             or any(
-                character.isspace() or unicodedata.category(character) == "Cc"
+                character.isspace()
+                or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
                 for character in self.claim_instance_id
             )
             or self.weight_eligible is not False
