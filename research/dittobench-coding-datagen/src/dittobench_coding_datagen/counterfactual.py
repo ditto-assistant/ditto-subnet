@@ -99,6 +99,15 @@ def compile_counterfactual_group(
         for arm in arms
     ):
         raise CorpusError("counterfactual memory volume is invalid")
+    if len({arm.memory_volume_tier for arm in arms}) != 1:
+        raise CorpusError("counterfactual group must use one memory volume tier")
+    memory_digests = {arm.memory_bundle_sha256 for arm in arms}
+    if len(memory_digests) != len(_CONDITIONS):
+        raise CorpusError("counterfactual arms require distinct memory bundles")
+    byte_counts = [arm.seeded_memory_bytes for arm in arms]
+    allowed_spread = max(1024, max(byte_counts) // 20)
+    if max(byte_counts) - min(byte_counts) > allowed_spread:
+        raise CorpusError("counterfactual memory bundle sizes are not balanced")
     return CounterfactualGroup(
         opaque_group_id=opaque_group_id, repository_epoch=repository_epoch, arms=arms
     )

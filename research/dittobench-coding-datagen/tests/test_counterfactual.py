@@ -101,3 +101,33 @@ def test_compiler_rejects_incomplete_or_visible_drifting_groups() -> None:
                 ),
             ),
         )
+
+
+def test_compiler_rejects_unbalanced_bundle_sizes() -> None:
+    arms = [
+        _arm(condition, memory)
+        for condition, memory in zip(
+            (
+                "v0_none",
+                "v1_relevant",
+                "v2_irrelevant",
+                "v3_stale_conflict",
+                "v4_current_override",
+            ),
+            ("b", "c", "d", "e", "f"),
+            strict=True,
+        )
+    ]
+    arms[-1] = CounterfactualArm(
+        condition="v4_current_override",
+        visible_bundle_sha256="a" * 64,
+        memory_bundle_sha256="f" * 64,
+        seeded_memory_bytes=4096,
+        memory_volume_tier="medium",
+    )
+    with pytest.raises(CorpusError, match="sizes are not balanced"):
+        compile_counterfactual_group(
+            opaque_group_id="opaque-group-1",
+            repository_epoch="repo@abc",
+            arms=tuple(arms),
+        )
