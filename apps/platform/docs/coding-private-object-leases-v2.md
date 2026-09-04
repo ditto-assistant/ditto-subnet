@@ -9,10 +9,15 @@ count, ciphertext digest, plaintext digest, ticket, phase, and expiry before
 delivery.
 
 ```text
-authoring phase -> visible workspace, issue, policy, selected raw memory
+authoring phase -> visible workspace, issue, policy, selected raw memory,
+                   and validator-only resource profile
 freeze boundary -> revoke authoring capability
-grading phase -> hidden grader and protected resource plan
+grading phase -> visible workspace, hidden grader, and protected resource plan
 ```
+
+Memory is authoring-only. Grader material is freeze-gated and never present
+during authoring. Grading re-fetches the visible base for the pristine
+networkless grader.
 
 The miner, executor, model process, and validator never receive a Hippius
 credential, bucket name, wrapping key, arbitrary object key, list capability,
