@@ -19,6 +19,10 @@ from dittobench_coding_datagen.private_authoring import (
     load_private_group_manifest,
     write_private_authoring_output,
 )
+from dittobench_coding_datagen.private_release import (
+    compile_private_release,
+    load_private_release,
+)
 from dittobench_coding_datagen.public_controls import (
     PUBLIC_CONDITIONS,
     validate_public_task_controls,
@@ -230,6 +234,20 @@ def _parser() -> argparse.ArgumentParser:
     private_audit_parser.add_argument("--hidden-grader", type=Path, required=True)
     private_audit_parser.add_argument("--overlap-review-sha256", required=True)
     private_audit_parser.add_argument("--output", type=Path, required=True)
+
+    private_release_parser = subcommands.add_parser(
+        "compile-private-release",
+        help="compile fifty audited private groups into one release authority",
+    )
+    private_release_parser.add_argument("--groups-dir", type=Path, required=True)
+    private_release_parser.add_argument("--release-id", required=True)
+    private_release_parser.add_argument("--output", type=Path, required=True)
+
+    verify_private_release_parser = subcommands.add_parser(
+        "verify-private-release",
+        help="verify one canonical fifty-group private release authority",
+    )
+    verify_private_release_parser.add_argument("release", type=Path)
     return parser
 
 
@@ -408,6 +426,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             body = private_audit.canonical_bytes()
             write_private_authoring_output(args.output, body)
             print(body.decode("utf-8"), end="")
+            return 0
+        if args.command == "compile-private-release":
+            private_release = compile_private_release(
+                groups_dir=args.groups_dir,
+                corpus_release_id=args.release_id,
+                output=args.output,
+            )
+            print(canonical_json_bytes(private_release).decode("utf-8"), end="")
+            return 0
+        if args.command == "verify-private-release":
+            private_release = load_private_release(args.release)
+            print(canonical_json_bytes(private_release).decode("utf-8"), end="")
             return 0
         raise CorpusError(f"unknown command: {args.command}")
     except CorpusError as error:

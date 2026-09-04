@@ -142,6 +142,15 @@ uv run dittobench-coding-datagen audit-private-group \
   --overlap-review-sha256 <review-sha256> \
   --output /protected/coding-private-v2/group-audit.json
 
+# Compile exactly 50 audited groups, balanced as five groups in each of ten
+# repository strata, into one create-only private release authority.
+uv run dittobench-coding-datagen compile-private-release \
+  --groups-dir /protected/coding-private-v2/release-input/groups \
+  --release-id coding-private-v2-r1 \
+  --output /protected/coding-private-v2/release.json
+uv run dittobench-coding-datagen verify-private-release \
+  /protected/coding-private-v2/release.json
+
 # Materialize one public task for local agent development.
 uv run dittobench-coding-datagen materialize \
   --pack practice/v1 \
