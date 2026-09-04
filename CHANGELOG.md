@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.207.1 (2026-09-04)
+
+### Bug Fixes
+
+- **preview**: Publish Cloudflare Pages previews reliably
+  ([#1602](https://github.com/ditto-assistant/ditto-subnet/pull/1602),
+  [`a362a3d`](https://github.com/ditto-assistant/ditto-subnet/commit/a362a3d155c26b8f8706900f94e138f91ccec374))
+
+
 ## v0.207.0 (2026-09-04)
 
 ### Features
