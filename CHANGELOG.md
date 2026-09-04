@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.199.0 (2026-09-04)
+
+### Features
+
+- **coding-datagen**: Run public v2 tasks locally
+  ([#1587](https://github.com/ditto-assistant/ditto-subnet/pull/1587),
+  [`4771266`](https://github.com/ditto-assistant/ditto-subnet/commit/4771266dad3869641650f980d5d26777c67f26ce))
+
+
 ## v0.198.2 (2026-09-04)
 
 ### Bug Fixes
