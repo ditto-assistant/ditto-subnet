@@ -17,6 +17,7 @@ from dittobench_coding_datagen.public_release import (
     build_public_practice_release,
     verify_public_practice_release,
 )
+from dittobench_coding_datagen.public_result_runner import aggregate_public_v2_results
 from dittobench_coding_datagen.validation import validate_pack
 
 
@@ -85,6 +86,17 @@ def _parser() -> argparse.ArgumentParser:
     )
     verify_release_parser.add_argument("--archive", type=Path, required=True)
     verify_release_parser.add_argument("--descriptor", type=Path, required=True)
+
+    summarize_parser = subcommands.add_parser(
+        "summarize-public-practice",
+        help="aggregate ten public v2 task results into one non-authoritative report",
+    )
+    summarize_parser.add_argument("--pack", type=Path, required=True)
+    summarize_parser.add_argument("--harness-artifact-sha256", required=True)
+    summarize_parser.add_argument(
+        "--task-result", type=Path, action="append", required=True
+    )
+    summarize_parser.add_argument("--output", type=Path)
     return parser
 
 
@@ -144,6 +156,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 descriptor=args.descriptor,
             )
             print(canonical_json_bytes(result).decode("utf-8"), end="")
+            return 0
+        if args.command == "summarize-public-practice":
+            result_bytes = aggregate_public_v2_results(
+                pack=args.pack,
+                harness_artifact_sha256=args.harness_artifact_sha256,
+                task_result_paths=tuple(args.task_result),
+            )
+            if args.output is not None:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_bytes(result_bytes)
+            print(result_bytes.decode("utf-8"), end="")
             return 0
         raise CorpusError(f"unknown command: {args.command}")
     except CorpusError as error:
