@@ -94,8 +94,28 @@ def build_private_v2_shadow_canary(
         catalog = verify_private_catalog_v2(catalog_directory)
     except PrivateCatalogV2CompileError as error:
         raise PrivateV2ShadowPlanError("private v2 catalog is invalid") from error
+    expected = {
+        "schema",
+        "coding_contract_version",
+        "weight_eligible",
+        "shadow_only",
+        "corpus_release_id",
+        "private_release_sha256",
+        "catalog_sha256",
+        "catalog_merkle_root",
+        "payload_sha256",
+        "transport_sha256",
+        "wrapping_key_sha256",
+        "publication_receipt_sha256",
+        "previous_registration_sha256",
+        "registration_sha256",
+    }
     if (
-        registration.get("registration_sha256")
+        set(registration) != expected
+        or registration.get("schema")
+        != "dittobench-coding-private-v2-registration-v1"
+        or registration.get("coding_contract_version") != 2
+        or registration.get("registration_sha256")
         != _digest(
             {
                 key: value
