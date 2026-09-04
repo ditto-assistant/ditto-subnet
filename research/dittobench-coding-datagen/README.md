@@ -143,6 +143,16 @@ uv run dittobench-coding-datagen audit-private-group \
   --overlap-review-sha256 <review-sha256> \
   --output /protected/coding-private-v2/group-audit.json
 
+# Compile two deterministic base observations and two deterministic reference
+# observations into the calibration authority required for release admission.
+uv run dittobench-coding-datagen compile-private-calibration \
+  --manifest /protected/coding-private-v2/group-manifest.json \
+  --observation /protected/coding-private-v2/base-01.json \
+  --observation /protected/coding-private-v2/base-02.json \
+  --observation /protected/coding-private-v2/reference-01.json \
+  --observation /protected/coding-private-v2/reference-02.json \
+  --output /protected/coding-private-v2/group-calibration.json
+
 # Compile exactly 50 audited groups, balanced as five groups in each of ten
 # repository strata, into one create-only private release authority.
 uv run dittobench-coding-datagen compile-private-release \

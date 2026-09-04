@@ -19,6 +19,7 @@ from dittobench_coding_datagen.private_authoring import (
     load_private_group_manifest,
     write_private_authoring_output,
 )
+from dittobench_coding_datagen.private_calibration import compile_private_calibration
 from dittobench_coding_datagen.private_release import (
     compile_private_release,
     load_private_release,
@@ -236,6 +237,16 @@ def _parser() -> argparse.ArgumentParser:
     private_audit_parser.add_argument("--overlap-review-sha256", required=True)
     private_audit_parser.add_argument("--output", type=Path, required=True)
 
+    private_calibration_parser = subcommands.add_parser(
+        "compile-private-calibration",
+        help="compile repeated base and reference observations for one private group",
+    )
+    private_calibration_parser.add_argument("--manifest", type=Path, required=True)
+    private_calibration_parser.add_argument(
+        "--observation", type=Path, required=True, action="append"
+    )
+    private_calibration_parser.add_argument("--output", type=Path, required=True)
+
     private_release_parser = subcommands.add_parser(
         "compile-private-release",
         help="compile fifty audited private groups into one release authority",
@@ -426,6 +437,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 overlap_review_sha256=args.overlap_review_sha256,
             )
             body = private_audit.canonical_bytes()
+            write_private_authoring_output(args.output, body)
+            print(body.decode("utf-8"), end="")
+            return 0
+        if args.command == "compile-private-calibration":
+            private_group = load_private_group_manifest(args.manifest)
+            calibration = compile_private_calibration(
+                manifest=private_group,
+                observations=tuple(args.observation),
+            )
+            body = canonical_json_bytes(calibration)
             write_private_authoring_output(args.output, body)
             print(body.decode("utf-8"), end="")
             return 0

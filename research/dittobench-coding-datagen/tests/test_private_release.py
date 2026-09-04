@@ -74,6 +74,23 @@ def _groups(root: Path, *, count: int = 50, unbalanced: bool = False) -> Path:
         write_private_authoring_output(
             group / "group-audit.json", canonical_json_bytes(audit)
         )
+        calibration = {
+            "base_observation_sha256": sorted(
+                [_sha(f"base-{index}-0"), _sha(f"base-{index}-1")]
+            ),
+            "group_manifest_sha256": manifest.manifest_sha256(),
+            "passed": True,
+            "reference_observation_sha256": sorted(
+                [_sha(f"reference-{index}-0"), _sha(f"reference-{index}-1")]
+            ),
+            "replicate_count_per_candidate": 2,
+            "runner_profile_sha256": _sha("runner-profile"),
+            "schema": "dittobench-coding-private-calibration-v2",
+            "weight_eligible": False,
+        }
+        write_private_authoring_output(
+            group / "group-calibration.json", canonical_json_bytes(calibration)
+        )
     return root
 
 
@@ -101,6 +118,7 @@ def test_private_release_compiles_fifty_balanced_groups(
     compiled = json.loads(capsys.readouterr().out)
     assert compiled["group_count"] == 50
     assert compiled["repository_stratum_count"] == 10
+    assert all("calibration_sha256" in group for group in compiled["groups"])
     assert compiled["weight_eligible"] is False
     assert output.stat().st_mode & 0o777 == 0o600
     assert load_private_release(output) == compiled
@@ -138,4 +156,41 @@ def test_private_release_rejects_audit_drift(tmp_path: Path) -> None:
             groups_dir=groups,
             corpus_release_id="coding-private-v2-drift",
             output=protected / "drift.json",
+        )
+
+
+def test_private_release_loader_rejects_rehashed_group_projection_drift(
+    tmp_path: Path,
+) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    release_path = protected / "release.json"
+    compile_private_release(
+        groups_dir=_groups(protected / "groups"),
+        corpus_release_id="coding-private-v2-r1",
+        output=release_path,
+    )
+    raw = json.loads(release_path.read_bytes())
+    raw["groups"][0]["unexpected"] = "field"
+    projection = dict(raw)
+    projection.pop("release_sha256")
+    raw["release_sha256"] = hashlib.sha256(canonical_json_bytes(projection)).hexdigest()
+    release_path.write_bytes(canonical_json_bytes(raw))
+    with pytest.raises(CorpusError, match="release authority"):
+        load_private_release(release_path)
+
+
+def test_private_release_rejects_runner_profile_drift(tmp_path: Path) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    groups = _groups(protected / "groups")
+    calibration_path = groups / "private-group-049" / "group-calibration.json"
+    calibration = json.loads(calibration_path.read_bytes())
+    calibration["runner_profile_sha256"] = _sha("other-runner-profile")
+    calibration_path.write_bytes(canonical_json_bytes(calibration))
+    with pytest.raises(CorpusError, match="runner profile"):
+        compile_private_release(
+            groups_dir=groups,
+            corpus_release_id="coding-private-v2-runner-drift",
+            output=protected / "runner-drift.json",
         )
