@@ -9,6 +9,8 @@ import httpx
 import pytest
 
 import ditto.preview.orchestrator as orchestrator
+from ditto.chain.client import ChainClient
+from ditto.chain.models import ChainConfig
 from ditto.preview.client import PreviewClient
 from ditto.preview.engine import IsolationError, PreviewEngine
 from ditto.preview.orchestrator import up
@@ -16,6 +18,49 @@ from ditto.preview.proxy import FaultProxy
 from ditto.preview.server import PreviewServer
 
 HOTKEY = "5EexQS8UxChmkZ6vGeacAkwcf3TARR1Go5rd684Mf69dwgTY"
+
+
+async def test_preview_control_serves_local_pylon_contract() -> None:
+    engine = PreviewEngine(
+        network="preview", endpoint="ws://127.0.0.1:9944", netuid=118
+    )
+    engine.register(HOTKEY, permit=True, stake=1.0)
+    server = PreviewServer(engine, token="preview-only")
+    server.start()
+    try:
+        config = ChainConfig(
+            pylon_url=server.url,
+            netuid=118,
+            open_access_token="preview-only",
+            identity_name="preview",
+            identity_token="preview-only",
+            subtensor_network="local",
+        )
+        async with ChainClient(config) as chain:
+            neurons = await chain.get_recent_neurons(118)
+            assert [(item.hotkey, item.validator_permit) for item in neurons] == [
+                (HOTKEY, True)
+            ]
+            assert (await chain.get_latest_block()).number == 1
+            await chain.put_weights({HOTKEY: 1.0})
+    finally:
+        server.stop()
+
+
+def test_loopback_pylon_reads_support_the_platform_pinned_client() -> None:
+    engine = PreviewEngine(
+        network="preview", endpoint="ws://127.0.0.1:9944", netuid=118
+    )
+    server = PreviewServer(engine, token="preview-only")
+    server.start()
+    try:
+        response = httpx.get(f"{server.url}/api/v1/block/latest")
+        assert response.status_code == 200
+        assert response.json()["number"] == 1
+        cheat_response = httpx.post(f"{server.url}/v1/cheat/warp", json={"blocks": 1})
+        assert cheat_response.status_code == 401
+    finally:
+        server.stop()
 
 
 def test_http_cheatcodes_roundtrip() -> None:

@@ -1,0 +1,24 @@
+{
+  email preview@dittobench.ai
+}
+
+dashboard.{$PREVIEW_BASE_DOMAIN} {
+  handle /api/* {
+    reverse_proxy platform:8000
+  }
+  handle {
+    reverse_proxy dashboard:80
+  }
+}
+
+platform.{$PREVIEW_BASE_DOMAIN} {
+  handle /__preview/health {
+    header Content-Type application/json
+    respond `{"status":"ok","sha":"{$PREVIEW_SHA}","profile":"{$PREVIEW_PROFILE}"}` 200
+  }
+  reverse_proxy platform:8000
+}
+
+backroom.{$PREVIEW_BASE_DOMAIN} {
+  reverse_proxy backroom:3000
+}

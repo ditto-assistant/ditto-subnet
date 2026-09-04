@@ -77,6 +77,42 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     assert "inherit" not in publish["secrets"]
 
 
+def test_stack_preview_controller_caps_slots_and_never_runs_pr_code() -> None:
+    text = (ROOT / ".github/workflows/preview-stack.yml").read_text()
+    workflow = yaml.safe_load(text)
+    triggers = workflow.get("on", workflow[True])
+    assert triggers["pull_request_target"]["types"] == [
+        "opened",
+        "reopened",
+        "synchronize",
+        "closed",
+    ]
+    control = workflow["jobs"]["control"]
+    assert control["environment"] == "preview-stack"
+    assert control["steps"][0]["with"]["ref"] == (
+        "${{ github.event.repository.default_branch }}"
+    )
+    assert "ref: ${{ github.event.pull_request.head.sha }}" not in text
+    provision = (ROOT / "preview/cloud/provision.sh").read_text()
+    assert "for candidate in {0..7}" in provision
+    assert "all 8 preview slots are active" in provision
+    assert "--if-generation-match=0" in provision
+    assert "head.repo.full_name" in provision
+    assert "stale PR head" in provision
+
+
+def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
+    provision = (ROOT / "preview/cloud/provision.sh").read_text()
+    snapshot = (ROOT / ".github/workflows/preview-snapshot.yml").read_text()
+    assert "/sanitized/*.dump" in provision
+    assert "sign-url" in provision
+    assert "--duration=2h" in provision
+    assert "sanitize-snapshot.sh" in snapshot
+    assert "environment: prod" in snapshot
+    assert "source.dump" in snapshot
+    assert "sanitized.dump" in snapshot
+
+
 def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     text = (ROOT / ".github/workflows/preview-dashboard-publish.yml").read_text()
     workflow = yaml.safe_load(text)

@@ -1,0 +1,131 @@
+name: Publish stack preview
+
+# This is the sole, narrowly reviewed exception to the repository's general
+# pull_request_target ban. GitHub loads it from the default branch. The
+# privileged runner checks out only that default branch and never executes PR
+# code; the exact PR SHA runs later on a credential-empty isolated VM.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: stack-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  control:
+    if: github.repository == 'ditto-assistant/ditto-subnet'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: preview-stack
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      PREVIEW_PR: ${{ github.event.pull_request.number }}
+      PREVIEW_SHA: ${{ github.event.pull_request.head.sha }}
+      GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT }}
+      GCP_PREVIEW_LEASE_BUCKET: ${{ vars.GCP_PREVIEW_LEASE_BUCKET }}
+      GCP_PREVIEW_SNAPSHOT_BUCKET: ${{ vars.GCP_PREVIEW_SNAPSHOT_BUCKET }}
+      GCP_PREVIEW_NETWORK: ${{ vars.GCP_PREVIEW_NETWORK }}
+      GCP_PREVIEW_SUBNETWORK: ${{ vars.GCP_PREVIEW_SUBNETWORK }}
+      GCP_PREVIEW_RUNTIME_SERVICE_ACCOUNT: ${{ vars.GCP_PREVIEW_RUNTIME_SERVICE_ACCOUNT }}
+      GCP_PREVIEW_ZONE: ${{ vars.GCP_PREVIEW_ZONE }}
+    steps:
+      - name: Check out trusted controller from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@20f1150d28b8c9900c8f41d4761b19a95c7d50c2 # v3.0.1
+
+      - name: Resolve trusted action and profile
+        id: resolve
+        run: |
+          set -euo pipefail
+          action=retire
+          profile=none
+          if [ "${{ github.event.action }}" != closed ] && \
+             [ "${{ github.event.pull_request.head.repo.full_name }}" = "$GITHUB_REPOSITORY" ]; then
+            files="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PREVIEW_PR}/files" --jq '.[].filename')"
+            if printf '%s\n' "$files" | grep -q '^apps/platform/alembic/'; then
+              action=provision
+              profile=stack-copy
+            elif printf '%s\n' "$files" | grep -Evq '^(apps/platform/dashboard/|docs/|\.agents/|\.claude/)'; then
+              action=provision
+              profile=stack
+            fi
+          fi
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          echo "profile=$profile" >> "$GITHUB_OUTPUT"
+
+      - name: Retire an old or ineligible preview
+        if: steps.resolve.outputs.action == 'retire'
+        run: preview/cloud/retire.sh
+
+      - name: Provision the exact PR SHA
+        id: provision
+        if: steps.resolve.outputs.action == 'provision'
+        env:
+          PREVIEW_PROFILE: ${{ steps.resolve.outputs.profile }}
+        run: |
+          set -euo pipefail
+          preview/cloud/provision.sh > "${RUNNER_TEMP}/preview.json"
+          jq -e '.ready == true' "${RUNNER_TEMP}/preview.json" >/dev/null
+          echo "dashboard_url=$(jq -r .dashboard_url "${RUNNER_TEMP}/preview.json")" >> "$GITHUB_OUTPUT"
+          echo "platform_url=$(jq -r .platform_url "${RUNNER_TEMP}/preview.json")" >> "$GITHUB_OUTPUT"
+          echo "backroom_url=$(jq -r .backroom_url "${RUNNER_TEMP}/preview.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish or update the preview comment
+        if: steps.provision.outcome == 'success'
+        env:
+          PROFILE: ${{ steps.resolve.outputs.profile }}
+          DASHBOARD_URL: ${{ steps.provision.outputs.dashboard_url }}
+          PLATFORM_URL: ${{ steps.provision.outputs.platform_url }}
+          BACKROOM_URL: ${{ steps.provision.outputs.backroom_url }}
+        run: |
+          set -euo pipefail
+          marker='<!-- ditto-stack-preview -->'
+          body_file="${RUNNER_TEMP}/comment.md"
+          {
+            echo "$marker"
+            echo "SN118 \`$PROFILE\` preview for \`$PREVIEW_SHA\` is ready:"
+            echo
+            echo "- Dashboard: $DASHBOARD_URL"
+            echo "- Platform API: $PLATFORM_URL"
+            echo "- Backroom: $BACKROOM_URL"
+            echo
+            echo "This is isolated, disposable PR code. It has no production credentials. The lease expires within 24 hours and is replaced on the next push."
+          } > "$body_file"
+          jq -n --rawfile body "$body_file" '{body:$body}' > "${RUNNER_TEMP}/comment.json"
+          comment_id="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PREVIEW_PR}/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("<!-- ditto-stack-preview -->")) | .id' | tail -n 1)"
+          if [ -n "$comment_id" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" --input "${RUNNER_TEMP}/comment.json" >/dev/null
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PREVIEW_PR}/comments" --input "${RUNNER_TEMP}/comment.json" >/dev/null
+          fi
+
+      - name: Mark a retired preview comment
+        if: steps.resolve.outputs.action == 'retire'
+        run: |
+          set -euo pipefail
+          marker='<!-- ditto-stack-preview -->'
+          comment_id="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PREVIEW_PR}/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("<!-- ditto-stack-preview -->")) | .id' | tail -n 1)"
+          if [ -n "$comment_id" ]; then
+            body_file="${RUNNER_TEMP}/comment.md"
+            printf '%s\nStack preview retired.\n' "$marker" > "$body_file"
+            jq -n --rawfile body "$body_file" '{body:$body}' > "${RUNNER_TEMP}/comment.json"
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" --input "${RUNNER_TEMP}/comment.json" >/dev/null
+          fi

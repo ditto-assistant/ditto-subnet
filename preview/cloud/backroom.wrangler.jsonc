@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ditto-subnet-backroom-preview",
+  "compatibility_date": "2026-07-11",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "main": "./src/server.ts",
+  "workers_dev": false,
+  "vars": {
+    "DITTO_PLATFORM_API_BASE_URL": "http://platform:8000",
+    "BACKROOM_PREVIEW_MODE": "true"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "00000000000000000000000000000000"
+    }
+  ]
+}

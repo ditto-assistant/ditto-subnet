@@ -7,6 +7,24 @@ import yaml
 
 ROOT = Path(__file__).parents[2]
 GCP_ROOT = ROOT / "infra" / "terraform" / "stacks" / "gcp-platform"
+PREVIEW_ROOT = "infra/terraform/stacks/gcp-preview"
+
+
+def test_preview_root_is_validated_and_has_protected_plan_apply_routing() -> None:
+    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "infra-ci.yml").read_text())
+    roots = ci["jobs"]["terraform"]["strategy"]["matrix"]["root"]
+    assert PREVIEW_ROOT in roots
+
+    delivery_path = ROOT / ".github" / "workflows" / "infra-plan-apply.yml"
+    delivery_text = delivery_path.read_text()
+    delivery = yaml.safe_load(delivery_text)
+    root_options = delivery[True]["workflow_dispatch"]["inputs"]["root"]["options"]
+    assert "gcp-preview" in root_options
+    assert delivery["jobs"]["apply"]["environment"] == "infra-apply"
+    assert (
+        delivery_text.count("gcp-preview) root=infra/terraform/stacks/gcp-preview") == 2
+    )
+    assert 'if [ "$TF_ROOT" = gcp-platform ]; then' in delivery_text
 
 
 def test_production_intent_explicitly_sets_every_live_resource_toggle() -> None:
