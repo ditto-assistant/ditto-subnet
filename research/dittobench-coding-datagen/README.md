@@ -153,6 +153,12 @@ uv run dittobench-coding-datagen compile-private-calibration \
   --observation /protected/coding-private-v2/reference-02.json \
   --output /protected/coding-private-v2/group-calibration.json
 
+# Verify every currently authored group while emitting only redacted counts and
+# one digest. Partial corpora remain explicitly not ready for release.
+uv run dittobench-coding-datagen audit-private-corpus-progress \
+  --groups-dir /protected/coding-private-v2/groups \
+  --output /protected/coding-private-v2/progress.json
+
 # Compile exactly 50 audited groups, balanced as five groups in each of ten
 # repository strata, into one create-only private release authority.
 uv run dittobench-coding-datagen compile-private-release \
