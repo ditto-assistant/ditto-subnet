@@ -9,8 +9,9 @@ from pathlib import Path
 
 from dittobench_coding_datagen.canonical import (
     canonical_json_bytes,
+    normalized_tree_identities,
+    normalized_tree_sha256,
     safe_opaque_id,
-    tree_identities,
 )
 from dittobench_coding_datagen.model import CorpusError
 from dittobench_coding_datagen.public_source import PublicSourceIntake
@@ -71,7 +72,7 @@ def validate_public_task_staging(
         workspace = task_root / "snapshot" / "workspace"
         if workspace.is_symlink() or not workspace.is_dir():
             raise CorpusError("public task workspace is unsafe")
-        workspace_tree = _identity_digest(workspace)
+        workspace_tree = normalized_tree_sha256(workspace)
         _require_snapshot_workspace(snapshot_manifest, workspace)
         archive = task_root / "snapshot" / "archive.tar.gz"
         if archive.exists() and (
@@ -83,7 +84,7 @@ def validate_public_task_staging(
         grader = task_root / "grader"
         if grader.is_symlink() or not grader.is_dir():
             raise CorpusError("public task grader is unsafe")
-        grader_sha256 = _identity_digest(grader)
+        grader_sha256 = normalized_tree_sha256(grader)
         if grader_sha256 != source.visible_grader_sha256:
             raise CorpusError("public task grader does not match intake")
         staged.append(
@@ -126,8 +127,8 @@ def _require_snapshot_workspace(manifest_body: bytes, workspace: Path) -> None:
         parsed = json.loads(manifest_body)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise CorpusError("public task snapshot manifest is invalid") from error
-    identities = [item.as_json() for item in tree_identities(workspace)]
-    workspace_tree = _identity_digest(workspace)
+    identities = normalized_tree_identities(workspace)
+    workspace_tree = normalized_tree_sha256(workspace)
     if (
         canonical_json_bytes(parsed) != manifest_body
         or not isinstance(parsed, dict)
@@ -137,12 +138,6 @@ def _require_snapshot_workspace(manifest_body: bytes, workspace: Path) -> None:
         or parsed.get("source_tree_sha256") != workspace_tree
     ):
         raise CorpusError("public task snapshot does not match workspace")
-
-
-def _identity_digest(root: Path) -> str:
-    return _sha256(
-        canonical_json_bytes([identity.as_json() for identity in tree_identities(root)])
-    )
 
 
 def _sha256(body: bytes) -> str:

@@ -32,6 +32,12 @@ def test_public_v2_pack_is_deterministic_and_verifiable(tmp_path: Path) -> None:
     assert (first / "manifest.json").read_bytes() == (
         second / "manifest.json"
     ).read_bytes()
+    assert (
+        first / "capsules" / "PUBLIC-V2-00" / "visible" / "workspace" / "app.txt"
+    ).stat().st_mode & 0o777 == 0o755
+    assert (
+        first / "capsules" / "PUBLIC-V2-00" / "grader" / "test.txt"
+    ).stat().st_mode & 0o777 == 0o755
 
 
 def test_public_v2_pack_rejects_identity_drift(tmp_path: Path) -> None:
@@ -44,4 +50,18 @@ def test_public_v2_pack_rejects_identity_drift(tmp_path: Path) -> None:
     manifest["task_count"] = 9
     (output / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(CorpusError, match="authority"):
+        validate_public_v2_pack(output)
+
+
+def test_public_v2_pack_rejects_mode_drift(tmp_path: Path) -> None:
+    intake = _intake(tmp_path / "staging")
+    output = tmp_path / "pack"
+    compile_public_v2_pack(
+        staging_root=intake.parent, intake_path=intake, output=output
+    )
+    executable = (
+        output / "capsules" / "PUBLIC-V2-00" / "visible" / "workspace" / "app.txt"
+    )
+    executable.chmod(0o644)
+    with pytest.raises(CorpusError, match="identities drifted"):
         validate_public_v2_pack(output)

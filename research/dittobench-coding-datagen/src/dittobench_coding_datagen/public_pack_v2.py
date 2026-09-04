@@ -11,6 +11,8 @@ from typing import Any
 
 from dittobench_coding_datagen.canonical import (
     canonical_json_bytes,
+    normalized_tree_identities,
+    normalized_tree_sha256,
     safe_opaque_id,
     safe_relative_path,
     sha256_hex,
@@ -95,7 +97,7 @@ def compile_public_v2_pack(
         manifest = {
             "coding_contract_version": 2,
             "corpus_scope": "public_practice",
-            "files": [item.as_json() for item in tree_identities(staged)],
+            "files": normalized_tree_identities(staged),
             "public_release_id": intake.public_release_id,
             "schema": PUBLIC_PACK_V2_SCHEMA,
             "source_intake_sha256": sha256_hex(intake.canonical_bytes()),
@@ -103,7 +105,9 @@ def compile_public_v2_pack(
             "task_count": len(index),
             "weight_eligible": False,
         }
-        (staged / "manifest.json").write_bytes(canonical_json_bytes(manifest))
+        manifest_path = staged / "manifest.json"
+        manifest_path.write_bytes(canonical_json_bytes(manifest))
+        manifest_path.chmod(0o644)
         os.replace(staged, output)
     return validate_public_v2_pack(output)
 
@@ -128,10 +132,9 @@ def validate_public_v2_pack(pack: Path) -> dict[str, Any]:
         or manifest.get("task_count") != 10
     ):
         raise CorpusError("public v2 pack manifest authority is invalid")
-    without_manifest = [
-        item.as_json()
-        for item in tree_identities(pack, exclude=frozenset({"manifest.json"}))
-    ]
+    without_manifest = normalized_tree_identities(
+        pack, exclude=frozenset({"manifest.json"})
+    )
     if manifest.get("files") != without_manifest:
         raise CorpusError("public v2 pack manifest file identities drifted")
     index = _read_jsonl(pack / "tasks" / "index.jsonl")
@@ -171,18 +174,8 @@ def validate_public_v2_pack(pack: Path) -> dict[str, Any]:
             or sha256_hex(issue.read_bytes()) != item.get("issue_sha256")
             or sha256_hex(memory.read_bytes()) != item.get("memory_sha256")
             or sha256_hex(policy.read_bytes()) != item.get("runtime_policy_sha256")
-            or sha256_hex(
-                canonical_json_bytes(
-                    [entry.as_json() for entry in tree_identities(workspace)]
-                )
-            )
-            != item.get("workspace_tree_sha256")
-            or sha256_hex(
-                canonical_json_bytes(
-                    [entry.as_json() for entry in tree_identities(grader)]
-                )
-            )
-            != item.get("visible_grader_sha256")
+            or normalized_tree_sha256(workspace) != item.get("workspace_tree_sha256")
+            or normalized_tree_sha256(grader) != item.get("visible_grader_sha256")
         ):
             raise CorpusError("public v2 pack task material is missing")
     if len(task_ids) != 10:

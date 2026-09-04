@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,20 @@ def test_public_v2_release_is_deterministic_and_verifiable(tmp_path: Path) -> No
     archive = next(first.glob("*.tar.gz"))
     descriptor = next(first.glob("*.release.json"))
     assert verify_public_v2_release(archive=archive, descriptor=descriptor) == one
+    with tarfile.open(archive, mode="r:gz") as release:
+        modes = {member.name: member.mode for member in release.getmembers()}
+    assert any(
+        name.endswith("/visible/workspace/app.txt") and mode == 0o755
+        for name, mode in modes.items()
+    )
+    assert any(
+        name.endswith("/grader/test.txt") and mode == 0o755
+        for name, mode in modes.items()
+    )
+    assert any(
+        name.endswith("/manifest.json") and mode == 0o644
+        for name, mode in modes.items()
+    )
 
 
 def test_public_v2_release_rejects_archive_drift(tmp_path: Path) -> None:

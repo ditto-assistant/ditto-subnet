@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import stat
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -87,3 +88,33 @@ def tree_identities(
             continue
         identities.append(file_identity(root, path))
     return identities
+
+
+def normalized_tree_identities(
+    root: Path, *, exclude: frozenset[str] = frozenset()
+) -> list[dict[str, str | int]]:
+    """Bind bytes and normalized executable modes for a release-owned tree."""
+
+    identities: list[dict[str, str | int]] = []
+    for identity in tree_identities(root, exclude=exclude):
+        path = root / identity.path
+        mode = stat.S_IMODE(path.lstat().st_mode)
+        if mode not in {0o644, 0o755}:
+            raise CorpusError(
+                f"pack file mode is not normalized: {identity.path}: {mode:o}"
+            )
+        identities.append(
+            {
+                "mode": mode,
+                "path": identity.path,
+                "sha256": identity.sha256,
+                "size_bytes": identity.size_bytes,
+            }
+        )
+    return identities
+
+
+def normalized_tree_sha256(root: Path) -> str:
+    """Hash normalized file identities, including executable mode."""
+
+    return sha256_hex(canonical_json_bytes(normalized_tree_identities(root)))

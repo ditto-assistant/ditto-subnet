@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from dittobench_coding_datagen.canonical import canonical_json_bytes, tree_identities
+from dittobench_coding_datagen.canonical import (
+    canonical_json_bytes,
+    normalized_tree_identities,
+    normalized_tree_sha256,
+)
 from dittobench_coding_datagen.model import CorpusError
 from dittobench_coding_datagen.public_source import load_public_source_intake
 from dittobench_coding_datagen.public_staging import validate_public_task_staging
@@ -21,9 +25,11 @@ def _write_task(root: Path, task_id: str) -> tuple[str, str]:
     task = root / "tasks" / task_id
     workspace = task / "snapshot" / "workspace"
     workspace.mkdir(parents=True)
-    (workspace / "app.txt").write_text(task_id, encoding="utf-8")
-    identities = [item.as_json() for item in tree_identities(workspace)]
-    workspace_tree = _sha(canonical_json_bytes(identities))
+    app = workspace / "app.txt"
+    app.write_text(task_id, encoding="utf-8")
+    app.chmod(0o755)
+    identities = normalized_tree_identities(workspace)
+    workspace_tree = normalized_tree_sha256(workspace)
     snapshot_manifest = canonical_json_bytes(
         {
             "excluded_root_entries": [],
@@ -36,13 +42,13 @@ def _write_task(root: Path, task_id: str) -> tuple[str, str]:
     (task / "snapshot" / "manifest.json").write_bytes(snapshot_manifest)
     grader = task / "grader"
     grader.mkdir()
-    (grader / "test.txt").write_text(task_id, encoding="utf-8")
+    grader_file = grader / "test.txt"
+    grader_file.write_text(task_id, encoding="utf-8")
+    grader_file.chmod(0o755)
     (task / "issue.json").write_bytes(canonical_json_bytes({"issue": task_id}))
     (task / "memory.json").write_bytes(canonical_json_bytes({"memories": []}))
     (task / "runtime-policy.json").write_bytes(canonical_json_bytes({"commands": []}))
-    grader_digest = _sha(
-        canonical_json_bytes([item.as_json() for item in tree_identities(grader)])
-    )
+    grader_digest = normalized_tree_sha256(grader)
     return _sha(snapshot_manifest), grader_digest
 
 
@@ -102,17 +108,30 @@ def test_staging_binds_every_external_task_to_intake(tmp_path: Path) -> None:
 
 def test_staging_rejects_grader_drift(tmp_path: Path) -> None:
     intake = load_public_source_intake(_intake(tmp_path))
-    (tmp_path / "tasks" / "PUBLIC-V2-00" / "grader" / "extra.txt").write_text(
-        "drift", encoding="utf-8"
-    )
+    extra = tmp_path / "tasks" / "PUBLIC-V2-00" / "grader" / "extra.txt"
+    extra.write_text("drift", encoding="utf-8")
+    extra.chmod(0o644)
     with pytest.raises(CorpusError, match="grader does not match"):
         validate_public_task_staging(root=tmp_path, intake=intake)
 
 
 def test_staging_rejects_workspace_drift_from_snapshot_manifest(tmp_path: Path) -> None:
     intake = load_public_source_intake(_intake(tmp_path))
-    (
-        tmp_path / "tasks" / "PUBLIC-V2-00" / "snapshot" / "workspace" / "extra.txt"
-    ).write_text("drift", encoding="utf-8")
+    extra = tmp_path / "tasks" / "PUBLIC-V2-00" / "snapshot" / "workspace" / "extra.txt"
+    extra.write_text("drift", encoding="utf-8")
+    extra.chmod(0o644)
     with pytest.raises(CorpusError, match="snapshot does not match workspace"):
+        validate_public_task_staging(root=tmp_path, intake=intake)
+
+
+def test_staging_rejects_workspace_and_grader_mode_drift(tmp_path: Path) -> None:
+    intake = load_public_source_intake(_intake(tmp_path))
+    task = tmp_path / "tasks" / "PUBLIC-V2-00"
+    (task / "snapshot" / "workspace" / "app.txt").chmod(0o644)
+    with pytest.raises(CorpusError, match="snapshot does not match workspace"):
+        validate_public_task_staging(root=tmp_path, intake=intake)
+
+    (task / "snapshot" / "workspace" / "app.txt").chmod(0o755)
+    (task / "grader" / "test.txt").chmod(0o644)
+    with pytest.raises(CorpusError, match="grader does not match"):
         validate_public_task_staging(root=tmp_path, intake=intake)

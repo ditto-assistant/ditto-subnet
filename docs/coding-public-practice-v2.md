@@ -94,6 +94,11 @@ tests, and graders may be fully inspectable because hardcoding is acceptable in
 the local-practice lane. No public task, source issue, module, test pattern, or
 reference patch may be reused as a private scoring task.
 
+The sanitized snapshot v2 file identity includes a numeric normalized POSIX
+mode. Regular files are exactly `0644` (`420` in canonical JSON) or `0755`
+(`493`); every other mode fails closed. Staging, pack compilation, release
+archiving, extraction, and validation preserve and re-verify the same mode.
+
 ## Memory and retrieval
 
 Public and private Coding data authorities contain raw memory text plus
