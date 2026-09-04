@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from typing import Literal
 
@@ -58,7 +59,7 @@ class PrivateGroupManifest:
                     "memory_volume_tier": arm.memory_volume_tier,
                     "seeded_memory_bytes": arm.seeded_memory_bytes,
                 }
-                for arm in self.arms
+                for arm in sorted(self.arms, key=lambda arm: arm.condition)
             ],
             "hidden_grader_sha256": self.hidden_grader_sha256,
             "opaque_group_id": self.opaque_group_id,
@@ -118,6 +119,7 @@ def build_private_group_manifest(
         or len({arm.memory_volume_tier for arm in arms}) != 1
         or any(
             not _sha256(arm.memory_bundle_sha256)
+            or type(arm.seeded_memory_bytes) is not int
             or arm.seeded_memory_bytes <= 0
             or arm.memory_volume_tier not in {"small", "medium", "large"}
             for arm in arms
@@ -137,16 +139,24 @@ def build_private_group_manifest(
         runtime_policy_sha256=runtime_policy_sha256,
         hidden_grader_sha256=hidden_grader_sha256,
         resource_profile_sha256=resource_profile_sha256,
-        arms=arms,
+        arms=tuple(sorted(arms, key=lambda arm: arm.condition)),
         weight_eligible=False,
     )
 
 
 def _identifier(value: str) -> bool:
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
     return (
         bool(value)
-        and len(value.encode("utf-8")) <= 256
-        and not any(character.isspace() or ord(character) < 32 for character in value)
+        and len(encoded) <= 256
+        and not any(
+            character.isspace()
+            or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
+            for character in value
+        )
     )
 
 

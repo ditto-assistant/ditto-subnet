@@ -50,6 +50,7 @@ def test_compiler_emits_blinded_complete_group() -> None:
         )
     )
     assert len({assignment["opaque_arm_id"] for assignment in assignments}) == 5
+    assert all("visible_bundle_sha256" not in assignment for assignment in assignments)
     assert assignments != group.blinded_arm_projections(assignment_key=b"z" * 32)
 
 
@@ -133,10 +134,38 @@ def test_compiler_rejects_unbalanced_bundle_sizes() -> None:
         )
 
 
+def test_compiler_rejects_boolean_seeded_memory_bytes() -> None:
+    with pytest.raises(CorpusError, match="volume"):
+        compile_counterfactual_group(
+            opaque_group_id="opaque-group-1",
+            repository_epoch="repo@abc",
+            arms=tuple(
+                CounterfactualArm(
+                    condition=condition,  # type: ignore[arg-type]
+                    visible_bundle_sha256="a" * 64,
+                    memory_bundle_sha256=memory * 64,
+                    seeded_memory_bytes=True,  # type: ignore[arg-type]
+                    memory_volume_tier="medium",
+                )
+                for condition, memory in zip(
+                    (
+                        "v0_none",
+                        "v1_relevant",
+                        "v2_irrelevant",
+                        "v3_stale_conflict",
+                        "v4_current_override",
+                    ),
+                    ("b", "c", "d", "e", "f"),
+                    strict=True,
+                )
+            ),
+        )
+
+
 def test_compiler_rejects_unsafe_group_identity() -> None:
     with pytest.raises(CorpusError, match="identity"):
         compile_counterfactual_group(
-            opaque_group_id="opaque group",
+            opaque_group_id="g\u200b1",
             repository_epoch="repo@abc",
             arms=tuple(
                 _arm(condition, memory)
