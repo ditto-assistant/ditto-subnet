@@ -162,7 +162,8 @@ uv run dittobench-coding-datagen audit-private-corpus-progress \
 # Compile exactly 50 audited groups, balanced as five groups in each of ten
 # repository strata, into one create-only private release authority. Each group
 # binds one immutable calibration runner profile; profiles may differ across
-# task-bound language toolchains.
+# task-bound language toolchains. Every group directory must also contain a
+# canonical `group-semantic-review.json` with a release-unique semantic family.
 uv run dittobench-coding-datagen compile-private-release \
   --groups-dir /protected/coding-private-v2/release-input/groups \
   --release-id coding-private-v2-r1 \

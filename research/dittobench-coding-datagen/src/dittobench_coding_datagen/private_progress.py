@@ -13,6 +13,7 @@ from dittobench_coding_datagen.canonical import canonical_json_bytes, sha256_hex
 from dittobench_coding_datagen.model import CorpusError
 from dittobench_coding_datagen.private_authoring import load_private_group_manifest
 from dittobench_coding_datagen.private_calibration import load_private_calibration
+from dittobench_coding_datagen.private_semantic import load_private_semantic_review
 
 PRIVATE_CORPUS_PROGRESS_SCHEMA = "dittobench-coding-private-corpus-progress-v2"
 _MAX_GROUPS = 50
@@ -81,6 +82,7 @@ def audit_private_corpus_progress(groups_dir: Path) -> PrivateCorpusProgress:
         manifest_path = authority / "group-manifest.json"
         audit_path = authority / "group-audit.json"
         calibration_path = authority / "group-calibration.json"
+        semantic_path = authority / "group-semantic-review.json"
         if not all(
             path.is_file()
             and not path.is_symlink()
@@ -89,6 +91,7 @@ def audit_private_corpus_progress(groups_dir: Path) -> PrivateCorpusProgress:
                 manifest_path,
                 audit_path,
                 calibration_path,
+                semantic_path,
             )
         ):
             raise CorpusError("private corpus group authority is incomplete")
@@ -100,6 +103,10 @@ def audit_private_corpus_progress(groups_dir: Path) -> PrivateCorpusProgress:
         audit, audit_body = _load_audit(audit_path, manifest_sha256=manifest_sha256)
         calibration, calibration_body = load_private_calibration(
             calibration_path,
+            group_manifest_sha256=manifest_sha256,
+        )
+        semantic, semantic_body = load_private_semantic_review(
+            semantic_path,
             group_manifest_sha256=manifest_sha256,
         )
         stratum = manifest.opaque_repository_stratum_id
@@ -114,6 +121,8 @@ def audit_private_corpus_progress(groups_dir: Path) -> PrivateCorpusProgress:
                 "opaque_group_id": manifest.opaque_group_id,
                 "opaque_repository_stratum_id": stratum,
                 "overlap_review_sha256": str(audit["overlap_review_sha256"]),
+                "semantic_family_id": str(semantic["semantic_family_id"]),
+                "semantic_review_sha256": sha256_hex(semantic_body),
                 "visible_snapshot_tree_sha256": str(
                     audit["visible_snapshot_tree_sha256"]
                 ),
@@ -183,6 +192,8 @@ def _require_unique_authorities(identities: list[dict[str, str]]) -> None:
         "memory_bundle_set_sha256",
         "opaque_group_id",
         "overlap_review_sha256",
+        "semantic_family_id",
+        "semantic_review_sha256",
         "visible_snapshot_tree_sha256",
     )
     if any(
