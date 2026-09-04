@@ -13,6 +13,12 @@ from dittobench_coding_datagen.canonical import canonical_json_bytes
 from dittobench_coding_datagen.compiler import compile_practice, grade, materialize
 from dittobench_coding_datagen.model import CorpusError
 from dittobench_coding_datagen.practice_server import evaluate_practice_harness
+from dittobench_coding_datagen.private_audit import audit_private_group_inputs
+from dittobench_coding_datagen.private_authoring import (
+    build_private_group_from_source,
+    load_private_group_manifest,
+    write_private_authoring_output,
+)
 from dittobench_coding_datagen.public_controls import (
     PUBLIC_CONDITIONS,
     validate_public_task_controls,
@@ -207,6 +213,23 @@ def _parser() -> argparse.ArgumentParser:
     publish_plan_parser.add_argument("--dataset-repository", required=True)
     publish_plan_parser.add_argument("--revision", required=True)
     publish_plan_parser.add_argument("--output", type=Path, required=True)
+
+    private_group_parser = subcommands.add_parser(
+        "build-private-group",
+        help="build one canonical private v2 group manifest from protected source",
+    )
+    private_group_parser.add_argument("--source", type=Path, required=True)
+    private_group_parser.add_argument("--output", type=Path, required=True)
+
+    private_audit_parser = subcommands.add_parser(
+        "audit-private-group",
+        help="audit one private group against protected visible and grader trees",
+    )
+    private_audit_parser.add_argument("--manifest", type=Path, required=True)
+    private_audit_parser.add_argument("--visible-snapshot", type=Path, required=True)
+    private_audit_parser.add_argument("--hidden-grader", type=Path, required=True)
+    private_audit_parser.add_argument("--overlap-review-sha256", required=True)
+    private_audit_parser.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -366,6 +389,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_bytes(body)
             args.output.chmod(0o644)
+            print(body.decode("utf-8"), end="")
+            return 0
+        if args.command == "build-private-group":
+            private_group = build_private_group_from_source(args.source)
+            body = private_group.canonical_bytes()
+            write_private_authoring_output(args.output, body)
+            print(body.decode("utf-8"), end="")
+            return 0
+        if args.command == "audit-private-group":
+            private_group = load_private_group_manifest(args.manifest)
+            private_audit = audit_private_group_inputs(
+                manifest=private_group,
+                visible_snapshot=args.visible_snapshot,
+                hidden_grader=args.hidden_grader,
+                overlap_review_sha256=args.overlap_review_sha256,
+            )
+            body = private_audit.canonical_bytes()
+            write_private_authoring_output(args.output, body)
             print(body.decode("utf-8"), end="")
             return 0
         raise CorpusError(f"unknown command: {args.command}")
