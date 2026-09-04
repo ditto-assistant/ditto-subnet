@@ -108,6 +108,10 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     assert preflight["outputs"] == {
         "configured": "${{ steps.check.outputs.configured }}"
     }
+    preflight_script = preflight["steps"][0]["run"]
+    assert "missing+=(CLOUDFLARE_ACCOUNT_ID)" in preflight_script
+    assert "missing+=(CLOUDFLARE_API_TOKEN)" in preflight_script
+    assert 'missing_csv="$(IFS=,; echo "${missing[*]}")"' in preflight_script
     assert "environment" not in inspect
     assert inspect["permissions"] == {
         "actions": "read",

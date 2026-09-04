@@ -59,14 +59,17 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -n "$CLOUDFLARE_ACCOUNT_ID" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+          missing=()
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || missing+=(CLOUDFLARE_ACCOUNT_ID)
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || missing+=(CLOUDFLARE_API_TOKEN)
+          if [ "${#missing[@]}" -eq 0 ]; then
             echo 'configured=true' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo 'configured=false' >> "$GITHUB_OUTPUT"
           title='Dashboard preview not published'
-          body='The preview environment has no CLOUDFLARE_ACCOUNT_ID and'
-          body="$body CLOUDFLARE_API_TOKEN, so no Cloudflare Pages deployment"
+          missing_csv="$(IFS=,; echo "${missing[*]}")"
+          body="The preview environment is missing ${missing_csv}, so no Cloudflare Pages deployment"
           body="$body was created for this PR. Set both on the preview"
           body="$body environment to turn previews back on; no workflow change"
           body="$body is needed."
