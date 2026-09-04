@@ -173,6 +173,13 @@ A new release publishes a new immutable pack ID; it never mutates an existing
 pack. Public release publication has no private-catalog credential, no Hippius
 private-input access, and no private grader dependency.
 
+Before any owner-approved upload, the curator produces a canonical publication
+plan that binds the reviewed public dataset repository and revision to the
+release archive, descriptor, manifest, byte sizes, SHA-256 values, and exact
+content-addressed destination paths. The plan has no token, credential, HTTP
+client, or upload action; an operator must separately confirm the target and
+perform publication in the protected environment.
+
 Private task bytes, private repository epochs, private memories, hidden tests,
 reference patches, private object keys, and decryption material remain outside
 public Git, ordinary image builds, and public practice artifacts.
