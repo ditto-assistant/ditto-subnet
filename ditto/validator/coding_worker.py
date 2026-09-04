@@ -68,9 +68,25 @@ class DurableCodingAttemptPlatform:
         return await self._platform.request_coding_authoring_lease(ticket_id)
 
     async def request_coding_grading_lease(
-        self, **authority: Any
+        self,
+        *,
+        agent_id: UUID,
+        run_row_id: UUID,
+        ticket_id: UUID,
+        freeze_id: UUID,
+        claim_instance_id: str,
+        authoring_evidence_sha256: str,
+        expected_frozen_patch_sha256: str,
     ) -> CodingGradingLeaseResponse:
-        return await self._platform.request_coding_grading_lease(**authority)
+        return await self._platform.request_coding_grading_lease(
+            agent_id=agent_id,
+            run_row_id=run_row_id,
+            ticket_id=ticket_id,
+            freeze_id=freeze_id,
+            claim_instance_id=claim_instance_id,
+            authoring_evidence_sha256=authoring_evidence_sha256,
+            expected_frozen_patch_sha256=expected_frozen_patch_sha256,
+        )
 
     async def submit_coding_authoring_freeze(
         self,
@@ -566,6 +582,7 @@ def _ticket(claim: CodingClaimResponse) -> CodingAttemptTicket:
         ticket_deadline=claim.ticket_deadline,
         agent_artifact_sha256=claim.agent_artifact_sha256,
         screened_image_sha256=claim.screened_image_sha256,
+        claim_instance_id=claim.instance_id,
         weight_eligible=False,
     )
 

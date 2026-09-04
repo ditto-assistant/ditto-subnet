@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -53,6 +54,7 @@ class CodingAttemptTicket:
     ticket_deadline: datetime
     agent_artifact_sha256: str
     screened_image_sha256: str
+    claim_instance_id: str
     weight_eligible: Literal[False] = False
 
     def __post_init__(self) -> None:
@@ -69,6 +71,12 @@ class CodingAttemptTicket:
             or not _SHA256_RE.fullmatch(self.agent_artifact_sha256)
             or not isinstance(self.screened_image_sha256, str)
             or not _SHA256_RE.fullmatch(self.screened_image_sha256)
+            or not isinstance(self.claim_instance_id, str)
+            or not 1 <= len(self.claim_instance_id.encode()) <= 128
+            or any(
+                character.isspace() or unicodedata.category(character) == "Cc"
+                for character in self.claim_instance_id
+            )
             or self.weight_eligible is not False
         ):
             raise CodingAttemptIntegrityError("coding attempt ticket is invalid")
@@ -157,6 +165,7 @@ class CodingAttemptPlatform(Protocol):
         run_row_id: UUID,
         ticket_id: UUID,
         freeze_id: UUID,
+        claim_instance_id: str,
         authoring_evidence_sha256: str,
         expected_frozen_patch_sha256: str,
     ) -> CodingGradingLeaseResponse: ...
@@ -344,6 +353,7 @@ class CodingAttemptCoordinator:
             run_row_id=ticket.run_row_id,
             ticket_id=ticket.ticket_id,
             freeze_id=freeze.freeze_id,
+            claim_instance_id=ticket.claim_instance_id,
             authoring_evidence_sha256=evidence_sha256,
             expected_frozen_patch_sha256=authoring.evidence.frozen_patch_sha256,
         )
