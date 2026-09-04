@@ -306,12 +306,22 @@ async def test_started_ambiguous_claim_never_reruns_candidate() -> None:
         run_row_id=_RUN,
         clock=lambda: _NOW,
     )
+    submitted: list[Any] = []
+
+    async def submit_authoring_infrastructure_failure(ticket: Any, **_: Any) -> object:
+        assert ticket.ticket_id == _TICKET
+        submitted.append(ticket)
+        platform.events.append("terminal_failure")
+        return object()
+
     worker._coordinator = SimpleNamespace(  # type: ignore[assignment]
-        execute=lambda _: (_ for _ in ()).throw(AssertionError("candidate rerun"))
+        execute=lambda _: (_ for _ in ()).throw(AssertionError("candidate rerun")),
+        submit_authoring_infrastructure_failure=submit_authoring_infrastructure_failure,
     )
-    assert await worker.run_once() is False
+    assert await worker.run_once() is True
     assert runtime.recoveries == 1
-    assert platform.events == ["claim"]
+    assert submitted
+    assert platform.events == ["claim", "authoring_lease", "terminal_failure"]
 
 
 async def test_preflight_failure_leaves_claim_unstarted_and_transferable() -> None:

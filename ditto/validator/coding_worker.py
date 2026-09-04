@@ -388,7 +388,12 @@ class CodingShadowWorker:
             "shadow coding recovery is non-rerunnable state=%s",
             recovery.state,
         )
-        return False
+        lease = await self._platform.request_coding_authoring_lease(claim.ticket_id)
+        await self._coordinator.submit_authoring_infrastructure_failure(
+            _ticket(claim),
+            authoring_lease=lease,
+        )
+        return True
 
     async def _execute_new(
         self,

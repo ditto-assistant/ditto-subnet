@@ -518,6 +518,34 @@ def test_authoring_outcome_accepts_not_invoked_and_empty_patch() -> None:
         )
 
 
+async def test_non_rerunnable_recovery_submits_authoring_infrastructure_failure() -> (
+    None
+):
+    coordinator, platform, events = _coordinator(
+        clock=lambda: datetime(2026, 8, 21, 12, tzinfo=UTC)
+    )
+    captured: dict[str, Any] = {}
+
+    async def submit_coding_shadow_result(agent_id: UUID, **kwargs: Any) -> object:
+        assert agent_id == _ticket().agent_id
+        captured["evidence"] = kwargs["evidence"]
+        captured["task_evidence"] = kwargs["task_evidence"]
+        events.append("submit_result")
+        return platform.result_response
+
+    platform.submit_coding_shadow_result = submit_coding_shadow_result  # type: ignore[method-assign]
+    accepted = await coordinator.submit_authoring_infrastructure_failure(
+        _ticket(),
+        authoring_lease=platform.authoring_lease,
+    )
+    assert accepted == platform.result_response
+    evidence = CodingRunEvidence.model_validate(captured["evidence"])
+    assert evidence.infrastructure_count == 1
+    assert evidence.scoreable_task_count == 0
+    assert evidence.repair_mean_micros == 0
+    assert events == ["submit_result"]
+
+
 def test_outcomes_require_revocation_cleanup_and_authoritative_activity() -> None:
     valid = _authoring_outcome()
     with pytest.raises(CodingAttemptIntegrityError, match="not gradeable"):

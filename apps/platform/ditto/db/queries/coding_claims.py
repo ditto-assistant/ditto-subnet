@@ -84,9 +84,9 @@ async def claim_next_coding_ticket(
                 return None
             _clear_claim(current)
             await session.flush()
-        elif current.claim_started_at is not None:
-            return None
         else:
+            # Deadline passed: the ticket cannot be retried, so release the
+            # instance slot even if authoring had already started.
             _clear_claim(current)
             await session.flush()
 
