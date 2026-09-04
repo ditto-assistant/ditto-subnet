@@ -376,6 +376,55 @@ func TestFactoryRejectsAuthorityDriftAndDuplicateInstance(t *testing.T) {
 	}
 }
 
+func TestFactoryAllowsPrivateAndCanaryTogetherWhenLimitedToTwo(t *testing.T) {
+	now := time.Date(2026, 8, 23, 18, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		if request.URL.Path != "/coding/health" {
+			http.NotFound(response, request)
+			return
+		}
+		_, _ = response.Write([]byte(`{"status":"ok","supported_coding_contract_versions":[1],"capabilities":["case_scoped_inference_v1","coding_runner_tools_v1","scoped_memory_seed_v1"]}`))
+	}))
+	t.Cleanup(server.Close)
+	runtime := &fakeRuntime{baseURL: server.URL}
+	registry := codingsource.NewRegistry(func() time.Time { return now })
+	ids := []string{"coding-harness-slot-1", "coding-harness-slot-2", "coding-harness-slot-3"}
+	next := 0
+	factory, err := New(Config{
+		Runtime: runtime, Sources: registry, Transport: server.Client().Transport,
+		Now: func() time.Time { return now }, MaxInstances: 2,
+		NewInstance: func() string {
+			id := ids[next]
+			next++
+			return id
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := factory.Acquire(t.Context(), fixtureHarnessBinding(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canary, err := factory.AcquireCanary(t.Context(), fixtureCanaryBinding(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := factory.Acquire(t.Context(), fixtureHarnessBinding(now)); !errors.Is(err, ErrLifecycle) {
+		t.Fatalf("third instance err=%v", err)
+	}
+	if runtime.loaded != 2 {
+		t.Fatalf("loaded=%d", runtime.loaded)
+	}
+	if err := private.Destroy(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := canary.Destroy(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSandboxRuntimeRequiresDedicatedRootlessCapabilityEgress(t *testing.T) {
 	docker := sandbox.NewLocalDocker()
 	for name, configure := range map[string]func(*sandbox.LocalDocker){

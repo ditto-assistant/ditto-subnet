@@ -141,6 +141,12 @@ func TestHostFailsClosedWhenCanaryIsEnabledWithoutThePublicPack(t *testing.T) {
 	}
 }
 
+func TestHarnessMaxInstancesGivesCanaryItsOwnSlot(t *testing.T) {
+	if harnessMaxInstances(false) != 1 || harnessMaxInstances(true) != 2 {
+		t.Fatal("canary must not share the sole private harness slot")
+	}
+}
+
 func TestHostConfigDiagnosticsNeverExposeControlToken(t *testing.T) {
 	config := Config{ControlToken: testControlToken, PrivateRoot: "/private"}
 	if strings.Contains(fmt.Sprintf("%#v", config), testControlToken) ||
