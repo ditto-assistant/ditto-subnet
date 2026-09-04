@@ -34,7 +34,8 @@ _UINT64_MAX = (1 << 64) - 1
 
 def _bounded_identifier(value: str, maximum: int) -> str:
     if len(value.encode()) > maximum or any(
-        character.isspace() or unicodedata.category(character) == "Cc"
+        character.isspace()
+        or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
         for character in value
     ):
         raise ValueError("identifier contains whitespace, control, or too many bytes")

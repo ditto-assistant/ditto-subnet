@@ -28,7 +28,8 @@ _MAX_URL_BYTES = 16 << 10
 
 def _opaque(value: str, *, maximum: int = 256) -> str:
     if len(value.encode()) > maximum or any(
-        char.isspace() or unicodedata.category(char) == "Cc" for char in value
+        char.isspace() or unicodedata.category(char) in {"Cc", "Cf", "Cs", "Co"}
+        for char in value
     ):
         raise ValueError("coding certification lease identifier is invalid")
     return value

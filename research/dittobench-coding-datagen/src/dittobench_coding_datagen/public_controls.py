@@ -556,7 +556,7 @@ def _bounded_text(value: object, minimum: int, maximum: int, label: str) -> str:
 
 def _unsafe_control(value: str) -> bool:
     return any(
-        unicodedata.category(character) == "Cc"
+        unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
         and character not in _ALLOWED_TEXT_CONTROLS
         for character in value
     )

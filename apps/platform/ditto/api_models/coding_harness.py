@@ -27,7 +27,8 @@ _MAX_URL_BYTES = 16 << 10
 
 def _bounded_identifier(value: str, maximum: int) -> str:
     if len(value.encode()) > maximum or any(
-        character.isspace() or unicodedata.category(character) == "Cc"
+        character.isspace()
+        or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
         for character in value
     ):
         raise ValueError("coding harness identity is invalid")

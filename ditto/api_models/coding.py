@@ -72,7 +72,8 @@ def _validate_identifier(value: str, max_bytes: int) -> str:
     if len(value.encode()) > max_bytes:
         raise ValueError(f"identifier must contain at most {max_bytes} UTF-8 bytes")
     if any(
-        character.isspace() or unicodedata.category(character) == "Cc"
+        character.isspace()
+        or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
         for character in value
     ):
         raise ValueError("identifier must not contain whitespace or control characters")
@@ -106,7 +107,10 @@ def _validate_relative_path(value: str) -> str:
         or value.startswith("/")
         or "\\" in value
         or any(part in {"", ".", "..", ".git"} for part in value.split("/"))
-        or any(unicodedata.category(character) == "Cc" for character in value)
+        or any(
+            unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
+            for character in value
+        )
     ):
         raise ValueError("editable path must be a safe workspace-relative POSIX path")
     return value
@@ -221,7 +225,8 @@ class CodingGraderCommand(CodingContractModel):
             or "/" in executable
             or "\\" in executable
             or any(
-                character.isspace() or unicodedata.category(character) == "Cc"
+                character.isspace()
+                or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
                 for character in executable
             )
             or executable.casefold()
