@@ -12,7 +12,13 @@ from ditto.validator.coding_counterfactual_terminal import (
     aggregate_counterfactual_results,
 )
 
-_CONDITIONS: tuple[Condition, ...] = ("v0", "v1", "v2", "v3", "v4")
+_CONDITIONS: tuple[Condition, ...] = (
+    "v0_none",
+    "v1_relevant",
+    "v2_irrelevant",
+    "v3_stale_conflict",
+    "v4_current_override",
+)
 
 
 @dataclass(frozen=True)
@@ -38,10 +44,14 @@ def audit_adversarial_baselines() -> CounterfactualBaselineAudit:
             expected_group_ids=(group,),
         )
 
-    honest = aggregate("honest", {"v0", "v1", "v2", "v3", "v4"})
-    v0_sandbagging = aggregate("sandbag", {"v1", "v2", "v3", "v4"})
-    stale_follower = aggregate("stale", {"v0", "v1", "v2", "v4"})
-    context_stuffer = aggregate("stuff", {"v0", "v1", "v4"})
+    honest = aggregate("honest", set(_CONDITIONS))
+    v0_sandbagging = aggregate("sandbag", set(_CONDITIONS[1:]))
+    stale_follower = aggregate(
+        "stale", {"v0_none", "v1_relevant", "v2_irrelevant", "v4_current_override"}
+    )
+    context_stuffer = aggregate(
+        "stuff", {"v0_none", "v1_relevant", "v4_current_override"}
+    )
     missing_control = aggregate_counterfactual_results(
         tuple(
             CounterfactualTerminalResult("missing", condition, True)
