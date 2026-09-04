@@ -40,6 +40,8 @@ _SENSITIVE_ENV = re.compile(
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _OCI_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _FORBIDDEN_GRADER_PARTS = {"answer", "gold", "reference", "solution"}
+_PATCH_TEXT_MARKERS = ("diff --git ", "```diff", "\n--- a/", "\n+++ b/")
+_PATCH_HUNK = re.compile(r"(?m)^@@ -[0-9]+(?:,[0-9]+)? \+[0-9]+(?:,[0-9]+)? @@")
 _MAX_CONTROL_BYTES = 1 << 20
 _ALLOWED_TEXT_CONTROLS = {"\t", "\n", "\r"}
 
@@ -103,6 +105,7 @@ def _validate_issue(value: dict[str, object], task_id: str) -> None:
         raise CorpusError("public task issue authority is invalid")
     _bounded_text(value["title"], 1, 1024, "issue title")
     _bounded_text(value["description"], 1, 64 << 10, "issue description")
+    _reject_patch_text(value["description"], "issue description")
     constraints = value["constraints"]
     if (
         not isinstance(constraints, list)
@@ -116,6 +119,8 @@ def _validate_issue(value: dict[str, object], task_id: str) -> None:
         )
     ):
         raise CorpusError("public task issue constraints are invalid")
+    for constraint in constraints:
+        _reject_patch_text(constraint, "issue constraint")
 
 
 def _validate_memory(value: dict[str, object], task_id: str, condition: str) -> None:
@@ -164,6 +169,7 @@ def _validate_memory(value: dict[str, object], task_id: str, condition: str) -> 
         _opaque(raw["scope"], "memory scope")
         _opaque(raw["type"], "memory type")
         _bounded_text(raw["content"], 1, 16 << 10, "memory content")
+        _reject_patch_text(raw["content"], "memory content")
         confidence = raw["confidence_micros"]
         if type(confidence) is not int or not 0 <= confidence <= 1_000_000:
             raise CorpusError("public task memory confidence is invalid")
@@ -526,6 +532,16 @@ def _load_json(path: Path, label: str) -> tuple[bytes, dict[str, object]]:
 def _require_fields(value: dict[str, object], fields: set[str], label: str) -> None:
     if set(value) != fields:
         raise CorpusError(f"public task {label} fields are invalid")
+
+
+def _reject_patch_text(value: object, label: str) -> None:
+    if not isinstance(value, str):
+        raise CorpusError(f"public task {label} is invalid")
+    lowered = value.lower()
+    if any(marker in lowered for marker in _PATCH_TEXT_MARKERS) or _PATCH_HUNK.search(
+        value
+    ):
+        raise CorpusError(f"public task {label} contains patch-form solution text")
 
 
 def _bounded_text(value: object, minimum: int, maximum: int, label: str) -> str:

@@ -96,6 +96,43 @@ def test_public_controls_reject_embedding_and_condition_drift(tmp_path: Path) ->
         )
 
 
+def test_public_controls_reject_patch_form_issue_and_memory_text(
+    tmp_path: Path,
+) -> None:
+    task, workspace = _task(tmp_path)
+
+    def add_issue_patch(value: dict[str, object]) -> None:
+        value["description"] = (
+            "Suggested repair:\n```diff\ndiff --git a/src/app.py b/src/app.py\n"
+            "@@ -1 +1 @@\n-old\n+new\n```"
+        )
+
+    _rewrite(task / "issue.json", add_issue_patch)
+    with pytest.raises(CorpusError, match="patch-form solution text"):
+        validate_public_task_controls(
+            task_root=task,
+            task_id="PUBLIC-V2-CONTROLS",
+            condition="v1_relevant",
+            workspace=workspace,
+        )
+
+    task, workspace = _task(tmp_path / "memory")
+
+    def add_memory_patch(value: dict[str, object]) -> None:
+        memories = value["memories"]
+        assert isinstance(memories, list) and isinstance(memories[0], dict)
+        memories[0]["content"] = "@@ -2,1 +2,1 @@\n-return old\n+return new"
+
+    _rewrite(task / "memory.json", add_memory_patch)
+    with pytest.raises(CorpusError, match="patch-form solution text"):
+        validate_public_task_controls(
+            task_root=task,
+            task_id="PUBLIC-V2-CONTROLS",
+            condition="v1_relevant",
+            workspace=workspace,
+        )
+
+
 def test_public_controls_reject_unsafe_runtime_commands(tmp_path: Path) -> None:
     task, workspace = _task(tmp_path)
     policy = task / "runtime-policy.json"
