@@ -121,6 +121,14 @@ uv run dittobench-coding-datagen verify-public-v2-release \
   --archive /tmp/coding-public-v2-release/coding-public-v2.tar.gz \
   --descriptor /tmp/coding-public-v2-release/coding-public-v2.release.json
 
+# Create a credential-free, immutable upload handoff. This validates the
+# release directory but does not contact or upload to Hugging Face.
+uv run dittobench-coding-datagen plan-public-v2-publication \
+  --release-dir /tmp/coding-public-v2-release \
+  --dataset-repository ditto-assistant/coding-practice \
+  --revision main \
+  --output /tmp/coding-public-v2-publication-plan.json
+
 # Materialize one public task for local agent development.
 uv run dittobench-coding-datagen materialize \
   --pack practice/v1 \

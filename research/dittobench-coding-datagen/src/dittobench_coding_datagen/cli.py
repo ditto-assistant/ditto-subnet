@@ -30,6 +30,10 @@ from dittobench_coding_datagen.public_task_runner import (
     run_public_v2_controls,
     run_public_v2_task,
 )
+from dittobench_coding_datagen.public_v2_publish_plan import (
+    build_public_v2_publish_plan,
+    canonical_public_v2_publish_plan_bytes,
+)
 from dittobench_coding_datagen.public_v2_release import (
     build_public_v2_release,
     verify_public_v2_release,
@@ -194,6 +198,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     verify_release_v2_parser.add_argument("--archive", type=Path, required=True)
     verify_release_v2_parser.add_argument("--descriptor", type=Path, required=True)
+
+    publish_plan_parser = subcommands.add_parser(
+        "plan-public-v2-publication",
+        help="build a credential-free immutable upload plan for a public v2 release",
+    )
+    publish_plan_parser.add_argument("--release-dir", type=Path, required=True)
+    publish_plan_parser.add_argument("--dataset-repository", required=True)
+    publish_plan_parser.add_argument("--revision", required=True)
+    publish_plan_parser.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -340,6 +353,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 descriptor=args.descriptor,
             )
             print(canonical_json_bytes(v2_descriptor).decode("utf-8"), end="")
+            return 0
+        if args.command == "plan-public-v2-publication":
+            publish_plan = build_public_v2_publish_plan(
+                release_dir=args.release_dir,
+                dataset_repository=args.dataset_repository,
+                revision=args.revision,
+            )
+            body = canonical_public_v2_publish_plan_bytes(publish_plan)
+            if args.output.exists() or args.output.is_symlink():
+                raise CorpusError("public v2 publication plan output already exists")
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_bytes(body)
+            args.output.chmod(0o644)
+            print(body.decode("utf-8"), end="")
             return 0
         raise CorpusError(f"unknown command: {args.command}")
     except CorpusError as error:
