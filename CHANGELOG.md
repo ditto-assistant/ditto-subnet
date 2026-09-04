@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v0.198.2 (2026-09-04)
+
+### Bug Fixes
+
+- **coding**: Freeze and grade not_invoked empty authoring
+  ([#1582](https://github.com/ditto-assistant/ditto-subnet/pull/1582),
+  [`79df1b2`](https://github.com/ditto-assistant/ditto-subnet/commit/79df1b27a68a676ee99faa0254db5257a919cfb0))
+
+- **codinghost**: Give canary its own harness instance slot
+  ([#1584](https://github.com/ditto-assistant/ditto-subnet/pull/1584),
+  [`a0fdbc9`](https://github.com/ditto-assistant/ditto-subnet/commit/a0fdbc9452593f1c2590f90635d931a007684e1f))
+
+- **validator**: Close started coding claims with terminal failure
+  ([#1583](https://github.com/ditto-assistant/ditto-subnet/pull/1583),
+  [`67a5496`](https://github.com/ditto-assistant/ditto-subnet/commit/67a5496e2ab56bb10a78172c2ab7aef939d0f32f))
+
+
 ## v0.198.1 (2026-09-04)
 
 ### Bug Fixes
