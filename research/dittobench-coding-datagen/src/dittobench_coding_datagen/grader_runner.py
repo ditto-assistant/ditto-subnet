@@ -43,6 +43,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     os.write(args.completion_fd, COMPLETION_MARKER)
     os.close(args.completion_fd)
+    if result.testsRun <= 0:
+        return 1
     return 0 if result.wasSuccessful() else 1
 
 
