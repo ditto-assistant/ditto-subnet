@@ -66,6 +66,14 @@ uv run dittobench-coding-datagen verify-public-release \
   --archive /tmp/dittobench-coding-practice-release/coding-practice-3x3-v1.tar.gz \
   --descriptor /tmp/dittobench-coding-practice-release/coding-practice-3x3-v1.release.json
 
+# Bind one sanitized public-v2 snapshot into a deterministic mode-preserving
+# archive for external intake. Both commands emit the same canonical receipt.
+uv run dittobench-coding-datagen build-snapshot-archive \
+  --snapshot /path/to/snapshot \
+  --archive /path/to/snapshot/archive.tar.gz
+uv run dittobench-coding-datagen verify-snapshot-archive \
+  --archive /path/to/snapshot/archive.tar.gz
+
 # Materialize one public task for local agent development.
 uv run dittobench-coding-datagen materialize \
   --pack practice/v1 \

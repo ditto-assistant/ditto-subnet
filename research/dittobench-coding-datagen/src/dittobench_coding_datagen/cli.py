@@ -18,6 +18,10 @@ from dittobench_coding_datagen.public_release import (
     verify_public_practice_release,
 )
 from dittobench_coding_datagen.public_result_runner import aggregate_public_v2_results
+from dittobench_coding_datagen.snapshot_archive import (
+    build_snapshot_archive,
+    verify_snapshot_archive,
+)
 from dittobench_coding_datagen.validation import validate_pack
 
 
@@ -97,6 +101,20 @@ def _parser() -> argparse.ArgumentParser:
         "--task-result", type=Path, action="append", required=True
     )
     summarize_parser.add_argument("--output", type=Path)
+
+    snapshot_archive_parser = subcommands.add_parser(
+        "build-snapshot-archive",
+        help="build one deterministic archive from a sanitized snapshot",
+    )
+    snapshot_archive_parser.add_argument("--snapshot", type=Path, required=True)
+    snapshot_archive_parser.add_argument("--archive", type=Path, required=True)
+    snapshot_archive_parser.add_argument("--replace", action="store_true")
+
+    verify_snapshot_parser = subcommands.add_parser(
+        "verify-snapshot-archive",
+        help="verify one deterministic sanitized snapshot archive",
+    )
+    verify_snapshot_parser.add_argument("--archive", type=Path, required=True)
     return parser
 
 
@@ -167,6 +185,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 args.output.write_bytes(result_bytes)
             print(result_bytes.decode("utf-8"), end="")
+            return 0
+        if args.command == "build-snapshot-archive":
+            receipt = build_snapshot_archive(
+                snapshot=args.snapshot,
+                archive=args.archive,
+                replace=args.replace,
+            )
+            print(canonical_json_bytes(receipt.as_json()).decode("utf-8"), end="")
+            return 0
+        if args.command == "verify-snapshot-archive":
+            receipt = verify_snapshot_archive(args.archive)
+            print(canonical_json_bytes(receipt.as_json()).decode("utf-8"), end="")
             return 0
         raise CorpusError(f"unknown command: {args.command}")
     except CorpusError as error:

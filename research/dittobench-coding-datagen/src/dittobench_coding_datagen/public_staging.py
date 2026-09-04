@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
 from dittobench_coding_datagen.canonical import (
-    canonical_json_bytes,
-    normalized_tree_identities,
     normalized_tree_sha256,
     safe_opaque_id,
 )
 from dittobench_coding_datagen.model import CorpusError
 from dittobench_coding_datagen.public_source import PublicSourceIntake
-from dittobench_coding_datagen.snapshot import SNAPSHOT_SCHEMA
+from dittobench_coding_datagen.snapshot import validate_sanitized_snapshot
+from dittobench_coding_datagen.snapshot_archive import verify_snapshot_archive
 
 PUBLIC_STAGING_SCHEMA = "dittobench-coding-public-task-staging-v2"
 _MAX_CONTROL_FILE_BYTES = 1 << 20
@@ -69,16 +67,17 @@ def validate_public_task_staging(
         snapshot_manifest = _read_control(task_root / "snapshot" / "manifest.json")
         if _sha256(snapshot_manifest) != source.source_snapshot_manifest_sha256:
             raise CorpusError("public task snapshot manifest does not match intake")
-        workspace = task_root / "snapshot" / "workspace"
-        if workspace.is_symlink() or not workspace.is_dir():
-            raise CorpusError("public task workspace is unsafe")
-        workspace_tree = normalized_tree_sha256(workspace)
-        _require_snapshot_workspace(snapshot_manifest, workspace)
+        snapshot = validate_sanitized_snapshot(task_root / "snapshot")
+        workspace_tree = snapshot.snapshot_tree_sha256
         archive = task_root / "snapshot" / "archive.tar.gz"
-        if archive.exists() and (
-            archive.is_symlink()
-            or not archive.is_file()
-            or _sha256(archive.read_bytes()) != source.source_snapshot_archive_sha256
+        if archive.is_symlink() or not archive.is_file():
+            raise CorpusError("public task snapshot archive is unavailable")
+        archive_receipt = verify_snapshot_archive(archive)
+        if (
+            archive_receipt.archive_sha256 != source.source_snapshot_archive_sha256
+            or archive_receipt.snapshot_manifest_sha256
+            != source.source_snapshot_manifest_sha256
+            or archive_receipt.snapshot_tree_sha256 != workspace_tree
         ):
             raise CorpusError("public task snapshot archive does not match intake")
         grader = task_root / "grader"
@@ -120,24 +119,6 @@ def _read_control(path: Path) -> bytes:
     if not body:
         raise CorpusError("public task control file is empty")
     return body
-
-
-def _require_snapshot_workspace(manifest_body: bytes, workspace: Path) -> None:
-    try:
-        parsed = json.loads(manifest_body)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise CorpusError("public task snapshot manifest is invalid") from error
-    identities = normalized_tree_identities(workspace)
-    workspace_tree = normalized_tree_sha256(workspace)
-    if (
-        canonical_json_bytes(parsed) != manifest_body
-        or not isinstance(parsed, dict)
-        or parsed.get("schema") != SNAPSHOT_SCHEMA
-        or parsed.get("files") != identities
-        or parsed.get("snapshot_tree_sha256") != workspace_tree
-        or parsed.get("source_tree_sha256") != workspace_tree
-    ):
-        raise CorpusError("public task snapshot does not match workspace")
 
 
 def _sha256(body: bytes) -> str:
