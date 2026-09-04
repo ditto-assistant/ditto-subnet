@@ -25,6 +25,11 @@ from ditto.api_models.coding import (
     coding_authoring_evidence_digest,
 )
 from ditto.api_models.coding_harness import CodingHarnessLaunchResponse
+from ditto.validator.coding_failure import (
+    CodingFailureCode,
+    CodingFailureStage,
+    build_coding_failure_task_evidence,
+)
 from ditto.validator.coding_terminal import (
     CodingTerminalEvidenceError,
     build_coding_run_evidence,
@@ -407,6 +412,49 @@ class CodingAttemptCoordinator:
             run_manifest=grading_lease.run_manifest,
             evidence=evidence,
             task_evidence=list(grading.task_evidence),
+        )
+
+    async def submit_authoring_infrastructure_failure(
+        self,
+        ticket: CodingAttemptTicket,
+        *,
+        authoring_lease: CodingAuthoringLeaseResponse,
+    ) -> SubmitCodingShadowResultResponse:
+        """Publish a zero-score terminal when recovery cannot rerun authoring."""
+
+        self._validate_authoring_lease(ticket, authoring_lease)
+        tasks = tuple(
+            build_coding_failure_task_evidence(
+                authoring_lease.run_manifest,
+                validator_ticket_id=str(ticket.ticket_id),
+                case_id=task.case_id,
+                variant_id=task.variant_id,
+                stage=CodingFailureStage.AUTHORING_INFRASTRUCTURE,
+                failure_code=CodingFailureCode.AUTHORING_RUNTIME,
+            )
+            for task in authoring_lease.run_manifest.tasks
+        )
+        try:
+            evidence = build_coding_run_evidence(
+                authoring_lease.run_manifest,
+                str(ticket.ticket_id),
+                tasks,
+            )
+        except CodingTerminalEvidenceError as error:
+            raise CodingAttemptIntegrityError(
+                "coding failure evidence disagrees with run authority"
+            ) from error
+        return await self._platform.submit_coding_shadow_result(
+            ticket.agent_id,
+            bench_version=ticket.bench_version,
+            run_row_id=ticket.run_row_id,
+            ticket_id=ticket.ticket_id,
+            ticket_deadline=ticket.ticket_deadline,
+            agent_artifact_sha256=ticket.agent_artifact_sha256,
+            screened_image_sha256=ticket.screened_image_sha256,
+            run_manifest=authoring_lease.run_manifest,
+            evidence=evidence,
+            task_evidence=list(tasks),
         )
 
     def _require_active(self, ticket: CodingAttemptTicket, *, phase: str) -> None:

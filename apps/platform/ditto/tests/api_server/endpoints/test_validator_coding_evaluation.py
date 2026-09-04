@@ -57,6 +57,7 @@ from ditto.db.queries.coding_catalog import (
     expose_coding_shadow_run_tasks,
     insert_coding_catalog_release,
 )
+from ditto.db.queries.coding_claims import claim_next_coding_ticket
 from ditto.db.queries.coding_evaluations import (
     CodingShadowConflictError,
     insert_coding_authoring_freeze,
@@ -817,6 +818,31 @@ async def test_scoreable_result_rejects_complete_freeze_without_transcript(
                 run_evidence_sha256=coding_run_evidence_digest(evidence),
                 signature="99" * 64,
             )
+
+
+async def test_started_claim_past_deadline_releases_instance_slot(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _agent_id, run, ticket, _deadline = await _seed(session_maker)
+    instance_id = ticket.claim_instance_id
+    assert instance_id is not None
+    async with session_maker() as session, session.begin():
+        stored = await session.get(CodingShadowTicket, ticket.ticket_id)
+        assert stored is not None
+        stored.deadline = datetime.now(UTC) - timedelta(seconds=1)
+        stored.claim_expires_at = stored.deadline
+    async with session_maker() as session, session.begin():
+        nxt = await claim_next_coding_ticket(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            run_row_id=run.run_row_id,
+        )
+        assert nxt is None
+        stored = await session.get(CodingShadowTicket, ticket.ticket_id)
+        assert stored is not None
+        assert stored.claim_instance_id is None
+        assert stored.claim_started_at is None
 
 
 async def test_infrastructure_result_can_close_without_authoring_freeze(
