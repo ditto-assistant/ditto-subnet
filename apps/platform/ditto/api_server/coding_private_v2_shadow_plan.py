@@ -112,8 +112,7 @@ def build_private_v2_shadow_canary(
     }
     if (
         set(registration) != expected
-        or registration.get("schema")
-        != "dittobench-coding-private-v2-registration-v1"
+        or registration.get("schema") != "dittobench-coding-private-v2-registration-v1"
         or registration.get("coding_contract_version") != 2
         or registration.get("registration_sha256")
         != _digest(
