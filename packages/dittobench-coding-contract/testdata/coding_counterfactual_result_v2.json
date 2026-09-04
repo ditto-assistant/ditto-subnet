@@ -1,0 +1,14 @@
+{
+  "schema": "dittobench-coding-counterfactual-result-v2",
+  "coding_contract_version": 2,
+  "weight_eligible": false,
+  "agent_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "base_task_group_id": "group-1",
+  "condition": "v3_stale_conflict",
+  "repository_epoch": "epoch-1",
+  "quorum_group_id": "quorum-1",
+  "replicate_id": 1,
+  "task_evidence_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "resolved": true,
+  "model_visible_memory_token_count": 4096
+}

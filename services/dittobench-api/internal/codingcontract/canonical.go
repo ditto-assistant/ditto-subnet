@@ -450,9 +450,20 @@ func validateRunRequestShape(object map[string]any) error {
 }
 
 func validateCounterfactualAssignmentV2Shape(object map[string]any) error {
-	return requireFields(object, "$", "schema", "coding_contract_version", "weight_eligible",
+	if err := requireFields(object, "$", "schema", "coding_contract_version", "weight_eligible",
 		"agent_artifact_sha256", "opaque_assignment_id", "repository_epoch", "memory_bundle_sha256",
-		"seeded_memory_bytes", "model_visible_memory_token_budget", "memory_volume_tier")
+		"seeded_memory_bytes", "model_visible_memory_token_budget", "memory_volume_tier"); err != nil {
+		return err
+	}
+	for _, key := range []string{
+		"condition", "base_task_group_id", "quorum_group_id", "replicate_id",
+		"opaque_group_commitment", "private_condition_commitment",
+	} {
+		if _, ok := object[key]; ok {
+			return errors.New("counterfactual assignment exposes private grouping")
+		}
+	}
+	return nil
 }
 
 func validateCounterfactualResultV2Shape(object map[string]any) error {
