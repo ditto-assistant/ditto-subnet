@@ -5,16 +5,20 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import stat
 import tarfile
 from pathlib import Path
 from typing import Any
 
 from ditto.api_models.coding_canonical import coding_canonical_json_bytes
+from ditto.api_models.coding_private_catalog_v2 import CodingPrivateCatalogV2Task
 from ditto.api_server.coding_private_catalog_v2_compile import (
     PrivateCatalogV2CompileError,
     verify_private_catalog_v2,
 )
+
+_OPAQUE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 class PrivateV2PayloadError(ValueError):
@@ -39,19 +43,34 @@ def build_private_v2_payload(
     task_assets: list[dict[str, Any]] = []
     for record_meta in catalog["records"]:
         index = record_meta["catalog_index"]
-        record = _read_json(catalog_directory / "records" / f"{index:06d}.json")
-        group = groups_root / record["base_task_group_id"]
+        record_path = catalog_directory / "records" / f"{index:06d}.json"
+        record = _canonical_json(record_path, "private v2 catalog record")
+        group_id = _safe_path_id(record["base_task_group_id"])
+        group = groups_root / group_id
         condition = record["condition"]
+        memory_body = _read_bytes(group / "memory" / f"{condition}.json")
+        runtime_body = _read_bytes(group / "runtime-policy.json")
+        resource_body = _read_bytes(group / "resource-profile.json")
+        snapshot_root = group / "snapshot"
+        grader_root = group / "grader"
+        if (
+            hashlib.sha256(memory_body).hexdigest() != record["memory_bundle_sha256"]
+            or hashlib.sha256(runtime_body).hexdigest()
+            != record["runtime_policy_sha256"]
+            or hashlib.sha256(resource_body).hexdigest()
+            != record["resource_profile_sha256"]
+            or _tree_digest(snapshot_root) != record["visible_snapshot_tree_sha256"]
+            or _tree_digest(grader_root) != record["hidden_grader_tree_sha256"]
+        ):
+            raise PrivateV2PayloadError("private v2 payload artifacts drifted")
         artifacts = {
-            "catalog_record": _read_bytes(
-                catalog_directory / "records" / f"{index:06d}.json"
-            ),
-            "visible_bundle": _archive_tree(group / "snapshot"),
+            "catalog_record": _read_bytes(record_path),
+            "visible_bundle": _archive_tree(snapshot_root),
             "issue": _read_bytes(group / "issue.json"),
-            "runtime_policy": _read_bytes(group / "runtime-policy.json"),
-            "resource_profile": _read_bytes(group / "resource-profile.json"),
-            "memory_bundle": _read_bytes(group / "memory" / f"{condition}.json"),
-            "grader_bundle": _archive_tree(group / "grader"),
+            "runtime_policy": runtime_body,
+            "resource_profile": resource_body,
+            "memory_bundle": memory_body,
+            "grader_bundle": _archive_tree(grader_root),
         }
         identities: dict[str, str] = {}
         for role, body in artifacts.items():
@@ -100,7 +119,9 @@ def build_private_v2_payload(
 def verify_private_v2_payload(directory: Path) -> dict[str, Any]:
     """Verify every protected payload object without decrypting or uploading."""
 
-    authority = _read_json(directory / "payload-authority.json")
+    authority = _canonical_json(
+        directory / "payload-authority.json", "private v2 payload authority"
+    )
     expected = {
         "schema",
         "coding_contract_version",
@@ -163,6 +184,38 @@ def verify_private_v2_payload(directory: Path) -> dict[str, Any]:
             or any(value not in objects for value in artifacts.values())
         ):
             raise PrivateV2PayloadError("private v2 payload task assets are invalid")
+        record_body = _read_bytes(
+            directory / "objects" / f"{artifacts['catalog_record']}.bin"
+        )
+        task = CodingPrivateCatalogV2Task.model_validate(json.loads(record_body))
+        memory_body = _read_bytes(
+            directory / "objects" / f"{artifacts['memory_bundle']}.bin"
+        )
+        runtime_body = _read_bytes(
+            directory / "objects" / f"{artifacts['runtime_policy']}.bin"
+        )
+        resource_body = _read_bytes(
+            directory / "objects" / f"{artifacts['resource_profile']}.bin"
+        )
+        visible_body = _read_bytes(
+            directory / "objects" / f"{artifacts['visible_bundle']}.bin"
+        )
+        grader_body = _read_bytes(
+            directory / "objects" / f"{artifacts['grader_bundle']}.bin"
+        )
+        if (
+            artifacts["memory_bundle"] != task.memory_bundle_sha256
+            or artifacts["runtime_policy"] != task.runtime_policy_sha256
+            or artifacts["resource_profile"] != task.resource_profile_sha256
+            or hashlib.sha256(memory_body).hexdigest() != task.memory_bundle_sha256
+            or hashlib.sha256(runtime_body).hexdigest() != task.runtime_policy_sha256
+            or hashlib.sha256(resource_body).hexdigest()
+            != task.resource_profile_sha256
+            or _tree_digest_from_tar(visible_body)
+            != task.visible_snapshot_tree_sha256
+            or _tree_digest_from_tar(grader_body) != task.hidden_grader_tree_sha256
+        ):
+            raise PrivateV2PayloadError("private v2 payload artifacts drifted")
     return authority
 
 
@@ -189,14 +242,77 @@ def _archive_tree(root: Path) -> bytes:
     return buffer.getvalue()
 
 
-def _read_json(path: Path) -> dict[str, Any]:
+def _canonical_json(path: Path, label: str) -> dict[str, Any]:
     body = _read_bytes(path)
     try:
         value: Any = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise PrivateV2PayloadError("private v2 JSON artifact is invalid") from error
-    if not isinstance(value, dict):
-        raise PrivateV2PayloadError("private v2 JSON artifact is invalid")
+        raise PrivateV2PayloadError(f"{label} is invalid") from error
+    if (
+        not isinstance(value, dict)
+        or coding_canonical_json_bytes(value, maximum_bytes=8 << 20, label=label)
+        != body
+    ):
+        raise PrivateV2PayloadError(f"{label} is not canonical")
+    return value
+
+
+def _tree_digest(root: Path) -> str:
+    if root.is_symlink() or not root.is_dir():
+        raise PrivateV2PayloadError("private v2 artifact tree is invalid")
+    identities: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*")):
+        if path.is_dir():
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise PrivateV2PayloadError("private v2 artifact tree is unsafe")
+        body = path.read_bytes()
+        identities.append(
+            {
+                "path": path.relative_to(root).as_posix(),
+                "sha256": hashlib.sha256(body).hexdigest(),
+                "size_bytes": len(body),
+            }
+        )
+    return hashlib.sha256(
+        coding_canonical_json_bytes(
+            identities, maximum_bytes=4 << 20, label="private v2 tree identity"
+        )
+    ).hexdigest()
+
+
+def _tree_digest_from_tar(body: bytes) -> str:
+    identities: list[dict[str, Any]] = []
+    try:
+        with tarfile.open(fileobj=io.BytesIO(body), mode="r:") as archive:
+            for member in sorted(archive.getmembers(), key=lambda item: item.name):
+                if member.isdir():
+                    continue
+                if not member.isfile() or member.issym() or member.islnk():
+                    raise PrivateV2PayloadError("private v2 artifact tree is unsafe")
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise PrivateV2PayloadError("private v2 artifact tree is invalid")
+                content = extracted.read()
+                identities.append(
+                    {
+                        "path": member.name,
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                        "size_bytes": len(content),
+                    }
+                )
+    except tarfile.TarError as error:
+        raise PrivateV2PayloadError("private v2 artifact tree is invalid") from error
+    return hashlib.sha256(
+        coding_canonical_json_bytes(
+            identities, maximum_bytes=4 << 20, label="private v2 tree identity"
+        )
+    ).hexdigest()
+
+
+def _safe_path_id(value: object) -> str:
+    if not isinstance(value, str) or not _OPAQUE_ID.fullmatch(value):
+        raise PrivateV2PayloadError("private group identity is unsafe")
     return value
 
 
