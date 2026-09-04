@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.203.1 (2026-09-04)
+
+### Bug Fixes
+
+- **coding-datagen**: Bind private memory bundles
+  ([#1599](https://github.com/ditto-assistant/ditto-subnet/pull/1599),
+  [`c538d62`](https://github.com/ditto-assistant/ditto-subnet/commit/c538d62424be0f78345e79db2e002056846fd1c6))
+
+- **infra**: Omit empty Pages compatibility flags
+  ([#1600](https://github.com/ditto-assistant/ditto-subnet/pull/1600),
+  [`88cbca7`](https://github.com/ditto-assistant/ditto-subnet/commit/88cbca76667097c6d77a6df257fd5470290eaf84))
+
+
 ## v0.203.0 (2026-09-04)
 
 ### Features
