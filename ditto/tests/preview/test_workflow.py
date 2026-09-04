@@ -93,6 +93,14 @@ def test_stack_preview_controller_caps_slots_and_never_runs_pr_code() -> None:
         "${{ github.event.repository.default_branch }}"
     )
     assert "ref: ${{ github.event.pull_request.head.sha }}" not in text
+    activation = next(
+        step
+        for step in control["steps"]
+        if step.get("name") == "Check whether stack previews are activated"
+    )
+    assert "GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT" in activation["run"]
+    assert "GCP_PREVIEW_RUNTIME_SERVICE_ACCOUNT" in activation["run"]
+    assert "enabled=$enabled" in activation["run"]
     provision = (ROOT / "preview/cloud/provision.sh").read_text()
     assert "for candidate in {0..7}" in provision
     assert "all 8 preview slots are active" in provision
