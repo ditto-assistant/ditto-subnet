@@ -129,6 +129,19 @@ uv run dittobench-coding-datagen plan-public-v2-publication \
   --revision main \
   --output /tmp/coding-public-v2-publication-plan.json
 
+# Build and audit one private group from owner-controlled files outside Git.
+# The destination directories must already exist with no group/other access;
+# outputs are created once with mode 0600.
+uv run dittobench-coding-datagen build-private-group \
+  --source /protected/coding-private-v2/group-source.json \
+  --output /protected/coding-private-v2/group-manifest.json
+uv run dittobench-coding-datagen audit-private-group \
+  --manifest /protected/coding-private-v2/group-manifest.json \
+  --visible-snapshot /protected/coding-private-v2/visible \
+  --hidden-grader /protected/coding-private-v2/grader \
+  --overlap-review-sha256 <review-sha256> \
+  --output /protected/coding-private-v2/group-audit.json
+
 # Materialize one public task for local agent development.
 uv run dittobench-coding-datagen materialize \
   --pack practice/v1 \
