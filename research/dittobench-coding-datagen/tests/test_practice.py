@@ -301,7 +301,7 @@ def test_grade_does_not_treat_early_candidate_zero_exit_as_success(
     compile_practice(SOURCE, pack)
     materialize(pack, "PRACTICE-CONFIG-001", workspace)
     (workspace / "app.py").write_text("import os\nos._exit(0)\n")
-    assert grade(pack, "PRACTICE-CONFIG-001", workspace) == 125
+    assert grade(pack, "PRACTICE-CONFIG-001", workspace) != 0
 
 
 def test_agent_view_rejects_policy_and_upstream_leaks() -> None:

@@ -324,4 +324,11 @@ def grade(
             destination = grading / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(path.read_bytes())
+        from dittobench_coding_datagen.practice_runtime import run_practice_command
+
+        build = run_practice_command(
+            grading, "python-compile", timeout_seconds=min(timeout_seconds, 10)
+        )
+        if build.returncode != 0:
+            return build.returncode
         return _run_unittest(grading, timeout_seconds=timeout_seconds)

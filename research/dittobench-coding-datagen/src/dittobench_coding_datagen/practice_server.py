@@ -28,6 +28,11 @@ from dittobench_coding_datagen.practice_runtime import (
 )
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+_REQUIRED_CAPABILITIES = (
+    "case_scoped_inference_v1",
+    "coding_runner_tools_v1",
+    "scoped_memory_seed_v1",
+)
 
 
 def _json_response(
@@ -176,13 +181,29 @@ def _validate_health(value: Any) -> None:
     versions = value.get("supported_coding_contract_versions")
     if not isinstance(versions, list) or CODING_CONTRACT_VERSION not in versions:
         raise CorpusError("practice harness does not support coding contract v1")
+    capabilities = value.get("capabilities")
+    if not isinstance(capabilities, list) or any(
+        capability not in capabilities for capability in _REQUIRED_CAPABILITIES
+    ):
+        raise CorpusError("practice harness health lacks required coding capabilities")
 
 
 def _validate_seed_response(
-    value: Any, expected_digest: str, expected_count: int
+    value: Any,
+    seed: dict[str, Any],
+    expected_digest: str,
+    expected_count: int,
 ) -> None:
     if not isinstance(value, dict):
         raise CorpusError("practice harness seed response must be an object")
+    if (
+        value.get("case_id") != seed.get("case_id")
+        or value.get("profile_capability_id") != seed.get("profile_capability_id")
+        or value.get("idempotent_replay") is not False
+    ):
+        raise CorpusError(
+            "practice harness seed response does not echo request identity"
+        )
     if value.get("memory_bundle_sha256") != expected_digest:
         raise CorpusError("practice harness did not confirm the memory bundle digest")
     if value.get("memory_count") != expected_count:
@@ -201,8 +222,10 @@ def _validate_run_response(value: Any, case_id: str) -> None:
         raise CorpusError("practice harness final summary is invalid")
     if (
         not isinstance(risks, list)
-        or len(risks) > 20
-        or any(not isinstance(risk, str) or len(risk) > 500 for risk in risks)
+        or len(risks) > 32
+        or any(
+            not isinstance(risk, str) or not risk or len(risk) > 2_000 for risk in risks
+        )
     ):
         raise CorpusError("practice harness remaining risks are invalid")
 
@@ -235,6 +258,7 @@ def evaluate_practice_harness(
             )
             _validate_seed_response(
                 seed_response,
+                seed,
                 session.case.memory_bundle_sha256,
                 len(session.case.memories),
             )

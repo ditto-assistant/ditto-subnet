@@ -127,8 +127,9 @@ class _OfflineHarnessHandler(BaseHTTPRequestHandler):
             HTTPStatus.OK,
             {
                 "capabilities": [
-                    "scoped_memory_seed_v1",
+                    "case_scoped_inference_v1",
                     "coding_runner_tools_v1",
+                    "scoped_memory_seed_v1",
                 ],
                 "status": "ok",
                 "supported_coding_contract_versions": [1],
@@ -146,8 +147,11 @@ class _OfflineHarnessHandler(BaseHTTPRequestHandler):
                 self,
                 HTTPStatus.OK,
                 {
+                    "case_id": value["case_id"],
+                    "idempotent_replay": False,
                     "memory_bundle_sha256": value["memory_bundle_sha256"],
                     "memory_count": len(memories),
+                    "profile_capability_id": value["profile_capability_id"],
                 },
             )
             return
