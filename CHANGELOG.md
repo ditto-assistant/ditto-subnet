@@ -2,6 +2,31 @@
 
 <!-- version list -->
 
+## v0.195.0 (2026-09-04)
+
+### Features
+
+- **coding-contract**: Add v2 counterfactual schemas
+  ([#1537](https://github.com/ditto-assistant/ditto-subnet/pull/1537),
+  [`5e475f9`](https://github.com/ditto-assistant/ditto-subnet/commit/5e475f917cdea7c69098afc8a8d479b0aecf5a74))
+
+- **coding-datagen**: Compile matched V0-V4 groups
+  ([#1538](https://github.com/ditto-assistant/ditto-subnet/pull/1538),
+  [`7b8b723`](https://github.com/ditto-assistant/ditto-subnet/commit/7b8b723aa12b0c8d76b5558f855671bf1dae0c90))
+
+- **coding-terminal**: Aggregate monotone v2 evidence
+  ([#1541](https://github.com/ditto-assistant/ditto-subnet/pull/1541),
+  [`5cc9d57`](https://github.com/ditto-assistant/ditto-subnet/commit/5cc9d57ad3a5ea663d937de07828c5f8092e61a9))
+
+- **platform**: Issue blinded counterfactual assignments
+  ([#1539](https://github.com/ditto-assistant/ditto-subnet/pull/1539),
+  [`bed9493`](https://github.com/ditto-assistant/ditto-subnet/commit/bed9493be5f092f40db1a10e9d284bc35e459501))
+
+- **validator**: Execute v2 replicated conditions
+  ([#1540](https://github.com/ditto-assistant/ditto-subnet/pull/1540),
+  [`a7893d2`](https://github.com/ditto-assistant/ditto-subnet/commit/a7893d23827743a1a96abbab1bb4919a4e2add0f))
+
+
 ## v0.194.0 (2026-09-04)
 
 ### Documentation
