@@ -16,6 +16,10 @@ memory records. It never contains a production task manifest, upstream
 SWE-bench instance IDs, gold patches, hidden evaluation tests, corpus keys, or
 production user memories.
 
+Public v2 external staging is semantically validated before compilation. Its
+issue, raw-memory, networkless runtime-policy, and grader controls are canonical
+and task-bound; hashes alone do not admit structurally invalid controls.
+
 The nine practice tasks are deliberately static protocol demonstrations with
 zero per-task entropy. They teach the public wire and local workflow only; a
 signature-to-patch lookup is expected to solve them and they must never be used
@@ -73,6 +77,13 @@ uv run dittobench-coding-datagen build-snapshot-archive \
   --archive /path/to/snapshot/archive.tar.gz
 uv run dittobench-coding-datagen verify-snapshot-archive \
   --archive /path/to/snapshot/archive.tar.gz
+
+# Validate one task's canonical issue, raw memory, runtime policy, and grader
+# before building the complete ten-task intake.
+uv run dittobench-coding-datagen validate-public-controls \
+  --task-root /path/to/tasks/PUBLIC-V2-00 \
+  --task-id PUBLIC-V2-00 \
+  --condition v1_relevant
 
 # Materialize one public task for local agent development.
 uv run dittobench-coding-datagen materialize \

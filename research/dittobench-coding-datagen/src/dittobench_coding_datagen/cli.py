@@ -13,6 +13,10 @@ from dittobench_coding_datagen.canonical import canonical_json_bytes
 from dittobench_coding_datagen.compiler import compile_practice, grade, materialize
 from dittobench_coding_datagen.model import CorpusError
 from dittobench_coding_datagen.practice_server import evaluate_practice_harness
+from dittobench_coding_datagen.public_controls import (
+    PUBLIC_CONDITIONS,
+    validate_public_task_controls,
+)
 from dittobench_coding_datagen.public_release import (
     build_public_practice_release,
     verify_public_practice_release,
@@ -115,6 +119,16 @@ def _parser() -> argparse.ArgumentParser:
         help="verify one deterministic sanitized snapshot archive",
     )
     verify_snapshot_parser.add_argument("--archive", type=Path, required=True)
+
+    controls_parser = subcommands.add_parser(
+        "validate-public-controls",
+        help="validate one external public v2 task control set",
+    )
+    controls_parser.add_argument("--task-root", type=Path, required=True)
+    controls_parser.add_argument("--task-id", required=True)
+    controls_parser.add_argument(
+        "--condition", choices=sorted(PUBLIC_CONDITIONS), required=True
+    )
     return parser
 
 
@@ -197,6 +211,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "verify-snapshot-archive":
             receipt = verify_snapshot_archive(args.archive)
             print(canonical_json_bytes(receipt.as_json()).decode("utf-8"), end="")
+            return 0
+        if args.command == "validate-public-controls":
+            authority = validate_public_task_controls(
+                task_root=args.task_root,
+                task_id=args.task_id,
+                condition=args.condition,
+                workspace=args.task_root / "snapshot" / "workspace",
+            )
+            print(canonical_json_bytes(authority.as_json()).decode("utf-8"), end="")
             return 0
         raise CorpusError(f"unknown command: {args.command}")
     except CorpusError as error:

@@ -117,6 +117,32 @@ retrieval strategy.
 The reference starter remains a baseline. Its local retrieval choice is not a
 public practice scoring rule and does not constrain private miner innovation.
 
+## Task controls
+
+Every staged task carries canonical, task-bound public controls:
+
+```text
+dittobench-coding-public-issue-v2
+dittobench-coding-public-memory-v2
+dittobench-coding-public-runtime-policy-v2
+dittobench-coding-public-grader-v2
+```
+
+The issue binds bounded visible requirements. The memory control contains raw
+records and structured validity/supersession metadata only; embedding or vector
+fields are invalid. V0 contains no records and V1-V4 contain at least one.
+
+The runtime policy binds one immutable `linux/amd64` image digest, `network =
+none`, normalized edit/create/delete paths, resource limits, and argv-only
+commands. Shells, Git, inline Python, mutable `npx`, online Cargo, incomplete
+offline pip installation, URLs, and credential-shaped environment variables
+fail closed.
+
+The grader binds the same runtime image, ordered fail-to-pass and pass-to-pass
+groups, distinct validator-only command IDs, and exact mode-aware files. Grader
+files may be injected only into test-scoped destinations. Patch/diff files and
+answer-, gold-, reference-, or solution-named source material are invalid.
+
 ## Public validator canary
 
 The public validator canary reuses only public v2 material. It verifies the

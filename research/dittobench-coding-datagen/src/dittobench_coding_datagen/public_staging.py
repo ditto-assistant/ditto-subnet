@@ -6,11 +6,9 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from dittobench_coding_datagen.canonical import (
-    normalized_tree_sha256,
-    safe_opaque_id,
-)
+from dittobench_coding_datagen.canonical import safe_opaque_id
 from dittobench_coding_datagen.model import CorpusError
+from dittobench_coding_datagen.public_controls import validate_public_task_controls
 from dittobench_coding_datagen.public_source import PublicSourceIntake
 from dittobench_coding_datagen.snapshot import validate_sanitized_snapshot
 from dittobench_coding_datagen.snapshot_archive import verify_snapshot_archive
@@ -80,22 +78,22 @@ def validate_public_task_staging(
             or archive_receipt.snapshot_tree_sha256 != workspace_tree
         ):
             raise CorpusError("public task snapshot archive does not match intake")
-        grader = task_root / "grader"
-        if grader.is_symlink() or not grader.is_dir():
-            raise CorpusError("public task grader is unsafe")
-        grader_sha256 = normalized_tree_sha256(grader)
-        if grader_sha256 != source.visible_grader_sha256:
+        controls = validate_public_task_controls(
+            task_root=task_root,
+            task_id=task_id,
+            condition=source.condition,
+            workspace=task_root / "snapshot" / "workspace",
+        )
+        if controls.visible_grader_sha256 != source.visible_grader_sha256:
             raise CorpusError("public task grader does not match intake")
         staged.append(
             StagedPublicTask(
                 task_id=task_id,
                 workspace_tree_sha256=workspace_tree,
-                visible_grader_sha256=grader_sha256,
-                issue_sha256=_sha256(_read_control(task_root / "issue.json")),
-                memory_sha256=_sha256(_read_control(task_root / "memory.json")),
-                runtime_policy_sha256=_sha256(
-                    _read_control(task_root / "runtime-policy.json")
-                ),
+                visible_grader_sha256=controls.visible_grader_sha256,
+                issue_sha256=controls.issue_sha256,
+                memory_sha256=controls.memory_sha256,
+                runtime_policy_sha256=controls.runtime_policy_sha256,
             )
         )
     return PublicTaskStaging(

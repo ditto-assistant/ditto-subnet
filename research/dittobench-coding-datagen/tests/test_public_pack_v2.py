@@ -36,7 +36,7 @@ def test_public_v2_pack_is_deterministic_and_verifiable(tmp_path: Path) -> None:
         first / "capsules" / "PUBLIC-V2-00" / "visible" / "workspace" / "app.txt"
     ).stat().st_mode & 0o777 == 0o755
     assert (
-        first / "capsules" / "PUBLIC-V2-00" / "grader" / "test.txt"
+        first / "capsules" / "PUBLIC-V2-00" / "grader" / "files" / "test_public.py"
     ).stat().st_mode & 0o777 == 0o755
 
 
