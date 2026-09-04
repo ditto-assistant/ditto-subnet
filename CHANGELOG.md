@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.201.0 (2026-09-04)
+
+### Features
+
+- **coding-datagen**: Plan public v2 publication
+  ([#1596](https://github.com/ditto-assistant/ditto-subnet/pull/1596),
+  [`1136980`](https://github.com/ditto-assistant/ditto-subnet/commit/113698046d1d84c7afed4385f56c9799384e5c28))
+
+
 ## v0.200.1 (2026-09-04)
 
 ### Bug Fixes
