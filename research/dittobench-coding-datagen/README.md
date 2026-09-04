@@ -85,6 +85,26 @@ uv run dittobench-coding-datagen validate-public-controls \
   --task-id PUBLIC-V2-00 \
   --condition v1_relevant
 
+# Grade one miner-edited public-v2 workspace in the task's exact locally
+# available image. Build and test commands share one disposable, networkless
+# container; the emitted task result is non-authoritative.
+uv run dittobench-coding-datagen run-public-task \
+  --pack /path/to/coding-public-v2 \
+  --task PUBLIC-V2-00 \
+  --workspace /path/to/edited-workspace \
+  --image repository/image@sha256:... \
+  --output /tmp/PUBLIC-V2-00.result.json
+
+# Curators can exercise the same execution core before a complete ten-task pack
+# exists. This validates one external control set but grants no release status.
+uv run dittobench-coding-datagen run-public-controls \
+  --task-root /path/to/tasks/PUBLIC-V2-00 \
+  --task PUBLIC-V2-00 \
+  --condition v1_relevant \
+  --workspace /path/to/edited-workspace \
+  --image repository/image@sha256:... \
+  --output /tmp/PUBLIC-V2-00.control-result.json
+
 # Materialize one public task for local agent development.
 uv run dittobench-coding-datagen materialize \
   --pack practice/v1 \

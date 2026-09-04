@@ -145,6 +145,16 @@ groups, distinct validator-only command IDs, and exact mode-aware files. Grader
 files may be injected only into test-scoped destinations. Patch/diff files and
 answer-, gold-, reference-, or solution-named source material are invalid.
 
+The local task runner verifies that a locally available image resolves to the
+bound digest, reconstructs a grading workspace from the immutable visible
+snapshot plus only policy-authorized candidate edits, and injects the public
+grader after reconstruction. Build and test commands execute in order inside
+one disposable container with networking disabled, all Linux capabilities
+dropped, and `no-new-privileges` enabled. A zero exit status is insufficient:
+every declared fail-to-pass and pass-to-pass test identity must also be observed
+before the task is reported resolved. The resulting task record remains
+non-authoritative local evidence.
+
 ## Public validator canary
 
 The public validator canary reuses only public v2 material. It verifies the
