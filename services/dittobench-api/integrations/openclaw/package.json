@@ -9,7 +9,7 @@
     "test": "node --test"
   },
   "dependencies": {
-    "openclaw": "2026.7.1"
+    "openclaw": "2026.8.1"
   },
   "engines": {
     "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0"
