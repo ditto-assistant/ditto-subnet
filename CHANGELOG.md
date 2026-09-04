@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.205.1 (2026-09-04)
+
+### Bug Fixes
+
+- **coding-datagen**: Allow task-bound runner profiles
+  ([#1604](https://github.com/ditto-assistant/ditto-subnet/pull/1604),
+  [`90e31fa`](https://github.com/ditto-assistant/ditto-subnet/commit/90e31fa6915d12a86bb90e19659b1b2c41d48269))
+
+
 ## v0.205.0 (2026-09-04)
 
 ### Features
