@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 from dataclasses import replace
 
 import pytest
 
+from ditto.api_models.coding_canonical import coding_canonical_json_bytes
 from ditto.api_server.coding_counterfactual_assignment import (
     CounterfactualArmAuthority,
     CounterfactualAssignmentError,
@@ -51,7 +54,26 @@ def test_assignment_is_deterministic_blinded_and_shadow_only() -> None:
         "opaque_group_commitment",
         "replicate_id",
         "quorum_group_id",
+        "visible_bundle_sha256",
     }.isdisjoint(result)
+    authority = _authority()
+    preimage = coding_canonical_json_bytes(
+        {
+            "artifact_sha256": authority.artifact_sha256,
+            "group_commitment": authority.opaque_group_commitment,
+            "private_condition_commitment": authority.private_condition_commitment,
+            "replicate_id": 1,
+            "repository_epoch": authority.repository_epoch,
+            "schema": "dittobench-coding-counterfactual-assignment-preimage-v2",
+        },
+        maximum_bytes=4 << 10,
+        label="counterfactual assignment preimage",
+    )
+    assert (
+        result["opaque_assignment_id"]
+        == hmac.new(b"k" * 32, preimage, hashlib.sha256).hexdigest()
+    )
+    assert preimage.endswith(b"\n")
 
 
 def test_assignment_rejects_unsafe_authority() -> None:
@@ -63,4 +85,16 @@ def test_assignment_rejects_unsafe_authority() -> None:
     with pytest.raises(CounterfactualAssignmentError, match="invalid"):
         issue_blinded_assignment(
             authority=invalid, replicate_id=1, assignment_key=b"k" * 32
+        )
+    with pytest.raises(CounterfactualAssignmentError, match="invalid"):
+        issue_blinded_assignment(
+            authority=replace(_authority(), repository_epoch="repo\u200bepoch"),
+            replicate_id=1,
+            assignment_key=b"k" * 32,
+        )
+    with pytest.raises(CounterfactualAssignmentError, match="invalid"):
+        issue_blinded_assignment(
+            authority=replace(_authority(), seeded_memory_bytes=True),  # type: ignore[arg-type]
+            replicate_id=1,
+            assignment_key=b"k" * 32,
         )
