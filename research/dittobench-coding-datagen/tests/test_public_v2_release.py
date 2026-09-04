@@ -39,7 +39,7 @@ def test_public_v2_release_is_deterministic_and_verifiable(tmp_path: Path) -> No
         for name, mode in modes.items()
     )
     assert any(
-        name.endswith("/grader/test.txt") and mode == 0o755
+        name.endswith("/grader/files/test_public.py") and mode == 0o755
         for name, mode in modes.items()
     )
     assert any(
