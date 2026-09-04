@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.207.0 (2026-09-04)
+
+### Features
+
+- **coding-contract**: Define private catalog v2 task
+  ([#1612](https://github.com/ditto-assistant/ditto-subnet/pull/1612),
+  [`3aee27a`](https://github.com/ditto-assistant/ditto-subnet/commit/3aee27a8c46c1f1beb15f42a64b7d520bd15d3f2))
+
+
 ## v0.206.0 (2026-09-04)
 
 ### Features
