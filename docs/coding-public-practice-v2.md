@@ -22,6 +22,11 @@ Private Validator Score
     = future shadow-only competitive evidence
 ```
 
+Admission remains the existing unified order. A public canary pass is not
+private-shadow admission: the exact screened artifact must already have a
+durable Tool + Memory core-qualification decision, then a claimed certification
+lease, before any private task.
+
 The current `coding-practice-3x3-v1` pack remains supported until v2 is
 published. It contains nine static protocol fixtures and is not retroactively
 rescored or changed by this proposal.
@@ -103,9 +108,10 @@ public practice scoring rule and does not constrain private miner innovation.
 ## Public validator canary
 
 The public validator canary reuses only public v2 material. It verifies the
-screened artifact and protocol path, including health, seed, run, workspace
-freeze, and pristine public grading. A pass is a qualification gate only and
-adds no Coding score.
+screened artifact and protocol path, including health, seed, ticket-scoped
+inference, run, workspace freeze, and pristine public grading. A pass is a
+coding-capability qualification gate only: it adds no Coding score and does not
+bypass core qualification or the certification lease.
 
 ## Publication rules
 
