@@ -2,6 +2,89 @@
 
 <!-- version list -->
 
+## v0.197.0 (2026-09-04)
+
+### Documentation
+
+- **backroom**: Define private shadow operations v2
+  ([#1573](https://github.com/ditto-assistant/ditto-subnet/pull/1573),
+  [`6ccbbbd`](https://github.com/ditto-assistant/ditto-subnet/commit/6ccbbbdbdbcf239ca72008ffaddef4fb3b9e5dbe))
+
+- **coding**: Define private authoring v2
+  ([#1564](https://github.com/ditto-assistant/ditto-subnet/pull/1564),
+  [`493ca27`](https://github.com/ditto-assistant/ditto-subnet/commit/493ca27fdb423d957a477a92506c73034ad76ab6))
+
+- **coding**: Define private release package v2
+  ([#1567](https://github.com/ditto-assistant/ditto-subnet/pull/1567),
+  [`ae309b4`](https://github.com/ditto-assistant/ditto-subnet/commit/ae309b4e9c6100a09d93655bdb3918c3e59d5cf5))
+
+- **coding**: Define private shadow terminal v2
+  ([#1572](https://github.com/ditto-assistant/ditto-subnet/pull/1572),
+  [`5d6deaf`](https://github.com/ditto-assistant/ditto-subnet/commit/5d6deafa147d900395ccc07079cf5d321dcd90fa))
+
+- **coding**: Define public practice v2
+  ([#1554](https://github.com/ditto-assistant/ditto-subnet/pull/1554),
+  [`3f74436`](https://github.com/ditto-assistant/ditto-subnet/commit/3f74436e9ab3358ee9b4c9af8b1ce799ae7c87e1))
+
+- **coding**: Define public v2 certification canary
+  ([#1562](https://github.com/ditto-assistant/ditto-subnet/pull/1562),
+  [`3b9f8ae`](https://github.com/ditto-assistant/ditto-subnet/commit/3b9f8ae6214c4510b6d7a9cc4d2fd5aecdba4e5c))
+
+- **platform**: Define private object leases v2
+  ([#1570](https://github.com/ditto-assistant/ditto-subnet/pull/1570),
+  [`b3daaad`](https://github.com/ditto-assistant/ditto-subnet/commit/b3daaadd2bdd8917579f5514495de18c413124b5))
+
+- **platform**: Define private release registry v2
+  ([#1568](https://github.com/ditto-assistant/ditto-subnet/pull/1568),
+  [`1aa39ae`](https://github.com/ditto-assistant/ditto-subnet/commit/1aa39aeb346b4050e0a85e7431504daa88a92962))
+
+- **platform**: Define private selection v2
+  ([#1569](https://github.com/ditto-assistant/ditto-subnet/pull/1569),
+  [`8c67883`](https://github.com/ditto-assistant/ditto-subnet/commit/8c678834d1e43af16b4e472f95c0445aba7ff6b8))
+
+- **validator**: Define private shadow execution v2
+  ([#1571](https://github.com/ditto-assistant/ditto-subnet/pull/1571),
+  [`ebb3fe7`](https://github.com/ditto-assistant/ditto-subnet/commit/ebb3fe74b9bfdb7dc13882f1b65ddd2b7f8e47d5))
+
+### Features
+
+- **coding-cli**: Summarize public practice results
+  ([#1561](https://github.com/ditto-assistant/ditto-subnet/pull/1561),
+  [`c415bb5`](https://github.com/ditto-assistant/ditto-subnet/commit/c415bb5fba6f9b6e4aa310ec96f0fc5d38140b02))
+
+- **coding-contract**: Add local practice result v2
+  ([#1555](https://github.com/ditto-assistant/ditto-subnet/pull/1555),
+  [`98deaec`](https://github.com/ditto-assistant/ditto-subnet/commit/98deaec935aa9e89a94cd9a680d4eb85f46edc92))
+
+- **coding-datagen**: Add public source intake
+  ([#1558](https://github.com/ditto-assistant/ditto-subnet/pull/1558),
+  [`8c6e7bb`](https://github.com/ditto-assistant/ditto-subnet/commit/8c6e7bbdc04d153922ab77484e241e1a3ed169fa))
+
+- **coding-datagen**: Add sanitized repository snapshots
+  ([#1557](https://github.com/ditto-assistant/ditto-subnet/pull/1557),
+  [`9e681e8`](https://github.com/ditto-assistant/ditto-subnet/commit/9e681e840cab5191b6df0c8f43eca96c06972894))
+
+- **coding-datagen**: Audit private task inputs
+  ([#1566](https://github.com/ditto-assistant/ditto-subnet/pull/1566),
+  [`5d65dcc`](https://github.com/ditto-assistant/ditto-subnet/commit/5d65dcc86f12efe56a62dd8c5290a9fa18a11b22))
+
+- **coding-datagen**: Compile private v2 group manifests
+  ([#1565](https://github.com/ditto-assistant/ditto-subnet/pull/1565),
+  [`ffdc8e7`](https://github.com/ditto-assistant/ditto-subnet/commit/ffdc8e76d2df4786ab38343568a4a97d50efbf1c))
+
+- **coding-datagen**: Compile public v2 task packs
+  ([#1560](https://github.com/ditto-assistant/ditto-subnet/pull/1560),
+  [`ea011a4`](https://github.com/ditto-assistant/ditto-subnet/commit/ea011a4a8075e83bda006f8bcc708f46c3369f0e))
+
+- **coding-datagen**: Validate public task staging
+  ([#1559](https://github.com/ditto-assistant/ditto-subnet/pull/1559),
+  [`7d963d0`](https://github.com/ditto-assistant/ditto-subnet/commit/7d963d0a548605a4da61b069076f22e850ab4eaf))
+
+- **coding-release**: Publish public v2 practice artifacts
+  ([#1563](https://github.com/ditto-assistant/ditto-subnet/pull/1563),
+  [`c8b8dff`](https://github.com/ditto-assistant/ditto-subnet/commit/c8b8dffac8686b93831f5852ce2ddf0d01c561f7))
+
+
 ## v0.196.0 (2026-09-04)
 
 ### Documentation
