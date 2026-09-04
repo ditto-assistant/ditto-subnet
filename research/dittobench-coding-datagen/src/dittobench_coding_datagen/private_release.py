@@ -66,6 +66,7 @@ def compile_private_release(
                 "audit_sha256": sha256_hex(audit_body),
                 "group_manifest_sha256": manifest_sha256,
                 "hidden_grader_tree_sha256": audit["hidden_grader_tree_sha256"],
+                "memory_bundle_set_sha256": audit["memory_bundle_set_sha256"],
                 "opaque_group_id": manifest.opaque_group_id,
                 "opaque_repository_stratum_id": stratum,
                 "overlap_review_sha256": audit["overlap_review_sha256"],
@@ -139,6 +140,7 @@ def _load_audit(path: Path) -> tuple[dict[str, Any], bytes]:
     expected = {
         "group_manifest_sha256",
         "hidden_grader_tree_sha256",
+        "memory_bundle_set_sha256",
         "overlap_review_sha256",
         "passed",
         "schema",
@@ -153,6 +155,7 @@ def _load_audit(path: Path) -> tuple[dict[str, Any], bytes]:
             for field in (
                 "group_manifest_sha256",
                 "hidden_grader_tree_sha256",
+                "memory_bundle_set_sha256",
                 "overlap_review_sha256",
                 "visible_snapshot_tree_sha256",
             )

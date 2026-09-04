@@ -232,6 +232,7 @@ def _parser() -> argparse.ArgumentParser:
     private_audit_parser.add_argument("--manifest", type=Path, required=True)
     private_audit_parser.add_argument("--visible-snapshot", type=Path, required=True)
     private_audit_parser.add_argument("--hidden-grader", type=Path, required=True)
+    private_audit_parser.add_argument("--memory-bundles", type=Path, required=True)
     private_audit_parser.add_argument("--overlap-review-sha256", required=True)
     private_audit_parser.add_argument("--output", type=Path, required=True)
 
@@ -421,6 +422,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 manifest=private_group,
                 visible_snapshot=args.visible_snapshot,
                 hidden_grader=args.hidden_grader,
+                memory_bundles=args.memory_bundles,
                 overlap_review_sha256=args.overlap_review_sha256,
             )
             body = private_audit.canonical_bytes()

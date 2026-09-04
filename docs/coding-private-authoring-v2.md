@@ -81,6 +81,13 @@ Before release registration, every group MUST pass:
 Failure of any gate quarantines the group. Quarantined groups are absent from
 selection and cannot improve a candidate score by reducing a denominator.
 
+The private input audit opens all five canonical memory-bundle files, verifies
+their manifest-bound SHA-256 values, requires an empty V0 bundle and non-empty
+V1-V4 bundles, rejects credential-like content, and binds the complete memory
+bundle-set digest. Each canonical bundle must fit within its declared balanced
+`seeded_memory_bytes` envelope; padding and observed runtime accounting remain
+validator-owned rather than being represented as fake memory records.
+
 ## Publication boundary
 
 Only after the gates pass does the offline curator package client-encrypted
