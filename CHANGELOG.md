@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.199.1 (2026-09-04)
+
+### Bug Fixes
+
+- **coding-datagen**: Reject patch-form task text
+  ([#1594](https://github.com/ditto-assistant/ditto-subnet/pull/1594),
+  [`65355ec`](https://github.com/ditto-assistant/ditto-subnet/commit/65355ec9a4e89195c1f490f003c43f6e4b98a709))
+
+
 ## v0.199.0 (2026-09-04)
 
 ### Features
