@@ -2,6 +2,31 @@
 
 <!-- version list -->
 
+## v0.200.1 (2026-09-04)
+
+### Bug Fixes
+
+- **coding-datagen**: Hide visible bundles and stabilize private groups
+  ([#1589](https://github.com/ditto-assistant/ditto-subnet/pull/1589),
+  [`8874db3`](https://github.com/ditto-assistant/ditto-subnet/commit/8874db3ee333093642bcd66728ded432c6366f5a))
+
+- **coding-datagen**: Match practice health seed and grade to certifier
+  ([#1591](https://github.com/ditto-assistant/ditto-subnet/pull/1591),
+  [`0841329`](https://github.com/ditto-assistant/ditto-subnet/commit/084132953b4f8219e948f188b98b67fdd726c49f))
+
+- **coding-starter**: Honor tool budget and wall-time activity
+  ([#1592](https://github.com/ditto-assistant/ditto-subnet/pull/1592),
+  [`f4ec876`](https://github.com/ditto-assistant/ditto-subnet/commit/f4ec87602053a5f40cdab6c3f61e820afcc84181))
+
+- **platform**: Canonicalize coding memory assignment HMAC
+  ([#1590](https://github.com/ditto-assistant/ditto-subnet/pull/1590),
+  [`f753aa3`](https://github.com/ditto-assistant/ditto-subnet/commit/f753aa36d82c09f8ef3ca1c3a56ab6a9fdb8ac73))
+
+- **validator**: Bind v2 aggregation identity and pairing
+  ([#1588](https://github.com/ditto-assistant/ditto-subnet/pull/1588),
+  [`d342320`](https://github.com/ditto-assistant/ditto-subnet/commit/d342320b0e7a0eb223a6199d16a273e5b540b4b2))
+
+
 ## v0.200.0 (2026-09-04)
 
 ### Features
