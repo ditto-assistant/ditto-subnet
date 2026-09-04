@@ -37,6 +37,8 @@ class CounterfactualTerminalResult:
     condition: Condition
     resolved: bool
     trusted: bool = True
+    agent_artifact_sha256: str = ""
+    repository_epoch: str = ""
 
 
 @dataclass(frozen=True)
@@ -76,14 +78,20 @@ def aggregate_counterfactual_results(
         raise ValueError("counterfactual expected-group authority is invalid")
     groups: dict[str, dict[Condition, bool]] = {group_id: {} for group_id in expected}
     untrusted = 0
+    pairings: set[tuple[str, str]] = set()
     for result in results:
         if (
             result.group_id not in expected
             or result.condition not in _WEIGHTS
             or type(result.resolved) is not bool
             or type(result.trusted) is not bool
+            or type(result.agent_artifact_sha256) is not str
+            or type(result.repository_epoch) is not str
         ):
             raise ValueError("counterfactual result is outside expected authority")
+        pairings.add((result.agent_artifact_sha256, result.repository_epoch))
+        if len(pairings) > 1:
+            raise ValueError("counterfactual results mix artifacts or epochs")
         if result.group_id in quarantined_group_ids:
             continue
         group = groups[result.group_id]
@@ -136,7 +144,8 @@ def _valid_identifier(value: str) -> bool:
         bool(value)
         and len(encoded) <= 256
         and not any(
-            character.isspace() or unicodedata.category(character) == "Cc"
+            character.isspace()
+            or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
             for character in value
         )
     )

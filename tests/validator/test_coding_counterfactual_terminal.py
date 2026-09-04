@@ -106,6 +106,31 @@ def test_terminal_quarantine_cannot_raise_score() -> None:
     assert quarantined_failed.monotone_shadow_score < 1.0
 
 
+def test_terminal_rejects_mixed_artifact_or_epoch() -> None:
+    with pytest.raises(ValueError, match="mix artifacts or epochs"):
+        aggregate_counterfactual_results(
+            _group("good", {"v1_relevant"})
+            + (
+                CounterfactualTerminalResult(
+                    "bad",
+                    "v0_none",
+                    False,
+                    agent_artifact_sha256="a" * 64,
+                    repository_epoch="epoch-1",
+                ),
+            ),
+            expected_group_ids=("good", "bad"),
+        )
+
+
+def test_terminal_rejects_format_control_group_id() -> None:
+    with pytest.raises(ValueError, match="expected-group authority"):
+        aggregate_counterfactual_results(
+            (),
+            expected_group_ids=("g\u200b1",),
+        )
+
+
 def test_terminal_rejects_non_boolean_evidence() -> None:
     with pytest.raises(ValueError, match="outside expected authority"):
         aggregate_counterfactual_results(
