@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import unicodedata
 from dataclasses import dataclass
+
+from ditto.api_models.coding_canonical import coding_canonical_json_bytes
 
 
 class CounterfactualAssignmentError(ValueError):
@@ -34,7 +35,9 @@ def issue_blinded_assignment(
         len(assignment_key) < 32
         or replicate_id <= 0
         or authority.memory_volume_tier not in {"small", "medium", "large"}
+        or type(authority.seeded_memory_bytes) is not int
         or authority.seeded_memory_bytes <= 0
+        or type(authority.model_visible_memory_token_budget) is not int
         or authority.model_visible_memory_token_budget <= 0
         or any(
             len(value) != 64 or any(char not in "0123456789abcdef" for char in value)
@@ -50,7 +53,7 @@ def issue_blinded_assignment(
         raise CounterfactualAssignmentError(
             "counterfactual assignment authority invalid"
         )
-    preimage = json.dumps(
+    preimage = coding_canonical_json_bytes(
         {
             "artifact_sha256": authority.artifact_sha256,
             "group_commitment": authority.opaque_group_commitment,
@@ -59,10 +62,9 @@ def issue_blinded_assignment(
             "repository_epoch": authority.repository_epoch,
             "schema": "dittobench-coding-counterfactual-assignment-preimage-v2",
         },
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
+        maximum_bytes=4 << 10,
+        label="counterfactual assignment preimage",
+    )
     assignment_id = hmac.new(assignment_key, preimage, hashlib.sha256).hexdigest()
     return {
         "agent_artifact_sha256": authority.artifact_sha256,
@@ -89,7 +91,8 @@ def _valid_identifier(value: str, *, maximum_bytes: int) -> bool:
         bool(value)
         and len(encoded) <= maximum_bytes
         and not any(
-            character.isspace() or unicodedata.category(character) == "Cc"
+            character.isspace()
+            or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
             for character in value
         )
     )
