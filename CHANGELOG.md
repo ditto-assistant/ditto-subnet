@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.203.0 (2026-09-04)
+
+### Features
+
+- **coding-datagen**: Compile private v2 releases
+  ([#1598](https://github.com/ditto-assistant/ditto-subnet/pull/1598),
+  [`a8a453a`](https://github.com/ditto-assistant/ditto-subnet/commit/a8a453a47ed9929d96aa12391b48ddb28f5b24fa))
+
+
 ## v0.202.0 (2026-09-04)
 
 ### Bug Fixes
