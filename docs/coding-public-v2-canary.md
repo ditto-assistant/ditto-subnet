@@ -22,7 +22,8 @@ weight_eligible = false
 ```
 
 The canary uses only fully public material. It grants no private catalog,
-Hippius, decryption, curator, grader, or scoring capability.
+Hippius, decryption, curator, private grader, or scoring capability. Public
+grader material is injected only after freeze.
 
 ## Required sequence
 
@@ -30,6 +31,7 @@ Hippius, decryption, curator, grader, or scoring capability.
 health
   -> seed
   -> identical seed replay
+  -> exchange ticket-scoped inference grant
   -> run
   -> revoke workspace capability
   -> freeze workspace
@@ -37,10 +39,10 @@ health
   -> append terminal certification evidence
 ```
 
-The sequence must demonstrate a valid coding interface, validator-owned tool
-activity, bounded workspace mutation, and reproducible public grading. A
-candidate failure affects only coding qualification; it cannot alter normal
-DittoBench results.
+The sequence must demonstrate a valid coding interface, source-bound inference,
+validator-owned tool activity, bounded workspace mutation, and reproducible
+public grading. A candidate failure affects only coding qualification; it
+cannot alter normal DittoBench results.
 
 ## v2 release transition
 
@@ -69,5 +71,8 @@ public grader infrastructure   -> validator infrastructure
 ```
 
 No local result or miner-provided report may substitute for this validator-run
-canary. A canary pass is necessary before a future private shadow run, but is
-never sufficient for leaderboard, reward, or emission eligibility.
+canary. A canary pass is necessary for coding-capability certification, but it
+is not private-shadow admission: the exact screened artifact must already have
+a durable Tool + Memory core-qualification decision and a claimed certification
+lease. A canary pass is never sufficient for leaderboard, reward, or emission
+eligibility.
