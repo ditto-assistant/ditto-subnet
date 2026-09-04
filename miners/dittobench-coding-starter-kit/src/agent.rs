@@ -1,6 +1,7 @@
 //! Coding-specific model/tool loop with bounded operational state.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -80,9 +81,22 @@ impl CodingAgent {
         memories: &[RetrievedMemory],
     ) -> Result<AgentOutcome, AgentError> {
         let deadline = Duration::from_secs(request.budgets.wall_time_seconds);
-        match tokio::time::timeout(deadline, self.run_inner(request, memories)).await {
-            Ok(result) => result,
-            Err(_) => Ok(degraded_outcome(&AgentError::WallTime, 0, 0, 0)),
+        let meters = Arc::new(RunMeters::default());
+        if let Ok(result) = tokio::time::timeout(
+            deadline,
+            self.run_inner(request, memories, Arc::clone(&meters)),
+        )
+        .await
+        {
+            result
+        } else {
+            let (input_tokens, output_tokens, workspace_tool_calls) = meters.snapshot();
+            Ok(degraded_outcome(
+                &AgentError::WallTime,
+                input_tokens,
+                output_tokens,
+                workspace_tool_calls,
+            ))
         }
     }
 
@@ -92,6 +106,7 @@ impl CodingAgent {
         &self,
         request: &CodingRunRequest,
         memories: &[RetrievedMemory],
+        meters: Arc<RunMeters>,
     ) -> Result<AgentOutcome, AgentError> {
         let mut messages = initial_messages(request, memories);
         let definitions = self
@@ -105,13 +120,13 @@ impl CodingAgent {
             .map(|tool| (tool.definition().name, Arc::clone(tool)))
             .collect();
         let max_turns = usize::try_from(request.budgets.workspace_tool_calls)
-            .unwrap_or(256)
+            .unwrap_or(1_000)
             .saturating_add(16)
-            .min(256);
+            .min(1_016);
         let context_bytes = usize::try_from(request.budgets.model_input_tokens)
-            .unwrap_or(usize::MAX)
+            .unwrap_or(2_000_000)
             .saturating_mul(4)
-            .min(256 * 1024);
+            .min(8_000_000);
         let mut input_tokens = 0_u64;
         let mut output_tokens = 0_u64;
         let mut workspace_tool_calls = 0_u32;
@@ -147,6 +162,7 @@ impl CodingAgent {
                 output_tokens = output_tokens.saturating_add(
                     u64::try_from(cost.usage.output_tokens.max(0)).unwrap_or(u64::MAX),
                 );
+                meters.store(input_tokens, output_tokens, workspace_tool_calls);
             }
             if input_tokens > request.budgets.model_input_tokens {
                 return Ok(degraded_outcome(
@@ -258,6 +274,7 @@ impl CodingAgent {
                 ..ChatMessage::default()
             });
             workspace_tool_calls = workspace_tool_calls.saturating_add(1);
+            meters.store(input_tokens, output_tokens, workspace_tool_calls);
         }
         Ok(degraded_outcome(
             &AgentError::TurnBudget,
@@ -265,6 +282,30 @@ impl CodingAgent {
             output_tokens,
             workspace_tool_calls,
         ))
+    }
+}
+
+#[derive(Default)]
+struct RunMeters {
+    input_tokens: AtomicU64,
+    output_tokens: AtomicU64,
+    workspace_tool_calls: AtomicU32,
+}
+
+impl RunMeters {
+    fn store(&self, input_tokens: u64, output_tokens: u64, workspace_tool_calls: u32) {
+        self.input_tokens.store(input_tokens, Ordering::Relaxed);
+        self.output_tokens.store(output_tokens, Ordering::Relaxed);
+        self.workspace_tool_calls
+            .store(workspace_tool_calls, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> (u64, u64, u32) {
+        (
+            self.input_tokens.load(Ordering::Relaxed),
+            self.output_tokens.load(Ordering::Relaxed),
+            self.workspace_tool_calls.load(Ordering::Relaxed),
+        )
     }
 }
 
@@ -620,5 +661,49 @@ mod tests {
         let outcome = agent.run(&request, &[]).await.unwrap();
         assert!(outcome.final_text.contains("wall-time budget exhausted"));
         assert!(outcome.final_text.contains("freeze it"));
+        assert_eq!(outcome.workspace_tool_calls, 0);
+    }
+
+    struct OneToolThenHang {
+        remaining: std::sync::atomic::AtomicU8,
+    }
+
+    #[async_trait]
+    impl Model for OneToolThenHang {
+        async fn next(
+            &self,
+            _messages: &[ChatMessage],
+            _tools: &[ToolDefinition],
+        ) -> ditto_harness::Result<ChatChunk> {
+            if self.remaining.swap(0, Ordering::Relaxed) == 0 {
+                std::future::pending::<()>().await;
+            }
+            Ok(ChatChunk {
+                tool_call: Some(ToolCall {
+                    id: "call".to_string(),
+                    name: "repo_read_file".to_string(),
+                    args: json!({"path": "app.py"}),
+                }),
+                ..ChatChunk::default()
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn wall_time_preserves_workspace_activity_counts() {
+        let mut request = request();
+        request.budgets.wall_time_seconds = 1;
+        let tool = Arc::new(RecordingTool {
+            calls: Mutex::new(Vec::new()),
+        });
+        let agent = CodingAgent::new(
+            Arc::new(OneToolThenHang {
+                remaining: std::sync::atomic::AtomicU8::new(1),
+            }),
+            vec![tool as Arc<dyn Tool>],
+        );
+        let outcome = agent.run(&request, &[]).await.unwrap();
+        assert!(outcome.final_text.contains("wall-time budget exhausted"));
+        assert_eq!(outcome.workspace_tool_calls, 1);
     }
 }

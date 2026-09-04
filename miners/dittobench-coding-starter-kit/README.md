@@ -142,9 +142,9 @@ the authoritative workspace.
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
+# from the repository root:
+scripts/test-coding-starter-practice-e2e.sh
 ```
 
-The practice integration test consumes the committed
-`PRACTICE-LEDGER-001` capsule, confirms its base fails, runs the scripted agent
-through an HTTP workspace capability, and confirms the real public grader tests
-pass afterward.
+`cargo test` covers protocol, compaction, and the scripted agent loop.
+The PRACTICE-LEDGER-001 HTTP+grader path is the repository-root e2e script.
