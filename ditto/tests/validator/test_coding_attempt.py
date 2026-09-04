@@ -526,7 +526,9 @@ async def test_non_rerunnable_recovery_submits_authoring_infrastructure_failure(
     )
     captured: dict[str, Any] = {}
 
-    async def submit_coding_shadow_result(agent_id: UUID, **kwargs: Any) -> object:
+    async def submit_coding_shadow_result(
+        agent_id: UUID, **kwargs: Any
+    ) -> SubmitCodingShadowResultResponse:
         assert agent_id == _ticket().agent_id
         captured["evidence"] = kwargs["evidence"]
         captured["task_evidence"] = kwargs["task_evidence"]
