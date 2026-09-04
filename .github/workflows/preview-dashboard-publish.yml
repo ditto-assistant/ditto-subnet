@@ -259,6 +259,27 @@ jobs:
           test "$(jq -r .state <<<"$pr_json")" = open
           test "$(jq -r .head.sha <<<"$pr_json")" = "$PREVIEW_SHA"
 
+      - name: Initialize the native Pages hostname when the project is empty
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+        run: |
+          set -euo pipefail
+          endpoint="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments"
+          response="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "${endpoint}?env=production&per_page=20&page=1")"
+          jq -e '.success == true' <<<"$response" >/dev/null
+          if [ "$(jq '.result | length' <<<"$response")" -eq 0 ]; then
+            ./apps/backroom/node_modules/.bin/wrangler pages deploy \
+              "${RUNNER_TEMP}/validated-dashboard/dist" \
+              --project-name "$PAGES_PROJECT" \
+              --branch main \
+              --commit-hash "$PREVIEW_SHA" \
+              --commit-message bootstrap-dashboard-pages-dev \
+              --commit-dirty=false
+          fi
+
       - name: Publish the exact-SHA Pages deployment
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}

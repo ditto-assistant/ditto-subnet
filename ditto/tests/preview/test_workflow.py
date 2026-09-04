@@ -190,7 +190,10 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     assert "${endpoint}/${deployment_id}?force=true" in text
     assert ".result_info.total_pages // 1" in text
     assert "per_page=100" not in text
-    assert text.count("per_page=20") == 5
+    assert text.count("per_page=20") == 6
+    assert '"${endpoint}?env=production&per_page=20&page=1"' in text
+    assert "--commit-message bootstrap-dashboard-pages-dev" in text
+    assert "--branch main" in text
     assert "jq -r .url" in text
     assert "This page contains untrusted PR code. Do not enter credentials." in text
     assert "production-public-read-only" in text
