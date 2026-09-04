@@ -199,6 +199,14 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     assert retire["env"]["PREVIEW_BRANCH"] == "main"
     assert "--write-out '%{http_code}'" in text
     assert 'if [ "$http_code" = 200 ] && jq -e' in text
+    delete_project = next(
+        step
+        for step in retire_steps
+        if step.get("name") == "Delete the isolated project after PR close"
+    )
+    assert "needs.inspect.outputs.reason == 'retire-closed'" in delete_project["if"]
+    assert 'pages/projects/${PAGES_PROJECT}"' in delete_project["run"]
+    assert "-X DELETE" in delete_project["run"]
     assert "This page contains untrusted PR code. Do not enter credentials." in text
     assert "production-public-read-only" in text
     assert 'has("generated_at") and has("miners")' in text

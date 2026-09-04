@@ -628,6 +628,21 @@ jobs:
           done
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' "$tombstone_url")" = 410
 
+      - name: Delete the isolated project after PR close
+        if: >-
+          steps.existing.outputs.found == 'true' &&
+          steps.current.outputs.current == 'true' &&
+          needs.inspect.outputs.reason == 'retire-closed'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare_api_token }}
+        run: |
+          set -euo pipefail
+          endpoint="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}"
+          response="$(curl --fail-with-body --silent --show-error -X DELETE \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$endpoint")"
+          jq -e '.success == true' <<<"$response" >/dev/null
+
       - name: Mark the preview retired
         if: >-
           steps.existing.outputs.found == 'true' &&
