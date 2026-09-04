@@ -70,3 +70,12 @@ def test_public_source_intake_rejects_non_public_source_urls(tmp_path: Path) -> 
     path.write_bytes(json.dumps(value).encode("utf-8"))
     with pytest.raises(CorpusError, match="authority"):
         load_public_source_intake(path)
+
+
+def test_public_source_intake_rejects_path_task_ids(tmp_path: Path) -> None:
+    value = _manifest()
+    value["tasks"][0]["task_id"] = "../etc"  # type: ignore[index]
+    path = tmp_path / "intake.json"
+    path.write_bytes(json.dumps(value).encode("utf-8"))
+    with pytest.raises(CorpusError, match="authority"):
+        load_public_source_intake(path)

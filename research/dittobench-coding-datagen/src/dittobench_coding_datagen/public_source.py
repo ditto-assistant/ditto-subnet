@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
-from dittobench_coding_datagen.canonical import canonical_json_bytes
+from dittobench_coding_datagen.canonical import canonical_json_bytes, safe_opaque_id
 from dittobench_coding_datagen.model import CorpusError
 
 PublicLanguage = Literal["python", "typescript", "rust", "go"]
@@ -98,15 +98,17 @@ def load_public_source_intake(path: Path) -> PublicSourceIntake:
         raise CorpusError("public source intake fields are invalid")
     if raw["schema"] != "dittobench-coding-public-source-intake-v2":
         raise CorpusError("public source intake schema is invalid")
-    if not _identifier(raw["public_release_id"]):
-        raise CorpusError("public source intake release identity is invalid")
+    try:
+        public_release_id = safe_opaque_id(raw["public_release_id"])
+    except CorpusError as error:
+        raise CorpusError("public source intake release identity is invalid") from error
     if not isinstance(raw["tasks"], list):
         raise CorpusError("public source intake tasks are invalid")
     tasks = tuple(_parse_task(task) for task in raw["tasks"])
     _validate_release(tasks)
     return PublicSourceIntake(
         schema="dittobench-coding-public-source-intake-v2",
-        public_release_id=raw["public_release_id"],
+        public_release_id=public_release_id,
         tasks=tasks,
     )
 
@@ -126,11 +128,14 @@ def _parse_task(raw: object) -> PublicTaskSource:
     }:
         raise CorpusError("public source task fields are invalid")
     values = {name: raw[name] for name in raw}
+    try:
+        values["task_id"] = safe_opaque_id(values["task_id"])
+        values["repository_family"] = safe_opaque_id(values["repository_family"])
+        values["licence_spdx"] = safe_opaque_id(values["licence_spdx"])
+    except CorpusError as error:
+        raise CorpusError("public source task authority is invalid") from error
     if (
-        not _identifier(values["task_id"])
-        or not _identifier(values["repository_family"])
-        or not _identifier(values["licence_spdx"])
-        or values["language"] not in _LANGUAGE_COUNTS
+        values["language"] not in _LANGUAGE_COUNTS
         or values["source_kind"]
         not in {"swe_bench_verified", "swe_bench_multilingual", "public_maintainer"}
         or values["condition"] not in _CONDITIONS
@@ -159,15 +164,6 @@ def _validate_release(tasks: tuple[PublicTaskSource, ...]) -> None:
     for condition in _CONDITIONS:
         if sum(task.condition == condition for task in tasks) != 2:
             raise CorpusError("public source intake condition split is invalid")
-
-
-def _identifier(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and bool(value)
-        and len(value.encode("utf-8")) <= 256
-        and not any(character.isspace() or ord(character) < 32 for character in value)
-    )
 
 
 def _sha256(value: object) -> bool:
