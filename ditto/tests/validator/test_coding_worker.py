@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Literal
@@ -392,3 +394,28 @@ async def test_claim_from_another_run_is_rejected_before_execution() -> None:
     with pytest.raises(CodingAttemptIntegrityError, match="authority"):
         await worker.run_once()
     assert platform.events == ["claim"]
+
+
+async def test_run_forever_logs_exception_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stop = asyncio.Event()
+    worker = CodingShadowWorker(
+        platform=_Platform(_claim(started=False)),
+        runtime=_Runtime("released"),  # type: ignore[arg-type]
+        publication=_Publication(),  # type: ignore[arg-type]
+        instance_id=_INSTANCE,
+        run_row_id=_RUN,
+        clock=lambda: _NOW,
+        poll_seconds=1,
+    )
+
+    async def boom() -> bool:
+        stop.set()
+        raise RuntimeError("lease expired for ticket-xyz")
+
+    worker.run_once = boom  # type: ignore[method-assign]
+    with caplog.at_level(logging.WARNING, logger="ditto.validator.coding_worker"):
+        await worker.run_forever(stop, drain_requested=asyncio.Event())
+    assert "type=RuntimeError" in caplog.text
+    assert "lease expired for ticket-xyz" in caplog.text

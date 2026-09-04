@@ -266,8 +266,9 @@ class CodingShadowWorker:
                 raise
             except Exception as error:
                 logger.warning(
-                    "shadow coding worker attempt failed type=%s",
+                    "shadow coding worker attempt failed type=%s error=%s",
                     type(error).__name__,
+                    str(error)[:200],
                 )
                 worked = False
             finally:
