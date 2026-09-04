@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from dittobench_coding_datagen.canonical import canonical_json_bytes
+from dittobench_coding_datagen.canonical import canonical_json_bytes, safe_opaque_id
 from dittobench_coding_datagen.model import CorpusError
 
 LocalPracticeCondition = Literal[
@@ -92,33 +92,47 @@ def build_local_practice_result(
 ) -> LocalPracticeResult:
     """Build one strict ten-task report without granting competitive authority."""
 
+    try:
+        public_release_id = safe_opaque_id(public_release_id)
+        ordered = tuple(sorted(tasks, key=lambda task: task.task_id))
+        task_ids = tuple(safe_opaque_id(task.task_id) for task in ordered)
+    except CorpusError as error:
+        raise CorpusError("local practice result authority is invalid") from error
     if (
-        not _safe_identifier(public_release_id)
-        or not _sha256(public_release_manifest_sha256)
+        not _sha256(public_release_manifest_sha256)
         or not _sha256(harness_artifact_sha256)
-        or len(tasks) != 10
-        or len({task.task_id for task in tasks}) != 10
-        or any(not _safe_identifier(task.task_id) for task in tasks)
-        or any(type(task.resolved) is not bool for task in tasks)
-        or any(type(task.protocol_valid) is not bool for task in tasks)
-        or any(type(task.patch_valid) is not bool for task in tasks)
+        or len(ordered) != 10
+        or len(set(task_ids)) != 10
+        or any(type(task.resolved) is not bool for task in ordered)
+        or any(type(task.protocol_valid) is not bool for task in ordered)
+        or any(type(task.patch_valid) is not bool for task in ordered)
+        or any(
+            task.terminal_domain
+            not in {"resolved", "repair_failure", "harness_failure"}
+            for task in ordered
+        )
+        or any(
+            (task.terminal_domain == "resolved") != task.resolved for task in ordered
+        )
+        or any(
+            task.resolved and not (task.protocol_valid and task.patch_valid)
+            for task in ordered
+        )
     ):
         raise CorpusError("local practice result authority is invalid")
     for condition in _CONDITIONS:
-        if sum(task.condition == condition for task in tasks) != 2:
+        if sum(task.condition == condition for task in ordered) != 2:
             raise CorpusError(
                 "local practice result must contain two tasks per condition"
             )
-    if any((task.terminal_domain == "resolved") != task.resolved for task in tasks):
-        raise CorpusError("local practice result terminal domain disagrees")
-    resolved_count = sum(task.resolved for task in tasks)
+    resolved_count = sum(task.resolved for task in ordered)
     return LocalPracticeResult(
         schema="dittobench-coding-local-practice-result-v2",
         coding_contract_version=2,
         public_release_id=public_release_id,
         public_release_manifest_sha256=public_release_manifest_sha256,
         harness_artifact_sha256=harness_artifact_sha256,
-        tasks=tasks,
+        tasks=ordered,
         resolved_count=resolved_count,
         local_practice_score_micros=(resolved_count * 1_000_000) // len(tasks),
         authoritative=False,
@@ -130,14 +144,6 @@ def build_local_practice_result(
 def _sha256(value: str) -> bool:
     return len(value) == 64 and all(
         character in "0123456789abcdef" for character in value
-    )
-
-
-def _safe_identifier(value: str) -> bool:
-    return (
-        bool(value)
-        and len(value.encode("utf-8")) <= 256
-        and not any(character.isspace() or ord(character) < 32 for character in value)
     )
 
 

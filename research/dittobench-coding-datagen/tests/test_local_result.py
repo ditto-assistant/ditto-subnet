@@ -62,3 +62,41 @@ def test_local_result_rejects_unbalanced_conditions() -> None:
             harness_artifact_sha256="b" * 64,
             tasks=invalid,
         )
+
+
+def test_local_result_sorts_tasks_and_rejects_path_ids() -> None:
+    shuffled = tuple(reversed(_tasks()))
+    first = build_local_practice_result(
+        public_release_id="coding-public-v2",
+        public_release_manifest_sha256="a" * 64,
+        harness_artifact_sha256="b" * 64,
+        tasks=shuffled,
+    )
+    second = build_local_practice_result(
+        public_release_id="coding-public-v2",
+        public_release_manifest_sha256="a" * 64,
+        harness_artifact_sha256="b" * 64,
+        tasks=_tasks(),
+    )
+    assert first.canonical_bytes() == second.canonical_bytes()
+    assert [task.task_id for task in first.tasks] == sorted(
+        task.task_id for task in shuffled
+    )
+    with pytest.raises(CorpusError, match="authority is invalid"):
+        build_local_practice_result(
+            public_release_id="coding-public-v2",
+            public_release_manifest_sha256="a" * 64,
+            harness_artifact_sha256="b" * 64,
+            tasks=(replace(_tasks()[0], task_id="../escape"),) + _tasks()[1:],
+        )
+
+
+def test_local_result_rejects_resolved_without_valid_patch() -> None:
+    invalid = (replace(_tasks()[0], resolved=True, patch_valid=False),) + _tasks()[1:]
+    with pytest.raises(CorpusError, match="authority is invalid"):
+        build_local_practice_result(
+            public_release_id="coding-public-v2",
+            public_release_manifest_sha256="a" * 64,
+            harness_artifact_sha256="b" * 64,
+            tasks=invalid,
+        )

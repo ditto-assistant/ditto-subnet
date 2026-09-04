@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from dittobench_coding_datagen.model import CorpusError, FileIdentity
+
+_OPAQUE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def canonical_json_bytes(value: Any) -> bytes:
@@ -32,6 +35,14 @@ def canonical_json_bytes(value: Any) -> bytes:
 
 def sha256_hex(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
+
+
+def safe_opaque_id(value: object) -> str:
+    """Reject identifiers that cannot be used as a single path component."""
+
+    if not isinstance(value, str) or not _OPAQUE_ID.fullmatch(value):
+        raise CorpusError("identifier is unsafe")
+    return value
 
 
 def safe_relative_path(raw: str) -> str:
