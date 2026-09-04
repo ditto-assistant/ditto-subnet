@@ -12,11 +12,11 @@ import (
 )
 
 type canonicalModel interface {
-	RunManifest | SeedRequest | RunRequest
+	RunManifest | SeedRequest | RunRequest | CounterfactualAssignmentV2 | CounterfactualResultV2
 }
 
 type parsedModel interface {
-	RunManifest | SeedRequest | RunRequest | TaskEvidence | RunEvidence
+	RunManifest | SeedRequest | RunRequest | TaskEvidence | RunEvidence | CounterfactualAssignmentV2 | CounterfactualResultV2
 }
 
 // CanonicalJSON validates and emits the sorted known-field projection with one
@@ -165,6 +165,10 @@ func validateCanonical[T parsedModel](value T) error {
 		return typed.Validate()
 	case RunEvidence:
 		return typed.Validate()
+	case CounterfactualAssignmentV2:
+		return typed.Validate()
+	case CounterfactualResultV2:
+		return typed.Validate()
 	default:
 		return errors.New("unsupported canonical coding model")
 	}
@@ -188,6 +192,14 @@ func ParseTaskEvidence(body []byte) (TaskEvidence, error) {
 
 func ParseRunEvidence(body []byte) (RunEvidence, error) {
 	return parseCanonical[RunEvidence](body, validateRunEvidenceShape)
+}
+
+func ParseCounterfactualAssignmentV2(body []byte) (CounterfactualAssignmentV2, error) {
+	return parseCanonical[CounterfactualAssignmentV2](body, validateCounterfactualAssignmentV2Shape)
+}
+
+func ParseCounterfactualResultV2(body []byte) (CounterfactualResultV2, error) {
+	return parseCanonical[CounterfactualResultV2](body, validateCounterfactualResultV2Shape)
 }
 
 // ValidateJSONDocument applies the shared bounded Unicode, duplicate-field,
@@ -435,6 +447,19 @@ func validateRunRequestShape(object map[string]any) error {
 		return err
 	}
 	return requireFields(budgets, "$.budgets", "model_input_tokens", "model_output_tokens", "workspace_tool_calls", "wall_time_seconds")
+}
+
+func validateCounterfactualAssignmentV2Shape(object map[string]any) error {
+	return requireFields(object, "$", "schema", "coding_contract_version", "weight_eligible",
+		"agent_artifact_sha256", "opaque_assignment_id", "repository_epoch", "memory_bundle_sha256",
+		"seeded_memory_bytes", "model_visible_memory_token_budget", "memory_volume_tier")
+}
+
+func validateCounterfactualResultV2Shape(object map[string]any) error {
+	return requireFields(object, "$", "schema", "coding_contract_version", "weight_eligible",
+		"agent_artifact_sha256", "base_task_group_id", "condition", "repository_epoch",
+		"quorum_group_id", "replicate_id", "task_evidence_sha256", "resolved",
+		"model_visible_memory_token_count")
 }
 
 func validateModelShape(object map[string]any, path string) error {
