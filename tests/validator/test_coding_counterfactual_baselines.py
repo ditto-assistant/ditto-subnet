@@ -12,3 +12,10 @@ def test_adversarial_baselines_preserve_monotone_incentives() -> None:
     assert (
         audit.honest.monotone_shadow_score > audit.stale_follower.monotone_shadow_score
     )
+    assert (
+        audit.honest.monotone_shadow_score > audit.context_stuffer.monotone_shadow_score
+    )
+    assert audit.missing_control.missing_result_count == 1
+    assert (
+        audit.honest.monotone_shadow_score > audit.missing_control.monotone_shadow_score
+    )
