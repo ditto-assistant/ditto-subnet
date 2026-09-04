@@ -147,12 +147,33 @@ def verify_private_v2_transport(directory: Path) -> dict[str, Any]:
             raise PrivateV2TransportError("private v2 transport object is invalid")
         digest = item.get("plaintext_sha256")
         relative = item.get("ciphertext_relative_path")
+        nonce = item.get("nonce_b64")
+        wrapped = item.get("wrapped_data_key_b64")
+        aad_sha = item.get("aad_sha256")
         if (
-            not isinstance(digest, str)
+            set(item)
+            != {
+                "plaintext_sha256",
+                "plaintext_size_bytes",
+                "ciphertext_relative_path",
+                "ciphertext_sha256",
+                "ciphertext_size_bytes",
+                "nonce_b64",
+                "wrapped_data_key_b64",
+                "aad_sha256",
+            }
+            or not isinstance(digest, str)
             or digest in seen
             or relative != f"objects/{digest}.bin"
             or not isinstance(item.get("ciphertext_size_bytes"), int)
             or item["ciphertext_size_bytes"] < 17
+            or not isinstance(nonce, str)
+            or not nonce
+            or not isinstance(wrapped, str)
+            or not wrapped
+            or not isinstance(aad_sha, str)
+            or len(aad_sha) != 64
+            or any(character not in "0123456789abcdef" for character in aad_sha)
         ):
             raise PrivateV2TransportError("private v2 transport object is invalid")
         ciphertext = _read(directory / relative)
