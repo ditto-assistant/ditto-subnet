@@ -189,6 +189,8 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     assert "deployment_trigger.metadata.branch" in text
     assert "${endpoint}/${deployment_id}?force=true" in text
     assert ".result_info.total_pages // 1" in text
+    assert "per_page=100" not in text
+    assert text.count("per_page=20") == 5
     assert "jq -r .url" in text
     assert "This page contains untrusted PR code. Do not enter credentials." in text
     assert "production-public-read-only" in text

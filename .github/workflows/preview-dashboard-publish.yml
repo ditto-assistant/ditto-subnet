@@ -287,7 +287,7 @@ jobs:
           for _ in {1..12}; do
             response="$(curl --fail-with-body --silent --show-error \
               -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              "${endpoint}?env=preview&per_page=100&page=1")"
+              "${endpoint}?env=preview&per_page=20&page=1")"
             jq -e '.success == true' <<<"$response" >/dev/null
             current="$(jq -c --arg branch "$PREVIEW_BRANCH" --arg sha "$PREVIEW_SHA" --arg message "$PUBLISH_MESSAGE" \
               '[.result[] | select(.deployment_trigger.metadata.branch == $branch and .deployment_trigger.metadata.commit_hash == $sha and .deployment_trigger.metadata.commit_message == $message)] | sort_by(.created_on) | last // empty' \
@@ -307,7 +307,7 @@ jobs:
             if [ "$page" -gt 1 ]; then
               response="$(curl --fail-with-body --silent --show-error \
                 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                "${endpoint}?env=preview&per_page=100&page=${page}")"
+                "${endpoint}?env=preview&per_page=20&page=${page}")"
               jq -e '.success == true' <<<"$response" >/dev/null
             fi
             mapfile -t page_ids < <(jq -r --arg branch "$PREVIEW_BRANCH" --arg current "$current_id" \
@@ -412,7 +412,7 @@ jobs:
             http_code="$(curl --silent --show-error --write-out '%{http_code}' \
               --output "$body" \
               -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              "${endpoint}?env=preview&per_page=100&page=${page}")"
+              "${endpoint}?env=preview&per_page=20&page=${page}")"
             # A missing project (404) means this PR never had a dashboard
             # preview, so there is nothing to retire; treat it as an empty
             # result instead of failing the retirement.
@@ -567,7 +567,7 @@ jobs:
           for _ in {1..12}; do
             response="$(curl --fail-with-body --silent --show-error \
               -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              "${endpoint}?env=preview&per_page=100&page=1")"
+              "${endpoint}?env=preview&per_page=20&page=1")"
             jq -e '.success == true' <<<"$response" >/dev/null
             tombstone="$(jq -c --arg branch "$PREVIEW_BRANCH" --arg message "$RETIRE_MESSAGE" \
               '[.result[] | select(.deployment_trigger.metadata.branch == $branch and .deployment_trigger.metadata.commit_message == $message)] | sort_by(.created_on) | last // empty' \
@@ -583,7 +583,7 @@ jobs:
             if [ "$page" -gt 1 ]; then
               response="$(curl --fail-with-body --silent --show-error \
                 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                "${endpoint}?env=preview&per_page=100&page=${page}")"
+                "${endpoint}?env=preview&per_page=20&page=${page}")"
               jq -e '.success == true' <<<"$response" >/dev/null
             fi
             mapfile -t page_ids < <(jq -r --arg branch "$PREVIEW_BRANCH" \
