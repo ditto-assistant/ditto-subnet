@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from ditto.validator.coding_counterfactual_terminal import (
     CounterfactualTerminalResult,
     aggregate_counterfactual_results,
@@ -86,3 +88,17 @@ def test_terminal_quarantine_requires_explicit_expected_group() -> None:
     )
     assert result.monotone_shadow_score == 1.0
     assert result.quarantined_group_count == 1
+
+
+def test_terminal_rejects_non_boolean_evidence() -> None:
+    with pytest.raises(ValueError, match="outside expected authority"):
+        aggregate_counterfactual_results(
+            (
+                CounterfactualTerminalResult(
+                    "good",
+                    "v0_none",
+                    1,  # type: ignore[arg-type]
+                ),
+            ),
+            expected_group_ids=("good",),
+        )

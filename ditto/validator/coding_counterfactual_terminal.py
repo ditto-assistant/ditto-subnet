@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from statistics import mean
 from typing import Literal
@@ -69,7 +70,7 @@ def aggregate_counterfactual_results(
     if (
         not 1 <= len(expected_group_ids) <= 100
         or len(expected) != len(expected_group_ids)
-        or any(not group_id for group_id in expected)
+        or any(not _valid_identifier(group_id) for group_id in expected)
         or not quarantined_group_ids <= expected
         or quarantined_group_ids == expected
     ):
@@ -78,7 +79,12 @@ def aggregate_counterfactual_results(
     groups: dict[str, dict[Condition, bool]] = {group_id: {} for group_id in active}
     untrusted = 0
     for result in results:
-        if result.group_id not in expected or result.condition not in _WEIGHTS:
+        if (
+            result.group_id not in expected
+            or result.condition not in _WEIGHTS
+            or type(result.resolved) is not bool
+            or type(result.trusted) is not bool
+        ):
             raise ValueError("counterfactual result is outside expected authority")
         if result.group_id in quarantined_group_ids:
             continue
@@ -116,4 +122,19 @@ def aggregate_counterfactual_results(
         absolute_condition_score=absolute,
         selective_group_success=selective,
         monotone_shadow_score=0.85 * absolute + 0.15 * selective,
+    )
+
+
+def _valid_identifier(value: str) -> bool:
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return (
+        bool(value)
+        and len(encoded) <= 256
+        and not any(
+            character.isspace() or unicodedata.category(character) == "Cc"
+            for character in value
+        )
     )
