@@ -64,7 +64,7 @@ def aggregate_counterfactual_results(
     expected_group_ids: tuple[str, ...],
     quarantined_group_ids: frozenset[str] = frozenset(),
 ) -> CounterfactualTerminalAggregate:
-    """Score expected groups fail-closed; quarantine requires explicit authority."""
+    """Score expected groups fail-closed; quarantine cannot raise the score."""
 
     expected = set(expected_group_ids)
     if (
@@ -72,11 +72,9 @@ def aggregate_counterfactual_results(
         or len(expected) != len(expected_group_ids)
         or any(not _valid_identifier(group_id) for group_id in expected)
         or not quarantined_group_ids <= expected
-        or quarantined_group_ids == expected
     ):
         raise ValueError("counterfactual expected-group authority is invalid")
-    active = expected - quarantined_group_ids
-    groups: dict[str, dict[Condition, bool]] = {group_id: {} for group_id in active}
+    groups: dict[str, dict[Condition, bool]] = {group_id: {} for group_id in expected}
     untrusted = 0
     for result in results:
         if (
@@ -94,7 +92,11 @@ def aggregate_counterfactual_results(
         if not result.trusted:
             untrusted += 1
         group[result.condition] = result.resolved if result.trusted else False
-    missing = sum(len(_CONDITIONS) - len(group) for group in groups.values())
+    missing = sum(
+        len(_CONDITIONS) - len(group)
+        for group_id, group in groups.items()
+        if group_id not in quarantined_group_ids
+    )
     rates = {
         condition: mean(float(group.get(condition, False)) for group in groups.values())
         for condition in _CONDITIONS
