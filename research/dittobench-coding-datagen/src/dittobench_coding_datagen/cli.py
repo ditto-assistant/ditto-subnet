@@ -20,6 +20,7 @@ from dittobench_coding_datagen.private_authoring import (
     write_private_authoring_output,
 )
 from dittobench_coding_datagen.private_calibration import compile_private_calibration
+from dittobench_coding_datagen.private_progress import audit_private_corpus_progress
 from dittobench_coding_datagen.private_release import (
     compile_private_release,
     load_private_release,
@@ -247,6 +248,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     private_calibration_parser.add_argument("--output", type=Path, required=True)
 
+    private_progress_parser = subcommands.add_parser(
+        "audit-private-corpus-progress",
+        help="verify partial private authoring state and emit redacted progress",
+    )
+    private_progress_parser.add_argument("--groups-dir", type=Path, required=True)
+    private_progress_parser.add_argument("--output", type=Path)
+
     private_release_parser = subcommands.add_parser(
         "compile-private-release",
         help="compile fifty audited private groups into one release authority",
@@ -448,6 +456,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             body = canonical_json_bytes(calibration)
             write_private_authoring_output(args.output, body)
+            print(body.decode("utf-8"), end="")
+            return 0
+        if args.command == "audit-private-corpus-progress":
+            progress = audit_private_corpus_progress(args.groups_dir)
+            body = progress.canonical_bytes()
+            if args.output is not None:
+                write_private_authoring_output(args.output, body)
             print(body.decode("utf-8"), end="")
             return 0
         if args.command == "compile-private-release":

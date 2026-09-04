@@ -89,6 +89,13 @@ hidden tests. Test counts and outcomes must be stable across replicates. The
 receipt binds observation digests; it does not make private task material
 public or make the task weight-eligible.
 
+Partial authoring state may be checked with the redacted corpus-progress audit.
+It verifies every group manifest, input audit, and calibration authority;
+rejects duplicate snapshots, graders, memories, reviews, and receipts; enforces
+at most five groups per repository stratum and one runner profile; and emits
+only aggregate counts plus a corpus-progress digest. `ready_for_release` is true
+only at exactly 50 groups in ten complete five-group strata.
+
 The private input audit opens all five canonical memory-bundle files, verifies
 their manifest-bound SHA-256 values, requires an empty V0 bundle and non-empty
 V1-V4 bundles, rejects credential-like content, and binds the complete memory
