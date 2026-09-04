@@ -50,3 +50,23 @@ def test_snapshot_rejects_nested_git_and_symlinks(tmp_path: Path) -> None:
     (source / "link").symlink_to(source / "src" / "main.py")
     with pytest.raises(CorpusError, match="symlink"):
         export_sanitized_snapshot(source, tmp_path / "symlink")
+
+
+def test_snapshot_omits_nested_caches_and_rejects_env_files(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    (source / "src" / "__pycache__").mkdir()
+    (source / "src" / "__pycache__" / "main.cpython-313.pyc").write_bytes(b"\0")
+    (source / "web" / "node_modules" / "left-pad").mkdir(parents=True)
+    (source / "web" / "node_modules" / "left-pad" / "index.js").write_text(
+        "module.exports=1\n", encoding="utf-8"
+    )
+    snapshot = export_sanitized_snapshot(source, tmp_path / "caches")
+    workspace = tmp_path / "caches" / "workspace"
+    assert snapshot.excluded_root_entries == (".git", ".github")
+    assert not (workspace / "src" / "__pycache__").exists()
+    assert not (workspace / "web" / "node_modules").exists()
+    assert (workspace / "src" / "main.py").is_file()
+
+    (source / ".env").write_text("OPENROUTER_API_KEY=secret\n", encoding="utf-8")
+    with pytest.raises(CorpusError, match="credential file"):
+        export_sanitized_snapshot(source, tmp_path / "env")

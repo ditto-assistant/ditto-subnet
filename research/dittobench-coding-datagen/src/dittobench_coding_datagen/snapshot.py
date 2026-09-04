@@ -19,12 +19,13 @@ from dittobench_coding_datagen.canonical import (
 from dittobench_coding_datagen.model import CorpusError
 
 SNAPSHOT_SCHEMA = "dittobench-coding-sanitized-snapshot-v1"
-_ROOT_EXCLUSIONS = frozenset(
+_ROOT_CONTROL_EXCLUSIONS = frozenset({".git", ".github"})
+_CACHE_DIRECTORIES = frozenset(
     {
-        ".git",
-        ".github",
+        ".idea",
         ".pytest_cache",
         ".venv",
+        ".vscode",
         "__pycache__",
         "node_modules",
         "target",
@@ -100,8 +101,10 @@ def _copy_source(source: Path, destination: Path) -> set[str]:
             relative = path.relative_to(source).as_posix()
             if path.is_symlink():
                 raise CorpusError(f"source snapshot contains a symlink: {relative}")
-            if relative_root == Path(".") and name in _ROOT_EXCLUSIONS:
+            if relative_root == Path(".") and name in _ROOT_CONTROL_EXCLUSIONS:
                 excluded.add(name)
+                continue
+            if name in _CACHE_DIRECTORIES:
                 continue
             safe_relative_path(relative)
             retained_directories.append(name)
@@ -109,9 +112,15 @@ def _copy_source(source: Path, destination: Path) -> set[str]:
         for name in sorted(files):
             path = root_path / name
             relative = path.relative_to(source).as_posix()
-            if relative_root == Path(".") and name in _ROOT_EXCLUSIONS:
+            if relative_root == Path(".") and name in _ROOT_CONTROL_EXCLUSIONS:
                 excluded.add(name)
                 continue
+            if name in _CACHE_DIRECTORIES:
+                continue
+            if name == ".env" or name.startswith(".env."):
+                raise CorpusError(
+                    f"source snapshot contains a credential file: {relative}"
+                )
             safe_relative_path(relative)
             info = path.lstat()
             if path.is_symlink():
