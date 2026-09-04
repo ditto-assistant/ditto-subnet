@@ -509,3 +509,18 @@ def test_ticket_rejects_boolean_version_and_zero_identity() -> None:
             screened_image_sha256=valid.screened_image_sha256,
             claim_instance_id=valid.claim_instance_id,
         )
+
+
+def test_ticket_rejects_empty_claim_instance_id() -> None:
+    valid = _ticket()
+    with pytest.raises(CodingAttemptIntegrityError, match="ticket"):
+        CodingAttemptTicket(
+            agent_id=valid.agent_id,
+            bench_version=valid.bench_version,
+            run_row_id=valid.run_row_id,
+            ticket_id=valid.ticket_id,
+            ticket_deadline=valid.ticket_deadline,
+            agent_artifact_sha256=valid.agent_artifact_sha256,
+            screened_image_sha256=valid.screened_image_sha256,
+            claim_instance_id="",
+        )
