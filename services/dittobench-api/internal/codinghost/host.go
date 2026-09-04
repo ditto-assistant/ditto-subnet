@@ -76,6 +76,13 @@ func New(config Config) (*Host, error) {
 	return newHost(config, nil)
 }
 
+func harnessMaxInstances(canaryEnabled bool) int {
+	if canaryEnabled {
+		return 2
+	}
+	return 1
+}
+
 func newHost(config Config, availability func(context.Context) error) (*Host, error) {
 	if nilLike(config.SourceListener) || config.Docker == nil || !validToken(config.ControlToken) ||
 		config.Policy.Validate() != nil || config.MaxTotalBytes < 64<<20 ||
@@ -151,7 +158,8 @@ func newHost(config Config, availability func(context.Context) error) (*Host, er
 		return nil, errors.Join(ErrInvalidConfig, availabilityErr)
 	}
 	harnesses, err := codingharness.New(codingharness.Config{
-		Runtime: harnessRuntime, Sources: registry, Now: now, MaxInstances: 1,
+		Runtime: harnessRuntime, Sources: registry, Now: now,
+		MaxInstances: harnessMaxInstances(config.CanaryEnabled),
 	})
 	if err != nil {
 		return nil, errors.Join(ErrInvalidConfig, err)
