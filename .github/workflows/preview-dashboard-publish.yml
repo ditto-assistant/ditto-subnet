@@ -350,15 +350,19 @@ jobs:
         run: |
           set -euo pipefail
           ready=false
+          health_body="$(mktemp)"
           for _ in {1..18}; do
-            if curl --fail --silent --show-error \
-              "$PREVIEW_URL/__preview/health" | jq -e \
-              '.status == "ok" and .mode == "untrusted-read-only-dashboard-preview"' >/dev/null; then
+            http_code="$(curl --silent --show-error --output "$health_body" \
+              --write-out '%{http_code}' "$PREVIEW_URL/__preview/health" || true)"
+            if [ "$http_code" = 200 ] && jq -e \
+              '.status == "ok" and .mode == "untrusted-read-only-dashboard-preview"' \
+              "$health_body" >/dev/null; then
               ready=true
               break
             fi
             sleep 5
           done
+          rm -f "$health_body"
           [ "$ready" = true ]
           root="$(curl --fail --silent --show-error "$PREVIEW_URL/")"
           grep -q '<div id="root"' <<<"$root"

@@ -197,6 +197,8 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     assert "env=preview" not in text
     assert publish["env"]["PREVIEW_BRANCH"] == "main"
     assert retire["env"]["PREVIEW_BRANCH"] == "main"
+    assert '--write-out \'%{http_code}\'' in text
+    assert 'if [ "$http_code" = 200 ] && jq -e' in text
     assert "This page contains untrusted PR code. Do not enter credentials." in text
     assert "production-public-read-only" in text
     assert 'has("generated_at") and has("miners")' in text
