@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+_HEX = frozenset("0123456789abcdef")
+
 
 class CodingCounterfactualExecutionError(ValueError):
     """Counterfactual authority is incomplete or violates isolation."""
@@ -41,8 +43,8 @@ def execute_replicated_conditions(
         raise CodingCounterfactualExecutionError("counterfactual arm count invalid")
     identities = {(arm.opaque_assignment_id, arm.replicate_id) for arm in arms}
     if len(identities) != len(arms) or any(
-        not arm.opaque_assignment_id
-        or len(arm.private_condition_commitment) != 64
+        not _valid_sha256(arm.opaque_assignment_id)
+        or not _valid_sha256(arm.private_condition_commitment)
         or arm.replicate_id <= 0
         for arm in arms
     ):
@@ -56,12 +58,21 @@ def execute_replicated_conditions(
                 "counterfactual arms require unique fresh workspaces"
             )
         workspace_ids.add(workspace_id)
+        resolved = execute(arm, workspace_id)
+        if type(resolved) is not bool:
+            raise CodingCounterfactualExecutionError(
+                "counterfactual execution returned a non-boolean result"
+            )
         results.append(
             CounterfactualExecutionResult(
                 opaque_assignment_id=arm.opaque_assignment_id,
                 replicate_id=arm.replicate_id,
-                resolved=bool(execute(arm, workspace_id)),
+                resolved=resolved,
                 fresh_workspace_id=workspace_id,
             )
         )
     return tuple(results)
+
+
+def _valid_sha256(value: str) -> bool:
+    return len(value) == 64 and all(character in _HEX for character in value)
