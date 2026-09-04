@@ -17,6 +17,10 @@ from dittobench_coding_datagen.public_controls import (
     PUBLIC_CONDITIONS,
     validate_public_task_controls,
 )
+from dittobench_coding_datagen.public_pack_v2 import (
+    compile_public_v2_pack,
+    validate_public_v2_pack,
+)
 from dittobench_coding_datagen.public_release import (
     build_public_practice_release,
     verify_public_practice_release,
@@ -25,6 +29,10 @@ from dittobench_coding_datagen.public_result_runner import aggregate_public_v2_r
 from dittobench_coding_datagen.public_task_runner import (
     run_public_v2_controls,
     run_public_v2_task,
+)
+from dittobench_coding_datagen.public_v2_release import (
+    build_public_v2_release,
+    verify_public_v2_release,
 )
 from dittobench_coding_datagen.snapshot_archive import (
     build_snapshot_archive,
@@ -156,6 +164,36 @@ def _parser() -> argparse.ArgumentParser:
     controls_runner_parser.add_argument("--workspace", type=Path, required=True)
     controls_runner_parser.add_argument("--image", required=True)
     controls_runner_parser.add_argument("--output", type=Path)
+
+    compile_v2_parser = subcommands.add_parser(
+        "compile-public-v2-pack",
+        help="compile verified external staging into a ten-task public v2 pack",
+    )
+    compile_v2_parser.add_argument("--staging-root", type=Path, required=True)
+    compile_v2_parser.add_argument("--intake", type=Path, required=True)
+    compile_v2_parser.add_argument("--output", type=Path, required=True)
+    compile_v2_parser.add_argument("--replace", action="store_true")
+
+    validate_v2_parser = subcommands.add_parser(
+        "validate-public-v2-pack",
+        help="verify a compiled ten-task public v2 pack",
+    )
+    validate_v2_parser.add_argument("pack", type=Path)
+
+    release_v2_parser = subcommands.add_parser(
+        "build-public-v2-release",
+        help="build a deterministic public v2 archive and descriptor",
+    )
+    release_v2_parser.add_argument("--pack", type=Path, required=True)
+    release_v2_parser.add_argument("--output", type=Path, required=True)
+    release_v2_parser.add_argument("--replace", action="store_true")
+
+    verify_release_v2_parser = subcommands.add_parser(
+        "verify-public-v2-release",
+        help="verify a public v2 archive and descriptor",
+    )
+    verify_release_v2_parser.add_argument("--archive", type=Path, required=True)
+    verify_release_v2_parser.add_argument("--descriptor", type=Path, required=True)
     return parser
 
 
@@ -275,6 +313,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.output.write_bytes(body)
             print(body.decode("utf-8"), end="")
             return 0 if control_result.resolved else 1
+        if args.command == "compile-public-v2-pack":
+            v2_manifest = compile_public_v2_pack(
+                staging_root=args.staging_root,
+                intake_path=args.intake,
+                output=args.output,
+                replace=args.replace,
+            )
+            print(canonical_json_bytes(v2_manifest).decode("utf-8"), end="")
+            return 0
+        if args.command == "validate-public-v2-pack":
+            v2_manifest = validate_public_v2_pack(args.pack)
+            print(canonical_json_bytes(v2_manifest).decode("utf-8"), end="")
+            return 0
+        if args.command == "build-public-v2-release":
+            v2_descriptor = build_public_v2_release(
+                pack=args.pack,
+                output=args.output,
+                replace=args.replace,
+            )
+            print(canonical_json_bytes(v2_descriptor).decode("utf-8"), end="")
+            return 0
+        if args.command == "verify-public-v2-release":
+            v2_descriptor = verify_public_v2_release(
+                archive=args.archive,
+                descriptor=args.descriptor,
+            )
+            print(canonical_json_bytes(v2_descriptor).decode("utf-8"), end="")
+            return 0
         raise CorpusError(f"unknown command: {args.command}")
     except CorpusError as error:
         print(json.dumps({"error": str(error)}, sort_keys=True), file=sys.stderr)

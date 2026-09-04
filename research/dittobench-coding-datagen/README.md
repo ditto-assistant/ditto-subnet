@@ -105,6 +105,22 @@ uv run dittobench-coding-datagen run-public-controls \
   --image repository/image@sha256:... \
   --output /tmp/PUBLIC-V2-00.control-result.json
 
+# Compile and verify the complete external ten-task v2 staging authority.
+uv run dittobench-coding-datagen compile-public-v2-pack \
+  --staging-root /path/to/public-v2-staging \
+  --intake /path/to/public-v2-staging/intake.json \
+  --output /tmp/coding-public-v2-pack
+uv run dittobench-coding-datagen validate-public-v2-pack \
+  /tmp/coding-public-v2-pack
+
+# Build and independently verify the immutable public distribution artifacts.
+uv run dittobench-coding-datagen build-public-v2-release \
+  --pack /tmp/coding-public-v2-pack \
+  --output /tmp/coding-public-v2-release
+uv run dittobench-coding-datagen verify-public-v2-release \
+  --archive /tmp/coding-public-v2-release/coding-public-v2.tar.gz \
+  --descriptor /tmp/coding-public-v2-release/coding-public-v2.release.json
+
 # Materialize one public task for local agent development.
 uv run dittobench-coding-datagen materialize \
   --pack practice/v1 \
