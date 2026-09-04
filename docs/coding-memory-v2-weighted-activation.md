@@ -12,7 +12,8 @@ and policy digests; an unsigned configuration toggle is insufficient.
 
 1. A reviewed private corpus release with matched V0–V4 groups, private
    condition labels, balanced visible-bundle commitments, and a documented
-   memory-volume distribution.
+   memory-volume distribution. The initial profile contains 50 complete groups;
+   each artifact selects six groups and executes all five arms for 30 attempts.
 2. Reproducible shadow execution by independent validator quorums for the same
    immutable artifact/task/condition authority, with fresh workspaces and no
    retained state between variants.
