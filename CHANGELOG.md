@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.204.0 (2026-09-04)
+
+### Features
+
+- **coding-datagen**: Require private calibration evidence
+  ([#1601](https://github.com/ditto-assistant/ditto-subnet/pull/1601),
+  [`1939900`](https://github.com/ditto-assistant/ditto-subnet/commit/1939900240da13992fdb4a7e612151cb78ed0004))
+
+
 ## v0.203.1 (2026-09-04)
 
 ### Bug Fixes
