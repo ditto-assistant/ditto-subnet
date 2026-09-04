@@ -491,15 +491,20 @@ async def insert_coding_shadow_result(
                 CodingShadowAuthoringFreeze.ticket_id == ticket.ticket_id
             )
         )
-        if (
-            freeze is None
-            or freeze.authoring_transcript_bytes == 0
-            or freeze.authoring_event_count == 0
-        ):
+        if freeze is None:
             raise CodingShadowConflictError(
                 "scoreable coding result requires authoritative frozen activity"
             )
         model = freeze.evidence.get("model")
+        invoked = not (
+            isinstance(model, dict) and model.get("usage_status") == "not_invoked"
+        )
+        if invoked and (
+            freeze.authoring_transcript_bytes == 0 or freeze.authoring_event_count == 0
+        ):
+            raise CodingShadowConflictError(
+                "scoreable coding result requires authoritative frozen activity"
+            )
         if evidence.resolved_count > 0 and (
             not freeze.protected_paths_intact
             or freeze.changed_path_count == 0

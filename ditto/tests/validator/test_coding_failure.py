@@ -11,6 +11,7 @@ import pytest
 from ditto.api_models.coding import (
     CodingAuthoringEvidence,
     CodingGraderEvidence,
+    CodingModelUsageStatus,
     CodingRunManifest,
     CodingTaskEvidence,
     CodingTerminalDomain,
@@ -232,6 +233,28 @@ def test_repair_and_candidate_reject_resolved_grader() -> None:
     ):
         with pytest.raises(CodingFailureClassificationError, match="typed stage"):
             _build(stage, authoring=authoring, grader=resolved)
+
+
+def test_gradeable_authoring_accepts_not_invoked_empty_patch() -> None:
+    authoring, _grader = _components()
+    model = authoring.model.model_copy(
+        update={
+            "usage_status": CodingModelUsageStatus.NOT_INVOKED,
+            "provider_receipt_set_sha256": None,
+            "requests": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd_micros": 0,
+            "retry_count": 0,
+        }
+    )
+    authoring = authoring.model_copy(
+        update={"model": model, "changed_path_count": 0, "changed_bytes": 0}
+    )
+    evidence = _build(CodingFailureStage.GRADING_INFRASTRUCTURE, authoring=authoring)
+    assert evidence.terminal_domain is CodingTerminalDomain.VALIDATOR_INFRASTRUCTURE
+    assert evidence.authoring is authoring
 
 
 @pytest.mark.parametrize(

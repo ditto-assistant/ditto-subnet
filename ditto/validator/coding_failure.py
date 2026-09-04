@@ -199,9 +199,14 @@ def _validate_component_policy(
             or grader is not None
         )
         and (
-            authoring.model.usage_status is not CodingModelUsageStatus.COMPLETE
+            authoring.model.usage_status
+            not in {
+                CodingModelUsageStatus.COMPLETE,
+                CodingModelUsageStatus.NOT_INVOKED,
+                CodingModelUsageStatus.PROVIDER_FAILURE,
+            }
             or not authoring.protected_paths_intact
-            or authoring.changed_path_count <= 0
+            or authoring.changed_path_count < 0
         )
     ):
         raise ValueError("failure stage requires gradeable authoring evidence")

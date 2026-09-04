@@ -14,6 +14,7 @@ from ditto.api_models.coding import (
     CodingAuthoringEvidence,
     CodingAuthoringLeaseResponse,
     CodingGradingLeaseResponse,
+    CodingModelUsageStatus,
     CodingRunEvidence,
     CodingTaskEvidence,
     SubmitCodingAuthoringFreezeResponse,
@@ -465,6 +466,56 @@ async def test_runtime_failure_triggers_phase_cleanup(
     with pytest.raises(RuntimeError, match="synthetic"):
         await coordinator.execute(_ticket())
     assert events == expected
+
+
+def test_authoring_outcome_accepts_not_invoked_and_empty_patch() -> None:
+    valid = _authoring_outcome()
+    model = valid.evidence.model.model_copy(
+        update={
+            "usage_status": CodingModelUsageStatus.NOT_INVOKED,
+            "provider_receipt_set_sha256": None,
+            "requests": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd_micros": 0,
+            "retry_count": 0,
+        }
+    )
+    empty = valid.evidence.model_copy(
+        update={"model": model, "changed_path_count": 0, "changed_bytes": 0}
+    )
+    outcome = CodingAuthoringOutcome(
+        evidence=empty,
+        authoring_transcript_object_key=valid.authoring_transcript_object_key,
+        authoring_transcript_bytes=0,
+        authoring_event_count=0,
+        frozen_submission_object_key=valid.frozen_submission_object_key,
+        capabilities_revoked=True,
+        authoring_environment_destroyed=True,
+    )
+    assert outcome.evidence.model.usage_status is CodingModelUsageStatus.NOT_INVOKED
+    CodingAuthoringOutcome(
+        evidence=valid.evidence.model_copy(
+            update={"changed_path_count": 0, "changed_bytes": 0}
+        ),
+        authoring_transcript_object_key=valid.authoring_transcript_object_key,
+        authoring_transcript_bytes=valid.authoring_transcript_bytes,
+        authoring_event_count=valid.authoring_event_count,
+        frozen_submission_object_key=valid.frozen_submission_object_key,
+        capabilities_revoked=True,
+        authoring_environment_destroyed=True,
+    )
+    with pytest.raises(CodingAttemptIntegrityError, match="not gradeable"):
+        CodingAuthoringOutcome(
+            evidence=valid.evidence,
+            authoring_transcript_object_key=valid.authoring_transcript_object_key,
+            authoring_transcript_bytes=0,
+            authoring_event_count=0,
+            frozen_submission_object_key=valid.frozen_submission_object_key,
+            capabilities_revoked=True,
+            authoring_environment_destroyed=True,
+        )
 
 
 def test_outcomes_require_revocation_cleanup_and_authoritative_activity() -> None:

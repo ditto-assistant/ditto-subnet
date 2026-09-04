@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 import bittensor
 import httpx
+import pytest
 from fastapi import FastAPI
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -24,6 +25,7 @@ from ditto.api_models.coding_catalog import (
 )
 from ditto.api_models.coding_evaluation import (
     CodingAuthoringEvidence,
+    CodingCertificationModelUsageStatus,
     CodingRunEvidence,
     CodingShadowRunAuthority,
     coding_authoring_evidence_digest,
@@ -56,6 +58,7 @@ from ditto.db.queries.coding_catalog import (
     insert_coding_catalog_release,
 )
 from ditto.db.queries.coding_evaluations import (
+    CodingShadowConflictError,
     insert_coding_authoring_freeze,
     insert_coding_shadow_result,
     insert_coding_shadow_run,
@@ -727,6 +730,93 @@ async def test_authoring_freeze_cannot_be_created_after_final_result(
             )
             == 0
         )
+
+
+async def test_scoreable_result_accepts_not_invoked_empty_freeze(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _agent_id, _run, ticket, _deadline = await _seed(session_maker)
+    authoring = _authoring_evidence()
+    model = authoring.model.model_copy(
+        update={
+            "usage_status": CodingCertificationModelUsageStatus.NOT_INVOKED,
+            "provider_receipt_set_sha256": None,
+            "requests": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd_micros": 0,
+            "retry_count": 0,
+        }
+    )
+    authoring = authoring.model_copy(
+        update={"model": model, "changed_path_count": 0, "changed_bytes": 0}
+    )
+    evidence = _failed_evidence(ticket.ticket_id)
+    async with session_maker() as session, session.begin():
+        stored_ticket = await session.get(CodingShadowTicket, ticket.ticket_id)
+        assert stored_ticket is not None
+        await insert_coding_authoring_freeze(
+            session,
+            ticket=stored_ticket,
+            evidence=authoring,
+            authoring_evidence_sha256=coding_authoring_evidence_digest(authoring),
+            authoring_transcript_object_key=(
+                f"sha256/{authoring.authoring_transcript_sha256}"
+            ),
+            authoring_transcript_bytes=0,
+            authoring_event_count=0,
+            frozen_submission_object_key=f"sha256/{authoring.frozen_patch_sha256}",
+            signature="98" * 64,
+        )
+        stored_ticket = await session.get(CodingShadowTicket, ticket.ticket_id)
+        assert stored_ticket is not None
+        inserted = await insert_coding_shadow_result(
+            session,
+            ticket=stored_ticket,
+            evidence=evidence,
+            run_evidence_sha256=coding_run_evidence_digest(evidence),
+            signature="99" * 64,
+        )
+    assert inserted.idempotent is False
+    assert isinstance(inserted.row, CodingShadowResult)
+    assert inserted.row.scoreable_task_count == 1
+    assert inserted.row.repair_failure_count == 1
+    assert inserted.row.resolved_count == 0
+
+
+async def test_scoreable_result_rejects_complete_freeze_without_transcript(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _agent_id, _run, ticket, _deadline = await _seed(session_maker)
+    authoring = _authoring_evidence()
+    evidence = _failed_evidence(ticket.ticket_id)
+    async with session_maker() as session, session.begin():
+        stored_ticket = await session.get(CodingShadowTicket, ticket.ticket_id)
+        assert stored_ticket is not None
+        await insert_coding_authoring_freeze(
+            session,
+            ticket=stored_ticket,
+            evidence=authoring,
+            authoring_evidence_sha256=coding_authoring_evidence_digest(authoring),
+            authoring_transcript_object_key=(
+                f"sha256/{authoring.authoring_transcript_sha256}"
+            ),
+            authoring_transcript_bytes=0,
+            authoring_event_count=0,
+            frozen_submission_object_key=f"sha256/{authoring.frozen_patch_sha256}",
+            signature="98" * 64,
+        )
+        stored_ticket = await session.get(CodingShadowTicket, ticket.ticket_id)
+        assert stored_ticket is not None
+        with pytest.raises(CodingShadowConflictError, match="frozen activity"):
+            await insert_coding_shadow_result(
+                session,
+                ticket=stored_ticket,
+                evidence=evidence,
+                run_evidence_sha256=coding_run_evidence_digest(evidence),
+                signature="99" * 64,
+            )
 
 
 async def test_infrastructure_result_can_close_without_authoring_freeze(

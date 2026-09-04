@@ -93,14 +93,29 @@ class CodingAuthoringOutcome:
     authoring_environment_destroyed: Literal[True]
 
     def __post_init__(self) -> None:
+        usage = self.evidence.model.usage_status
+        invoked = usage is not CodingModelUsageStatus.NOT_INVOKED
         if (
-            self.evidence.model.usage_status is not CodingModelUsageStatus.COMPLETE
+            usage
+            not in {
+                CodingModelUsageStatus.COMPLETE,
+                CodingModelUsageStatus.NOT_INVOKED,
+                CodingModelUsageStatus.PROVIDER_FAILURE,
+            }
             or not self.evidence.protected_paths_intact
-            or self.evidence.changed_path_count <= 0
+            or type(self.evidence.changed_path_count) is not int
+            or self.evidence.changed_path_count < 0
             or type(self.authoring_transcript_bytes) is not int
-            or not 0 < self.authoring_transcript_bytes <= 512 << 20
             or type(self.authoring_event_count) is not int
-            or not 0 < self.authoring_event_count <= 1_000
+            or not 0 <= self.authoring_transcript_bytes <= 512 << 20
+            or not 0 <= self.authoring_event_count <= 1_000
+            or (
+                invoked
+                and (
+                    self.authoring_transcript_bytes == 0
+                    or self.authoring_event_count == 0
+                )
+            )
             or self.authoring_transcript_object_key
             != f"sha256/{self.evidence.authoring_transcript_sha256}"
             or self.frozen_submission_object_key
