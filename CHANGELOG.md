@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.198.1 (2026-09-04)
+
+### Bug Fixes
+
+- **coding-datagen**: Allow offline Cargo lock refresh
+  ([#1586](https://github.com/ditto-assistant/ditto-subnet/pull/1586),
+  [`c812a08`](https://github.com/ditto-assistant/ditto-subnet/commit/c812a0897c8c1e4ca4cdd90b9b6dd5242fbdbea9))
+
+
 ## v0.198.0 (2026-09-04)
 
 ### Bug Fixes
