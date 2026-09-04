@@ -195,6 +195,8 @@ jobs:
       proof_result: ${{ needs.cheatcodes.result }}
       repo: ${{ github.event.pull_request.head.repo.full_name }}
       sha: ${{ github.event.pull_request.head.sha }}
+    secrets:
+      cloudflare_api_token: ${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}
     permissions:
       actions: read
       contents: read

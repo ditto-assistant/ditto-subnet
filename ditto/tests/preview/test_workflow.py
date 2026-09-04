@@ -33,7 +33,7 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     assert "pull-requests: read" in text
     assert "gh api --paginate" in text
     assert "ref: ${{ needs.plan.outputs.sha }}" in text
-    assert "CLOUDFLARE_API_TOKEN" not in text
+    assert text.count("CLOUDFLARE_PREVIEW_API_TOKEN") == 1
     assert "actions/upload-artifact@" in text
     assert (
         "node --test apps/platform/dashboard/preview/cloudflare-pages-worker.test.mjs"
@@ -71,6 +71,10 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     assert publish["with"]["bundle_result"] == "${{ needs.dashboard-bundle.result }}"
     assert publish["with"]["proof_result"] == "${{ needs.cheatcodes.result }}"
     assert publish["with"]["sha"] == "${{ github.event.pull_request.head.sha }}"
+    assert publish["secrets"] == {
+        "cloudflare_api_token": "${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}"
+    }
+    assert "inherit" not in publish["secrets"]
 
 
 def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
@@ -89,6 +93,12 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
         "proof_result",
         "repo",
         "sha",
+    }
+    assert triggers["workflow_call"]["secrets"] == {
+        "cloudflare_api_token": {
+            "description": "Pages-only token forwarded explicitly by the caller",
+            "required": False,
+        }
     }
     assert set(workflow["jobs"]) == {"preflight", "inspect", "publish", "retire"}
     preflight = workflow["jobs"]["preflight"]
