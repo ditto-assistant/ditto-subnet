@@ -131,6 +131,9 @@ dittobench-coding-public-grader-v2
 The issue binds bounded visible requirements. The memory control contains raw
 records and structured validity/supersession metadata only; embedding or vector
 fields are invalid. V0 contains no records and V1-V4 contain at least one.
+Issue descriptions, constraints, and memory content containing unified-diff or
+Git patch markers are invalid. Public provenance may link to an upstream issue,
+but the task controls must not package a patch-form reference repair.
 
 The runtime policy binds one immutable `linux/amd64` image digest, `network =
 none`, normalized edit/create/delete paths, resource limits, and argv-only
