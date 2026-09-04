@@ -29,8 +29,14 @@ def test_assignment_is_deterministic_blinded_and_shadow_only() -> None:
         authority=_authority(), replicate_id=1, assignment_key=b"k" * 32
     )
     assert result["weight_eligible"] is False
-    assert "condition" not in result
-    assert "group" not in result
+    assert {
+        "condition",
+        "private_condition_commitment",
+        "group",
+        "opaque_group_commitment",
+        "replicate_id",
+        "quorum_group_id",
+    }.isdisjoint(result)
 
 
 def test_assignment_rejects_unsafe_authority() -> None:

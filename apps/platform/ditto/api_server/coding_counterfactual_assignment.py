@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 from dataclasses import dataclass
 
 
@@ -46,23 +47,25 @@ def issue_blinded_assignment(
         raise CounterfactualAssignmentError(
             "counterfactual assignment authority invalid"
         )
-    preimage = "|".join(
-        (
-            authority.artifact_sha256,
-            authority.opaque_group_commitment,
-            authority.private_condition_commitment,
-            authority.repository_epoch,
-            str(replicate_id),
-        )
-    ).encode("ascii")
+    preimage = json.dumps(
+        {
+            "artifact_sha256": authority.artifact_sha256,
+            "group_commitment": authority.opaque_group_commitment,
+            "private_condition_commitment": authority.private_condition_commitment,
+            "replicate_id": replicate_id,
+            "repository_epoch": authority.repository_epoch,
+            "schema": "dittobench-coding-counterfactual-assignment-preimage-v2",
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
     assignment_id = hmac.new(assignment_key, preimage, hashlib.sha256).hexdigest()
     return {
         "coding_contract_version": 2,
         "memory_bundle_sha256": authority.memory_bundle_sha256,
         "memory_volume_tier": authority.memory_volume_tier,
         "opaque_assignment_id": assignment_id,
-        "private_condition_commitment": authority.private_condition_commitment,
-        "replicate_id": replicate_id,
         "repository_epoch": authority.repository_epoch,
         "seeded_memory_bytes": authority.seeded_memory_bytes,
         "weight_eligible": False,
