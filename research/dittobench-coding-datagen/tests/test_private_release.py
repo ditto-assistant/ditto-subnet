@@ -91,6 +91,18 @@ def _groups(root: Path, *, count: int = 50, unbalanced: bool = False) -> Path:
         write_private_authoring_output(
             group / "group-calibration.json", canonical_json_bytes(calibration)
         )
+        semantic = {
+            "group_manifest_sha256": manifest.manifest_sha256(),
+            "nearest_group_manifest_sha256": None,
+            "nearest_similarity_micros": 0,
+            "passed": True,
+            "reviewer_authority_sha256": _sha(f"reviewer-{index}"),
+            "schema": "dittobench-coding-private-semantic-review-v2",
+            "semantic_family_id": f"semantic-family-{index:03d}",
+        }
+        write_private_authoring_output(
+            group / "group-semantic-review.json", canonical_json_bytes(semantic)
+        )
     return root
 
 
@@ -119,6 +131,7 @@ def test_private_release_compiles_fifty_balanced_groups(
     assert compiled["group_count"] == 50
     assert compiled["repository_stratum_count"] == 10
     assert all("calibration_sha256" in group for group in compiled["groups"])
+    assert all("semantic_review_sha256" in group for group in compiled["groups"])
     assert compiled["weight_eligible"] is False
     assert output.stat().st_mode & 0o777 == 0o600
     assert load_private_release(output) == compiled

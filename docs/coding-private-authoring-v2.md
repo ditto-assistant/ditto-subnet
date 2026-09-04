@@ -72,10 +72,11 @@ Before release registration, every group MUST pass:
 4. Pre-fix build and deterministic fail-to-pass/pass-to-pass checks.
 5. Independent hidden grader review.
 6. Public benchmark overlap and source-recognition audit.
-7. Gold-patch, issue-text, memory-text, and hidden-test leakage audit.
-8. V0-V4 semantic consistency, validity/supersession consistency, and balanced
+7. Independent semantic-family and nearest-neighbor review.
+8. Gold-patch, issue-text, memory-text, and hidden-test leakage audit.
+9. V0-V4 semantic consistency, validity/supersession consistency, and balanced
    visible bundle volume.
-9. Calibration against weak, memory-ignoring, stale-following, and
+10. Calibration against weak, memory-ignoring, stale-following, and
    context-stuffing baselines.
 
 Failure of any gate quarantines the group. Quarantined groups are absent from
@@ -98,6 +99,12 @@ a corpus-progress digest. A runner profile is immutable across every repeated
 base/reference observation for its group, but a release may use distinct
 task-bound profiles for different language toolchains. `ready_for_release` is
 true only at exactly 50 groups in ten complete five-group strata.
+
+Every admitted group also carries a protected semantic review authority. It
+binds the group manifest, an independently assigned semantic-family ID, a
+reviewer-authority digest, and the nearest reviewed group and similarity. A
+semantic family may occur only once in a release. Unique bytes, renamed symbols,
+or changed domain nouns do not establish semantic independence.
 
 The private input audit opens all five canonical memory-bundle files, verifies
 their manifest-bound SHA-256 values, requires an empty V0 bundle and non-empty

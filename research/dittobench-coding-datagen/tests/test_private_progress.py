@@ -87,6 +87,18 @@ def _groups(root: Path, *, count: int = 10) -> Path:
         write_private_authoring_output(
             authority / "group-calibration.json", canonical_json_bytes(calibration)
         )
+        semantic = {
+            "group_manifest_sha256": manifest.manifest_sha256(),
+            "nearest_group_manifest_sha256": None,
+            "nearest_similarity_micros": 0,
+            "passed": True,
+            "reviewer_authority_sha256": _sha(f"reviewer-{index}"),
+            "schema": "dittobench-coding-private-semantic-review-v2",
+            "semantic_family_id": f"semantic-family-{index:03d}",
+        }
+        write_private_authoring_output(
+            authority / "group-semantic-review.json", canonical_json_bytes(semantic)
+        )
     return root
 
 
@@ -151,4 +163,18 @@ def test_private_progress_rejects_exposed_authority(tmp_path: Path) -> None:
     authority = groups / "private-group-000" / "authority"
     authority.chmod(0o755)
     with pytest.raises(CorpusError, match="authority"):
+        audit_private_corpus_progress(groups)
+
+
+def test_private_progress_rejects_duplicate_semantic_family(tmp_path: Path) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    groups = _groups(protected / "groups")
+    first = groups / "private-group-000" / "authority" / "group-semantic-review.json"
+    second = groups / "private-group-001" / "authority" / "group-semantic-review.json"
+    first_review = json.loads(first.read_bytes())
+    second_review = json.loads(second.read_bytes())
+    second_review["semantic_family_id"] = first_review["semantic_family_id"]
+    second.write_bytes(canonical_json_bytes(second_review))
+    with pytest.raises(CorpusError, match="duplicated"):
         audit_private_corpus_progress(groups)

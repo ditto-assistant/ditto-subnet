@@ -18,6 +18,7 @@ from dittobench_coding_datagen.private_authoring import (
     write_private_authoring_output,
 )
 from dittobench_coding_datagen.private_calibration import load_private_calibration
+from dittobench_coding_datagen.private_semantic import load_private_semantic_review
 
 PRIVATE_RELEASE_SCHEMA = "dittobench-coding-private-release-v2"
 _GROUP_COUNT = 50
@@ -43,6 +44,7 @@ def compile_private_release(
         raise CorpusError("private release requires exactly fifty groups")
     groups: list[dict[str, object]] = []
     strata: dict[str, int] = {}
+    semantic_families: set[str] = set()
     for directory in directories:
         if directory.is_symlink() or not directory.is_dir():
             raise CorpusError("private release group directory is unsafe")
@@ -50,6 +52,7 @@ def compile_private_release(
             "group-audit.json",
             "group-calibration.json",
             "group-manifest.json",
+            "group-semantic-review.json",
         }:
             raise CorpusError("private release group directory has unexpected files")
         manifest_path = directory / "group-manifest.json"
@@ -65,6 +68,11 @@ def compile_private_release(
             directory / "group-calibration.json",
             group_manifest_sha256=manifest_sha256,
         )
+        semantic, semantic_body = load_private_semantic_review(
+            directory / "group-semantic-review.json",
+            group_manifest_sha256=manifest_sha256,
+        )
+        semantic_families.add(str(semantic["semantic_family_id"]))
         stratum = manifest.opaque_repository_stratum_id
         strata[stratum] = strata.get(stratum, 0) + 1
         groups.append(
@@ -78,6 +86,8 @@ def compile_private_release(
                 "opaque_repository_stratum_id": stratum,
                 "overlap_review_sha256": audit["overlap_review_sha256"],
                 "runner_profile_sha256": calibration["runner_profile_sha256"],
+                "semantic_family_id": semantic["semantic_family_id"],
+                "semantic_review_sha256": sha256_hex(semantic_body),
                 "visible_snapshot_tree_sha256": audit["visible_snapshot_tree_sha256"],
             }
         )
@@ -87,6 +97,7 @@ def compile_private_release(
         or len({str(group["opaque_group_id"]) for group in groups}) != _GROUP_COUNT
         or len({str(group["group_manifest_sha256"]) for group in groups})
         != _GROUP_COUNT
+        or len(semantic_families) != _GROUP_COUNT
     ):
         raise CorpusError("private release repository strata are not balanced")
     projection = {
@@ -155,10 +166,13 @@ def _valid_release_groups(value: list[object]) -> bool:
         "opaque_repository_stratum_id",
         "overlap_review_sha256",
         "runner_profile_sha256",
+        "semantic_family_id",
+        "semantic_review_sha256",
         "visible_snapshot_tree_sha256",
     }
     group_ids: list[str] = []
     manifests: set[str] = set()
+    semantic_families: set[str] = set()
     strata: dict[str, int] = {}
     for item in value:
         if not isinstance(item, dict) or set(item) != expected:
@@ -166,6 +180,7 @@ def _valid_release_groups(value: list[object]) -> bool:
         digest_fields = expected - {
             "opaque_group_id",
             "opaque_repository_stratum_id",
+            "semantic_family_id",
         }
         if any(not _sha256(item[field]) for field in digest_fields):
             return False
@@ -176,11 +191,13 @@ def _valid_release_groups(value: list[object]) -> bool:
             return False
         group_ids.append(group_id)
         manifests.add(str(item["group_manifest_sha256"]))
+        semantic_families.add(str(item["semantic_family_id"]))
         strata[stratum] = strata.get(stratum, 0) + 1
     return (
         group_ids == sorted(group_ids)
         and len(set(group_ids)) == _GROUP_COUNT
         and len(manifests) == _GROUP_COUNT
+        and len(semantic_families) == _GROUP_COUNT
         and len(strata) == _STRATUM_COUNT
         and all(count == _GROUPS_PER_STRATUM for count in strata.values())
     )
