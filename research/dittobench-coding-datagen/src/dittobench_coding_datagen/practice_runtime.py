@@ -66,9 +66,9 @@ class ToolRequest:
             raise CorpusError("coding_contract_version must be an integer")
         return cls(
             coding_contract_version=version,
-            case_id=_bounded_string(value.get("case_id"), "case_id", 128),
+            case_id=_bounded_string(value.get("case_id"), "case_id", 256),
             profile_capability_id=_bounded_string(
-                value.get("profile_capability_id"), "profile_capability_id", 128
+                value.get("profile_capability_id"), "profile_capability_id", 256
             ),
             call_id=_bounded_string(value.get("call_id"), "call_id", 128),
             name=_bounded_string(value.get("name"), "name", 80),
