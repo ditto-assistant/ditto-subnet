@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.206.0 (2026-09-04)
+
+### Features
+
+- **coding-datagen**: Require semantic group review
+  ([#1611](https://github.com/ditto-assistant/ditto-subnet/pull/1611),
+  [`36b8df8`](https://github.com/ditto-assistant/ditto-subnet/commit/36b8df8731fcc12dfb8711f2156c66df5a25708b))
+
+
 ## v0.205.1 (2026-09-04)
 
 ### Bug Fixes
