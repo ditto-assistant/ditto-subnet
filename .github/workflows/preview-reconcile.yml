@@ -35,6 +35,6 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT }}
 
-      - uses: google-github-actions/setup-gcloud@20f1150d28b8c9900c8f41d4761b19a95c7d50c2 # v3.0.1
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       - run: preview/cloud/reconcile.sh

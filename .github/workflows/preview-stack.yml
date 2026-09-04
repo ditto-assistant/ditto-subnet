@@ -29,6 +29,7 @@ jobs:
       PREVIEW_PR: ${{ github.event.pull_request.number }}
       PREVIEW_SHA: ${{ github.event.pull_request.head.sha }}
       GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
       GCP_PREVIEW_LEASE_BUCKET: ${{ vars.GCP_PREVIEW_LEASE_BUCKET }}
       GCP_PREVIEW_SNAPSHOT_BUCKET: ${{ vars.GCP_PREVIEW_SNAPSHOT_BUCKET }}
       GCP_PREVIEW_NETWORK: ${{ vars.GCP_PREVIEW_NETWORK }}
@@ -42,15 +43,40 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.repository.default_branch }}
 
+      - name: Check whether stack previews are activated
+        id: activation
+        run: |
+          enabled=true
+          for name in \
+            GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT \
+            GCP_WORKLOAD_IDENTITY_PROVIDER \
+            GCP_PREVIEW_LEASE_BUCKET \
+            GCP_PREVIEW_SNAPSHOT_BUCKET \
+            GCP_PREVIEW_NETWORK \
+            GCP_PREVIEW_SUBNETWORK \
+            GCP_PREVIEW_RUNTIME_SERVICE_ACCOUNT \
+            GCP_PREVIEW_ZONE; do
+            if [ -z "${!name}" ]; then
+              enabled=false
+            fi
+          done
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          if [ "$enabled" != true ]; then
+            echo "Stack previews are not activated; skipping this event."
+          fi
+
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: steps.activation.outputs.enabled == 'true'
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT }}
 
-      - uses: google-github-actions/setup-gcloud@20f1150d28b8c9900c8f41d4761b19a95c7d50c2 # v3.0.1
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        if: steps.activation.outputs.enabled == 'true'
 
       - name: Resolve trusted action and profile
         id: resolve
+        if: steps.activation.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           action=retire
@@ -70,12 +96,12 @@ jobs:
           echo "profile=$profile" >> "$GITHUB_OUTPUT"
 
       - name: Retire an old or ineligible preview
-        if: steps.resolve.outputs.action == 'retire'
+        if: steps.activation.outputs.enabled == 'true' && steps.resolve.outputs.action == 'retire'
         run: preview/cloud/retire.sh
 
       - name: Provision the exact PR SHA
         id: provision
-        if: steps.resolve.outputs.action == 'provision'
+        if: steps.activation.outputs.enabled == 'true' && steps.resolve.outputs.action == 'provision'
         env:
           PREVIEW_PROFILE: ${{ steps.resolve.outputs.profile }}
         run: |
@@ -117,7 +143,7 @@ jobs:
           fi
 
       - name: Mark a retired preview comment
-        if: steps.resolve.outputs.action == 'retire'
+        if: steps.activation.outputs.enabled == 'true' && steps.resolve.outputs.action == 'retire'
         run: |
           set -euo pipefail
           marker='<!-- ditto-stack-preview -->'

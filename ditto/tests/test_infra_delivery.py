@@ -27,6 +27,17 @@ def test_preview_root_is_validated_and_has_protected_plan_apply_routing() -> Non
     assert 'if [ "$TF_ROOT" = gcp-platform ]; then' in delivery_text
 
 
+def test_preview_state_lock_bootstrap_is_exact_object_only() -> None:
+    lock_grant = (GCP_ROOT / "terraform-state-locks.tf").read_text()
+    assert 'role   = "roles/storage.objectAdmin"' in lock_grant
+    assert (
+        'resource.name == \\"projects/_/buckets/ditto-app-dev-tfstate/'
+        'objects/gcp-preview/default.tflock\\"' in lock_grant
+    )
+    assert "default.tfstate" not in lock_grant
+    assert "startsWith" not in lock_grant
+
+
 def test_production_intent_explicitly_sets_every_live_resource_toggle() -> None:
     intent = (GCP_ROOT / "prod.auto.tfvars").read_text()
     declared = set(
