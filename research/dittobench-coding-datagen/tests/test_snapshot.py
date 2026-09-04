@@ -7,7 +7,10 @@ import pytest
 
 from dittobench_coding_datagen.canonical import normalized_tree_sha256
 from dittobench_coding_datagen.model import CorpusError
-from dittobench_coding_datagen.snapshot import export_sanitized_snapshot
+from dittobench_coding_datagen.snapshot import (
+    export_sanitized_snapshot,
+    validate_sanitized_snapshot,
+)
 
 
 def _source(root: Path) -> Path:
@@ -40,6 +43,7 @@ def test_snapshot_is_deterministic_git_free_and_normalized(tmp_path: Path) -> No
         tmp_path / "second" / "manifest.json"
     ).read_bytes()
     manifest = json.loads((tmp_path / "first" / "manifest.json").read_bytes())
+    assert manifest["schema"] == "dittobench-coding-sanitized-snapshot-v2"
     modes = {item["path"]: item["mode"] for item in manifest["files"]}
     assert modes["run.sh"] == 0o755
     assert modes["src/main.py"] == 0o644
@@ -49,7 +53,10 @@ def test_snapshot_is_deterministic_git_free_and_normalized(tmp_path: Path) -> No
         normalized_tree_sha256(tmp_path / "first" / "workspace")
         != first.snapshot_tree_sha256
     )
+    with pytest.raises(CorpusError, match="does not match workspace"):
+        validate_sanitized_snapshot(tmp_path / "first")
     assert export_sanitized_snapshot(source, tmp_path / "third") == first
+    assert validate_sanitized_snapshot(tmp_path / "third") == first
 
 
 def test_snapshot_rejects_nested_git_and_symlinks(tmp_path: Path) -> None:

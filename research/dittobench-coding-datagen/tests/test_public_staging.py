@@ -15,13 +15,14 @@ from dittobench_coding_datagen.model import CorpusError
 from dittobench_coding_datagen.public_source import load_public_source_intake
 from dittobench_coding_datagen.public_staging import validate_public_task_staging
 from dittobench_coding_datagen.snapshot import SNAPSHOT_SCHEMA
+from dittobench_coding_datagen.snapshot_archive import build_snapshot_archive
 
 
 def _sha(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
-def _write_task(root: Path, task_id: str) -> tuple[str, str]:
+def _write_task(root: Path, task_id: str) -> tuple[str, str, str]:
     task = root / "tasks" / task_id
     workspace = task / "snapshot" / "workspace"
     workspace.mkdir(parents=True)
@@ -40,6 +41,7 @@ def _write_task(root: Path, task_id: str) -> tuple[str, str]:
         }
     )
     (task / "snapshot" / "manifest.json").write_bytes(snapshot_manifest)
+    (task / "snapshot" / "manifest.json").chmod(0o644)
     grader = task / "grader"
     grader.mkdir()
     grader_file = grader / "test.txt"
@@ -49,7 +51,11 @@ def _write_task(root: Path, task_id: str) -> tuple[str, str]:
     (task / "memory.json").write_bytes(canonical_json_bytes({"memories": []}))
     (task / "runtime-policy.json").write_bytes(canonical_json_bytes({"commands": []}))
     grader_digest = normalized_tree_sha256(grader)
-    return _sha(snapshot_manifest), grader_digest
+    archive = task / "snapshot" / "archive.tar.gz"
+    archive_receipt = build_snapshot_archive(
+        snapshot=task / "snapshot", archive=archive
+    )
+    return _sha(snapshot_manifest), archive_receipt.archive_sha256, grader_digest
 
 
 def _intake(root: Path) -> Path:
@@ -68,7 +74,7 @@ def _intake(root: Path) -> Path:
     tasks: list[dict[str, object]] = []
     for index, (language, condition) in enumerate(layout):
         task_id = f"PUBLIC-V2-{index:02d}"
-        manifest_sha, grader_sha = _write_task(root, task_id)
+        manifest_sha, archive_sha, grader_sha = _write_task(root, task_id)
         tasks.append(
             {
                 "task_id": task_id,
@@ -80,7 +86,7 @@ def _intake(root: Path) -> Path:
                 else "swe_bench_multilingual",
                 "public_issue_url": f"https://github.com/example/{language}/issues/{index}",
                 "source_snapshot_manifest_sha256": manifest_sha,
-                "source_snapshot_archive_sha256": "a" * 64,
+                "source_snapshot_archive_sha256": archive_sha,
                 "visible_grader_sha256": grader_sha,
                 "condition": condition,
             }
@@ -135,3 +141,19 @@ def test_staging_rejects_workspace_and_grader_mode_drift(tmp_path: Path) -> None
     (task / "grader" / "test.txt").chmod(0o644)
     with pytest.raises(CorpusError, match="grader does not match"):
         validate_public_task_staging(root=tmp_path, intake=intake)
+
+
+def test_staging_requires_canonical_snapshot_archive(tmp_path: Path) -> None:
+    intake = load_public_source_intake(_intake(tmp_path))
+    archive = tmp_path / "tasks" / "PUBLIC-V2-00" / "snapshot" / "archive.tar.gz"
+    archive.unlink()
+    with pytest.raises(CorpusError, match="archive is unavailable"):
+        validate_public_task_staging(root=tmp_path, intake=intake)
+
+    intake = load_public_source_intake(_intake(tmp_path / "second"))
+    archive = (
+        tmp_path / "second" / "tasks" / "PUBLIC-V2-00" / "snapshot" / "archive.tar.gz"
+    )
+    archive.write_bytes(archive.read_bytes() + b"drift")
+    with pytest.raises(CorpusError, match="canonical"):
+        validate_public_task_staging(root=tmp_path / "second", intake=intake)

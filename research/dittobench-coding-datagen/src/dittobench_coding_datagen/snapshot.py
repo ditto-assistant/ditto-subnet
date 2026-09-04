@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
@@ -32,6 +33,7 @@ _CACHE_DIRECTORIES = frozenset(
     }
 )
 _MAX_FILE_BYTES = 1 << 30
+_MAX_MANIFEST_BYTES = 8 << 20
 
 
 @dataclass(frozen=True)
@@ -88,6 +90,65 @@ def export_sanitized_snapshot(source: Path, output: Path) -> SanitizedSnapshot:
     return snapshot
 
 
+def validate_sanitized_snapshot(root: Path) -> SanitizedSnapshot:
+    """Verify one canonical snapshot manifest against its normalized workspace."""
+
+    manifest_path = root / "manifest.json"
+    workspace = root / "workspace"
+    if (
+        root.is_symlink()
+        or not root.is_dir()
+        or manifest_path.is_symlink()
+        or not manifest_path.is_file()
+        or manifest_path.stat().st_size > _MAX_MANIFEST_BYTES
+        or workspace.is_symlink()
+        or not workspace.is_dir()
+    ):
+        raise CorpusError("sanitized snapshot is unsafe")
+    try:
+        body = manifest_path.read_bytes()
+        value = json.loads(body)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CorpusError("sanitized snapshot manifest is invalid") from error
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {
+            "excluded_root_entries",
+            "files",
+            "schema",
+            "snapshot_tree_sha256",
+            "source_tree_sha256",
+        }
+        or canonical_json_bytes(value) != body
+        or value.get("schema") != SNAPSHOT_SCHEMA
+    ):
+        raise CorpusError("sanitized snapshot manifest is invalid")
+    excluded = value.get("excluded_root_entries")
+    if (
+        not isinstance(excluded, list)
+        or any(not isinstance(item, str) for item in excluded)
+        or excluded != sorted(set(excluded))
+        or not set(excluded).issubset(_ROOT_CONTROL_EXCLUSIONS)
+    ):
+        raise CorpusError("sanitized snapshot exclusions are invalid")
+    identities = normalized_tree_identities(workspace)
+    tree_sha256 = normalized_tree_sha256(workspace)
+    if (
+        value.get("files") != identities
+        or value.get("snapshot_tree_sha256") != tree_sha256
+        or value.get("source_tree_sha256") != tree_sha256
+    ):
+        raise CorpusError("sanitized snapshot does not match workspace")
+    return SanitizedSnapshot(
+        schema=SNAPSHOT_SCHEMA,
+        source_tree_sha256=tree_sha256,
+        excluded_root_entries=tuple(excluded),
+        files=tuple(identities),
+        snapshot_tree_sha256=tree_sha256,
+    )
+
+
 def _copy_source(source: Path, destination: Path) -> set[str]:
     excluded: set[str] = set()
     for root, directories, files in os.walk(source, topdown=True, followlinks=False):
@@ -140,4 +201,9 @@ def _copy_source(source: Path, destination: Path) -> set[str]:
     return excluded
 
 
-__all__ = ["SNAPSHOT_SCHEMA", "SanitizedSnapshot", "export_sanitized_snapshot"]
+__all__ = [
+    "SNAPSHOT_SCHEMA",
+    "SanitizedSnapshot",
+    "export_sanitized_snapshot",
+    "validate_sanitized_snapshot",
+]

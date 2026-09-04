@@ -99,6 +99,13 @@ mode. Regular files are exactly `0644` (`420` in canonical JSON) or `0755`
 (`493`); every other mode fails closed. Staging, pack compilation, release
 archiving, extraction, and validation preserve and re-verify the same mode.
 
+Every staged snapshot also includes a required deterministic `archive.tar.gz`.
+Its canonical gzip/tar bytes contain only the snapshot manifest and workspace
+files under the mode-aware tree digest. Intake binds the archive SHA-256;
+staging replays the archive, manifest, tree, and mode authorities before pack
+compilation. An absent, non-canonical, appended, or mismatched archive fails
+closed.
+
 ## Memory and retrieval
 
 Public and private Coding data authorities contain raw memory text plus
