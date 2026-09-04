@@ -67,6 +67,7 @@ from ditto.db.queries.heartbeats import (
 from ditto.db.queries.score_ranking import (
     VALIDATOR_STALE_WINDOW,
     EfficiencyFactorRequesterNotReady,
+    completed_wave_data,
     dedupe_owner_rows,
     efficiency_tiebreak_composites,
     official_composites,
@@ -670,6 +671,11 @@ async def scores(
             agent_ids=[r.agent_id for r in rows],
             bench_version=canonical_version,
         )
+        _, active_confirmation_by_seed, _ = completed_wave_data(
+            rows,
+            stderrs={},
+            confirmation_by_seed=confirmation_by_seed,
+        )
         proof_rows = await quorum_ledger_proof_rows(
             session,
             [r.agent_id for r in rows],
@@ -712,7 +718,7 @@ async def scores(
         ranking_scores = official_composites(
             rows,
             quorum=quorum,
-            completed_waves=confirmation_by_seed,
+            completed_waves=active_confirmation_by_seed,
             continual_mean_active=continual_mean_active,
             efficiency_bonuses=efficiency_bonuses,
             efficiency_factors=efficiency_factors,
@@ -781,6 +787,7 @@ async def scores(
                         signature=row.signature,
                     )
                     for row in history[r.agent_id]
+                    if row.seed in active_confirmation_by_seed.get(r.agent_id, {})
                 ]
                 if continual_mean_active
                 and r.v9_confirmation is None
