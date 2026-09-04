@@ -1,0 +1,125 @@
+# Coding public practice v2
+
+Status: proposed shadow-only public practice contract. This document does not
+change Coding weights, emissions, private release selection, provider access,
+or deployment.
+
+## Purpose
+
+Public practice v2 gives miners a reproducible local development surface for
+the Coding protocol. Its result is a development signal only. It is never
+authoritative evidence, a validator consensus input, a leaderboard value, or a
+reward input.
+
+```text
+Local Practice Score
+    = miner-owned development result
+
+Public Validator Canary
+    = protocol and artifact qualification only
+
+Private Validator Score
+    = future shadow-only competitive evidence
+```
+
+Admission remains the existing unified order. A public canary pass is not
+private-shadow admission: the exact screened artifact must already have a
+durable Tool + Memory core-qualification decision, then a claimed certification
+lease, before any private task.
+
+The current `coding-practice-3x3-v1` pack remains supported until v2 is
+published. It contains nine static protocol fixtures and is not retroactively
+rescored or changed by this proposal.
+
+## Public v2 release shape
+
+One immutable public v2 release contains exactly ten tasks from four reviewed
+repository families:
+
+| Language family | Tasks |
+| --- | --- |
+| Python | 3 |
+| TypeScript or JavaScript | 3 |
+| Rust | 2 |
+| Go | 2 |
+
+The selection manifest assigns exactly two tasks to every memory condition:
+
+```text
+V0 no relevant memory          2
+V1 relevant memory             2
+V2 irrelevant memory           2
+V3 stale/conflicting memory    2
+V4 current override            2
+```
+
+The condition split demonstrates the wire and failure modes; it is not a
+causal estimate of miner capability because public task difficulty differs by
+repository. The local UI MUST label all condition summaries as practice
+diagnostics.
+
+Every task must be deterministic, networkless at run time, independently
+buildable, and bounded by release policy. The reviewed release manifest binds
+the public source licence, normalized source snapshot, visible issue text,
+visible tests, public grader, runtime policy, task condition, and task digest.
+
+## Local practice result
+
+The future v2 runner emits one canonical result containing at least:
+
+```text
+public_release_id
+artifact_sha256
+task and grader identities
+resolved and total counts
+per-condition counts
+protocol, build, patch, timeout and resource diagnostics
+authoritative = false
+leaderboard_eligible = false
+reward_eligible = false
+```
+
+The Platform MUST reject any miner-claimed local result as competitive
+evidence. A public result may be displayed or attached for debugging only.
+
+## Public source snapshots
+
+Large public repository snapshots are immutable release artifacts, not ordinary
+monorepo fixtures. A snapshot export MUST omit `.git`, source credentials,
+editor state, host paths, unrelated build caches, and hidden grader material.
+It binds normalized paths, file modes, file sizes, and SHA-256 identities.
+
+Public source provenance may be published. Public task snapshots, issue text,
+tests, and graders may be fully inspectable because hardcoding is acceptable in
+the local-practice lane. No public task, source issue, module, test pattern, or
+reference patch may be reused as a private scoring task.
+
+## Memory and retrieval
+
+Public and private Coding data authorities contain raw memory text plus
+structured metadata. Public practice v2 does not require Perplexity, another
+external embedding provider, or prepared embedding vectors. Miners may use
+lexical search, metadata filters, local models, or their own self-contained
+retrieval strategy.
+
+The reference starter remains a baseline. Its local retrieval choice is not a
+public practice scoring rule and does not constrain private miner innovation.
+
+## Public validator canary
+
+The public validator canary reuses only public v2 material. It verifies the
+screened artifact and protocol path, including health, seed, ticket-scoped
+inference, run, workspace freeze, and pristine public grading. A pass is a
+coding-capability qualification gate only: it adds no Coding score and does not
+bypass core qualification or the certification lease.
+
+## Publication rules
+
+The public release is content-addressed and must be verified before extraction.
+A new release publishes a new immutable pack ID; it never mutates an existing
+pack. Public release publication has no private-catalog credential, no Hippius
+private-input access, and no private grader dependency.
+
+Private task bytes, private repository epochs, private memories, hidden tests,
+reference patches, private object keys, and decryption material remain outside
+public Git, ordinary image builds, and public practice artifacts.
