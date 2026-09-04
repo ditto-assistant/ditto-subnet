@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.198.0 (2026-09-04)
+
+### Bug Fixes
+
+- **coding-datagen**: Bind public snapshot file modes
+  ([#1577](https://github.com/ditto-assistant/ditto-subnet/pull/1577),
+  [`5fe8a73`](https://github.com/ditto-assistant/ditto-subnet/commit/5fe8a73b3994625b5105d9651ec2062f5ae2e8fd))
+
+### Features
+
+- **coding-datagen**: Archive public snapshots
+  ([#1578](https://github.com/ditto-assistant/ditto-subnet/pull/1578),
+  [`1f6218f`](https://github.com/ditto-assistant/ditto-subnet/commit/1f6218fb36d9330c1ed11dace7fc1985bbc9a9b5))
+
+- **coding-datagen**: Validate public task controls
+  ([#1581](https://github.com/ditto-assistant/ditto-subnet/pull/1581),
+  [`ad03b1f`](https://github.com/ditto-assistant/ditto-subnet/commit/ad03b1f3da392834c6f7883df53fd18087331642))
+
+
 ## v0.197.1 (2026-09-04)
 
 ### Bug Fixes
