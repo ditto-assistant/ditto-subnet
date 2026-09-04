@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.197.1 (2026-09-04)
+
+### Bug Fixes
+
+- **coding-terminal**: Keep quarantined groups as unsolved zeros
+  ([#1574](https://github.com/ditto-assistant/ditto-subnet/pull/1574),
+  [`f4d8716`](https://github.com/ditto-assistant/ditto-subnet/commit/f4d87169b6d883e570228250c71b80cb257cf69e))
+
+- **validator**: Pass claim instance into coding grading leases
+  ([#1575](https://github.com/ditto-assistant/ditto-subnet/pull/1575),
+  [`e0f144d`](https://github.com/ditto-assistant/ditto-subnet/commit/e0f144d90bc279ca0a79153c4f8a75b04ab16571))
+
+
 ## v0.197.0 (2026-09-04)
 
 ### Documentation
