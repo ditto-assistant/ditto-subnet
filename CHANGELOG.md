@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v0.194.0 (2026-09-04)
+
+### Documentation
+
+- **coding**: Define Hippius metadata and recovery policy
+  ([#1535](https://github.com/ditto-assistant/ditto-subnet/pull/1535),
+  [`dd369c9`](https://github.com/ditto-assistant/ditto-subnet/commit/dd369c93793f006146afe8799e5edc2907517145))
+
+- **coding**: Define monotone memory scoring v2
+  ([#1536](https://github.com/ditto-assistant/ditto-subnet/pull/1536),
+  [`f70392b`](https://github.com/ditto-assistant/ditto-subnet/commit/f70392bbfe67e8ece74c6e83b7ff88fab958dd15))
+
+### Features
+
+- **coding**: Add optional Hippius Object Lock canary
+  ([#1534](https://github.com/ditto-assistant/ditto-subnet/pull/1534),
+  [`4bd0120`](https://github.com/ditto-assistant/ditto-subnet/commit/4bd0120b1df00d41d3a3651de784d03aa20f0ec7))
+
+- **coding**: Measure Hippius credential revocation
+  ([#1533](https://github.com/ditto-assistant/ditto-subnet/pull/1533),
+  [`cadd26e`](https://github.com/ditto-assistant/ditto-subnet/commit/cadd26ecafc55c9e5ce2eec3f0a3df6179f64e33))
+
+
 ## v0.193.0 (2026-09-04)
 
 ### Documentation
