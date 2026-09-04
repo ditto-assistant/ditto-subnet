@@ -72,26 +72,38 @@ def test_terminal_counts_missing_and_untrusted_evidence_as_failure() -> None:
 
 
 def test_terminal_quarantine_cannot_raise_score() -> None:
-    failed = {
+    all_solved = {
         "v0_none",
         "v1_relevant",
         "v2_irrelevant",
         "v3_stale_conflict",
         "v4_current_override",
     }
-    scored_as_zeros = aggregate_counterfactual_results(
-        _group("good", failed) + _group("bad", set()),
+    failed_as_zeros = aggregate_counterfactual_results(
+        _group("good", all_solved) + _group("bad", set()),
         expected_group_ids=("good", "bad"),
     )
-    quarantined = aggregate_counterfactual_results(
-        _group("good", failed) + _group("bad", failed),
+    quarantined_failed = aggregate_counterfactual_results(
+        _group("good", all_solved) + _group("bad", set()),
         expected_group_ids=("good", "bad"),
         quarantined_group_ids=frozenset({"bad"}),
     )
-    assert quarantined.quarantined_group_count == 1
-    assert quarantined.missing_result_count == 0
-    assert quarantined.monotone_shadow_score == scored_as_zeros.monotone_shadow_score
-    assert quarantined.monotone_shadow_score < 1.0
+    quarantined_passed = aggregate_counterfactual_results(
+        _group("good", all_solved) + _group("bad", all_solved),
+        expected_group_ids=("good", "bad"),
+        quarantined_group_ids=frozenset({"bad"}),
+    )
+    assert quarantined_failed.quarantined_group_count == 1
+    assert quarantined_failed.missing_result_count == 0
+    assert (
+        quarantined_failed.monotone_shadow_score
+        == failed_as_zeros.monotone_shadow_score
+    )
+    assert (
+        quarantined_passed.monotone_shadow_score
+        == failed_as_zeros.monotone_shadow_score
+    )
+    assert quarantined_failed.monotone_shadow_score < 1.0
 
 
 def test_terminal_rejects_non_boolean_evidence() -> None:
