@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 from dataclasses import dataclass
 from typing import Literal
 
-from dittobench_coding_datagen.canonical import canonical_json_bytes, sha256_hex
+from dittobench_coding_datagen.canonical import canonical_json_bytes
 from dittobench_coding_datagen.model import CorpusError
 
 CounterfactualCondition = Literal[
@@ -42,32 +44,29 @@ class CounterfactualGroup:
     repository_epoch: str
     arms: tuple[CounterfactualArm, ...]
 
-    def miner_assignments(self) -> tuple[dict[str, object], ...]:
-        """Return blinded arm projections; never include condition labels."""
+    def miner_assignments(
+        self, *, assignment_key: bytes
+    ) -> tuple[dict[str, object], ...]:
+        """Return keyed opaque projections with treatment linkage removed."""
 
-        group_commitment = sha256_hex(
-            canonical_json_bytes(
-                {
-                    "opaque_group_id": self.opaque_group_id,
-                    "repository_epoch": self.repository_epoch,
-                }
-            )
-        )
+        if len(assignment_key) < 32:
+            raise CorpusError("counterfactual assignment key is too short")
         return tuple(
             {
                 "memory_bundle_sha256": arm.memory_bundle_sha256,
                 "memory_volume_tier": arm.memory_volume_tier,
-                "opaque_base_task_group_commitment": group_commitment,
-                "opaque_variant_id": sha256_hex(
+                "opaque_variant_id": hmac.new(
+                    assignment_key,
                     canonical_json_bytes(
-                        {"group": group_commitment, "memory": arm.memory_bundle_sha256}
-                    )
-                ),
-                "private_condition_commitment": sha256_hex(
-                    canonical_json_bytes(
-                        {"condition": arm.condition, "group": group_commitment}
-                    )
-                ),
+                        {
+                            "condition": arm.condition,
+                            "group": self.opaque_group_id,
+                            "memory": arm.memory_bundle_sha256,
+                            "repository_epoch": self.repository_epoch,
+                        }
+                    ),
+                    hashlib.sha256,
+                ).hexdigest(),
                 "repository_epoch": self.repository_epoch,
                 "seeded_memory_bytes": arm.seeded_memory_bytes,
                 "visible_bundle_sha256": arm.visible_bundle_sha256,

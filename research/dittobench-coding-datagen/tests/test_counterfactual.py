@@ -38,18 +38,42 @@ def test_compiler_emits_blinded_complete_group() -> None:
             )
         ),
     )
-    assignments = group.miner_assignments()
+    assignments = group.miner_assignments(assignment_key=b"k" * 32)
     assert len(assignments) == 5
-    assert all("condition" not in assignment for assignment in assignments)
-    assert (
-        len(
-            {
-                assignment["opaque_base_task_group_commitment"]
-                for assignment in assignments
-            }
+    assert all(
+        forbidden not in assignment
+        for assignment in assignments
+        for forbidden in (
+            "condition",
+            "opaque_base_task_group_commitment",
+            "private_condition_commitment",
         )
-        == 1
     )
+    assert len({assignment["opaque_variant_id"] for assignment in assignments}) == 5
+    assert assignments != group.miner_assignments(assignment_key=b"z" * 32)
+
+
+def test_compiler_rejects_short_assignment_key() -> None:
+    group = compile_counterfactual_group(
+        opaque_group_id="opaque-group-1",
+        repository_epoch="repo@abc",
+        arms=tuple(
+            _arm(condition, memory)
+            for condition, memory in zip(
+                (
+                    "v0_none",
+                    "v1_relevant",
+                    "v2_irrelevant",
+                    "v3_stale_conflict",
+                    "v4_current_override",
+                ),
+                ("b", "c", "d", "e", "f"),
+                strict=True,
+            )
+        ),
+    )
+    with pytest.raises(CorpusError, match="key is too short"):
+        group.miner_assignments(assignment_key=b"short")
 
 
 def test_compiler_rejects_incomplete_or_visible_drifting_groups() -> None:
