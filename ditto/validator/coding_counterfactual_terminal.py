@@ -6,15 +6,27 @@ from dataclasses import dataclass
 from statistics import mean
 from typing import Literal
 
-Condition = Literal["v0", "v1", "v2", "v3", "v4"]
-_CONDITIONS: tuple[Condition, ...] = ("v0", "v1", "v2", "v3", "v4")
-_SELECTIVE_CONDITIONS: tuple[Condition, ...] = ("v1", "v2", "v3", "v4")
+Condition = Literal[
+    "v0_none",
+    "v1_relevant",
+    "v2_irrelevant",
+    "v3_stale_conflict",
+    "v4_current_override",
+]
+_CONDITIONS: tuple[Condition, ...] = (
+    "v0_none",
+    "v1_relevant",
+    "v2_irrelevant",
+    "v3_stale_conflict",
+    "v4_current_override",
+)
+_SELECTIVE_CONDITIONS: tuple[Condition, ...] = _CONDITIONS[1:]
 _WEIGHTS: dict[Condition, int] = {
-    "v0": 15,
-    "v1": 30,
-    "v2": 15,
-    "v3": 20,
-    "v4": 20,
+    "v0_none": 15,
+    "v1_relevant": 30,
+    "v2_irrelevant": 15,
+    "v3_stale_conflict": 20,
+    "v4_current_override": 20,
 }
 
 
@@ -93,14 +105,14 @@ def aggregate_counterfactual_results(
         quarantined_group_count=len(quarantined_group_ids),
         missing_result_count=missing,
         untrusted_result_count=untrusted,
-        p0=rates["v0"],
-        p1=rates["v1"],
-        p2=rates["v2"],
-        p3=rates["v3"],
-        p4=rates["v4"],
-        useful_lift=rates["v1"] - rates["v0"],
-        stale_delta=rates["v3"] - rates["v0"],
-        irrelevant_delta=rates["v2"] - rates["v0"],
+        p0=rates["v0_none"],
+        p1=rates["v1_relevant"],
+        p2=rates["v2_irrelevant"],
+        p3=rates["v3_stale_conflict"],
+        p4=rates["v4_current_override"],
+        useful_lift=rates["v1_relevant"] - rates["v0_none"],
+        stale_delta=rates["v3_stale_conflict"] - rates["v0_none"],
+        irrelevant_delta=rates["v2_irrelevant"] - rates["v0_none"],
         absolute_condition_score=absolute,
         selective_group_success=selective,
         monotone_shadow_score=0.85 * absolute + 0.15 * selective,
