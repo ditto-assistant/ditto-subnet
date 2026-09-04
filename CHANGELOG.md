@@ -2,6 +2,55 @@
 
 <!-- version list -->
 
+## v0.209.0 (2026-09-04)
+
+### Bug Fixes
+
+- **coding**: Reject format-control characters in identifiers
+  ([#1608](https://github.com/ditto-assistant/ditto-subnet/pull/1608),
+  [`bdfce36`](https://github.com/ditto-assistant/ditto-subnet/commit/bdfce36dbdfc1c31b559d679a1972b34f7a74c22))
+
+- **coding-contract**: Freeze v2 vectors and reject private grouping
+  ([#1609](https://github.com/ditto-assistant/ditto-subnet/pull/1609),
+  [`bf597c8`](https://github.com/ditto-assistant/ditto-subnet/commit/bf597c8ea84b11b6db5fc00b36e4d4644bf67504))
+
+- **coding-practice**: Accept OpaqueId-length case and profile IDs
+  ([#1606](https://github.com/ditto-assistant/ditto-subnet/pull/1606),
+  [`9adf9b9`](https://github.com/ditto-assistant/ditto-subnet/commit/9adf9b96f57be4d2834d764b47c37a9e329019da))
+
+- **coding-worker**: Include exception text in attempt failure logs
+  ([#1607](https://github.com/ditto-assistant/ditto-subnet/pull/1607),
+  [`dac121c`](https://github.com/ditto-assistant/ditto-subnet/commit/dac121c16f71b9254be824dd7d916977dd74ce0b))
+
+- **infra**: Bootstrap preview state lock
+  ([#1618](https://github.com/ditto-assistant/ditto-subnet/pull/1618),
+  [`9b1ef47`](https://github.com/ditto-assistant/ditto-subnet/commit/9b1ef47e56db1cd92a87f72b252c9e0d582be9b0))
+
+- **infra**: Bootstrap preview state object
+  ([#1619](https://github.com/ditto-assistant/ditto-subnet/pull/1619),
+  [`a6352d2`](https://github.com/ditto-assistant/ditto-subnet/commit/a6352d207573604fd39cbc236586d41c557e1fb3))
+
+### Chores
+
+- **coding-starter**: Drop unused uuid and document dotenv split
+  ([#1605](https://github.com/ditto-assistant/ditto-subnet/pull/1605),
+  [`5083503`](https://github.com/ditto-assistant/ditto-subnet/commit/5083503e5db9f3a70925d7877c0bc3ea77163bc4))
+
+### Features
+
+- **coding**: Package private v2 payload
+  ([#1615](https://github.com/ditto-assistant/ditto-subnet/pull/1615),
+  [`c4d946f`](https://github.com/ditto-assistant/ditto-subnet/commit/c4d946f9210c52096b283460920dec5abb8d25b2))
+
+- **coding**: Prepare private v2 transport and canary plan
+  ([#1616](https://github.com/ditto-assistant/ditto-subnet/pull/1616),
+  [`ee28da1`](https://github.com/ditto-assistant/ditto-subnet/commit/ee28da19a89920247407e21a9fbdc997c4ba4b6a))
+
+- **coding-datagen**: Compile private v2 catalog
+  ([#1614](https://github.com/ditto-assistant/ditto-subnet/pull/1614),
+  [`14805a3`](https://github.com/ditto-assistant/ditto-subnet/commit/14805a3f80f6577ece37279c8d84f0bea7046cb1))
+
+
 ## v0.208.0 (2026-09-04)
 
 ### Features
