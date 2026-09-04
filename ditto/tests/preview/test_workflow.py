@@ -105,8 +105,22 @@ def test_stack_preview_controller_caps_slots_and_never_runs_pr_code() -> None:
     assert "for candidate in {0..7}" in provision
     assert "all 8 preview slots are active" in provision
     assert "--if-generation-match=0" in provision
+    assert '"$uri" >/dev/null 2>&1' in provision
+    assert '"$(preview_lease_uri "$slot")" >/dev/null' in provision
     assert "head.repo.full_name" in provision
     assert "stale PR head" in provision
+    compose = (ROOT / "preview/cloud/compose.yml").read_text()
+    runtime = (ROOT / "preview/cloud/runtime.sh").read_text()
+    backroom_config = (ROOT / "preview/cloud/backroom.wrangler.jsonc").read_text()
+    backroom_entrypoint = (ROOT / "preview/cloud/backroom-entrypoint.sh").read_text()
+    assert "backroom: {condition: service_healthy}" in compose
+    assert "AbortSignal.timeout(5000)" in compose
+    assert "docker compose -f preview/cloud/compose.yml logs" in runtime
+    assert '"main": "./dist/server/index.js"' in backroom_config
+    assert '"directory": "./dist/client"' in backroom_config
+    assert '--env-file "$env_file"' in backroom_entrypoint
+    assert "DITTO_ADMIN_API_TOKEN=%s" in backroom_entrypoint
+    assert "SESSION_SECRET=%s" in backroom_entrypoint
 
 
 def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
@@ -117,6 +131,7 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert "--duration=2h" in provision
     assert "sanitize-snapshot.sh" in snapshot
     assert "environment: prod" in snapshot
+    assert "pg_dump -Fc --no-owner --no-privileges ditto_platform_prod" in snapshot
     assert "source.dump" in snapshot
     assert "sanitized.dump" in snapshot
 

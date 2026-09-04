@@ -38,7 +38,8 @@ jobs:
           gcloud compute ssh ditto-pg-platform \
             --zone "${{ vars.GCP_PLATFORM_ZONE }}" \
             --tunnel-through-iap \
-            --command "sudo -u postgres pg_dump -Fc --no-owner --no-privileges ditto" \
+            --quiet \
+            --command "sudo -u postgres pg_dump -Fc --no-owner --no-privileges ditto_platform_prod" \
             > "${RUNNER_TEMP}/source.dump"
 
       - name: Sanitize in a disposable Postgres
