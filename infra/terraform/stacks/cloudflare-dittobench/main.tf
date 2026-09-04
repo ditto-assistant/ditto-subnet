@@ -31,13 +31,11 @@ resource "cloudflare_pages_project" "dashboard_preview" {
     preview = {
       always_use_latest_compatibility_date = false
       compatibility_date                   = "2026-08-22"
-      compatibility_flags                  = []
       fail_open                            = false
     }
     production = {
       always_use_latest_compatibility_date = false
       compatibility_date                   = "2026-08-22"
-      compatibility_flags                  = []
       fail_open                            = false
     }
   }
