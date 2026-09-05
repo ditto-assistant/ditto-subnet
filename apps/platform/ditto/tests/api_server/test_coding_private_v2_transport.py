@@ -123,3 +123,12 @@ def test_transport_verify_rejects_leftover_objects_and_aad_drift(
     )
     with pytest.raises(PrivateV2TransportError, match="object is invalid"):
         verify_private_v2_transport(drifted)
+
+
+def test_transport_rejects_symlinked_object_directory(tmp_path: Path) -> None:
+    root = tmp_path / "transport"
+    _write_transport(root)
+    (root / "objects").rename(root / "actual-objects")
+    (root / "objects").symlink_to(root / "actual-objects", target_is_directory=True)
+    with pytest.raises(PrivateV2TransportError, match="objects are invalid"):
+        verify_private_v2_transport(root)

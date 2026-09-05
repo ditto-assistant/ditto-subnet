@@ -200,3 +200,9 @@ def test_private_v2_payload_rejects_leftover_objects(tmp_path: Path) -> None:
         verify_private_v2_payload(protected / "payload")
     extra.unlink()
     assert verify_private_v2_payload(protected / "payload") == payload
+    objects_dir = protected / "payload" / "objects"
+    actual_dir = protected / "payload" / "actual-objects"
+    objects_dir.rename(actual_dir)
+    objects_dir.symlink_to(actual_dir, target_is_directory=True)
+    with pytest.raises(PrivateV2PayloadError, match="objects are invalid"):
+        verify_private_v2_payload(protected / "payload")
