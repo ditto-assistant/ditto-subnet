@@ -58,6 +58,39 @@ CREATE TYPE public.ticketstatus AS ENUM (
 
 
 --
+-- Name: coding_hosted_assignment_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.coding_hosted_assignment_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+            IF TG_OP = 'DELETE' THEN
+                RAISE EXCEPTION 'hosted assignments cannot be deleted'
+                    USING ERRCODE = '23514';
+            END IF;
+            IF (to_jsonb(OLD) - ARRAY['admitted_at','admission_request_sha256',
+                                     'started_at','worker_id'])
+                IS DISTINCT FROM
+               (to_jsonb(NEW) - ARRAY['admitted_at','admission_request_sha256',
+                                     'started_at','worker_id'])
+                OR (OLD.admitted_at IS NOT NULL AND
+                    (NEW.admitted_at IS DISTINCT FROM OLD.admitted_at OR
+                     NEW.admission_request_sha256 IS DISTINCT FROM
+                     OLD.admission_request_sha256))
+                OR (OLD.started_at IS NOT NULL AND
+                    (NEW.started_at IS DISTINCT FROM OLD.started_at OR
+                     NEW.worker_id IS DISTINCT FROM OLD.worker_id))
+            THEN
+                RAISE EXCEPTION 'hosted assignment authority or lifecycle is immutable'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+
+
+--
 -- Name: guard_coding_catalog_append_only(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -981,6 +1014,38 @@ CREATE TABLE public.coding_certification_leases (
     CONSTRAINT ck_coding_certification_leases_coding_certification_lea_e585 CHECK ((weight_eligible = false)),
     CONSTRAINT ck_coding_certification_leases_coding_certification_lea_e6b0 CHECK (((artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND (core_qualification_policy_checksum ~ '^[0-9a-f]{64}$'::text) AND (canary_manifest_sha256 ~ '^[0-9a-f]{64}$'::text) AND (runner_plan_sha256 ~ '^[0-9a-f]{64}$'::text) AND (grader_plan_sha256 ~ '^[0-9a-f]{64}$'::text) AND (resource_profile_sha256 ~ '^[0-9a-f]{64}$'::text) AND (inference_policy_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_coding_certification_leases_coding_certification_lea_fe07 CHECK ((status = ANY (ARRAY['issued'::text, 'claimed'::text, 'aborted'::text, 'expired'::text])))
+);
+
+
+--
+-- Name: coding_hosted_assignments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_assignments (
+    evaluation_id uuid NOT NULL,
+    attempt_id uuid NOT NULL,
+    release_row_id uuid NOT NULL,
+    registration_sha256 text NOT NULL,
+    agent_id uuid NOT NULL,
+    validator_hotkey text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    screened_image_sha256 text NOT NULL,
+    assignment_sha256 text NOT NULL,
+    authority jsonb NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    shadow_only boolean NOT NULL,
+    weight_eligible boolean NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    admitted_at timestamp with time zone,
+    admission_request_sha256 text,
+    started_at timestamp with time zone,
+    worker_id uuid,
+    CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__60ba CHECK (((validator_hotkey ~ '^[1-9A-HJ-NP-Za-km-z]{47,48}$'::text) AND ((length(TRIM(BOTH FROM reason)) >= 8) AND (length(TRIM(BOTH FROM reason)) <= 512)) AND ((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120)) AND (jsonb_typeof(authority) = 'object'::text) AND (octet_length((authority)::text) <= 16384))),
+    CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__6e57 CHECK (((expires_at > created_at) AND ((admitted_at IS NULL) = (admission_request_sha256 IS NULL)) AND ((admitted_at IS NULL) OR ((admitted_at >= created_at) AND (admission_request_sha256 ~ '^[0-9a-f]{64}$'::text))) AND ((started_at IS NULL) = (worker_id IS NULL)) AND ((started_at IS NULL) OR ((admitted_at IS NOT NULL) AND (started_at >= admitted_at))))),
+    CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__9b2e CHECK (((shadow_only = true) AND (weight_eligible = false))),
+    CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__c2b7 CHECK (((registration_sha256 ~ '^[0-9a-f]{64}$'::text) AND (artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND (assignment_sha256 ~ '^[0-9a-f]{64}$'::text)))
 );
 
 
@@ -4765,6 +4830,14 @@ ALTER TABLE ONLY public.coding_certification_leases
 
 
 --
+-- Name: coding_hosted_assignments pk_coding_hosted_assignments; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_assignments
+    ADD CONSTRAINT pk_coding_hosted_assignments PRIMARY KEY (evaluation_id);
+
+
+--
 -- Name: confirmation_budget_days pk_confirmation_budget_days; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5370,6 +5443,22 @@ ALTER TABLE ONLY public.benchmark_rollout_carryover
 
 ALTER TABLE ONLY public.benchmark_rollout_members
     ADD CONSTRAINT uq_benchmark_rollout_members_rollout_id UNIQUE (rollout_id, "position");
+
+
+--
+-- Name: coding_hosted_assignments uq_coding_hosted_assignments_assignment_sha256; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_assignments
+    ADD CONSTRAINT uq_coding_hosted_assignments_assignment_sha256 UNIQUE (assignment_sha256);
+
+
+--
+-- Name: coding_hosted_assignments uq_coding_hosted_assignments_attempt_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_assignments
+    ADD CONSTRAINT uq_coding_hosted_assignments_attempt_id UNIQUE (attempt_id);
 
 
 --
@@ -6377,6 +6466,13 @@ CREATE TRIGGER coding_catalog_retirements_append_only_guard BEFORE DELETE OR UPD
 
 
 --
+-- Name: coding_hosted_assignments coding_hosted_assignment_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_assignment_guard BEFORE DELETE OR UPDATE ON public.coding_hosted_assignments FOR EACH ROW EXECUTE FUNCTION public.coding_hosted_assignment_guard();
+
+
+--
 -- Name: coding_private_v2_release_events coding_private_v2_release_events_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -6576,6 +6672,14 @@ ALTER TABLE ONLY public.coding_capability_certifications
 
 ALTER TABLE ONLY public.coding_capability_certifications
     ADD CONSTRAINT coding_certifications_lease_fkey FOREIGN KEY (lease_id) REFERENCES public.coding_certification_leases(lease_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_hosted_assignments coding_hosted_assignments_release_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_assignments
+    ADD CONSTRAINT coding_hosted_assignments_release_fkey FOREIGN KEY (release_row_id, registration_sha256) REFERENCES public.coding_private_v2_releases(release_row_id, registration_sha256) ON DELETE RESTRICT;
 
 
 --
@@ -6944,6 +7048,14 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 ALTER TABLE ONLY public.benchmark_rollout_members
     ADD CONSTRAINT fk_benchmark_rollout_members_rollout_id_benchmark_rollouts FOREIGN KEY (rollout_id) REFERENCES public.benchmark_rollouts(rollout_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_hosted_assignments fk_coding_hosted_assignments_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_assignments
+    ADD CONSTRAINT fk_coding_hosted_assignments_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
 
 
 --

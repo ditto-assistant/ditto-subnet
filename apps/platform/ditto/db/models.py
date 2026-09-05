@@ -1567,6 +1567,85 @@ class CodingCatalogRetirement(Base):
     )
 
 
+class CodingHostedAssignment(Base):
+    """Approved, opaque hosted assignment with an irreversible start boundary."""
+
+    __tablename__ = "coding_hosted_assignments"
+
+    evaluation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False, unique=True
+    )
+    release_row_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    registration_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    screened_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    assignment_sha256: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    authority: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    shadow_only: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.clock_timestamp()
+    )
+    admitted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    admission_request_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    worker_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["release_row_id", "registration_sha256"],
+            [
+                "coding_private_v2_releases.release_row_id",
+                "coding_private_v2_releases.registration_sha256",
+            ],
+            ondelete="RESTRICT",
+            name="coding_hosted_assignments_release_fkey",
+        ),
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        CheckConstraint(
+            "shadow_only = true AND weight_eligible = false",
+            name="coding_hosted_assignments_shadow_check",
+        ),
+        CheckConstraint(
+            "registration_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND artifact_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND screened_image_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND assignment_sha256 ~ '^[0-9a-f]{64}$'",
+            name="coding_hosted_assignments_digests_check",
+        ),
+        CheckConstraint(
+            "validator_hotkey ~ '^[1-9A-HJ-NP-Za-km-z]{47,48}$' "
+            "AND length(trim(reason)) BETWEEN 8 AND 512 "
+            "AND length(trim(actor)) BETWEEN 1 AND 120 "
+            "AND jsonb_typeof(authority) = 'object' "
+            "AND octet_length(authority::text) <= 16384",
+            name="coding_hosted_assignments_authority_check",
+        ),
+        CheckConstraint(
+            "expires_at > created_at "
+            "AND (admitted_at IS NULL) = (admission_request_sha256 IS NULL) "
+            "AND (admitted_at IS NULL OR (admitted_at >= created_at "
+            "AND admission_request_sha256 ~ '^[0-9a-f]{64}$')) "
+            "AND (started_at IS NULL) = (worker_id IS NULL) "
+            "AND (started_at IS NULL OR (admitted_at IS NOT NULL "
+            "AND started_at >= admitted_at))",
+            name="coding_hosted_assignments_lifecycle_check",
+        ),
+    )
+
+
 class CodingPrivateV2Release(Base):
     """One immutable, digest-only private Coding v2 release registration."""
 
