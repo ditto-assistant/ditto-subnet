@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 import httpx
@@ -495,9 +496,12 @@ def test_retrieval_config_and_presigned_url_are_fail_closed() -> None:
         )
 
 
-async def test_live_reader_uses_one_bounded_nonredirecting_exact_get() -> None:
+@pytest.mark.parametrize("namespace", ["v1", "v2"])
+async def test_live_reader_uses_one_bounded_nonredirecting_exact_get(
+    namespace: Literal["v1", "v2"],
+) -> None:
     config = _retrieval_config()
-    key = "coding-private-inputs/v1/" + "a" * 64 + "/objects/000000.bin"
+    key = f"coding-private-inputs/{namespace}/" + "a" * 64 + "/objects/000000.bin"
     url = f"https://s3.hippius.com/{config.bucket}/{key}?X-Amz-Signature=abc"
     requests: list[httpx.Request] = []
 
@@ -508,6 +512,7 @@ async def test_live_reader_uses_one_bounded_nonredirecting_exact_get() -> None:
     reader = AiobotoHippiusPrivateInputReader(
         config,
         http_transport=httpx.MockTransport(success),
+        object_namespace=namespace,
     )
     reader._session = _PresigningSession(url)  # type: ignore[assignment]
     try:
@@ -521,6 +526,11 @@ async def test_live_reader_uses_one_bounded_nonredirecting_exact_get() -> None:
         await reader.get_object(key="../secret", max_bytes=17)
     with pytest.raises(HippiusPrivateInputRetrievalIntegrity, match="exact-read"):
         await reader.get_object(key=key + ".bak", max_bytes=17)
+    other_namespace = "v2" if namespace == "v1" else "v1"
+    with pytest.raises(HippiusPrivateInputRetrievalIntegrity, match="exact-read"):
+        await reader.get_object(
+            key=key.replace(f"/{namespace}/", f"/{other_namespace}/"), max_bytes=17
+        )
 
     def redirect(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"location": "https://evil.example/leak"})
@@ -528,6 +538,7 @@ async def test_live_reader_uses_one_bounded_nonredirecting_exact_get() -> None:
     reader = AiobotoHippiusPrivateInputReader(
         config,
         http_transport=httpx.MockTransport(redirect),
+        object_namespace=namespace,
     )
     reader._session = _PresigningSession(url)  # type: ignore[assignment]
     try:

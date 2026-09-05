@@ -59,9 +59,6 @@ _MAX_RECORD_BYTES = 2 << 20
 _MAX_JSON_DEPTH = 32
 _MAX_UNWRAP_MESSAGE_BYTES = 32 << 10
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_REMOTE_OBJECT_KEY = re.compile(
-    r"^coding-private-inputs/v1/[0-9a-f]{64}/objects/[0-9]{6}\.bin$"
-)
 _BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 _SS58 = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{47,48}$")
 
@@ -219,7 +216,13 @@ class AiobotoHippiusPrivateInputReader:
         config: HippiusPrivateInputRetrievalConfig,
         *,
         http_transport: httpx.AsyncBaseTransport | None = None,
+        object_namespace: Literal["v1", "v2"] = "v1",
     ) -> None:
+        if object_namespace not in {"v1", "v2"}:
+            raise HippiusPrivateInputRetrievalIntegrity("invalid reader namespace")
+        self._object_key_pattern = re.compile(
+            rf"^coding-private-inputs/{object_namespace}/[0-9a-f]{{64}}/objects/[0-9]{{6}}\.bin$"
+        )
         import aioboto3
         from botocore.config import Config
 
@@ -257,7 +260,7 @@ class AiobotoHippiusPrivateInputReader:
 
     async def get_object(self, *, key: str, max_bytes: int) -> bytes:
         if (
-            _REMOTE_OBJECT_KEY.fullmatch(key) is None
+            self._object_key_pattern.fullmatch(key) is None
             or not 17 <= max_bytes <= _MAX_CIPHERTEXT_BYTES
         ):
             raise HippiusPrivateInputRetrievalIntegrity(
