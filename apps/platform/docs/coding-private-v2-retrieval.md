@@ -11,6 +11,10 @@ the grant store must consult the current release lifecycle and attempt phase on
 every check, including after provider download and immediately before returning
 plaintext. Retired or quarantined releases must yield no active grant.
 
+The curator public-key file is selected by trusted operator configuration, not
+by the receipt or a candidate. The hardened publication loader verifies that
+key and signature before the retriever checks the registered object linkage.
+
 The grant selects one catalog index, explicit asset roles, evaluation and attempt,
 audience and expiry. The caller cannot supply an object key, object digest or URL.
 The retriever derives the exact v2 Hippius key from the authorized transport

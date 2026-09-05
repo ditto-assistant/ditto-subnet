@@ -253,16 +253,23 @@ def _fixture(
         None,
     )
     grants, reader, unwrapper = Grants(grant), Reader(ciphertext), Unwrapper()
+    trusted_key = (
+        Ed25519PrivateKey.generate().public_key()
+        if tamper == "curator"
+        else signer.public_key()
+    )
+    trusted_key_path = tmp_path / "trusted-curator-public.pem"
+    trusted_key_path.write_bytes(
+        trusted_key.public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
     retriever = PrivateV2InputRetriever(
         registration=model,
         transport_manifest=tmp_path / "transport.json",
         payload_authority=tmp_path / "payload.json",
         publication_receipt=tmp_path / "receipt.json",
-        trusted_curator=(
-            Ed25519PrivateKey.generate().public_key()
-            if tamper == "curator"
-            else signer.public_key()
-        ),
+        trusted_curator_public_key_path=trusted_key_path,
         reader_authority_sha256="6" * 64,
         audience="platform-authoring" if phase == "authoring" else "platform-grading",
         grants=grants,

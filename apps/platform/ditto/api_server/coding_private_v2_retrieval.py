@@ -15,14 +15,13 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from ditto.api_models.coding_canonical import coding_canonical_json_bytes
 from ditto.api_models.coding_private_v2_registry import (
     CodingPrivateV2RegistrationAuthority,
 )
+from ditto.api_server.coding_hippius_publication import load_curator_signing_public_key
 from ditto.api_server.coding_hippius_retrieval import HippiusPrivateInputReader
 from ditto.api_server.coding_private_v2_publication import (
     PRIVATE_V2_PUBLICATION_MAX_CIPHERTEXT_BYTES,
@@ -128,7 +127,7 @@ class PrivateV2InputRetriever:
         transport_manifest: Path,
         payload_authority: Path,
         publication_receipt: Path,
-        trusted_curator: Ed25519PublicKey,
+        trusted_curator_public_key_path: Path,
         reader_authority_sha256: str,
         audience: Literal["platform-authoring", "platform-grading"],
         grants: PrivateV2GrantStore,
@@ -144,14 +143,13 @@ class PrivateV2InputRetriever:
             )
             manifest = load_private_v2_transport_manifest(transport_manifest)
             payload = _load_authority(payload_authority)
-            receipt, receipt_sha = load_private_v2_publication_receipt(
-                publication_receipt
+            trusted_curator, curator_sha = load_curator_signing_public_key(
+                trusted_curator_public_key_path
             )
-            curator_sha = hashlib.sha256(
-                trusted_curator.public_bytes(
-                    serialization.Encoding.Raw, serialization.PublicFormat.Raw
-                )
-            ).hexdigest()
+            receipt, receipt_sha = load_private_v2_publication_receipt(
+                publication_receipt,
+                curator_public_key_path=trusted_curator_public_key_path,
+            )
             if (
                 registration.publication_receipt_sha256 != receipt_sha
                 or receipt.curator_signing_key_sha256 != curator_sha
