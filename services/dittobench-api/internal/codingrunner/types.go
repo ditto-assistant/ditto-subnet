@@ -15,6 +15,8 @@ import (
 
 const (
 	ContractVersion = 1
+	// HostedContractVersion is opt-in through the separate hosted entry points.
+	HostedContractVersion = 2
 
 	DefaultMaxBundleBytes      int64 = 512 << 20
 	DefaultMaxWorkspaceBytes   int64 = 1 << 30
@@ -176,7 +178,11 @@ type Manifest struct {
 }
 
 func (manifest Manifest) validate(now time.Time) error {
-	if manifest.CodingContractVersion != ContractVersion ||
+	return manifest.validateVersion(now, ContractVersion)
+}
+
+func (manifest Manifest) validateVersion(now time.Time, version int) error {
+	if (version != ContractVersion && version != HostedContractVersion) || manifest.CodingContractVersion != version ||
 		!validIdentifier(manifest.TicketID, 256) || !validIdentifier(manifest.CaseID, 256) ||
 		!validIdentifier(manifest.ProfileCapabilityID, 256) ||
 		!isLowerSHA256(manifest.VisibleBundleSHA256) || !isLowerSHA256(manifest.BaseTreeSHA256) {

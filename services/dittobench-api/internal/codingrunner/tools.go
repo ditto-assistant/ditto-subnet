@@ -56,7 +56,7 @@ func (session *Session) Invoke(ctx context.Context, request ToolRequest) (ToolRe
 	if ctx == nil {
 		return ToolResponse{}, errors.New("workspace tool context is required")
 	}
-	if err := request.validate(); err != nil {
+	if err := request.validateVersion(session.manifest.CodingContractVersion); err != nil {
 		return ToolResponse{}, err
 	}
 	operationContext, cancel := context.WithCancel(session.ctx)

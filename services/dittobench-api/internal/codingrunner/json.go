@@ -11,6 +11,10 @@ import (
 )
 
 func parseToolRequest(body []byte) (ToolRequest, error) {
+	return parseToolRequestVersion(body, ContractVersion)
+}
+
+func parseToolRequestVersion(body []byte, version int) (ToolRequest, error) {
 	if len(body) == 0 || int64(len(body)) > MaxToolRequestBytes {
 		return ToolRequest{}, errors.New("workspace tool request is outside the body limit")
 	}
@@ -43,14 +47,18 @@ func parseToolRequest(body []byte) (ToolRequest, error) {
 	if err := json.Unmarshal(body, &request); err != nil {
 		return ToolRequest{}, err
 	}
-	if err := request.validate(); err != nil {
+	if err := request.validateVersion(version); err != nil {
 		return ToolRequest{}, err
 	}
 	return request, nil
 }
 
 func (request ToolRequest) validate() error {
-	if request.CodingContractVersion != ContractVersion || !validIdentifier(request.CaseID, 256) ||
+	return request.validateVersion(ContractVersion)
+}
+
+func (request ToolRequest) validateVersion(version int) error {
+	if (version != ContractVersion && version != HostedContractVersion) || request.CodingContractVersion != version || !validIdentifier(request.CaseID, 256) ||
 		!validIdentifier(request.ProfileCapabilityID, 256) || !validIdentifier(request.CallID, 128) ||
 		!validIdentifier(request.Name, 80) || len(request.Arguments) == 0 ||
 		int64(len(request.Arguments)) > MaxToolRequestBytes {

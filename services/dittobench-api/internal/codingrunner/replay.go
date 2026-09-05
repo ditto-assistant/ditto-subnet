@@ -88,6 +88,10 @@ func ReplayFrozenSubmission(
 	visibleBundle io.Reader,
 	limits Limits,
 ) (*ReplayWorkspace, error) {
+	return replayFrozenSubmission(ctx, submission, visibleBundle, limits, ContractVersion, "", "")
+}
+
+func replayFrozenSubmission(ctx context.Context, submission FrozenSubmission, visibleBundle io.Reader, limits Limits, version int, assignmentSHA256, evaluationID string) (*ReplayWorkspace, error) {
 	if ctx == nil {
 		return nil, errors.New("frozen replay context is required")
 	}
@@ -99,7 +103,7 @@ func ReplayFrozenSubmission(
 		return nil, errors.New("frozen submission is unavailable")
 	}
 	submission = *cloned.Submission
-	if err := validateFrozenSubmission(submission, limits); err != nil {
+	if err := validateFrozenSubmissionVersion(submission, limits, version, assignmentSHA256, evaluationID); err != nil {
 		return nil, err
 	}
 	staged, digest, err := stageVisibleBundle(ctx, visibleBundle, limits.MaxBundleBytes)
@@ -173,7 +177,11 @@ func ReplayFrozenSubmission(
 }
 
 func validateFrozenSubmission(submission FrozenSubmission, limits Limits) error {
-	if submission.CodingContractVersion != ContractVersion || !validIdentifier(submission.CaseID, 256) ||
+	return validateFrozenSubmissionVersion(submission, limits, ContractVersion, "", "")
+}
+
+func validateFrozenSubmissionVersion(submission FrozenSubmission, limits Limits, version int, assignmentSHA256, evaluationID string) error {
+	if (version != ContractVersion && version != HostedContractVersion) || submission.CodingContractVersion != version || !validIdentifier(submission.CaseID, 256) ||
 		!isLowerSHA256(submission.VisibleBundleSHA256) || !isLowerSHA256(submission.BaseTreeSHA256) ||
 		!isLowerSHA256(submission.FinalTreeSHA256) || !isLowerSHA256(submission.FrozenPatchSHA256) ||
 		!isLowerSHA256(submission.ChangedPathRoot) || !isLowerSHA256(submission.AuthoringEventRoot) ||
@@ -234,8 +242,10 @@ func validateFrozenSubmission(submission FrozenSubmission, limits Limits) error 
 		return errors.New("frozen changed-path root mismatch")
 	}
 	patch, err := canonicalStruct(patchDocument{
-		Schema:                "dittobench-coding-frozen-patch-v1",
-		CodingContractVersion: ContractVersion,
+		Schema:                frozenPatchSchema(version),
+		AssignmentSHA256:      assignmentSHA256,
+		EvaluationID:          evaluationID,
+		CodingContractVersion: version,
 		CaseID:                submission.CaseID,
 		BaseTreeSHA256:        submission.BaseTreeSHA256,
 		VisibleBundleSHA256:   submission.VisibleBundleSHA256,

@@ -27,7 +27,7 @@ func (session *Session) Handler() http.Handler {
 			writeJSON(response, http.StatusRequestEntityTooLarge, map[string]string{"error": "workspace tool request exceeds body limit"})
 			return
 		}
-		toolRequest, err := parseToolRequest(body)
+		toolRequest, err := parseToolRequestVersion(body, session.manifest.CodingContractVersion)
 		if err != nil {
 			writeJSON(response, http.StatusBadRequest, map[string]string{"error": boundedText(err.Error(), 512)})
 			return
