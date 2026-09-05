@@ -17,6 +17,10 @@ from ditto.api_server.coding_private_v2_payload import (
     PrivateV2PayloadError,
     verify_private_v2_payload,
 )
+from ditto.api_server.coding_private_v2_publication import (
+    PrivateV2PublicationError,
+    load_private_v2_publication_receipt,
+)
 from ditto.api_server.coding_private_v2_transport import (
     PrivateV2TransportError,
     verify_private_v2_transport,
@@ -32,27 +36,44 @@ def build_private_v2_registration_authority(
     catalog_directory: Path,
     payload_directory: Path,
     transport_directory: Path,
-    publication_receipt_sha256: str,
+    publication_receipt_path: Path,
+    curator_public_key_path: Path,
     output: Path,
 ) -> dict[str, Any]:
     """Bind independently verified artifacts into one append-only-ready record."""
 
-    if not _sha256(publication_receipt_sha256):
-        raise PrivateV2ShadowPlanError("publication receipt identity is invalid")
     try:
         catalog = verify_private_catalog_v2(catalog_directory)
         payload = verify_private_v2_payload(payload_directory)
         transport = verify_private_v2_transport(transport_directory)
+        receipt, publication_receipt_sha256 = load_private_v2_publication_receipt(
+            publication_receipt_path,
+            curator_public_key_path=curator_public_key_path,
+        )
     except (
         PrivateCatalogV2CompileError,
         PrivateV2PayloadError,
+        PrivateV2PublicationError,
         PrivateV2TransportError,
     ) as error:
         raise PrivateV2ShadowPlanError("private v2 inputs are invalid") from error
+    transport_objects = transport["objects"]
     if (
         payload["catalog_sha256"] != catalog["catalog_sha256"]
         or transport["catalog_sha256"] != catalog["catalog_sha256"]
         or transport["payload_sha256"] != payload["payload_sha256"]
+        or receipt.catalog_sha256 != catalog["catalog_sha256"]
+        or receipt.catalog_merkle_root != catalog["catalog_merkle_root"]
+        or receipt.payload_sha256 != payload["payload_sha256"]
+        or receipt.transport_sha256 != transport["transport_sha256"]
+        or receipt.wrapping_key_sha256 != transport["wrapping_key_sha256"]
+        or receipt.object_count != len(transport_objects)
+        or any(
+            item.ciphertext_sha256 != transport_objects[index]["ciphertext_sha256"]
+            or item.ciphertext_size_bytes
+            != transport_objects[index]["ciphertext_size_bytes"]
+            for index, item in enumerate(receipt.objects)
+        )
     ):
         raise PrivateV2ShadowPlanError("private v2 authority linkage drifted")
     projection = {
@@ -125,6 +146,15 @@ def build_private_v2_shadow_canary(
         or registration.get("shadow_only") is not True
         or registration.get("weight_eligible") is not False
         or registration.get("catalog_sha256") != catalog["catalog_sha256"]
+        or registration.get("catalog_merkle_root") != catalog["catalog_merkle_root"]
+        or registration.get("corpus_release_id") != catalog["corpus_release_id"]
+        or registration.get("private_release_sha256")
+        != catalog["private_release_sha256"]
+        or registration.get("previous_registration_sha256") is not None
+        or not _sha256(registration.get("publication_receipt_sha256"))
+        or not _sha256(registration.get("payload_sha256"))
+        or not _sha256(registration.get("transport_sha256"))
+        or not _sha256(registration.get("wrapping_key_sha256"))
         or not 0 <= catalog_index < catalog["task_version_count"]
     ):
         raise PrivateV2ShadowPlanError("private v2 registration authority is invalid")

@@ -350,8 +350,10 @@ def write_private_v2_publication_receipt(
 
 def load_private_v2_publication_receipt(
     path: Path,
+    *,
+    curator_public_key_path: Path,
 ) -> tuple[PrivateV2PublicationReceipt, str]:
-    """Load one canonical, complete, shadow-only v2 publication receipt."""
+    """Load one canonical receipt and verify the curator signature and keys."""
 
     body = _read_bounded_regular_file(
         path,
@@ -387,10 +389,38 @@ def load_private_v2_publication_receipt(
             != body
         ):
             raise ValueError("receipt digest or canonical bytes are invalid")
+        public_key, signing_key_sha256 = load_curator_signing_public_key(
+            curator_public_key_path
+        )
+        if signing_key_sha256 != receipt.curator_signing_key_sha256:
+            raise ValueError("curator signing key drifted")
+        message = private_v2_publication_signing_message(
+            manifest={
+                "schema": "dittobench-coding-private-v2-transport-v1",
+                "coding_contract_version": 2,
+                "weight_eligible": False,
+                "transport_sha256": receipt.transport_sha256,
+                "payload_sha256": receipt.payload_sha256,
+                "catalog_sha256": receipt.catalog_sha256,
+                "catalog_merkle_root": receipt.catalog_merkle_root,
+                "wrapping_key_sha256": receipt.wrapping_key_sha256,
+                "objects": [{}] * receipt.object_count,
+            },
+            source_sha=receipt.source_sha,
+            probe_receipt_payload_sha256=receipt.probe_receipt_payload_sha256,
+            private_input_authority_sha256=receipt.private_input_authority_sha256,
+            curator_signing_key_sha256=signing_key_sha256,
+        )
+        public_key.verify(
+            base64.b64decode(receipt.curator_signature_b64, validate=True),
+            message,
+        )
     except (
         KeyError,
         TypeError,
         ValueError,
+        InvalidSignature,
+        HippiusPrivateInputPublicationError,
         PrivateV2PublicationError,
     ) as error:
         raise PrivateV2PublicationError(
@@ -444,9 +474,15 @@ def _validated_receipt(
     remote_keys: set[str] = set()
     ciphertexts: set[str] = set()
     for expected_index, item in enumerate(receipt.objects):
+        expected_remote = hashlib.sha256(
+            private_v2_remote_object_key(
+                transport_sha256=receipt.transport_sha256,
+                object_index=expected_index,
+            ).encode("utf-8")
+        ).hexdigest()
         if (
             item.object_index != expected_index
-            or not _sha256(item.remote_object_key_sha256)
+            or item.remote_object_key_sha256 != expected_remote
             or not _sha256(item.ciphertext_sha256)
             or type(item.ciphertext_size_bytes) is not int
             or not 17

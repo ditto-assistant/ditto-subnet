@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import json
 import os
 import stat
 from collections.abc import Mapping
@@ -13,6 +14,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from ditto.api_models.coding_canonical import coding_canonical_json_bytes
 from ditto.api_server.coding_hippius_probe import load_hippius_probe_receipt
 from ditto.api_server.coding_hippius_publication import (
     HippiusPrivateInputConflict,
@@ -178,7 +180,9 @@ async def test_private_v2_publication_uploads_verifies_replays_and_redacts(
     receipt_sha256 = write_private_v2_publication_receipt(
         receipt=second, output=receipt_path
     )
-    loaded, loaded_sha256 = load_private_v2_publication_receipt(receipt_path)
+    loaded, loaded_sha256 = load_private_v2_publication_receipt(
+        receipt_path, curator_public_key_path=public_path
+    )
     assert loaded == second
     assert loaded_sha256 == receipt_sha256
     assert stat.S_IMODE(receipt_path.stat().st_mode) == 0o600
@@ -194,6 +198,43 @@ async def test_private_v2_publication_uploads_verifies_replays_and_redacts(
         "1" * 64,
     ):
         assert sensitive not in raw
+
+    raw_receipt = json.loads(receipt_path.read_bytes())
+    raw_receipt["objects"][0]["remote_object_key_sha256"] = "e" * 64
+    claimed_sha256 = raw_receipt.pop("receipt_payload_sha256")
+    payload_bytes = coding_canonical_json_bytes(
+        raw_receipt,
+        maximum_bytes=16 << 20,
+        label="private v2 publication receipt",
+    )
+    raw_receipt["receipt_payload_sha256"] = hashlib.sha256(payload_bytes).hexdigest()
+    swapped_path = (tmp_path / "swapped-receipt.json").resolve()
+    swapped_path.write_bytes(
+        coding_canonical_json_bytes(
+            raw_receipt,
+            maximum_bytes=16 << 20,
+            label="private v2 publication receipt",
+        )
+    )
+    swapped_path.chmod(0o600)
+    assert raw_receipt["receipt_payload_sha256"] != claimed_sha256
+    with pytest.raises(PrivateV2PublicationError, match="invalid or incomplete"):
+        load_private_v2_publication_receipt(
+            swapped_path, curator_public_key_path=public_path
+        )
+
+    other_private = Ed25519PrivateKey.generate()
+    other_public = tmp_path / "other-curator-public.pem"
+    other_public.write_bytes(
+        other_private.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    with pytest.raises(PrivateV2PublicationError, match="invalid or incomplete"):
+        load_private_v2_publication_receipt(
+            receipt_path, curator_public_key_path=other_public
+        )
 
 
 @pytest.mark.asyncio
