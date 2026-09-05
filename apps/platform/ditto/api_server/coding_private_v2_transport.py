@@ -127,7 +127,26 @@ def verify_private_v2_transport(directory: Path) -> dict[str, Any]:
         or stat.S_IMODE(directory.stat().st_mode) & 0o077
     ):
         raise PrivateV2TransportError("private v2 transport directory is not protected")
-    manifest = _canonical_object(directory / "manifest.json")
+    manifest = load_private_v2_transport_manifest(directory / "manifest.json")
+    objects_dir = directory / "objects"
+    if objects_dir.is_symlink() or not objects_dir.is_dir():
+        raise PrivateV2TransportError("private v2 transport objects are invalid")
+    on_disk: set[str] = set()
+    for path in objects_dir.iterdir():
+        if path.is_symlink() or not path.is_file() or not path.name.endswith(".bin"):
+            raise PrivateV2TransportError("private v2 transport objects drifted")
+        on_disk.add(path.name[: -len(".bin")])
+    if on_disk != {item["plaintext_sha256"] for item in manifest["objects"]}:
+        raise PrivateV2TransportError("private v2 transport objects drifted")
+    for item in manifest["objects"]:
+        read_private_v2_transport_ciphertext(directory=directory, item=item)
+    return manifest
+
+
+def load_private_v2_transport_manifest(path: Path) -> dict[str, Any]:
+    """Validate transport metadata without requiring local ciphertext replicas."""
+
+    manifest = _canonical_object(path)
     projection = dict(manifest)
     transport_sha = projection.pop("transport_sha256", None)
     expected = {
@@ -162,9 +181,6 @@ def verify_private_v2_transport(directory: Path) -> dict[str, Any]:
         )
     ):
         raise PrivateV2TransportError("private v2 transport manifest is invalid")
-    objects_dir = directory / "objects"
-    if objects_dir.is_symlink() or not objects_dir.is_dir():
-        raise PrivateV2TransportError("private v2 transport objects are invalid")
     seen: set[str] = set()
     seen_ciphertexts: set[str] = set()
     previous_digest: str | None = None
@@ -234,17 +250,9 @@ def verify_private_v2_transport(directory: Path) -> dict[str, Any]:
             != aad_sha
         ):
             raise PrivateV2TransportError("private v2 transport object is invalid")
-        read_private_v2_transport_ciphertext(directory=directory, item=item)
         seen.add(digest)
         seen_ciphertexts.add(ciphertext_sha)
         previous_digest = digest
-    on_disk: set[str] = set()
-    for path in objects_dir.iterdir():
-        if path.is_symlink() or not path.is_file() or not path.name.endswith(".bin"):
-            raise PrivateV2TransportError("private v2 transport objects drifted")
-        on_disk.add(path.name[: -len(".bin")])
-    if on_disk != seen:
-        raise PrivateV2TransportError("private v2 transport objects drifted")
     return manifest
 
 
