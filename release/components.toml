@@ -87,6 +87,7 @@ paths = [
   "ditto/api_models/benchmark_progress.py",
   "ditto/api_models/coding.py",
   "ditto/api_models/coding_executor_control.py",
+  "ditto/api_models/coding_hosted.py",
   "ditto/api_models/coding_inference.py",
   "ditto/api_models/coding_inference_grants.py",
   "ditto/api_models/coding_harness.py",
@@ -192,6 +193,9 @@ paths = [
   "apps/platform/uv.lock",
   ".github/workflows/platform-ci.yml",
   # Platform consumes these shared coding contract vectors.
+  "packages/dittobench-coding-contract/testdata/coding_hosted_control_v2.json",
+  "packages/dittobench-coding-contract/generate_hosted_vectors.py",
+  "ditto/api_models/coding_hosted.py",
   "packages/dittobench-coding-contract/testdata/coding_contract_v1.json",
   "packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json",
   "packages/dittobench-coding-contract/testdata/coding_catalog_v1.json",
