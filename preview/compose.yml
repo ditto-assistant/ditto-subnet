@@ -5,7 +5,7 @@ name: ditto-preview
 
 services:
   postgres:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: ditto
       POSTGRES_PASSWORD: preview

@@ -151,9 +151,9 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert 'docker cp "$source_dump" "$container:/tmp/source.dump"' in sanitizer
     assert 'docker cp "$container:/tmp/sanitized.dump" "$output_dump"' in sanitizer
     assert '-v "$temp_dir:/work"' not in sanitizer
-    assert "postgres:17-alpine" in sanitizer
-    assert "image: postgres:17-alpine" in cloud_compose
-    assert "image: postgres:17-alpine" in local_compose
+    assert "pgvector/pgvector:pg17" in sanitizer
+    assert "image: pgvector/pgvector:pg17" in cloud_compose
+    assert "image: pgvector/pgvector:pg17" in local_compose
     assert "postgres:16-alpine" not in sanitizer
     assert "image: postgres:16-alpine" not in cloud_compose
     assert "image: postgres:16-alpine" not in local_compose
