@@ -4,51 +4,19 @@
 -- identity. Keep this policy explicit and fail closed in sanitize-snapshot.sh.
 SET session_replication_role = replica;
 
+CREATE TEMP TABLE preview_excluded_tables (
+  table_name text PRIMARY KEY
+);
+\copy preview_excluded_tables (table_name) FROM '/sanitize-excluded-tables.txt'
+
 DO $policy$
 DECLARE
   target_table text;
   column_record record;
 BEGIN
-  FOREACH target_table IN ARRAY ARRAY[
-    'artifact_fetch_audit',
-    'banned_hotkeys',
-    'confirmation_dimension_evidence',
-    'confirmation_inference_grants',
-    'confirmation_inference_requests',
-    'evaluation_payments',
-    'hotkey_ban_audit',
-    'inference_grants',
-    'inference_requests',
-    'inference_routing_audit',
-    'miner_avatar_nonces',
-    'miner_avatars',
-    'miner_device_grants',
-    'miner_login_nonces',
-    'miner_oauth_clients',
-    'miner_oauth_codes',
-    'miner_profiles',
-    'miner_session_tokens',
-    'miner_sessions',
-    'name_claim_endorsements',
-    'name_claims',
-    'owner_attestations',
-    'screened_image_uploads',
-    'screener_heartbeats',
-    'screener_node_bootstrap_grants',
-    'screener_nodes',
-    'screener_shadow_reviews',
-    'screening_disputes',
-    'screening_quarantine_resolutions',
-    'screening_quarantines',
-    'screening_retry_overrides',
-    'submission_image_builds',
-    'submission_deposit_address_revisions',
-    'submission_source_reviews',
-    'trusted_image_builds',
-    'upload_admission_reservations',
-    'validator_heartbeats',
-    'validator_request_nonces'
-  ] LOOP
+  FOR target_table IN
+    SELECT excluded.table_name FROM preview_excluded_tables AS excluded
+  LOOP
     IF to_regclass('public.' || target_table) IS NOT NULL THEN
       EXECUTE format('TRUNCATE TABLE %I CASCADE', target_table);
     END IF;
