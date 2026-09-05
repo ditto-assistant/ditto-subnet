@@ -1,7 +1,9 @@
 # Platform-only private v2 retrieval
 
 Status: injected service primitive, default-off. No HTTP route, runtime startup,
-production KMS adapter or durable grant-store implementation is added here.
+production KMS adapter is added here. The separate
+`coding-hosted-private-grants.md` layer supplies a database-backed grant store
+for approved hosted attempts; neither primitive is configured at startup.
 
 `PrivateV2InputRetriever` binds a registered release, canonical payload and
 transport manifests, publication readback receipt and an independently trusted
@@ -26,7 +28,7 @@ The entire read, including grant lookups and unwrap, has a 30-second wall-time
 limit. Grant expiry is rechecked before unwrap and before plaintext return.
 
 Authoring grants cannot request grader bundles. Grading grants require a frozen
-patch digest and the separate Platform grading audience. The future durable grant
+patch digest and the separate Platform grading audience. The durable grant
 store must verify that this digest represents an actual committed patch freeze;
 providing a syntactically valid digest is not proof of that state transition.
 
