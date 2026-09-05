@@ -135,6 +135,7 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert "environment: prod" in snapshot
     export = (ROOT / "preview/cloud/export-snapshot.sh").read_text()
     sanitizer = (ROOT / "preview/cloud/sanitize-snapshot.sh").read_text()
+    sanitizer_sql = (ROOT / "preview/cloud/sanitize.sql").read_text()
     cloud_compose = (ROOT / "preview/cloud/compose.yml").read_text()
     local_compose = (ROOT / "preview/compose.yml").read_text()
     assert "pg_dump" in export
@@ -156,6 +157,7 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert "/tmp/restore.log 2>&1" in sanitizer
     assert "/tmp/alembic-restore.log 2>&1" in sanitizer
     assert "detailed output withheld from CI" in sanitizer
+    assert "SET search_path = public, extensions, pg_catalog" in sanitizer_sql
     assert "pgvector/pgvector:pg17" in sanitizer
     assert "image: pgvector/pgvector:pg17" in cloud_compose
     assert "image: pgvector/pgvector:pg17" in local_compose
