@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator
+from legacy_pack import SOURCE, legacy_practice_pack
 
 from dittobench_coding_datagen.canonical import (
     canonical_json_bytes,
@@ -29,13 +30,12 @@ from dittobench_coding_datagen.validation import (
 )
 
 ROOT = Path(__file__).parents[1]
-SOURCE = ROOT / "practice-source/source.json"
 
 
 def test_published_schemas_accept_the_committed_source_and_manifest() -> None:
     for schema_name, document in (
         ("practice-source.schema.json", SOURCE),
-        ("practice-manifest.schema.json", ROOT / "practice/v1/manifest.json"),
+        ("practice-manifest.schema.json", legacy_practice_pack() / "manifest.json"),
     ):
         schema = json.loads((ROOT / "schemas" / schema_name).read_text())
         Draft202012Validator.check_schema(schema)
@@ -95,10 +95,10 @@ def test_compile_is_deterministic_and_agent_view_is_blind(tmp_path: Path) -> Non
         assert forbidden not in agent_text
 
 
-def test_committed_practice_pack_matches_the_compiler(tmp_path: Path) -> None:
+def test_legacy_regression_pack_matches_the_compiler(tmp_path: Path) -> None:
     rebuilt = tmp_path / "rebuilt"
     compile_practice(SOURCE, rebuilt)
-    committed = ROOT / "practice/v1"
+    committed = legacy_practice_pack()
 
     assert validate_pack(committed) == validate_pack(rebuilt)
     assert [identity.as_json() for identity in tree_identities(committed)] == [

@@ -97,8 +97,8 @@ func LoadPublicPack(repoRoot string) (PublicPack, error) {
 		return zero, err
 	}
 	manifestSHA := sha256.Sum256(body)
-	visible := filepath.Join(repoRoot, "research", "dittobench-coding-datagen", "practice", "v1", "capsules", publicCanaryTaskID, "visible", "workspace")
-	graderDir := filepath.Join(repoRoot, "research", "dittobench-coding-datagen", "practice", "v1", "capsules", publicCanaryTaskID, "grader")
+	visible := filepath.Join(repoRoot, "research", "dittobench-coding-datagen", "certification", "v1", "capsules", publicCanaryTaskID, "visible", "workspace")
+	graderDir := filepath.Join(repoRoot, "research", "dittobench-coding-datagen", "certification", "v1", "capsules", publicCanaryTaskID, "grader")
 	if _, err := os.Stat(visible); err != nil {
 		return zero, ErrInvalid
 	}

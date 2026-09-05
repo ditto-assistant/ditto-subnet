@@ -4,11 +4,13 @@ import hashlib
 import json
 from pathlib import Path
 
+from legacy_pack import legacy_practice_pack
+
 from dittobench_coding_datagen.canonical import canonical_json_bytes
 from dittobench_coding_datagen.validation import validate_pack
 
 ROOT = Path(__file__).parents[1]
-PACK = ROOT / "practice" / "v1"
+PACK = legacy_practice_pack()
 MANIFEST = ROOT / "certification" / "v1" / "manifest.json"
 LOCKED_POLICY = (
     ROOT.parents[1]
@@ -21,6 +23,18 @@ LOCKED_POLICY = (
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_retained_certification_capsule_preserves_original_bytes() -> None:
+    capsule = "capsules/PRACTICE-LEDGER-001"
+    retained = ROOT / "certification/v1" / capsule
+    expected = PACK / capsule
+    files = [p.relative_to(expected) for p in expected.rglob("*") if p.is_file()]
+    assert set(files) == {
+        p.relative_to(retained) for p in retained.rglob("*") if p.is_file()
+    }
+    for relative in files:
+        assert (expected / relative).read_bytes() == (retained / relative).read_bytes()
 
 
 def test_public_certification_canary_is_canonical_and_pack_bound() -> None:

@@ -8,12 +8,22 @@ Language-neutral Python/Go/Rust wire and digest vectors live in
 `packages/dittobench-coding-contract`; this component must remain compatible
 with those shared vectors.
 
+## Miner local practice
+
+The ten-task public v2 dataset is stored in this repository as a verified
+archive. Follow [practice/v2/README.md](practice/v2/README.md) to unpack it,
+prepare an editing workspace, grade a task, and compute a local score.
+No Hugging Face account, hosted dataset, or private storage access is required.
+
+The nine-task v1 pack has been removed from distribution. Its source is
+retained only under tests/fixtures for v1 protocol regression tests; the legacy
+commands below generate temporary test inputs and are not the miner setup.
+
 ## Security boundary
 
-The public tree contains schemas, compiler code, leakage checks, and a disjoint
-three-user/three-repository practice pack with nine tasks and eighteen unique
-memory records. It never contains a production task manifest, upstream
-SWE-bench instance IDs, gold patches, hidden evaluation tests, corpus keys, or
+The public tree contains the ten-task release, public source provenance,
+schemas, compiler code and regression fixtures. It never contains private
+evaluation tasks, reference solutions, private graders, corpus keys or
 production user memories.
 
 Public v2 external staging is semantically validated before compilation. Its
@@ -52,17 +62,17 @@ uv sync --locked --group dev
 
 # Rebuild the committed public practice pack deterministically.
 uv run dittobench-coding-datagen compile-practice \
-  --source practice-source/source.json \
-  --output practice/v1 --replace
+  --source tests/fixtures/legacy-practice-source.json \
+  --output /tmp/coding-legacy-regression --replace
 
 # Verify canonical bytes, hashes, scope, counts, and miner-view leakage.
-uv run dittobench-coding-datagen validate-pack practice/v1
+uv run dittobench-coding-datagen validate-pack /tmp/coding-legacy-regression
 
 # Build a deterministic public distribution artifact. It contains only the
 # committed public practice pack, a copied manifest, a release descriptor, and
 # release notes; it never reads private-corpus/.
 uv run dittobench-coding-datagen build-public-release \
-  --pack practice/v1 \
+  --pack /tmp/coding-legacy-regression \
   --output /tmp/dittobench-coding-practice-release
 
 # Verify a downloaded archive before using it locally.
@@ -173,7 +183,7 @@ uv run dittobench-coding-datagen verify-private-release \
 
 # Materialize one public task for local agent development.
 uv run dittobench-coding-datagen materialize \
-  --pack practice/v1 \
+  --pack /tmp/coding-legacy-regression \
   --task PRACTICE-LEDGER-001 \
   --output /tmp/ditto-coding-task
 
@@ -181,7 +191,7 @@ uv run dittobench-coding-datagen materialize \
 # from the pack and isolates stdlib imports, but remains a non-adversarial
 # convenience tool rather than production integrity evidence.
 uv run dittobench-coding-datagen grade \
-  --pack practice/v1 \
+  --pack /tmp/coding-legacy-regression \
   --task PRACTICE-LEDGER-001 \
   --workspace /tmp/ditto-coding-task
 
@@ -189,7 +199,7 @@ uv run dittobench-coding-datagen grade \
 # /coding/run, validator-owned typed tools, an authoritative workspace freeze,
 # and a fresh practice grader.
 uv run dittobench-coding-datagen evaluate-practice \
-  --pack practice/v1 \
+  --pack /tmp/coding-legacy-regression \
   --task PRACTICE-LEDGER-001 \
   --harness-url http://127.0.0.1:8080
 
@@ -200,21 +210,11 @@ uv run dittobench-coding-datagen audit-curation \
 
 ## Public distribution
 
-The public practice pack may be mirrored to a public Hugging Face dataset only
-as the deterministic release artifact produced by `build-public-release`. The
-release descriptor binds the pack manifest and archive SHA-256; miners must
-download the complete release directory and verify it before extracting the
-archive. The manual
-`publish-coding-practice.yml` workflow requires a pre-existing public dataset
-repository named by the `HF_CODING_PRACTICE_DATASET_REPO` environment variable
-and an environment-scoped `HF_TOKEN`; it has no private-catalog credential or
-corpus input. The operator-owned dataset card remains at the repository root;
-each immutable release contains its own `RELEASE.md` under the release path.
-
-The destination path is content-addressed by the practice-pack ID and manifest
-digest. A new pack revision therefore publishes a new immutable artifact rather
-than replacing a prior miner reference. The practice pack remains static,
-public, and permanently `weight_eligible=false`.
+The official archive and descriptor are committed under practice/v2. Datagen
+verifies their digests, paths, modes and task counts before extraction. The
+Hugging Face publication workflow is removed; the legacy upload-plan parser
+is retained for compatibility only. Public practice scores remain
+non-authoritative and never contribute to ranking, weights or emissions.
 
 ## Public certification canary
 
@@ -230,10 +230,10 @@ The canary uses only public `PRACTICE-LEDGER-001` material and remains
 pack and policy hashes together, then reviewing the new manifest digest before
 Platform can issue any related certification lease.
 
-## Public practice runner
+## Legacy protocol regression runner
 
-Every compiled task carries a manifest-bound public runtime policy. The current
-pack allows edits only to `app.py` and exposes the fixed command IDs
+Every compiled task carries a manifest-bound public runtime policy. The legacy
+regression pack allows edits only to `app.py` and exposes the fixed command IDs
 `visible-unit` and `python-compile`. A harness never receives the temporary
 workspace path.
 It drives the workspace through a random loopback capability with these tools:

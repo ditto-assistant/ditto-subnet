@@ -1,5 +1,12 @@
 # DittoBench coding starter kit
 
+For the ten-task public local dataset, follow the
+[repository practice guide](../../research/dittobench-coding-datagen/practice/v2/README.md).
+Datagen unpacks and grades public workspaces without a hosted dataset account.
+This starter still implements contract v1; the v2 workspace-grading commands
+do not yet provide an automatic v2 `/coding/run` adapter for this harness.
+The scripted examples below are v1 protocol regressions, not the public pack.
+
 This is the shadow-only reference miner harness for DittoBench Coding contract
 v1. It demonstrates miner-owned, task-scoped embedded memory and a bounded SWE
 agent loop while keeping the mutable repository behind the validator-owned

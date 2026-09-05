@@ -8,6 +8,7 @@ datagen_root="$repository_root/research/dittobench-coding-datagen"
 practice_port="${DITTO_CODING_PRACTICE_PORT:-18080}"
 practice_log=$(mktemp /tmp/dittobench-coding-practice.XXXXXX.log)
 practice_pid=""
+legacy_parent=$(mktemp -d /tmp/dittobench-legacy-protocol.XXXXXX)
 
 stop_harness() {
   if [[ -n "$practice_pid" ]]; then
@@ -77,8 +78,11 @@ start_scripted_harness fixtures/mock/ledger-001.json
 
 (
   cd "$datagen_root"
+  uv run dittobench-coding-datagen compile-practice \
+    --source tests/fixtures/legacy-practice-source.json \
+    --output "$legacy_parent/pack"
   uv run dittobench-coding-datagen evaluate-practice \
-    --pack practice/v1 \
+    --pack "$legacy_parent/pack" \
     --task PRACTICE-LEDGER-001 \
     --harness-url "http://127.0.0.1:${practice_port}"
 )

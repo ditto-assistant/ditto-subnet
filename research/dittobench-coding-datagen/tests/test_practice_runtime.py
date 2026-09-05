@@ -14,6 +14,7 @@ from types import TracebackType
 from typing import Any, Self
 
 import pytest
+from legacy_pack import legacy_practice_pack
 
 from dittobench_coding_datagen.canonical import canonical_json_bytes
 from dittobench_coding_datagen.cli import main
@@ -33,7 +34,7 @@ from dittobench_coding_datagen.practice_server import (
 )
 
 ROOT = Path(__file__).parents[1]
-PACK = ROOT / "practice/v1"
+PACK = legacy_practice_pack()
 
 VALID_REPAIRS = {
     "PRACTICE-LEDGER-001": (

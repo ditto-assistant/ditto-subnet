@@ -489,11 +489,13 @@ mod tests {
     fn public_practice_digest_matches_python_projection() {
         const MEMORIES: &str = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../research/dittobench-coding-datagen/practice/v1/agent/memories.jsonl"
+            "/../../research/dittobench-coding-datagen/tests/fixtures/legacy-practice-source.json"
         ));
-        let memories = MEMORIES
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        let source = serde_json::from_str::<Value>(MEMORIES).unwrap();
+        let memories = source["memories"]
+            .as_array()
+            .unwrap()
+            .iter()
             .filter(|record| record["owner_user_id"] == "P01")
             .map(|record| {
                 let repository = record["repository_id"].as_str().map(str::to_string);

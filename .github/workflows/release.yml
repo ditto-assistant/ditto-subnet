@@ -669,7 +669,7 @@ jobs:
           uv run ruff check .
           uv run mypy src
           uv run pytest -q
-          uv run dittobench-coding-datagen validate-pack practice/v1
+          uv run dittobench-coding-datagen verify-public-v2-release --archive practice/v2/coding-public-v2-2026-09-04-r2.tar.gz --descriptor practice/v2/coding-public-v2-2026-09-04-r2.release.json
 
   verify-screener:
     needs: [plan, admit-current]

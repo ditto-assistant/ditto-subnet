@@ -38,6 +38,7 @@ from dittobench_coding_datagen.public_release import (
     verify_public_practice_release,
 )
 from dittobench_coding_datagen.public_result_runner import aggregate_public_v2_results
+from dittobench_coding_datagen.public_suite import run_public_practice
 from dittobench_coding_datagen.public_task_runner import (
     run_public_v2_controls,
     run_public_v2_task,
@@ -48,8 +49,10 @@ from dittobench_coding_datagen.public_v2_publish_plan import (
 )
 from dittobench_coding_datagen.public_v2_release import (
     build_public_v2_release,
+    unpack_public_v2_release,
     verify_public_v2_release,
 )
+from dittobench_coding_datagen.public_workspace import prepare_public_workspace
 from dittobench_coding_datagen.snapshot_archive import (
     build_snapshot_archive,
     verify_snapshot_archive,
@@ -60,6 +63,31 @@ from dittobench_coding_datagen.validation import validate_pack
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="dittobench-coding-datagen")
     subcommands = parser.add_subparsers(dest="command", required=True)
+
+    suite_parser = subcommands.add_parser(
+        "run-public-practice",
+        help="grade all ten edited public workspaces and report a local practice score",
+    )
+    suite_parser.add_argument("--pack", type=Path, required=True)
+    suite_parser.add_argument("--workspaces", type=Path, required=True)
+    suite_parser.add_argument("--images", type=Path, required=True)
+    suite_parser.add_argument("--harness-artifact-sha256", required=True)
+    suite_parser.add_argument("--output", type=Path, required=True)
+
+    unpack_parser = subcommands.add_parser(
+        "unpack-public-practice",
+        help="verify and unpack a repository public v2 release",
+    )
+    unpack_parser.add_argument("--archive", type=Path, required=True)
+    unpack_parser.add_argument("--descriptor", type=Path, required=True)
+    unpack_parser.add_argument("--output", type=Path, required=True)
+    workspace_parser = subcommands.add_parser(
+        "prepare-public-workspace",
+        help="copy one public task into a new editing directory",
+    )
+    workspace_parser.add_argument("--pack", type=Path, required=True)
+    workspace_parser.add_argument("--task", required=True)
+    workspace_parser.add_argument("--output", type=Path, required=True)
 
     compile_parser = subcommands.add_parser(
         "compile-practice", help="compile a canonical public practice pack"
@@ -325,6 +353,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = verify_public_practice_release(
                 archive=args.archive,
                 descriptor=args.descriptor,
+            )
+            print(canonical_json_bytes(result).decode("utf-8"), end="")
+            return 0
+        if args.command == "run-public-practice":
+            body = run_public_practice(
+                pack=args.pack,
+                workspaces=args.workspaces,
+                images=args.images,
+                harness_artifact_sha256=args.harness_artifact_sha256,
+            )
+            args.output.write_bytes(body)
+            print(body.decode("utf-8"), end="")
+            return 0
+        if args.command == "unpack-public-practice":
+            result = unpack_public_v2_release(
+                archive=args.archive, descriptor=args.descriptor, output=args.output
+            )
+            print(canonical_json_bytes(result).decode("utf-8"), end="")
+            return 0
+        if args.command == "prepare-public-workspace":
+            result = prepare_public_workspace(
+                pack=args.pack, task_id=args.task, output=args.output
             )
             print(canonical_json_bytes(result).decode("utf-8"), end="")
             return 0
