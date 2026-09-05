@@ -51,19 +51,35 @@ type Config struct {
 	AllowCertificationImage bool
 	SeccompProfile          string
 	AppArmorProfile         string
+	hosted                  bool
 }
 
 func (config Config) validate() error {
+	contractSHA := codinggrader.GraderContractSHA256()
+	validateManifest := config.Manifest.Validate
+	planDigest := codinggrader.GraderPlanSHA256
+	resourceDigest := codinggrader.ResourceProfileSHA256
+	if config.hosted {
+		if config.AuthoringOnly || config.AllowCertificationImage {
+			return errors.New("hosted grading cannot use authoring or certification mode")
+		}
+		contractSHA = codinggrader.HostedGraderContractSHA256()
+		validateManifest = codinggrader.HostedManifest(config.Manifest).Validate
+		planDigest = func(m codinggrader.Manifest) (string, error) {
+			return codinggrader.HostedGraderPlanSHA256(codinggrader.HostedManifest(m))
+		}
+		resourceDigest = codinggrader.HostedResourceProfileSHA256
+	}
 	if config.AuthoringOnly {
 		if config.Manifest.ResourcePolicy.Validate() != nil ||
 			!ociDigest(config.Manifest.GraderImageDigest) ||
 			config.Manifest.GraderPlatform != "linux/amd64" {
 			return errors.New("coding authoring executor authority is invalid")
 		}
-	} else if err := config.Manifest.Validate(time.Now()); err != nil {
+	} else if err := validateManifest(time.Now()); err != nil {
 		return fmt.Errorf("coding executor manifest: %w", err)
 	}
-	if (!config.AuthoringOnly && config.Manifest.GraderContractSHA256 != codinggrader.GraderContractSHA256()) ||
+	if (!config.AuthoringOnly && config.Manifest.GraderContractSHA256 != contractSHA) ||
 		config.Manifest.GraderPlatform != "linux/amd64" ||
 		!strings.HasSuffix(config.ImageRef, "@"+config.Manifest.GraderImageDigest) ||
 		strings.Count(config.ImageRef, "@") != 1 || strings.HasPrefix(config.ImageRef, "-") ||
@@ -72,11 +88,11 @@ func (config Config) validate() error {
 		return errors.New("coding executor identity or daemon policy is invalid")
 	}
 	if !config.AuthoringOnly {
-		planSHA, err := codinggrader.GraderPlanSHA256(config.Manifest)
+		planSHA, err := planDigest(config.Manifest)
 		if err != nil || planSHA != config.Manifest.GraderPlanSHA256 {
 			return errors.New("coding executor grader plan is invalid")
 		}
-		resourceSHA, err := codinggrader.ResourceProfileSHA256(config.Manifest.ResourcePolicy)
+		resourceSHA, err := resourceDigest(config.Manifest.ResourcePolicy)
 		if err != nil || resourceSHA != config.Manifest.ResourceProfileSHA256 {
 			return errors.New("coding executor resource profile is invalid")
 		}

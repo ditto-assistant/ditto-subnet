@@ -147,8 +147,12 @@ func GraderContractSHA256() string {
 
 // ResourceProfileSHA256 hashes the complete sandbox and artifact envelope.
 func ResourceProfileSHA256(policy ResourcePolicy) (string, error) {
+	return resourceProfileSHA256(policy, "dittobench-coding-grader-resource-v1")
+}
+
+func resourceProfileSHA256(policy ResourcePolicy, schema string) (string, error) {
 	return digestCanonical(resourceProjection{
-		Schema: "dittobench-coding-grader-resource-v1",
+		Schema: schema,
 		CandidateLimits: limitsProjection{
 			MaxBundleBytes: policy.CandidateLimits.MaxBundleBytes, MaxWorkspaceBytes: policy.CandidateLimits.MaxWorkspaceBytes,
 			MaxFileBytes: policy.CandidateLimits.MaxFileBytes, MaxPatchBytes: policy.CandidateLimits.MaxPatchBytes,
@@ -176,6 +180,10 @@ func ResourceProfileSHA256(policy ResourcePolicy) (string, error) {
 // GraderPlanSHA256 hashes every command, test count, identity, and execution
 // policy used for one task.
 func GraderPlanSHA256(manifest Manifest) (string, error) {
+	return graderPlanSHA256(manifest, "dittobench-coding-grader-plan-v1", executionOrder)
+}
+
+func graderPlanSHA256(manifest Manifest, schema string, order []string) (string, error) {
 	groups := make([]groupProjection, len(manifest.TestGroups))
 	for index, group := range manifest.TestGroups {
 		groups[index] = groupProjection{
@@ -185,7 +193,7 @@ func GraderPlanSHA256(manifest Manifest) (string, error) {
 		}
 	}
 	return digestCanonical(planProjection{
-		Schema:                "dittobench-coding-grader-plan-v1",
+		Schema:                schema,
 		CodingContractVersion: manifest.CodingContractVersion,
 		CaseID:                manifest.CaseID,
 		VariantID:             manifest.VariantID,
@@ -201,7 +209,7 @@ func GraderPlanSHA256(manifest Manifest) (string, error) {
 		BuildRequired:         manifest.Build.Required,
 		BuildCommand:          commandValue(manifest.Build.Command.ID, manifest.Build.Command.Argv, manifest.Build.Command.Timeout.Milliseconds()),
 		TestGroups:            groups,
-		ExecutionOrder:        append([]string(nil), executionOrder...),
+		ExecutionOrder:        append([]string(nil), order...),
 	})
 }
 
