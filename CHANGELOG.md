@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.218.0 (2026-09-05)
+
+### Features
+
+- **coding**: Add native hosted authoring and snapshot replay
+  ([#1648](https://github.com/ditto-assistant/ditto-subnet/pull/1648),
+  [`11d419c`](https://github.com/ditto-assistant/ditto-subnet/commit/11d419cddf3d1019234cbeae64f5156a17763a2f))
+
+- **coding**: Persist hosted private grants and patch freeze
+  ([#1646](https://github.com/ditto-assistant/ditto-subnet/pull/1646),
+  [`afc8dd9`](https://github.com/ditto-assistant/ditto-subnet/commit/afc8dd9b17e3559ee84af2e1b00e6814364a46f0))
+
+
 ## v0.217.0 (2026-09-05)
 
 ### Features
