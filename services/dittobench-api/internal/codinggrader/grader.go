@@ -53,18 +53,35 @@ func GradeWithProtectedOpener(
 	openProtected ProtectedBundleOpener,
 	executor Executor,
 ) (result Result) {
+	return grade(ctx, manifest, submission, visibleBundle, openProtected, executor, nil)
+}
+
+func grade(ctx context.Context, manifest Manifest, submission codingrunner.FrozenSubmission, visibleBundle io.Reader, openProtected ProtectedBundleOpener, executor Executor, hosted *codingrunner.HostedReplayAuthority) (result Result) {
 	if ctx == nil {
 		return failure(codingcontract.DomainValidatorInfrastructure, "grader_context_missing")
 	}
 	manifest = cloneManifest(manifest)
-	if err := manifest.validate(time.Now()); err != nil {
+	if err := manifest.validateProfile(time.Now(), hosted != nil); err != nil {
 		return failure(codingcontract.DomainControlPlaneIntegrity, "grader_manifest_invalid")
 	}
 	if submission.CaseID != manifest.CaseID || submission.VisibleBundleSHA256 != manifest.VisibleBundleSHA256 ||
 		submission.BaseTreeSHA256 != manifest.BaseTreeSHA256 {
 		return failure(codingcontract.DomainControlPlaneIntegrity, "grader_submission_identity_mismatch")
 	}
-	if executor == nil {
+	order, receiptSchema := executionOrder, "dittobench-coding-grader-receipt-v1"
+	replay := codingrunner.ReplayFrozenSubmission
+	validateEvidence := func(e *codingcontract.GraderEvidence) error { return e.Validate() }
+	if hosted != nil {
+		if err := codingrunner.ValidateHostedFrozenSubmission(*hosted, submission, manifest.ResourcePolicy.CandidateLimits); err != nil {
+			return failure(codingcontract.DomainControlPlaneIntegrity, "hosted_freeze_identity_mismatch")
+		}
+		order, receiptSchema = hostedExecutionOrder, "dittobench-coding-grader-receipt-v2"
+		replay = func(ctx context.Context, sub codingrunner.FrozenSubmission, bundle io.Reader, limits codingrunner.Limits) (*codingrunner.ReplayWorkspace, error) {
+			return codingrunner.ReplayHostedFrozenSubmission(ctx, *hosted, sub, bundle, limits)
+		}
+		validateEvidence = validateHostedEvidence
+	}
+	if nilInterface(executor) {
 		return failure(codingcontract.DomainValidatorInfrastructure, "grader_executor_unavailable")
 	}
 	if openProtected == nil {
@@ -82,7 +99,7 @@ func GradeWithProtectedOpener(
 	if err := attestation.validate(manifest); err != nil {
 		return failure(codingcontract.DomainControlPlaneIntegrity, "grader_attestation_invalid")
 	}
-	workspace, err := codingrunner.ReplayFrozenSubmission(
+	workspace, err := replay(
 		leaseContext, submission, visibleBundle, manifest.ResourcePolicy.CandidateLimits,
 	)
 	if err != nil {
@@ -178,7 +195,7 @@ func GradeWithProtectedOpener(
 				failureCode = "grader_build_receipt"
 			} else {
 				receipts, receiptRoot, err = appendReceipt(receipts, receiptRoot, ExecutionReceipt{
-					Schema: "dittobench-coding-grader-receipt-v1", Phase: "build", CommandID: buildRun.CommandID,
+					Schema: receiptSchema, Phase: "build", CommandID: buildRun.CommandID,
 					CommandSHA256: commandSHA, ExecutorInstanceID: buildRun.ExecutorInstanceID,
 					ReturnCode: buildRun.ReturnCode, Completed: buildRun.Completed, TimedOut: buildRun.TimedOut,
 				})
@@ -196,7 +213,7 @@ func GradeWithProtectedOpener(
 
 	allTestsPassed := buildPassed && !infrastructureFailure && !controlPlaneFailure
 	if allTestsPassed {
-		for _, groupName := range executionOrder {
+		for _, groupName := range order {
 			group := groupsByName[groupName]
 			index := groupIndexes[groupName]
 			run, runErr := executor.Test(executionContext, trustedPath, protectedPath, group)
@@ -223,7 +240,7 @@ func GradeWithProtectedOpener(
 			testEvidence[index].Passed = run.Passed
 			groupCopy := group.Group
 			receipts, receiptRoot, err = appendReceipt(receipts, receiptRoot, ExecutionReceipt{
-				Schema: "dittobench-coding-grader-receipt-v1", Phase: "test", Group: &groupCopy,
+				Schema: receiptSchema, Phase: "test", Group: &groupCopy,
 				CommandID: run.CommandID, CommandSHA256: commandSHA, ExecutorInstanceID: run.ExecutorInstanceID,
 				ReturnCode: run.ReturnCode, Passed: run.Passed, Total: run.Total,
 				Completed: run.Completed, TimedOut: run.TimedOut,
@@ -270,7 +287,7 @@ func GradeWithProtectedOpener(
 		},
 		TestGroups: testEvidence,
 	}
-	if err := evidence.Validate(); err != nil {
+	if err := validateEvidence(evidence); err != nil {
 		return failure(codingcontract.DomainControlPlaneIntegrity, "grader_evidence_invalid")
 	}
 	result = Result{
@@ -316,10 +333,14 @@ func GradeWithProtectedOpener(
 }
 
 func nilReadCloser(reader io.ReadCloser) bool {
-	if reader == nil {
+	return nilInterface(reader)
+}
+
+func nilInterface(input any) bool {
+	if input == nil {
 		return true
 	}
-	value := reflect.ValueOf(reader)
+	value := reflect.ValueOf(input)
 	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return value.IsNil()

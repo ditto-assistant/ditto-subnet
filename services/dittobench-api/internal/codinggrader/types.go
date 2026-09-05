@@ -67,7 +67,18 @@ type ResourcePolicy struct {
 }
 
 func (manifest Manifest) validate(now time.Time) error {
-	if manifest.CodingContractVersion != codingrunner.ContractVersion || !validIdentifier(manifest.CaseID, 256) ||
+	return manifest.validateProfile(now, false)
+}
+
+func (manifest Manifest) validateProfile(now time.Time, hosted bool) error {
+	version, groupsRequired, contractSHA, lifetime := codingrunner.ContractVersion, evidenceGroups, GraderContractSHA256(), 2*time.Hour
+	resourceDigestFunc, planDigestFunc := ResourceProfileSHA256, GraderPlanSHA256
+	if hosted {
+		version, groupsRequired, contractSHA, lifetime = codingrunner.HostedContractVersion, hostedEvidenceGroups, HostedGraderContractSHA256(), time.Hour
+		resourceDigestFunc = HostedResourceProfileSHA256
+		planDigestFunc = func(m Manifest) (string, error) { return HostedGraderPlanSHA256(HostedManifest(m)) }
+	}
+	if manifest.CodingContractVersion != version || !validIdentifier(manifest.CaseID, 256) ||
 		!validIdentifier(manifest.VariantID, 256) || !lowerSHA256(manifest.VisibleBundleSHA256) ||
 		!lowerSHA256(manifest.BaseTreeSHA256) ||
 		!lowerSHA256(manifest.GraderContractSHA256) || !lowerSHA256(manifest.GraderBundleSHA256) ||
@@ -76,48 +87,51 @@ func (manifest Manifest) validate(now time.Time) error {
 		!lowerSHA256(manifest.GraderPlanSHA256) || !lowerSHA256(manifest.ResourceProfileSHA256) {
 		return errors.New("coding grader manifest identity is invalid")
 	}
-	if manifest.Deadline.IsZero() || !manifest.Deadline.After(now) || manifest.Deadline.After(now.Add(2*time.Hour)) {
+	if manifest.Deadline.IsZero() || !manifest.Deadline.After(now) || manifest.Deadline.After(now.Add(lifetime)) {
 		return errors.New("coding grader deadline is outside its bounded lifetime")
 	}
 	if manifest.ExecutionTimeout <= 0 || manifest.ExecutionTimeout > time.Hour ||
 		manifest.ExecutionTimeout%time.Millisecond != 0 {
 		return errors.New("coding grader execution timeout is outside contract bounds")
 	}
-	if manifest.GraderContractSHA256 != GraderContractSHA256() {
+	if manifest.GraderContractSHA256 != contractSHA {
 		return errors.New("coding grader contract digest does not match the compiled contract")
 	}
 	if err := manifest.ResourcePolicy.validate(); err != nil {
 		return err
 	}
-	resourceDigest, err := ResourceProfileSHA256(manifest.ResourcePolicy)
+	resourceDigest, err := resourceDigestFunc(manifest.ResourcePolicy)
 	if err != nil || resourceDigest != manifest.ResourceProfileSHA256 {
 		return errors.New("coding grader resource profile digest mismatch")
 	}
 	if err := manifest.Build.Command.Validate(); err != nil {
 		return err
 	}
-	if len(manifest.TestGroups) != len(evidenceGroups) {
+	if len(manifest.TestGroups) != len(groupsRequired) {
 		return errors.New("coding grader test groups are incomplete")
 	}
 	commandIDs := map[string]struct{}{manifest.Build.Command.ID: {}}
 	groups := make([]string, len(manifest.TestGroups))
 	for index, group := range manifest.TestGroups {
 		groups[index] = group.Group
-		if group.Group != evidenceGroups[index] || group.ExpectedTotal == 0 {
+		if group.Group != groupsRequired[index] || group.ExpectedTotal == 0 {
 			return errors.New("coding grader test groups must be complete and sorted")
 		}
 		if err := group.Command.Validate(); err != nil {
 			return err
+		}
+		if hosted && (group.ExpectedTotal > 1_000_000 || group.Command.Argv[0] != "dittobench-test-driver") {
+			return errors.New("hosted grader requires a trusted bounded test driver")
 		}
 		if _, duplicate := commandIDs[group.Command.ID]; duplicate {
 			return errors.New("coding grader command IDs must be unique")
 		}
 		commandIDs[group.Command.ID] = struct{}{}
 	}
-	if !slices.Equal(groups, evidenceGroups) {
+	if !slices.Equal(groups, groupsRequired) {
 		return errors.New("coding grader group order is invalid")
 	}
-	planDigest, err := GraderPlanSHA256(manifest)
+	planDigest, err := planDigestFunc(manifest)
 	if err != nil || planDigest != manifest.GraderPlanSHA256 {
 		return errors.New("coding grader plan digest mismatch")
 	}

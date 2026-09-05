@@ -82,6 +82,10 @@ func digest(value []byte) string {
 }
 
 func frozenFixture(t *testing.T) (codingrunner.FrozenSubmission, []byte, codingrunner.Limits) {
+	return frozenFixtureVersion(t, false)
+}
+
+func frozenFixtureVersion(t *testing.T, hosted bool) (codingrunner.FrozenSubmission, []byte, codingrunner.Limits) {
 	t.Helper()
 	visible := tarBundle(t,
 		fixtureFile{path: "src/app.py", body: "def normalize(value):\n    return value.strip()\n"},
@@ -107,13 +111,20 @@ func frozenFixture(t *testing.T) (codingrunner.FrozenSubmission, []byte, codingr
 		BuildCommands:         []codingrunner.CommandSpec{},
 		Limits:                limits,
 	}
-	session, err := codingrunner.NewSession(t.Context(), manifest, bytes.NewReader(visible), nil)
+	var session *codingrunner.Session
+	if hosted {
+		manifest.CodingContractVersion = codingrunner.HostedContractVersion
+		manifest.TicketID, manifest.CaseID = "10000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000002"
+		session, err = codingrunner.NewHostedSession(t.Context(), codingrunner.HostedAuthority{EvaluationID: manifest.TicketID, AttemptID: manifest.CaseID, AssignmentSHA256: strings.Repeat("a", 64)}, manifest, bytes.NewReader(visible), nil)
+	} else {
+		session, err = codingrunner.NewSession(t.Context(), manifest, bytes.NewReader(visible), nil)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer session.Close()
 	readRequest := codingrunner.ToolRequest{
-		CodingContractVersion: codingrunner.ContractVersion,
+		CodingContractVersion: manifest.CodingContractVersion,
 		CaseID:                manifest.CaseID,
 		ProfileCapabilityID:   manifest.ProfileCapabilityID,
 		CallID:                "grade-read",
@@ -135,7 +146,7 @@ func frozenFixture(t *testing.T) (codingrunner.FrozenSubmission, []byte, codingr
 		"replacements": []map[string]string{{"old_text": "return value.strip()", "new_text": "return value.rstrip()"}},
 	})
 	edit, err := session.Invoke(t.Context(), codingrunner.ToolRequest{
-		CodingContractVersion: codingrunner.ContractVersion,
+		CodingContractVersion: manifest.CodingContractVersion,
 		CaseID:                manifest.CaseID,
 		ProfileCapabilityID:   manifest.ProfileCapabilityID,
 		CallID:                "grade-edit",
@@ -471,7 +482,7 @@ func TestSharedGraderPlanResourceAndReceiptVectors(t *testing.T) {
 		GraderImageDigest: plan.GraderImageDigest, GraderPlatform: plan.GraderPlatform,
 		TestManifestSHA256: plan.TestManifestSHA256, ResourceProfileSHA256: plan.ResourceProfileSHA256,
 		ExecutionTimeout: time.Duration(plan.ExecutionTimeoutMS) * time.Millisecond,
-		Build: BuildSpec{Required: plan.BuildRequired, Command: toCommand(plan.BuildCommand)}, TestGroups: groupsForManifest,
+		Build:            BuildSpec{Required: plan.BuildRequired, Command: toCommand(plan.BuildCommand)}, TestGroups: groupsForManifest,
 	})
 	if err != nil || productionPlanDigest != planDigest {
 		t.Fatalf("production plan digest=%s shared=%s err=%v", productionPlanDigest, planDigest, err)

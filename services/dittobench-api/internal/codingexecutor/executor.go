@@ -40,6 +40,9 @@ var _ codinggrader.Executor = (*Executor)(nil)
 // New returns a fail-closed Docker executor. No Docker call occurs until
 // Preflight or the first command.
 func New(config Config) (*Executor, error) {
+	if config.hosted {
+		return nil, errors.New("hosted grading requires its explicit constructor")
+	}
 	return newWithDocker(config, execDocker{})
 }
 
@@ -125,10 +128,13 @@ func (executor *Executor) probeContainerPolicy(ctx context.Context) (returnedErr
 // The grader independently compares every returned identity with its manifest.
 func (executor *Executor) Preflight(
 	ctx context.Context,
-	_ string,
+	expectedPlanSHA256 string,
 ) (codinggrader.ExecutorAttestation, error) {
 	if ctx == nil || executor == nil || executor.config.AuthoringOnly {
 		return codinggrader.ExecutorAttestation{}, errors.New("coding executor preflight context is required")
+	}
+	if executor.config.hosted && expectedPlanSHA256 != executor.config.Manifest.GraderPlanSHA256 {
+		return codinggrader.ExecutorAttestation{}, errors.New("hosted executor plan does not match")
 	}
 	if err := executor.ensurePreflight(ctx); err != nil {
 		return codinggrader.ExecutorAttestation{}, err
@@ -149,6 +155,9 @@ func (executor *Executor) Execute(
 	workspace string,
 	command codingrunner.CommandSpec,
 ) (codingrunner.CommandResult, error) {
+	if executor != nil && executor.config.hosted {
+		return codingrunner.CommandResult{}, errors.New("hosted grader cannot run authoring commands")
+	}
 	result, err := executor.execute(ctx, modeAuthoring, workspace, "", command, 0)
 	if err != nil {
 		return codingrunner.CommandResult{}, err
@@ -169,6 +178,10 @@ func (executor *Executor) Build(
 	workspace string,
 	command codingrunner.CommandSpec,
 ) (codinggrader.BuildRun, error) {
+	if executor != nil && executor.config.hosted &&
+		(!executor.config.Manifest.Build.Required || !sameHostedCommand(command, executor.config.Manifest.Build.Command)) {
+		return codinggrader.BuildRun{}, errors.New("hosted build command does not match")
+	}
 	if executor == nil || executor.config.AuthoringOnly {
 		return codinggrader.BuildRun{}, errors.New("coding executor is not scoped to grading")
 	}
@@ -191,6 +204,9 @@ func (executor *Executor) Test(
 	protectedGrader string,
 	group codinggrader.TestGroupSpec,
 ) (codinggrader.TestRun, error) {
+	if executor != nil && executor.config.hosted && !executor.hostedTestAllowed(group) {
+		return codinggrader.TestRun{}, errors.New("hosted test command does not match")
+	}
 	if executor == nil || executor.config.AuthoringOnly {
 		return codinggrader.TestRun{}, errors.New("coding executor is not scoped to grading")
 	}
