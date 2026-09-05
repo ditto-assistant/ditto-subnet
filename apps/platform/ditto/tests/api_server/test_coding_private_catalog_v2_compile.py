@@ -41,8 +41,10 @@ def _fixture(root: Path) -> tuple[Path, Path]:
     )
     for index in range(50):
         group_id = f"private-group-{index:03d}"
-        authority = groups_root / group_id / "authority"
+        group_root = groups_root / group_id
+        authority = group_root / "authority"
         authority.mkdir(parents=True, mode=0o700)
+        issue_sha = _write(group_root / "issue.json", {"title": f"issue-{index}"})
         manifest = {
             "arms": [
                 {
@@ -56,6 +58,7 @@ def _fixture(root: Path) -> tuple[Path, Path]:
             "repository_epoch": f"epoch-{index}",
             "runtime_policy_sha256": _sha(f"runtime-{index}"),
             "resource_profile_sha256": _sha(f"resource-{index}"),
+            "visible_issue_sha256": issue_sha,
         }
         manifest_sha = _write(authority / "group-manifest.json", manifest)
         groups.append(
@@ -115,6 +118,12 @@ def test_private_v2_compiler_emits_all_condition_leaves(tmp_path: Path) -> None:
     final = json.loads((output / "records" / "000249.json").read_bytes())
     assert first["condition"] == "v0_none"
     assert final["condition"] == "v4_current_override"
+    assert (
+        first["visible_issue_sha256"]
+        == hashlib.sha256(
+            (groups / "private-group-000" / "issue.json").read_bytes()
+        ).hexdigest()
+    )
     assert verify_private_catalog_v2(output) == authority
 
 
@@ -158,4 +167,18 @@ def test_private_v2_compiler_rejects_private_grouping_and_path_escape(
             release_authority=escaped_path,
             groups_root=groups,
             output=protected / "catalog-escape",
+        )
+
+
+def test_private_v2_compiler_rejects_issue_drift(tmp_path: Path) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    release, groups = _fixture(protected)
+    drifted = groups / "private-group-000" / "issue.json"
+    drifted.write_bytes(drifted.read_bytes() + b"\n")
+    with pytest.raises(PrivateCatalogV2CompileError, match="issue drifted"):
+        compile_private_catalog_v2(
+            release_authority=release,
+            groups_root=groups,
+            output=protected / "catalog",
         )

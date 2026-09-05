@@ -27,6 +27,7 @@ def _task() -> CodingPrivateCatalogV2Task:
         private_release_sha256="1" * 64,
         group_manifest_sha256="2" * 64,
         visible_snapshot_tree_sha256="3" * 64,
+        visible_issue_sha256="b" * 64,
         hidden_grader_tree_sha256="4" * 64,
         memory_bundle_sha256="5" * 64,
         runtime_policy_sha256="6" * 64,
@@ -54,6 +55,14 @@ def test_private_catalog_v2_task_binds_one_condition() -> None:
 def test_private_catalog_v2_task_rejects_commitment_or_weight_drift() -> None:
     raw = _task().model_dump(mode="json", by_alias=True)
     raw["weight_eligible"] = True
+    with pytest.raises(ValidationError):
+        CodingPrivateCatalogV2Task.model_validate(raw)
+    raw = _task().model_dump(mode="json", by_alias=True)
+    raw["future_field"] = "ignored"
+    with pytest.raises(ValidationError):
+        CodingPrivateCatalogV2Task.model_validate(raw)
+    raw = _task().model_dump(mode="json", by_alias=True)
+    del raw["visible_issue_sha256"]
     with pytest.raises(ValidationError):
         CodingPrivateCatalogV2Task.model_validate(raw)
 

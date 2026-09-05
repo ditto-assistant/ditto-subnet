@@ -51,6 +51,7 @@ def build_private_v2_payload(
         memory_body = _read_bytes(group / "memory" / f"{condition}.json")
         runtime_body = _read_bytes(group / "runtime-policy.json")
         resource_body = _read_bytes(group / "resource-profile.json")
+        issue_body = _read_bytes(group / "issue.json")
         snapshot_root = group / "snapshot"
         grader_root = group / "grader"
         if (
@@ -59,6 +60,7 @@ def build_private_v2_payload(
             != record["runtime_policy_sha256"]
             or hashlib.sha256(resource_body).hexdigest()
             != record["resource_profile_sha256"]
+            or hashlib.sha256(issue_body).hexdigest() != record["visible_issue_sha256"]
             or _tree_digest(snapshot_root) != record["visible_snapshot_tree_sha256"]
             or _tree_digest(grader_root) != record["hidden_grader_tree_sha256"]
         ):
@@ -66,7 +68,7 @@ def build_private_v2_payload(
         artifacts = {
             "catalog_record": _read_bytes(record_path),
             "visible_bundle": _archive_tree(snapshot_root),
-            "issue": _read_bytes(group / "issue.json"),
+            "issue": issue_body,
             "runtime_policy": runtime_body,
             "resource_profile": resource_body,
             "memory_bundle": memory_body,
@@ -209,6 +211,7 @@ def verify_private_v2_payload(directory: Path) -> dict[str, Any]:
         resource_body = _read_bytes(
             directory / "objects" / f"{artifacts['resource_profile']}.bin"
         )
+        issue_body = _read_bytes(directory / "objects" / f"{artifacts['issue']}.bin")
         visible_body = _read_bytes(
             directory / "objects" / f"{artifacts['visible_bundle']}.bin"
         )
@@ -219,9 +222,11 @@ def verify_private_v2_payload(directory: Path) -> dict[str, Any]:
             artifacts["memory_bundle"] != task.memory_bundle_sha256
             or artifacts["runtime_policy"] != task.runtime_policy_sha256
             or artifacts["resource_profile"] != task.resource_profile_sha256
+            or artifacts["issue"] != task.visible_issue_sha256
             or hashlib.sha256(memory_body).hexdigest() != task.memory_bundle_sha256
             or hashlib.sha256(runtime_body).hexdigest() != task.runtime_policy_sha256
             or hashlib.sha256(resource_body).hexdigest() != task.resource_profile_sha256
+            or hashlib.sha256(issue_body).hexdigest() != task.visible_issue_sha256
             or _tree_digest_from_tar(visible_body) != task.visible_snapshot_tree_sha256
             or _tree_digest_from_tar(grader_body) != task.hidden_grader_tree_sha256
         ):

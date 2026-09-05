@@ -15,8 +15,9 @@
   "runtime_policy_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
   "schema": "dittobench-coding-private-catalog-task-v2",
   "semantic_review_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
-  "task_commitment_sha256": "696807e200b8ba2d0c6e9a6e4387f9a1293ddeb234cf45df8e02120de0cade73",
+  "task_commitment_sha256": "bb89c5c3a36e10b420415c4e1ce1f2482edf1b8f0ee70b8cdb403896cd4508a9",
   "task_version_id": "private-group-001-v1",
+  "visible_issue_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "visible_snapshot_tree_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
   "weight_eligible": false
 }
