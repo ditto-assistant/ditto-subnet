@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.212.0 (2026-09-05)
+
+### Features
+
+- **coding**: Ship ten public practice tasks in the repository
+  ([#1635](https://github.com/ditto-assistant/ditto-subnet/pull/1635),
+  [`f19415c`](https://github.com/ditto-assistant/ditto-subnet/commit/f19415c009a965e63b703303b5b0e95a8fbddb64))
+
+
 ## v0.211.0 (2026-09-05)
 
 ### Documentation
