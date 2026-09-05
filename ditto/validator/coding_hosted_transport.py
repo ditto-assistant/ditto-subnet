@@ -13,6 +13,7 @@ import httpx
 from ditto.api_models.coding_hosted import (
     HostedCodingRequest,
     HostedCodingResult,
+    HostedCodingStatus,
     hosted_message_digest,
 )
 from ditto.validator.coding_hosted import (
@@ -20,6 +21,7 @@ from ditto.validator.coding_hosted import (
     HostedResultExpectation,
     SignatureVerifier,
     verify_hosted_result,
+    verify_hosted_status,
 )
 
 HOSTED_CONTROL_PATH = "/api/v1/validator/coding-hosted/control"
@@ -31,7 +33,7 @@ class HostedCodingTransportError(RuntimeError):
 
 
 class HostedCodingTransport:
-    """No worker imports this adapter; the corresponding API is not active yet.
+    """Opt-in adapter for the default-off hosted control API.
 
     The origin and verification keys come from trusted operator configuration,
     never a candidate, assignment URL or received result. No automatic retry or
@@ -87,10 +89,10 @@ class HostedCodingTransport:
 
     async def exchange(
         self, *, request: HostedCodingRequest, expected: HostedResultExpectation
-    ) -> HostedCodingResult:
-        """Return a verified terminal projection or a fixed, redacted error.
+    ) -> HostedCodingResult | HostedCodingStatus:
+        """Return a verified terminal result or a distinct signed pending status.
 
-        A pending or unavailable HTTP response is not a terminal result. Durable
+        HTTP 202 is never terminal evidence; HTTP 200 requires a result. Durable
         admission/status orchestration must handle polling separately; this
         adapter deliberately never retries an evaluate request.
         """
@@ -131,8 +133,11 @@ class HostedCodingTransport:
             async with asyncio.timeout(
                 min(HOSTED_CONTROL_TIMEOUT_SECONDS, request.expires_at_unix - now)
             ):
-                body = await self._post(payload, request.validator_hotkey)
-            return verify_hosted_result(
+                status_code, body = await self._post(payload, request.validator_hotkey)
+            verify = (
+                verify_hosted_result if status_code == 200 else verify_hosted_status
+            )
+            return verify(
                 body=body,
                 expected=expected,
                 trusted_verifiers=self._verifiers,
@@ -143,7 +148,7 @@ class HostedCodingTransport:
                 "hosted Coding control exchange failed"
             ) from None
 
-    async def _post(self, payload: bytes, validator_hotkey: str) -> bytes:
+    async def _post(self, payload: bytes, validator_hotkey: str) -> tuple[int, bytes]:
         async with self._client.stream(
             "POST",
             self._url,
@@ -161,7 +166,7 @@ class HostedCodingTransport:
                 for part in response.headers.get("cache-control", "").split(",")
             }
             if (
-                response.status_code != 200
+                response.status_code not in {200, 202}
                 or "no-store" not in directives
                 or response.headers.get("content-encoding", "identity").lower()
                 != "identity"
@@ -187,4 +192,4 @@ class HostedCodingTransport:
                 body.extend(chunk)
             if not body or (length is not None and len(body) != int(length)):
                 raise ValueError("response length")
-            return bytes(body)
+            return response.status_code, bytes(body)

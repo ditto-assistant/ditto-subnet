@@ -1,7 +1,9 @@
 # Durable hosted Coding admission
 
-Status: Platform persistence and transaction functions. No API route, worker,
-selector, object grant, key grant, terminal result or scoring path is enabled.
+Status: Platform persistence and transaction functions. The separate hosted
+control route supports admission/status only with explicit signer injection.
+No worker, selector, object grant, key grant, terminal result or scoring path
+is enabled.
 
 The operator-side creator accepts an immutable assignment authority and an exact
 confirmation digest, plus actor/reason audit fields. Its caller must enforce
@@ -47,8 +49,9 @@ real validator signatures. They exercise concurrent admission/start, replay,
 rollback, retirement, artifact drift and raw SQL guard violations. They do not
 prove live Hippius access, production KMS custody or candidate isolation.
 
-Next integration: authenticated operator/validator routes and bounded pending
-responses; task-scoped grants tied to these attempts; Platform worker launch,
+The validator route and bounded signed pending responses are described in
+`docs/coding-hosted-control-v2.md` at the repository root. Next integration:
+authenticated operator provisioning; task-scoped grants tied to these attempts; Platform worker launch,
 patch freeze, pristine grading and evidence finalization; then signed terminal
 receipts and acknowledgements. These steps must preserve this irreversible start
 boundary and keep private data away from validator hosts.

@@ -12,6 +12,7 @@ import pytest
 from ditto.api_models.coding_hosted import (
     HostedCodingRequest,
     HostedCodingResult,
+    HostedCodingStatus,
     hosted_message_digest,
     hosted_signing_bytes,
 )
@@ -75,9 +76,11 @@ def _exchange_case() -> tuple[
     return request, result, replace(expected, request_sha256=digest), platform
 
 
-def _response(body: bytes, *, headers: dict[str, str] | None = None) -> httpx.Response:
+def _response(
+    body: bytes, *, headers: dict[str, str] | None = None, status: int = 200
+) -> httpx.Response:
     return httpx.Response(
-        200,
+        status,
         headers={
             "Cache-Control": "no-store",
             "Content-Type": "application/json",
@@ -110,6 +113,46 @@ async def test_transport_only_returns_verified_projection() -> None:
     ) as client:
         assert await client.exchange(request=request, expected=expected) == result
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "http_status,pending,accepted",
+    [(202, True, True), (200, True, False), (202, False, False)],
+)
+async def test_transport_distinguishes_pending_status_from_terminal_result(
+    http_status: int, pending: bool, accepted: bool
+) -> None:
+    request, result, expected, key = _exchange_case()
+    projection: HostedCodingResult | HostedCodingStatus = result
+    if pending:
+        projection = HostedCodingStatus.model_validate(
+            {
+                **result.model_dump(
+                    mode="json",
+                    by_alias=True,
+                    exclude={"schema_", "outcome", "evidence_sha256"},
+                ),
+                "schema": "dittobench-coding-hosted-status-v2",
+                "state": "admitted",
+            }
+        )
+        projection = projection.model_copy(
+            update={"signature": key.sign(hosted_signing_bytes(projection)).hex()}
+        )
+    async with HostedCodingTransport(
+        platform_origin="https://platform.example",
+        trusted_verifiers={key.ss58_address: key},
+        clock=lambda: NOW,
+        transport=httpx.MockTransport(
+            lambda _: _response(_body(projection), status=http_status)
+        ),
+    ) as client:
+        if accepted:
+            actual = await client.exchange(request=request, expected=expected)
+            assert actual == projection and isinstance(actual, HostedCodingStatus)
+        else:
+            with pytest.raises(HostedCodingTransportError):
+                await client.exchange(request=request, expected=expected)
 
 
 @pytest.mark.parametrize(
