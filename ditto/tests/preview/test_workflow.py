@@ -135,6 +135,8 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert "environment: prod" in snapshot
     export = (ROOT / "preview/cloud/export-snapshot.sh").read_text()
     sanitizer = (ROOT / "preview/cloud/sanitize-snapshot.sh").read_text()
+    cloud_compose = (ROOT / "preview/cloud/compose.yml").read_text()
+    local_compose = (ROOT / "preview/compose.yml").read_text()
     assert "pg_dump" in export
     assert "--no-owner" in export
     assert "--no-privileges" in export
@@ -149,6 +151,12 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert 'docker cp "$source_dump" "$container:/tmp/source.dump"' in sanitizer
     assert 'docker cp "$container:/tmp/sanitized.dump" "$output_dump"' in sanitizer
     assert '-v "$temp_dir:/work"' not in sanitizer
+    assert "postgres:17-alpine" in sanitizer
+    assert "image: postgres:17-alpine" in cloud_compose
+    assert "image: postgres:17-alpine" in local_compose
+    assert "postgres:16-alpine" not in sanitizer
+    assert "image: postgres:16-alpine" not in cloud_compose
+    assert "image: postgres:16-alpine" not in local_compose
     assert "source.dump" in snapshot
     assert "sanitized.dump" in snapshot
 
