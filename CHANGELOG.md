@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.214.0 (2026-09-05)
+
+### Features
+
+- **coding**: Bound hosted validator control transport
+  ([#1642](https://github.com/ditto-assistant/ditto-subnet/pull/1642),
+  [`a7c64a3`](https://github.com/ditto-assistant/ditto-subnet/commit/a7c64a3450af7d76c791ee3935b75f9b189233b4))
+
+
 ## v0.213.2 (2026-09-05)
 
 ### Bug Fixes
