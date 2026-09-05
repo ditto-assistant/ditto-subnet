@@ -148,6 +148,9 @@ def verify_private_v2_payload(directory: Path) -> dict[str, Any]:
         or len(authority["task_assets"]) != 250
     ):
         raise PrivateV2PayloadError("private v2 payload authority is invalid")
+    objects_dir = directory / "objects"
+    if objects_dir.is_symlink() or not objects_dir.is_dir():
+        raise PrivateV2PayloadError("private v2 payload objects are invalid")
     objects: dict[str, int] = {}
     for item in authority["objects"]:
         if not isinstance(item, dict) or set(item) != {"sha256", "size_bytes"}:
@@ -157,6 +160,8 @@ def verify_private_v2_payload(directory: Path) -> dict[str, Any]:
         if (
             not isinstance(digest, str)
             or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            or digest in objects
             or type(size) is not int
             or size < 1
         ):
@@ -165,6 +170,13 @@ def verify_private_v2_payload(directory: Path) -> dict[str, Any]:
         if len(body) != size or hashlib.sha256(body).hexdigest() != digest:
             raise PrivateV2PayloadError("private v2 payload object drifted")
         objects[digest] = size
+    on_disk: set[str] = set()
+    for path in objects_dir.iterdir():
+        if path.is_symlink() or not path.is_file() or not path.name.endswith(".bin"):
+            raise PrivateV2PayloadError("private v2 payload objects drifted")
+        on_disk.add(path.name[: -len(".bin")])
+    if on_disk != set(objects):
+        raise PrivateV2PayloadError("private v2 payload objects drifted")
     for index, task in enumerate(authority["task_assets"]):
         if not isinstance(task, dict) or task.get("catalog_index") != index:
             raise PrivateV2PayloadError("private v2 payload task order is invalid")
