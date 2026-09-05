@@ -35,12 +35,36 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          case "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" in
+            *[!0-9-]*) echo "invalid workflow run identity" >&2; exit 2 ;;
+          esac
+          remote_dump="/tmp/sn118-preview-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.dump"
+          remote_script="/tmp/sn118-preview-export-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
+          cleanup_remote() {
+            gcloud compute ssh ditto-pg-platform \
+              --zone "${{ vars.GCP_PLATFORM_ZONE }}" \
+              --tunnel-through-iap \
+              --quiet \
+              --command "rm -f '$remote_dump' '$remote_script'" \
+              >/dev/null 2>&1 || true
+          }
+          trap cleanup_remote EXIT
+          gcloud compute scp preview/cloud/export-snapshot.sh \
+            "ditto-pg-platform:${remote_script}" \
+            --zone "${{ vars.GCP_PLATFORM_ZONE }}" \
+            --tunnel-through-iap \
+            --quiet
           gcloud compute ssh ditto-pg-platform \
             --zone "${{ vars.GCP_PLATFORM_ZONE }}" \
             --tunnel-through-iap \
             --quiet \
-            --command "sudo -u postgres pg_dump -Fc --no-owner --no-privileges ditto_platform_prod" \
-            > "${RUNNER_TEMP}/source.dump"
+            --command "sh '$remote_script' '$remote_dump'"
+          gcloud compute scp "ditto-pg-platform:${remote_dump}" \
+            "${RUNNER_TEMP}/source.dump" \
+            --zone "${{ vars.GCP_PLATFORM_ZONE }}" \
+            --tunnel-through-iap \
+            --quiet
+          test "$(LC_ALL=C head -c 5 "${RUNNER_TEMP}/source.dump")" = PGDMP
 
       - name: Sanitize in a disposable Postgres
         run: preview/cloud/sanitize-snapshot.sh "${RUNNER_TEMP}/source.dump" "${RUNNER_TEMP}/sanitized.dump"

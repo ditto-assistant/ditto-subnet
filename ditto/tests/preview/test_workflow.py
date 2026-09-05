@@ -107,6 +107,8 @@ def test_stack_preview_controller_caps_slots_and_never_runs_pr_code() -> None:
     assert "--if-generation-match=0" in provision
     assert '"$uri" >/dev/null 2>&1' in provision
     assert '"$(preview_lease_uri "$slot")" >/dev/null' in provision
+    assert '--quiet >&2\n\nip="$(gcloud compute instances describe' in provision
+    assert '"$(preview_lease_uri "$slot")" >&2' in provision
     assert "head.repo.full_name" in provision
     assert "stale PR head" in provision
     compose = (ROOT / "preview/cloud/compose.yml").read_text()
@@ -131,7 +133,17 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert "--duration=2h" in provision
     assert "sanitize-snapshot.sh" in snapshot
     assert "environment: prod" in snapshot
-    assert "pg_dump -Fc --no-owner --no-privileges ditto_platform_prod" in snapshot
+    export = (ROOT / "preview/cloud/export-snapshot.sh").read_text()
+    assert "pg_dump" in export
+    assert "--no-owner" in export
+    assert "--no-privileges" in export
+    assert "ditto_platform_prod" in export
+    assert "gcloud compute scp preview/cloud/export-snapshot.sh" in snapshot
+    assert 'gcloud compute scp "ditto-pg-platform:${remote_dump}"' in snapshot
+    assert "trap cleanup_remote EXIT" in snapshot
+    assert "rm -f '$remote_dump' '$remote_script'" in snapshot
+    assert "head -c 5" in snapshot
+    assert 'pg_dump -Fc --no-owner --no-privileges ditto_platform_prod"' not in snapshot
     assert "source.dump" in snapshot
     assert "sanitized.dump" in snapshot
 
