@@ -101,6 +101,7 @@ def _fixture(
     tmp_path: Path,
     *,
     phase: Literal["authoring", "grading"] = "authoring",
+    tamper: Literal["payload", "signature", "curator"] | None = None,
 ) -> tuple[PrivateV2InputRetriever, Grants, Reader, Unwrapper]:
     tmp_path.chmod(0o700)
     digest = hashlib.sha256(PLAIN).hexdigest()
@@ -167,6 +168,8 @@ def _fixture(
         ],
     }
     manifest["transport_sha256"] = _sha(manifest)
+    if tamper == "payload":
+        payload["task_version_count"] = 249
     (tmp_path / "transport.json").write_bytes(_bytes(manifest))
     (tmp_path / "payload.json").write_bytes(_bytes(payload))
     signer = Ed25519PrivateKey.generate()
@@ -184,6 +187,8 @@ def _fixture(
             curator_signing_key_sha256=signer_sha,
         )
     )
+    if tamper == "signature":
+        signature = b"\x00" * 64
     remote = private_v2_remote_object_key(
         transport_sha256=str(manifest["transport_sha256"]), object_index=0
     )
@@ -253,7 +258,11 @@ def _fixture(
         transport_manifest=tmp_path / "transport.json",
         payload_authority=tmp_path / "payload.json",
         publication_receipt=tmp_path / "receipt.json",
-        trusted_curator=signer.public_key(),
+        trusted_curator=(
+            Ed25519PrivateKey.generate().public_key()
+            if tamper == "curator"
+            else signer.public_key()
+        ),
         reader_authority_sha256="6" * 64,
         audience="platform-authoring" if phase == "authoring" else "platform-grading",
         grants=grants,
@@ -262,6 +271,16 @@ def _fixture(
         clock=lambda: NOW,
     )
     return retriever, grants, reader, unwrapper
+
+
+@pytest.mark.parametrize("tamper", ["payload", "signature", "curator"])
+def test_authority_tampering_cannot_construct_retriever(
+    tmp_path: Path, tamper: Literal["payload", "signature", "curator"]
+) -> None:
+    with pytest.raises(PrivateV2RetrievalError) as caught:
+        _fixture(tmp_path, tamper=tamper)
+    assert str(caught.value) == "private v2 retrieval authorities are invalid"
+    assert caught.value.__suppress_context__
 
 
 async def test_exact_object_roundtrip_needs_no_local_ciphertext_copy(
