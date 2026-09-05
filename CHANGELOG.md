@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.216.1 (2026-09-05)
+
+### Bug Fixes
+
+- **coding**: Validate private snapshot capsules before use
+  ([#1644](https://github.com/ditto-assistant/ditto-subnet/pull/1644),
+  [`463ab9b`](https://github.com/ditto-assistant/ditto-subnet/commit/463ab9b545de2cc92bbdbb1a1eb806bcbea4332c))
+
+
 ## v0.216.0 (2026-09-05)
 
 ### Features
