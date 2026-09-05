@@ -879,7 +879,8 @@ def _safe_scalar(value: str, *, maximum_bytes: int) -> bool:
         bool(value)
         and len(value.encode()) <= maximum_bytes
         and not any(
-            character.isspace() or unicodedata.category(character) == "Cc"
+            character.isspace()
+            or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
             for character in value
         )
     )

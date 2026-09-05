@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -176,7 +177,16 @@ class _FileState:
 
 
 def _bounded_string(value: Any, field: str, maximum: int) -> str:
-    if not isinstance(value, str) or not value or len(value) > maximum:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value.encode()) > maximum
+        or any(
+            character.isspace()
+            or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
+            for character in value
+        )
+    ):
         raise CorpusError(f"{field} must be a non-empty string of at most {maximum}")
     return value
 

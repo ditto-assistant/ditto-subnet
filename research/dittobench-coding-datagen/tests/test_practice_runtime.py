@@ -706,6 +706,10 @@ def test_tool_request_accepts_opaque_id_length_case_and_profile() -> None:
         ToolRequest.from_json({**payload, "case_id": "c" * 257})
     with pytest.raises(CorpusError, match="profile_capability_id"):
         ToolRequest.from_json({**payload, "profile_capability_id": "p" * 257})
+    with pytest.raises(CorpusError, match="case_id"):
+        ToolRequest.from_json({**payload, "case_id": "é" * 129})
+    with pytest.raises(CorpusError, match="case_id"):
+        ToolRequest.from_json({**payload, "case_id": "id\u200bhidden"})
 
 
 def test_capability_url_is_unforgeable_by_path_guessing() -> None:
