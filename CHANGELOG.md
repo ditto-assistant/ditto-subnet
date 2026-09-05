@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.213.2 (2026-09-05)
+
+### Bug Fixes
+
+- **coding**: Bound identifiers without rejecting source text
+  ([#1638](https://github.com/ditto-assistant/ditto-subnet/pull/1638),
+  [`1ef5530`](https://github.com/ditto-assistant/ditto-subnet/commit/1ef5530ccd55fc0c700bec26b573f4e25f1f52fd))
+
+- **coding**: Reject leftover private v2 objects and bind AAD
+  ([#1637](https://github.com/ditto-assistant/ditto-subnet/pull/1637),
+  [`b53e9ea`](https://github.com/ditto-assistant/ditto-subnet/commit/b53e9ea2d7ef8d0a9b55a268b0e408dff18fdcb6))
+
+
 ## v0.213.1 (2026-09-05)
 
 ### Bug Fixes
