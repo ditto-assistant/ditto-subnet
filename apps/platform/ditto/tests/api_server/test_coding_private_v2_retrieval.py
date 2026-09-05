@@ -5,7 +5,7 @@ import base64
 import hashlib
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 import pytest
@@ -40,11 +40,11 @@ PLAIN = b"PRIVATE_MARKER: synthetic task input"
 KEY = b"k" * 32
 
 
-def _bytes(value: object) -> bytes:
+def _bytes(value: dict[str, Any]) -> bytes:
     return coding_canonical_json_bytes(value, maximum_bytes=16 << 20, label="fixture")
 
 
-def _sha(value: object) -> str:
+def _sha(value: dict[str, Any]) -> str:
     return hashlib.sha256(_bytes(value)).hexdigest()
 
 
