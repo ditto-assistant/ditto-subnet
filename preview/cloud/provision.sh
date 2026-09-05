@@ -41,8 +41,8 @@ for candidate in {0..7}; do
     expires_at="$(jq -r '.expires_at_epoch // 0' <<<"$current")"
     if [[ "$expires_at" =~ ^[0-9]+$ ]] && [ "$expires_at" -lt "$(preview_now_epoch)" ]; then
       stale_instance="$(preview_instance_name "$candidate")"
-      gcloud compute instances delete "$stale_instance" --zone "$GCP_PREVIEW_ZONE" --quiet || true
-      gcloud storage rm "$uri" || true
+      gcloud compute instances delete "$stale_instance" --zone "$GCP_PREVIEW_ZONE" --quiet >&2 || true
+      gcloud storage rm "$uri" >&2 || true
     else
       continue
     fi
@@ -100,7 +100,7 @@ gcloud compute instances create "$instance" \
   --shielded-secure-boot \
   --shielded-vtpm \
   --shielded-integrity-monitoring \
-  --quiet
+  --quiet >&2
 
 ip="$(gcloud compute instances describe "$instance" --zone "$GCP_PREVIEW_ZONE" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
 [ -n "$ip" ] || preview_die "preview VM has no public IP"
@@ -128,7 +128,7 @@ jq -n \
   --argjson expires_at_epoch "$(( $(preview_now_epoch) + lease_ttl_seconds ))" \
   '{schema:1,slot:$slot,pr:$pr,sha:$sha,profile:$profile,instance:$instance,ip:$ip,dashboard_url:$dashboard_url,platform_url:$platform_url,backroom_url:$backroom_url,ready:$ready,created_at_epoch:$created_at_epoch,expires_at_epoch:$expires_at_epoch}' \
   >"$lease_file"
-gcloud storage cp "$lease_file" "$(preview_lease_uri "$slot")" >/dev/null
+gcloud storage cp "$lease_file" "$(preview_lease_uri "$slot")" >&2
 
 jq -n --argjson slot "$slot" --argjson ready "$ready" \
   --arg dashboard_url "$dashboard_url" --arg platform_url "$platform_url" --arg backroom_url "$backroom_url" \
