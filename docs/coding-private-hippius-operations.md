@@ -141,3 +141,8 @@ Before any private Coding shadow release, require all of:
 
 Object Lock and revocation observations improve the operating posture but do
 not silently activate a worker, scoring, weights, or emissions.
+
+The condition-specific v2 corpus uses the separate, deduplicated publication
+profile documented in
+`apps/platform/docs/coding-private-v2-publication.md`. The legacy v1
+catalog-index publisher must not be used for a v2 transport manifest.

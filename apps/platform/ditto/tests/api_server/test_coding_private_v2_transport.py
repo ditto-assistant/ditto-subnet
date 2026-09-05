@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 from pathlib import Path
 
@@ -12,11 +13,17 @@ from ditto.api_server.coding_private_v2_transport import (
 )
 
 
-def _write_transport(root: Path, *, include_nonce: bool = True) -> None:
-    ciphertext = b"\x00" * 17
-    digest = "a" * 64
+def _write_transport(
+    root: Path,
+    *,
+    include_nonce: bool = True,
+    digest: str = "a" * 64,
+    ciphertext: bytes = b"\x00" * 17,
+) -> None:
+    root.mkdir(parents=True, mode=0o700)
+    root.chmod(0o700)
     objects = root / "objects"
-    objects.mkdir(parents=True, mode=0o700)
+    objects.mkdir(mode=0o700)
     (objects / f"{digest}.bin").write_bytes(ciphertext)
     (objects / f"{digest}.bin").chmod(0o600)
     item = {
@@ -24,10 +31,10 @@ def _write_transport(root: Path, *, include_nonce: bool = True) -> None:
         "ciphertext_relative_path": f"objects/{digest}.bin",
         "ciphertext_sha256": hashlib.sha256(ciphertext).hexdigest(),
         "ciphertext_size_bytes": len(ciphertext),
-        "nonce_b64": "AAAAAAAAAAAA",
+        "nonce_b64": base64.b64encode(b"\x00" * 12).decode("ascii"),
         "plaintext_sha256": digest,
-        "plaintext_size_bytes": 1,
-        "wrapped_data_key_b64": "AQID",
+        "plaintext_size_bytes": len(ciphertext) - 16,
+        "wrapped_data_key_b64": base64.b64encode(b"\x01" * (3072 // 8)).decode("ascii"),
     }
     if not include_nonce:
         item.pop("nonce_b64")
