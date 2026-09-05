@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import secrets
 import stat
 from pathlib import Path
@@ -27,6 +28,11 @@ from ditto.api_server.coding_private_v2_payload import (
 PRIVATE_V2_TRANSPORT_CONFIRMATION = "ENCRYPT HIPPIUS CODING PRIVATE V2 PAYLOAD"
 _KEY_BYTES = 32
 _NONCE_BYTES = 12
+PRIVATE_V2_MAX_PLAINTEXT_BYTES = 128 << 20
+PRIVATE_V2_MAX_CIPHERTEXT_BYTES = PRIVATE_V2_MAX_PLAINTEXT_BYTES + 16
+_MAX_MANIFEST_BYTES = 16 << 20
+_MIN_WRAPPED_KEY_BYTES = 3072 // 8
+_MAX_WRAPPED_KEY_BYTES = 8192 // 8
 
 
 class PrivateV2TransportError(ValueError):
@@ -51,7 +57,10 @@ def prepare_private_v2_transport(
     encrypted: list[dict[str, Any]] = []
     for item in payload["objects"]:
         digest = item["sha256"]
-        plaintext = _read(payload_directory / "objects" / f"{digest}.bin")
+        plaintext = _read(
+            payload_directory / "objects" / f"{digest}.bin",
+            maximum_bytes=PRIVATE_V2_MAX_PLAINTEXT_BYTES,
+        )
         if (
             len(plaintext) != item["size_bytes"]
             or hashlib.sha256(plaintext).hexdigest() != digest
@@ -117,6 +126,12 @@ def prepare_private_v2_transport(
 def verify_private_v2_transport(directory: Path) -> dict[str, Any]:
     """Verify manifest, ciphertext bytes, and content-addressed object paths."""
 
+    if (
+        directory.is_symlink()
+        or not directory.is_dir()
+        or stat.S_IMODE(directory.stat().st_mode) & 0o077
+    ):
+        raise PrivateV2TransportError("private v2 transport directory is not protected")
     manifest = _canonical_object(directory / "manifest.json")
     projection = dict(manifest)
     transport_sha = projection.pop("transport_sha256", None)
@@ -139,54 +154,116 @@ def verify_private_v2_transport(directory: Path) -> dict[str, Any]:
         or not isinstance(transport_sha, str)
         or _digest(projection) != transport_sha
         or not isinstance(manifest["objects"], list)
+        or not 1 <= len(manifest["objects"]) <= 1_000_000
+        or any(
+            not _sha256(manifest.get(name))
+            for name in (
+                "payload_sha256",
+                "catalog_sha256",
+                "catalog_merkle_root",
+                "wrapping_key_sha256",
+                "transport_sha256",
+            )
+        )
     ):
         raise PrivateV2TransportError("private v2 transport manifest is invalid")
     seen: set[str] = set()
+    seen_ciphertexts: set[str] = set()
+    previous_digest: str | None = None
     for item in manifest["objects"]:
-        if not isinstance(item, dict):
+        expected_fields = {
+            "plaintext_sha256",
+            "plaintext_size_bytes",
+            "ciphertext_relative_path",
+            "ciphertext_sha256",
+            "ciphertext_size_bytes",
+            "nonce_b64",
+            "wrapped_data_key_b64",
+            "aad_sha256",
+        }
+        if not isinstance(item, dict) or set(item) != expected_fields:
             raise PrivateV2TransportError("private v2 transport object is invalid")
-        digest = item.get("plaintext_sha256")
-        relative = item.get("ciphertext_relative_path")
-        nonce = item.get("nonce_b64")
-        wrapped = item.get("wrapped_data_key_b64")
-        aad_sha = item.get("aad_sha256")
+        digest = item["plaintext_sha256"]
+        relative = item["ciphertext_relative_path"]
+        nonce = item["nonce_b64"]
+        wrapped = item["wrapped_data_key_b64"]
+        aad_sha = item["aad_sha256"]
+        ciphertext_sha = item["ciphertext_sha256"]
+        plaintext_size = item["plaintext_size_bytes"]
+        ciphertext_size = item["ciphertext_size_bytes"]
         if (
-            set(item)
-            != {
-                "plaintext_sha256",
-                "plaintext_size_bytes",
-                "ciphertext_relative_path",
-                "ciphertext_sha256",
-                "ciphertext_size_bytes",
-                "nonce_b64",
-                "wrapped_data_key_b64",
-                "aad_sha256",
-            }
-            or not isinstance(digest, str)
-            or digest in seen
-            or relative != f"objects/{digest}.bin"
-            or not isinstance(item.get("ciphertext_size_bytes"), int)
-            or item["ciphertext_size_bytes"] < 17
+            not isinstance(digest, str)
+            or not isinstance(relative, str)
             or not isinstance(nonce, str)
-            or not nonce
             or not isinstance(wrapped, str)
-            or not wrapped
             or not isinstance(aad_sha, str)
-            or len(aad_sha) != 64
-            or any(character not in "0123456789abcdef" for character in aad_sha)
+            or not isinstance(ciphertext_sha, str)
         ):
             raise PrivateV2TransportError("private v2 transport object is invalid")
-        ciphertext = _read(directory / relative)
-        if len(ciphertext) != item["ciphertext_size_bytes"] or hashlib.sha256(
-            ciphertext
-        ).hexdigest() != item.get("ciphertext_sha256"):
-            raise PrivateV2TransportError("private v2 transport ciphertext drifted")
+        try:
+            decoded_nonce = base64.b64decode(nonce, validate=True)
+            decoded_wrapped = base64.b64decode(wrapped, validate=True)
+        except (TypeError, ValueError) as error:
+            raise PrivateV2TransportError(
+                "private v2 transport object is invalid"
+            ) from error
+        if (
+            not _sha256(digest)
+            or digest in seen
+            or (previous_digest is not None and digest <= previous_digest)
+            or relative != f"objects/{digest}.bin"
+            or type(plaintext_size) is not int
+            or not 1 <= plaintext_size <= PRIVATE_V2_MAX_PLAINTEXT_BYTES
+            or type(ciphertext_size) is not int
+            or ciphertext_size != plaintext_size + 16
+            or ciphertext_size > PRIVATE_V2_MAX_CIPHERTEXT_BYTES
+            or not _sha256(ciphertext_sha)
+            or ciphertext_sha in seen_ciphertexts
+            or len(decoded_nonce) != _NONCE_BYTES
+            or not _MIN_WRAPPED_KEY_BYTES
+            <= len(decoded_wrapped)
+            <= _MAX_WRAPPED_KEY_BYTES
+            or not _sha256(aad_sha)
+        ):
+            raise PrivateV2TransportError("private v2 transport object is invalid")
+        read_private_v2_transport_ciphertext(directory=directory, item=item)
         seen.add(digest)
+        seen_ciphertexts.add(ciphertext_sha)
+        previous_digest = digest
     return manifest
 
 
+def read_private_v2_transport_ciphertext(
+    *, directory: Path, item: dict[str, Any]
+) -> bytes:
+    """Read one verified v2 ciphertext without following a replaced symlink."""
+
+    digest = item.get("plaintext_sha256")
+    relative = item.get("ciphertext_relative_path")
+    expected_size = item.get("ciphertext_size_bytes")
+    expected_sha = item.get("ciphertext_sha256")
+    if (
+        not _sha256(digest)
+        or relative != f"objects/{digest}.bin"
+        or type(expected_size) is not int
+        or not 17 <= expected_size <= PRIVATE_V2_MAX_CIPHERTEXT_BYTES
+        or not _sha256(expected_sha)
+    ):
+        raise PrivateV2TransportError("private v2 transport object is invalid")
+    ciphertext = _read(
+        directory / relative,
+        maximum_bytes=PRIVATE_V2_MAX_CIPHERTEXT_BYTES,
+    )
+    if (
+        len(ciphertext) != expected_size
+        or hashlib.sha256(ciphertext).hexdigest() != expected_sha
+    ):
+        raise PrivateV2TransportError("private v2 transport ciphertext drifted")
+    return ciphertext
+
+
 def _canonical_object(path: Path) -> dict[str, Any]:
-    body = _read(path)
+    body = _read(path, maximum_bytes=_MAX_MANIFEST_BYTES)
     try:
         value: Any = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -214,10 +291,37 @@ def _new_directory(path: Path) -> None:
     path.mkdir(mode=0o700)
 
 
-def _read(path: Path) -> bytes:
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > 128 << 20:
+def _read(path: Path, *, maximum_bytes: int) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise PrivateV2TransportError(
+            "private v2 transport artifact is unreadable"
+        ) from error
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or not 1 <= info.st_size <= maximum_bytes:
+            raise PrivateV2TransportError("private v2 transport artifact is invalid")
+        body = bytearray()
+        while len(body) < maximum_bytes + 1:
+            chunk = os.read(descriptor, maximum_bytes + 1 - len(body))
+            if not chunk:
+                break
+            body.extend(chunk)
+    except PrivateV2TransportError:
+        raise
+    except OSError as error:
+        raise PrivateV2TransportError(
+            "private v2 transport artifact is unreadable"
+        ) from error
+    finally:
+        os.close(descriptor)
+    if not body or len(body) > maximum_bytes:
         raise PrivateV2TransportError("private v2 transport artifact is invalid")
-    return path.read_bytes()
+    return bytes(body)
 
 
 def _write_new(path: Path, body: bytes) -> None:
@@ -232,3 +336,11 @@ def _digest(value: dict[str, Any]) -> str:
             value, maximum_bytes=16 << 20, label="private v2 transport manifest"
         )
     ).hexdigest()
+
+
+def _sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
