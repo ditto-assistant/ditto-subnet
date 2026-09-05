@@ -17,6 +17,10 @@ from ditto.api_server.coding_private_catalog_v2_compile import (
     PrivateCatalogV2CompileError,
     verify_private_catalog_v2,
 )
+from ditto.api_server.coding_private_snapshot import (
+    PrivateSnapshotError,
+    validate_private_snapshot_capsule,
+)
 from ditto.coding_selection import (
     coding_catalog_empty_leaf_hash,
     coding_catalog_leaf_hash,
@@ -70,9 +74,29 @@ def build_private_v2_payload(
             or _tree_digest(grader_root) != record["hidden_grader_tree_sha256"]
         ):
             raise PrivateV2PayloadError("private v2 payload artifacts drifted")
+        group_manifest = _canonical_json(
+            group / "authority" / "group-manifest.json", "private group manifest"
+        )
+        if (
+            _digest(group_manifest, "private group manifest")
+            != record["group_manifest_sha256"]
+        ):
+            raise PrivateV2PayloadError("private v2 group manifest drifted")
+        visible_bundle = _archive_tree(snapshot_root)
+        try:
+            expected_snapshot_manifest = group_manifest.get("snapshot_manifest_sha256")
+            if not isinstance(expected_snapshot_manifest, str):
+                raise PrivateSnapshotError("snapshot authority is missing")
+            validate_private_snapshot_capsule(
+                visible_bundle, expected_manifest_sha256=expected_snapshot_manifest
+            )
+        except PrivateSnapshotError:
+            raise PrivateV2PayloadError(
+                "private v2 snapshot capsule is invalid"
+            ) from None
         artifacts = {
             "catalog_record": _read_bytes(record_path),
-            "visible_bundle": _archive_tree(snapshot_root),
+            "visible_bundle": visible_bundle,
             "issue": issue_body,
             "runtime_policy": runtime_body,
             "resource_profile": resource_body,
@@ -246,6 +270,12 @@ def verify_private_v2_payload(directory: Path) -> dict[str, Any]:
         grader_body = _read_bytes(
             directory / "objects" / f"{artifacts['grader_bundle']}.bin"
         )
+        try:
+            validate_private_snapshot_capsule(visible_body)
+        except PrivateSnapshotError:
+            raise PrivateV2PayloadError(
+                "private v2 snapshot capsule is invalid"
+            ) from None
         if (
             artifacts["memory_bundle"] != task.memory_bundle_sha256
             or artifacts["runtime_policy"] != task.runtime_policy_sha256
