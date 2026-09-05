@@ -1,5 +1,12 @@
 # Default-off shadow coding worker
 
+For the proposed Platform-hosted private v2 deployment, follow
+[the private execution boundary](coding-platform-private-execution-v2.md).
+The worker and remote mode described below retain their existing v1 semantics;
+they do not establish confidentiality from a validator operator. Private v2
+requires new request/result projections and Platform-owned execution before
+this worker can be used with that release.
+
 The shadow coding pipeline now has one complete composition path, but every
 release keeps it disabled by default and every coding artifact remains
 `weight_eligible=false`.
