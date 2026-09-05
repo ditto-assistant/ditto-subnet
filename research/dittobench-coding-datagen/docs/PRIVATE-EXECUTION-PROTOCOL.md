@@ -6,6 +6,14 @@ it does not implement a service, alter the active DittoBench protocol, reserve a
 
 Project: [DittoBench Coding](https://github.com/orgs/ditto-assistant/projects/7)
 
+For the proposed Platform-hosted private v2 deployment, the
+[execution-boundary delta](../../../docs/coding-platform-private-execution-v2.md)
+supersedes statements below that deliver private execution material or raw
+evidence to validator-controlled hosts. Validators request evaluations and
+verify approved result projections; Platform services execute and grade.
+Existing v1 wire contracts retain their semantics and do not satisfy this v2
+profile merely by enabling remote execution. Runtime migration is pending.
+
 ## Decision
 
 DittoBench Coding will run beside the current short-case `/run` protocol under
