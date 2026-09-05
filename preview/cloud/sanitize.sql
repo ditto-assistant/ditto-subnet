@@ -4,24 +4,10 @@
 -- identity. Keep this policy explicit and fail closed in sanitize-snapshot.sh.
 SET session_replication_role = replica;
 
-CREATE TEMP TABLE preview_excluded_tables (
-  table_name text PRIMARY KEY
-);
-\copy preview_excluded_tables (table_name) FROM '/sanitize-excluded-tables.txt'
-
 DO $policy$
 DECLARE
-  target_table text;
   column_record record;
 BEGIN
-  FOR target_table IN
-    SELECT excluded.table_name FROM preview_excluded_tables AS excluded
-  LOOP
-    IF to_regclass('public.' || target_table) IS NOT NULL THEN
-      EXECUTE format('TRUNCATE TABLE %I CASCADE', target_table);
-    END IF;
-  END LOOP;
-
   -- Redact every remaining high-risk column by name. Unknown future columns
   -- matching these classes are scrubbed automatically; unsupported non-null
   -- types fail the sanitizer instead of publishing a partially scrubbed dump.

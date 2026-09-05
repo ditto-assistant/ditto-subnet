@@ -76,11 +76,14 @@ connect the in-memory overlay to Platform/validator behavior.
 
 Cloud `stack-copy` never reads production itself. The main-only
 `preview-snapshot.yml` workflow exports into a disposable Postgres, applies the
-explicit policy in `preview/cloud/sanitize.sql`, and uploads only the sanitized
-custom-format dump. Authentication, payments, artifacts, source-review
-evidence, bearer material, signatures, and operator identity are stripped. The
-controller supplies the VM a two-hour signed URL; the source dump is never
-uploaded and is removed from the runner even on failure.
+explicit policy in `preview/cloud/sanitize.sql`, and uploads only a schema copy
+plus the non-sensitive Alembic migration marker. Production rows are never
+restored into the sanitizer or published. The resulting custom-format dump is
+therefore useful for testing migrations against the production schema without
+carrying authentication, payments, artifacts, source-review evidence, bearer
+material, signatures, operator identity, or other user data. The controller
+supplies the VM a two-hour signed URL; the source dump is never uploaded and is
+removed from the runner even on failure.
 
 ## GitHub Actions
 

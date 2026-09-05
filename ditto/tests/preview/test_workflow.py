@@ -135,9 +135,6 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert "environment: prod" in snapshot
     export = (ROOT / "preview/cloud/export-snapshot.sh").read_text()
     sanitizer = (ROOT / "preview/cloud/sanitize-snapshot.sh").read_text()
-    excluded_tables = (ROOT / "preview/cloud/sanitize-excluded-tables.txt").read_text()
-    sanitizer_sql = (ROOT / "preview/cloud/sanitize.sql").read_text()
-    restore_filter = (ROOT / "preview/cloud/filter-restore-list.awk").read_text()
     cloud_compose = (ROOT / "preview/cloud/compose.yml").read_text()
     local_compose = (ROOT / "preview/compose.yml").read_text()
     assert "pg_dump" in export
@@ -154,17 +151,11 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert 'docker cp "$source_dump" "$container:/tmp/source.dump"' in sanitizer
     assert 'docker cp "$container:/tmp/sanitized.dump" "$output_dump"' in sanitizer
     assert '-v "$temp_dir:/work"' not in sanitizer
-    tables = excluded_tables.splitlines()
-    assert tables == sorted(set(tables))
-    assert "owner_attestations" in tables
-    assert "pg_restore --list /tmp/source.dump" in sanitizer
-    assert "--use-list=/tmp/restore-filtered.list" in sanitizer
-    assert '$4 == "TABLE" && $5 == "DATA" && $6 == "public"' in restore_filter
-    assert 'print ";" $0' in restore_filter
+    assert "pg_restore --schema-only" in sanitizer
+    assert "pg_restore --data-only --table=alembic_version" in sanitizer
     assert "/tmp/restore.log 2>&1" in sanitizer
+    assert "/tmp/alembic-restore.log 2>&1" in sanitizer
     assert "detailed output withheld from CI" in sanitizer
-    assert "preview_excluded_tables" in sanitizer_sql
-    assert "sanitize-excluded-tables.txt" in sanitizer_sql
     assert "pgvector/pgvector:pg17" in sanitizer
     assert "image: pgvector/pgvector:pg17" in cloud_compose
     assert "image: pgvector/pgvector:pg17" in local_compose
