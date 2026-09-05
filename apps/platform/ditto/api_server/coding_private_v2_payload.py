@@ -17,6 +17,11 @@ from ditto.api_server.coding_private_catalog_v2_compile import (
     PrivateCatalogV2CompileError,
     verify_private_catalog_v2,
 )
+from ditto.coding_selection import (
+    coding_catalog_empty_leaf_hash,
+    coding_catalog_leaf_hash,
+    coding_catalog_node_hash,
+)
 
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -51,6 +56,7 @@ def build_private_v2_payload(
         memory_body = _read_bytes(group / "memory" / f"{condition}.json")
         runtime_body = _read_bytes(group / "runtime-policy.json")
         resource_body = _read_bytes(group / "resource-profile.json")
+        issue_body = _read_bytes(group / "issue.json")
         snapshot_root = group / "snapshot"
         grader_root = group / "grader"
         if (
@@ -59,6 +65,7 @@ def build_private_v2_payload(
             != record["runtime_policy_sha256"]
             or hashlib.sha256(resource_body).hexdigest()
             != record["resource_profile_sha256"]
+            or hashlib.sha256(issue_body).hexdigest() != record["visible_issue_sha256"]
             or _tree_digest(snapshot_root) != record["visible_snapshot_tree_sha256"]
             or _tree_digest(grader_root) != record["hidden_grader_tree_sha256"]
         ):
@@ -66,7 +73,7 @@ def build_private_v2_payload(
         artifacts = {
             "catalog_record": _read_bytes(record_path),
             "visible_bundle": _archive_tree(snapshot_root),
-            "issue": _read_bytes(group / "issue.json"),
+            "issue": issue_body,
             "runtime_policy": runtime_body,
             "resource_profile": resource_body,
             "memory_bundle": memory_body,
@@ -177,8 +184,13 @@ def verify_private_v2_payload(directory: Path) -> dict[str, Any]:
         on_disk.add(path.name[: -len(".bin")])
     if on_disk != set(objects):
         raise PrivateV2PayloadError("private v2 payload objects drifted")
+    catalog_leaves: list[str] = []
     for index, task in enumerate(authority["task_assets"]):
-        if not isinstance(task, dict) or task.get("catalog_index") != index:
+        if (
+            not isinstance(task, dict)
+            or type(task.get("catalog_index")) is not int
+            or task["catalog_index"] != index
+        ):
             raise PrivateV2PayloadError("private v2 payload task order is invalid")
         artifacts = task.get("artifacts")
         if (
@@ -199,7 +211,25 @@ def verify_private_v2_payload(directory: Path) -> dict[str, Any]:
         record_body = _read_bytes(
             directory / "objects" / f"{artifacts['catalog_record']}.bin"
         )
-        task = CodingPrivateCatalogV2Task.model_validate(json.loads(record_body))
+        record = CodingPrivateCatalogV2Task.model_validate(json.loads(record_body))
+        if (
+            record.catalog_index != index
+            or task.get("task_version_id") != record.task_version_id
+            or task.get("task_commitment_sha256") != record.task_commitment_sha256
+            or coding_canonical_json_bytes(
+                record.model_dump(mode="json", by_alias=True),
+                maximum_bytes=64 << 10,
+                label="private v2 catalog task",
+            )
+            != record_body
+        ):
+            raise PrivateV2PayloadError("private v2 payload catalog binding drifted")
+        task = record
+        catalog_leaves.append(
+            coding_catalog_leaf_hash(
+                catalog_index=index, task_commitment_sha256=task.task_commitment_sha256
+            )
+        )
         memory_body = _read_bytes(
             directory / "objects" / f"{artifacts['memory_bundle']}.bin"
         )
@@ -209,6 +239,7 @@ def verify_private_v2_payload(directory: Path) -> dict[str, Any]:
         resource_body = _read_bytes(
             directory / "objects" / f"{artifacts['resource_profile']}.bin"
         )
+        issue_body = _read_bytes(directory / "objects" / f"{artifacts['issue']}.bin")
         visible_body = _read_bytes(
             directory / "objects" / f"{artifacts['visible_bundle']}.bin"
         )
@@ -219,13 +250,33 @@ def verify_private_v2_payload(directory: Path) -> dict[str, Any]:
             artifacts["memory_bundle"] != task.memory_bundle_sha256
             or artifacts["runtime_policy"] != task.runtime_policy_sha256
             or artifacts["resource_profile"] != task.resource_profile_sha256
+            or artifacts["issue"] != task.visible_issue_sha256
             or hashlib.sha256(memory_body).hexdigest() != task.memory_bundle_sha256
             or hashlib.sha256(runtime_body).hexdigest() != task.runtime_policy_sha256
             or hashlib.sha256(resource_body).hexdigest() != task.resource_profile_sha256
+            or hashlib.sha256(issue_body).hexdigest() != task.visible_issue_sha256
             or _tree_digest_from_tar(visible_body) != task.visible_snapshot_tree_sha256
             or _tree_digest_from_tar(grader_body) != task.hidden_grader_tree_sha256
         ):
             raise PrivateV2PayloadError("private v2 payload artifacts drifted")
+    leaf_count = 1 << (len(catalog_leaves) - 1).bit_length()
+    catalog_leaves.extend(
+        coding_catalog_empty_leaf_hash(catalog_index=index)
+        for index in range(len(catalog_leaves), leaf_count)
+    )
+    level = 0
+    while len(catalog_leaves) > 1:
+        catalog_leaves = [
+            coding_catalog_node_hash(
+                level=level,
+                left_sha256=catalog_leaves[index],
+                right_sha256=catalog_leaves[index + 1],
+            )
+            for index in range(0, len(catalog_leaves), 2)
+        ]
+        level += 1
+    if catalog_leaves[0] != authority["catalog_merkle_root"]:
+        raise PrivateV2PayloadError("private v2 payload catalog root drifted")
     return authority
 
 

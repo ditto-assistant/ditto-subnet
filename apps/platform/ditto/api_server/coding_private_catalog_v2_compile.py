@@ -306,6 +306,12 @@ def _compile_group(
         condition.value for condition in _CONDITIONS
     ]:
         raise PrivateCatalogV2CompileError("private group conditions are invalid")
+    issue_path = root / "issue.json"
+    if issue_path.is_symlink() or not issue_path.is_file():
+        raise PrivateCatalogV2CompileError("private group issue is unavailable")
+    visible_issue_sha256 = _file_sha256(issue_path)
+    if visible_issue_sha256 != manifest.get("visible_issue_sha256"):
+        raise PrivateCatalogV2CompileError("private group issue drifted")
     task_metadata = []
     for offset, arm in enumerate(arms):
         index = catalog_start + offset
@@ -322,6 +328,7 @@ def _compile_group(
             private_release_sha256=release_sha256,
             group_manifest_sha256=group["group_manifest_sha256"],
             visible_snapshot_tree_sha256=group["visible_snapshot_tree_sha256"],
+            visible_issue_sha256=visible_issue_sha256,
             hidden_grader_tree_sha256=group["hidden_grader_tree_sha256"],
             memory_bundle_sha256=arm["memory_bundle_sha256"],
             runtime_policy_sha256=manifest["runtime_policy_sha256"],

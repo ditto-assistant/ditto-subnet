@@ -33,6 +33,7 @@ type PrivateCatalogTaskV2 struct {
 	PrivateReleaseSHA256      string                    `json:"private_release_sha256"`
 	GroupManifestSHA256       string                    `json:"group_manifest_sha256"`
 	VisibleSnapshotTreeSHA256 string                    `json:"visible_snapshot_tree_sha256"`
+	VisibleIssueSHA256        string                    `json:"visible_issue_sha256"`
 	HiddenGraderTreeSHA256    string                    `json:"hidden_grader_tree_sha256"`
 	MemoryBundleSHA256        string                    `json:"memory_bundle_sha256"`
 	RuntimePolicySHA256       string                    `json:"runtime_policy_sha256"`
@@ -74,6 +75,7 @@ func validatePrivateCatalogTaskV2Fields(task PrivateCatalogTaskV2) error {
 		"private_release_sha256":       task.PrivateReleaseSHA256,
 		"group_manifest_sha256":        task.GroupManifestSHA256,
 		"visible_snapshot_tree_sha256": task.VisibleSnapshotTreeSHA256,
+		"visible_issue_sha256":         task.VisibleIssueSHA256,
 		"hidden_grader_tree_sha256":    task.HiddenGraderTreeSHA256,
 		"memory_bundle_sha256":         task.MemoryBundleSHA256,
 		"runtime_policy_sha256":        task.RuntimePolicySHA256,
@@ -109,6 +111,7 @@ func PrivateCatalogTaskV2Digest(task PrivateCatalogTaskV2) (string, error) {
 		"private_release_sha256":       task.PrivateReleaseSHA256,
 		"group_manifest_sha256":        task.GroupManifestSHA256,
 		"visible_snapshot_tree_sha256": task.VisibleSnapshotTreeSHA256,
+		"visible_issue_sha256":         task.VisibleIssueSHA256,
 		"hidden_grader_tree_sha256":    task.HiddenGraderTreeSHA256,
 		"memory_bundle_sha256":         task.MemoryBundleSHA256,
 		"runtime_policy_sha256":        task.RuntimePolicySHA256,

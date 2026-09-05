@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -73,7 +74,7 @@ def _bound_fixture(root: Path) -> tuple[Path, Path]:
         group = groups_root / group_id
         _write_text(group / "snapshot" / "app.py", f"print({index})\n")
         _write_text(group / "grader" / "test_app.py", f"assert {index} >= 0\n")
-        _write_json(group / "issue.json", {"title": f"issue-{index}"})
+        issue_sha = _write_json(group / "issue.json", {"title": f"issue-{index}"})
         runtime_sha = _write_json(
             group / "runtime-policy.json", {"editable_paths": ["app.py"]}
         )
@@ -101,6 +102,7 @@ def _bound_fixture(root: Path) -> tuple[Path, Path]:
                 "repository_epoch": f"epoch-{index}",
                 "runtime_policy_sha256": runtime_sha,
                 "resource_profile_sha256": resource_sha,
+                "visible_issue_sha256": issue_sha,
             },
         )
         groups.append(
@@ -206,3 +208,95 @@ def test_private_v2_payload_rejects_leftover_objects(tmp_path: Path) -> None:
     objects_dir.symlink_to(actual_dir, target_is_directory=True)
     with pytest.raises(PrivateV2PayloadError, match="objects are invalid"):
         verify_private_v2_payload(protected / "payload")
+
+
+def test_private_v2_payload_rejects_issue_drift(tmp_path: Path) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    release, groups = _bound_fixture(protected)
+    compile_private_catalog_v2(
+        release_authority=release,
+        groups_root=groups,
+        output=protected / "catalog",
+    )
+    drifted = groups / "private-group-000" / "issue.json"
+    drifted.write_bytes(drifted.read_bytes() + b"\n")
+    with pytest.raises(PrivateV2PayloadError, match="drifted"):
+        build_private_v2_payload(
+            catalog_directory=protected / "catalog",
+            groups_root=groups,
+            output=protected / "payload",
+        )
+
+
+def test_private_v2_payload_rejects_swapped_issue_object(tmp_path: Path) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    release, groups = _bound_fixture(protected)
+    compile_private_catalog_v2(
+        release_authority=release,
+        groups_root=groups,
+        output=protected / "catalog",
+    )
+    payload_dir = protected / "payload"
+    build_private_v2_payload(
+        catalog_directory=protected / "catalog",
+        groups_root=groups,
+        output=payload_dir,
+    )
+    swapped = b'{"title":"swapped-issue"}'
+    digest = hashlib.sha256(swapped).hexdigest()
+    object_path = payload_dir / "objects" / f"{digest}.bin"
+    object_path.write_bytes(swapped)
+    object_path.chmod(0o600)
+    authority = json.loads((payload_dir / "payload-authority.json").read_bytes())
+    objects = [item for item in authority["objects"] if item["sha256"] != digest]
+    objects.append({"sha256": digest, "size_bytes": len(swapped)})
+    authority["objects"] = sorted(objects, key=lambda item: str(item["sha256"]))
+    authority["task_assets"][0]["artifacts"]["issue"] = digest
+    projection = {
+        key: value for key, value in authority.items() if key != "payload_sha256"
+    }
+    authority["payload_sha256"] = hashlib.sha256(
+        coding_canonical_json_bytes(
+            projection, maximum_bytes=8 << 20, label="private v2 payload authority"
+        )
+    ).hexdigest()
+    (payload_dir / "payload-authority.json").write_bytes(
+        coding_canonical_json_bytes(
+            authority, maximum_bytes=8 << 20, label="private v2 payload authority"
+        )
+    )
+    with pytest.raises(PrivateV2PayloadError, match="drifted"):
+        verify_private_v2_payload(payload_dir)
+
+
+@pytest.mark.parametrize("tamper", ["task_mapping", "catalog_root"])
+def test_private_v2_payload_rejects_catalog_binding_drift(
+    tmp_path: Path, tamper: str
+) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    release, groups = _bound_fixture(protected)
+    compile_private_catalog_v2(
+        release_authority=release, groups_root=groups, output=protected / "catalog"
+    )
+    payload_dir = protected / "payload"
+    authority = build_private_v2_payload(
+        catalog_directory=protected / "catalog", groups_root=groups, output=payload_dir
+    )
+    if tamper == "task_mapping":
+        authority["task_assets"][0]["artifacts"] = authority["task_assets"][1][
+            "artifacts"
+        ]
+    else:
+        authority["catalog_merkle_root"] = "f" * 64
+    authority.pop("payload_sha256")
+    authority["payload_sha256"] = hashlib.sha256(
+        coding_canonical_json_bytes(
+            authority, maximum_bytes=8 << 20, label="private v2 payload authority"
+        )
+    ).hexdigest()
+    _write_json(payload_dir / "payload-authority.json", authority)
+    with pytest.raises(PrivateV2PayloadError, match="catalog.*drifted"):
+        verify_private_v2_payload(payload_dir)

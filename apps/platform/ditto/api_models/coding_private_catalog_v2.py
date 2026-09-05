@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from ditto.api_models.coding_canonical import coding_canonical_sha256
 from ditto.api_models.coding_evaluation import CodingEvaluationModel, OpaqueId, Sha256
@@ -22,6 +22,12 @@ class CodingMemoryConditionV2(StrEnum):
 class CodingPrivateCatalogV2Task(CodingEvaluationModel):
     """One sealed v2 catalog leaf; condition/group linkage stays private."""
 
+    model_config = ConfigDict(
+        extra="ignore",
+        frozen=True,
+        serialize_by_alias=True,
+        validate_by_name=True,
+    )
     schema_name: Literal["dittobench-coding-private-catalog-task-v2"] = Field(
         alias="schema"
     )
@@ -36,6 +42,7 @@ class CodingPrivateCatalogV2Task(CodingEvaluationModel):
     private_release_sha256: Sha256
     group_manifest_sha256: Sha256
     visible_snapshot_tree_sha256: Sha256
+    visible_issue_sha256: Sha256
     hidden_grader_tree_sha256: Sha256
     memory_bundle_sha256: Sha256
     runtime_policy_sha256: Sha256
