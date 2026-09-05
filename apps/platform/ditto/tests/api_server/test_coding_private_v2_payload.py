@@ -269,3 +269,34 @@ def test_private_v2_payload_rejects_swapped_issue_object(tmp_path: Path) -> None
     )
     with pytest.raises(PrivateV2PayloadError, match="drifted"):
         verify_private_v2_payload(payload_dir)
+
+
+@pytest.mark.parametrize("tamper", ["task_mapping", "catalog_root"])
+def test_private_v2_payload_rejects_catalog_binding_drift(
+    tmp_path: Path, tamper: str
+) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    release, groups = _bound_fixture(protected)
+    compile_private_catalog_v2(
+        release_authority=release, groups_root=groups, output=protected / "catalog"
+    )
+    payload_dir = protected / "payload"
+    authority = build_private_v2_payload(
+        catalog_directory=protected / "catalog", groups_root=groups, output=payload_dir
+    )
+    if tamper == "task_mapping":
+        authority["task_assets"][0]["artifacts"] = authority["task_assets"][1][
+            "artifacts"
+        ]
+    else:
+        authority["catalog_merkle_root"] = "f" * 64
+    authority.pop("payload_sha256")
+    authority["payload_sha256"] = hashlib.sha256(
+        coding_canonical_json_bytes(
+            authority, maximum_bytes=8 << 20, label="private v2 payload authority"
+        )
+    ).hexdigest()
+    _write_json(payload_dir / "payload-authority.json", authority)
+    with pytest.raises(PrivateV2PayloadError, match="catalog.*drifted"):
+        verify_private_v2_payload(payload_dir)
