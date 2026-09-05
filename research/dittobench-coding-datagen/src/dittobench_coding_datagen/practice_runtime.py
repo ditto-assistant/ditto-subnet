@@ -177,10 +177,10 @@ class _FileState:
 
 
 def _bounded_string(value: Any, field: str, maximum: int) -> str:
+    if not isinstance(value, str) or not value:
+        raise CorpusError(f"{field} must be a non-empty string of at most {maximum}")
     try:
-        valid = (
-            isinstance(value, str) and bool(value) and len(value.encode()) <= maximum
-        )
+        valid = len(value.encode()) <= maximum
     except UnicodeEncodeError:
         valid = False
     if not valid:
