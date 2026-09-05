@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.211.0 (2026-09-05)
+
+### Documentation
+
+- **coding**: Define Platform-hosted private execution
+  ([#1633](https://github.com/ditto-assistant/ditto-subnet/pull/1633),
+  [`5d460b9`](https://github.com/ditto-assistant/ditto-subnet/commit/5d460b9c8cdb43f8a5c6d0c7d8d224271bf0bd48))
+
+### Features
+
+- **coding**: Register private v2 releases
+  ([#1632](https://github.com/ditto-assistant/ditto-subnet/pull/1632),
+  [`3cf01c6`](https://github.com/ditto-assistant/ditto-subnet/commit/3cf01c6c0ff81055bd708a031cd95d58e0183192))
+
+
 ## v0.210.0 (2026-09-05)
 
 ### Bug Fixes
