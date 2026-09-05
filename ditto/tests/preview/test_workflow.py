@@ -131,6 +131,8 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert "/sanitized/*.dump" in provision
     assert "sign-url" in provision
     assert "--duration=2h" in provision
+    assert 'snapshot_region="${GCP_PREVIEW_ZONE%-*}"' in provision
+    assert '--region="$snapshot_region"' in provision
     assert "sanitize-snapshot.sh" in snapshot
     assert "environment: prod" in snapshot
     export = (ROOT / "preview/cloud/export-snapshot.sh").read_text()

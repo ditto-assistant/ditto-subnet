@@ -72,7 +72,8 @@ snapshot_url=''
 if [ "$PREVIEW_PROFILE" = stack-copy ]; then
   snapshot_object="$(gcloud storage ls "gs://${GCP_PREVIEW_SNAPSHOT_BUCKET}/sanitized/*.dump" | sort | tail -n 1)"
   [ -n "$snapshot_object" ] || preview_die "no sanitized snapshot is available"
-  snapshot_url="$(gcloud storage sign-url "$snapshot_object" --duration=2h --impersonate-service-account="${GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT:?}" --format='value(signed_url)')"
+  snapshot_region="${GCP_PREVIEW_ZONE%-*}"
+  snapshot_url="$(gcloud storage sign-url "$snapshot_object" --duration=2h --region="$snapshot_region" --impersonate-service-account="${GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT:?}" --format='value(signed_url)')"
 fi
 
 metadata_file="$(mktemp)"
