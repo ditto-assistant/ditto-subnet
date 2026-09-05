@@ -91,7 +91,7 @@ func TestHostedCapsuleCompilesIntoRealAuthoringAndPristineReplay(t *testing.T) {
 	if frozen.Submission == nil {
 		t.Fatal("native freeze failed")
 	}
-	workspace, err := ReplayHostedFrozenSubmission(t.Context(), authority, *frozen.Submission, bytes.NewReader(compiled.Bundle), manifest.Limits)
+	workspace, err := ReplayHostedFrozenSubmission(t.Context(), HostedReplayAuthority{authority, frozen.Submission.FrozenPatchSHA256}, *frozen.Submission, bytes.NewReader(compiled.Bundle), manifest.Limits)
 	if err != nil {
 		t.Fatal(err)
 	}

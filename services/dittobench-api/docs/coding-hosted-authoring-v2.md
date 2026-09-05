@@ -61,6 +61,10 @@ evaluation UUID, attempt/case UUID, visible bundle and base tree, and exact
 full-file transitions. Repeated freeze returns the same result and revokes tools.
 `ReplayHostedFrozenSubmission` reconstructs a fresh workspace from the pristine
 base and verifies these identities against the independently trusted authority.
+Its `HostedReplayAuthority` additionally requires the exact frozen-patch digest
+from the committed Platform freeze ledger. Do not fill that expected value from
+the incoming submission: self-consistent bytes with the right assignment are
+not sufficient proof that they are the patch actually frozen for grading.
 The v1 validator/replayer rejects v2 submissions; changing only a version label
 does not make a v1 patch valid v2 evidence.
 

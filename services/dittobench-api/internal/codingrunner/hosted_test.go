@@ -87,7 +87,7 @@ func TestHostedToolsFreezeAndPristineReplayUseNativeV2Identities(t *testing.T) {
 	if _, err := session.Invoke(t.Context(), hostedTool(authority, "after-freeze", "git.status", map[string]any{})); err == nil {
 		t.Fatal("frozen capability remained active")
 	}
-	workspace, err := ReplayHostedFrozenSubmission(t.Context(), authority, *frozen.Submission, bytes.NewReader(bundle), session.manifest.Limits)
+	workspace, err := ReplayHostedFrozenSubmission(t.Context(), HostedReplayAuthority{authority, frozen.Submission.FrozenPatchSHA256}, *frozen.Submission, bytes.NewReader(bundle), session.manifest.Limits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,18 +117,18 @@ func TestHostedReplayRejectsOtherAssignmentsAndRelabeledV1(t *testing.T) {
 		{EvaluationID: "30000000-0000-4000-8000-000000000003", AttemptID: authority.AttemptID, AssignmentSHA256: authority.AssignmentSHA256},
 		{EvaluationID: authority.EvaluationID, AttemptID: "30000000-0000-4000-8000-000000000003", AssignmentSHA256: authority.AssignmentSHA256},
 	} {
-		if _, err := ReplayHostedFrozenSubmission(t.Context(), changed, *frozen.Submission, bytes.NewReader(bundle), session.manifest.Limits); err == nil {
+		if _, err := ReplayHostedFrozenSubmission(t.Context(), HostedReplayAuthority{changed, frozen.Submission.FrozenPatchSHA256}, *frozen.Submission, bytes.NewReader(bundle), session.manifest.Limits); err == nil {
 			t.Fatal("accepted authority drift")
 		}
 	}
 	old, _ := newFixtureSession(t, nil)
 	v1 := old.Freeze()
-	if err := ValidateHostedFrozenSubmission(authority, *v1.Submission, session.manifest.Limits); err == nil {
+	if err := ValidateHostedFrozenSubmission(HostedReplayAuthority{authority, v1.Submission.FrozenPatchSHA256}, *v1.Submission, session.manifest.Limits); err == nil {
 		t.Fatal("accepted v1 freeze")
 	}
 	v1.Submission.CodingContractVersion = HostedContractVersion
 	v1.Submission.CaseID = authority.AttemptID
-	if err := ValidateHostedFrozenSubmission(authority, *v1.Submission, session.manifest.Limits); err == nil {
+	if err := ValidateHostedFrozenSubmission(HostedReplayAuthority{authority, v1.Submission.FrozenPatchSHA256}, *v1.Submission, session.manifest.Limits); err == nil {
 		t.Fatal("accepted relabeled v1 patch")
 	}
 	if bytes.Contains(old.Freeze().Submission.Patch, []byte("assignment_sha256")) {
@@ -214,5 +214,26 @@ func TestLegacyPatchCanonicalBytesRemainUnchanged(t *testing.T) {
 	want := `{"base_tree_sha256":"` + strings.Repeat("a", 64) + `","case_id":"legacy-case","changes":[],"coding_contract_version":1,"schema":"dittobench-coding-frozen-patch-v1","visible_bundle_sha256":"` + strings.Repeat("b", 64) + `"}` + "\n"
 	if err != nil || string(patch) != want {
 		t.Fatal("legacy patch byte identity changed")
+	}
+}
+
+func TestHostedReplayRequiresTheCommittedPatchNotOnlySelfConsistency(t *testing.T) {
+	original, authority, _ := hostedFixture(t, nil)
+	committed := original.Freeze()
+	other, _, _ := hostedFixture(t, nil)
+	invokeOK(t, other, hostedTool(authority, "other-patch", "repo.apply_patch", map[string]any{
+		"path": "src/parser.py", "expected_sha256": other.base["src/parser.py"].sha256,
+		"replacements": []map[string]string{{"old_text": "return value.strip()", "new_text": "return value.rstrip()"}},
+	}))
+	changed := other.Freeze()
+	if committed.Submission == nil || changed.Submission == nil || committed.Submission.FrozenPatchSHA256 == changed.Submission.FrozenPatchSHA256 {
+		t.Fatal("test needs two valid distinct patches")
+	}
+	if err := ValidateHostedFrozenSubmission(HostedReplayAuthority{authority, changed.Submission.FrozenPatchSHA256}, *changed.Submission, other.manifest.Limits); err != nil {
+		t.Fatal("second patch is not internally valid")
+	}
+	reader := &unreadBundle{}
+	if _, err := ReplayHostedFrozenSubmission(t.Context(), HostedReplayAuthority{authority, committed.Submission.FrozenPatchSHA256}, *changed.Submission, reader, other.manifest.Limits); err == nil || reader.read {
+		t.Fatal("uncommitted patch reached replay materialization")
 	}
 }

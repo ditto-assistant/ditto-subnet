@@ -17,6 +17,13 @@ type HostedAuthority struct {
 	AssignmentSHA256 string
 }
 
+// HostedReplayAuthority additionally binds the patch observed in the committed
+// Platform freeze ledger. Never populate it from the supplied submission itself.
+type HostedReplayAuthority struct {
+	HostedAuthority
+	FrozenPatchSHA256 string
+}
+
 func (authority HostedAuthority) validate() error {
 	evaluation, err := uuid.Parse(authority.EvaluationID)
 	if err != nil || evaluation == uuid.Nil || evaluation.String() != authority.EvaluationID {
@@ -58,18 +65,19 @@ func ValidateHostedManifest(authority HostedAuthority, manifest Manifest, now ti
 // ReplayHostedFrozenSubmission validates the native v2 patch against the
 // independently trusted assignment and reconstructs a pristine workspace.
 // The v1 replay/validation entry points continue to reject these submissions.
-func ReplayHostedFrozenSubmission(ctx context.Context, authority HostedAuthority, submission FrozenSubmission, visibleBundle io.Reader, limits Limits) (*ReplayWorkspace, error) {
+func ReplayHostedFrozenSubmission(ctx context.Context, authority HostedReplayAuthority, submission FrozenSubmission, visibleBundle io.Reader, limits Limits) (*ReplayWorkspace, error) {
 	if err := ValidateHostedFrozenSubmission(authority, submission, limits); err != nil {
 		return nil, err
 	}
 	return replayFrozenSubmission(ctx, submission, visibleBundle, limits, HostedContractVersion, authority.AssignmentSHA256, authority.EvaluationID)
 }
 
-func ValidateHostedFrozenSubmission(authority HostedAuthority, submission FrozenSubmission, limits Limits) error {
+func ValidateHostedFrozenSubmission(authority HostedReplayAuthority, submission FrozenSubmission, limits Limits) error {
 	if err := authority.validate(); err != nil {
 		return err
 	}
-	if submission.CaseID != authority.AttemptID {
+	if submission.CaseID != authority.AttemptID || !isLowerSHA256(authority.FrozenPatchSHA256) ||
+		submission.FrozenPatchSHA256 != authority.FrozenPatchSHA256 {
 		return errors.New("hosted frozen submission does not match its authority")
 	}
 	if err := limits.Validate(); err != nil {
