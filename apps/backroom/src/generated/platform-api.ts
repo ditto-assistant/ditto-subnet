@@ -23230,9 +23230,11 @@ export interface components {
          *
          *     ``escalate`` is never a model choice. The adjudicator is asked for clear
          *     or reject; the host uses ``escalate`` internally when the returned
-         *     decision fails its contract. The terminal court wrapper converts that
-         *     refusal to the explicit no-proven-breach clear clause, so malformed or
-         *     exhausted automation cannot strand or reject a miner without proof.
+         *     decision fails its contract. A refusal with retained notes converts to
+         *     the explicit no-proven-breach clear clause, so malformed or exhausted
+         *     automation cannot reject a miner without proof. A refusal with an empty
+         *     ledger stays ``escalate`` so the policy module quarantines unseen source
+         *     instead of admitting it.
          */
         SourceReviewAdjudication: {
             /** Citations */

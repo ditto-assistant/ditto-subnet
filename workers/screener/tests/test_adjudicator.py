@@ -275,10 +275,10 @@ async def test_evidence_bearing_ledger_uses_one_preloaded_final_turn(
     assert "Preloaded source evidence" in str(requests[0]["messages"])
 
 
-async def test_budget_terminated_review_without_evidence_settles_immediately(
+async def test_budget_terminated_review_without_evidence_holds(
     tmp_path: Path,
 ) -> None:
-    """No retained evidence means no model rediscovery or miner-facing retry."""
+    """No retained evidence means no model rediscovery and no silent admit."""
     requests = 0
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -294,8 +294,8 @@ async def test_budget_terminated_review_without_evidence_settles_immediately(
         error_code="source-review-lease-budget-exhausted",
     )
 
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
     assert result.escalation_code == "adjudicator-no-evidence"
     assert requests == 0
 
@@ -686,15 +686,16 @@ async def test_a_search_hit_counts_as_reading_that_line(tmp_path: Path) -> None:
     assert result.decision == "clear"
 
 
-async def test_a_missing_key_clears_rather_than_punishing_the_miner(
+async def test_a_missing_key_with_empty_ledger_holds_unseen_source(
     tmp_path: Path,
 ) -> None:
     result = await SourceReviewAdjudicator(
         api_key_file=None, base_url="https://openrouter.test/api/v1"
     ).adjudicate(_archive(tmp_path), notes=[])
 
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
+    assert result.escalation_code == "adjudicator-unavailable"
 
 
 async def test_a_wall_clock_timeout_clears_rather_than_holding(
