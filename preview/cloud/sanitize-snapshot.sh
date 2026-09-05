@@ -17,7 +17,7 @@ docker run -d --name "$container" \
   -e POSTGRES_USER=ditto -e POSTGRES_PASSWORD=preview-sanitizer \
   -e POSTGRES_DB=preview_sanitize \
   -v "$script_dir/sanitize.sql:/sanitize.sql:ro" \
-  postgres:17-alpine >/dev/null
+  pgvector/pgvector:pg17 >/dev/null
 
 ready=false
 for _ in {1..60}; do
