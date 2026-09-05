@@ -1646,6 +1646,66 @@ class CodingHostedAssignment(Base):
     )
 
 
+class CodingHostedPrivateTask(Base):
+    """Private selected arm and irreversible object-access phase boundaries."""
+
+    __tablename__ = "coding_hosted_private_tasks"
+
+    evaluation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    selection_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    selection_authority: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    catalog_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_patch_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    authoring_grant_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False, unique=True
+    )
+    grading_grant_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False, unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.clock_timestamp()
+    )
+    frozen_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    frozen_patch_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    frozen_patch_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    close_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["evaluation_id"],
+            ["coding_hosted_assignments.evaluation_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "selection_sha256 ~ '^[0-9a-f]{64}$' AND catalog_index BETWEEN 0 AND 249 "
+            "AND max_patch_bytes BETWEEN 1 AND 134217728 "
+            "AND authoring_grant_id <> grading_grant_id "
+            "AND authoring_grant_id <> '00000000-0000-0000-0000-000000000000'::uuid "
+            "AND grading_grant_id <> '00000000-0000-0000-0000-000000000000'::uuid "
+            "AND jsonb_typeof(selection_authority) = 'object' "
+            "AND octet_length(selection_authority::text) <= 4096",
+            name="coding_hosted_private_tasks_authority_check",
+        ),
+        CheckConstraint(
+            "(frozen_at IS NULL) = (frozen_patch_sha256 IS NULL) "
+            "AND (frozen_at IS NULL) = (frozen_patch_size IS NULL) "
+            "AND (frozen_at IS NULL OR (frozen_at >= created_at "
+            "AND frozen_patch_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND frozen_patch_size BETWEEN 0 AND max_patch_bytes)) "
+            "AND (closed_at IS NULL) = (close_reason IS NULL) "
+            "AND (closed_at IS NULL OR (closed_at >= created_at "
+            "AND (frozen_at IS NULL OR closed_at >= frozen_at) "
+            "AND close_reason IN ('completed','failed','aborted')))",
+            name="coding_hosted_private_tasks_phase_check",
+        ),
+    )
+
+
 class CodingPrivateV2Release(Base):
     """One immutable, digest-only private Coding v2 release registration."""
 

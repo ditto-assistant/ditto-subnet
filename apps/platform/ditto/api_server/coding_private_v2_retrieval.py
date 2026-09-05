@@ -32,46 +32,17 @@ from ditto.api_server.coding_private_v2_publication import (
 from ditto.api_server.coding_private_v2_transport import (
     load_private_v2_transport_manifest,
 )
+from ditto.coding_hosted_private import AUTHORING_ROLES, GRADING_ROLES
+from ditto.coding_hosted_private import PrivateV2ObjectGrant as PrivateV2ObjectGrant
 
-_AUTHORING_ROLES = frozenset(
-    {
-        "catalog_record",
-        "issue",
-        "visible_bundle",
-        "memory_bundle",
-        "runtime_policy",
-        "resource_profile",
-    }
-)
-_GRADING_ROLES = frozenset(
-    {
-        "catalog_record",
-        "visible_bundle",
-        "grader_bundle",
-        "runtime_policy",
-        "resource_profile",
-    }
-)
+_AUTHORING_ROLES = frozenset(AUTHORING_ROLES)
+_GRADING_ROLES = frozenset(GRADING_ROLES)
 _ALL_ROLES = _AUTHORING_ROLES | _GRADING_ROLES
 PRIVATE_V2_RETRIEVAL_TIMEOUT_SECONDS = 30
 
 
 class PrivateV2RetrievalError(ValueError):
     """Safe failure without object identities, keys or private body bytes."""
-
-
-@dataclass(frozen=True, repr=False)
-class PrivateV2ObjectGrant:
-    grant_id: UUID
-    evaluation_id: UUID
-    attempt_id: UUID
-    registration_sha256: str
-    catalog_index: int
-    phase: Literal["authoring", "grading"]
-    audience: Literal["platform-authoring", "platform-grading"]
-    allowed_roles: tuple[str, ...]
-    expires_at_unix: int
-    frozen_patch_sha256: str | None
 
 
 class PrivateV2GrantStore(Protocol):

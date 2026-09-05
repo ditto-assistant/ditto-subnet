@@ -91,6 +91,72 @@ CREATE FUNCTION public.coding_hosted_assignment_guard() RETURNS trigger
 
 
 --
+-- Name: coding_hosted_private_task_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.coding_hosted_private_task_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        DECLARE
+            assignment coding_hosted_assignments%ROWTYPE;
+            phase_columns text[] := ARRAY['frozen_at','frozen_patch_sha256',
+                'frozen_patch_size','closed_at','close_reason'];
+        BEGIN
+            IF TG_OP = 'DELETE' THEN
+                RAISE EXCEPTION 'hosted private tasks cannot be deleted'
+                    USING ERRCODE = '23514';
+            END IF;
+            SELECT * INTO assignment FROM coding_hosted_assignments
+                WHERE evaluation_id = NEW.evaluation_id;
+            IF NOT FOUND OR assignment.authority->>'selection_sha256'
+                IS DISTINCT FROM NEW.selection_sha256 THEN
+                RAISE EXCEPTION 'hosted private task assignment mismatch'
+                    USING ERRCODE = '23514';
+            END IF;
+            IF TG_OP = 'INSERT' THEN
+                IF assignment.started_at IS NOT NULL
+                   OR assignment.expires_at <= clock_timestamp()
+                   OR NEW.created_at < assignment.created_at
+                   OR NEW.created_at > clock_timestamp()
+                   OR NEW.frozen_at IS NOT NULL OR NEW.frozen_patch_sha256 IS NOT NULL
+                   OR NEW.frozen_patch_size IS NOT NULL OR NEW.closed_at IS NOT NULL
+                   OR NEW.close_reason IS NOT NULL THEN
+                    RAISE EXCEPTION 'hosted private task must bind before start'
+                        USING ERRCODE = '23514';
+                END IF;
+            ELSE
+                IF (to_jsonb(OLD) - phase_columns)
+                    IS DISTINCT FROM
+                   (to_jsonb(NEW) - phase_columns)
+                   OR (OLD.frozen_at IS NOT NULL AND
+                       ROW(NEW.frozen_at, NEW.frozen_patch_sha256,
+                           NEW.frozen_patch_size) IS DISTINCT FROM
+                       ROW(OLD.frozen_at, OLD.frozen_patch_sha256,
+                           OLD.frozen_patch_size))
+                   OR (OLD.closed_at IS NOT NULL AND NEW IS DISTINCT FROM OLD)
+                THEN
+                    RAISE EXCEPTION 'hosted private task authority is immutable'
+                        USING ERRCODE = '23514';
+                END IF;
+                IF OLD.frozen_at IS NULL AND NEW.frozen_at IS NOT NULL AND
+                    (assignment.started_at IS NULL
+                     OR NEW.frozen_at < assignment.started_at
+                     OR NEW.frozen_at >= assignment.expires_at
+                     OR NEW.frozen_at > clock_timestamp()) THEN
+                    RAISE EXCEPTION 'hosted freeze requires an active attempt'
+                        USING ERRCODE = '23514';
+                END IF;
+                IF NEW.closed_at IS NOT NULL AND NEW.closed_at > clock_timestamp() THEN
+                    RAISE EXCEPTION 'hosted close time is invalid'
+                        USING ERRCODE = '23514';
+                END IF;
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+
+
+--
 -- Name: guard_coding_catalog_append_only(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1046,6 +1112,29 @@ CREATE TABLE public.coding_hosted_assignments (
     CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__6e57 CHECK (((expires_at > created_at) AND ((admitted_at IS NULL) = (admission_request_sha256 IS NULL)) AND ((admitted_at IS NULL) OR ((admitted_at >= created_at) AND (admission_request_sha256 ~ '^[0-9a-f]{64}$'::text))) AND ((started_at IS NULL) = (worker_id IS NULL)) AND ((started_at IS NULL) OR ((admitted_at IS NOT NULL) AND (started_at >= admitted_at))))),
     CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__9b2e CHECK (((shadow_only = true) AND (weight_eligible = false))),
     CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__c2b7 CHECK (((registration_sha256 ~ '^[0-9a-f]{64}$'::text) AND (artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND (assignment_sha256 ~ '^[0-9a-f]{64}$'::text)))
+);
+
+
+--
+-- Name: coding_hosted_private_tasks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_private_tasks (
+    evaluation_id uuid NOT NULL,
+    selection_sha256 text NOT NULL,
+    selection_authority jsonb NOT NULL,
+    catalog_index integer NOT NULL,
+    max_patch_bytes integer NOT NULL,
+    authoring_grant_id uuid NOT NULL,
+    grading_grant_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    frozen_at timestamp with time zone,
+    frozen_patch_sha256 text,
+    frozen_patch_size integer,
+    closed_at timestamp with time zone,
+    close_reason text,
+    CONSTRAINT ck_coding_hosted_private_tasks_coding_hosted_private_ta_d5b6 CHECK ((((frozen_at IS NULL) = (frozen_patch_sha256 IS NULL)) AND ((frozen_at IS NULL) = (frozen_patch_size IS NULL)) AND ((frozen_at IS NULL) OR ((frozen_at >= created_at) AND (frozen_patch_sha256 ~ '^[0-9a-f]{64}$'::text) AND ((frozen_patch_size >= 0) AND (frozen_patch_size <= max_patch_bytes)))) AND ((closed_at IS NULL) = (close_reason IS NULL)) AND ((closed_at IS NULL) OR ((closed_at >= created_at) AND ((frozen_at IS NULL) OR (closed_at >= frozen_at)) AND (close_reason = ANY (ARRAY['completed'::text, 'failed'::text, 'aborted'::text])))))),
+    CONSTRAINT ck_coding_hosted_private_tasks_coding_hosted_private_ta_e4aa CHECK (((selection_sha256 ~ '^[0-9a-f]{64}$'::text) AND ((catalog_index >= 0) AND (catalog_index <= 249)) AND ((max_patch_bytes >= 1) AND (max_patch_bytes <= 134217728)) AND (authoring_grant_id <> grading_grant_id) AND (authoring_grant_id <> '00000000-0000-0000-0000-000000000000'::uuid) AND (grading_grant_id <> '00000000-0000-0000-0000-000000000000'::uuid) AND (jsonb_typeof(selection_authority) = 'object'::text) AND (octet_length((selection_authority)::text) <= 4096)))
 );
 
 
@@ -4838,6 +4927,14 @@ ALTER TABLE ONLY public.coding_hosted_assignments
 
 
 --
+-- Name: coding_hosted_private_tasks pk_coding_hosted_private_tasks; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_private_tasks
+    ADD CONSTRAINT pk_coding_hosted_private_tasks PRIMARY KEY (evaluation_id);
+
+
+--
 -- Name: confirmation_budget_days pk_confirmation_budget_days; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5459,6 +5556,22 @@ ALTER TABLE ONLY public.coding_hosted_assignments
 
 ALTER TABLE ONLY public.coding_hosted_assignments
     ADD CONSTRAINT uq_coding_hosted_assignments_attempt_id UNIQUE (attempt_id);
+
+
+--
+-- Name: coding_hosted_private_tasks uq_coding_hosted_private_tasks_authoring_grant_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_private_tasks
+    ADD CONSTRAINT uq_coding_hosted_private_tasks_authoring_grant_id UNIQUE (authoring_grant_id);
+
+
+--
+-- Name: coding_hosted_private_tasks uq_coding_hosted_private_tasks_grading_grant_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_private_tasks
+    ADD CONSTRAINT uq_coding_hosted_private_tasks_grading_grant_id UNIQUE (grading_grant_id);
 
 
 --
@@ -6473,6 +6586,13 @@ CREATE TRIGGER coding_hosted_assignment_guard BEFORE DELETE OR UPDATE ON public.
 
 
 --
+-- Name: coding_hosted_private_tasks coding_hosted_private_task_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_private_task_guard BEFORE INSERT OR DELETE OR UPDATE ON public.coding_hosted_private_tasks FOR EACH ROW EXECUTE FUNCTION public.coding_hosted_private_task_guard();
+
+
+--
 -- Name: coding_private_v2_release_events coding_private_v2_release_events_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -7056,6 +7176,14 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 ALTER TABLE ONLY public.coding_hosted_assignments
     ADD CONSTRAINT fk_coding_hosted_assignments_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_hosted_private_tasks fk_coding_hosted_private_tasks_evaluation_id_coding_hos_3974; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_private_tasks
+    ADD CONSTRAINT fk_coding_hosted_private_tasks_evaluation_id_coding_hos_3974 FOREIGN KEY (evaluation_id) REFERENCES public.coding_hosted_assignments(evaluation_id) ON DELETE RESTRICT;
 
 
 --

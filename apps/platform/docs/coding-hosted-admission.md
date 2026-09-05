@@ -51,7 +51,10 @@ prove live Hippius access, production KMS custody or candidate isolation.
 
 The validator route and bounded signed pending responses are described in
 `docs/coding-hosted-control-v2.md` at the repository root. Next integration:
-authenticated operator provisioning; task-scoped grants tied to these attempts; Platform worker launch,
+authenticated operator provisioning; Platform worker launch,
 patch freeze, pristine grading and evidence finalization; then signed terminal
 receipts and acknowledgements. These steps must preserve this irreversible start
 boundary and keep private data away from validator hosts.
+
+The injected task-scoped grant store and patch-freeze ledger are now described
+in `coding-hosted-private-grants.md`; they remain unavailable to validator routes.

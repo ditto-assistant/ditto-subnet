@@ -14,6 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.coding_hosted import HostedCodingRequest, hosted_signing_bytes
+from ditto.api_models.coding_private_v2_registry import (
+    CodingPrivateV2PublicationReceipt,
+    CodingPrivateV2RegistrationAuthority,
+)
 from ditto.db.models import Agent, CodingHostedAssignment
 from ditto.db.queries.coding_hosted_admission import (
     HostedAdmissionError,
@@ -37,10 +41,19 @@ VALIDATOR = bittensor.Keypair.create_from_uri("//Alice")
 
 
 async def _seed(
-    maker: async_sessionmaker[AsyncSession], *, approve: bool = True
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    approve: bool = True,
+    registration_bundle: tuple[
+        CodingPrivateV2RegistrationAuthority, CodingPrivateV2PublicationReceipt
+    ]
+    | None = None,
 ) -> HostedAssignmentAuthority:
-    receipt = _publication_receipt(Ed25519PrivateKey.generate())
-    registration = _registration(receipt)
+    if registration_bundle is None:
+        receipt = _publication_receipt(Ed25519PrivateKey.generate())
+        registration = _registration(receipt)
+    else:
+        registration, receipt = registration_bundle
     agent_id = uuid4()
     now = datetime.now(UTC)
     async with maker() as session, session.begin():
