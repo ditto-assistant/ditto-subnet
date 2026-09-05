@@ -58,7 +58,7 @@ for candidate in {0..7}; do
     --argjson expires_at_epoch "$(( $(preview_now_epoch) + lease_ttl_seconds ))" \
     '{schema:1,slot:$slot,pr:$pr,sha:$sha,profile:$profile,created_at_epoch:$created_at_epoch,expires_at_epoch:$expires_at_epoch}' \
     >"$lease_file"
-  if gcloud storage cp --if-generation-match=0 "$lease_file" "$uri" 2>/dev/null; then
+  if gcloud storage cp --if-generation-match=0 "$lease_file" "$uri" >/dev/null 2>&1; then
     slot="$candidate"
     break
   fi
@@ -128,7 +128,7 @@ jq -n \
   --argjson expires_at_epoch "$(( $(preview_now_epoch) + lease_ttl_seconds ))" \
   '{schema:1,slot:$slot,pr:$pr,sha:$sha,profile:$profile,instance:$instance,ip:$ip,dashboard_url:$dashboard_url,platform_url:$platform_url,backroom_url:$backroom_url,ready:$ready,created_at_epoch:$created_at_epoch,expires_at_epoch:$expires_at_epoch}' \
   >"$lease_file"
-gcloud storage cp "$lease_file" "$(preview_lease_uri "$slot")"
+gcloud storage cp "$lease_file" "$(preview_lease_uri "$slot")" >/dev/null
 
 jq -n --argjson slot "$slot" --argjson ready "$ready" \
   --arg dashboard_url "$dashboard_url" --arg platform_url "$platform_url" --arg backroom_url "$backroom_url" \

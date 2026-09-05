@@ -5,6 +5,7 @@ COPY apps/backroom/package.json apps/backroom/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --ignore-scripts
 COPY apps/backroom/ ./
 COPY preview/cloud/backroom.wrangler.jsonc ./wrangler.preview.jsonc
+COPY preview/cloud/backroom-entrypoint.sh /usr/local/bin/backroom-preview
 RUN pnpm build
 EXPOSE 3000
-CMD ["pnpm", "exec", "wrangler", "dev", "--config", "wrangler.preview.jsonc", "--ip", "0.0.0.0", "--port", "3000"]
+CMD ["/bin/sh", "/usr/local/bin/backroom-preview"]

@@ -2,6 +2,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
+runtime_diagnostics() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    docker compose -f preview/cloud/compose.yml ps >&2 || true
+    docker compose -f preview/cloud/compose.yml logs --no-color --tail=200 >&2 || true
+  fi
+  exit "$status"
+}
+trap runtime_diagnostics EXIT
+
 [[ "${PREVIEW_SHA:-}" =~ ^[0-9a-f]{40}$ ]]
 case "${PREVIEW_PROFILE:-}" in stack|stack-copy) ;; *) exit 2 ;; esac
 
@@ -32,3 +42,4 @@ fi
 
 docker compose -f preview/cloud/compose.yml up -d platform dashboard backroom preview-control gateway
 docker compose -f preview/cloud/compose.yml ps
+trap - EXIT

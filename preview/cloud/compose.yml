@@ -93,6 +93,11 @@ services:
       BACKROOM_PREVIEW_SHA: ${PREVIEW_SHA}
     depends_on:
       platform: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/', {signal: AbortSignal.timeout(5000)}).then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 8s
+      retries: 30
 
   preview-control:
     build:
@@ -141,7 +146,7 @@ services:
       platform: {condition: service_healthy}
       validator: {condition: service_healthy}
       dashboard: {condition: service_started}
-      backroom: {condition: service_started}
+      backroom: {condition: service_healthy}
     environment:
       PREVIEW_BASE_DOMAIN: ${PREVIEW_BASE_DOMAIN}
       PREVIEW_SHA: ${PREVIEW_SHA}
