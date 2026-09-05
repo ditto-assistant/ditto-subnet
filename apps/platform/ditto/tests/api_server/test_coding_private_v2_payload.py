@@ -72,7 +72,33 @@ def _bound_fixture(root: Path) -> tuple[Path, Path]:
     for index in range(50):
         group_id = f"private-group-{index:03d}"
         group = groups_root / group_id
-        _write_text(group / "snapshot" / "app.py", f"print({index})\n")
+        workspace = group / "snapshot" / "workspace"
+        _write_text(workspace / "app.py", f"print({index})\n")
+        entries = [
+            {
+                "path": "app.py",
+                "mode": 0o644,
+                "sha256": hashlib.sha256(
+                    (workspace / "app.py").read_bytes()
+                ).hexdigest(),
+                "size_bytes": (workspace / "app.py").stat().st_size,
+            }
+        ]
+        snapshot_tree_sha = hashlib.sha256(
+            coding_canonical_json_bytes(
+                entries, maximum_bytes=4 << 20, label="snapshot"
+            )
+        ).hexdigest()
+        snapshot_manifest_sha = _write_json(
+            group / "snapshot" / "manifest.json",
+            {
+                "schema": "dittobench-coding-sanitized-snapshot-v2",
+                "files": entries,
+                "source_tree_sha256": snapshot_tree_sha,
+                "snapshot_tree_sha256": snapshot_tree_sha,
+                "excluded_root_entries": [],
+            },
+        )
         _write_text(group / "grader" / "test_app.py", f"assert {index} >= 0\n")
         issue_sha = _write_json(group / "issue.json", {"title": f"issue-{index}"})
         runtime_sha = _write_json(
@@ -103,6 +129,7 @@ def _bound_fixture(root: Path) -> tuple[Path, Path]:
                 "runtime_policy_sha256": runtime_sha,
                 "resource_profile_sha256": resource_sha,
                 "visible_issue_sha256": issue_sha,
+                "snapshot_manifest_sha256": snapshot_manifest_sha,
             },
         )
         groups.append(
@@ -300,3 +327,19 @@ def test_private_v2_payload_rejects_catalog_binding_drift(
     _write_json(payload_dir / "payload-authority.json", authority)
     with pytest.raises(PrivateV2PayloadError, match="catalog.*drifted"):
         verify_private_v2_payload(payload_dir)
+
+
+def test_private_payload_rejects_snapshot_modes_after_export(tmp_path: Path) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    release, groups = _bound_fixture(protected)
+    compile_private_catalog_v2(
+        release_authority=release, groups_root=groups, output=protected / "catalog"
+    )
+    (groups / "private-group-000/snapshot/workspace/app.py").chmod(0o600)
+    with pytest.raises(PrivateV2PayloadError, match="snapshot capsule"):
+        build_private_v2_payload(
+            catalog_directory=protected / "catalog",
+            groups_root=groups,
+            output=protected / "payload",
+        )

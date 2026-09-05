@@ -20,6 +20,21 @@ audit-report digests, object plaintext/ciphertext digests, wrapping-key digest,
 and `weight_eligible=false`. Any missing audit, duplicate group, opaque-ID
 collision, unbalanced condition group, or mismatched object digest fails closed.
 
+## Visible snapshot capsule
+
+The `visible_bundle` is an uncompressed tar of a sanitized snapshot v2 capsule:
+one canonical `manifest.json` plus its declared files below `workspace/`.
+The repository root used by execution is the validated `workspace/` directory,
+not the enclosing capsule. A package must not guess between alternative roots.
+
+Preparation binds the snapshot manifest to the frozen group manifest and checks
+its declared paths, lengths, hashes, normalized modes and tree identity against
+the archive. Verification repeats these checks after reading the stored payload.
+Missing/extra files, duplicate paths, links, unsafe paths and mode drift fail
+closed. Keeping a parent directory private does not justify changing normalized
+workspace modes after snapshot export; confidentiality belongs to protected
+staging and encryption, while the capsule manifest binds execution metadata.
+
 The offline curator alone may invoke the existing encryption and publication
 commands. Platform, validators, miners, executors, and models receive no
 curator credential, wrapping private key, or reusable Hippius capability.
