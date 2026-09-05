@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.213.0 (2026-09-05)
+
+### Features
+
+- **coding**: Verify hosted request and result projections
+  ([#1640](https://github.com/ditto-assistant/ditto-subnet/pull/1640),
+  [`76d5a84`](https://github.com/ditto-assistant/ditto-subnet/commit/76d5a8429c217b32766a5129edd2cd81d5fec238))
+
+
 ## v0.212.0 (2026-09-05)
 
 ### Features
