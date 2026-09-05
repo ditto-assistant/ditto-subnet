@@ -877,12 +877,12 @@ def _safe_credential(value: HippiusProbeCredential) -> bool:
 def _safe_scalar(value: str, *, maximum_bytes: int) -> bool:
     return (
         bool(value)
-        and len(value.encode()) <= maximum_bytes
         and not any(
             character.isspace()
             or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
             for character in value
         )
+        and len(value.encode()) <= maximum_bytes
     )
 
 

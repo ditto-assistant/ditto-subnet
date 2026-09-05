@@ -402,6 +402,11 @@ async def test_retrieval_rejects_ciphertext_ticket_and_registration_drift(
             authority=_ticket(release, coding_run_id="coding-run\u200b-private-001"),
             now=datetime(2026, 9, 2, 16, 30, tzinfo=UTC),
         )
+    with pytest.raises(HippiusPrivateInputRetrievalIntegrity, match="ticket authority"):
+        await retriever.get_task_material(
+            authority=_ticket(release, coding_run_id="coding-run\ud800-private-001"),
+            now=datetime(2026, 9, 2, 16, 30, tzinfo=UTC),
+        )
 
 
 async def test_retriever_rejects_receipt_and_runtime_authority_drift(
