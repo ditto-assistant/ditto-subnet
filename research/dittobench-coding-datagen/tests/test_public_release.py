@@ -5,6 +5,7 @@ import tarfile
 from pathlib import Path
 
 import pytest
+from legacy_pack import legacy_practice_pack
 
 from dittobench_coding_datagen.model import CorpusError
 from dittobench_coding_datagen.public_release import (
@@ -13,7 +14,7 @@ from dittobench_coding_datagen.public_release import (
 )
 
 ROOT = Path(__file__).parents[1]
-PACK = ROOT / "practice/v1"
+PACK = legacy_practice_pack()
 
 
 def _artifact(output: Path, suffix: str) -> Path:

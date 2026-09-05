@@ -110,6 +110,47 @@ def verify_public_v2_release(*, archive: Path, descriptor: Path) -> dict[str, An
     return {str(key): item for key, item in value.items()}
 
 
+def unpack_public_v2_release(
+    *, archive: Path, descriptor: Path, output: Path
+) -> dict[str, Any]:
+    """Verify a frozen copy before extracting into a new local practice folder."""
+
+    if output.exists() or output.is_symlink() or not output.parent.is_dir():
+        raise CorpusError("public practice output must be new with an existing parent")
+    if archive.is_symlink() or not archive.is_file():
+        raise CorpusError("public v2 release artifact is unsafe")
+    if descriptor.is_symlink() or not descriptor.is_file():
+        raise CorpusError("public v2 release artifact is unsafe")
+    if (
+        archive.stat().st_size > _MAX_ARCHIVE_BYTES
+        or descriptor.stat().st_size > _MAX_DESCRIPTOR_BYTES
+    ):
+        raise CorpusError("public v2 release exceeds bounds")
+    with tempfile.TemporaryDirectory(
+        prefix=".coding-unpack-", dir=output.parent
+    ) as raw:
+        scratch = Path(raw)
+        frozen_archive = scratch / "release.tar.gz"
+        frozen_descriptor = scratch / "release.json"
+        shutil.copyfile(archive, frozen_archive, follow_symlinks=False)
+        shutil.copyfile(descriptor, frozen_descriptor, follow_symlinks=False)
+        value = verify_public_v2_release(
+            archive=frozen_archive, descriptor=frozen_descriptor
+        )
+        staged = scratch / "pack"
+        _extract_archive(
+            frozen_archive, destination=staged, release_id=value["public_release_id"]
+        )
+        validate_public_v2_pack(staged)
+        # Never overwrite an existing destination, even if it appeared while verifying.
+        output.mkdir()
+        for child in sorted(
+            staged.iterdir(), key=lambda path: path.name == "manifest.json"
+        ):
+            os.rename(child, output / child.name)
+    return value
+
+
 def _write_archive(pack: Path, archive: Path, *, release_id: str) -> None:
     with (
         archive.open("xb") as raw,
