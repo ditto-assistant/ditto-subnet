@@ -3,6 +3,9 @@
 -- evidence, payments, request bodies, bearer digests, signatures, or operator
 -- identity. Keep this policy explicit and fail closed in sanitize-snapshot.sh.
 SET session_replication_role = replica;
+-- Production installs trusted contrib extensions in this dedicated schema.
+-- Keep public for local fixtures and pg_catalog for built-in functions.
+SET search_path = public, extensions, pg_catalog;
 
 DO $policy$
 DECLARE
