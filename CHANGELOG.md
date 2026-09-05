@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.215.0 (2026-09-05)
+
+### Bug Fixes
+
+- **coding**: Bind private v2 issues and payloads to catalog leaves
+  ([#1634](https://github.com/ditto-assistant/ditto-subnet/pull/1634),
+  [`435c7d2`](https://github.com/ditto-assistant/ditto-subnet/commit/435c7d27b276505d4060abfe001c7c0086c0ad1c))
+
+### Features
+
+- **coding**: Retrieve private v2 inputs through scoped grants
+  ([#1641](https://github.com/ditto-assistant/ditto-subnet/pull/1641),
+  [`ba9ee9d`](https://github.com/ditto-assistant/ditto-subnet/commit/ba9ee9dd9049ebadac9e2085bc683b5849062fe3))
+
+
 ## v0.214.0 (2026-09-05)
 
 ### Features
