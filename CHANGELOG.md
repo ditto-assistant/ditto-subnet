@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.216.0 (2026-09-05)
+
+### Features
+
+- **coding**: Persist hosted admission and one-way attempt starts
+  ([#1643](https://github.com/ditto-assistant/ditto-subnet/pull/1643),
+  [`7e47ab6`](https://github.com/ditto-assistant/ditto-subnet/commit/7e47ab69a7cce7faac40cdbf6108d0f7bd213c08))
+
+
 ## v0.215.0 (2026-09-05)
 
 ### Bug Fixes
