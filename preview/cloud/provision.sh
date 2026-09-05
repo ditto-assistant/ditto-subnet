@@ -111,7 +111,7 @@ platform_url="https://platform.${base}"
 backroom_url="https://backroom.${base}"
 
 ready=false
-for _ in {1..90}; do
+for _ in {1..210}; do
   if curl --fail --silent --show-error --max-time 5 "$platform_url/__preview/health" \
     | jq -e --arg sha "$PREVIEW_SHA" '.status == "ok" and .sha == $sha' >/dev/null 2>&1; then
     ready=true
@@ -134,5 +134,5 @@ gcloud storage cp "$lease_file" "$(preview_lease_uri "$slot")" >&2
 jq -n --argjson slot "$slot" --argjson ready "$ready" \
   --arg dashboard_url "$dashboard_url" --arg platform_url "$platform_url" --arg backroom_url "$backroom_url" \
   '{slot:$slot,ready:$ready,dashboard_url:$dashboard_url,platform_url:$platform_url,backroom_url:$backroom_url}'
-[ "$ready" = true ] || preview_die "preview did not become healthy within 15 minutes"
+[ "$ready" = true ] || preview_die "preview did not become healthy within 35 minutes"
 completed=true
