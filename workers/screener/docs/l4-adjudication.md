@@ -48,9 +48,16 @@ line you have read" is therefore enforced rather than requested, and it
 subsumes a bounds check: a citation past the end of a file was necessarily
 never served either.
 
-Any refusal produces `decision: "escalate"`. The hold stands and an operator
-sees it, so a malformed adjudication costs latency and can never produce a
-wrong release or a wrong ban.
+Any refusal produces `decision: "escalate"`. When the ledger is empty, that
+escalate is terminal: the policy module quarantines, and an operator sees the
+hold. An empty-ledger clear is not "no proven breach" — it is unseen source,
+and it is how scored agents were admitted in ~80s with zero L2 notes.
+
+When the court recorded notes and then refused (timeout, malformed citations,
+unavailable model), the host still converts that escalate into a
+`no_proven_breach_before_deadline` clear. Reject remains fail-closed: it
+needs verified executable citations. A miner is not banned because the
+reviewer timed out after inspecting named locations.
 
 ## Closed decision vocabulary
 

@@ -21,9 +21,12 @@ than model size. The host checks every citation against the archive AND
 against what this adjudicator actually read, so a decision resting on a
 hallucinated or unread location is refused rather than executed.
 
-A refused decision settles clear under the published no-proven-breach rule.
-There is no path here that rejects on evidence the host could not verify, and
-a bounded automated court can never strand a submission in an operator hold.
+A refused decision with retained notes settles clear under the published
+no-proven-breach rule: there is no path here that rejects on evidence the
+host could not verify. A refusal with an empty ledger is different. Nothing
+was inspected, so "no proven breach" is not a finding — the hold stands and
+an operator sees it. That is the only way a bounded court can fail closed
+when L1/L2 recorded zero notes.
 """
 
 from __future__ import annotations
@@ -80,8 +83,8 @@ _MAX_STEPS = 128
 _MAX_COMPLETION_TOKENS = 6_000
 # A provider request must never consume an otherwise healthy screening lease.
 # The court can resume its compacted ledger on one transient retry; after that,
-# the published no-proven-breach rule settles the review rather than stranding
-# the miner behind an unresponsive model endpoint.
+# a refusal with retained notes settles under no-proven-breach, and a refusal
+# with an empty ledger holds for an operator instead of admitting unseen source.
 # The decision-only court emits one tool call over preloaded evidence.  Keep a
 # healthy completion responsive and reserve one equal slice for a new
 # connection; an unresponsive provider must settle from retained notes, not
@@ -387,14 +390,17 @@ def _settle_refusal(
     notes: int,
     policy_version: int,
 ) -> SourceReviewAdjudication:
-    """Turn a refused court output into the only fair terminal fallback.
+    """Turn a refused court output into the terminal fallback for that ledger.
 
-    A missing, timed-out, exhausted, or malformed court result proves no miner
-    breach.  Reject still requires verified executable citations; when that
-    proof is absent, the published rule is to clear rather than park the
-    submission indefinitely or punish the miner for reviewer infrastructure.
+    Reject still requires verified executable citations. When notes exist and
+    the court cannot certify a breach, no-proven-breach clears rather than
+    punishing the miner for reviewer infrastructure. When the ledger is empty,
+    nothing was inspected: keep ``escalate`` so the policy module quarantines
+    instead of stamping ``adjudicated-source-review-clear`` on unseen source.
     """
     if adjudication.decision != "escalate":
+        return adjudication
+    if notes == 0:
         return adjudication
     refusal_code = adjudication.escalation_code or "court-refused"
     return SourceReviewAdjudication(
@@ -611,7 +617,7 @@ class SourceReviewAdjudicator:
         if not notes and error_code in _BUDGET_TERMINATED_REVIEW_CODES:
             # An upstream review consumed its discovery budget without
             # recording evidence. There is nothing for the court to decide;
-            # settle rather than spend its reserve rediscovering the archive.
+            # hold rather than admit unseen source or rediscover the archive.
             return _settle_refusal(
                 _escalate(
                     "adjudicator-no-evidence",
@@ -631,8 +637,9 @@ class SourceReviewAdjudicator:
             if not preloaded_evidence:
                 # The upstream layers retained a ledger but no usable source
                 # evidence. There is nothing for a court to decide; do not
-                # burn its reserve rediscovering the archive. This is still the
-                # terminal no-proven-breach adjudication, not a retry.
+                # burn its reserve rediscovering the archive. Empty usable
+                # evidence with a non-empty ledger still follows
+                # `_settle_refusal` (clear if notes exist, hold if they do not).
                 return _settle_refusal(
                     _escalate(
                         "adjudicator-no-evidence",
