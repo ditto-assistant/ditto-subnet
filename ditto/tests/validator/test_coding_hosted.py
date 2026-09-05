@@ -11,6 +11,7 @@ import pytest
 from ditto.api_models.coding_hosted import (
     HostedCodingRequest,
     HostedCodingResult,
+    HostedCodingStatus,
     hosted_message_digest,
     hosted_signing_bytes,
 )
@@ -19,6 +20,7 @@ from ditto.validator.coding_hosted import (
     HostedResultExpectation,
     verify_hosted_request,
     verify_hosted_result,
+    verify_hosted_status,
 )
 
 NOW = 1788590000
@@ -62,7 +64,7 @@ def _case() -> tuple[HostedCodingResult, HostedResultExpectation, bittensor.Keyp
     return result, expected, platform
 
 
-def _body(result: HostedCodingResult, **extra: object) -> bytes:
+def _body(result: HostedCodingResult | HostedCodingStatus, **extra: object) -> bytes:
     return (
         json.dumps(
             {**result.model_dump(mode="json", by_alias=True), **extra},
@@ -254,3 +256,43 @@ def test_platform_and_validator_use_identical_contract_and_verifier() -> None:
     assert (root / "ditto/validator/coding_hosted.py").read_bytes() == (
         root / "apps/platform/ditto/api_server/coding_hosted_verification.py"
     ).read_bytes()
+    assert (
+        hosted_message_digest(HostedCodingStatus.model_validate(vector["status"]))
+        == vector["status_signing_sha256"]
+    )
+
+
+def test_pending_status_is_signed_but_cannot_be_terminal_evidence() -> None:
+    result, expected, platform = _case()
+    status = HostedCodingStatus.model_validate(
+        {
+            **{
+                key: value
+                for key, value in result.model_dump(mode="json", by_alias=True).items()
+                if key not in {"schema", "outcome", "evidence_sha256"}
+            },
+            "schema": "dittobench-coding-hosted-status-v2",
+            "state": "admitted",
+        }
+    )
+    status = status.model_copy(
+        update={"signature": platform.sign(hosted_signing_bytes(status)).hex()}
+    )
+    keys = {platform.ss58_address: platform}
+    assert (
+        verify_hosted_status(
+            body=_body(status), expected=expected, trusted_verifiers=keys, now_unix=NOW
+        )
+        == status
+    )
+    with pytest.raises(HostedCodingVerificationError):
+        verify_hosted_result(
+            body=_body(status), expected=expected, trusted_verifiers=keys, now_unix=NOW
+        )
+    with pytest.raises(HostedCodingVerificationError):
+        verify_hosted_status(
+            body=_body(status, state="started"),
+            expected=expected,
+            trusted_verifiers=keys,
+            now_unix=NOW,
+        )

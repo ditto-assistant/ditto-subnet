@@ -1,7 +1,8 @@
 # Hosted Coding validator transport v2
 
 Status: opt-in HTTP adapter above the signed hosted control contract. It is not
-imported by the validator worker and does not activate a Platform route.
+imported by the validator worker. The corresponding Platform route remains
+disabled without explicit trusted-runtime signer injection.
 
 `HostedCodingTransport` accepts an operator-configured canonical HTTPS origin and
 independently provisioned Platform verification keys. It posts only the signed
@@ -18,8 +19,10 @@ the outgoing request expiry. It never automatically retries an operation.
 Only HTTP 200 with JSON, no-store and uncompressed content can carry a terminal
 receipt. Both declared and streamed body lengths are bounded to 8192 bytes, and
 the response signature, trusted signer, assignment, attempt and expiry must pass
-the shared verifier before a result is returned. Other HTTP statuses, including
-pending responses, are not terminal evidence. Future orchestration must handle
+the shared verifier before a result is returned. HTTP 202 requires a separately
+signed `HostedCodingStatus` and returns that distinct type, never terminal evidence.
+A status body under HTTP 200 or a terminal result under HTTP 202 is rejected.
+Other HTTP statuses are redacted transport errors. Future orchestration must handle
 durable admission and status polling separately, without rerolling an evaluation.
 
 Transport and verification failures have fixed redacted messages. They are
@@ -28,6 +31,7 @@ No response body or remote error details are logged or exposed by this module.
 
 Mock-transport tests cover signatures, redirects, header restrictions, actual
 stream size, timeout cancellation, preflight assignment mismatch and safe errors.
-They do not prove a deployed endpoint or independent execution. The server route,
-durable replay ledger, host key provisioning and worker wiring remain separate
-reviewed steps. All accepted contract receipts are shadow-only and non-weightable.
+They do not prove a deployed endpoint or independent execution. Server admission
+uses the durable replay ledger, but host key provisioning, terminal finalization
+and worker wiring remain separate reviewed steps. All accepted contract receipts
+are shadow-only and non-weightable.

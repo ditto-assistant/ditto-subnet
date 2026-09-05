@@ -5215,6 +5215,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/coding-hosted/control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Control */
+        post: operations["control_api_v1_validator_coding_hosted_control_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/coding-shadow/authoring-freeze": {
         parameters: {
             query?: never;
@@ -15029,6 +15046,126 @@ export interface components {
              * @description Total RAM in MiB.
              */
             memory_total_mib: number;
+        };
+        /**
+         * HostedCodingRequest
+         * @description A validator can act on an assigned handle without supplying task data.
+         */
+        HostedCodingRequest: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Assignment Sha256 */
+            assignment_sha256: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 2;
+            /**
+             * Evaluation Id
+             * Format: uuid
+             */
+            evaluation_id: string;
+            /** Expires At Unix */
+            expires_at_unix: number;
+            /** Issued At Unix */
+            issued_at_unix: number;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "evaluate" | "status" | "acknowledge";
+            /** Policy Sha256 */
+            policy_sha256: string;
+            /** Result Sha256 */
+            result_sha256: string | null;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-hosted-request-v2";
+            /**
+             * Shadow Only
+             * @constant
+             */
+            shadow_only: true;
+            /** Signature */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * HostedCodingStatus
+         * @description Signed pending projection; never terminal evidence or an object grant.
+         */
+        HostedCodingStatus: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Assignment Sha256 */
+            assignment_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 2;
+            /**
+             * Evaluation Id
+             * Format: uuid
+             */
+            evaluation_id: string;
+            /** Execution Profile Sha256 */
+            execution_profile_sha256: string;
+            /** Expires At Unix */
+            expires_at_unix: number;
+            /** Grading Profile Sha256 */
+            grading_profile_sha256: string;
+            /** Issued At Unix */
+            issued_at_unix: number;
+            /** Platform Hotkey */
+            platform_hotkey: string;
+            /** Policy Sha256 */
+            policy_sha256: string;
+            /** Request Sha256 */
+            request_sha256: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-hosted-status-v2";
+            /**
+             * Shadow Only
+             * @constant
+             */
+            shadow_only: true;
+            /** Signature */
+            signature: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "assigned" | "admitted" | "started";
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
         };
         /** InferenceCalibrationRoute */
         InferenceCalibrationRoute: {
@@ -35105,6 +35242,65 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    control_api_v1_validator_coding_hosted_control_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HostedCodingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostedCodingStatus"];
+                };
+            };
+            /** @description Validator identity is not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request replay or assignment conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Streamed request exceeds the byte limit. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed request; input values are not returned. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Hosted control is disabled or unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

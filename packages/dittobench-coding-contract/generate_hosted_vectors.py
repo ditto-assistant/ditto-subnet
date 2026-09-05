@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT))
 from ditto.api_models.coding_hosted import (  # noqa: E402
     HostedCodingRequest,
     HostedCodingResult,
+    HostedCodingStatus,
     hosted_message_digest,
 )
 
@@ -53,6 +54,17 @@ def vector() -> bytes:
             "outcome": "completed",
         }
     )
+    status = HostedCodingStatus.model_validate(
+        {
+            **{
+                key: value
+                for key, value in result.model_dump(mode="json", by_alias=True).items()
+                if key not in {"schema", "outcome", "evidence_sha256"}
+            },
+            "schema": "dittobench-coding-hosted-status-v2",
+            "state": "admitted",
+        }
+    )
     data = {
         "schema": "dittobench-coding-hosted-control-vectors-v2",
         "synthetic_only": True,
@@ -60,6 +72,8 @@ def vector() -> bytes:
         "request_signing_sha256": hosted_message_digest(request),
         "result": result.model_dump(mode="json", by_alias=True),
         "result_signing_sha256": hosted_message_digest(result),
+        "status": status.model_dump(mode="json", by_alias=True),
+        "status_signing_sha256": hosted_message_digest(status),
     }
     return (json.dumps(data, sort_keys=True, separators=(",", ":")) + "\n").encode()
 

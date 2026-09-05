@@ -111,7 +111,42 @@ class HostedCodingResult(_HostedEnvelope):
         return self
 
 
-def hosted_signing_bytes(value: HostedCodingRequest | HostedCodingResult) -> bytes:
+class HostedCodingStatus(_HostedEnvelope):
+    """Signed pending projection; never terminal evidence or an object grant."""
+
+    schema_name: Literal["dittobench-coding-hosted-status-v2"] = Field(alias="schema")
+    coding_contract_version: Literal[2]
+    shadow_only: Literal[True]
+    weight_eligible: Literal[False]
+    evaluation_id: UUID
+    attempt_id: UUID
+    validator_hotkey: Hotkey
+    platform_hotkey: Hotkey
+    request_sha256: Digest
+    artifact_sha256: Digest
+    assignment_sha256: Digest
+    policy_sha256: Digest
+    execution_profile_sha256: Digest
+    grading_profile_sha256: Digest
+    state: Literal["assigned", "admitted", "started"]
+    issued_at_unix: Timestamp
+    expires_at_unix: Timestamp
+    signature: Signature
+
+    @model_validator(mode="after")
+    def bounded_authority(self) -> HostedCodingStatus:
+        if (
+            self.evaluation_id.int == 0
+            or self.attempt_id.int == 0
+            or not 0 < self.expires_at_unix - self.issued_at_unix <= 120
+        ):
+            raise ValueError("hosted Coding status authority is invalid")
+        return self
+
+
+def hosted_signing_bytes(
+    value: HostedCodingRequest | HostedCodingResult | HostedCodingStatus,
+) -> bytes:
     # Revalidation prevents model_copy/model_construct from bypassing typed gates.
     checked = type(value).model_validate(value.model_dump(mode="json", by_alias=True))
     fields = checked.model_dump(mode="json", by_alias=True)
@@ -128,5 +163,7 @@ def hosted_signing_bytes(value: HostedCodingRequest | HostedCodingResult) -> byt
     ).encode("utf-8")
 
 
-def hosted_message_digest(value: HostedCodingRequest | HostedCodingResult) -> str:
+def hosted_message_digest(
+    value: HostedCodingRequest | HostedCodingResult | HostedCodingStatus,
+) -> str:
     return hashlib.sha256(hosted_signing_bytes(value)).hexdigest()

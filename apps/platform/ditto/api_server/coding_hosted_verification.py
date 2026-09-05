@@ -5,17 +5,19 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypeVar
 from uuid import UUID
 
 from ditto.api_models.coding_hosted import (
     HostedCodingRequest,
     HostedCodingResult,
+    HostedCodingStatus,
     hosted_message_digest,
     hosted_signing_bytes,
 )
 
 MAX_HOSTED_RESULT_BYTES = 8192
+_Receipt = TypeVar("_Receipt", HostedCodingResult, HostedCodingStatus)
 
 
 class HostedCodingVerificationError(ValueError):
@@ -49,17 +51,51 @@ def verify_hosted_result(
 ) -> HostedCodingResult:
     """Accept only a canonical projection signed by an out-of-band trusted key.
 
-    No HTTP client or default worker imports this module. The eventual client
-    must bound streamed bytes and enforce no-store/TLS before calling it.
+    The HTTP client must bound streamed bytes and enforce no-store/TLS before
+    calling it. No default worker consumes these shadow receipts.
     """
 
+    return _verify_projection(
+        body=body,
+        expected=expected,
+        trusted_verifiers=trusted_verifiers,
+        now_unix=now_unix,
+        model=HostedCodingResult,
+    )
+
+
+def verify_hosted_status(
+    *,
+    body: bytes,
+    expected: HostedResultExpectation,
+    trusted_verifiers: Mapping[str, SignatureVerifier],
+    now_unix: int,
+) -> HostedCodingStatus:
+    """Verify a short-lived pending projection, never a terminal result."""
+    return _verify_projection(
+        body=body,
+        expected=expected,
+        trusted_verifiers=trusted_verifiers,
+        now_unix=now_unix,
+        model=HostedCodingStatus,
+    )
+
+
+def _verify_projection(  # noqa: UP047 - mirrored Platform source supports Python 3.11
+    *,
+    body: bytes,
+    expected: HostedResultExpectation,
+    trusted_verifiers: Mapping[str, SignatureVerifier],
+    now_unix: int,
+    model: type[_Receipt],
+) -> _Receipt:
     if type(now_unix) is not int or not body or len(body) > MAX_HOSTED_RESULT_BYTES:
         raise HostedCodingVerificationError("hosted Coding response bounds failed")
     verifier = trusted_verifiers.get(expected.platform_hotkey)
     if verifier is None:
         raise HostedCodingVerificationError("hosted Coding signer is not trusted")
     try:
-        result = HostedCodingResult.model_validate_json(body)
+        result = model.model_validate_json(body)
         canonical = (
             json.dumps(
                 result.model_dump(mode="json", by_alias=True),
