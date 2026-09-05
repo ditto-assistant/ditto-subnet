@@ -69,7 +69,9 @@ def _publication_receipt(
     projection = {
         "schema": "dittobench-coding-private-v2-publication-v1",
         "source_sha": "a" * 40,
-        "checked_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "checked_at": datetime.now(UTC)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
         "provider": "hippius",
         "probe_receipt_payload_sha256": "77" * 32,
         "private_input_authority_sha256": "88" * 32,

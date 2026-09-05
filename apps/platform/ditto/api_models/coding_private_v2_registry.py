@@ -59,7 +59,7 @@ class CodingPrivateV2PublicationReceipt(CodingEvaluationModel):
         alias="schema"
     )
     source_sha: SourceSha
-    checked_at: Annotated[str, Field(min_length=21, max_length=40)]
+    checked_at: Annotated[str, Field(min_length=20, max_length=40)]
     provider: Literal["hippius"]
     probe_receipt_payload_sha256: Sha256
     private_input_authority_sha256: Sha256
