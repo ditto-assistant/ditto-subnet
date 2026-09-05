@@ -173,6 +173,23 @@ def test_oversized_and_duplicate_field_results_fail_safely() -> None:
         assert "PRIVATE_MARKER" not in str(caught.value)
 
 
+def test_verifier_backend_errors_are_redacted() -> None:
+    class BrokenVerifier:
+        def verify(self, data: bytes, signature: bytes) -> bool:
+            assert data and signature
+            raise RuntimeError("PRIVATE_MARKER")
+
+    result, expected, platform = _case()
+    with pytest.raises(HostedCodingVerificationError) as caught:
+        verify_hosted_result(
+            body=_body(result),
+            expected=expected,
+            trusted_verifiers={platform.ss58_address: BrokenVerifier()},
+            now_unix=NOW,
+        )
+    assert "PRIVATE_MARKER" not in str(caught.value)
+
+
 def test_request_drops_unknown_fields_and_binds_nonce() -> None:
     validator = bittensor.Keypair.create_from_uri("//Bob")
     request = HostedCodingRequest.model_validate(

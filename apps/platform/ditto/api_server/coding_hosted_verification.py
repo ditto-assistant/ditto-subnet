@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
-from pydantic import ValidationError
-
 from ditto.api_models.coding_hosted import (
     HostedCodingRequest,
     HostedCodingResult,
@@ -87,7 +85,7 @@ def verify_hosted_result(
             hosted_signing_bytes(result), bytes.fromhex(result.signature)
         ):
             raise ValueError("signature")
-    except (ValueError, TypeError, ValidationError):
+    except Exception:
         raise HostedCodingVerificationError(
             "hosted Coding result verification failed"
         ) from None
@@ -117,7 +115,7 @@ def verify_hosted_request(
             hosted_signing_bytes(request), bytes.fromhex(request.signature)
         ):
             raise ValueError("signature")
-    except (ValueError, TypeError, ValidationError):
+    except Exception:
         raise HostedCodingVerificationError(
             "hosted Coding request verification failed"
         ) from None
