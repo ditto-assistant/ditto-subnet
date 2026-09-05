@@ -177,3 +177,26 @@ def test_private_v2_payload_rejects_memory_drift(tmp_path: Path) -> None:
             groups_root=groups,
             output=protected / "payload",
         )
+
+
+def test_private_v2_payload_rejects_leftover_objects(tmp_path: Path) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    release, groups = _bound_fixture(protected)
+    compile_private_catalog_v2(
+        release_authority=release,
+        groups_root=groups,
+        output=protected / "catalog",
+    )
+    payload = build_private_v2_payload(
+        catalog_directory=protected / "catalog",
+        groups_root=groups,
+        output=protected / "payload",
+    )
+    extra = protected / "payload" / "objects" / f"{'0' * 64}.bin"
+    extra.write_bytes(b"leftover")
+    extra.chmod(0o600)
+    with pytest.raises(PrivateV2PayloadError, match="objects drifted"):
+        verify_private_v2_payload(protected / "payload")
+    extra.unlink()
+    assert verify_private_v2_payload(protected / "payload") == payload

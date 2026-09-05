@@ -68,17 +68,12 @@ def prepare_private_v2_transport(
             raise PrivateV2TransportError("private v2 payload object drifted")
         key = secrets.token_bytes(_KEY_BYTES)
         nonce = secrets.token_bytes(_NONCE_BYTES)
-        aad = coding_canonical_json_bytes(
-            {
-                "schema": "dittobench-coding-private-v2-transport-aad-v1",
-                "payload_sha256": payload["payload_sha256"],
-                "catalog_sha256": payload["catalog_sha256"],
-                "plaintext_sha256": digest,
-                "plaintext_size_bytes": len(plaintext),
-                "wrapping_key_sha256": wrapping_sha,
-            },
-            maximum_bytes=16 << 10,
-            label="private v2 transport AAD",
+        aad = _aad_bytes(
+            payload_sha256=payload["payload_sha256"],
+            catalog_sha256=payload["catalog_sha256"],
+            plaintext_sha256=digest,
+            plaintext_size_bytes=len(plaintext),
+            wrapping_key_sha256=wrapping_sha,
         )
         aad_sha = hashlib.sha256(aad).hexdigest()
         ciphertext = AESGCM(key).encrypt(nonce, plaintext, aad)
@@ -224,12 +219,32 @@ def verify_private_v2_transport(directory: Path) -> dict[str, Any]:
             <= len(decoded_wrapped)
             <= _MAX_WRAPPED_KEY_BYTES
             or not _sha256(aad_sha)
+            or hashlib.sha256(
+                _aad_bytes(
+                    payload_sha256=manifest["payload_sha256"],
+                    catalog_sha256=manifest["catalog_sha256"],
+                    plaintext_sha256=digest,
+                    plaintext_size_bytes=plaintext_size,
+                    wrapping_key_sha256=manifest["wrapping_key_sha256"],
+                )
+            ).hexdigest()
+            != aad_sha
         ):
             raise PrivateV2TransportError("private v2 transport object is invalid")
         read_private_v2_transport_ciphertext(directory=directory, item=item)
         seen.add(digest)
         seen_ciphertexts.add(ciphertext_sha)
         previous_digest = digest
+    objects_dir = directory / "objects"
+    if objects_dir.is_symlink() or not objects_dir.is_dir():
+        raise PrivateV2TransportError("private v2 transport objects are invalid")
+    on_disk: set[str] = set()
+    for path in objects_dir.iterdir():
+        if path.is_symlink() or not path.is_file() or not path.name.endswith(".bin"):
+            raise PrivateV2TransportError("private v2 transport objects drifted")
+        on_disk.add(path.name[: -len(".bin")])
+    if on_disk != seen:
+        raise PrivateV2TransportError("private v2 transport objects drifted")
     return manifest
 
 
@@ -260,6 +275,28 @@ def read_private_v2_transport_ciphertext(
     ):
         raise PrivateV2TransportError("private v2 transport ciphertext drifted")
     return ciphertext
+
+
+def _aad_bytes(
+    *,
+    payload_sha256: str,
+    catalog_sha256: str,
+    plaintext_sha256: str,
+    plaintext_size_bytes: int,
+    wrapping_key_sha256: str,
+) -> bytes:
+    return coding_canonical_json_bytes(
+        {
+            "schema": "dittobench-coding-private-v2-transport-aad-v1",
+            "payload_sha256": payload_sha256,
+            "catalog_sha256": catalog_sha256,
+            "plaintext_sha256": plaintext_sha256,
+            "plaintext_size_bytes": plaintext_size_bytes,
+            "wrapping_key_sha256": wrapping_key_sha256,
+        },
+        maximum_bytes=16 << 10,
+        label="private v2 transport AAD",
+    )
 
 
 def _canonical_object(path: Path) -> dict[str, Any]:
