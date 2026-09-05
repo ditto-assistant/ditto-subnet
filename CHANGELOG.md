@@ -2,6 +2,57 @@
 
 <!-- version list -->
 
+## v0.210.0 (2026-09-05)
+
+### Bug Fixes
+
+- **preview**: Allow slow cold-stack bootstraps
+  ([#1631](https://github.com/ditto-assistant/ditto-subnet/pull/1631),
+  [`aadebbd`](https://github.com/ditto-assistant/ditto-subnet/commit/aadebbdf12fff455c06e2e3c3307d1aca109711d))
+
+- **preview**: Complete isolated stack bootstrap
+  ([#1620](https://github.com/ditto-assistant/ditto-subnet/pull/1620),
+  [`5d73544`](https://github.com/ditto-assistant/ditto-subnet/commit/5d735445c64bd4dc021c25a1dc1cc3b6a3e3c666))
+
+- **preview**: Copy snapshot archives without stdout framing
+  ([#1621](https://github.com/ditto-assistant/ditto-subnet/pull/1621),
+  [`faedbb7`](https://github.com/ditto-assistant/ditto-subnet/commit/faedbb783058323436ea1fc9fd3cb9720d90e224))
+
+- **preview**: Exclude sensitive rows during restore
+  ([#1626](https://github.com/ditto-assistant/ditto-subnet/pull/1626),
+  [`4774046`](https://github.com/ditto-assistant/ditto-subnet/commit/4774046f6b6924f40ccabc15613602a9ba68ac64))
+
+- **preview**: Match production postgres archive version
+  ([#1623](https://github.com/ditto-assistant/ditto-subnet/pull/1623),
+  [`76a2423`](https://github.com/ditto-assistant/ditto-subnet/commit/76a242348ac98ea80e7e35c0d473247e6e26272c))
+
+- **preview**: Publish schema-only stack copies
+  ([#1627](https://github.com/ditto-assistant/ditto-subnet/pull/1627),
+  [`5863c8b`](https://github.com/ditto-assistant/ditto-subnet/commit/5863c8b1d56acc7f6a9b9d22b4e7805829d75ff3))
+
+- **preview**: Resolve production extension schema
+  ([#1628](https://github.com/ditto-assistant/ditto-subnet/pull/1628),
+  [`ee03d4f`](https://github.com/ditto-assistant/ditto-subnet/commit/ee03d4fd678fa6f701e3653d6f59f1ae2969070a))
+
+- **preview**: Restore snapshots with pgvector
+  ([#1625](https://github.com/ditto-assistant/ditto-subnet/pull/1625),
+  [`3a1a02f`](https://github.com/ditto-assistant/ditto-subnet/commit/3a1a02f37669c511b3f85990768b0b7d8b8d2612))
+
+- **preview**: Specify snapshot signing region
+  ([#1630](https://github.com/ditto-assistant/ditto-subnet/pull/1630),
+  [`fd6fac9`](https://github.com/ditto-assistant/ditto-subnet/commit/fd6fac9320fc0fe0672854b6452fd5d6056e3b3e))
+
+- **preview**: Wait for durable sanitizer database
+  ([#1622](https://github.com/ditto-assistant/ditto-subnet/pull/1622),
+  [`47104a7`](https://github.com/ditto-assistant/ditto-subnet/commit/47104a710e96e731c7ba4a3e2b89d59881e0c071))
+
+### Features
+
+- **coding**: Publish private v2 payload to Hippius
+  ([#1624](https://github.com/ditto-assistant/ditto-subnet/pull/1624),
+  [`a7aa077`](https://github.com/ditto-assistant/ditto-subnet/commit/a7aa077e286de0e31029042a20d16f4f54c0457f))
+
+
 ## v0.209.0 (2026-09-04)
 
 ### Bug Fixes
