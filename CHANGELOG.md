@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.213.1 (2026-09-05)
+
+### Bug Fixes
+
+- **coding**: Verify private v2 publication receipts on load
+  ([#1636](https://github.com/ditto-assistant/ditto-subnet/pull/1636),
+  [`c7d119d`](https://github.com/ditto-assistant/ditto-subnet/commit/c7d119d683e1b930b0f8359ebb277995cd46a61a))
+
+
 ## v0.213.0 (2026-09-05)
 
 ### Features
