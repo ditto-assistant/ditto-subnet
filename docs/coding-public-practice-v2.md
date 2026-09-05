@@ -1,8 +1,8 @@
 # Coding public practice v2
 
-Status: proposed shadow-only public practice contract. This document does not
-change Coding weights, emissions, private release selection, provider access,
-or deployment.
+Status: the ten-task repository archive and local workspace grading commands
+are implemented. Hosted v2 harness integration and public v2 certification
+remain pending. Local scores do not change Coding weights or emissions.
 
 ## Purpose
 
@@ -27,11 +27,13 @@ private-shadow admission: the exact screened artifact must already have a
 durable Tool + Memory core-qualification decision, then a claimed certification
 lease, before any private task.
 
-The planned replacement checks ten small public tasks into this repository and
-uses datagen for deterministic compilation and local execution. It replaces
-`coding-practice-3x3-v1` after its runner, CI and canary consumers migrate in the
-same replacement PR. That nine-task pack still exists today. Hugging Face
-publication is retired as part of the replacement, not a prerequisite for v2.
+The ten-task release is committed as a deterministic archive under
+`research/dittobench-coding-datagen/practice/v2`. Datagen verifies and unpacks it,
+prepares editable task workspaces, and grades individual tasks or the ten-task
+suite. The nine-task `coding-practice-3x3-v1` pack and Hugging Face publication
+workflow are removed. Legacy v1 tests generate temporary regression inputs,
+and a single unchanged capsule remains under `certification/v1` for protocol
+compatibility. See the [miner setup guide](../research/dittobench-coding-datagen/practice/v2/README.md).
 Private data is never a local-test source; its evaluation follows the
 [Platform-hosted private execution boundary](coding-platform-private-execution-v2.md).
 
@@ -69,7 +71,9 @@ visible tests, public grader, runtime policy, task condition, and task digest.
 
 ## Local practice result
 
-The future v2 runner emits one canonical result containing at least:
+The v2 workspace grader emits a canonical local result. It grades workspaces
+edited by a miner's harness; it does not itself launch the v1 Rust harness via
+the future hosted v2 protocol. The report binds:
 
 ```text
 public_release_id
