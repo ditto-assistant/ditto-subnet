@@ -134,6 +134,7 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert "sanitize-snapshot.sh" in snapshot
     assert "environment: prod" in snapshot
     export = (ROOT / "preview/cloud/export-snapshot.sh").read_text()
+    sanitizer = (ROOT / "preview/cloud/sanitize-snapshot.sh").read_text()
     assert "pg_dump" in export
     assert "--no-owner" in export
     assert "--no-privileges" in export
@@ -144,6 +145,10 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert "rm -f '$remote_dump' '$remote_script'" in snapshot
     assert "head -c 5" in snapshot
     assert 'pg_dump -Fc --no-owner --no-privileges ditto_platform_prod"' not in snapshot
+    assert '/proc/1/comm)" = postgres' in sanitizer
+    assert 'docker cp "$source_dump" "$container:/tmp/source.dump"' in sanitizer
+    assert 'docker cp "$container:/tmp/sanitized.dump" "$output_dump"' in sanitizer
+    assert '-v "$temp_dir:/work"' not in sanitizer
     assert "source.dump" in snapshot
     assert "sanitized.dump" in snapshot
 
