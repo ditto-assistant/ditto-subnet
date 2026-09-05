@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,12 +67,12 @@ class ToolRequest:
             raise CorpusError("coding_contract_version must be an integer")
         return cls(
             coding_contract_version=version,
-            case_id=_bounded_string(value.get("case_id"), "case_id", 256),
-            profile_capability_id=_bounded_string(
+            case_id=_opaque_identifier(value.get("case_id"), "case_id", 256),
+            profile_capability_id=_opaque_identifier(
                 value.get("profile_capability_id"), "profile_capability_id", 256
             ),
-            call_id=_bounded_string(value.get("call_id"), "call_id", 128),
-            name=_bounded_string(value.get("name"), "name", 80),
+            call_id=_opaque_identifier(value.get("call_id"), "call_id", 128),
+            name=_opaque_identifier(value.get("name"), "name", 80),
             arguments=arguments,
         )
 
@@ -176,9 +177,26 @@ class _FileState:
 
 
 def _bounded_string(value: Any, field: str, maximum: int) -> str:
-    if not isinstance(value, str) or not value or len(value) > maximum:
+    if not isinstance(value, str) or not value:
+        raise CorpusError(f"{field} must be a non-empty string of at most {maximum}")
+    try:
+        valid = len(value.encode()) <= maximum
+    except UnicodeEncodeError:
+        valid = False
+    if not valid:
         raise CorpusError(f"{field} must be a non-empty string of at most {maximum}")
     return value
+
+
+def _opaque_identifier(value: Any, field: str, maximum: int) -> str:
+    result = _bounded_string(value, field, maximum)
+    if any(
+        character.isspace()
+        or unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co"}
+        for character in result
+    ):
+        raise CorpusError(f"{field} must be an opaque identifier")
+    return result
 
 
 def _exact_arguments(
