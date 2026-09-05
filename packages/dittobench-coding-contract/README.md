@@ -4,6 +4,15 @@ This directory is the language-neutral public authority for DittoBench Coding
 wire examples and canonical digest vectors. Contract v1 is shadow-only and
 hard-codes `weight_eligible=false`.
 
+`coding_hosted_control_v2.json` freezes unsigned synthetic request/result
+projections and their canonical signing digests for Platform-hosted private
+execution. It contains no private task data or download capabilities. Python
+Platform and validator consumers share byte-identical definitions checked by
+the hosted verifier tests; real Bittensor signature tests are separate from
+these deliberately unsigned vectors. Regenerate with
+`uv run python packages/dittobench-coding-contract/generate_hosted_vectors.py`
+from the repository root, or pass `--check` to detect drift.
+
 `counterfactual_v2.go` introduces separate, shadow-only types for matched
 V0–V4 execution. Condition, group, quorum, and replicate linkage are absent
 from miner-facing assignments and remain in grader-private results. The types
