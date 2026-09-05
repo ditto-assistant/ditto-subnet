@@ -59,8 +59,12 @@ def test_private_catalog_v2_task_rejects_commitment_or_weight_drift() -> None:
         CodingPrivateCatalogV2Task.model_validate(raw)
     raw = _task().model_dump(mode="json", by_alias=True)
     raw["future_field"] = "ignored"
-    with pytest.raises(ValidationError):
-        CodingPrivateCatalogV2Task.model_validate(raw)
+    parsed = CodingPrivateCatalogV2Task.model_validate(raw)
+    assert parsed == _task()
+    assert "future_field" not in parsed.model_dump(mode="json", by_alias=True)
+    assert (
+        coding_private_catalog_v2_task_digest(parsed) == parsed.task_commitment_sha256
+    )
     raw = _task().model_dump(mode="json", by_alias=True)
     del raw["visible_issue_sha256"]
     with pytest.raises(ValidationError):

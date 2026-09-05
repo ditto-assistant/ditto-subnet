@@ -23,7 +23,7 @@ class CodingPrivateCatalogV2Task(CodingEvaluationModel):
     """One sealed v2 catalog leaf; condition/group linkage stays private."""
 
     model_config = ConfigDict(
-        extra="forbid",
+        extra="ignore",
         frozen=True,
         serialize_by_alias=True,
         validate_by_name=True,
