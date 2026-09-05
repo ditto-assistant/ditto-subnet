@@ -18,7 +18,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--catalog", type=Path, required=True)
     parser.add_argument("--payload", type=Path, required=True)
     parser.add_argument("--transport", type=Path, required=True)
-    parser.add_argument("--publication-receipt-sha256", required=True)
+    parser.add_argument("--publication-receipt", type=Path, required=True)
+    parser.add_argument("--curator-public-key", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
@@ -26,7 +27,8 @@ def main(argv: list[str] | None = None) -> int:
             catalog_directory=args.catalog,
             payload_directory=args.payload,
             transport_directory=args.transport,
-            publication_receipt_sha256=args.publication_receipt_sha256,
+            publication_receipt_path=args.publication_receipt,
+            curator_public_key_path=args.curator_public_key,
             output=args.output,
         )
     except PrivateV2ShadowPlanError as error:
