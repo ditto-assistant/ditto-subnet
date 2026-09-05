@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.217.0 (2026-09-05)
+
+### Features
+
+- **coding**: Add default-off hosted control admission API
+  ([#1645](https://github.com/ditto-assistant/ditto-subnet/pull/1645),
+  [`9f6b82a`](https://github.com/ditto-assistant/ditto-subnet/commit/9f6b82a6a6a24199033d51f85e9d5d09b8c17c1f))
+
+
 ## v0.216.1 (2026-09-05)
 
 ### Bug Fixes
