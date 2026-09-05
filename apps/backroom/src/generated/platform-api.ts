@@ -413,6 +413,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/coding-private-v2-releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Private V2 Releases */
+        get: operations["get_private_v2_releases_api_v1_admin_coding_private_v2_releases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/coding-private-v2-releases/quarantine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Quarantine Private V2 Release */
+        post: operations["quarantine_private_v2_release_api_v1_admin_coding_private_v2_releases_quarantine_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/coding-private-v2-releases/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Private V2 Release */
+        post: operations["register_private_v2_release_api_v1_admin_coding_private_v2_releases_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/coding-private-v2-releases/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retire Private V2 Release */
+        post: operations["retire_private_v2_release_api_v1_admin_coding_private_v2_releases_retire_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/coding-shadow/reconcile": {
         parameters: {
             query?: never;
@@ -6354,6 +6422,28 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** AdminCodingPrivateV2ReleaseResponse */
+        AdminCodingPrivateV2ReleaseResponse: {
+            /** Releases */
+            releases: components["schemas"]["CodingPrivateV2ReleaseRecord"][];
+            /**
+             * Selectable
+             * @constant
+             */
+            selectable: false;
+            /**
+             * Shadow Only
+             * @constant
+             */
+            shadow_only: true;
+            /** Total */
+            total: number;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
         /**
          * AdminCodingShadowReconciliationRequest
          * @description One explicit, confirmed request to advance a shadow coding artifact.
@@ -7945,6 +8035,22 @@ export interface components {
             /** Signature */
             signature: string;
         };
+        /** AdminRegisterCodingPrivateV2ReleaseRequest */
+        AdminRegisterCodingPrivateV2ReleaseRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Curator Public Key Pem */
+            curator_public_key_pem: string;
+            publication_receipt: components["schemas"]["CodingPrivateV2PublicationReceipt"];
+            /** Reason */
+            reason: string;
+            registration: components["schemas"]["CodingPrivateV2RegistrationAuthority"];
+        };
         /**
          * AdminReinstatementRetryBudget
          * @description What the submission's attempt budget was when it came back.
@@ -9292,6 +9398,22 @@ export interface components {
             replacement_commitment: components["schemas"]["CodingCatalogCommitment"];
             /** Replacement Signature */
             replacement_signature: string;
+        };
+        /** AdminTransitionCodingPrivateV2ReleaseRequest */
+        AdminTransitionCodingPrivateV2ReleaseRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Corpus Release Id */
+            corpus_release_id: string;
+            /** Expected Registration Sha256 */
+            expected_registration_sha256: string;
+            /** Reason */
+            reason: string;
         };
         /** AdminV9ContractRetestItem */
         AdminV9ContractRetestItem: {
@@ -12739,6 +12861,177 @@ export interface components {
              * Format: uuid
              */
             ticket_id: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** CodingPrivateV2PublicationObject */
+        CodingPrivateV2PublicationObject: {
+            /** Ciphertext Sha256 */
+            ciphertext_sha256: string;
+            /** Ciphertext Size Bytes */
+            ciphertext_size_bytes: number;
+            /** Object Index */
+            object_index: number;
+            /** Remote Object Key Sha256 */
+            remote_object_key_sha256: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "uploaded" | "reused";
+        };
+        /** CodingPrivateV2PublicationReceipt */
+        CodingPrivateV2PublicationReceipt: {
+            /** Catalog Merkle Root */
+            catalog_merkle_root: string;
+            /** Catalog Sha256 */
+            catalog_sha256: string;
+            /** Checked At */
+            checked_at: string;
+            /** Curator Signature B64 */
+            curator_signature_b64: string;
+            /** Curator Signing Key Sha256 */
+            curator_signing_key_sha256: string;
+            /** Object Count */
+            object_count: number;
+            /** Objects */
+            objects: components["schemas"]["CodingPrivateV2PublicationObject"][];
+            /** Payload Sha256 */
+            payload_sha256: string;
+            /** Private Input Authority Sha256 */
+            private_input_authority_sha256: string;
+            /** Probe Receipt Payload Sha256 */
+            probe_receipt_payload_sha256: string;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "hippius";
+            /**
+             * Ready
+             * @constant
+             */
+            ready: true;
+            /** Receipt Payload Sha256 */
+            receipt_payload_sha256: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-private-v2-publication-v1";
+            /**
+             * Shadow Only
+             * @constant
+             */
+            shadow_only: true;
+            /** Source Sha */
+            source_sha: string;
+            /** Transport Sha256 */
+            transport_sha256: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+            /** Wrapping Key Sha256 */
+            wrapping_key_sha256: string;
+        };
+        /** CodingPrivateV2RegistrationAuthority */
+        CodingPrivateV2RegistrationAuthority: {
+            /** Catalog Merkle Root */
+            catalog_merkle_root: string;
+            /** Catalog Sha256 */
+            catalog_sha256: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 2;
+            /** Corpus Release Id */
+            corpus_release_id: string;
+            /** Payload Sha256 */
+            payload_sha256: string;
+            /** Previous Registration Sha256 */
+            previous_registration_sha256: string | null;
+            /** Private Release Sha256 */
+            private_release_sha256: string;
+            /** Publication Receipt Sha256 */
+            publication_receipt_sha256: string;
+            /** Registration Sha256 */
+            registration_sha256: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-private-v2-registration-v1";
+            /**
+             * Shadow Only
+             * @constant
+             */
+            shadow_only: true;
+            /** Transport Sha256 */
+            transport_sha256: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+            /** Wrapping Key Sha256 */
+            wrapping_key_sha256: string;
+        };
+        /** CodingPrivateV2ReleaseRecord */
+        CodingPrivateV2ReleaseRecord: {
+            /** Curator Signing Key Sha256 */
+            curator_signing_key_sha256: string;
+            /** Latest Event Actor */
+            latest_event_actor: string | null;
+            /** Latest Event At */
+            latest_event_at: string | null;
+            /** Latest Event Reason */
+            latest_event_reason: string | null;
+            /** Lifecycle Event Count */
+            lifecycle_event_count: number;
+            /** Private Input Authority Sha256 */
+            private_input_authority_sha256: string;
+            /** Provider Probe Receipt Sha256 */
+            provider_probe_receipt_sha256: string;
+            /** Publication Object Count */
+            publication_object_count: number;
+            /** Publication Source Sha */
+            publication_source_sha: string;
+            /** Registered Actor */
+            registered_actor: string;
+            /**
+             * Registered At
+             * Format: date-time
+             */
+            registered_at: string;
+            /** Registered Reason */
+            registered_reason: string;
+            registration: components["schemas"]["CodingPrivateV2RegistrationAuthority"];
+            /**
+             * Release Row Id
+             * Format: uuid
+             */
+            release_row_id: string;
+            /**
+             * Selectable
+             * @constant
+             */
+            selectable: false;
+            /**
+             * Shadow Only
+             * @constant
+             */
+            shadow_only: true;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "registered" | "quarantined" | "retired";
             /**
              * Weight Eligible
              * @constant
@@ -25981,6 +26274,144 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminCodingCatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_private_v2_releases_api_v1_admin_coding_private_v2_releases_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingPrivateV2ReleaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    quarantine_private_v2_release_api_v1_admin_coding_private_v2_releases_quarantine_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTransitionCodingPrivateV2ReleaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingPrivateV2ReleaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_private_v2_release_api_v1_admin_coding_private_v2_releases_register_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminRegisterCodingPrivateV2ReleaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingPrivateV2ReleaseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retire_private_v2_release_api_v1_admin_coding_private_v2_releases_retire_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTransitionCodingPrivateV2ReleaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingPrivateV2ReleaseResponse"];
                 };
             };
             /** @description Validation Error */

@@ -1567,6 +1567,147 @@ class CodingCatalogRetirement(Base):
     )
 
 
+class CodingPrivateV2Release(Base):
+    """One immutable, digest-only private Coding v2 release registration."""
+
+    __tablename__ = "coding_private_v2_releases"
+
+    release_row_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    corpus_release_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    coding_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    private_release_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    catalog_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    catalog_merkle_root: Mapped[str] = mapped_column(Text, nullable=False)
+    payload_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    transport_sha256: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    wrapping_key_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    publication_receipt_sha256: Mapped[str] = mapped_column(
+        Text, nullable=False, unique=True
+    )
+    provider_probe_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    private_input_authority_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    curator_signing_key_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    publication_source_sha: Mapped[str] = mapped_column(Text, nullable=False)
+    publication_object_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_registration_sha256: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    registration_sha256: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    registration_authority: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    shadow_only: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    selectable: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "release_row_id",
+            "registration_sha256",
+            name="coding_private_v2_releases_row_registration_key",
+        ),
+        CheckConstraint(
+            "coding_contract_version = 2 AND shadow_only = true "
+            "AND selectable = false AND weight_eligible = false "
+            "AND publication_object_count BETWEEN 1 AND 10000 "
+            "AND previous_registration_sha256 IS NULL",
+            name="coding_private_v2_releases_contract_check",
+        ),
+        CheckConstraint(
+            "private_release_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND catalog_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND catalog_merkle_root ~ '^[0-9a-f]{64}$' "
+            "AND payload_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND transport_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND wrapping_key_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND publication_receipt_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND provider_probe_receipt_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND private_input_authority_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND curator_signing_key_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND registration_sha256 ~ '^[0-9a-f]{64}$'",
+            name="coding_private_v2_releases_hashes_check",
+        ),
+        CheckConstraint(
+            "publication_source_sha ~ '^[0-9a-f]{40}$'",
+            name="coding_private_v2_releases_source_check",
+        ),
+        CheckConstraint(
+            "octet_length(corpus_release_id) BETWEEN 1 AND 256 "
+            "AND corpus_release_id !~ '[[:space:][:cntrl:]]'",
+            name="coding_private_v2_releases_identifier_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8 AND length(trim(actor)) BETWEEN 1 AND 120",
+            name="coding_private_v2_releases_audit_check",
+        ),
+        Index("coding_private_v2_releases_created_idx", "created_at"),
+    )
+
+
+class CodingPrivateV2ReleaseEvent(Base):
+    """One append-only terminal quarantine or retirement event."""
+
+    __tablename__ = "coding_private_v2_release_events"
+
+    event_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    release_row_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    expected_registration_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    event_sha256: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    shadow_only: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    selectable: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["release_row_id", "expected_registration_sha256"],
+            [
+                "coding_private_v2_releases.release_row_id",
+                "coding_private_v2_releases.registration_sha256",
+            ],
+            ondelete="RESTRICT",
+            name="coding_private_v2_release_events_release_fkey",
+        ),
+        UniqueConstraint(
+            "release_row_id",
+            "action",
+            name="coding_private_v2_release_events_release_action_key",
+        ),
+        CheckConstraint(
+            "action IN ('quarantined', 'retired') "
+            "AND shadow_only = true AND selectable = false "
+            "AND weight_eligible = false",
+            name="coding_private_v2_release_events_contract_check",
+        ),
+        CheckConstraint(
+            "expected_registration_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND event_sha256 ~ '^[0-9a-f]{64}$'",
+            name="coding_private_v2_release_events_hashes_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8 AND length(trim(actor)) BETWEEN 1 AND 120",
+            name="coding_private_v2_release_events_audit_check",
+        ),
+        Index(
+            "coding_private_v2_release_events_release_created_idx",
+            "release_row_id",
+            "created_at",
+        ),
+    )
+
+
 class CodingCatalogExposure(Base):
     """Irreversible private task-version consumption before lease issuance."""
 

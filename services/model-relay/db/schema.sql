@@ -1068,6 +1068,65 @@ CREATE TABLE public.coding_inference_requests (
 
 
 --
+-- Name: coding_private_v2_release_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_private_v2_release_events (
+    event_id uuid NOT NULL,
+    release_row_id uuid NOT NULL,
+    expected_registration_sha256 text NOT NULL,
+    action text NOT NULL,
+    event_sha256 text NOT NULL,
+    shadow_only boolean NOT NULL,
+    selectable boolean NOT NULL,
+    weight_eligible boolean NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_private_v2_release_events_coding_private_v2_r_a6d5 CHECK (((expected_registration_sha256 ~ '^[0-9a-f]{64}$'::text) AND (event_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_coding_private_v2_release_events_coding_private_v2_r_da8b CHECK (((action = ANY (ARRAY['quarantined'::text, 'retired'::text])) AND (shadow_only = true) AND (selectable = false) AND (weight_eligible = false))),
+    CONSTRAINT ck_coding_private_v2_release_events_coding_private_v2_r_e26e CHECK (((length(TRIM(BOTH FROM reason)) >= 8) AND ((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))))
+);
+
+
+--
+-- Name: coding_private_v2_releases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_private_v2_releases (
+    release_row_id uuid NOT NULL,
+    corpus_release_id text NOT NULL,
+    coding_contract_version integer NOT NULL,
+    private_release_sha256 text NOT NULL,
+    catalog_sha256 text NOT NULL,
+    catalog_merkle_root text NOT NULL,
+    payload_sha256 text NOT NULL,
+    transport_sha256 text NOT NULL,
+    wrapping_key_sha256 text NOT NULL,
+    publication_receipt_sha256 text NOT NULL,
+    provider_probe_receipt_sha256 text NOT NULL,
+    private_input_authority_sha256 text NOT NULL,
+    curator_signing_key_sha256 text NOT NULL,
+    publication_source_sha text NOT NULL,
+    publication_object_count integer NOT NULL,
+    previous_registration_sha256 text,
+    registration_sha256 text NOT NULL,
+    registration_authority jsonb NOT NULL,
+    shadow_only boolean NOT NULL,
+    selectable boolean NOT NULL,
+    weight_eligible boolean NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_private_v2_releases_coding_private_v2_release_20d8 CHECK (((private_release_sha256 ~ '^[0-9a-f]{64}$'::text) AND (catalog_sha256 ~ '^[0-9a-f]{64}$'::text) AND (catalog_merkle_root ~ '^[0-9a-f]{64}$'::text) AND (payload_sha256 ~ '^[0-9a-f]{64}$'::text) AND (transport_sha256 ~ '^[0-9a-f]{64}$'::text) AND (wrapping_key_sha256 ~ '^[0-9a-f]{64}$'::text) AND (publication_receipt_sha256 ~ '^[0-9a-f]{64}$'::text) AND (provider_probe_receipt_sha256 ~ '^[0-9a-f]{64}$'::text) AND (private_input_authority_sha256 ~ '^[0-9a-f]{64}$'::text) AND (curator_signing_key_sha256 ~ '^[0-9a-f]{64}$'::text) AND (registration_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_coding_private_v2_releases_coding_private_v2_release_6b91 CHECK ((((octet_length(corpus_release_id) >= 1) AND (octet_length(corpus_release_id) <= 256)) AND (corpus_release_id !~ '[[:space:][:cntrl:]]'::text))),
+    CONSTRAINT ck_coding_private_v2_releases_coding_private_v2_release_6e77 CHECK ((publication_source_sha ~ '^[0-9a-f]{40}$'::text)),
+    CONSTRAINT ck_coding_private_v2_releases_coding_private_v2_release_a8e8 CHECK (((coding_contract_version = 2) AND (shadow_only = true) AND (selectable = false) AND (weight_eligible = false) AND ((publication_object_count >= 1) AND (publication_object_count <= 10000)) AND (previous_registration_sha256 IS NULL))),
+    CONSTRAINT ck_coding_private_v2_releases_coding_private_v2_release_e3ff CHECK (((length(TRIM(BOTH FROM reason)) >= 8) AND ((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))))
+);
+
+
+--
 -- Name: coding_sealed_evidence_finalizations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3978,6 +4037,78 @@ ALTER TABLE ONLY public.coding_inference_requests
 
 
 --
+-- Name: coding_private_v2_release_events coding_private_v2_release_events_event_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_private_v2_release_events
+    ADD CONSTRAINT coding_private_v2_release_events_event_sha256_key UNIQUE (event_sha256);
+
+
+--
+-- Name: coding_private_v2_release_events coding_private_v2_release_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_private_v2_release_events
+    ADD CONSTRAINT coding_private_v2_release_events_pkey PRIMARY KEY (event_id);
+
+
+--
+-- Name: coding_private_v2_release_events coding_private_v2_release_events_release_action_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_private_v2_release_events
+    ADD CONSTRAINT coding_private_v2_release_events_release_action_key UNIQUE (release_row_id, action);
+
+
+--
+-- Name: coding_private_v2_releases coding_private_v2_releases_corpus_release_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_private_v2_releases
+    ADD CONSTRAINT coding_private_v2_releases_corpus_release_id_key UNIQUE (corpus_release_id);
+
+
+--
+-- Name: coding_private_v2_releases coding_private_v2_releases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_private_v2_releases
+    ADD CONSTRAINT coding_private_v2_releases_pkey PRIMARY KEY (release_row_id);
+
+
+--
+-- Name: coding_private_v2_releases coding_private_v2_releases_publication_receipt_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_private_v2_releases
+    ADD CONSTRAINT coding_private_v2_releases_publication_receipt_sha256_key UNIQUE (publication_receipt_sha256);
+
+
+--
+-- Name: coding_private_v2_releases coding_private_v2_releases_registration_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_private_v2_releases
+    ADD CONSTRAINT coding_private_v2_releases_registration_sha256_key UNIQUE (registration_sha256);
+
+
+--
+-- Name: coding_private_v2_releases coding_private_v2_releases_row_registration_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_private_v2_releases
+    ADD CONSTRAINT coding_private_v2_releases_row_registration_key UNIQUE (release_row_id, registration_sha256);
+
+
+--
+-- Name: coding_private_v2_releases coding_private_v2_releases_transport_sha256_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_private_v2_releases
+    ADD CONSTRAINT coding_private_v2_releases_transport_sha256_key UNIQUE (transport_sha256);
+
+
+--
 -- Name: coding_sealed_evidence_finalizations coding_sealed_evidence_finalizations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5511,6 +5642,20 @@ CREATE INDEX coding_inference_requests_grant_status_idx ON public.coding_inferen
 
 
 --
+-- Name: coding_private_v2_release_events_release_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_private_v2_release_events_release_created_idx ON public.coding_private_v2_release_events USING btree (release_row_id, created_at);
+
+
+--
+-- Name: coding_private_v2_releases_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_private_v2_releases_created_idx ON public.coding_private_v2_releases USING btree (created_at);
+
+
+--
 -- Name: coding_sealed_evidence_finalizations_finalized_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6232,6 +6377,20 @@ CREATE TRIGGER coding_catalog_retirements_append_only_guard BEFORE DELETE OR UPD
 
 
 --
+-- Name: coding_private_v2_release_events coding_private_v2_release_events_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_private_v2_release_events_append_only BEFORE DELETE OR UPDATE ON public.coding_private_v2_release_events FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_private_v2_releases coding_private_v2_releases_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_private_v2_releases_append_only BEFORE DELETE OR UPDATE ON public.coding_private_v2_releases FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
 -- Name: coding_sealed_evidence_finalizations coding_sealed_evidence_finalizations_append_only; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -6433,6 +6592,14 @@ ALTER TABLE ONLY public.coding_inference_grants
 
 ALTER TABLE ONLY public.coding_inference_requests
     ADD CONSTRAINT coding_inference_requests_grant_fkey FOREIGN KEY (grant_id, ticket_id) REFERENCES public.coding_inference_grants(grant_id, ticket_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_private_v2_release_events coding_private_v2_release_events_release_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_private_v2_release_events
+    ADD CONSTRAINT coding_private_v2_release_events_release_fkey FOREIGN KEY (release_row_id, expected_registration_sha256) REFERENCES public.coding_private_v2_releases(release_row_id, registration_sha256) ON DELETE RESTRICT;
 
 
 --
