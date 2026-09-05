@@ -2,6 +2,13 @@
 
 ## Status
 
+The proposed private v2 deployment additionally follows
+[Platform-hosted private execution](coding-platform-private-execution-v2.md).
+That delta restricts all private input, decryption and raw evidence processing
+to Platform-controlled services. Validator hosts receive only authorized
+request/status/result projections; older v1 phase-delivery descriptions below
+are not sufficient for this deployment profile.
+
 This document fixes the object-storage provider for DittoBench Coding private
 inputs and sealed evidence to Hippius. It is a design contract only. It creates
 no bucket, credential, object, endpoint, deployment, worker, score, weight, or

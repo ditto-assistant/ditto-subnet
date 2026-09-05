@@ -27,9 +27,13 @@ private-shadow admission: the exact screened artifact must already have a
 durable Tool + Memory core-qualification decision, then a claimed certification
 lease, before any private task.
 
-The current `coding-practice-3x3-v1` pack remains supported until v2 is
-published. It contains nine static protocol fixtures and is not retroactively
-rescored or changed by this proposal.
+The planned replacement checks ten small public tasks into this repository and
+uses datagen for deterministic compilation and local execution. It replaces
+`coding-practice-3x3-v1` after its runner, CI and canary consumers migrate in the
+same replacement PR. That nine-task pack still exists today. Hugging Face
+publication is retired as part of the replacement, not a prerequisite for v2.
+Private data is never a local-test source; its evaluation follows the
+[Platform-hosted private execution boundary](coding-platform-private-execution-v2.md).
 
 ## Public v2 release shape
 
@@ -173,12 +177,11 @@ A new release publishes a new immutable pack ID; it never mutates an existing
 pack. Public release publication has no private-catalog credential, no Hippius
 private-input access, and no private grader dependency.
 
-Before any owner-approved upload, the curator produces a canonical publication
-plan that binds the reviewed public dataset repository and revision to the
-release archive, descriptor, manifest, byte sizes, SHA-256 values, and exact
-content-addressed destination paths. The plan has no token, credential, HTTP
-client, or upload action; an operator must separately confirm the target and
-perform publication in the protected environment.
+The official public source is the versioned repository task set. Datagen binds
+its revision to a deterministic release archive, descriptor, manifest, byte
+sizes and SHA-256 values. Rebuilding a release must reproduce those identities.
+Local practice needs no dataset-hosting credential. Existing external upload
+tooling is legacy until removed by the public-pack replacement PR.
 
 Private task bytes, private repository epochs, private memories, hidden tests,
 reference patches, private object keys, and decryption material remain outside
