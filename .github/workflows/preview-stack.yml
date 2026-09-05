@@ -21,7 +21,7 @@ jobs:
   control:
     if: github.repository == 'ditto-assistant/ditto-subnet'
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     environment: preview-stack
     env:
       GH_TOKEN: ${{ github.token }}
