@@ -30,6 +30,7 @@ type Session struct {
 	mu sync.Mutex
 
 	manifest         Manifest
+	assignmentSHA256 string
 	executor         CommandExecutor
 	root             string
 	base             map[string]fileState
@@ -60,11 +61,15 @@ type Session struct {
 // NewSession verifies and materializes one visible capsule into a private
 // temporary workspace. It never exposes the workspace path to the harness.
 func NewSession(ctx context.Context, manifest Manifest, visibleBundle io.Reader, executor CommandExecutor) (*Session, error) {
+	return newSession(ctx, manifest, visibleBundle, executor, ContractVersion, "")
+}
+
+func newSession(ctx context.Context, manifest Manifest, visibleBundle io.Reader, executor CommandExecutor, version int, assignmentSHA256 string) (*Session, error) {
 	if ctx == nil {
 		return nil, errors.New("coding runner construction context is required")
 	}
 	now := time.Now()
-	if err := manifest.validate(now); err != nil {
+	if err := manifest.validateVersion(now, version); err != nil {
 		return nil, err
 	}
 	staged, visibleDigest, err := stageVisibleBundle(ctx, visibleBundle, manifest.Limits.MaxBundleBytes)
@@ -130,23 +135,24 @@ func NewSession(ctx context.Context, manifest Manifest, visibleBundle io.Reader,
 	}
 	sessionContext, cancel := context.WithDeadline(context.Background(), manifest.Deadline)
 	session := &Session{
-		manifest:       manifest,
-		executor:       executor,
-		root:           root,
-		base:           base,
-		ctx:            sessionContext,
-		cancel:         cancel,
-		transcript:     transcript,
-		transcriptPath: transcriptPath,
-		transcriptHash: sha256.New(),
-		editable:       listSet(manifest.EditablePaths),
-		creatable:      listSet(manifest.CreatablePaths),
-		deletable:      listSet(manifest.DeletablePaths),
-		tests:          commandMap(manifest.TestCommands),
-		builds:         commandMap(manifest.BuildCommands),
-		eventRoot:      initialEventRoot,
-		calls:          make(map[string]cachedCall),
-		now:            time.Now,
+		manifest:         manifest,
+		assignmentSHA256: assignmentSHA256,
+		executor:         executor,
+		root:             root,
+		base:             base,
+		ctx:              sessionContext,
+		cancel:           cancel,
+		transcript:       transcript,
+		transcriptPath:   transcriptPath,
+		transcriptHash:   sha256.New(),
+		editable:         listSet(manifest.EditablePaths),
+		creatable:        listSet(manifest.CreatablePaths),
+		deletable:        listSet(manifest.DeletablePaths),
+		tests:            commandMap(manifest.TestCommands),
+		builds:           commandMap(manifest.BuildCommands),
+		eventRoot:        initialEventRoot,
+		calls:            make(map[string]cachedCall),
+		now:              time.Now,
 	}
 	cleanup = false
 	return session, nil
@@ -343,6 +349,8 @@ func (session *Session) validateChanges(ctx context.Context, current map[string]
 
 type patchDocument struct {
 	Schema                string         `json:"schema"`
+	AssignmentSHA256      string         `json:"assignment_sha256,omitempty"`
+	EvaluationID          string         `json:"evaluation_id,omitempty"`
 	CodingContractVersion int            `json:"coding_contract_version"`
 	CaseID                string         `json:"case_id"`
 	BaseTreeSHA256        string         `json:"base_tree_sha256"`
@@ -392,8 +400,10 @@ func (session *Session) freezeLocked() FreezeResult {
 		return session.freezeFailure("validator_infrastructure", "changed_path_digest", current)
 	}
 	patch, err := canonicalStruct(patchDocument{
-		Schema:                "dittobench-coding-frozen-patch-v1",
-		CodingContractVersion: ContractVersion,
+		Schema:                frozenPatchSchema(session.manifest.CodingContractVersion),
+		AssignmentSHA256:      session.assignmentSHA256,
+		EvaluationID:          hostedEvaluationID(session.manifest),
+		CodingContractVersion: session.manifest.CodingContractVersion,
 		CaseID:                session.manifest.CaseID,
 		BaseTreeSHA256:        session.manifest.BaseTreeSHA256,
 		VisibleBundleSHA256:   session.manifest.VisibleBundleSHA256,
@@ -406,7 +416,7 @@ func (session *Session) freezeLocked() FreezeResult {
 		return session.freezeFailure("repair_failure", "patch_limit", current)
 	}
 	submission := &FrozenSubmission{
-		CodingContractVersion:     ContractVersion,
+		CodingContractVersion:     session.manifest.CodingContractVersion,
 		CaseID:                    session.manifest.CaseID,
 		BaseTreeSHA256:            session.manifest.BaseTreeSHA256,
 		VisibleBundleSHA256:       session.manifest.VisibleBundleSHA256,
