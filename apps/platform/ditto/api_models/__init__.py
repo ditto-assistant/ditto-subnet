@@ -84,6 +84,18 @@ from ditto.api_models.coding_private_catalog_v2 import (
     CodingPrivateCatalogV2Task,
     coding_private_catalog_v2_task_digest,
 )
+from ditto.api_models.coding_private_v2_registry import (
+    AdminCodingPrivateV2ReleaseResponse,
+    AdminRegisterCodingPrivateV2ReleaseRequest,
+    AdminTransitionCodingPrivateV2ReleaseRequest,
+    CodingPrivateV2PublicationObject,
+    CodingPrivateV2PublicationReceipt,
+    CodingPrivateV2RegistrationAuthority,
+    CodingPrivateV2ReleaseRecord,
+    private_v2_publication_receipt_digest,
+    private_v2_registration_digest,
+    private_v2_release_event_digest,
+)
 from ditto.api_models.core_qualification import (
     AdminCoreQualificationPolicyRequest,
     AdminCoreQualificationPolicyResponse,
@@ -528,6 +540,16 @@ __all__ = [
     "coding_sealed_evidence_identity_digest",
     "coding_catalog_commitment_digest",
     "coding_private_catalog_v2_task_digest",
+    "AdminCodingPrivateV2ReleaseResponse",
+    "AdminRegisterCodingPrivateV2ReleaseRequest",
+    "AdminTransitionCodingPrivateV2ReleaseRequest",
+    "CodingPrivateV2PublicationObject",
+    "CodingPrivateV2PublicationReceipt",
+    "CodingPrivateV2RegistrationAuthority",
+    "CodingPrivateV2ReleaseRecord",
+    "private_v2_publication_receipt_digest",
+    "private_v2_registration_digest",
+    "private_v2_release_event_digest",
     "coding_catalog_commitment_signing_message",
     "coding_shadow_result_signing_message",
 ]

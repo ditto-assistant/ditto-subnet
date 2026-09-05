@@ -68,6 +68,7 @@ from ditto.api_server.endpoints import (
     admin_coding_catalog_router,
     admin_coding_certifications_router,
     admin_coding_evaluations_router,
+    admin_coding_private_v2_releases_router,
     admin_coding_reconciliation_router,
     admin_coding_ticket_sets_router,
     admin_confirmation_bundles_router,
@@ -615,6 +616,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_copy_review_router, prefix="/api/v1")
     app.include_router(admin_coding_certifications_router, prefix="/api/v1")
     app.include_router(admin_coding_catalog_router, prefix="/api/v1")
+    app.include_router(admin_coding_private_v2_releases_router, prefix="/api/v1")
     app.include_router(admin_coding_evaluations_router, prefix="/api/v1")
     app.include_router(admin_coding_reconciliation_router, prefix="/api/v1")
     app.include_router(admin_coding_ticket_sets_router, prefix="/api/v1")
