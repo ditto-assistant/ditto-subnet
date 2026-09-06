@@ -29,7 +29,8 @@ settlement or retry state is involved. The initial native policy permits no retr
 come from a trusted provider adapter, never miner-reported counts. Output ceiling
 equals the request maximum. Prompt/cost estimates require a reviewed tokenizer
 and pricing profile; this ledger does not implement or certify that estimator.
-Until that adapter exists, there is no authorized outbound inference path.
+The private adapter still needs a reviewed production estimator and provider
+profile before any outbound path may be activated.
 
 The reservation commits before returning fresh dispatch permission, sequence,
 request digest and expiry. Exactly one request may be outstanding per grant.
