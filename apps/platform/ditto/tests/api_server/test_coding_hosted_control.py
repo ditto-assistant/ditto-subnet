@@ -100,7 +100,9 @@ class Storage:
 
 
 @pytest.fixture
-async def control_fixture(tmp_path, session_maker, hosted_profile):
+async def control_fixture(
+    tmp_path, session_maker, hosted_profile, grading_factory=None
+):
     hosted_profile = json.loads(json.dumps(hosted_profile))
     hosted_profile["profile"]["budgets"]["wall_time_seconds"] = 300
     hosted_profile["sha256"] = sha(canonical(hosted_profile["profile"]))
@@ -108,7 +110,11 @@ async def control_fixture(tmp_path, session_maker, hosted_profile):
     profile = budget_profile(valid_from_unix=now - 1, valid_until_unix=now + 3600)
     policy = native_policy(runtime_profile_sha256=profile.digest())
     authority, worker, grants, retriever, assembler, reader, unwrapper = await fixture(
-        tmp_path, session_maker, hosted_profile, policy_sha256=policy.digest()
+        tmp_path,
+        session_maker,
+        hosted_profile,
+        policy_sha256=policy.digest(),
+        grading_profile_factory=grading_factory,
     )
     execution = canonical(hosted_profile["profile"])
     private = rsa.generate_private_key(public_exponent=65537, key_size=3072)

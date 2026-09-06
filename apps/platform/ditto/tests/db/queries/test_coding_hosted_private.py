@@ -37,6 +37,7 @@ async def _prepared(
     registration_bundle=None,
     execution_profile_sha256=None,
     policy_sha256=None,
+    grading_profile_sha256=None,
 ):
     authority = await _seed(
         maker, approve=False, registration_bundle=registration_bundle
@@ -57,6 +58,8 @@ async def _prepared(
         execution_profile_sha256=execution_profile_sha256
         or authority.execution_profile_sha256,
         policy_sha256=policy_sha256 or authority.policy_sha256,
+        grading_profile_sha256=grading_profile_sha256
+        or authority.grading_profile_sha256,
     )
     async with maker() as session, session.begin():
         await create_hosted_assignment(

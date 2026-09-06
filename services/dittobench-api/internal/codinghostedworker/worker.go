@@ -143,6 +143,8 @@ type Attempt struct {
 	evidenceSHA                                                                 string
 	freeze                                                                      *codingrunner.FreezeResult
 	authority                                                                   codingrunner.HostedReplayAuthority
+	gradingAttempted                                                            bool
+	terminalBody                                                                []byte
 	workspaceRevoked, relayRevoked, bridgeRevoked, harnessStopped, inputsClosed bool
 }
 

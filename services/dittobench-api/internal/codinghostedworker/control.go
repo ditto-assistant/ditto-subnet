@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
+	"github.com/ditto-assistant/dittobench-api/internal/codinggrader"
 	"github.com/ditto-assistant/dittobench-api/internal/codinghostedinput"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
 	"github.com/ditto-assistant/dittobench-api/internal/codingsource"
@@ -27,14 +28,18 @@ const controlMagic = "DITTO-HOSTED-CONTROL-V2\n"
 // ControlConfig is explicit trusted Platform runtime authority. Expected and
 // Profile come from the approved assignment, never the incoming input frame.
 type ControlConfig struct {
-	SocketPath string
-	Token      []byte
-	Expected   codinghostedinput.Expected
-	Profile    codinghostedinput.Profile
+	SocketPath           string
+	Token                []byte
+	Expected             codinghostedinput.Expected
+	Profile              codinghostedinput.Profile
+	GradingProfile       []byte
+	GradingProfileSHA256 string
 }
 type ControlClient struct {
-	config  ControlConfig
-	profile []byte
+	config         ControlConfig
+	profile        []byte
+	gradingProfile []byte
+	testGrader     func(context.Context, codinggrader.HostedManifest) (codinggrader.Executor, error)
 }
 
 func NewControlClient(config ControlConfig) (*ControlClient, error) {
@@ -50,7 +55,7 @@ func NewControlClient(config ControlConfig) (*ControlClient, error) {
 		return nil, ErrAttempt
 	}
 	config.Token = bytes.Clone(config.Token)
-	return &ControlClient{config: config, profile: body}, nil
+	return &ControlClient{config: config, profile: body, gradingProfile: bytes.Clone(config.GradingProfile)}, nil
 }
 
 func controlSocket(path string) bool {
@@ -107,6 +112,7 @@ type controlReply struct {
 	SourceSHA   string `json:"source_sha256"`
 	OK          *bool  `json:"ok"`
 	PayloadKind string `json:"payload_kind"`
+	PayloadSize int64  `json:"payload_size"`
 	EvidenceSHA string `json:"evidence_sha256"`
 	Bridge      struct {
 		GrantID   string `json:"grant_id"`
@@ -149,10 +155,10 @@ func (c *ControlClient) exchange(ctx context.Context, s codingsource.HostedBindi
 		return fail()
 	}
 	timeout := 30 * time.Second
-	if op == "authoring" {
+	if op == "authoring" || op == "grading" || op == "grading_bundle" {
 		timeout = 180 * time.Second
 	}
-	if op == "retain" {
+	if op == "retain" || op == "terminal" {
 		timeout = 600 * time.Second
 	}
 	call, cancel := context.WithTimeout(ctx, timeout)
@@ -202,7 +208,7 @@ func (c *ControlClient) exchange(ctx context.Context, s codingsource.HostedBindi
 	if json.Unmarshal(response, &reply) != nil || reply.Schema != "dittobench-coding-hosted-control-result-v2" || reply.RequestID != requestID || reply.Operation != op || reply.SourceSHA != sourceSHA || reply.OK == nil || !*reply.OK || call.Err() != nil {
 		return fail()
 	}
-	if op != "authoring" {
+	if op != "authoring" && op != "grading" && op != "grading_bundle" {
 		var end [1]byte
 		if n, err := conn.Read(end[:]); n != 0 || err != io.EOF || call.Err() != nil {
 			return fail()
@@ -277,32 +283,8 @@ func (c *ControlClient) Retain(ctx context.Context, s codingsource.HostedBinding
 	if c == nil || e.WriteTranscript == nil {
 		return "", ErrAttempt
 	}
-	body, err := json.Marshal(e.Freeze)
+	body, err := encodePrivateFreeze(e.Freeze)
 	if err != nil {
-		return "", ErrAttempt
-	}
-	// Patch is deliberately excluded by the runner's ordinary JSON projection;
-	// add it only to this explicit private evidence stream.
-	var freeze map[string]json.RawMessage
-	if json.Unmarshal(body, &freeze) != nil {
-		return "", ErrAttempt
-	}
-	if e.Freeze.Submission != nil {
-		var sub map[string]json.RawMessage
-		if json.Unmarshal(freeze["submission"], &sub) != nil {
-			return "", ErrAttempt
-		}
-		sub["patch"], err = json.Marshal(base64.StdEncoding.EncodeToString(e.Freeze.Submission.Patch))
-		if err != nil {
-			return "", ErrAttempt
-		}
-		freeze["submission"], err = json.Marshal(sub)
-		if err != nil {
-			return "", ErrAttempt
-		}
-	}
-	body, err = json.Marshal(freeze)
-	if err != nil || len(body) > 520<<20 {
 		return "", ErrAttempt
 	}
 	hash := sha256.New()
@@ -346,6 +328,36 @@ func (c *ControlClient) CommitFreeze(ctx context.Context, s codingsource.HostedB
 		return codingrunner.HostedReplayAuthority{}, ErrAttempt
 	}
 	return codingrunner.HostedReplayAuthority{HostedAuthority: codingrunner.HostedAuthority{EvaluationID: f.EvaluationID, AttemptID: f.AttemptID, AssignmentSHA256: f.AssignmentSHA}, FrozenPatchSHA256: f.PatchSHA}, nil
+}
+
+func encodePrivateFreeze(value codingrunner.FreezeResult) ([]byte, error) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, ErrAttempt
+	}
+	var freeze map[string]json.RawMessage
+	if json.Unmarshal(body, &freeze) != nil {
+		return nil, ErrAttempt
+	}
+	if value.Submission != nil {
+		var sub map[string]json.RawMessage
+		if json.Unmarshal(freeze["submission"], &sub) != nil {
+			return nil, ErrAttempt
+		}
+		sub["patch"], err = json.Marshal(base64.StdEncoding.EncodeToString(value.Submission.Patch))
+		if err != nil {
+			return nil, ErrAttempt
+		}
+		freeze["submission"], err = json.Marshal(sub)
+		if err != nil {
+			return nil, ErrAttempt
+		}
+	}
+	body, err = json.Marshal(freeze)
+	if err != nil || len(body) > 520<<20 {
+		return nil, ErrAttempt
+	}
+	return body, nil
 }
 func (ControlConfig) String() string                { return "HostedControlConfig{private}" }
 func (c ControlConfig) GoString() string            { return c.String() }

@@ -691,6 +691,61 @@ CREATE FUNCTION public.guard_hosted_evidence_insert() RETURNS trigger
 
 
 --
+-- Name: guard_hosted_grading_insert(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.guard_hosted_grading_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE a coding_hosted_assignments%ROWTYPE; t coding_hosted_private_tasks%ROWTYPE;
+            c coding_hosted_grading_claims%ROWTYPE; i jsonb;
+    BEGIN
+      SELECT * INTO a FROM coding_hosted_assignments
+          WHERE evaluation_id=NEW.evaluation_id;
+      IF TG_TABLE_NAME='coding_hosted_grading_claims' THEN
+        SELECT * INTO t FROM coding_hosted_private_tasks
+          WHERE evaluation_id=NEW.evaluation_id;
+        i:=NEW.binding;
+        IF a.started_at IS NULL
+          OR a.expires_at<=clock_timestamp()
+          OR t.frozen_at IS NULL
+          OR t.closed_at IS NOT NULL
+          OR i->>'frozen_patch_sha256' IS DISTINCT FROM t.frozen_patch_sha256
+
+          OR i->>'grading_profile_sha256'
+          IS DISTINCT FROM a.authority->>'grading_profile_sha256'
+          OR i->'source'->>'worker_id' IS DISTINCT FROM a.worker_id::text
+          OR i->'source'->>'attempt_id' IS DISTINCT FROM a.attempt_id::text
+          OR i->'source'->>'assignment_sha256' IS DISTINCT FROM a.assignment_sha256
+        THEN RAISE EXCEPTION 'hosted grading claim mismatch'; END IF;
+      ELSIF TG_TABLE_NAME='coding_hosted_terminal_reservations' THEN
+        SELECT * INTO c FROM coding_hosted_grading_claims
+          WHERE evaluation_id=NEW.evaluation_id;
+        i:=NEW.identity;
+        IF i->>'claim_id' IS DISTINCT FROM c.claim_id::text
+
+          OR i->>'authoring_evidence_sha256'
+          IS DISTINCT FROM c.binding->>'authoring_evidence_sha256'
+
+          OR i->>'grading_profile_sha256'
+          IS DISTINCT FROM c.binding->>'grading_profile_sha256'
+          OR i->'weight_eligible' IS DISTINCT FROM 'false'::jsonb
+
+          OR i->>'outcome' NOT IN
+            ('completed','candidate_failure','infrastructure_failure','integrity_failure')
+
+          OR (i->>'outcome' IN ('completed','candidate_failure')
+          AND clock_timestamp()>=a.expires_at)
+        THEN RAISE EXCEPTION 'hosted terminal identity mismatch'; END IF;
+      END IF;
+      IF TG_TABLE_NAME!='coding_hosted_grading_claims'
+          AND clock_timestamp()>=a.expires_at+interval '24 hours'
+      THEN RAISE EXCEPTION 'hosted terminal publication expired'; END IF;
+      RETURN NEW;
+    END $$;
+
+
+--
 -- Name: guard_validator_ticket_bench_floor(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1401,6 +1456,19 @@ CREATE TABLE public.coding_hosted_evidence_reservations (
 
 
 --
+-- Name: coding_hosted_grading_claims; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_grading_claims (
+    evaluation_id uuid NOT NULL,
+    claim_id uuid NOT NULL,
+    binding jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_hosted_grading_claims_hosted_grading_binding CHECK (((jsonb_typeof(binding) = 'object'::text) AND (octet_length((binding)::text) <= 16384)))
+);
+
+
+--
 -- Name: coding_hosted_inference_grants; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1473,6 +1541,57 @@ CREATE TABLE public.coding_hosted_private_tasks (
     close_reason text,
     CONSTRAINT ck_coding_hosted_private_tasks_coding_hosted_private_ta_d5b6 CHECK ((((frozen_at IS NULL) = (frozen_patch_sha256 IS NULL)) AND ((frozen_at IS NULL) = (frozen_patch_size IS NULL)) AND ((frozen_at IS NULL) OR ((frozen_at >= created_at) AND (frozen_patch_sha256 ~ '^[0-9a-f]{64}$'::text) AND ((frozen_patch_size >= 0) AND (frozen_patch_size <= max_patch_bytes)))) AND ((closed_at IS NULL) = (close_reason IS NULL)) AND ((closed_at IS NULL) OR ((closed_at >= created_at) AND ((frozen_at IS NULL) OR (closed_at >= frozen_at)) AND (close_reason = ANY (ARRAY['completed'::text, 'failed'::text, 'aborted'::text])))))),
     CONSTRAINT ck_coding_hosted_private_tasks_coding_hosted_private_ta_e4aa CHECK (((selection_sha256 ~ '^[0-9a-f]{64}$'::text) AND ((catalog_index >= 0) AND (catalog_index <= 249)) AND ((max_patch_bytes >= 1) AND (max_patch_bytes <= 134217728)) AND (authoring_grant_id <> grading_grant_id) AND (authoring_grant_id <> '00000000-0000-0000-0000-000000000000'::uuid) AND (grading_grant_id <> '00000000-0000-0000-0000-000000000000'::uuid) AND (jsonb_typeof(selection_authority) = 'object'::text) AND (octet_length((selection_authority)::text) <= 4096)))
+);
+
+
+--
+-- Name: coding_hosted_result_acknowledgements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_result_acknowledgements (
+    result_sha256 text NOT NULL,
+    request_sha256 text NOT NULL,
+    acknowledged_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_hosted_result_acknowledgements_hosted_ack_request CHECK ((request_sha256 ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: coding_hosted_result_deliveries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_result_deliveries (
+    result_sha256 text NOT NULL,
+    evaluation_id uuid NOT NULL,
+    validator_hotkey text NOT NULL,
+    body jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_hosted_result_deliveries_hosted_delivery_body CHECK (((result_sha256 ~ '^[0-9a-f]{64}$'::text) AND (jsonb_typeof(body) = 'object'::text) AND (octet_length((body)::text) <= 8192)))
+);
+
+
+--
+-- Name: coding_hosted_terminal_finalizations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_terminal_finalizations (
+    evaluation_id uuid NOT NULL,
+    probe_sha256 text NOT NULL,
+    verified_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_hosted_terminal_finalizations_hosted_terminal_probe CHECK ((probe_sha256 ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: coding_hosted_terminal_reservations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_terminal_reservations (
+    evaluation_id uuid NOT NULL,
+    identity_sha256 text NOT NULL,
+    identity jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_hosted_terminal_reservations_hosted_terminal_identity CHECK (((identity_sha256 ~ '^[0-9a-f]{64}$'::text) AND (jsonb_typeof(identity) = 'object'::text) AND (octet_length((identity)::text) <= 16384)))
 );
 
 
@@ -5297,6 +5416,14 @@ ALTER TABLE ONLY public.coding_hosted_evidence_reservations
 
 
 --
+-- Name: coding_hosted_grading_claims pk_coding_hosted_grading_claims; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_grading_claims
+    ADD CONSTRAINT pk_coding_hosted_grading_claims PRIMARY KEY (evaluation_id);
+
+
+--
 -- Name: coding_hosted_inference_grants pk_coding_hosted_inference_grants; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5318,6 +5445,38 @@ ALTER TABLE ONLY public.coding_hosted_inference_requests
 
 ALTER TABLE ONLY public.coding_hosted_private_tasks
     ADD CONSTRAINT pk_coding_hosted_private_tasks PRIMARY KEY (evaluation_id);
+
+
+--
+-- Name: coding_hosted_result_acknowledgements pk_coding_hosted_result_acknowledgements; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_result_acknowledgements
+    ADD CONSTRAINT pk_coding_hosted_result_acknowledgements PRIMARY KEY (result_sha256);
+
+
+--
+-- Name: coding_hosted_result_deliveries pk_coding_hosted_result_deliveries; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_result_deliveries
+    ADD CONSTRAINT pk_coding_hosted_result_deliveries PRIMARY KEY (result_sha256);
+
+
+--
+-- Name: coding_hosted_terminal_finalizations pk_coding_hosted_terminal_finalizations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_terminal_finalizations
+    ADD CONSTRAINT pk_coding_hosted_terminal_finalizations PRIMARY KEY (evaluation_id);
+
+
+--
+-- Name: coding_hosted_terminal_reservations pk_coding_hosted_terminal_reservations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_terminal_reservations
+    ADD CONSTRAINT pk_coding_hosted_terminal_reservations PRIMARY KEY (evaluation_id);
 
 
 --
@@ -5969,6 +6128,14 @@ ALTER TABLE ONLY public.coding_hosted_evidence_reservations
 
 
 --
+-- Name: coding_hosted_grading_claims uq_coding_hosted_grading_claims_claim_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_grading_claims
+    ADD CONSTRAINT uq_coding_hosted_grading_claims_claim_id UNIQUE (claim_id);
+
+
+--
 -- Name: coding_hosted_inference_grants uq_coding_hosted_inference_grants_evaluation_id; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6006,6 +6173,14 @@ ALTER TABLE ONLY public.coding_hosted_private_tasks
 
 ALTER TABLE ONLY public.coding_hosted_private_tasks
     ADD CONSTRAINT uq_coding_hosted_private_tasks_grading_grant_id UNIQUE (grading_grant_id);
+
+
+--
+-- Name: coding_hosted_terminal_reservations uq_coding_hosted_terminal_reservations_identity_sha256; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_terminal_reservations
+    ADD CONSTRAINT uq_coding_hosted_terminal_reservations_identity_sha256 UNIQUE (identity_sha256);
 
 
 --
@@ -7076,6 +7251,20 @@ CREATE TRIGGER coding_hosted_evidence_reservations_insert BEFORE INSERT ON publi
 
 
 --
+-- Name: coding_hosted_grading_claims coding_hosted_grading_claims_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_grading_claims_immutable BEFORE DELETE OR UPDATE ON public.coding_hosted_grading_claims FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_hosted_grading_claims coding_hosted_grading_claims_insert; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_grading_claims_insert BEFORE INSERT ON public.coding_hosted_grading_claims FOR EACH ROW EXECUTE FUNCTION public.guard_hosted_grading_insert();
+
+
+--
 -- Name: coding_hosted_inference_grants coding_hosted_inference_grant_guard; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -7101,6 +7290,48 @@ CREATE TRIGGER coding_hosted_inference_request_guard BEFORE INSERT OR DELETE OR 
 --
 
 CREATE TRIGGER coding_hosted_private_task_guard BEFORE INSERT OR DELETE OR UPDATE ON public.coding_hosted_private_tasks FOR EACH ROW EXECUTE FUNCTION public.coding_hosted_private_task_guard();
+
+
+--
+-- Name: coding_hosted_result_acknowledgements coding_hosted_result_acknowledgements_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_result_acknowledgements_immutable BEFORE DELETE OR UPDATE ON public.coding_hosted_result_acknowledgements FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_hosted_result_deliveries coding_hosted_result_deliveries_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_result_deliveries_immutable BEFORE DELETE OR UPDATE ON public.coding_hosted_result_deliveries FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_hosted_terminal_finalizations coding_hosted_terminal_finalizations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_terminal_finalizations_immutable BEFORE DELETE OR UPDATE ON public.coding_hosted_terminal_finalizations FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_hosted_terminal_finalizations coding_hosted_terminal_finalizations_insert; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_terminal_finalizations_insert BEFORE INSERT ON public.coding_hosted_terminal_finalizations FOR EACH ROW EXECUTE FUNCTION public.guard_hosted_grading_insert();
+
+
+--
+-- Name: coding_hosted_terminal_reservations coding_hosted_terminal_reservations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_terminal_reservations_immutable BEFORE DELETE OR UPDATE ON public.coding_hosted_terminal_reservations FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_hosted_terminal_reservations coding_hosted_terminal_reservations_insert; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_terminal_reservations_insert BEFORE INSERT ON public.coding_hosted_terminal_reservations FOR EACH ROW EXECUTE FUNCTION public.guard_hosted_grading_insert();
 
 
 --
@@ -7722,6 +7953,14 @@ ALTER TABLE ONLY public.coding_hosted_evidence_reservations
 
 
 --
+-- Name: coding_hosted_grading_claims fk_coding_hosted_grading_claims_evaluation_id_coding_ho_45d3; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_grading_claims
+    ADD CONSTRAINT fk_coding_hosted_grading_claims_evaluation_id_coding_ho_45d3 FOREIGN KEY (evaluation_id) REFERENCES public.coding_hosted_authoring_finalizations(evaluation_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: coding_hosted_inference_grants fk_coding_hosted_inference_grants_evaluation_id_coding__64c4; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7743,6 +7982,38 @@ ALTER TABLE ONLY public.coding_hosted_inference_requests
 
 ALTER TABLE ONLY public.coding_hosted_private_tasks
     ADD CONSTRAINT fk_coding_hosted_private_tasks_evaluation_id_coding_hos_3974 FOREIGN KEY (evaluation_id) REFERENCES public.coding_hosted_assignments(evaluation_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_hosted_result_acknowledgements fk_coding_hosted_result_acknowledgements_result_sha256__e79c; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_result_acknowledgements
+    ADD CONSTRAINT fk_coding_hosted_result_acknowledgements_result_sha256__e79c FOREIGN KEY (result_sha256) REFERENCES public.coding_hosted_result_deliveries(result_sha256) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_hosted_result_deliveries fk_coding_hosted_result_deliveries_evaluation_id_coding_5c09; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_result_deliveries
+    ADD CONSTRAINT fk_coding_hosted_result_deliveries_evaluation_id_coding_5c09 FOREIGN KEY (evaluation_id) REFERENCES public.coding_hosted_terminal_finalizations(evaluation_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_hosted_terminal_finalizations fk_coding_hosted_terminal_finalizations_evaluation_id_c_883e; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_terminal_finalizations
+    ADD CONSTRAINT fk_coding_hosted_terminal_finalizations_evaluation_id_c_883e FOREIGN KEY (evaluation_id) REFERENCES public.coding_hosted_terminal_reservations(evaluation_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_hosted_terminal_reservations fk_coding_hosted_terminal_reservations_evaluation_id_co_0de3; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_terminal_reservations
+    ADD CONSTRAINT fk_coding_hosted_terminal_reservations_evaluation_id_co_0de3 FOREIGN KEY (evaluation_id) REFERENCES public.coding_hosted_grading_claims(evaluation_id) ON DELETE RESTRICT;
 
 
 --

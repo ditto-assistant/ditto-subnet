@@ -17,6 +17,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/codingcertifier"
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
 	"github.com/ditto-assistant/dittobench-api/internal/codingexecutor"
+	"github.com/ditto-assistant/dittobench-api/internal/codinggrader"
 	"github.com/ditto-assistant/dittobench-api/internal/codingharness"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
 	"github.com/ditto-assistant/dittobench-api/internal/codingsource"
@@ -36,13 +37,15 @@ func TestPlatformControlAdapterIntegration(t *testing.T) {
 		t.Fatal("missing integration config")
 	}
 	var config struct {
-		Socket    string        `json:"socket"`
-		Token     []byte        `json:"token"`
-		Config    ControlConfig `json:"control"`
-		Artifact  string        `json:"artifact"`
-		Agent     string        `json:"agent"`
-		MinerBody []byte        `json:"miner_body"`
-		Output    string        `json:"output"`
+		Socket       string        `json:"socket"`
+		Token        []byte        `json:"token"`
+		Config       ControlConfig `json:"control"`
+		Artifact     string        `json:"artifact"`
+		Agent        string        `json:"agent"`
+		MinerBody    []byte        `json:"miner_body"`
+		Output       string        `json:"output"`
+		Grading      bool          `json:"grading"`
+		GradingFault string        `json:"grading_fault"`
 	}
 	// ControlConfig intentionally refuses MarshalJSON but accepts private decoding.
 	if json.Unmarshal(raw, &config) != nil {
@@ -52,6 +55,11 @@ func TestPlatformControlAdapterIntegration(t *testing.T) {
 	client, err := NewControlClient(config.Config)
 	if err != nil {
 		t.Fatal("control client config rejected")
+	}
+	if config.Grading {
+		client.testGrader = func(_ context.Context, m codinggrader.HostedManifest) (codinggrader.Executor, error) {
+			return &scriptedGrader{manifest: m, failPreflight: config.GradingFault == "preflight"}, nil
+		}
 	}
 	expected := config.Config.Expected
 	binding := codingharness.HostedBinding{EvaluationID: expected.EvaluationID, AttemptID: expected.AttemptID, WorkerID: expected.WorkerID, AssignmentSHA256: expected.AssignmentSHA256, AgentID: config.Agent, AgentArtifactSHA256: config.Artifact, ProfileCapabilityID: "hosted-" + expected.AttemptID, Deadline: time.Unix(expected.DeadlineUnix, 0), ScreenedImageSHA256: strings.Repeat("b", 64), ScreenedImageID: "sha256:" + strings.Repeat("c", 64), ScreenedImageRef: "ditto-screen/" + config.Agent + ":latest", ScreenedImageSize: 1, ScreeningPolicyVersion: 11, ImageURL: "https://storage.invalid/image.tar?signature=synthetic", ImageExpiresAt: time.Now().Add(time.Minute)}
@@ -164,7 +172,19 @@ func TestPlatformControlAdapterIntegration(t *testing.T) {
 	if err != nil || again != authority {
 		t.Fatal("exact acknowledgement replay failed")
 	}
-	result, _ := json.Marshal(map[string]any{"patch_sha256": authority.FrozenPatchSHA256, "evidence_sha256": attempt.evidenceSHA})
+	output := map[string]any{"patch_sha256": authority.FrozenPatchSHA256, "evidence_sha256": attempt.evidenceSHA}
+	if config.Grading {
+		terminal, err := attempt.Grade(t.Context())
+		if err != nil {
+			t.Fatal("native grading/terminal failed", err)
+		}
+		if again, err := attempt.Grade(t.Context()); err != nil || again != terminal {
+			t.Fatal("terminal byte replay failed")
+		}
+		output["terminal_sha256"] = terminal
+		output["terminal_body"] = attempt.terminalBody
+	}
+	result, _ := json.Marshal(output)
 	if err := os.WriteFile(config.Output, result, 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -14,7 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import SCOREABLE_AGENT_STATUSES
 from ditto.api_models.coding_canonical import coding_canonical_sha256
-from ditto.api_models.coding_hosted import HostedCodingRequest
+from ditto.api_models.coding_hosted import (
+    HostedCodingRequest,
+    HostedCodingResult,
+    hosted_message_digest,
+)
 from ditto.api_server.coding_hosted_verification import (
     SignatureVerifier,
     verify_hosted_request,
@@ -22,6 +26,8 @@ from ditto.api_server.coding_hosted_verification import (
 from ditto.db.models import (
     Agent,
     CodingHostedAssignment,
+    CodingHostedResultAcknowledgement,
+    CodingHostedResultDelivery,
     CodingPrivateV2Release,
     CodingPrivateV2ReleaseEvent,
 )
@@ -188,7 +194,18 @@ async def admit_hosted_request(
     if not request.issued_at_unix <= now.timestamp() < request.expires_at_unix:
         raise HostedAdmissionError("hosted request expired while awaiting admission")
     if request.operation == "acknowledge":
-        raise HostedAdmissionError("hosted terminal acknowledgement is not available")
+        delivery = await session.get(CodingHostedResultDelivery, request.result_sha256)
+        if (
+            delivery is None
+            or delivery.evaluation_id != row.evaluation_id
+            or delivery.validator_hotkey != authenticated_validator
+        ):
+            raise HostedAdmissionError(
+                "hosted terminal acknowledgement is not available"
+            )
+        result = HostedCodingResult.model_validate(delivery.body)
+        if hosted_message_digest(result) != request.result_sha256:
+            raise HostedAdmissionError("hosted terminal acknowledgement differs")
     if request.operation == "evaluate" and row.expires_at <= now:
         raise HostedAdmissionError("hosted assignment expired")
     await consume_validator_nonce(
@@ -199,6 +216,16 @@ async def admit_hosted_request(
         expires_at=datetime.fromtimestamp(request.expires_at_unix, UTC),
     )
     newly_admitted = request.operation == "evaluate" and row.admitted_at is None
+    if (
+        request.operation == "acknowledge"
+        and await session.get(CodingHostedResultAcknowledgement, request.result_sha256)
+        is None
+    ):
+        session.add(
+            CodingHostedResultAcknowledgement(
+                result_sha256=request.result_sha256, request_sha256=request_sha
+            )
+        )
     if newly_admitted:
         row.admitted_at = now
         row.admission_request_sha256 = request_sha

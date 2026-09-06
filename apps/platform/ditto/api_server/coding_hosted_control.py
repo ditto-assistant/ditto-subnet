@@ -28,6 +28,7 @@ from ditto.api_server.coding_hosted_authoring_evidence import (
 from ditto.api_server.coding_hosted_budget import ProfiledBudgetEstimator
 from ditto.api_server.coding_hosted_evidence import HostedInferenceEvidencePublisher
 from ditto.api_server.coding_hosted_evidence_spool import HostedEvidenceError
+from ditto.api_server.coding_hosted_grading import HostedGradingControl
 from ditto.api_server.coding_hosted_inference import HostedInferenceLedger
 from ditto.api_server.coding_hosted_inputs import (
     HostedAuthoringInputAssembler,
@@ -72,6 +73,7 @@ class HostedAuthoringControl:
         inference_evidence: HostedInferenceEvidencePublisher,
         authoring_evidence: HostedAuthoringEvidencePublisher,
         bridge_root: Path,
+        grading: HostedGradingControl | None = None,
         _test_transport: httpx.MockTransport | None = None,
     ):
         import os
@@ -117,6 +119,7 @@ class HostedAuthoringControl:
             authoring_evidence,
         )
         self._root, self._test_transport = bridge_root, _test_transport
+        self._grading = grading
         self._ledger = HostedInferenceLedger(sessions=sessions, worker_id=worker_id)
         self._bridges: dict[UUID, _Bridge] = {}
         self._bound: dict[UUID, SourceBinding] = {}

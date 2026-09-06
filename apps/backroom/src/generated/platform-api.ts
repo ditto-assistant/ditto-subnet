@@ -15105,6 +15105,71 @@ export interface components {
             weight_eligible: false;
         };
         /**
+         * HostedCodingResult
+         * @description Validator-visible terminal receipt; private outcomes stay inside Platform.
+         */
+        HostedCodingResult: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Assignment Sha256 */
+            assignment_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 2;
+            /**
+             * Evaluation Id
+             * Format: uuid
+             */
+            evaluation_id: string;
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /** Execution Profile Sha256 */
+            execution_profile_sha256: string;
+            /** Expires At Unix */
+            expires_at_unix: number;
+            /** Grading Profile Sha256 */
+            grading_profile_sha256: string;
+            /** Issued At Unix */
+            issued_at_unix: number;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "completed" | "candidate_failure" | "infrastructure_failure" | "integrity_failure";
+            /** Platform Hotkey */
+            platform_hotkey: string;
+            /** Policy Sha256 */
+            policy_sha256: string;
+            /** Request Sha256 */
+            request_sha256: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-hosted-result-v2";
+            /**
+             * Shadow Only
+             * @constant
+             */
+            shadow_only: true;
+            /** Signature */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
          * HostedCodingStatus
          * @description Signed pending projection; never terminal evidence or an object grant.
          */
@@ -35258,6 +35323,15 @@ export interface operations {
             };
         };
         responses: {
+            /** @description Finalized signed result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostedCodingResult"];
+                };
+            };
             /** @description Successful Response */
             202: {
                 headers: {
@@ -35266,6 +35340,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HostedCodingStatus"];
                 };
+            };
+            /** @description Exact result acknowledged. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validator identity is not permitted. */
             401: {

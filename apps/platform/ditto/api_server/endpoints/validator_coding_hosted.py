@@ -21,10 +21,12 @@ from starlette.types import Message
 
 from ditto.api_models.coding_hosted import (
     HostedCodingRequest,
+    HostedCodingResult,
     HostedCodingStatus,
     hosted_message_digest,
     hosted_signing_bytes,
 )
+from ditto.api_server.coding_hosted_results import signed_terminal_result
 from ditto.api_server.coding_hosted_verification import verify_hosted_request
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.endpoints.validator import (
@@ -128,6 +130,8 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
     response_model=HostedCodingStatus,
     status_code=202,
     responses={
+        200: {"model": HostedCodingResult, "description": "Finalized signed result."},
+        204: {"description": "Exact result acknowledged."},
         401: {"description": "Validator identity is not permitted."},
         409: {"description": "Request replay or assignment conflict."},
         413: {"description": "Streamed request exceeds the byte limit."},
@@ -175,6 +179,18 @@ async def control(
             if not isinstance(database_now, datetime):
                 raise HostedAdmissionError("hosted clock unavailable")
             issued = int(database_now.timestamp())
+            if payload.operation == "acknowledge":
+                return Response(status_code=204, headers=_NO_STORE)
+            terminal = await signed_terminal_result(
+                session, row, payload, config.signer, issued
+            )
+            if terminal is not None:
+                return Response(
+                    content=terminal,
+                    status_code=200,
+                    media_type="application/json",
+                    headers=_NO_STORE,
+                )
             status = HostedCodingStatus.model_validate(
                 {
                     "schema": "dittobench-coding-hosted-status-v2",

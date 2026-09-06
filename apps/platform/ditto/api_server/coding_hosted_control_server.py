@@ -72,22 +72,95 @@ class HostedControlServer:
                 )
             operation = command.operation
             source = command.source
-            if operation != "retain" and command.retention is not None:
+            if operation not in {"retain", "grading"} and command.retention is not None:
                 return
-            if operation != "freeze" and (
-                command.patch_size or command.evidence_sha256 is not None
+            if operation != "freeze" and command.patch_size:
+                return
+            if (
+                operation not in {"freeze", "grading"}
+                and command.evidence_sha256 is not None
+            ):
+                return
+            if operation != "terminal" and (
+                command.terminal_size or command.terminal_sha256 is not None
             ):
                 return
             result = {
+                # No private bytes are included in this correlation header.
                 "schema": "dittobench-coding-hosted-control-result-v2",
                 "request_id": str(command.request_id),
                 "operation": operation,
                 "source_sha256": source.digest(),
                 "ok": True,
             }
-            async with asyncio.timeout(600 if operation == "retain" else 180):
+            if operation != "grading_bundle" and command.claim_id is not None:
+                return
+            async with asyncio.timeout(
+                600 if operation in {"retain", "terminal"} else 180
+            ):
                 async with self._control._sessions() as session, session.begin():
                     await self._control._owner(source, session)
+                if operation in {
+                    "grading",
+                    "check_grading",
+                    "grading_bundle",
+                    "terminal",
+                }:
+                    grading = self._control._grading
+                    if grading is None:
+                        return
+                    if operation == "grading_bundle":
+                        if command.claim_id is None or await reader.read(1):
+                            return
+                        body = await grading.protected(source, command.claim_id)
+                        result["payload_kind"] = "grading_bundle"
+                        result["payload_size"] = len(body)
+                        await self._reply(writer, result)
+                        writer.write(body)
+                        await writer.drain()
+                        return
+                    if operation == "grading":
+                        if command.retention is None or command.evidence_sha256 is None:
+                            return
+                        self._control.retention_bounds(command.retention)
+                        freeze = await reader.readexactly(command.retention.freeze_size)
+                        if await reader.read(1):
+                            return
+                        header, objects = await grading.inputs(
+                            source, command.evidence_sha256, command.retention, freeze
+                        )
+                        result["payload_kind"] = "grading"
+                        await self._reply(writer, result)
+                        encoded = canonical(header)
+                        for body in (
+                            struct.pack(">I", len(encoded)),
+                            encoded,
+                            *objects,
+                        ):
+                            await grading.check(source)
+                            writer.write(body)
+                            await writer.drain()
+                        await grading.check(source)
+                        writer.write(b"DITTO-GRADING-READY-V2\n")
+                        await writer.drain()
+                        return
+                    if operation == "terminal":
+                        if not command.terminal_size or command.terminal_sha256 is None:
+                            return
+                        body = await reader.readexactly(command.terminal_size)
+                        from ditto.api_server.coding_hosted_authoring_evidence import (
+                            sha,
+                        )
+
+                        if sha(body) != command.terminal_sha256 or await reader.read(1):
+                            return
+                        result["evidence_sha256"] = await grading.terminal(source, body)
+                    else:
+                        if await reader.read(1):
+                            return
+                        await grading.check(source)
+                    await self._reply(writer, result)
+                    return
                 if operation == "retain":
                     header = command.retention
                     if header is None:

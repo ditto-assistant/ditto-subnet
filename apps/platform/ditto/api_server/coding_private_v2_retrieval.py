@@ -241,6 +241,15 @@ class PrivateV2InputRetriever:
 
     async def describe_authoring(self, grant_id: UUID) -> PrivateV2AuthoringDescriptor:
         """Private assembler authority; contains no grader object capability."""
+        return await self._describe(grant_id, "authoring", AUTHORING_ROLES)
+
+    async def describe_grading(self, grant_id: UUID) -> PrivateV2AuthoringDescriptor:
+        """Private grading authority, available only after committed patch freeze."""
+        return await self._describe(grant_id, "grading", GRADING_ROLES)
+
+    async def _describe(
+        self, grant_id: UUID, phase: str, roles: tuple[str, ...]
+    ) -> PrivateV2AuthoringDescriptor:
         try:
             async with asyncio.timeout(PRIVATE_V2_RETRIEVAL_TIMEOUT_SECONDS):
                 grant = await self._grants.active_grant(
@@ -249,8 +258,8 @@ class PrivateV2InputRetriever:
                 self._validate_grant(grant, grant_id=grant_id, role="catalog_record")
                 if (
                     grant is None
-                    or grant.phase != "authoring"
-                    or grant.allowed_roles != AUTHORING_ROLES
+                    or grant.phase != phase
+                    or grant.allowed_roles != roles
                 ):
                     raise ValueError("authoring grant")
                 leaves = [
@@ -287,7 +296,7 @@ class PrivateV2InputRetriever:
                             "plaintext_size_bytes"
                         ],
                     )
-                    for role in AUTHORING_ROLES
+                    for role in roles
                 )
                 await self._recheck(grant, "catalog_record")
                 return PrivateV2AuthoringDescriptor(

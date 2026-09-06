@@ -52,11 +52,18 @@ class ControlCommand(BaseModel):
         "retain",
         "freeze",
         "abort",
+        "grading",
+        "check_grading",
+        "grading_bundle",
+        "terminal",
     ]
     source: SourceBinding
     retention: RetentionHeader | None = None
     evidence_sha256: Digest | None = None
     patch_size: Annotated[int, Field(ge=0, le=128 << 20)] = 0
+    terminal_size: Annotated[int, Field(ge=0, le=4 << 20)] = 0
+    terminal_sha256: Digest | None = None
+    claim_id: CanonicalUUID | None = None
 
 
 class AuthoringBlob(BaseModel):

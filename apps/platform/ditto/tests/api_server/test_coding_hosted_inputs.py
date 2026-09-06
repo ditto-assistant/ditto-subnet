@@ -72,7 +72,13 @@ def hosted_profile(tmp_path_factory):
 
 
 async def fixture(
-    tmp_path, session_maker, hosted_profile, *, expires_soon=False, policy_sha256=None
+    tmp_path,
+    session_maker,
+    hosted_profile,
+    *,
+    expires_soon=False,
+    policy_sha256=None,
+    grading_profile_factory=None,
 ):
     tmp_path.chmod(0o700)
     release_path, groups = _bound_fixture(tmp_path, native_authoring=True)
@@ -80,7 +86,7 @@ async def fixture(
     compile_private_catalog_v2(
         release_authority=release_path, groups_root=groups, output=tmp_path / "catalog"
     )
-    build_private_v2_payload(
+    payload = build_private_v2_payload(
         catalog_directory=tmp_path / "catalog",
         groups_root=groups,
         output=tmp_path / "payload",
@@ -191,6 +197,11 @@ async def fixture(
         registration_bundle=(registration, wire_receipt),
         execution_profile_sha256=hosted_profile["sha256"],
         policy_sha256=policy_sha256,
+        grading_profile_sha256=(
+            grading_profile_factory(payload["task_assets"][7]["artifacts"])
+            if grading_profile_factory
+            else None
+        ),
         deadline=int(time.time()) + 2 if expires_soon else None,
     )
 
