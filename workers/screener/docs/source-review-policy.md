@@ -69,6 +69,19 @@ addendum.
   on the deciding turn (I7); a request-contract filler over a closed ledger /
   interval / trip recipe list (I5); a support-record visibility gate that
   discards a parseable model draft (I3).
+- **Missed on the whole aceron lineage (2026-09-06 copy-hold reads).** A
+  baked product-option vocabulary injected as a prompt note in `run()`
+  (aceron_v13 `baseline.rs:11553-11559`) and used by `product_option_fallbacks`
+  / `canonical_from_options` (`:13850-13956`) to canonicalize setter arguments
+  when the live discovery receipt lacks a match is a host-manufactured const
+  flowing into a tool argument — I4 under v11's own text. No clear mentioned
+  it; alexandors v1 removed it. It is now a named v12 lead.
+- **Copy-detector follow-ups (platform, not prompt).** Pure repacks submitted
+  minutes after a reference's `available_at` (v12-age, KOTH_v8) and a
+  near-duplicate of a still-embargoed king (unione v24, admitted through
+  `behavioral-oracle-passed`) show the detector never consults the reference's
+  `download_available`; it also named aceron_v9 as nearest match for a v13
+  derivative and held a delta that only deleted baked tables (alexandors).
 - **Static preflight reachability valve.** A `credential_access` or
   `data_exfiltration` preflight hit in a file the Dockerfile never `COPY`s, in
   a CLI subcommand other than the served entrypoint, or in a local rehearsal

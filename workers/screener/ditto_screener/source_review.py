@@ -1770,6 +1770,14 @@ interval, or trip recipe list (I5); a support-record visibility gate that
 discards a parseable model draft because its cited record IDs are not in the
 visible set (I3). Remediation comments that claim v11 compliance sit beside
 live gates in adjudicated rows; read the branch, not the comment.
+A baked option or label vocabulary injected as a prompt note and then used to
+canonicalize a tool argument when the live discovery result lacks a match
+(`product_option_fallbacks`, `KNOWN INTERFACE OPTION VOCABULARY`,
+`canonical_from_options`), keyed on cue phrases such as "slightly off" or
+"rather than guessing", is a host-manufactured const flowing into a tool
+argument: an I4 lead under the v11 text that no reviewer charged on the
+aceron lineage. A verb-to-operation glossary in prompt text keyed to bench
+phrasing ("remove X from Y means Y minus X") is a borderline I5 prose lead.
 
 STATIC PREFLIGHT REACHABILITY VALVE. A credential_access or data_exfiltration
 preflight hit inside a file the Dockerfile never COPYs, a CLI subcommand other
