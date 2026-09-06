@@ -39,6 +39,7 @@ type HarnessBinding struct {
 type sourceRecord struct {
 	binding HarnessBinding
 	address netip.Addr
+	hosted  *HostedBinding
 }
 
 // Registry owns the one-to-one active instance/source mapping shared by the
@@ -73,6 +74,10 @@ func NewRegistry(now func() time.Time) *Registry {
 }
 
 func (registry *Registry) Register(binding HarnessBinding, sourceIP string) (*Lease, error) {
+	return registry.register(binding, sourceIP, nil)
+}
+
+func (registry *Registry) register(binding HarnessBinding, sourceIP string, hosted *HostedBinding) (*Lease, error) {
 	if registry == nil {
 		return nil, ErrInvalid
 	}
@@ -81,7 +86,7 @@ func (registry *Registry) Register(binding HarnessBinding, sourceIP string) (*Le
 	if err != nil || !validSourceAddress(address) {
 		return nil, ErrInvalid
 	}
-	record := &sourceRecord{binding: binding, address: address.Unmap()}
+	record := &sourceRecord{binding: binding, address: address.Unmap(), hosted: hosted}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	now := registry.now().UTC()
@@ -150,7 +155,7 @@ func (registry *Registry) resolve(
 	}
 	registry.lastNow = now
 	record := registry.byInstance[instanceID]
-	if record == nil || !record.binding.Deadline.After(now) ||
+	if record == nil || record.hosted != nil || !record.binding.Deadline.After(now) ||
 		record.binding.AgentArtifactSHA256 != agentArtifactSHA256 || record.binding.TicketID != ticketID ||
 		record.binding.CaseID != caseID || record.binding.ProfileCapabilityID != profileCapabilityID {
 		return nil, false

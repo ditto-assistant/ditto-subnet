@@ -213,7 +213,7 @@ func (router *Router) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	address, err := remoteAddress(request.RemoteAddr)
-	if err != nil || !router.registry.matches(published.source, address) || !published.admit() {
+	if err != nil || !published.admit(router.registry, address) {
 		http.NotFound(response, request)
 		return
 	}
@@ -222,7 +222,7 @@ func (router *Router) ServeHTTP(response http.ResponseWriter, request *http.Requ
 }
 
 func routeKey(path string) string {
-	for _, prefix := range []string{workspacePrefix, inferencePrefix} {
+	for _, prefix := range []string{workspacePrefix, inferencePrefix, hostedWorkspacePrefix, hostedInferencePrefix} {
 		if !strings.HasPrefix(path, prefix) {
 			continue
 		}
@@ -247,10 +247,10 @@ func remoteAddress(value string) (netip.Addr, error) {
 	return address.Unmap(), nil
 }
 
-func (published *route) admit() bool {
+func (published *route) admit(registry *Registry, address netip.Addr) bool {
 	published.mu.Lock()
 	defer published.mu.Unlock()
-	if published.revoked || published.closed {
+	if published.revoked || published.closed || !registry.matches(published.source, address) {
 		return false
 	}
 	published.inflight++

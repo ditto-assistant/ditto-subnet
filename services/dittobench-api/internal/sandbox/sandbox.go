@@ -1002,6 +1002,18 @@ func parseRuntimeMetrics(diagnostics *RuntimeDiagnostics, output string) {
 // Run starts the image detached with resource caps and a random host port, then
 // resolves the mapped host port.
 func (d *LocalDocker) Run(ctx context.Context, image string, env map[string]string) (*Handle, error) {
+	return d.run(ctx, image, env, false)
+}
+
+// RunRetainingFailedHandle preserves exact container/network cleanup authority
+// after a possibly side-effecting start failure. A nonnil handle MUST be stopped
+// with StopRetainingImage even when err is nonnil. It performs no best-effort
+// cleanup that could discard an ambiguous container. Legacy Run is unchanged.
+func (d *LocalDocker) RunRetainingFailedHandle(ctx context.Context, image string, env map[string]string) (*Handle, error) {
+	return d.run(ctx, image, env, true)
+}
+
+func (d *LocalDocker) run(ctx context.Context, image string, env map[string]string, retainFailure bool) (*Handle, error) {
 	runCtx, cancel := context.WithTimeout(ctx, d.startTimeout())
 	defer cancel()
 	if _, err := brokerCapabilityHostFromEnv(env); err != nil {
@@ -1012,10 +1024,14 @@ func (d *LocalDocker) Run(ctx context.Context, image string, env map[string]stri
 	if err != nil {
 		return nil, err
 	}
+	containerName := "dittobench-" + identity
 	network := ""
 	if d.EgressNetwork != "" {
 		network, err = d.createIsolatedNetwork(runCtx, identity)
 		if err != nil {
+			if retainFailure {
+				return &Handle{ContainerID: containerName, ImageRef: image, NetworkName: "ditto-job-" + identity}, err
+			}
 			return nil, err
 		}
 	}
@@ -1024,9 +1040,11 @@ func (d *LocalDocker) Run(ctx context.Context, image string, env map[string]stri
 			_, _ = d.dockerOutput(context.Background(), "network", "rm", network)
 		}
 	}
-	containerName := "dittobench-" + identity
 	out, err := d.dockerOutput(runCtx, d.runArgsForNetwork(image, env, network, identity)...)
 	if err != nil {
+		if retainFailure {
+			return &Handle{ContainerID: containerName, ImageRef: image, NetworkName: network}, fmt.Errorf("sandbox start requires cleanup: %w", err)
+		}
 		// `docker run` can create the named container before a slow image unpack or
 		// runtime start exceeds the deadline. Remove that partial object by the
 		// exact random identity before releasing its network and image tag.
@@ -1039,11 +1057,17 @@ func (d *LocalDocker) Run(ctx context.Context, image string, env map[string]stri
 
 	hostPort, err := d.mappedPort(runCtx, containerID)
 	if err != nil {
+		if retainFailure {
+			return &Handle{ContainerID: containerName, ImageRef: image, NetworkName: network}, err
+		}
 		d.Stop(context.Background(), &Handle{ContainerID: containerID, ImageRef: image, NetworkName: network})
 		return nil, err
 	}
 	sourceIP, err := d.containerIP(runCtx, containerID)
 	if err != nil {
+		if retainFailure {
+			return &Handle{ContainerID: containerName, ImageRef: image, NetworkName: network}, err
+		}
 		d.Stop(context.Background(), &Handle{ContainerID: containerID, ImageRef: image, NetworkName: network})
 		return nil, err
 	}

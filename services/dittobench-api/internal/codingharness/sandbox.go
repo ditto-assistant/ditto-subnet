@@ -13,6 +13,29 @@ import (
 
 type SandboxRuntime struct{ docker *sandbox.LocalDocker }
 
+// HostedSandboxRuntime retains partial starts for verified native cleanup.
+// Legacy SandboxRuntime.Start retains its existing best-effort semantics.
+type HostedSandboxRuntime struct{ *SandboxRuntime }
+
+func NewHostedSandboxRuntime(docker *sandbox.LocalDocker) (*HostedSandboxRuntime, error) {
+	runtime, err := NewSandboxRuntime(docker)
+	if err != nil {
+		return nil, err
+	}
+	return &HostedSandboxRuntime{runtime}, nil
+}
+
+func (runtime *HostedSandboxRuntime) Start(ctx context.Context, image string) (Running, error) {
+	if runtime == nil || runtime.SandboxRuntime == nil || runtime.docker == nil {
+		return nil, ErrInvalidConfig
+	}
+	handle, err := runtime.docker.RunRetainingFailedHandle(ctx, image, map[string]string{})
+	if handle == nil {
+		return nil, err
+	}
+	return &sandboxRunning{handle: handle}, err
+}
+
 type sandboxRunning struct{ handle *sandbox.Handle }
 
 func NewSandboxRuntime(docker *sandbox.LocalDocker) (*SandboxRuntime, error) {

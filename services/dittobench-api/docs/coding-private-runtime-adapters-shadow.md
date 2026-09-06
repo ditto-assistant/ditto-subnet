@@ -5,6 +5,10 @@
 private adapters required by the phase runner. Nothing constructs them in a
 production worker yet.
 
+The separate native Platform-hosted v2 lifecycle and source routes are described
+in [coding-hosted-lifecycle-v2.md](coding-hosted-lifecycle-v2.md). They do not
+activate or reinterpret the legacy ticket/grant interfaces below.
+
 ## Dormant screened harness
 
 `codingharness.Factory.Acquire` validates the complete ticket/run/agent/image

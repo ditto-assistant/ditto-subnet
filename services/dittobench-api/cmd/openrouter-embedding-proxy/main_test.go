@@ -102,7 +102,7 @@ func TestProxyCoalescesIdenticalInflightBatches(t *testing.T) {
 		}()
 	}
 	deadline := time.Now().Add(time.Second)
-	for calls.Load() == 0 && time.Now().Before(deadline) {
+	for (calls.Load() == 0 || proxy.stats.CoalescedWaits.Load() == 0) && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	close(release)
