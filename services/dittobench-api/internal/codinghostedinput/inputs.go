@@ -99,6 +99,20 @@ type Prepared struct {
 	epoch    string
 }
 
+// Authority is a private worker projection, not a miner-facing task identity.
+// Returning a value prevents the orchestrator from changing prepared authority.
+func (p *Prepared) Authority() (Expected, error) {
+	if p == nil {
+		return Expected{}, ErrInput
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed || !expectedValid(p.expected) {
+		return Expected{}, ErrInput
+	}
+	return p.expected, nil
+}
+
 func expectedValid(expected Expected) bool {
 	for _, id := range []string{expected.EvaluationID, expected.AttemptID, expected.WorkerID} {
 		parsed, err := uuid.Parse(id)

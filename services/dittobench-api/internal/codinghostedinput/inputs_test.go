@@ -66,6 +66,15 @@ func TestPlatformAuthoringInputIntegration(t *testing.T) {
 		t.Fatal("valid frame rejected")
 	}
 	defer prepared.Close()
+	actual, err := prepared.Authority()
+	if err != nil || actual != expected {
+		t.Fatal("prepared worker authority drifted")
+	}
+	actual.AssignmentSHA256 = strings.Repeat("f", 64)
+	again, err := prepared.Authority()
+	if err != nil || again != expected {
+		t.Fatal("returned authority mutated prepared inputs")
+	}
 	seed, err := prepared.SeedRequest()
 	if err != nil {
 		t.Fatal(err)
@@ -106,6 +115,9 @@ func TestPlatformAuthoringInputIntegration(t *testing.T) {
 		t.Fatal("private prepared inputs serialized")
 	}
 	prepared.Close()
+	if _, err := prepared.Authority(); err == nil {
+		t.Fatal("closed inputs returned worker authority")
+	}
 	if _, err := prepared.SeedRequest(); err == nil {
 		t.Fatal("closed inputs served memory")
 	}
