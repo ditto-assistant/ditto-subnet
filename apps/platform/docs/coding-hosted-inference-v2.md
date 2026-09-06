@@ -78,6 +78,8 @@ Tests use migrated PostgreSQL and synthetic requests/receipts for concurrency,
 replay, quotas, unused-reservation release, rollback, revocation races, duplicate
 receipts, immutable rows and freeze gating. No live provider/billing is proven.
 
-Next: the reviewed native provider adapter/source-bound relay, followed by full
+The [native provider adapter](coding-hosted-provider-v2.md) now consumes this
+ledger privately; it still requires a reviewed estimator and live provider
+profile. Next: authenticated source-bound relay integration, followed by full
 worker execution and sealed terminal evidence. Public practice, ordinary scores,
 weights and emissions are unchanged. Migration alone cannot activate coding.

@@ -45,6 +45,9 @@ class DispatchReservation:
     locked_request_sha256: str
     newly_reserved: bool
     expires_at_unix: int
+    evaluation_id: UUID
+    attempt_id: UUID
+    policy_sha256: str
 
 
 @dataclass(frozen=True, repr=False)
@@ -294,6 +297,9 @@ class HostedInferenceLedger:
                     digest,
                     False,
                     int(grant.expires_at.timestamp()),
+                    grant.evaluation_id,
+                    grant.attempt_id,
+                    grant.policy_sha256,
                 )
             else:
                 rows = list(
@@ -342,6 +348,9 @@ class HostedInferenceLedger:
                     digest,
                     True,
                     int(grant.expires_at.timestamp()),
+                    grant.evaluation_id,
+                    grant.attempt_id,
+                    grant.policy_sha256,
                 )
         return result
 
@@ -386,6 +395,11 @@ class HostedInferenceLedger:
                 await session.flush()
                 fresh = True
         return fresh
+
+    async def require_active(self, grant_id: UUID) -> None:
+        """Recheck authority before releasing a settled response to the worker."""
+        async with asyncio.timeout(20), self._sessions() as session, session.begin():
+            await self._grant(session, grant_id, active=True)
 
     async def revoke(self, grant_id: UUID) -> bool:
         async with asyncio.timeout(20), self._sessions() as session, session.begin():
