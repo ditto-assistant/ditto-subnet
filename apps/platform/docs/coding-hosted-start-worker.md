@@ -61,6 +61,8 @@ commit failure/rollback, cancellation while waiting for a row lock, retired or
 closed authority, image/assignment drift, environment confinement and output
 limits. This does not prove live Docker isolation, Hippius access or key custody.
 
+Verified private projections are now supplied by the
+[authoring input assembler](coding-hosted-input-assembly.md).
 Next integration must assemble the approved screened-image transport and verified
 private projections, provide native inference issuance/revocation, run the worker,
 freeze after quiescence, grade pristinely and finalize sealed signed evidence.

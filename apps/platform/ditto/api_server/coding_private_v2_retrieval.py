@@ -34,6 +34,11 @@ from ditto.api_server.coding_private_v2_transport import (
 )
 from ditto.coding_hosted_private import AUTHORING_ROLES, GRADING_ROLES
 from ditto.coding_hosted_private import PrivateV2ObjectGrant as PrivateV2ObjectGrant
+from ditto.coding_selection import (
+    coding_catalog_empty_leaf_hash,
+    coding_catalog_leaf_hash,
+    coding_catalog_node_hash,
+)
 
 _AUTHORING_ROLES = frozenset(AUTHORING_ROLES)
 _GRADING_ROLES = frozenset(GRADING_ROLES)
@@ -86,6 +91,16 @@ class PrivateV2Unwrapper(Protocol):
     async def unwrap(
         self, request: PrivateV2UnwrapRequest
     ) -> PrivateV2UnwrapResult: ...
+
+
+@dataclass(frozen=True, repr=False)
+class PrivateV2AuthoringDescriptor:
+    grant: PrivateV2ObjectGrant
+    corpus_release_id: str
+    private_release_sha256: str
+    task_version_id: str
+    task_commitment_sha256: str
+    objects: tuple[tuple[str, str, int], ...]
 
 
 class PrivateV2InputRetriever:
@@ -222,6 +237,70 @@ class PrivateV2InputRetriever:
         except Exception:
             raise PrivateV2RetrievalError(
                 "private v2 object retrieval failed"
+            ) from None
+
+    async def describe_authoring(self, grant_id: UUID) -> PrivateV2AuthoringDescriptor:
+        """Private assembler authority; contains no grader object capability."""
+        try:
+            async with asyncio.timeout(PRIVATE_V2_RETRIEVAL_TIMEOUT_SECONDS):
+                grant = await self._grants.active_grant(
+                    grant_id=grant_id, audience=self._audience
+                )
+                self._validate_grant(grant, grant_id=grant_id, role="catalog_record")
+                if (
+                    grant is None
+                    or grant.phase != "authoring"
+                    or grant.allowed_roles != AUTHORING_ROLES
+                ):
+                    raise ValueError("authoring grant")
+                leaves = [
+                    coding_catalog_leaf_hash(
+                        catalog_index=i,
+                        task_commitment_sha256=task["task_commitment_sha256"],
+                    )
+                    for i, task in enumerate(self._payload["task_assets"])
+                ]
+                count = 1 << (len(leaves) - 1).bit_length()
+                leaves.extend(
+                    coding_catalog_empty_leaf_hash(catalog_index=i)
+                    for i in range(len(leaves), count)
+                )
+                level = 0
+                while len(leaves) > 1:
+                    leaves = [
+                        coding_catalog_node_hash(
+                            level=level,
+                            left_sha256=leaves[i],
+                            right_sha256=leaves[i + 1],
+                        )
+                        for i in range(0, len(leaves), 2)
+                    ]
+                    level += 1
+                if leaves[0] != self._registration.catalog_merkle_root:
+                    raise ValueError("catalog root")
+                task = self._payload["task_assets"][grant.catalog_index]
+                objects = tuple(
+                    (
+                        role,
+                        task["artifacts"][role],
+                        self._objects[task["artifacts"][role]][1][
+                            "plaintext_size_bytes"
+                        ],
+                    )
+                    for role in AUTHORING_ROLES
+                )
+                await self._recheck(grant, "catalog_record")
+                return PrivateV2AuthoringDescriptor(
+                    grant,
+                    self._registration.corpus_release_id,
+                    self._registration.private_release_sha256,
+                    task["task_version_id"],
+                    task["task_commitment_sha256"],
+                    objects,
+                )
+        except Exception:
+            raise PrivateV2RetrievalError(
+                "private v2 authoring authority is unavailable"
             ) from None
 
     async def _read(self, *, grant_id: UUID, role: str) -> bytes:

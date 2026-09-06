@@ -65,7 +65,7 @@ def _tree_digest(root: Path) -> str:
     ).hexdigest()
 
 
-def _bound_fixture(root: Path) -> tuple[Path, Path]:
+def _bound_fixture(root: Path, *, native_authoring=False) -> tuple[Path, Path]:
     groups_root = root / "groups"
     groups_root.mkdir(mode=0o700)
     groups: list[dict[str, object]] = []
@@ -100,18 +100,54 @@ def _bound_fixture(root: Path) -> tuple[Path, Path]:
             },
         )
         _write_text(group / "grader" / "test_app.py", f"assert {index} >= 0\n")
-        issue_sha = _write_json(group / "issue.json", {"title": f"issue-{index}"})
-        runtime_sha = _write_json(
-            group / "runtime-policy.json", {"editable_paths": ["app.py"]}
-        )
-        resource_sha = _write_json(
-            group / "resource-profile.json", {"cpu": 1, "index": index}
-        )
+        issue: dict[str, object] = {"title": f"issue-{index}"}
+        runtime: dict[str, object] = {"editable_paths": ["app.py"]}
+        resource: dict[str, object] = {"cpu": 1, "index": index}
+        if native_authoring:
+            issue = {
+                "schema": "dittobench-coding-private-visible-issue-v2",
+                "title": f"issue-{index}",
+                "description": "Update the synthetic example.",
+                "constraints": [],
+            }
+            runtime = {
+                "schema": "dittobench-coding-private-runtime-policy-v2",
+                "environment_platform": "linux/amd64",
+                "network": "none",
+                "editable_paths": ["app.py"],
+                "creatable_paths": [],
+                "deletable_paths": [],
+                "build_commands": [],
+                "test_commands": [
+                    {
+                        "id": "visible-tests",
+                        "argv": ["python", "app.py"],
+                        "environment": {},
+                        "timeout_milliseconds": 1000,
+                    }
+                ],
+            }
+            resource = {
+                "schema": "dittobench-coding-private-resource-profile-v2",
+                "cpus_milli": 2000,
+                "memory_mib": 1024,
+                "disk_mib": 512,
+                "pids": 256,
+                "wall_time_seconds": 600,
+                "network": "none",
+            }
+        issue_sha = _write_json(group / "issue.json", issue)
+        runtime_sha = _write_json(group / "runtime-policy.json", runtime)
+        resource_sha = _write_json(group / "resource-profile.json", resource)
         arms = []
         for condition in _CONDITIONS:
             memory_sha = _write_json(
                 group / "memory" / f"{condition}.json",
-                {"memories": [] if condition == "v0_none" else [{"id": condition}]},
+                {
+                    "memories": []
+                    if native_authoring or condition == "v0_none"
+                    else [{"id": condition}]
+                },
             )
             arms.append(
                 {

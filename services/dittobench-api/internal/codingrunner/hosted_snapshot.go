@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 )
@@ -17,9 +18,10 @@ var ErrHostedSnapshot = errors.New("hosted snapshot verification failed")
 
 // HostedSnapshot contains private source bytes. It is never a validator receipt.
 type HostedSnapshot struct {
-	Bundle        []byte
-	Identity      BundleIdentity
-	CapsuleSHA256 string
+	Bundle            []byte
+	Identity          BundleIdentity
+	CapsuleSHA256     string
+	CapsuleTreeSHA256 string
 }
 
 func (HostedSnapshot) MarshalJSON() ([]byte, error) {
@@ -167,7 +169,29 @@ func compileHostedSnapshot(ctx context.Context, capsule []byte, expectedSHA256 s
 	if err != nil {
 		return HostedSnapshot{}, ErrHostedSnapshot
 	}
-	return HostedSnapshot{Bundle: flat.Bytes(), Identity: identity, CapsuleSHA256: expectedSHA256}, nil
+	paths := make([]string, 0, len(entries))
+	for name := range entries {
+		paths = append(paths, name)
+	}
+	sort.Strings(paths)
+	identities := make([]struct {
+		Path      string `json:"path"`
+		SHA256    string `json:"sha256"`
+		SizeBytes int64  `json:"size_bytes"`
+	}, 0, len(paths))
+	for _, name := range paths {
+		entry := entries[name]
+		identities = append(identities, struct {
+			Path      string `json:"path"`
+			SHA256    string `json:"sha256"`
+			SizeBytes int64  `json:"size_bytes"`
+		}{name, sha256Hex(entry.body), entry.header.Size})
+	}
+	outerTree, err := canonicalStruct(identities)
+	if err != nil {
+		return HostedSnapshot{}, ErrHostedSnapshot
+	}
+	return HostedSnapshot{Bundle: flat.Bytes(), Identity: identity, CapsuleSHA256: expectedSHA256, CapsuleTreeSHA256: sha256Hex(outerTree)}, nil
 }
 
 func safeSnapshotPath(path string) bool {

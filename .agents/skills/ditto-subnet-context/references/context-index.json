@@ -361,6 +361,19 @@
       "related": ["coding-attempt-supervisor", "coding-inference-grants", "coding-repair-research", "platform-api", "dittobench-scoring"]
     },
     {
+      "id": "coding-hosted-inputs",
+      "title": "Verified hosted authoring input assembly",
+      "keywords": ["hosted authoring input", "coding hosted input assembly", "native input handoff"],
+      "summary": "Assemble only the committed task's authoring objects and verify the private handoff before native workspace creation.",
+      "skills": ["ditto-subnet-platform", "ditto-subnet-benchmark"],
+      "owns": ["apps/platform/ditto/api_server/coding_hosted_inputs.py", "apps/platform/ditto/api_server/coding_private_v2_retrieval.py", "services/dittobench-api/internal/codinghostedinput", "apps/platform/docs/coding-hosted-input-assembly.md"],
+      "read": ["apps/platform/docs/coding-hosted-input-assembly.md", "apps/platform/docs/coding-hosted-start-worker.md", "services/dittobench-api/docs/coding-hosted-authoring-v2.md"],
+      "search": ["rg -n 'describe_authoring|assemble|write_private_frame' apps/platform/ditto/api_server/coding_hosted_inputs.py apps/platform/ditto/api_server/coding_private_v2_retrieval.py", "rg -n 'Prepare|ProfileDigest|Begin' services/dittobench-api/internal/codinghostedinput"],
+      "validate": ["cd apps/platform && uv run pytest -q ditto/tests/api_server/test_coding_hosted_inputs.py", "cd services/dittobench-api && go test -race ./internal/codinghostedinput ./internal/codingrunner ./internal/codingseed ./internal/codingexecutor"],
+      "invariants": ["No grader object is included in the authoring frame.", "Expected authority comes from the committed assignment and verified payload, never the untrusted frame.", "Input assembly and synthetic tests do not activate a private benchmark or reward path."],
+      "related": ["coding-private-runtime-adapters", "platform-api", "coding-repair-research"]
+    },
+    {
       "id": "coding-private-runtime-adapters",
       "title": "Shadow coding private runtime adapters",
       "keywords": ["coding harness controller", "dormant screened harness", "source-bound coding routes", "coding source registry", "coding grant revoker", "coding gateway activator", "private coding runtime adapters"],

@@ -29,7 +29,13 @@ from ditto.tests.db.queries.test_coding_hosted_admission import _admit, _request
 
 
 async def _prepared(
-    maker, *, start=True, bind=True, deadline=None, registration_bundle=None
+    maker,
+    *,
+    start=True,
+    bind=True,
+    deadline=None,
+    registration_bundle=None,
+    execution_profile_sha256=None,
 ):
     authority = await _seed(
         maker, approve=False, registration_bundle=registration_bundle
@@ -47,6 +53,8 @@ async def _prepared(
         authority,
         selection_sha256=selection.digest(),
         deadline_unix=deadline or authority.deadline_unix,
+        execution_profile_sha256=execution_profile_sha256
+        or authority.execution_profile_sha256,
     )
     async with maker() as session, session.begin():
         await create_hosted_assignment(

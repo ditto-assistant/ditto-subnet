@@ -55,6 +55,13 @@ def test_context_index_paths_exist() -> None:
     )
 
 
+def test_hosted_authoring_input_routes_to_both_consumers() -> None:
+    topic = lookup("hosted authoring input assembler")[0]
+    assert topic["id"] == "coding-hosted-inputs"
+    assert "ditto-subnet-platform" in topic_list(topic, "skills")
+    assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
+
+
 def _tracked_skill_names(prefix: str) -> set[str]:
     completed = subprocess.run(
         ["git", "ls-files", "-z", "--", prefix],
