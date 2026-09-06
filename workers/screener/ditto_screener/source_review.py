@@ -1778,6 +1778,19 @@ canonicalize a tool argument when the live discovery result lacks a match
 argument: an I4 lead under the v11 text that no reviewer charged on the
 aceron lineage. A verb-to-operation glossary in prompt text keyed to bench
 phrasing ("remove X from Y means Y minus X") is a borderline I5 prose lead.
+When a submission derives from a cleared ancestor, the REMOVAL of a
+`#[cfg(any(test, feature = "diagnostics"))]` gate (or of `default = []`) that
+kept a selector diagnostics-only in the ancestor is itself a lead: read the
+now-live function, not its name. Evidence-packet closers that select one
+connected narrative, monetary, or contact component from family cue phrases
+and then close the packet for the model turn (`select_narrative_source_rows`,
+`prepare_focused_monetary_record`, `contact_history_events` gates) are the I5
+holding applied in Omar v6/v7, Hogwarts_v5 v19, and simon v6; the same
+function behind an intact diagnostics gate is not reachable and must not be
+charged. A grammar-selected mode that withholds the tool catalog on a recall
+request is a v11 grammar router when the deciding model can still ask for a
+tool; record it as an observation with the four I7 questions answered, not as
+a breach by name.
 
 STATIC PREFLIGHT REACHABILITY VALVE. A credential_access or data_exfiltration
 preflight hit inside a file the Dockerfile never COPYs, a CLI subcommand other

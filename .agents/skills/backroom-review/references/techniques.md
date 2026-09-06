@@ -31,10 +31,12 @@ normalize_minor_unit_answer_value|normalize_directional_answer_value
 format_minor_units_as_money|minor_units_as_major|schema_ledger_format_bare
 answer_contract|include_minor_units|asks_direction|magnitude / 100|% 100:02
 product_option_fallbacks|OPTION VOCABULARY|canonical_from_options
+select_narrative_source_rows|prepare_focused_monetary_record|contact_history_events
 ```
 
 Lines three to five from the end are the policy v12 scorer-visible slot
-rewrite class, and the last line is the baked option-vocabulary I4 lead:
+rewrite class, then the baked option-vocabulary I4 lead, then the evidence-packet family
+closers (charge only when their diagnostics `cfg` gate is gone):
 a hit means read the writer of `answer` on the served `/run` path and its
 trigger, then decide whether the transform is request-independent and
 character-level (normalization) or a rescale / vocabulary map / slot

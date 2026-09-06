@@ -76,6 +76,14 @@ addendum.
   when the live discovery receipt lacks a match is a host-manufactured const
   flowing into a tool argument — I4 under v11's own text. No clear mentioned
   it; alexandors v1 removed it. It is now a named v12 lead.
+- **Leads from the XXX v2 / Omar v7 / simon v6 reads.** Removal of a
+  diagnostics `cfg` gate relative to a cleared ancestor is the lead (simon v6
+  re-enabled a diagnostics-only selector and the fail-open clear missed it);
+  evidence-packet family closers (`select_narrative_source_rows`,
+  `prepare_focused_monetary_record`) are the applied I5 holding, but the same
+  function behind an intact gate is unreachable and must not be charged.
+  XXX v2's `normalize_punctuation` (Unicode-only, request-independent) is the
+  positive fixture for the narrowed normalization clause.
 - **Copy-detector follow-ups (platform, not prompt).** Pure repacks submitted
   minutes after a reference's `available_at` (v12-age, KOTH_v8) and a
   near-duplicate of a still-embargoed king (unione v24, admitted through
