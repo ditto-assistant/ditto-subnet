@@ -91,6 +91,131 @@ CREATE FUNCTION public.coding_hosted_assignment_guard() RETURNS trigger
 
 
 --
+-- Name: coding_hosted_inference_grant_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.coding_hosted_inference_grant_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE a coding_hosted_assignments%ROWTYPE;
+    BEGIN
+      IF TG_OP= 'DELETE' THEN RAISE EXCEPTION 'hosted inference grant is immutable'
+        USING ERRCODE= '23514' ; END IF;
+      IF TG_OP='UPDATE' THEN
+        IF (to_jsonb(NEW)-'revoked_at') IS DISTINCT FROM (to_jsonb(OLD)-'revoked_at')
+           OR (OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM
+             OLD.revoked_at)
+           OR NEW.revoked_at IS NULL THEN
+          RAISE EXCEPTION 'hosted inference grant cannot change or reopen' USING
+            ERRCODE= '23514' ;
+        END IF;
+      ELSE
+        SELECT * INTO a FROM coding_hosted_assignments WHERE
+          evaluation_id=NEW.evaluation_id;
+        IF NOT FOUND OR a.started_at IS NULL OR a.attempt_id<>NEW.attempt_id OR
+          a.worker_id<>NEW.worker_id
+           OR a.assignment_sha256<>NEW.assignment_sha256
+           OR (a.authority->>'policy_sha256') IS DISTINCT FROM NEW.policy_sha256
+           OR (a.authority->>'execution_profile_sha256')
+             IS DISTINCT FROM NEW.execution_profile_sha256
+           OR NEW.expires_at>a.expires_at OR NEW.created_at<a.started_at OR
+             NEW.created_at>clock_timestamp()
+           OR NEW.revoked_at IS NOT NULL OR a.expires_at<=clock_timestamp()
+           OR NOT EXISTS(SELECT 1 FROM coding_hosted_private_tasks t WHERE
+             t.evaluation_id=NEW.evaluation_id AND t.closed_at IS NULL AND t.frozen_at
+             IS NULL)
+        THEN RAISE EXCEPTION 'hosted inference grant lacks authoring authority' USING
+          ERRCODE= '23514' ; END IF;
+      END IF;
+      RETURN NEW;
+    END $$;
+
+
+--
+-- Name: coding_hosted_inference_phase_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.coding_hosted_inference_phase_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE g coding_hosted_inference_grants%ROWTYPE;
+    BEGIN
+      SELECT * INTO g FROM coding_hosted_inference_grants WHERE
+        evaluation_id=NEW.evaluation_id FOR UPDATE;
+      IF FOUND THEN
+        IF OLD.frozen_at IS NULL AND NEW.frozen_at IS NOT NULL AND
+          (g.revoked_at IS NULL OR EXISTS(SELECT 1 FROM
+            coding_hosted_inference_requests WHERE grant_id=g.grant_id AND state=
+            'reserved' )) THEN
+          RAISE EXCEPTION 'hosted inference must be revoked and drained before freeze'
+            USING ERRCODE= '23514' ;
+        END IF;
+        IF NEW.closed_at IS NOT NULL AND g.revoked_at IS NULL THEN
+          UPDATE coding_hosted_inference_grants SET revoked_at=clock_timestamp() WHERE
+            grant_id=g.grant_id;
+        END IF;
+      END IF;
+      RETURN NEW;
+    END $$;
+
+
+--
+-- Name: coding_hosted_inference_request_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.coding_hosted_inference_request_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE g coding_hosted_inference_grants%ROWTYPE; used_prompt bigint;
+      used_completion bigint; used_cost bigint; next_sequence integer;
+      mutable text[]:=ARRAY[ 'state' , 'finalized_at' , 'prompt_tokens' ,
+        'completion_tokens' , 'cost_usd_micros' , 'settlement_sha256' ,
+        'provider_receipt_sha256' , 'settlement' ];
+    BEGIN
+      IF TG_OP= 'DELETE' THEN RAISE EXCEPTION
+        'hosted inference requests cannot be deleted' USING ERRCODE= '23514' ; END IF;
+      IF TG_OP='UPDATE' THEN
+        IF (to_jsonb(NEW)-mutable) IS DISTINCT FROM (to_jsonb(OLD)-mutable)
+           OR OLD.state<>'reserved' OR NEW.state NOT IN ('settled','uncertain') THEN
+          RAISE EXCEPTION 'hosted inference request is immutable' USING ERRCODE='23514';
+        END IF;
+        IF NEW.state='uncertain' THEN
+          UPDATE coding_hosted_inference_grants SET
+            revoked_at=COALESCE(revoked_at,clock_timestamp()) WHERE
+            grant_id=NEW.grant_id;
+        END IF;
+      ELSE
+        SELECT * INTO g FROM coding_hosted_inference_grants WHERE grant_id=NEW.grant_id
+          FOR UPDATE;
+        IF NOT FOUND OR g.revoked_at IS NOT NULL OR g.expires_at<=clock_timestamp() OR
+          NEW.state<> 'reserved'
+           OR NEW.created_at<g.created_at OR NEW.created_at>clock_timestamp()
+           OR EXISTS(SELECT 1 FROM coding_hosted_inference_requests WHERE
+             grant_id=NEW.grant_id AND state= 'reserved' ) THEN
+          RAISE EXCEPTION 'hosted inference dispatch is unavailable' USING ERRCODE=
+            '23514' ;
+        END IF;
+        SELECT COALESCE(MAX(sequence),0)+1,
+          COALESCE(SUM(CASE WHEN state= 'settled' THEN prompt_tokens ELSE
+            prompt_ceiling END),0),
+          COALESCE(SUM(CASE WHEN state= 'settled' THEN completion_tokens ELSE
+            completion_ceiling END),0),
+          COALESCE(SUM(CASE WHEN state= 'settled' THEN cost_usd_micros ELSE
+            cost_ceiling END),0)
+        INTO next_sequence,used_prompt,used_completion,used_cost FROM
+          coding_hosted_inference_requests WHERE grant_id=NEW.grant_id;
+        IF NEW.sequence<>next_sequence OR NEW.sequence>g.request_limit OR
+          used_prompt+NEW.prompt_ceiling>g.prompt_limit
+           OR used_completion+NEW.completion_ceiling>g.completion_limit OR
+             used_cost+NEW.cost_ceiling>g.cost_limit THEN
+          RAISE EXCEPTION 'hosted inference budget exhausted' USING ERRCODE='23514';
+        END IF;
+      END IF;
+      RETURN NEW;
+    END $$;
+
+
+--
 -- Name: coding_hosted_private_task_guard(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1112,6 +1237,59 @@ CREATE TABLE public.coding_hosted_assignments (
     CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__6e57 CHECK (((expires_at > created_at) AND ((admitted_at IS NULL) = (admission_request_sha256 IS NULL)) AND ((admitted_at IS NULL) OR ((admitted_at >= created_at) AND (admission_request_sha256 ~ '^[0-9a-f]{64}$'::text))) AND ((started_at IS NULL) = (worker_id IS NULL)) AND ((started_at IS NULL) OR ((admitted_at IS NOT NULL) AND (started_at >= admitted_at))))),
     CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__9b2e CHECK (((shadow_only = true) AND (weight_eligible = false))),
     CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__c2b7 CHECK (((registration_sha256 ~ '^[0-9a-f]{64}$'::text) AND (artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND (assignment_sha256 ~ '^[0-9a-f]{64}$'::text)))
+);
+
+
+--
+-- Name: coding_hosted_inference_grants; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_inference_grants (
+    grant_id uuid NOT NULL,
+    evaluation_id uuid NOT NULL,
+    attempt_id uuid NOT NULL,
+    worker_id uuid NOT NULL,
+    assignment_sha256 text NOT NULL,
+    policy_sha256 text NOT NULL,
+    execution_profile_sha256 text NOT NULL,
+    policy jsonb NOT NULL,
+    request_limit integer NOT NULL,
+    prompt_limit bigint NOT NULL,
+    completion_limit bigint NOT NULL,
+    cost_limit bigint NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    revoked_at timestamp with time zone,
+    shadow_only boolean NOT NULL,
+    weight_eligible boolean NOT NULL,
+    CONSTRAINT ck_coding_hosted_inference_grants_hosted_inference_gran_7930 CHECK (((assignment_sha256 ~ '^[0-9a-f]{64}$'::text) AND (policy_sha256 ~ '^[0-9a-f]{64}$'::text) AND (execution_profile_sha256 ~ '^[0-9a-f]{64}$'::text) AND (jsonb_typeof(policy) = 'object'::text) AND (octet_length((policy)::text) <= 16384))),
+    CONSTRAINT ck_coding_hosted_inference_grants_hosted_inference_grant_bounds CHECK ((shadow_only AND (NOT weight_eligible) AND ((request_limit >= 1) AND (request_limit <= 256)) AND ((prompt_limit >= 1) AND (prompt_limit <= 2250000)) AND ((completion_limit >= 1) AND (completion_limit <= 250000)) AND ((cost_limit >= 1) AND (cost_limit <= 100000000)) AND (expires_at > created_at) AND ((revoked_at IS NULL) OR (revoked_at >= created_at))))
+);
+
+
+--
+-- Name: coding_hosted_inference_requests; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_inference_requests (
+    request_id uuid NOT NULL,
+    grant_id uuid NOT NULL,
+    sequence integer NOT NULL,
+    locked_request_sha256 text NOT NULL,
+    prompt_ceiling bigint NOT NULL,
+    completion_ceiling bigint NOT NULL,
+    cost_ceiling bigint NOT NULL,
+    state text NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    finalized_at timestamp with time zone,
+    prompt_tokens bigint,
+    completion_tokens bigint,
+    cost_usd_micros bigint,
+    settlement_sha256 text,
+    provider_receipt_sha256 text,
+    settlement jsonb,
+    CONSTRAINT ck_coding_hosted_inference_requests_hosted_inference_re_0797 CHECK ((((((state = 'reserved'::text) AND (finalized_at IS NULL)) OR ((state = 'uncertain'::text) AND (finalized_at IS NOT NULL) AND (finalized_at >= created_at))) AND (prompt_tokens IS NULL) AND (completion_tokens IS NULL) AND (cost_usd_micros IS NULL) AND (settlement_sha256 IS NULL) AND (provider_receipt_sha256 IS NULL) AND (settlement IS NULL)) OR ((state = 'settled'::text) AND (finalized_at IS NOT NULL) AND (finalized_at >= created_at) AND (prompt_tokens IS NOT NULL) AND ((prompt_tokens >= 0) AND (prompt_tokens <= prompt_ceiling)) AND (completion_tokens IS NOT NULL) AND ((completion_tokens >= 0) AND (completion_tokens <= completion_ceiling)) AND (cost_usd_micros IS NOT NULL) AND ((cost_usd_micros >= 0) AND (cost_usd_micros <= cost_ceiling)) AND (settlement_sha256 IS NOT NULL) AND (settlement_sha256 ~ '^[0-9a-f]{64}$'::text) AND (provider_receipt_sha256 IS NOT NULL) AND (provider_receipt_sha256 ~ '^[0-9a-f]{64}$'::text) AND (settlement IS NOT NULL) AND (jsonb_typeof(settlement) = 'object'::text) AND (octet_length((settlement)::text) <= 8192)))),
+    CONSTRAINT ck_coding_hosted_inference_requests_hosted_inference_re_1c18 CHECK ((((sequence >= 1) AND (sequence <= 256)) AND (locked_request_sha256 ~ '^[0-9a-f]{64}$'::text) AND ((prompt_ceiling >= 1) AND (prompt_ceiling <= 2250000)) AND ((completion_ceiling >= 1) AND (completion_ceiling <= 250000)) AND ((cost_ceiling >= 1) AND (cost_ceiling <= 100000000))))
 );
 
 
@@ -4927,6 +5105,22 @@ ALTER TABLE ONLY public.coding_hosted_assignments
 
 
 --
+-- Name: coding_hosted_inference_grants pk_coding_hosted_inference_grants; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_inference_grants
+    ADD CONSTRAINT pk_coding_hosted_inference_grants PRIMARY KEY (grant_id);
+
+
+--
+-- Name: coding_hosted_inference_requests pk_coding_hosted_inference_requests; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_inference_requests
+    ADD CONSTRAINT pk_coding_hosted_inference_requests PRIMARY KEY (request_id);
+
+
+--
 -- Name: coding_hosted_private_tasks pk_coding_hosted_private_tasks; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5556,6 +5750,30 @@ ALTER TABLE ONLY public.coding_hosted_assignments
 
 ALTER TABLE ONLY public.coding_hosted_assignments
     ADD CONSTRAINT uq_coding_hosted_assignments_attempt_id UNIQUE (attempt_id);
+
+
+--
+-- Name: coding_hosted_inference_grants uq_coding_hosted_inference_grants_evaluation_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_inference_grants
+    ADD CONSTRAINT uq_coding_hosted_inference_grants_evaluation_id UNIQUE (evaluation_id);
+
+
+--
+-- Name: coding_hosted_inference_requests uq_coding_hosted_inference_requests_grant_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_inference_requests
+    ADD CONSTRAINT uq_coding_hosted_inference_requests_grant_id UNIQUE (grant_id, sequence);
+
+
+--
+-- Name: coding_hosted_inference_requests uq_coding_hosted_inference_requests_provider_receipt_sha256; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_inference_requests
+    ADD CONSTRAINT uq_coding_hosted_inference_requests_provider_receipt_sha256 UNIQUE (provider_receipt_sha256);
 
 
 --
@@ -6586,6 +6804,27 @@ CREATE TRIGGER coding_hosted_assignment_guard BEFORE DELETE OR UPDATE ON public.
 
 
 --
+-- Name: coding_hosted_inference_grants coding_hosted_inference_grant_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_inference_grant_guard BEFORE INSERT OR DELETE OR UPDATE ON public.coding_hosted_inference_grants FOR EACH ROW EXECUTE FUNCTION public.coding_hosted_inference_grant_guard();
+
+
+--
+-- Name: coding_hosted_private_tasks coding_hosted_inference_phase_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_inference_phase_guard BEFORE UPDATE ON public.coding_hosted_private_tasks FOR EACH ROW EXECUTE FUNCTION public.coding_hosted_inference_phase_guard();
+
+
+--
+-- Name: coding_hosted_inference_requests coding_hosted_inference_request_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_inference_request_guard BEFORE INSERT OR DELETE OR UPDATE ON public.coding_hosted_inference_requests FOR EACH ROW EXECUTE FUNCTION public.coding_hosted_inference_request_guard();
+
+
+--
 -- Name: coding_hosted_private_tasks coding_hosted_private_task_guard; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -7176,6 +7415,22 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 ALTER TABLE ONLY public.coding_hosted_assignments
     ADD CONSTRAINT fk_coding_hosted_assignments_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_hosted_inference_grants fk_coding_hosted_inference_grants_evaluation_id_coding__64c4; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_inference_grants
+    ADD CONSTRAINT fk_coding_hosted_inference_grants_evaluation_id_coding__64c4 FOREIGN KEY (evaluation_id) REFERENCES public.coding_hosted_assignments(evaluation_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_hosted_inference_requests fk_coding_hosted_inference_requests_grant_id_coding_hos_c7b4; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_inference_requests
+    ADD CONSTRAINT fk_coding_hosted_inference_requests_grant_id_coding_hos_c7b4 FOREIGN KEY (grant_id) REFERENCES public.coding_hosted_inference_grants(grant_id) ON DELETE RESTRICT;
 
 
 --
