@@ -321,7 +321,46 @@ class TestPublicOrigin:
             },
             url=SimpleNamespace(netloc="127.0.0.1:8000", scheme="http"),
         )
-        assert public_origin(request) == "https://platform-api.heyditto.ai"  # type: ignore[arg-type]
+        assert public_origin(request) == "https://dittobench.ai"  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "platform-api.heyditto.ai",
+            "subnet.heyditto.ai",
+            "dittobench.ai",
+            "www.dittobench.ai",
+            "api.dittobench.ai",
+            "dittobench.com",
+            "www.dittobench.com",
+            "api.dittobench.com",
+            "WWW.DITTOBENCH.COM:443",
+        ],
+    )
+    def test_production_aliases_share_one_origin(self, host: str) -> None:
+        request = SimpleNamespace(
+            headers={"host": host},
+            url=SimpleNamespace(netloc=host, scheme="http"),
+        )
+        assert public_origin(request) == "https://dittobench.ai"  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "https://pr-42.preview.dittobench.ai",
+            "https://platform-api-dev.heyditto.ai",
+            "https://dittobench.ai.example.org",
+        ],
+    )
+    def test_other_origins_are_preserved(self, origin: str) -> None:
+        scheme, host = origin.split("://")
+        request = SimpleNamespace(
+            headers={"x-forwarded-host": host, "x-forwarded-proto": scheme},
+            url=SimpleNamespace(netloc="internal:8000", scheme="http"),
+        )
+        assert public_origin(request) == origin  # type: ignore[arg-type]
 
 
 @pytest.fixture
@@ -347,6 +386,25 @@ def seo_dist(tmp_path, monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.usefixtures("seo_dist")
 class TestSeoRoutes:
+    async def test_alias_html_and_discovery_documents_agree(self) -> None:
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="https://platform-api.heyditto.ai",
+        ) as client:
+            page = await client.get("/benchmark")
+            sitemap = await client.get("/sitemap.xml")
+            robots = await client.get("/robots.txt")
+            llms = await client.get("/llms.txt")
+        assert page.status_code == 200
+        assert 'rel="canonical" href="https://dittobench.ai/benchmark"' in page.text
+        assert (
+            'property="og:url" content="https://dittobench.ai/benchmark"' in page.text
+        )
+        assert "<loc>https://dittobench.ai/benchmark</loc>" in sitemap.text
+        assert "Sitemap: https://dittobench.ai/sitemap.xml" in robots.text
+        assert "https://dittobench.ai/benchmark" in llms.text
+
     async def test_robots_and_llms_are_served_next_to_the_spa(self) -> None:
         app = create_api_server(make_api_server_config(dashboard_enabled=True))
         robots = await _get(app, "/robots.txt")

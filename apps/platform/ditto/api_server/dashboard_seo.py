@@ -51,7 +51,22 @@ STATIC_DOC_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=3600"
 
 _SNAPSHOT_TTL_SECONDS = 30.0
 _SNAPSHOT_FAILURE_TTL_SECONDS = 5.0
-_DEFAULT_ORIGIN = "https://platform-api.heyditto.ai"
+_DEFAULT_ORIGIN = "https://dittobench.ai"
+# These aliases serve the same dashboard (infra/ansible/host_vars/
+# ditto-platform-prod.yml). Advertising each request host as canonical splits
+# one page across competing HTML, sitemap, and structured-data URLs.
+_PRODUCTION_DASHBOARD_HOSTS = frozenset(
+    {
+        "platform-api.heyditto.ai",
+        "subnet.heyditto.ai",
+        "dittobench.ai",
+        "www.dittobench.ai",
+        "api.dittobench.ai",
+        "dittobench.com",
+        "www.dittobench.com",
+        "api.dittobench.com",
+    }
+)
 _PROD_HOST_SUFFIX = "heyditto.ai"
 
 _STATIC_DESCRIPTION = (
@@ -242,14 +257,18 @@ def reset_seo_cache() -> None:
 def public_origin(request: Request) -> str:
     """Absolute origin the HTML and sitemap should advertise.
 
-    Prefers the forwarded host Caddy sets so a request that arrived as
-    ``platform-api.heyditto.ai`` is not canonicalized to the VM's internal
-    name. Production hosts are always https.
+    Consolidates known production aliases on the public dashboard domain.
+    Other hosts retain their forwarded origin so previews and local servers
+    never advertise themselves as production.
     """
     forwarded_host = (
         (request.headers.get("x-forwarded-host") or "").split(",", 1)[0].strip()
     )
     host = forwarded_host or request.headers.get("host") or request.url.netloc
+    # Only DNS names in the allowlist are aliases; IPv6/local hosts pass through.
+    hostname = host.partition(":")[0].lower().rstrip(".")
+    if hostname in _PRODUCTION_DASHBOARD_HOSTS:
+        return _DEFAULT_ORIGIN
     forwarded_proto = (
         (request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip()
     )
