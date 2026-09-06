@@ -71,7 +71,9 @@ def hosted_profile(tmp_path_factory):
     return json.loads(path.read_bytes())
 
 
-async def fixture(tmp_path, session_maker, hosted_profile, *, expires_soon=False):
+async def fixture(
+    tmp_path, session_maker, hosted_profile, *, expires_soon=False, policy_sha256=None
+):
     tmp_path.chmod(0o700)
     release_path, groups = _bound_fixture(tmp_path, native_authoring=True)
     release = json.loads(release_path.read_bytes())
@@ -188,6 +190,7 @@ async def fixture(tmp_path, session_maker, hosted_profile, *, expires_soon=False
         session_maker,
         registration_bundle=(registration, wire_receipt),
         execution_profile_sha256=hosted_profile["sha256"],
+        policy_sha256=policy_sha256,
         deadline=int(time.time()) + 2 if expires_soon else None,
     )
 

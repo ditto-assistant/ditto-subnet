@@ -1825,6 +1825,48 @@ class CodingHostedInferenceRequest(Base):
     )
 
 
+class CodingHostedAuthoringReservation(Base):
+    __tablename__ = "coding_hosted_authoring_reservations"
+    evaluation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    identity_sha256: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    identity: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.clock_timestamp()
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["evaluation_id"],
+            ["coding_hosted_assignments.evaluation_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "identity_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND jsonb_typeof(identity)='object' "
+            "AND octet_length(identity::text)<=16384",
+            name="hosted_authoring_identity",
+        ),
+    )
+
+
+class CodingHostedAuthoringFinalization(Base):
+    __tablename__ = "coding_hosted_authoring_finalizations"
+    evaluation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    probe_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    verified_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.clock_timestamp()
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["evaluation_id"],
+            ["coding_hosted_authoring_reservations.evaluation_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "probe_sha256 ~ '^[0-9a-f]{64}$'", name="hosted_authoring_probe"
+        ),
+    )
+
+
 class CodingHostedEvidenceReservation(Base):
     """Append-only native evidence identity; no ciphertext or raw envelope."""
 

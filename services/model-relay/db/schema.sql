@@ -582,6 +582,50 @@ CREATE FUNCTION public.guard_efficiency_snapshot_curve() RETURNS trigger
 
 
 --
+-- Name: guard_hosted_authoring_insert(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.guard_hosted_authoring_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE a coding_hosted_assignments%ROWTYPE; i jsonb; s jsonb;
+            reserved_at timestamptz;
+    BEGIN
+      SELECT * INTO a FROM coding_hosted_assignments
+        WHERE evaluation_id=NEW.evaluation_id;
+      IF TG_TABLE_NAME='coding_hosted_authoring_reservations' THEN
+        i:=NEW.identity; s:=i->'source';
+        IF a.started_at IS NULL
+          OR s->>'evaluation_id' IS DISTINCT FROM a.evaluation_id::text
+          OR s->>'attempt_id' IS DISTINCT FROM a.attempt_id::text
+          OR s->>'worker_id' IS DISTINCT FROM a.worker_id::text
+          OR s->>'assignment_sha256' IS DISTINCT FROM a.assignment_sha256
+          OR s->>'artifact_sha256' IS DISTINCT FROM a.artifact_sha256
+          OR s->>'profile_capability_id' IS DISTINCT FROM 'hosted-'||a.attempt_id::text
+          OR s->>'deadline_unix' IS DISTINCT FROM
+            floor(extract(epoch FROM a.expires_at))::bigint::text
+          OR i->>'schema' IS DISTINCT FROM 'dittobench-coding-authoring-evidence-v2'
+          OR i->'weight_eligible' IS DISTINCT FROM 'false'::jsonb
+          OR i->>'publication_deadline_unix' IS DISTINCT FROM
+            (floor(extract(epoch FROM a.expires_at))::bigint+86400)::text
+          OR NEW.created_at < a.started_at OR NEW.created_at > clock_timestamp()
+        THEN RAISE EXCEPTION 'native authoring evidence authority mismatch'; END IF;
+      ELSE
+        SELECT identity, created_at INTO i, reserved_at
+          FROM coding_hosted_authoring_reservations
+          WHERE evaluation_id=NEW.evaluation_id;
+        IF i IS NULL OR NEW.verified_at < reserved_at
+          OR NEW.verified_at > clock_timestamp()
+        THEN RAISE EXCEPTION 'native authoring evidence unavailable'; END IF;
+      END IF;
+      IF extract(epoch FROM clock_timestamp()) >=
+        (i->>'publication_deadline_unix')::bigint
+      THEN RAISE EXCEPTION 'native authoring publication expired'; END IF;
+      RETURN NEW;
+    END $$;
+
+
+--
 -- Name: guard_hosted_evidence_insert(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1302,6 +1346,31 @@ CREATE TABLE public.coding_hosted_assignments (
     CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__6e57 CHECK (((expires_at > created_at) AND ((admitted_at IS NULL) = (admission_request_sha256 IS NULL)) AND ((admitted_at IS NULL) OR ((admitted_at >= created_at) AND (admission_request_sha256 ~ '^[0-9a-f]{64}$'::text))) AND ((started_at IS NULL) = (worker_id IS NULL)) AND ((started_at IS NULL) OR ((admitted_at IS NOT NULL) AND (started_at >= admitted_at))))),
     CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__9b2e CHECK (((shadow_only = true) AND (weight_eligible = false))),
     CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__c2b7 CHECK (((registration_sha256 ~ '^[0-9a-f]{64}$'::text) AND (artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND (assignment_sha256 ~ '^[0-9a-f]{64}$'::text)))
+);
+
+
+--
+-- Name: coding_hosted_authoring_finalizations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_authoring_finalizations (
+    evaluation_id uuid NOT NULL,
+    probe_sha256 text NOT NULL,
+    verified_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_hosted_authoring_finalizations_hosted_authoring_probe CHECK ((probe_sha256 ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: coding_hosted_authoring_reservations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_authoring_reservations (
+    evaluation_id uuid NOT NULL,
+    identity_sha256 text NOT NULL,
+    identity jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_hosted_authoring_reservations_hosted_authorin_6493 CHECK (((identity_sha256 ~ '^[0-9a-f]{64}$'::text) AND (jsonb_typeof(identity) = 'object'::text) AND (octet_length((identity)::text) <= 16384)))
 );
 
 
@@ -5196,6 +5265,22 @@ ALTER TABLE ONLY public.coding_hosted_assignments
 
 
 --
+-- Name: coding_hosted_authoring_finalizations pk_coding_hosted_authoring_finalizations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_authoring_finalizations
+    ADD CONSTRAINT pk_coding_hosted_authoring_finalizations PRIMARY KEY (evaluation_id);
+
+
+--
+-- Name: coding_hosted_authoring_reservations pk_coding_hosted_authoring_reservations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_authoring_reservations
+    ADD CONSTRAINT pk_coding_hosted_authoring_reservations PRIMARY KEY (evaluation_id);
+
+
+--
 -- Name: coding_hosted_evidence_finalizations pk_coding_hosted_evidence_finalizations; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5857,6 +5942,14 @@ ALTER TABLE ONLY public.coding_hosted_assignments
 
 ALTER TABLE ONLY public.coding_hosted_assignments
     ADD CONSTRAINT uq_coding_hosted_assignments_attempt_id UNIQUE (attempt_id);
+
+
+--
+-- Name: coding_hosted_authoring_reservations uq_coding_hosted_authoring_reservations_identity_sha256; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_authoring_reservations
+    ADD CONSTRAINT uq_coding_hosted_authoring_reservations_identity_sha256 UNIQUE (identity_sha256);
 
 
 --
@@ -6927,6 +7020,34 @@ CREATE TRIGGER coding_hosted_assignment_guard BEFORE DELETE OR UPDATE ON public.
 
 
 --
+-- Name: coding_hosted_authoring_finalizations coding_hosted_authoring_finalizations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_authoring_finalizations_immutable BEFORE DELETE OR UPDATE ON public.coding_hosted_authoring_finalizations FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_hosted_authoring_finalizations coding_hosted_authoring_finalizations_insert; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_authoring_finalizations_insert BEFORE INSERT ON public.coding_hosted_authoring_finalizations FOR EACH ROW EXECUTE FUNCTION public.guard_hosted_authoring_insert();
+
+
+--
+-- Name: coding_hosted_authoring_reservations coding_hosted_authoring_reservations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_authoring_reservations_immutable BEFORE DELETE OR UPDATE ON public.coding_hosted_authoring_reservations FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_hosted_authoring_reservations coding_hosted_authoring_reservations_insert; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_authoring_reservations_insert BEFORE INSERT ON public.coding_hosted_authoring_reservations FOR EACH ROW EXECUTE FUNCTION public.guard_hosted_authoring_insert();
+
+
+--
 -- Name: coding_hosted_evidence_finalizations coding_hosted_evidence_finalizations_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -7566,6 +7687,22 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 ALTER TABLE ONLY public.coding_hosted_assignments
     ADD CONSTRAINT fk_coding_hosted_assignments_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_hosted_authoring_finalizations fk_coding_hosted_authoring_finalizations_evaluation_id__2a67; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_authoring_finalizations
+    ADD CONSTRAINT fk_coding_hosted_authoring_finalizations_evaluation_id__2a67 FOREIGN KEY (evaluation_id) REFERENCES public.coding_hosted_authoring_reservations(evaluation_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_hosted_authoring_reservations fk_coding_hosted_authoring_reservations_evaluation_id_c_5d20; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_authoring_reservations
+    ADD CONSTRAINT fk_coding_hosted_authoring_reservations_evaluation_id_c_5d20 FOREIGN KEY (evaluation_id) REFERENCES public.coding_hosted_assignments(evaluation_id) ON DELETE RESTRICT;
 
 
 --

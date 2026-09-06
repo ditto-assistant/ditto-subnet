@@ -260,6 +260,34 @@ func TestNativeRouteProjectionAndFailureClosure(t *testing.T) {
 	}
 }
 
+func TestShorterGrantExpiryPreservesAssignmentSourceBinding(t *testing.T) {
+	f := bridgeFixture(t, "success")
+	assignment := f.b
+	assignment.ExpiresAtUnix += 60
+	router, _ := sourceRouter(t, assignment)
+	config := Config{Router: router, Source: source(assignment), GrantID: f.b.GrantID, PolicySHA256: f.b.PolicySHA256, SocketPath: f.path, Token: f.token, ExpiresAt: time.Unix(f.b.ExpiresAtUnix, 0)}
+	relay, err := Publish(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !relay.deadline.Equal(config.ExpiresAt) {
+		t.Fatal("grant deadline extended")
+	}
+	if reply := request(t, router, relay.URL()+"/chat/completions", "172.30.0.7:1", []byte("{}")); reply.Code != 200 {
+		t.Fatal("assignment source binding lost", reply.Code)
+	}
+	if err := relay.Revoke(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, expiry := range []time.Time{config.Source.Deadline.Add(time.Second), time.Now().Add(-time.Second), config.ExpiresAt.Add(time.Nanosecond)} {
+		bad := config
+		bad.ExpiresAt = expiry
+		if handle, err := Publish(t.Context(), bad); handle != nil || err == nil {
+			t.Fatal("invalid grant expiry accepted")
+		}
+	}
+}
+
 func TestRevocationCancelsActiveTransportWithoutInventingDrain(t *testing.T) {
 	f := bridgeFixture(t, "block")
 	router, _ := sourceRouter(t, f.b)

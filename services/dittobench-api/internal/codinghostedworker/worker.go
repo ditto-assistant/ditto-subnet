@@ -50,6 +50,7 @@ type Control interface {
 type Bridge struct {
 	GrantID, PolicySHA256, SocketPath string
 	Token                             []byte
+	ExpiresAt                         time.Time
 	Revoke                            func(context.Context) error
 	Close                             func(context.Context) error
 }
@@ -118,7 +119,7 @@ func New(config Config) (*Worker, error) {
 		},
 		workspace: config.Router.PublishHostedWorkspace,
 		relay: func(ctx context.Context, b codingsource.HostedBinding, bridge Bridge) (inference, error) {
-			return codinghostedrelay.Publish(ctx, codinghostedrelay.Config{Router: config.Router, Source: b, GrantID: bridge.GrantID, PolicySHA256: bridge.PolicySHA256, SocketPath: bridge.SocketPath, Token: bridge.Token})
+			return codinghostedrelay.Publish(ctx, codinghostedrelay.Config{Router: config.Router, Source: b, GrantID: bridge.GrantID, PolicySHA256: bridge.PolicySHA256, SocketPath: bridge.SocketPath, Token: bridge.Token, ExpiresAt: bridge.ExpiresAt})
 		},
 	}}, nil
 }

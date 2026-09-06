@@ -25,6 +25,7 @@ type Config struct {
 	Source                            codingsource.HostedBinding
 	GrantID, PolicySHA256, SocketPath string
 	Token                             []byte
+	ExpiresAt                         time.Time
 }
 
 func (Config) String() string               { return "HostedRelayConfig{private}" }
@@ -46,11 +47,20 @@ func Publish(ctx context.Context, config Config) (*Relay, error) {
 	if ctx == nil || ctx.Err() != nil || config.Router == nil || !config.Source.Deadline.After(time.Now()) {
 		return nil, ErrRelay
 	}
-	backend, err := newClient(config.SocketPath, config.Token, config.Source, config.GrantID, config.PolicySHA256)
+	expiry := config.ExpiresAt
+	if expiry.IsZero() {
+		expiry = time.Unix(config.Source.Deadline.Unix(), 0)
+	}
+	if !expiry.After(time.Now()) || expiry.After(config.Source.Deadline) || expiry.Nanosecond() != 0 {
+		return nil, ErrRelay
+	}
+	backendSource := config.Source
+	backendSource.Deadline = expiry
+	backend, err := newClient(config.SocketPath, config.Token, backendSource, config.GrantID, config.PolicySHA256)
 	if err != nil {
 		return nil, err
 	}
-	relay := &Relay{backend: backend, deadline: time.Unix(config.Source.Deadline.Unix(), 0)}
+	relay := &Relay{backend: backend, deadline: expiry}
 	opened, err := backend.call(ctx, "open", uuid.NewString(), nil)
 	if err != nil || opened.LedgerDrained != nil {
 		relay.revoked = true
