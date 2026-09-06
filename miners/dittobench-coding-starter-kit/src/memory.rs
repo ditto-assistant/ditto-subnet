@@ -63,11 +63,20 @@ struct CaseKey {
 }
 
 struct CaseMemory {
+    coding_contract_version: u32,
     profile_capability_id: String,
     memory_bundle_sha256: String,
     store: Store,
     created_at: Instant,
     claim_id: AtomicU64,
+}
+
+impl CaseMemory {
+    fn matches_seed(&self, request: &CodingSeedRequest) -> bool {
+        self.profile_capability_id == request.profile_capability_id
+            && self.memory_bundle_sha256 == request.memory_bundle_sha256
+            && self.coding_contract_version == request.coding_contract_version
+    }
 }
 
 struct RegistryInner {
@@ -121,9 +130,7 @@ impl MemoryRegistry {
         {
             let cases = self.inner.cases.read().await;
             if let Some(existing) = cases.get(&key) {
-                if existing.profile_capability_id == request.profile_capability_id
-                    && existing.memory_bundle_sha256 == request.memory_bundle_sha256
-                {
+                if existing.matches_seed(&request) {
                     return Ok(CodingSeedResponse {
                         case_id: request.case_id,
                         profile_capability_id: request.profile_capability_id,
@@ -160,7 +167,7 @@ impl MemoryRegistry {
                     id: record.memory_id.clone(),
                     title: record.memory_type.clone(),
                     prompt: record.content.clone(),
-                    source: "coding_seed_v1".to_string(),
+                    source: format!("coding_seed_v{}", request.coding_contract_version),
                     source_context: metadata,
                     ..SaveMemoryRequest::default()
                 })
@@ -168,6 +175,7 @@ impl MemoryRegistry {
                 .map_err(|error| MemoryError::Store(error.to_string()))?;
         }
         let entry = Arc::new(CaseMemory {
+            coding_contract_version: request.coding_contract_version,
             profile_capability_id: request.profile_capability_id.clone(),
             memory_bundle_sha256: request.memory_bundle_sha256.clone(),
             store,
@@ -176,9 +184,7 @@ impl MemoryRegistry {
         });
         let mut cases = self.inner.cases.write().await;
         if let Some(existing) = cases.get(&key) {
-            if existing.profile_capability_id == request.profile_capability_id
-                && existing.memory_bundle_sha256 == request.memory_bundle_sha256
-            {
+            if existing.matches_seed(&request) {
                 return Ok(CodingSeedResponse {
                     case_id: request.case_id,
                     profile_capability_id: request.profile_capability_id,
@@ -219,6 +225,30 @@ impl MemoryRegistry {
         query: &str,
         limit: usize,
     ) -> Result<MemoryClaim, MemoryError> {
+        self.retrieve_for_version(
+            crate::protocol::CODING_CONTRACT_VERSION,
+            ticket_id,
+            case_id,
+            profile_capability_id,
+            query,
+            limit,
+        )
+        .await
+    }
+
+    /// Claims a case only when its seeded contract version matches the run.
+    ///
+    /// # Errors
+    /// Returns an error on a missing case, identity/version conflict or failed retrieval.
+    pub async fn retrieve_for_version(
+        &self,
+        version: u32,
+        ticket_id: &str,
+        case_id: &str,
+        profile_capability_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<MemoryClaim, MemoryError> {
         self.purge_expired().await;
         let key = CaseKey {
             ticket_id: ticket_id.to_string(),
@@ -232,7 +262,9 @@ impl MemoryRegistry {
             .get(&key)
             .cloned()
             .ok_or(MemoryError::NotSeeded)?;
-        if entry.profile_capability_id != profile_capability_id {
+        if entry.profile_capability_id != profile_capability_id
+            || entry.coding_contract_version != version
+        {
             return Err(MemoryError::Conflict {
                 ticket_id: ticket_id.to_string(),
                 case_id: case_id.to_string(),
@@ -694,5 +726,50 @@ mod tests {
             registry.seed(seed_request("profile-1", "second")).await,
             Err(MemoryError::Conflict { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn hosted_seed_and_claim_are_version_bound() {
+        let registry = MemoryRegistry::default();
+        let mut seed = seed_request("profile-2", "Preserve opaque identifiers.");
+        seed.ticket_id = "10000000-0000-4000-8000-000000000001".to_string();
+        seed.case_id = "20000000-0000-4000-8000-000000000002".to_string();
+        seed.coding_contract_version = 2;
+        registry.seed(seed.clone()).await.unwrap();
+        let mut legacy = seed.clone();
+        legacy.coding_contract_version = 1;
+        assert!(matches!(
+            registry.seed(legacy).await,
+            Err(MemoryError::Conflict { .. })
+        ));
+        assert!(matches!(
+            registry
+                .retrieve(
+                    &seed.ticket_id,
+                    &seed.case_id,
+                    &seed.profile_capability_id,
+                    "identifiers",
+                    6
+                )
+                .await,
+            Err(MemoryError::Conflict { .. })
+        ));
+        let claim = registry
+            .retrieve_for_version(
+                2,
+                &seed.ticket_id,
+                &seed.case_id,
+                &seed.profile_capability_id,
+                "identifiers",
+                6,
+            )
+            .await
+            .unwrap();
+        assert_eq!(claim.memories.len(), 1);
+        assert!(
+            registry
+                .finish_claim(&seed.ticket_id, &seed.case_id, claim.claim_id())
+                .await
+        );
     }
 }

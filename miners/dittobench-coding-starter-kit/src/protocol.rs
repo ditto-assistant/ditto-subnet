@@ -1,8 +1,43 @@
-//! Harness-facing `DittoBench` coding contract v1.
+//! Harness-facing `DittoBench` coding contracts v1 and native hosted v2.
 
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub const CODING_CONTRACT_VERSION: u32 = 1;
+pub const HOSTED_CODING_CONTRACT_VERSION: u32 = 2;
+
+#[must_use]
+pub fn supported_coding_version(version: u32) -> bool {
+    matches!(
+        version,
+        CODING_CONTRACT_VERSION | HOSTED_CODING_CONTRACT_VERSION
+    )
+}
+
+fn validate_coding_version(version: u32, ticket_id: &str, case_id: &str) -> Result<(), String> {
+    if !supported_coding_version(version) {
+        return Err(format!("unsupported coding_contract_version {version}"));
+    }
+    if version == HOSTED_CODING_CONTRACT_VERSION
+        && (!canonical_uuid(ticket_id) || !canonical_uuid(case_id))
+    {
+        return Err(
+            "hosted evaluation and attempt identifiers must be canonical UUIDs".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn canonical_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+            }
+        })
+        && value.bytes().any(|byte| byte != b'0' && byte != b'-')
+}
 pub const LUNA_MODEL: &str = "openai/gpt-5.6-luna";
 pub const LUNA_REASONING_EFFORT: &str = "medium";
 
@@ -17,11 +52,17 @@ impl Default for CodingHealthResponse {
     fn default() -> Self {
         Self {
             status: "ok".to_string(),
-            supported_coding_contract_versions: vec![CODING_CONTRACT_VERSION],
+            supported_coding_contract_versions: vec![
+                CODING_CONTRACT_VERSION,
+                HOSTED_CODING_CONTRACT_VERSION,
+            ],
             capabilities: vec![
                 "scoped_memory_seed_v1".to_string(),
                 "coding_runner_tools_v1".to_string(),
                 "case_scoped_inference_v1".to_string(),
+                "scoped_memory_seed_v2".to_string(),
+                "coding_runner_tools_v2".to_string(),
+                "case_scoped_inference_v2".to_string(),
             ],
         }
     }
@@ -265,12 +306,7 @@ impl CodingSeedRequest {
     /// Returns an error for an unsupported contract, malformed identity,
     /// invalid digest, duplicate memory, or oversized memory bundle.
     pub fn validate(&self) -> Result<(), String> {
-        if self.coding_contract_version != CODING_CONTRACT_VERSION {
-            return Err(format!(
-                "unsupported coding_contract_version {}",
-                self.coding_contract_version
-            ));
-        }
+        validate_coding_version(self.coding_contract_version, &self.ticket_id, &self.case_id)?;
         validate_identifier("ticket_id", &self.ticket_id)?;
         validate_identifier("case_id", &self.case_id)?;
         validate_identifier("profile_capability_id", &self.profile_capability_id)?;
@@ -345,11 +381,11 @@ impl CodingRunRequest {
     /// Returns an error for an unsupported contract, malformed identity,
     /// invalid digest, oversized issue, invalid URL length, or unsafe budget.
     pub fn validate(&self) -> Result<(), String> {
-        if self.coding_contract_version != CODING_CONTRACT_VERSION {
-            return Err(format!(
-                "unsupported coding_contract_version {}",
-                self.coding_contract_version
-            ));
+        validate_coding_version(self.coding_contract_version, &self.ticket_id, &self.case_id)?;
+        if self.coding_contract_version == HOSTED_CODING_CONTRACT_VERSION
+            && self.budgets.wall_time_seconds > 3600
+        {
+            return Err("hosted run exceeds its maximum lifetime".to_string());
         }
         validate_identifier("ticket_id", &self.ticket_id)?;
         validate_identifier("case_id", &self.case_id)?;

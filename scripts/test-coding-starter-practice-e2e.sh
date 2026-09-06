@@ -94,4 +94,6 @@ start_scripted_harness fixtures/mock/certification-001.json
   cd "$repository_root/services/dittobench-api"
   DITTOBENCH_CODING_RUST_HARNESS_URL="http://127.0.0.1:${practice_port}" \
     go test -run '^TestRustHarnessCertificationIntegration$' -count=1 ./internal/codingcertifier
+  DITTOBENCH_CODING_RUST_HARNESS_URL="http://127.0.0.1:${practice_port}" \
+    go test -run '^TestRustHostedHarnessV2Integration$' -count=1 ./internal/codingcertifier
 )

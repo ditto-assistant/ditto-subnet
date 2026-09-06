@@ -261,14 +261,17 @@ mod tests {
         assert_eq!(coding["status"], "ok");
         assert_eq!(
             coding["supported_coding_contract_versions"],
-            serde_json::json!([1])
+            serde_json::json!([1, 2])
         );
         assert_eq!(
             coding["capabilities"],
             serde_json::json!([
                 "scoped_memory_seed_v1",
                 "coding_runner_tools_v1",
-                "case_scoped_inference_v1"
+                "case_scoped_inference_v1",
+                "scoped_memory_seed_v2",
+                "coding_runner_tools_v2",
+                "case_scoped_inference_v2"
             ])
         );
     }

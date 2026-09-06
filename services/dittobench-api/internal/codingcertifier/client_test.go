@@ -189,9 +189,15 @@ func canonicalMemoryDigest(t *testing.T, memories []codingcontract.VisibleMemory
 	var buffer strings.Builder
 	encoder := json.NewEncoder(&buffer)
 	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(struct {
-		Memories []codingcontract.VisibleMemory `json:"memories"`
-	}{Memories: memories}); err != nil {
+	body, err := json.Marshal(memories)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var projection any
+	if err := json.Unmarshal(body, &projection); err != nil {
+		t.Fatal(err)
+	}
+	if err := encoder.Encode(map[string]any{"memories": projection}); err != nil {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256([]byte(buffer.String()))

@@ -1,4 +1,4 @@
-//! Typed client for the validator-owned coding workspace capability.
+//! Typed client for the trusted task-scoped coding workspace capability.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,7 +10,8 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use crate::protocol::{
-    is_lower_sha256, WorkspaceToolRequest, WorkspaceToolResponse, CODING_CONTRACT_VERSION,
+    is_lower_sha256, supported_coding_version, WorkspaceToolRequest, WorkspaceToolResponse,
+    CODING_CONTRACT_VERSION,
 };
 
 const TOOL_NAMES: &[(&str, &str)] = &[
@@ -28,6 +29,7 @@ const TOOL_NAMES: &[(&str, &str)] = &[
 ];
 
 struct WorkspaceContext {
+    coding_contract_version: u32,
     client: reqwest::Client,
     endpoint: String,
     case_id: String,
@@ -59,6 +61,29 @@ impl WorkspaceClient {
         case_id: String,
         profile_capability_id: String,
     ) -> Result<Self, Error> {
+        Self::new_for_version(
+            CODING_CONTRACT_VERSION,
+            endpoint,
+            case_id,
+            profile_capability_id,
+        )
+    }
+
+    /// Creates a client bound to the seed/run contract version.
+    ///
+    /// # Errors
+    /// Returns an error for an unsupported version or invalid HTTP configuration.
+    pub fn new_for_version(
+        version: u32,
+        endpoint: String,
+        case_id: String,
+        profile_capability_id: String,
+    ) -> Result<Self, Error> {
+        if !supported_coding_version(version) {
+            return Err(Error::InvalidArgument(
+                "unsupported workspace contract version".to_string(),
+            ));
+        }
         let url = reqwest::Url::parse(&endpoint)
             .map_err(|error| Error::InvalidArgument(format!("invalid workspace URL: {error}")))?;
         if !matches!(url.scheme(), "http" | "https")
@@ -78,6 +103,7 @@ impl WorkspaceClient {
             .build()?;
         Ok(Self {
             context: Arc::new(WorkspaceContext {
+                coding_contract_version: version,
                 client,
                 endpoint,
                 case_id,
@@ -133,7 +159,7 @@ impl Tool for RemoteWorkspaceTool {
         let ordinal = sequence.next_call;
         let call_id = format!("workspace-call-{ordinal}");
         let request = WorkspaceToolRequest {
-            coding_contract_version: CODING_CONTRACT_VERSION,
+            coding_contract_version: self.context.coding_contract_version,
             case_id: self.context.case_id.clone(),
             profile_capability_id: self.context.profile_capability_id.clone(),
             call_id: call_id.clone(),
@@ -499,6 +525,37 @@ mod tests {
             .await;
         assert!(matches!(result, Err(Error::Tool(message)) if message.contains("307")));
         assert!(!called.load(Ordering::SeqCst));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn hosted_workspace_calls_keep_version_two() {
+        async fn tool(Json(request): Json<WorkspaceToolRequest>) -> Json<WorkspaceToolResponse> {
+            assert_eq!(request.coding_contract_version, 2);
+            Json(WorkspaceToolResponse {
+                call_id: request.call_id,
+                sequence: 1,
+                ok: true,
+                result: json!({"entries": []}),
+                error: None,
+                event_sha256: "a".repeat(64),
+            })
+        }
+        let app = Router::new().route("/tool", post(tool));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = WorkspaceClient::new_for_version(
+            2,
+            format!("http://{address}/tool"),
+            "case".to_string(),
+            "profile".to_string(),
+        )
+        .unwrap();
+        client.tools()[0]
+            .execute(json!({"path": ".", "depth": 1}))
+            .await
+            .unwrap();
         server.abort();
     }
 

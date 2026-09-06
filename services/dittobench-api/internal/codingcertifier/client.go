@@ -146,7 +146,16 @@ func (client *HTTPHarnessClient) do(
 	}
 	var body io.Reader
 	if requestBody != nil {
-		encoded, err := json.Marshal(requestBody)
+		var encoded []byte
+		var err error
+		switch typed := requestBody.(type) {
+		case codingcontract.HostedSeedRequest:
+			encoded, err = codingcontract.CanonicalJSON(typed)
+		case codingcontract.HostedRunRequest:
+			encoded, err = codingcontract.CanonicalJSON(typed)
+		default:
+			encoded, err = json.Marshal(requestBody)
+		}
 		if err != nil {
 			return 0, harnessFailure(path, HarnessFailureProtocol, 0, errors.New("encode request"))
 		}

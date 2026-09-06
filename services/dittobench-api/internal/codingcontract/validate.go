@@ -170,7 +170,11 @@ func (memory VisibleMemory) Validate() error {
 }
 
 func (request SeedRequest) Validate() error {
-	if request.CodingContractVersion != ContractVersion || !validIdentifier(request.TicketID, 256) ||
+	return request.validateVersion(ContractVersion)
+}
+
+func (request SeedRequest) validateVersion(version int) error {
+	if request.CodingContractVersion != version || !validIdentifier(request.TicketID, 256) ||
 		!validIdentifier(request.CaseID, 256) || !validIdentifier(request.ProfileCapabilityID, 256) ||
 		!validSHA256(request.MemoryBundleSHA256) || request.Memories == nil || len(request.Memories) > 128 {
 		return errors.New("coding seed request identity is invalid")
@@ -245,7 +249,11 @@ func (budget Budgets) Validate() error {
 }
 
 func (request RunRequest) Validate() error {
-	if request.CodingContractVersion != ContractVersion || !validIdentifier(request.TicketID, 256) ||
+	return request.validateVersion(ContractVersion)
+}
+
+func (request RunRequest) validateVersion(version int) error {
+	if request.CodingContractVersion != version || !validIdentifier(request.TicketID, 256) ||
 		!validIdentifier(request.CaseID, 256) || !validIdentifier(request.ProfileCapabilityID, 256) ||
 		!validIdentifier(request.RepositoryEpoch, 256) || !validSHA256(request.VisibleBundleSHA256) {
 		return errors.New("coding run request identity is invalid")

@@ -34,11 +34,14 @@ port = sys.argv[1]
 expected_normal = {"status": "ok", "capabilities": ["case_scoped_inference_v1"]}
 expected_coding = {
     "status": "ok",
-    "supported_coding_contract_versions": [1],
+    "supported_coding_contract_versions": [1, 2],
     "capabilities": [
         "scoped_memory_seed_v1",
         "coding_runner_tools_v1",
         "case_scoped_inference_v1",
+        "scoped_memory_seed_v2",
+        "coding_runner_tools_v2",
+        "case_scoped_inference_v2",
     ],
 }
 

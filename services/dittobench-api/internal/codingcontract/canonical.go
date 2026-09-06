@@ -12,11 +12,11 @@ import (
 )
 
 type canonicalModel interface {
-	RunManifest | SeedRequest | RunRequest | CounterfactualAssignmentV2 | CounterfactualResultV2
+	RunManifest | SeedRequest | RunRequest | HostedSeedRequest | HostedRunRequest | CounterfactualAssignmentV2 | CounterfactualResultV2
 }
 
 type parsedModel interface {
-	RunManifest | SeedRequest | RunRequest | TaskEvidence | RunEvidence | CounterfactualAssignmentV2 | CounterfactualResultV2
+	RunManifest | SeedRequest | RunRequest | HostedSeedRequest | HostedRunRequest | TaskEvidence | RunEvidence | CounterfactualAssignmentV2 | CounterfactualResultV2
 }
 
 // CanonicalJSON validates and emits the sorted known-field projection with one
@@ -159,6 +159,10 @@ func validateCanonical[T parsedModel](value T) error {
 		return typed.Validate()
 	case SeedRequest:
 		return typed.Validate()
+	case HostedSeedRequest:
+		return typed.Validate()
+	case HostedRunRequest:
+		return typed.Validate()
 	case RunRequest:
 		return typed.Validate()
 	case TaskEvidence:
@@ -180,6 +184,14 @@ func ParseRunManifest(body []byte) (RunManifest, error) {
 
 func ParseSeedRequest(body []byte) (SeedRequest, error) {
 	return parseCanonical[SeedRequest](body, validateSeedRequestShape)
+}
+
+func ParseHostedSeedRequest(body []byte) (HostedSeedRequest, error) {
+	return parseCanonical[HostedSeedRequest](body, validateSeedRequestShape)
+}
+
+func ParseHostedRunRequest(body []byte) (HostedRunRequest, error) {
+	return parseCanonical[HostedRunRequest](body, validateRunRequestShape)
 }
 
 func ParseRunRequest(body []byte) (RunRequest, error) {

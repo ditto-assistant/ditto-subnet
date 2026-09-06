@@ -3,17 +3,23 @@
 For the ten-task public local dataset, follow the
 [repository practice guide](../../research/dittobench-coding-datagen/practice/v2/README.md).
 Datagen unpacks and grades public workspaces without a hosted dataset account.
-This starter still implements contract v1; the v2 workspace-grading commands
-do not yet provide an automatic v2 `/coding/run` adapter for this harness.
+This starter supports contract v1 and native hosted v2 seed/run/workspace calls.
+The public datagen commands grade local workspaces; complete hosted worker
+orchestration and private scoring remain separate integration work.
 The scripted examples below are v1 protocol regressions, not the public pack.
 
-This is the shadow-only reference miner harness for DittoBench Coding contract
-v1. It demonstrates miner-owned, task-scoped embedded memory and a bounded SWE
-agent loop while keeping the mutable repository behind the validator-owned
+This is the shadow-only reference miner harness for DittoBench Coding contracts
+v1 and v2. It demonstrates miner-owned, task-scoped embedded memory and a bounded SWE
+agent loop while keeping the mutable repository behind the trusted task-scoped
 workspace capability.
 
 It does **not** alter the active DittoBench score or weights. The public coding
 practice pack is permanently ineligible for emissions.
+
+For v2, `ticket_id` is the opaque evaluation UUID and `case_id` is the opaque
+attempt UUID. Seed and run versions must match; every workspace call retains
+that version. No private task/group IDs or Hippius credentials belong in these
+fields. See [hosted harness interoperability](../../services/dittobench-api/docs/coding-hosted-harness-v2.md).
 
 The shared contract vectors are owned by
 `packages/dittobench-coding-contract`. Rust seed/run parsing and canonical

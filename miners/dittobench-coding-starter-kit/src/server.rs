@@ -192,7 +192,8 @@ impl CodingService {
         );
         let claim = self
             .memory
-            .retrieve(
+            .retrieve_for_version(
+                request.coding_contract_version,
                 &request.ticket_id,
                 &request.case_id,
                 &request.profile_capability_id,
@@ -203,7 +204,8 @@ impl CodingService {
         let claim_id = claim.claim_id();
         let result = async {
             let model = self.models.create(&request)?;
-            let workspace = WorkspaceClient::new(
+            let workspace = WorkspaceClient::new_for_version(
+                request.coding_contract_version,
                 request.workspace_capability_url.clone(),
                 request.case_id.clone(),
                 request.profile_capability_id.clone(),
@@ -400,5 +402,31 @@ mod tests {
 
         release.notify_one();
         assert!(first.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn hosted_run_cannot_consume_a_legacy_seed() {
+        let service = CodingService::new(Arc::new(
+            ScriptedModelFactory::new(
+                vec![ChatChunk {
+                    text: "done".to_string(),
+                    ..ChatChunk::default()
+                }],
+                true,
+            )
+            .unwrap(),
+        ));
+        let mut seed = seed_request();
+        seed.ticket_id = "10000000-0000-4000-8000-000000000001".to_string();
+        seed.case_id = "20000000-0000-4000-8000-000000000002".to_string();
+        service.seed(seed.clone()).await.unwrap();
+        let mut run = run_request();
+        run.ticket_id = seed.ticket_id;
+        run.case_id = seed.case_id;
+        run.coding_contract_version = 2;
+        assert!(matches!(
+            service.run(run).await,
+            Err(ServiceError::Conflict(_))
+        ));
     }
 }
