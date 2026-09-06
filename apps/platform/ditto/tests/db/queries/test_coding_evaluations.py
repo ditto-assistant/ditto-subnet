@@ -88,7 +88,6 @@ from ditto.db.queries.core_qualification import (
 from ditto.db.queries.scores import MIN_ELIGIBLE_CASES, upsert_score
 
 _NOW = datetime.now(UTC)
-_AGENT_CREATED_AT = _NOW + timedelta(minutes=5)
 _BENCH = 12
 _VALIDATOR = "5" + "B" * 47
 _TRANSCRIPT_BYTES = 4096
@@ -284,7 +283,7 @@ def _authority(agent_id) -> CodingShadowRunAuthority:
 async def _seed_qualified_agent(
     session: AsyncSession,
     *,
-    created_at: datetime = _AGENT_CREATED_AT,
+    created_at: datetime | None = None,
 ) -> Agent:
     agent = Agent(
         agent_id=uuid4(),
@@ -299,7 +298,9 @@ async def _seed_qualified_agent(
         screened_image_ref="ditto-screen/coding-shadow:latest",
         screened_image_upload_id=uuid4(),
         screened_image_verified_at=_NOW,
-        created_at=created_at,
+        # Keep the artifact after this test's catalog, even when collection
+        # happened more than five minutes ago in the complete suite.
+        created_at=created_at or datetime.now(UTC) + timedelta(minutes=5),
     )
     async with session.begin():
         session.add(agent)
@@ -670,7 +671,7 @@ async def test_run_requires_core_qualification(session: AsyncSession) -> None:
         screened_image_ref="ditto-screen/unqualified-coding:latest",
         screened_image_upload_id=uuid4(),
         screened_image_verified_at=_NOW,
-        created_at=_AGENT_CREATED_AT,
+        created_at=datetime.now(UTC) + timedelta(minutes=5),
     )
     async with session.begin():
         session.add(agent)
