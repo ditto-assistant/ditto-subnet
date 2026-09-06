@@ -1,8 +1,10 @@
 # Hosted v2 screened-harness lifecycle
 
 Status: native lifecycle and source-router adapters with local regression tests.
-No production worker, start-store adapter, inference issuer, deployment, private
-dataset execution or scoring path is enabled by this change.
+The separate PostgreSQL start-store and local process handoff are documented in
+[coding-hosted-start-worker.md](../../../apps/platform/docs/coding-hosted-start-worker.md).
+No production worker, inference issuer, deployment, private dataset execution or
+scoring path is enabled.
 
 ## Native start boundary
 
@@ -25,7 +27,8 @@ container only after a successful fresh-commit acknowledgement. The store must
 reconstruct and compare the exact Platform assignment and commit its irreversible
 start before returning true. Replay, denial, lost acknowledgement, cancellation
 and late success never grant another launch. This interface does not itself
-implement PostgreSQL transactions; the native worker must supply that adapter.
+implement PostgreSQL transactions; `HostedStartCommand` supplies the concrete
+Platform helper adapter when explicitly configured by the native worker.
 There is no v1 ticket, legacy certification lease or numeric bench-version shim.
 
 Once active, only native v2 health/seed/run methods are available. Seed/run must
@@ -69,8 +72,8 @@ cancellation, cross-attempt/worker/assignment denial, source spoofing, legacy
 separation, address reuse and redacted diagnostics. These use synthetic images,
 fake runtime/store adapters and local HTTP, not production Docker/Hippius/KMS.
 
-Next: provide the trusted native start-store and screened-image authority from
-Platform, connect verified private projections and scoped native inference to the
+Next: assemble the approved screened-image authority with the concrete start
+handoff, connect verified private projections and scoped native inference to the
 worker, then commit freeze, run pristine grading and seal terminal evidence.
 The ten-task public pack, private corpus, embedding behavior, scoring and reward
 configuration are unchanged.
