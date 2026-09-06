@@ -290,6 +290,21 @@ sudo sed -n 's/^\(DESCRIPTOR\|REVISION\|VERSION\|UPDATED_AT\)=/\1=/p' \
   /var/lib/ditto-screener-fleet/updater/managed-release.env
 ```
 
+### Seeing adoption from Backroom
+
+The updater writes the activated `SCREENER_FLEET_REVISION`,
+`SCREENER_FLEET_VERSION`, and `SCREENER_FLEET_ACTIVATED_AT` into the
+service-readable `release.env` beside the builder image. Every worker samples
+that file once at startup and signs it into its heartbeat as the protocol v7
+`release` block together with the policy version compiled into its build, so
+`get_screener_capacity` shows `release` per node and worker, and
+`get_screener_policy_activation` carries a `fleet` summary
+(`safe_to_schedule_up_to`, `lagging_instances`, `instances_without_release`).
+The heartbeat's `policy_version` is still the requirement the worker is clamped
+to, not its build; read `release.builtin_policy_version` for that. A host that
+is not fleet-managed announces only its builtin policy and, when it runs from a
+`releases/<sha>` checkout, the revision recovered from its own path.
+
 For host, kernel, Ansible, or emergency maintenance, first set the node to
 `draining` in Backroom. This stops new full screens and lane claims while active
 leases finish. Re-run Ansible, confirm the heartbeat and channel usage return

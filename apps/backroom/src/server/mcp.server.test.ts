@@ -3167,6 +3167,7 @@ describe('Backroom MCP tools', () => {
         state: 'pending',
       },
     ],
+    fleet: null,
   }
   const scoredPolicyRescreenView = {
     activation_revision: 3,

@@ -130,6 +130,7 @@ from ditto.api_models.screener_review_settings import (
     ScreenerReviewSettings,
 )
 from ditto.api_models.system_health import (
+    fleet_release_signing_token,
     host_specs_signing_token,
     system_metrics_signing_token,
 )
@@ -3793,6 +3794,8 @@ def _heartbeat_signing_message(payload: ScreenerHeartbeatRequest) -> bytes:
         ]
         if payload.protocol_version >= 6:
             fields.append(host_specs_signing_token(payload.host_specs))
+        if payload.protocol_version >= 7:
+            fields.append(fleet_release_signing_token(payload.release))
         fields.append(str(payload.timestamp))
         return ("ditto-screener-heartbeat:v4:" + ":".join(fields)).encode()
     if payload.protocol_version >= 3:
@@ -3968,6 +3971,11 @@ async def heartbeat(
             host_specs=(
                 request_body.host_specs.model_dump(mode="json")
                 if request_body.host_specs is not None
+                else None
+            ),
+            release=(
+                request_body.release.model_dump(mode="json")
+                if request_body.release is not None
                 else None
             ),
             reported_at=reported_at,

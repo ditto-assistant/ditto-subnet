@@ -2033,6 +2033,7 @@ describe('screener policy activation', () => {
     builtin_policy_version: 11,
     latest: revision(3),
     revisions: [revision(3), revision(2)],
+    fleet: null,
   }
 
   it('parses the activation view the platform answers with', async () => {
@@ -2058,6 +2059,7 @@ describe('screener policy activation', () => {
           builtin_policy_version: 11,
           latest: null,
           revisions: [],
+          fleet: null,
         }),
       ),
     )
@@ -2065,6 +2067,7 @@ describe('screener policy activation', () => {
     await expect(fetchScreenerPolicyActivation()).resolves.toMatchObject({
       latest: null,
       revisions: [],
+      fleet: null,
     })
   })
 
@@ -2074,6 +2077,7 @@ describe('screener policy activation', () => {
       ...view,
       latest: revision(4),
       revisions: [revision(4), revision(3), revision(2)],
+      fleet: null,
     }
     const fetchMock = vi
       .fn()
@@ -3460,6 +3464,7 @@ describe('production score reads', () => {
         shared_seed_confirmations: 7,
       },
     ],
+    fleet: null,
   }
 
   const leaderboard = {

@@ -107,6 +107,90 @@ def host_specs_signing_token(specs: HostSpecs | None) -> str:
     )
 
 
+_RELEASE_REVISION_PATTERN = r"^[0-9a-f]{40}$"
+_RELEASE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
+
+
+class FleetRelease(BaseModel):
+    """Which build a screener worker is, as distinct from which policy it screens.
+
+    ``policy_version`` on a heartbeat is the platform requirement clamped to the
+    build, so it cannot reveal whether a fleet adopted a new release. This block
+    carries the build's own ``SCREENING_POLICY_VERSION`` plus, on a fleet-managed
+    host, the activated release revision, version, and activation time.
+    Mirrors ``ditto_screener.heartbeat.FleetRelease`` (heartbeat protocol v7).
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    builtin_policy_version: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=2**31 - 1,
+            description="SCREENING_POLICY_VERSION compiled into the running build.",
+        ),
+    ]
+    revision: (
+        Annotated[
+            str,
+            Field(
+                pattern=_RELEASE_REVISION_PATTERN,
+                description="Activated fleet release commit, when fleet-managed.",
+            ),
+        ]
+        | None
+    ) = None
+    version: (
+        Annotated[
+            str,
+            Field(
+                pattern=_RELEASE_VERSION_PATTERN,
+                description="Activated fleet release version, when fleet-managed.",
+            ),
+        ]
+        | None
+    ) = None
+    activated_at: (
+        Annotated[
+            int,
+            Field(ge=0, description="Unix time the updater activated this release."),
+        ]
+        | None
+    ) = None
+
+
+def fleet_release_signing_token(release: FleetRelease | None) -> str:
+    """Return an unambiguous bounded token for a heartbeat signature payload."""
+    if release is None:
+        return "-"
+    return ",".join(
+        str(value) if value is not None else "-"
+        for value in (
+            release.builtin_policy_version,
+            release.revision,
+            release.version,
+            release.activated_at,
+        )
+    )
+
+
+def fleet_release_from_heartbeat_envelope(raw: dict | None) -> FleetRelease | None:
+    """Revalidate the announced build identity out of a stored telemetry blob.
+
+    Pre-v7 rows have no ``release`` key and simply announce nothing.
+    """
+    if not isinstance(raw, dict):
+        return None
+    value = raw.get("release")
+    if not isinstance(value, dict):
+        return None
+    try:
+        return FleetRelease.model_validate(value)
+    except Exception:  # noqa: BLE001 - malformed historical rows stay private
+        return None
+
+
 def system_metrics_signing_token(metrics: SystemMetrics | None) -> str:
     """Return an unambiguous bounded token for a heartbeat signature payload."""
     if metrics is None:

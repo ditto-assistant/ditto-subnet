@@ -451,3 +451,113 @@ def test_v5_bytes_are_unchanged_by_the_v6_extension() -> None:
             f"{review_token}:456"
         ).encode()
     )
+
+
+def test_v7_heartbeat_binds_the_announced_fleet_release() -> None:
+    from ditto_screener.heartbeat import FleetRelease
+
+    message = heartbeat_signing_message(
+        screener_hotkey=_HOTKEY,
+        software_version="0.21.2",
+        protocol_version=7,
+        policy_version=12,
+        state="polling",
+        active_agent_id=None,
+        instance_id="subnet-screener-1-worker-1",
+        progress=None,
+        system_metrics=None,
+        review_settings=_v5_review_settings(),
+        host_specs=HostSpecs(
+            cpu_count=32,
+            cpu_physical_cores=24,
+            memory_total_mib=64075,
+            disk_total_gib=1726,
+            architecture="x86_64",
+        ),
+        release=FleetRelease(
+            builtin_policy_version=12,
+            revision="c393bc10488ee0b203d08e6d29df877d508f25d9",
+            version="0.230.0",
+            activated_at=1788717939,
+        ),
+        timestamp=456,
+    )
+    assert message.endswith(
+        b":32,24,64075,1726,x86_64"
+        b":12,c393bc10488ee0b203d08e6d29df877d508f25d9,0.230.0,1788717939:456"
+    )
+
+
+def test_v7_absent_managed_release_fields_stay_unambiguous() -> None:
+    from ditto_screener.heartbeat import FleetRelease
+
+    message = heartbeat_signing_message(
+        screener_hotkey=_HOTKEY,
+        software_version="0.21.2",
+        protocol_version=7,
+        policy_version=12,
+        state="polling",
+        active_agent_id=None,
+        instance_id="ditto-screener-dev",
+        progress=None,
+        system_metrics=None,
+        review_settings=_v5_review_settings(),
+        host_specs=HostSpecs(
+            cpu_count=4,
+            memory_total_mib=8000,
+            disk_total_gib=80,
+            architecture="aarch64",
+        ),
+        release=FleetRelease(builtin_policy_version=12),
+        timestamp=456,
+    )
+    assert message.endswith(b":4,-,8000,80,aarch64:12,-,-,-:456")
+
+
+def test_v7_refuses_to_sign_without_the_release_it_promises() -> None:
+    with pytest.raises(ValueError, match="requires the fleet release"):
+        heartbeat_signing_message(
+            screener_hotkey=_HOTKEY,
+            software_version="0.21.2",
+            protocol_version=7,
+            policy_version=12,
+            state="polling",
+            active_agent_id=None,
+            instance_id="ditto-screener-dev",
+            progress=None,
+            system_metrics=None,
+            review_settings=_v5_review_settings(),
+            host_specs=HostSpecs(
+                cpu_count=4,
+                memory_total_mib=8000,
+                disk_total_gib=80,
+                architecture="aarch64",
+            ),
+            release=None,
+            timestamp=456,
+        )
+
+
+def test_v6_bytes_are_unchanged_by_the_v7_extension() -> None:
+    """A v7-capable platform must still verify a v6 worker byte-for-byte."""
+    message = heartbeat_signing_message(
+        screener_hotkey=_HOTKEY,
+        software_version="0.16.0",
+        protocol_version=6,
+        policy_version=11,
+        state="polling",
+        active_agent_id=None,
+        instance_id="ditto-screener-prod",
+        progress=None,
+        system_metrics=None,
+        review_settings=_v5_review_settings(),
+        host_specs=HostSpecs(
+            cpu_count=16,
+            cpu_physical_cores=8,
+            memory_total_mib=64000,
+            disk_total_gib=500,
+            architecture="x86_64",
+        ),
+        timestamp=456,
+    )
+    assert message.endswith(b":16,8,64000,500,x86_64:456")

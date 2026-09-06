@@ -126,6 +126,31 @@ class HostSpecs(BaseModel):
         return self
 
 
+_RELEASE_REVISION_PATTERN = r"^[0-9a-f]{40}$"
+_RELEASE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
+_RELEASES_SEGMENT = "releases"
+
+
+class FleetRelease(BaseModel):
+    """Which build this worker is, as distinct from which policy it screens under.
+
+    ``policy_version`` on the heartbeat is the version the worker is ready to
+    claim now (the platform requirement clamped to the build), so it cannot
+    tell an operator whether a fleet has adopted a new release. This block
+    carries the build's own ``SCREENING_POLICY_VERSION`` and, on a
+    fleet-managed host, the activated release revision, version, and time the
+    updater wrote them, so Backroom can answer "is it safe to schedule policy
+    v(n+1)" without SSH.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    builtin_policy_version: Annotated[int, Field(ge=1, le=2**31 - 1)]
+    revision: Annotated[str, Field(pattern=_RELEASE_REVISION_PATTERN)] | None = None
+    version: Annotated[str, Field(pattern=_RELEASE_VERSION_PATTERN)] | None = None
+    activated_at: Annotated[int, Field(ge=0)] | None = None
+
+
 class ScreenerProgress(BaseModel):
     """Small, public-safe description of an active screening job."""
 
@@ -168,6 +193,7 @@ class ScreenerHeartbeatRequest(BaseModel):
     system_metrics: SystemMetrics | None = None
     review_settings: ReviewSettingsStatus | None = None
     host_specs: HostSpecs | None = None
+    release: FleetRelease | None = None
     timestamp: Annotated[int, Field(ge=0)]
     signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
 
@@ -205,6 +231,14 @@ class ScreenerHeartbeatRequest(BaseModel):
             raise ValueError("heartbeat protocol v6 requires host specs")
         if self.protocol_version < 6 and self.host_specs is not None:
             raise ValueError("host specs require heartbeat protocol v6")
+        return self
+
+    @model_validator(mode="after")
+    def validate_release(self) -> ScreenerHeartbeatRequest:
+        if self.protocol_version >= 7 and self.release is None:
+            raise ValueError("heartbeat protocol v7 requires the fleet release")
+        if self.protocol_version < 7 and self.release is not None:
+            raise ValueError("fleet release requires heartbeat protocol v7")
         return self
 
 
@@ -281,6 +315,21 @@ def host_specs_signing_token(specs: HostSpecs | None) -> str:
             specs.memory_total_mib,
             specs.disk_total_gib,
             specs.architecture,
+        )
+    )
+
+
+def fleet_release_signing_token(release: FleetRelease | None) -> str:
+    """Return the canonical v7 token for the announced build identity."""
+    if release is None:
+        return "-"
+    return ",".join(
+        str(value) if value is not None else "-"
+        for value in (
+            release.builtin_policy_version,
+            release.revision,
+            release.version,
+            release.activated_at,
         )
     )
 
@@ -379,6 +428,66 @@ def collect_host_specs(
     except Exception:  # noqa: BLE001 - fleet telemetry never blocks screening
         return None
     return specs
+
+
+def _release_revision_from_path(module_path: str) -> str | None:
+    """Recover the fleet revision from ``.../releases/<sha>/...`` if present."""
+    parts = module_path.replace("\\", "/").split("/")
+    for index, part in enumerate(parts[:-1]):
+        candidate = parts[index + 1]
+        if part == _RELEASES_SEGMENT and re.fullmatch(
+            _RELEASE_REVISION_PATTERN, candidate
+        ):
+            return candidate
+    return None
+
+
+def collect_fleet_release(
+    *,
+    builtin_policy_version: int,
+    release_env_file: str | None = None,
+    module_path: str | None = None,
+) -> FleetRelease:
+    """Describe this build once at startup.
+
+    The fleet updater writes ``SCREENER_FLEET_REVISION`` / ``_VERSION`` /
+    ``_ACTIVATED_AT`` into the service-readable release env; a host without that
+    file (GCE, dev) still announces its builtin policy and, when it runs from a
+    ``releases/<sha>`` checkout, the revision recovered from its own path. Any
+    unreadable or malformed value degrades to ``None`` rather than costing the
+    heartbeat that carries liveness.
+    """
+    values: dict[str, str] = {}
+    path = release_env_file or os.environ.get(
+        "SCREENER_FLEET_RELEASE_ENV_FILE", "/etc/ditto-screener-fleet/release.env"
+    )
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                key, separator, value = line.strip().partition("=")
+                if separator and key.startswith("SCREENER_FLEET_"):
+                    values[key] = value.strip().strip("\"'")
+    except OSError:
+        pass
+    revision = values.get("SCREENER_FLEET_REVISION")
+    if not revision or not re.fullmatch(_RELEASE_REVISION_PATTERN, revision):
+        revision = _release_revision_from_path(module_path or __file__)
+    version = values.get("SCREENER_FLEET_VERSION")
+    if version and not re.fullmatch(_RELEASE_VERSION_PATTERN, version):
+        version = None
+    activated_at: int | None = None
+    raw_activated = values.get("SCREENER_FLEET_ACTIVATED_AT")
+    if raw_activated and raw_activated.isdigit():
+        activated_at = int(raw_activated)
+    try:
+        return FleetRelease(
+            builtin_policy_version=builtin_policy_version,
+            revision=revision,
+            version=version or None,
+            activated_at=activated_at,
+        )
+    except Exception:  # noqa: BLE001 - fleet telemetry never blocks screening
+        return FleetRelease(builtin_policy_version=builtin_policy_version)
 
 
 class SystemMetricsCollector:

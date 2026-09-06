@@ -378,6 +378,7 @@ def _heartbeat_payload(
     system_metrics: dict[str, object] | None = None,
     review_settings: dict[str, object] | None = None,
     host_specs: dict[str, object] | None = None,
+    release: dict[str, object] | None = None,
 ) -> dict[str, object]:
     ts = timestamp if timestamp is not None else int(datetime.now(UTC).timestamp())
     metrics = (
@@ -424,6 +425,18 @@ def _heartbeat_payload(
                     "architecture",
                 )
             )
+        release_token = "-"
+        if protocol_version >= 7:
+            assert release is not None
+            release_token = ",".join(
+                str(release.get(key)) if release.get(key) is not None else "-"
+                for key in (
+                    "builtin_policy_version",
+                    "revision",
+                    "version",
+                    "activated_at",
+                )
+            )
         message = (
             "ditto-screener-heartbeat:v4:"
             f"{_SCREENER_HOTKEY}:0.4.2:{protocol_version}:"
@@ -431,6 +444,7 @@ def _heartbeat_payload(
             f"{progress_token}:{system_metrics_signing_token(metrics)}:"
             f"{review_token}:"
             + (f"{host_specs_token}:" if protocol_version >= 6 else "")
+            + (f"{release_token}:" if protocol_version >= 7 else "")
             + f"{ts}"
         ).encode()
     elif protocol_version >= 3:
@@ -468,6 +482,8 @@ def _heartbeat_payload(
         payload["review_settings"] = review_settings
     if host_specs is not None:
         payload["host_specs"] = host_specs
+    if release is not None:
+        payload["release"] = release
     return payload
 
 
@@ -3032,6 +3048,123 @@ class TestHeartbeat:
             assert heartbeat is not None
             assert heartbeat.system_metrics is not None
             assert heartbeat.system_metrics["review_settings"] == review
+
+    async def test_v7_persists_the_signed_fleet_release(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        specs = {
+            "cpu_count": 32,
+            "cpu_physical_cores": 24,
+            "memory_total_mib": 64075,
+            "disk_total_gib": 1726,
+            "architecture": "x86_64",
+        }
+        release = {
+            "builtin_policy_version": SCREENING_POLICY_VERSION,
+            "revision": "c393bc10488ee0b203d08e6d29df877d508f25d9",
+            "version": "0.230.0",
+            "activated_at": 1788717939,
+        }
+        response = await client.post(
+            "/api/v1/screener/heartbeat",
+            json=_heartbeat_payload(
+                protocol_version=7,
+                instance_id="subnet-screener-1-worker-1",
+                review_settings=_V5_REVIEW_SETTINGS,
+                host_specs=specs,
+                release=release,
+            ),
+        )
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            heartbeat = await session.get(
+                ScreenerHeartbeat, (_SCREENER_HOTKEY, "subnet-screener-1-worker-1")
+            )
+            assert heartbeat is not None
+            assert heartbeat.system_metrics is not None
+            assert heartbeat.system_metrics["release"] == release
+            assert heartbeat.system_metrics["host_specs"] == specs
+
+    async def test_v7_release_cannot_be_restated_after_signing(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        payload = _heartbeat_payload(
+            protocol_version=7,
+            instance_id="subnet-screener-1-worker-1",
+            review_settings=_V5_REVIEW_SETTINGS,
+            host_specs={
+                "cpu_count": 4,
+                "memory_total_mib": 8000,
+                "disk_total_gib": 80,
+                "architecture": "x86_64",
+            },
+            release={"builtin_policy_version": SCREENING_POLICY_VERSION},
+        )
+        payload["release"] = {"builtin_policy_version": SCREENING_POLICY_VERSION + 5}
+        response = await client.post("/api/v1/screener/heartbeat", json=payload)
+        assert response.status_code == 401, response.text
+
+    async def test_v7_requires_the_release_it_announces(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        payload = _heartbeat_payload(
+            protocol_version=7,
+            instance_id="subnet-screener-1-worker-1",
+            review_settings=_V5_REVIEW_SETTINGS,
+            host_specs={
+                "cpu_count": 4,
+                "memory_total_mib": 8000,
+                "disk_total_gib": 80,
+                "architecture": "x86_64",
+            },
+            release={"builtin_policy_version": SCREENING_POLICY_VERSION},
+        )
+        del payload["release"]
+        response = await client.post("/api/v1/screener/heartbeat", json=payload)
+        assert response.status_code == 422, response.text
+
+    async def test_v6_worker_keeps_reporting_against_a_v7_platform(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        response = await client.post(
+            "/api/v1/screener/heartbeat",
+            json=_heartbeat_payload(
+                protocol_version=6,
+                instance_id="ditto-screener-prod",
+                review_settings=_V5_REVIEW_SETTINGS,
+                host_specs={
+                    "cpu_count": 16,
+                    "cpu_physical_cores": 8,
+                    "memory_total_mib": 64000,
+                    "disk_total_gib": 500,
+                    "architecture": "x86_64",
+                },
+            ),
+        )
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            heartbeat = await session.get(
+                ScreenerHeartbeat, (_SCREENER_HOTKEY, "ditto-screener-prod")
+            )
+            assert heartbeat is not None
+            assert heartbeat.system_metrics is not None
+            assert heartbeat.system_metrics.get("release") is None
 
     async def test_v6_persists_signed_announced_host_specs(
         self,

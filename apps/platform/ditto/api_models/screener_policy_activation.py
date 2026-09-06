@@ -76,6 +76,29 @@ class ScheduleScreenerPolicyActivationRequest(BaseModel):
     actor: str | None = Field(default=None, max_length=120)
 
 
+class ScreenerFleetPolicyReadinessView(BaseModel):
+    """What the reporting fleet can screen, from signed v7 heartbeats.
+
+    ``builtin_policy_version`` above is the Platform build; this is the fleet.
+    A worker on an older build fails closed when the required version exceeds
+    its builtin, so ``safe_to_schedule_up_to`` is the highest target that would
+    not pause any fresh reporting worker. Workers below heartbeat protocol v7
+    cannot announce a build and are listed separately.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    instances_reporting: int = Field(ge=0)
+    instances_with_release: int = Field(ge=0)
+    instances_without_release: list[str] = Field(default_factory=list)
+    min_builtin_policy_version: int | None = None
+    max_builtin_policy_version: int | None = None
+    safe_to_schedule_up_to: int | None = None
+    lagging_instances: list[str] = Field(default_factory=list)
+    release_revisions: list[str] = Field(default_factory=list)
+    release_versions: list[str] = Field(default_factory=list)
+
+
 class ScreenerPolicyActivationView(BaseModel):
     """What the screening queue requires now, plus the governing schedule."""
 
@@ -86,6 +109,7 @@ class ScreenerPolicyActivationView(BaseModel):
     builtin_policy_version: int
     latest: ScreenerPolicyActivationRevision | None
     revisions: list[ScreenerPolicyActivationRevision]
+    fleet: ScreenerFleetPolicyReadinessView | None = None
 
 
 ScoredRescreenState = Literal["pending", "running", "paused", "terminal"]

@@ -12,10 +12,12 @@ from typing import TYPE_CHECKING, Any
 
 from ditto_screener.errors import ScreenerConfigError
 from ditto_screener.heartbeat import (
+    FleetRelease,
     HostSpecs,
     ReviewSettingsStatus,
     ScreenerProgress,
     SystemMetrics,
+    fleet_release_signing_token,
     host_specs_signing_token,
     review_settings_signing_token,
     screener_progress_signing_token,
@@ -134,6 +136,7 @@ def heartbeat_signing_message(
     system_metrics: SystemMetrics | None,
     review_settings: ReviewSettingsStatus | None = None,
     host_specs: HostSpecs | None = None,
+    release: FleetRelease | None = None,
     timestamp: int,
 ) -> bytes:
     """Build the versioned heartbeat payload mirrored by the platform."""
@@ -153,6 +156,8 @@ def heartbeat_signing_message(
             )
         if protocol_version >= 6 and host_specs is None:
             raise ValueError("heartbeat protocol v6 requires host specs")
+        if protocol_version >= 7 and release is None:
+            raise ValueError("heartbeat protocol v7 requires the fleet release")
         review_settings_token = review_settings_signing_token(
             review_settings, protocol_version=protocol_version
         )
@@ -173,6 +178,8 @@ def heartbeat_signing_message(
         ]
         if protocol_version >= 6:
             fields.append(host_specs_signing_token(host_specs))
+        if protocol_version >= 7:
+            fields.append(fleet_release_signing_token(release))
         fields.append(str(timestamp))
         return ("ditto-screener-heartbeat:v4:" + ":".join(fields)).encode()
     if protocol_version >= 3:
@@ -212,6 +219,7 @@ def sign_heartbeat(
     system_metrics: SystemMetrics | None,
     review_settings: ReviewSettingsStatus | None = None,
     host_specs: HostSpecs | None = None,
+    release: FleetRelease | None = None,
     timestamp: int,
 ) -> str:
     message = heartbeat_signing_message(
@@ -226,6 +234,7 @@ def sign_heartbeat(
         system_metrics=system_metrics,
         review_settings=review_settings,
         host_specs=host_specs,
+        release=release,
         timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)

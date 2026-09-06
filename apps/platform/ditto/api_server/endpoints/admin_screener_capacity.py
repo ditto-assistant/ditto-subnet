@@ -51,6 +51,7 @@ from ditto.api_models.screener_provider_settings import (
 )
 from ditto.api_models.system_health import (
     SystemMetrics,
+    fleet_release_from_heartbeat_envelope,
     host_specs_from_heartbeat_envelope,
 )
 from ditto.api_server.dependencies import get_session
@@ -131,6 +132,7 @@ def _worker_view(row: ScreenerHeartbeat) -> ScreenerNodeWorkerView:
         current_phase=_heartbeat_phase(row),
         system_metrics=_heartbeat_system_metrics(row),
         host_specs=host_specs_from_heartbeat_envelope(row.system_metrics),
+        release=fleet_release_from_heartbeat_envelope(row.system_metrics),
     )
 
 
@@ -838,6 +840,11 @@ async def screener_capacity(
                 ),
                 current_phase=phase,
                 host_specs=host_specs,
+                release=(
+                    fleet_release_from_heartbeat_envelope(heartbeat.system_metrics)
+                    if heartbeat is not None
+                    else None
+                ),
                 workers=[_worker_view(row) for row in node_heartbeats],
             )
         )

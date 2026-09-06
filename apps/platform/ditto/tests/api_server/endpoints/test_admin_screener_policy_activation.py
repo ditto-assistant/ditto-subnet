@@ -29,6 +29,7 @@ from ditto.db.models import (
     Score,
     ScoredPolicyRescreenRelease,
     ScoredScreeningSnapshotRestoration,
+    ScreenerHeartbeat,
     ScreeningAttempt,
 )
 from ditto.db.queries.screener_policy_activation import (
@@ -786,3 +787,125 @@ class TestScoredPolicyRescreenCheckpoint:
         assert retry.status_code == 200, retry.text
         assert retry.json()["current"]["agent_id"] == str(second_id)
         assert retry.json()["current"]["state"] == "pending"
+
+
+def _fleet_heartbeat(
+    instance_id: str,
+    *,
+    protocol_version: int,
+    policy_version: int,
+    release: dict[str, object] | None,
+    seen_at: datetime,
+) -> ScreenerHeartbeat:
+    envelope: dict[str, object] = {
+        "system_metrics": None,
+        "screening_progress": None,
+        "review_settings": None,
+        "host_specs": None,
+    }
+    if release is not None:
+        envelope["release"] = release
+    return ScreenerHeartbeat(
+        screener_hotkey="5EKvqERH4xCV2MuQwb8cenyCVayfvrfjHaoeDPb9RFXxbsND",
+        instance_id=instance_id,
+        software_version="0.21.2",
+        protocol_version=protocol_version,
+        policy_version=policy_version,
+        state="polling",
+        system_metrics=envelope,
+        first_seen_at=seen_at,
+        reported_at=seen_at,
+        seen_at=seen_at,
+        signature="ab" * 64,
+    )
+
+
+class TestFleetReadiness:
+    async def test_read_summarizes_fresh_v7_heartbeats(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        activation_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, activation_maker)
+        now = datetime.now(UTC)
+        current = SCREENING_POLICY_VERSION
+        async with activation_maker() as session, session.begin():
+            session.add_all(
+                [
+                    _fleet_heartbeat(
+                        "subnet-screener-1-worker-1",
+                        protocol_version=7,
+                        policy_version=current,
+                        release={
+                            "builtin_policy_version": current,
+                            "revision": "c393bc10488ee0b203d08e6d29df877d508f25d9",
+                            "version": "0.230.0",
+                            "activated_at": 1788717939,
+                        },
+                        seen_at=now,
+                    ),
+                    _fleet_heartbeat(
+                        "subnet-screener-1-worker-2",
+                        protocol_version=7,
+                        policy_version=current - 1,
+                        release={"builtin_policy_version": current - 1},
+                        seen_at=now,
+                    ),
+                    _fleet_heartbeat(
+                        "legacy-v6-worker",
+                        protocol_version=6,
+                        policy_version=current - 1,
+                        release=None,
+                        seen_at=now,
+                    ),
+                    _fleet_heartbeat(
+                        "stale-worker",
+                        protocol_version=7,
+                        policy_version=current,
+                        release={"builtin_policy_version": current + 9},
+                        seen_at=now - timedelta(hours=3),
+                    ),
+                ]
+            )
+        response = await client.get(_URL, headers=_HEADERS)
+        assert response.status_code == 200, response.text
+        fleet = response.json()["fleet"]
+        # The stale worker is ignored; the v6 worker cannot announce a build.
+        assert fleet["instances_reporting"] == 3
+        assert fleet["instances_with_release"] == 2
+        assert fleet["instances_without_release"] == ["legacy-v6-worker"]
+        assert fleet["min_builtin_policy_version"] == current - 1
+        assert fleet["max_builtin_policy_version"] == current
+        assert fleet["lagging_instances"] == ["subnet-screener-1-worker-2"]
+        # A worker that cannot announce its build makes the ceiling unknown.
+        assert fleet["safe_to_schedule_up_to"] is None
+        assert fleet["release_revisions"] == [
+            "c393bc10488ee0b203d08e6d29df877d508f25d9"
+        ]
+        assert fleet["release_versions"] == ["0.230.0"]
+
+    async def test_read_reports_a_safe_ceiling_when_every_worker_announces(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        activation_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, activation_maker)
+        now = datetime.now(UTC)
+        async with activation_maker() as session, session.begin():
+            session.add(
+                _fleet_heartbeat(
+                    "subnet-screener-1-worker-1",
+                    protocol_version=7,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    release={"builtin_policy_version": SCREENING_POLICY_VERSION},
+                    seen_at=now,
+                )
+            )
+        response = await client.get(_URL, headers=_HEADERS)
+        assert response.status_code == 200, response.text
+        fleet = response.json()["fleet"]
+        assert fleet["safe_to_schedule_up_to"] == SCREENING_POLICY_VERSION
+        assert fleet["lagging_instances"] == []
+        assert fleet["instances_without_release"] == []

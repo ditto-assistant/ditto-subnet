@@ -14976,6 +14976,29 @@ export interface components {
              */
             reopened: boolean;
         };
+        /**
+         * FleetRelease
+         * @description Which build a screener worker is, as distinct from which policy it screens.
+         *
+         *     ``policy_version`` on a heartbeat is the platform requirement clamped to the
+         *     build, so it cannot reveal whether a fleet adopted a new release. This block
+         *     carries the build's own ``SCREENING_POLICY_VERSION`` plus, on a fleet-managed
+         *     host, the activated release revision, version, and activation time.
+         *     Mirrors ``ditto_screener.heartbeat.FleetRelease`` (heartbeat protocol v7).
+         */
+        FleetRelease: {
+            /** Activated At */
+            activated_at?: number | null;
+            /**
+             * Builtin Policy Version
+             * @description SCREENING_POLICY_VERSION compiled into the running build.
+             */
+            builtin_policy_version: number;
+            /** Revision */
+            revision?: string | null;
+            /** Version */
+            version?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -22153,6 +22176,36 @@ export interface components {
             nodes: components["schemas"]["ScreenerControllerNodeState"][];
         };
         /**
+         * ScreenerFleetPolicyReadinessView
+         * @description What the reporting fleet can screen, from signed v7 heartbeats.
+         *
+         *     ``builtin_policy_version`` above is the Platform build; this is the fleet.
+         *     A worker on an older build fails closed when the required version exceeds
+         *     its builtin, so ``safe_to_schedule_up_to`` is the highest target that would
+         *     not pause any fresh reporting worker. Workers below heartbeat protocol v7
+         *     cannot announce a build and are listed separately.
+         */
+        ScreenerFleetPolicyReadinessView: {
+            /** Instances Reporting */
+            instances_reporting: number;
+            /** Instances With Release */
+            instances_with_release: number;
+            /** Instances Without Release */
+            instances_without_release?: string[];
+            /** Lagging Instances */
+            lagging_instances?: string[];
+            /** Max Builtin Policy Version */
+            max_builtin_policy_version?: number | null;
+            /** Min Builtin Policy Version */
+            min_builtin_policy_version?: number | null;
+            /** Release Revisions */
+            release_revisions?: string[];
+            /** Release Versions */
+            release_versions?: string[];
+            /** Safe To Schedule Up To */
+            safe_to_schedule_up_to?: number | null;
+        };
+        /**
          * ScreenerHeartbeatRequest
          * @description Dedicated screener identity, work, and optional host-health report.
          */
@@ -22167,6 +22220,7 @@ export interface components {
             progress?: components["schemas"]["ScreenerProgress"] | null;
             /** Protocol Version */
             protocol_version: number;
+            release?: components["schemas"]["FleetRelease"] | null;
             review_settings?: components["schemas"]["ScreenerReviewSettingsStatus"] | null;
             /** Screener Hotkey */
             screener_hotkey: string;
@@ -22467,6 +22521,7 @@ export interface components {
              * Format: date-time
              */
             registered_at: string;
+            release?: components["schemas"]["FleetRelease"] | null;
             /** Revoked At */
             revoked_at?: string | null;
             /**
@@ -22509,6 +22564,7 @@ export interface components {
             policy_version: number;
             /** Protocol Version */
             protocol_version: number;
+            release?: components["schemas"]["FleetRelease"] | null;
             /**
              * Reported At
              * Format: date-time
@@ -22572,6 +22628,7 @@ export interface components {
             builtin_policy_version: number;
             /** Effective Policy Version */
             effective_policy_version: number;
+            fleet?: components["schemas"]["ScreenerFleetPolicyReadinessView"] | null;
             /** Floor Policy Version */
             floor_policy_version: number;
             latest: components["schemas"]["ScreenerPolicyActivationRevision"] | null;

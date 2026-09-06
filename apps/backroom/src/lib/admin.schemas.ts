@@ -594,6 +594,13 @@ export const screenerHostSpecsSchema = z.object({
   architecture: z.string().min(1),
 })
 
+export const screenerFleetReleaseSchema = z.object({
+  builtin_policy_version: z.number().int().positive(),
+  revision: z.string().regex(/^[0-9a-f]{40}$/).nullish().transform((value) => value ?? null),
+  version: z.string().min(1).nullish().transform((value) => value ?? null),
+  activated_at: z.number().int().nonnegative().nullish().transform((value) => value ?? null),
+})
+
 const screenerDockerHealthSchema = z.object({
   status: z.enum(['healthy', 'degraded', 'unavailable']),
   running_containers: z.number().int().nonnegative(),
@@ -620,6 +627,7 @@ export const screenerNodeWorkerSchema = z.object({
   current_phase: z.string().nullable().default(null),
   system_metrics: screenerSystemMetricsSchema.nullish().transform((value) => value ?? null),
   host_specs: screenerHostSpecsSchema.nullish().transform((value) => value ?? null),
+  release: screenerFleetReleaseSchema.nullish().transform((value) => value ?? null),
 })
 
 export const screenerCapacityNodeSchema = z.object({
@@ -641,6 +649,7 @@ export const screenerCapacityNodeSchema = z.object({
   policy_version: z.number().int().nullable(),
   current_phase: z.string().nullable(),
   host_specs: screenerHostSpecsSchema.nullish().transform((value) => value ?? null),
+  release: screenerFleetReleaseSchema.nullish().transform((value) => value ?? null),
   workers: z.array(screenerNodeWorkerSchema).default([]),
 })
 
@@ -7043,6 +7052,18 @@ export const screenerPolicyActivationRevisionSchema = z.object({
   state: z.enum(['pending', 'due']),
 })
 
+export const screenerFleetPolicyReadinessSchema = z.object({
+  instances_reporting: z.number().int().nonnegative(),
+  instances_with_release: z.number().int().nonnegative(),
+  instances_without_release: z.array(z.string()).default([]),
+  min_builtin_policy_version: z.number().int().positive().nullable().default(null),
+  max_builtin_policy_version: z.number().int().positive().nullable().default(null),
+  safe_to_schedule_up_to: z.number().int().positive().nullable().default(null),
+  lagging_instances: z.array(z.string()).default([]),
+  release_revisions: z.array(z.string()).default([]),
+  release_versions: z.array(z.string()).default([]),
+})
+
 export const screenerPolicyActivationViewSchema = z.object({
   effective_policy_version: z.number().int().positive(),
   floor_policy_version: z.number().int().positive(),
@@ -7053,6 +7074,8 @@ export const screenerPolicyActivationViewSchema = z.object({
   revisions: z
     .array(screenerPolicyActivationRevisionSchema)
     .max(MAX_SCREENER_POLICY_ACTIVATION_REVISIONS),
+  // Absent from platforms older than heartbeat protocol v7.
+  fleet: screenerFleetPolicyReadinessSchema.nullish().transform((value) => value ?? null),
 })
 
 // The offset requirement is what makes the schedule unambiguous: a naive

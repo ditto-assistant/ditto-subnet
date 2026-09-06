@@ -13,7 +13,11 @@ from ditto.api_models.screener_node_settings import (
 )
 from ditto.api_models.screener_provider_settings import ScreenerProviderSettingsControl
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
-from ditto.api_models.system_health import HostSpecs, SystemMetrics
+from ditto.api_models.system_health import (
+    FleetRelease,
+    HostSpecs,
+    SystemMetrics,
+)
 from ditto_screening_protocol import SourceReviewObservationPayload
 
 ScreenerProvider = Literal["gcp", "targon", "hetzner", "home", "test"]
@@ -212,6 +216,9 @@ class ScreenerNodeWorkerView(BaseModel):
     current_phase: str | None = None
     system_metrics: SystemMetrics | None = None
     host_specs: HostSpecs | None = None
+    # Build identity the worker announced (protocol v7+): the policy version
+    # compiled into it and, on a fleet-managed host, the activated release.
+    release: FleetRelease | None = None
 
 
 class ScreenerNodeView(BaseModel):
@@ -238,6 +245,10 @@ class ScreenerNodeView(BaseModel):
     # Hardware the worker announced in its own heartbeat (protocol v6+), not
     # what the provider was asked to allocate. Absent until it reports.
     host_specs: HostSpecs | None = None
+    # Build identity from the newest worker heartbeat (protocol v7+). This is
+    # what tells an operator the fleet adopted a release; ``policy_version``
+    # above is only the requirement the worker is clamped to.
+    release: FleetRelease | None = None
     # Every attributable local worker, newest heartbeat first. This remains
     # separate from the summary fields above so operators can see concurrent
     # work rather than treating a multi-process persistent host as one slot.

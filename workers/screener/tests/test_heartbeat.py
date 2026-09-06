@@ -11,10 +11,12 @@ from pydantic import ValidationError
 
 from ditto_screener.heartbeat import (
     DockerHealth,
+    FleetRelease,
     HostSpecs,
     ScreenerHeartbeatRequest,
     ScreenerProgress,
     SystemMetricsCollector,
+    collect_fleet_release,
     collect_host_specs,
     probe_docker_health,
     source_review_progress_stage,
@@ -368,3 +370,93 @@ def test_unreadable_hardware_never_costs_a_heartbeat() -> None:
         )
         is None
     )
+
+
+def _v7_payload(**overrides: object) -> dict[str, object]:
+    payload = _v6_payload(protocol_version=7)
+    payload["release"] = {
+        "builtin_policy_version": 12,
+        "revision": "c393bc10488ee0b203d08e6d29df877d508f25d9",
+        "version": "0.230.0",
+        "activated_at": 1788717939,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_v7_requires_the_fleet_release_it_announces() -> None:
+    request = ScreenerHeartbeatRequest.model_validate(_v7_payload())
+    assert request.release is not None
+    assert request.release.builtin_policy_version == 12
+    assert request.release.revision == "c393bc10488ee0b203d08e6d29df877d508f25d9"
+    payload = _v7_payload()
+    del payload["release"]
+    with pytest.raises(ValidationError, match="requires the fleet release"):
+        ScreenerHeartbeatRequest.model_validate(payload)
+
+
+def test_fleet_release_is_refused_below_v7() -> None:
+    with pytest.raises(ValidationError, match="requires heartbeat protocol v7"):
+        ScreenerHeartbeatRequest.model_validate(_v7_payload(protocol_version=6))
+
+
+def test_fleet_release_may_omit_the_managed_fields() -> None:
+    """A GCE or dev host still announces the policy its build implements."""
+    request = ScreenerHeartbeatRequest.model_validate(
+        _v7_payload(release={"builtin_policy_version": 12})
+    )
+    assert request.release is not None
+    assert request.release.revision is None
+    assert request.release.version is None
+    assert request.release.activated_at is None
+
+
+def test_fleet_release_rejects_a_non_hex_revision() -> None:
+    with pytest.raises(ValidationError):
+        ScreenerHeartbeatRequest.model_validate(
+            _v7_payload(release={"builtin_policy_version": 12, "revision": "main"})
+        )
+
+
+def test_collect_fleet_release_reads_the_updater_env(tmp_path) -> None:
+    env = tmp_path / "release.env"
+    env.write_text(
+        "SCREENER_FLEET_BUILDER_IMAGE=example@sha256:abc\n"
+        "SCREENER_FLEET_REVISION=c393bc10488ee0b203d08e6d29df877d508f25d9\n"
+        "SCREENER_FLEET_VERSION=0.230.0\n"
+        "SCREENER_FLEET_ACTIVATED_AT=1788717939\n"
+    )
+    release = collect_fleet_release(
+        builtin_policy_version=12, release_env_file=str(env)
+    )
+    assert release.builtin_policy_version == 12
+    assert release.revision == "c393bc10488ee0b203d08e6d29df877d508f25d9"
+    assert release.version == "0.230.0"
+    assert release.activated_at == 1788717939
+
+
+def test_collect_fleet_release_falls_back_to_the_release_path(tmp_path) -> None:
+    module = (
+        "/opt/ditto/screener-fleet/releases/"
+        "c393bc10488ee0b203d08e6d29df877d508f25d9/src/workers/screener/"
+        "ditto_screener/heartbeat.py"
+    )
+    release = collect_fleet_release(
+        builtin_policy_version=12,
+        release_env_file=str(tmp_path / "missing.env"),
+        module_path=module,
+    )
+    assert release.revision == "c393bc10488ee0b203d08e6d29df877d508f25d9"
+    assert release.version is None
+    assert release.activated_at is None
+
+
+def test_collect_fleet_release_never_fails_the_heartbeat(tmp_path) -> None:
+    env = tmp_path / "release.env"
+    env.write_text("SCREENER_FLEET_REVISION=not-a-sha\nSCREENER_FLEET_VERSION=???\n")
+    release = collect_fleet_release(
+        builtin_policy_version=12,
+        release_env_file=str(env),
+        module_path="/srv/ditto/ditto_screener/heartbeat.py",
+    )
+    assert release == FleetRelease(builtin_policy_version=12)

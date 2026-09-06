@@ -8,7 +8,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ditto.api_models.system_health import HostSpecs, SystemMetrics
+from ditto.api_models.system_health import (
+    FleetRelease,
+    HostSpecs,
+    SystemMetrics,
+)
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScreenedImageCompletedPart,
@@ -137,6 +141,7 @@ class ScreenerHeartbeatRequest(BaseModel):
     review_settings: ScreenerReviewSettingsStatus | None = None
     # Announced hardware; required from heartbeat protocol v6.
     host_specs: HostSpecs | None = None
+    release: FleetRelease | None = None
     timestamp: Annotated[int, Field(ge=0)]
     signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
 
@@ -180,6 +185,14 @@ class ScreenerHeartbeatRequest(BaseModel):
             raise ValueError("heartbeat protocol v6 requires host specs")
         if self.protocol_version < 6 and self.host_specs is not None:
             raise ValueError("host specs require heartbeat protocol v6")
+        return self
+
+    @model_validator(mode="after")
+    def validate_release(self) -> ScreenerHeartbeatRequest:
+        if self.protocol_version >= 7 and self.release is None:
+            raise ValueError("heartbeat protocol v7 requires the fleet release")
+        if self.protocol_version < 7 and self.release is not None:
+            raise ValueError("fleet release requires heartbeat protocol v7")
         return self
 
 

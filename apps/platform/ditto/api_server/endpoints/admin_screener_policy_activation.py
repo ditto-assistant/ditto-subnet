@@ -26,7 +26,7 @@ the model cannot see:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, cast
 from uuid import UUID, uuid4
 
@@ -49,10 +49,12 @@ from ditto.api_models.screener_policy_activation import (
     ScoredPolicyRescreenReleaseView,
     ScoredPolicyRescreenView,
     ScoredRescreenState,
+    ScreenerFleetPolicyReadinessView,
     ScreenerPolicyActivationRevision,
     ScreenerPolicyActivationView,
 )
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.system_health import fleet_release_from_heartbeat_envelope
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.screener_policy_activation import (
@@ -64,12 +66,14 @@ from ditto.db.models import (
     Score,
     ScoredPolicyRescreenRelease,
     ScoredScreeningSnapshotRestoration,
+    ScreenerHeartbeat,
     ScreenerReviewSettingsRevision,
     ScreeningAttempt,
 )
 from ditto.db.models import (
     ScreenerPolicyActivation as ActivationRow,
 )
+from ditto.db.queries.heartbeats import list_screener_heartbeats
 from ditto.db.queries.scores import list_eligible_ledger
 from ditto.db.queries.screener_policy_activation import (
     insert_screener_policy_activation,
@@ -107,10 +111,58 @@ def _revision_view(
     )
 
 
+_FLEET_FRESHNESS = timedelta(minutes=15)
+
+
+async def _fleet_view(session: AsyncSession) -> ScreenerFleetPolicyReadinessView:
+    """Summarize which policy versions the fresh reporting fleet can screen."""
+    now = datetime.now(UTC)
+    fresh: list[ScreenerHeartbeat] = []
+    for row in await list_screener_heartbeats(session):
+        seen_at = row.seen_at
+        if seen_at.tzinfo is None:
+            seen_at = seen_at.replace(tzinfo=UTC)
+        if now - seen_at <= _FLEET_FRESHNESS:
+            fresh.append(row)
+    builtins: list[int] = []
+    without_release: list[str] = []
+    lagging: list[str] = []
+    revisions: set[str] = set()
+    versions: set[str] = set()
+    for row in fresh:
+        release = fleet_release_from_heartbeat_envelope(row.system_metrics)
+        if release is None:
+            without_release.append(row.instance_id)
+            continue
+        builtins.append(release.builtin_policy_version)
+        if release.builtin_policy_version < SCREENING_POLICY_VERSION:
+            lagging.append(row.instance_id)
+        if release.revision is not None:
+            revisions.add(release.revision)
+        if release.version is not None:
+            versions.add(release.version)
+    return ScreenerFleetPolicyReadinessView(
+        instances_reporting=len(fresh),
+        instances_with_release=len(builtins),
+        instances_without_release=sorted(without_release),
+        min_builtin_policy_version=min(builtins) if builtins else None,
+        max_builtin_policy_version=max(builtins) if builtins else None,
+        # Every fresh worker must be able to claim the target, so the safe
+        # ceiling is the smallest builtin; unknown builds make it unknown.
+        safe_to_schedule_up_to=(
+            min(builtins) if builtins and not without_release else None
+        ),
+        lagging_instances=sorted(lagging),
+        release_revisions=sorted(revisions),
+        release_versions=sorted(versions),
+    )
+
+
 def _view(
     policy: EffectiveScreenerPolicy,
     latest: ActivationRow | None,
     history: list[ActivationRow],
+    fleet: ScreenerFleetPolicyReadinessView | None = None,
 ) -> ScreenerPolicyActivationView:
     now = datetime.now(UTC)
     return ScreenerPolicyActivationView(
@@ -119,6 +171,7 @@ def _view(
         builtin_policy_version=SCREENING_POLICY_VERSION,
         latest=_revision_view(latest, now=now) if latest is not None else None,
         revisions=[_revision_view(row, now=now) for row in history],
+        fleet=fleet,
     )
 
 
@@ -258,7 +311,7 @@ async def get_activation(
     policy = await resolve_screener_policy_activation(session)
     latest = await latest_screener_policy_activation(session)
     history = list(await list_screener_policy_activations(session))
-    return _view(policy, latest, history)
+    return _view(policy, latest, history, fleet=await _fleet_view(session))
 
 
 @router.get("/scored-rescreen", response_model=ScoredPolicyRescreenView)
@@ -587,7 +640,7 @@ async def schedule_activation(
     policy = await resolve_screener_policy_activation(session)
     latest = await latest_screener_policy_activation(session)
     history = list(await list_screener_policy_activations(session))
-    return _view(policy, latest, history)
+    return _view(policy, latest, history, fleet=await _fleet_view(session))
 
 
 @router.post(

@@ -153,10 +153,18 @@ prepare_l2_analyzer() {
 }
 
 write_release_env() {
-  local output="$1" builder="$2" temporary
+  # The service user cannot read the root-only managed-release.env, so the
+  # activated revision/version travel here too: the worker heartbeats them
+  # (protocol v7) so Backroom can see fleet adoption from the heartbeat alone.
+  local output="$1" builder="$2" revision="${3:-}" version="${4:-}" temporary
   temporary="${output}.tmp.$$"
   umask 077
-  printf 'SCREENER_FLEET_BUILDER_IMAGE=%s\n' "$builder" >"$temporary"
+  {
+    printf 'SCREENER_FLEET_BUILDER_IMAGE=%s\n' "$builder"
+    [ -z "$revision" ] || printf 'SCREENER_FLEET_REVISION=%s\n' "$revision"
+    [ -z "$version" ] || printf 'SCREENER_FLEET_VERSION=%s\n' "$version"
+    [ -z "$revision" ] || printf 'SCREENER_FLEET_ACTIVATED_AT=%s\n' "$(date +%s)"
+  } >"$temporary"
   chown "$SERVICE_USER:$SERVICE_GROUP" "$temporary"
   chmod 0600 "$temporary"
   mv "$temporary" "$output"
@@ -242,6 +250,9 @@ activate_release() {
   local old_target='' old_builder='' old_l2_image='' new_link="$FLEET_ROOT/.current.$$"
   [ ! -L "$CURRENT_LINK" ] || old_target="$(readlink "$CURRENT_LINK")"
   [ ! -f "$RELEASE_ENV" ] || old_builder="$(manifest_value "$RELEASE_ENV" SCREENER_FLEET_BUILDER_IMAGE)"
+  local old_revision="" old_version=""
+  [ ! -f "$RELEASE_ENV" ] || old_revision="$(manifest_value "$RELEASE_ENV" SCREENER_FLEET_REVISION)"
+  [ ! -f "$RELEASE_ENV" ] || old_version="$(manifest_value "$RELEASE_ENV" SCREENER_FLEET_VERSION)"
   old_l2_image="$(run_rootless_as_service docker image inspect --format '{{.Id}}' \
     "$L2_ANALYZER_ACTIVE" 2>/dev/null || true)"
   install -o root -g root -m 0755 \
@@ -251,7 +262,8 @@ activate_release() {
   stop_fleet
   run_rootless_as_service docker tag "$l2_candidate" "$L2_ANALYZER_ACTIVE"
   mv -Tf "$new_link" "$CURRENT_LINK"
-  write_release_env "$RELEASE_ENV" "$builder"
+  write_release_env "$RELEASE_ENV" "$builder" "$revision" \
+    "$(manifest_value "$STATE_DIR/candidate.env" FLEET_VERSION)"
   if ! start_fleet; then
     log "candidate failed to start; restoring the previous release"
     stop_fleet || true
@@ -265,7 +277,8 @@ activate_release() {
       run_rootless_as_service docker image rm --force "$L2_ANALYZER_ACTIVE" \
         >/dev/null 2>&1 || true
     fi
-    [ -z "$old_builder" ] || write_release_env "$RELEASE_ENV" "$old_builder"
+    [ -z "$old_builder" ] || write_release_env "$RELEASE_ENV" "$old_builder" \
+      "$old_revision" "$old_version"
     start_fleet || die "candidate and rollback release both failed to start"
     printf '%s\n' "$exact" >"$FAILED_CANDIDATE_FILE"
     return 1

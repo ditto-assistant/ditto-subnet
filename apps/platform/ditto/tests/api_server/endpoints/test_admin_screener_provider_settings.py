@@ -360,6 +360,12 @@ async def test_capacity_attributes_all_persistent_worker_heartbeats_to_node(
             "disk_total_gib": 1726,
             "architecture": "x86_64",
         },
+        "release": {
+            "builtin_policy_version": 12,
+            "revision": "c393bc10488ee0b203d08e6d29df877d508f25d9",
+            "version": "0.230.0",
+            "activated_at": 1788717939,
+        },
     }
     async with session_maker() as session, session.begin():
         session.add(
@@ -442,6 +448,12 @@ async def test_capacity_attributes_all_persistent_worker_heartbeats_to_node(
         },
     }
     assert node["workers"][0]["host_specs"]["cpu_count"] == 32
+    assert node["workers"][0]["release"]["builtin_policy_version"] == 12
+    assert (
+        node["workers"][0]["release"]["revision"]
+        == "c393bc10488ee0b203d08e6d29df877d508f25d9"
+    )
+    assert node["release"]["version"] == "0.230.0"
 
 
 async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(

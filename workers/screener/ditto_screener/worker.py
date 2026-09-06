@@ -28,12 +28,14 @@ from ditto_screener.errors import PlatformError
 from ditto_screener.gate import LeaseDeadline
 from ditto_screener.heartbeat import (
     DockerHealth,
+    FleetRelease,
     HostSpecs,
     ReviewSettingsStatus,
     ScreenerHeartbeatRequest,
     ScreenerProgress,
     ScreenerProgressStage,
     ScreenerRuntimeState,
+    collect_fleet_release,
     collect_host_specs,
     probe_docker_health,
 )
@@ -109,7 +111,7 @@ def _private_failure_feedback(detail: str, reason_code: str | None) -> str:
 
 # v6 adds the announced host specs (CPU/RAM/disk). A worker that cannot read
 # its own hardware still reports at v5 rather than going dark.
-_HEARTBEAT_PROTOCOL_VERSION = 6
+_HEARTBEAT_PROTOCOL_VERSION = 7
 _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS = 5
 _SYSTEMD_WORKER_CGROUP = re.compile(
     r"(?:^|/)ditto-screener-worker@([1-9][0-9]*)\.service(?:/|$)"
@@ -186,6 +188,7 @@ class ScreenerWorker:
         readiness: ReadinessServer | None = None,
         executor_health_probe: Callable[[], DockerHealth] = probe_docker_health,
         host_specs_probe: Callable[[], HostSpecs | None] = collect_host_specs,
+        fleet_release_probe: Callable[[], FleetRelease] | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -198,6 +201,14 @@ class ScreenerWorker:
         # every heartbeat, so the announced shape can never disagree with
         # itself between two reports from the same process.
         self._host_specs = host_specs_probe()
+        # The build identity is likewise fixed for this process: the fleet
+        # updater restarts every worker on activation, so sampling once here
+        # is exact and lets Backroom see adoption without SSH (protocol v7).
+        self._fleet_release: FleetRelease = (
+            fleet_release_probe()
+            if fleet_release_probe is not None
+            else collect_fleet_release(builtin_policy_version=SCREENING_POLICY_VERSION)
+        )
         # A node can run multiple independent local workers. Their enrollment
         # identity remains the shared ``node_id`` while every heartbeat must
         # use its process identity, otherwise Platform overwrites concurrent
@@ -321,6 +332,7 @@ class ScreenerWorker:
                 if host_specs is not None
                 else _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS
             )
+            release = self._fleet_release if protocol_version >= 7 else None
             policy_version = self._heartbeat_policy_version
             signature = sign_heartbeat(
                 self._keypair,
@@ -335,6 +347,7 @@ class ScreenerWorker:
                 system_metrics=metrics,
                 review_settings=self._review_settings_status,
                 host_specs=host_specs,
+                release=release,
                 timestamp=timestamp,
             )
             request = ScreenerHeartbeatRequest(
@@ -349,6 +362,7 @@ class ScreenerWorker:
                 system_metrics=metrics,
                 review_settings=self._review_settings_status,
                 host_specs=host_specs,
+                release=release,
                 timestamp=timestamp,
                 signature=signature,
             )
