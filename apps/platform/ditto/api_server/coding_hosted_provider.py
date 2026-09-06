@@ -24,6 +24,7 @@ from ditto.api_models.coding_inference import (
     coding_inference_canonical_json_bytes,
     parse_coding_inference_json,
 )
+from ditto.api_server.coding_hosted_budget import ProfiledBudgetEstimator
 from ditto.api_server.coding_hosted_inference import (
     DispatchReservation,
     HostedInferenceLedger,
@@ -39,11 +40,7 @@ class HostedProviderError(ValueError):
 
 
 class BudgetEstimator(Protocol):
-    """Trusted, operator-reviewed tokenizer/pricing implementation, not a miner.
-
-    No production estimator is supplied by this layer. The worker must pin its
-    implementation, tokenizer, price ceiling and validity profile before use.
-    """
+    """Synthetic test seam; network transport requires ProfiledBudgetEstimator."""
 
     def ceilings(self, canonical_request: bytes) -> ReservationCeilings: ...
 
@@ -214,7 +211,7 @@ class HostedProviderAdapter:
         policy: HostedInferencePolicy,
         estimator: BudgetEstimator,
         api_key: str,
-        _test_transport: httpx.AsyncBaseTransport | None = None,
+        _test_transport: httpx.MockTransport | None = None,
     ):
         if (
             not isinstance(grant_id, UUID)
@@ -223,12 +220,20 @@ class HostedProviderAdapter:
             or not 1 <= len(api_key) <= 4096
             or any(not 33 <= ord(char) <= 126 for char in api_key)
             or not callable(getattr(estimator, "ceilings", None))
+            or (
+                _test_transport is not None
+                and type(_test_transport) is not httpx.MockTransport
+            )
         ):
             raise HostedProviderError("hosted provider configuration is invalid")
         self._ledger, self._grant = ledger, grant_id
         self._policy = HostedInferencePolicy.model_validate_json(
             policy.model_dump_json(by_alias=True)
         )
+        if isinstance(estimator, ProfiledBudgetEstimator):
+            estimator.require_policy(self._policy)
+        elif _test_transport is None or self._policy.runtime_profile_sha256 is not None:
+            raise HostedProviderError("a policy-bound runtime estimator is required")
         self._estimator, self._key = estimator, api_key
         self._test_transport = _test_transport
         self._busy = False
@@ -261,15 +266,23 @@ class HostedProviderAdapter:
                 self._policy.request_timeout_milliseconds / 1000,
                 reservation.expires_at_unix - time.time(),
             )
+            if isinstance(self._estimator, ProfiledBudgetEstimator):
+                # A DB transaction may outlast profile validity. Recheck after
+                # commit, before provider I/O, and cap the call by profile expiry.
+                timeout = min(timeout, self._estimator.remaining_seconds())
             if timeout <= 0:
                 raise HostedProviderError("hosted provider deadline expired")
             async with asyncio.timeout(timeout):
                 body = await self._post(canonical, timeout)
             result = verify_response(body, self._policy, reservation)
+            if isinstance(self._estimator, ProfiledBudgetEstimator):
+                self._estimator.verify_usage(result.settlement)
             # Release no model output until durable, fully bound accounting has
             # committed. Lost acknowledgement is terminal, never a fresh retry.
             await self._ledger.settle(result.settlement)
             await self._ledger.require_active(self._grant)
+            if isinstance(self._estimator, ProfiledBudgetEstimator):
+                self._estimator.remaining_seconds()
             if self._closed or time.time() >= reservation.expires_at_unix:
                 raise HostedProviderError("hosted provider output is no longer active")
             return result
@@ -288,6 +301,8 @@ class HostedProviderAdapter:
             self._busy = False
 
     async def authorize_relay(self, binding: HostedRelayBinding) -> None:
+        if isinstance(self._estimator, ProfiledBudgetEstimator):
+            self._estimator.require_policy(self._policy)
         if (
             self._closed
             or binding.grant_id != self._grant

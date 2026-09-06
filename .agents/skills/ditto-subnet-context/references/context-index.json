@@ -374,6 +374,19 @@
       "related": ["coding-hosted-inference", "coding-hosted-inputs", "platform-api"]
     },
     {
+      "id": "coding-hosted-budget",
+      "title": "Native runtime budget and provider profile",
+      "keywords": ["hosted runtime budget profile", "provider billed input cap", "native budget estimator"],
+      "summary": "Bind reviewed provider billing caps and conservative integer cost reservations into the native policy without enabling live inference.",
+      "skills": ["ditto-subnet-platform", "ditto-subnet-benchmark"],
+      "owns": ["apps/platform/ditto/api_models/coding_hosted_budget.py", "apps/platform/ditto/api_server/coding_hosted_budget.py", "apps/platform/docs/coding-hosted-budget-v2.md"],
+      "read": ["apps/platform/docs/coding-hosted-budget-v2.md", "apps/platform/docs/coding-hosted-provider-v2.md"],
+      "search": ["rg -n 'HostedBudgetProfile|ProfiledBudgetEstimator|runtime_profile_sha256' apps/platform/ditto"],
+      "validate": ["cd apps/platform && uv run pytest -q ditto/tests/api_server/test_coding_hosted_budget.py ditto/tests/api_server/test_coding_hosted_provider.py"],
+      "invariants": ["The approved native policy commits the exact profile digest.", "No guessed tokenizer, live pricing defaults or automatic profile refresh.", "Profile expiry never releases unverified budget or activates scoring."],
+      "related": ["coding-hosted-inference", "coding-hosted-relay", "platform-api"]
+    },
+    {
       "id": "coding-hosted-inference",
       "title": "Native hosted inference policy and accounting",
       "keywords": ["hosted inference authority", "native v2 inference", "hosted inference budget", "native hosted provider adapter"],

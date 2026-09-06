@@ -9,9 +9,11 @@ credential loading, worker activation or live model call is enabled by this PR.
 `HostedProviderAdapter` belongs inside the trusted Platform worker, not the
 validator or miner. It requires an existing native grant, policy, private provider
 key and explicit trusted `BudgetEstimator`. Grant UUIDs are not authentication.
-There is no built-in production estimator: the operator must review and pin the
-tokenizer, framing allowances, prices, validity interval and conformance vectors
-before enabling a worker. Synthetic test ceilings are not an approved profile.
+The [runtime budget profile](coding-hosted-budget-v2.md) supplies a concrete
+conservative estimator, pinned by the native policy. Its first algorithm reserves
+a reviewed billed-input cap instead of guessing local tokenization. The operator
+must approve actual billing/route evidence before use. Synthetic ceilings are not
+an approved live profile; generic estimators work only with the mock transport.
 
 The adapter validates the locked request and sends its canonical known-field
 projection only after a fresh PostgreSQL reservation commits. The returned
@@ -78,6 +80,6 @@ instance may be recreated to bypass failure or revive a used source capability.
 
 The [native source-bound relay](coding-hosted-relay-v2.md) now connects this
 adapter through an authenticated private Unix socket, with miner request locking
-and revocation/drain checks. Next integrate the reviewed budget/provider profile,
-durable evidence publisher and full worker execution. There are no schema migrations, public API changes, embeddings,
+and revocation/drain checks. Next integrate the durable evidence publisher and
+full worker execution with an approved live budget/provider profile. There are no schema migrations, public API changes, embeddings,
 public-practice changes, scoring, weights or emissions in this layer.

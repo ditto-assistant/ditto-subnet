@@ -378,6 +378,8 @@ async def test_adapter_policy_must_match_committed_grant(session_maker):
 
 
 async def test_outbound_client_has_no_ambient_authority(session_maker, monkeypatch):
+    from ditto.tests.api_server.test_coding_hosted_budget import profiled_fixture
+
     settings = []
     payload = response_body()
 
@@ -388,12 +390,12 @@ async def test_outbound_client_has_no_ambient_authority(session_maker, monkeypat
     monkeypatch.setattr(httpx, "AsyncHTTPTransport", transport)
     monkeypatch.setenv("HTTPS_PROXY", "http://untrusted-proxy.invalid:99")
     monkeypatch.setenv("SSL_CERT_FILE", "/nonexistent/untrusted-cert")
-    _, _, policy, _, ledger, grant = await fixture(session_maker)
+    _, _, policy, _, ledger, grant, estimate = await profiled_fixture(session_maker)
     adapter = HostedProviderAdapter(
         ledger=ledger,
         grant_id=grant,
         policy=policy,
-        estimator=SyntheticEstimator(),
+        estimator=estimate,
         api_key="synthetic",
     )
     await adapter.complete(request_id=uuid4(), locked_request=locked_body())

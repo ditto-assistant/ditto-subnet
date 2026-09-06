@@ -51,6 +51,9 @@ class HostedInferencePolicy(BaseModel):
     provider_cache_policy: Literal["disabled_v1"]
     router_metadata_required: Literal[True]
     retry_policy: Literal["no_retries_v2"]
+    runtime_profile_sha256: Digest | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     max_requests: Annotated[int, Field(strict=True, ge=1, le=256)]
     max_prompt_tokens: TokenLimit
     max_completion_tokens: Annotated[int, Field(strict=True, ge=1, le=250_000)]
