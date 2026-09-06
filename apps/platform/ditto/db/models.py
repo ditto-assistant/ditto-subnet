@@ -1825,6 +1825,54 @@ class CodingHostedInferenceRequest(Base):
     )
 
 
+class CodingHostedEvidenceReservation(Base):
+    """Append-only native evidence identity; no ciphertext or raw envelope."""
+
+    __tablename__ = "coding_hosted_evidence_reservations"
+    request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    reservation_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False, unique=True
+    )
+    identity_sha256: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    identity: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.clock_timestamp()
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["request_id"],
+            ["coding_hosted_inference_requests.request_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "identity_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "jsonb_typeof(identity)='object' AND octet_length(identity::text)<=16384",
+            name="hosted_evidence_identity",
+        ),
+    )
+
+
+class CodingHostedEvidenceFinalization(Base):
+    """Historical verified readback, never an execution/score result."""
+
+    __tablename__ = "coding_hosted_evidence_finalizations"
+    reservation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    probe_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    verified_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.clock_timestamp()
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["reservation_id"],
+            ["coding_hosted_evidence_reservations.reservation_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "probe_sha256 ~ '^[0-9a-f]{64}$'", name="hosted_evidence_probe"
+        ),
+    )
+
+
 class CodingPrivateV2Release(Base):
     """One immutable, digest-only private Coding v2 release registration."""
 

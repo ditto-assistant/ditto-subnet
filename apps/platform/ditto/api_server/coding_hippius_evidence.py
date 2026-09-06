@@ -12,9 +12,10 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
 from typing import NoReturn, Protocol
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from uuid import UUID, uuid4
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -248,12 +249,30 @@ class PostgresHippiusSealedEvidenceLedger:
             ) from error
 
 
+class _NoRedirectRequests:
+    """Keep the SDK's managed HTTP session while forbidding internal redirects."""
+
+    def __init__(self, session):
+        self._session = session
+
+    def request(self, *args, **kwargs):
+        kwargs["allow_redirects"] = False
+        return self._session.request(*args, **kwargs)
+
+
 class AiobotoHippiusSealedEvidenceTransport:
     """Evidence-only S3 client exposing no list, delete, or arbitrary bucket API."""
 
     def __init__(self, config: HippiusSealedEvidenceConfig) -> None:
         import aioboto3
-        from botocore.config import Config
+        from aiobotocore.config import AioConfig
+        from aiobotocore.httpsession import AIOHTTPSession
+
+        class EvidenceHTTPSession(AIOHTTPSession):
+            async def _get_session(self, proxy_url):
+                # aiohttp otherwise follows redirects inside send(), outside
+                # the SDK before-send hook and its exact-object checks.
+                return _NoRedirectRequests(await super()._get_session(proxy_url))
 
         self._config = config
         self._session = aioboto3.Session(
@@ -261,7 +280,8 @@ class AiobotoHippiusSealedEvidenceTransport:
             aws_secret_access_key=config.mediator.secret_key,
             region_name=config.region,
         )
-        self._client_config = Config(
+        self._client_config = AioConfig(
+            http_session_cls=EvidenceHTTPSession,
             signature_version="s3v4",
             connect_timeout=config.timeout_seconds,
             read_timeout=config.timeout_seconds,
@@ -290,9 +310,39 @@ class AiobotoHippiusSealedEvidenceTransport:
             config=self._client_config,
         )
 
+    def _check_outbound(self, request, *, key: str, **_kwargs: object) -> None:
+        """Also guard SDK redirect/retry endpoint resolution before bytes leave."""
+        try:
+            actual = urlparse(request.url)
+            expected = urlparse(self._config.endpoint_url)
+            valid = (
+                actual.scheme == "https"
+                and actual.hostname == expected.hostname
+                and (actual.port or 443) == (expected.port or 443)
+                and actual.username is None
+                and actual.password is None
+                and not actual.params
+                and not actual.query
+                and not actual.fragment
+                and actual.path
+                == "/"
+                + quote(self._config.bucket, safe="")
+                + "/"
+                + quote(key, safe="/")
+            )
+        except (TypeError, ValueError, AttributeError):
+            valid = False
+        if not valid:
+            raise HippiusSealedEvidenceConflict(
+                "Hippius evidence request target drifted"
+            )
+
     async def get_object(self, *, key: str, max_bytes: int) -> bytes:
         try:
             async with self._client() as s3:
+                s3.meta.events.register(
+                    "before-send.s3", partial(self._check_outbound, key=key)
+                )
                 response = await s3.get_object(Bucket=self._config.bucket, Key=key)
                 stream = response["Body"]
                 chunks: list[bytes] = []
@@ -322,6 +372,9 @@ class AiobotoHippiusSealedEvidenceTransport:
     ) -> None:
         try:
             async with self._client() as s3:
+                s3.meta.events.register(
+                    "before-send.s3", partial(self._check_outbound, key=key)
+                )
                 await s3.put_object(
                     Bucket=self._config.bucket,
                     Key=key,

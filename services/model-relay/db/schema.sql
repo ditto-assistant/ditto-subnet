@@ -582,6 +582,71 @@ CREATE FUNCTION public.guard_efficiency_snapshot_curve() RETURNS trigger
 
 
 --
+-- Name: guard_hosted_evidence_insert(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.guard_hosted_evidence_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $_$
+    DECLARE r coding_hosted_inference_requests%ROWTYPE;
+            g coding_hosted_inference_grants%ROWTYPE;
+            i jsonb;
+            k text;
+            reserved_at timestamptz;
+    BEGIN
+      IF TG_TABLE_NAME='coding_hosted_evidence_reservations' THEN
+        SELECT * INTO r FROM coding_hosted_inference_requests
+          WHERE request_id=NEW.request_id;
+        SELECT * INTO g FROM coding_hosted_inference_grants WHERE grant_id=r.grant_id;
+        i := NEW.identity;
+        IF r.state IS DISTINCT FROM 'settled'
+          OR i->>'schema' IS DISTINCT FROM
+            'dittobench-coding-hosted-inference-evidence-v2'
+          OR i->'weight_eligible' IS DISTINCT FROM 'false'::jsonb
+          OR i->>'request_id' IS DISTINCT FROM NEW.request_id::text
+          OR i->>'reservation_id' IS DISTINCT FROM NEW.reservation_id::text
+          OR i->>'grant_id' IS DISTINCT FROM g.grant_id::text
+          OR i->>'evaluation_id' IS DISTINCT FROM g.evaluation_id::text
+          OR i->>'attempt_id' IS DISTINCT FROM g.attempt_id::text
+          OR i->>'worker_id' IS DISTINCT FROM g.worker_id::text
+          OR i->>'assignment_sha256' IS DISTINCT FROM g.assignment_sha256
+          OR i->>'policy_sha256' IS DISTINCT FROM g.policy_sha256
+          OR i->>'settlement_sha256' IS DISTINCT FROM r.settlement_sha256
+          OR g.policy->>'runtime_profile_sha256' IS NULL
+          OR i->>'runtime_profile_sha256' IS DISTINCT FROM
+            g.policy->>'runtime_profile_sha256'
+          OR i->>'publication_deadline_unix' IS DISTINCT FROM
+            (floor(extract(epoch FROM r.finalized_at))::bigint+86400)::text
+          OR clock_timestamp() >= r.finalized_at + interval '24 hours'
+          OR NEW.created_at < r.finalized_at
+          OR NEW.created_at > clock_timestamp()
+        THEN RAISE EXCEPTION 'native evidence authority mismatch'; END IF;
+        FOREACH k IN ARRAY ARRAY['plaintext_sha256','ciphertext_sha256',
+          'envelope_sha256','wrapping_key_sha256','storage_domain_sha256'] LOOP
+          IF jsonb_typeof(i->k) IS DISTINCT FROM 'string'
+            OR NOT (i->>k ~ '^[0-9a-f]{64}$')
+          THEN RAISE EXCEPTION 'native evidence digest is invalid'; END IF;
+        END LOOP;
+        IF jsonb_typeof(i->'plaintext_size') IS DISTINCT FROM 'number'
+          OR jsonb_typeof(i->'ciphertext_size') IS DISTINCT FROM 'number'
+          OR (i->>'plaintext_size')::bigint NOT BETWEEN 1 AND 25165824
+          OR (i->>'ciphertext_size')::bigint - (i->>'plaintext_size')::bigint
+            NOT BETWEEN 17 AND 2048
+        THEN RAISE EXCEPTION 'native evidence size is invalid'; END IF;
+      ELSE
+        SELECT identity, created_at INTO i, reserved_at
+          FROM coding_hosted_evidence_reservations
+          WHERE reservation_id=NEW.reservation_id;
+        IF i IS NULL OR extract(epoch FROM clock_timestamp()) >=
+          (i->>'publication_deadline_unix')::bigint
+          OR NEW.verified_at < reserved_at OR NEW.verified_at > clock_timestamp()
+        THEN RAISE EXCEPTION 'native evidence publication expired'; END IF;
+      END IF;
+      RETURN NEW;
+    END $_$;
+
+
+--
 -- Name: guard_validator_ticket_bench_floor(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1237,6 +1302,32 @@ CREATE TABLE public.coding_hosted_assignments (
     CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__6e57 CHECK (((expires_at > created_at) AND ((admitted_at IS NULL) = (admission_request_sha256 IS NULL)) AND ((admitted_at IS NULL) OR ((admitted_at >= created_at) AND (admission_request_sha256 ~ '^[0-9a-f]{64}$'::text))) AND ((started_at IS NULL) = (worker_id IS NULL)) AND ((started_at IS NULL) OR ((admitted_at IS NOT NULL) AND (started_at >= admitted_at))))),
     CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__9b2e CHECK (((shadow_only = true) AND (weight_eligible = false))),
     CONSTRAINT ck_coding_hosted_assignments_coding_hosted_assignments__c2b7 CHECK (((registration_sha256 ~ '^[0-9a-f]{64}$'::text) AND (artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND (assignment_sha256 ~ '^[0-9a-f]{64}$'::text)))
+);
+
+
+--
+-- Name: coding_hosted_evidence_finalizations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_evidence_finalizations (
+    reservation_id uuid NOT NULL,
+    probe_sha256 text NOT NULL,
+    verified_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_hosted_evidence_finalizations_hosted_evidence_probe CHECK ((probe_sha256 ~ '^[0-9a-f]{64}$'::text))
+);
+
+
+--
+-- Name: coding_hosted_evidence_reservations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_evidence_reservations (
+    request_id uuid NOT NULL,
+    reservation_id uuid NOT NULL,
+    identity_sha256 text NOT NULL,
+    identity jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_hosted_evidence_reservations_hosted_evidence_identity CHECK (((identity_sha256 ~ '^[0-9a-f]{64}$'::text) AND (jsonb_typeof(identity) = 'object'::text) AND (octet_length((identity)::text) <= 16384)))
 );
 
 
@@ -5105,6 +5196,22 @@ ALTER TABLE ONLY public.coding_hosted_assignments
 
 
 --
+-- Name: coding_hosted_evidence_finalizations pk_coding_hosted_evidence_finalizations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_evidence_finalizations
+    ADD CONSTRAINT pk_coding_hosted_evidence_finalizations PRIMARY KEY (reservation_id);
+
+
+--
+-- Name: coding_hosted_evidence_reservations pk_coding_hosted_evidence_reservations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_evidence_reservations
+    ADD CONSTRAINT pk_coding_hosted_evidence_reservations PRIMARY KEY (request_id);
+
+
+--
 -- Name: coding_hosted_inference_grants pk_coding_hosted_inference_grants; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5750,6 +5857,22 @@ ALTER TABLE ONLY public.coding_hosted_assignments
 
 ALTER TABLE ONLY public.coding_hosted_assignments
     ADD CONSTRAINT uq_coding_hosted_assignments_attempt_id UNIQUE (attempt_id);
+
+
+--
+-- Name: coding_hosted_evidence_reservations uq_coding_hosted_evidence_reservations_identity_sha256; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_evidence_reservations
+    ADD CONSTRAINT uq_coding_hosted_evidence_reservations_identity_sha256 UNIQUE (identity_sha256);
+
+
+--
+-- Name: coding_hosted_evidence_reservations uq_coding_hosted_evidence_reservations_reservation_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_evidence_reservations
+    ADD CONSTRAINT uq_coding_hosted_evidence_reservations_reservation_id UNIQUE (reservation_id);
 
 
 --
@@ -6804,6 +6927,34 @@ CREATE TRIGGER coding_hosted_assignment_guard BEFORE DELETE OR UPDATE ON public.
 
 
 --
+-- Name: coding_hosted_evidence_finalizations coding_hosted_evidence_finalizations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_evidence_finalizations_immutable BEFORE DELETE OR UPDATE ON public.coding_hosted_evidence_finalizations FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_hosted_evidence_finalizations coding_hosted_evidence_finalizations_insert; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_evidence_finalizations_insert BEFORE INSERT ON public.coding_hosted_evidence_finalizations FOR EACH ROW EXECUTE FUNCTION public.guard_hosted_evidence_insert();
+
+
+--
+-- Name: coding_hosted_evidence_reservations coding_hosted_evidence_reservations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_evidence_reservations_immutable BEFORE DELETE OR UPDATE ON public.coding_hosted_evidence_reservations FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_hosted_evidence_reservations coding_hosted_evidence_reservations_insert; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_evidence_reservations_insert BEFORE INSERT ON public.coding_hosted_evidence_reservations FOR EACH ROW EXECUTE FUNCTION public.guard_hosted_evidence_insert();
+
+
+--
 -- Name: coding_hosted_inference_grants coding_hosted_inference_grant_guard; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -7415,6 +7566,22 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 ALTER TABLE ONLY public.coding_hosted_assignments
     ADD CONSTRAINT fk_coding_hosted_assignments_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_hosted_evidence_finalizations fk_coding_hosted_evidence_finalizations_reservation_id__16c4; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_evidence_finalizations
+    ADD CONSTRAINT fk_coding_hosted_evidence_finalizations_reservation_id__16c4 FOREIGN KEY (reservation_id) REFERENCES public.coding_hosted_evidence_reservations(reservation_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_hosted_evidence_reservations fk_coding_hosted_evidence_reservations_request_id_codin_b041; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_evidence_reservations
+    ADD CONSTRAINT fk_coding_hosted_evidence_reservations_request_id_codin_b041 FOREIGN KEY (request_id) REFERENCES public.coding_hosted_inference_requests(request_id) ON DELETE RESTRICT;
 
 
 --
