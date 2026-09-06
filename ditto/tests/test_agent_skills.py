@@ -62,6 +62,12 @@ def test_hosted_authoring_input_routes_to_both_consumers() -> None:
     assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
 
 
+def test_native_inference_routes_to_its_private_authority() -> None:
+    topic = lookup("native v2 inference budget")[0]
+    assert topic["id"] == "coding-hosted-inference"
+    assert "ditto-subnet-platform" in topic_list(topic, "skills")
+
+
 def _tracked_skill_names(prefix: str) -> set[str]:
     completed = subprocess.run(
         ["git", "ls-files", "-z", "--", prefix],

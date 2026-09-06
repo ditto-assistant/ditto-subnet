@@ -49,6 +49,11 @@ Those runtime and evidence adapters remain required before a live hosted canary.
 Revocation stops future retrieval; it cannot erase bytes already delivered to a
 trusted process.
 
+When a native inference grant exists, an additional PostgreSQL guard requires it
+to be revoked with no pending dispatch before freeze. See the
+[native inference ledger](coding-hosted-inference-v2.md); database state still
+does not prove physical provider or process quiescence.
+
 `close_hosted_private_task` permanently removes both grants and remains callable
 by the owning worker after expiry, release retirement or artifact drift. It is
 not terminal result finalization, a grade, or an authorization to rerun a task.

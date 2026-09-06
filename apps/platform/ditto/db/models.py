@@ -1706,6 +1706,125 @@ class CodingHostedPrivateTask(Base):
     )
 
 
+class CodingHostedInferenceGrant(Base):
+    """Native Platform-owned grant; not a validator ticket or provider bearer."""
+
+    __tablename__ = "coding_hosted_inference_grants"
+    grant_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    evaluation_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False, unique=True
+    )
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    worker_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    assignment_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    execution_profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    request_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    prompt_limit: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    completion_limit: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cost_limit: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.clock_timestamp()
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    shadow_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    weight_eligible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["evaluation_id"],
+            ["coding_hosted_assignments.evaluation_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "shadow_only AND NOT weight_eligible AND request_limit BETWEEN 1 "
+            "AND 256 AND prompt_limit BETWEEN 1 AND 2250000 AND "
+            "completion_limit BETWEEN 1 AND 250000 AND cost_limit BETWEEN 1 "
+            "AND 100000000 AND expires_at > created_at AND (revoked_at IS NULL "
+            "OR revoked_at >= created_at)",
+            name="hosted_inference_grant_bounds",
+        ),
+        CheckConstraint(
+            "assignment_sha256 ~ '^[0-9a-f]{64}$' AND policy_sha256 ~ "
+            "'^[0-9a-f]{64}$' AND execution_profile_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND jsonb_typeof(policy)='object' AND "
+            "octet_length(policy::text)<=16384",
+            name="hosted_inference_grant_authority",
+        ),
+    )
+
+
+class CodingHostedInferenceRequest(Base):
+    """One irreversible dispatch reservation and optional trusted settlement."""
+
+    __tablename__ = "coding_hosted_inference_requests"
+    request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    grant_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    locked_request_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_ceiling: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    completion_ceiling: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cost_ceiling: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False, default="reserved")
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.clock_timestamp()
+    )
+    finalized_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    prompt_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    cost_usd_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    settlement_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_receipt_sha256: Mapped[str | None] = mapped_column(
+        Text, nullable=True, unique=True
+    )
+    settlement: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["grant_id"],
+            ["coding_hosted_inference_grants.grant_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("grant_id", "sequence"),
+        CheckConstraint(
+            "sequence BETWEEN 1 AND 256 AND locked_request_sha256 ~ "
+            "'^[0-9a-f]{64}$' AND prompt_ceiling BETWEEN 1 AND 2250000 AND "
+            "completion_ceiling BETWEEN 1 AND 250000 AND cost_ceiling BETWEEN "
+            "1 AND 100000000",
+            name="hosted_inference_request_bounds",
+        ),
+        CheckConstraint(
+            "((state='reserved' AND finalized_at IS NULL) OR "
+            "(state='uncertain' AND finalized_at IS NOT NULL AND "
+            "finalized_at>=created_at)) AND prompt_tokens IS NULL AND "
+            "completion_tokens IS NULL AND cost_usd_micros IS NULL AND "
+            "settlement_sha256 IS NULL AND provider_receipt_sha256 IS NULL AND "
+            "settlement IS NULL OR (state='settled' AND finalized_at IS NOT "
+            "NULL AND finalized_at>=created_at AND prompt_tokens IS NOT NULL "
+            "AND prompt_tokens BETWEEN 0 AND prompt_ceiling AND "
+            "completion_tokens IS NOT NULL AND completion_tokens BETWEEN 0 AND "
+            "completion_ceiling AND cost_usd_micros IS NOT NULL AND "
+            "cost_usd_micros BETWEEN 0 AND cost_ceiling AND settlement_sha256 "
+            "IS NOT NULL AND settlement_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "provider_receipt_sha256 IS NOT NULL AND provider_receipt_sha256 ~ "
+            "'^[0-9a-f]{64}$' AND settlement IS NOT NULL AND "
+            "jsonb_typeof(settlement)='object' AND "
+            "octet_length(settlement::text)<=8192)",
+            name="hosted_inference_request_state",
+        ),
+    )
+
+
 class CodingPrivateV2Release(Base):
     """One immutable, digest-only private Coding v2 release registration."""
 

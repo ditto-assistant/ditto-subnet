@@ -361,6 +361,19 @@
       "related": ["coding-attempt-supervisor", "coding-inference-grants", "coding-repair-research", "platform-api", "dittobench-scoring"]
     },
     {
+      "id": "coding-hosted-inference",
+      "title": "Native hosted inference policy and accounting",
+      "keywords": ["hosted inference authority", "native v2 inference", "hosted inference budget"],
+      "summary": "Bind native inference to committed assignments with conservative reservations and revoke-before-freeze guards.",
+      "skills": ["ditto-subnet-platform", "ditto-subnet-benchmark"],
+      "owns": ["apps/platform/ditto/api_models/coding_hosted_inference.py", "apps/platform/ditto/api_server/coding_hosted_inference.py", "apps/platform/alembic/versions/2026_09_06_add_hosted_inference_authority.py", "apps/platform/docs/coding-hosted-inference-v2.md"],
+      "read": ["apps/platform/docs/coding-hosted-inference-v2.md", "apps/platform/docs/coding-hosted-private-grants.md"],
+      "search": ["rg -n 'HostedInferenceLedger|DispatchReservation|InferenceAccounting' apps/platform/ditto"],
+      "validate": ["cd apps/platform && uv run pytest -q ditto/tests/api_server/test_coding_hosted_inference.py", "cd apps/platform && uv run python scripts/check_migration_order.py origin/main"],
+      "invariants": ["Dispatch requires a fresh committed reservation.", "Unknown outcomes retain ceilings and cannot become zero usage.", "No v1 ticket or provider transport is activated by this ledger."],
+      "related": ["coding-hosted-inputs", "coding-inference-grants", "platform-api"]
+    },
+    {
       "id": "coding-hosted-inputs",
       "title": "Verified hosted authoring input assembly",
       "keywords": ["hosted authoring input", "coding hosted input assembly", "native input handoff"],
