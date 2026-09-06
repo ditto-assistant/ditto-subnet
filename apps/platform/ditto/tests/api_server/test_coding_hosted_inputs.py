@@ -79,6 +79,9 @@ async def fixture(
     expires_soon=False,
     policy_sha256=None,
     grading_profile_factory=None,
+    reader_authority_sha256="6" * 64,
+    start=True,
+    wrapping_key_callback=None,
 ):
     tmp_path.chmod(0o700)
     release_path, groups = _bound_fixture(tmp_path, native_authoring=True)
@@ -92,6 +95,8 @@ async def fixture(
         output=tmp_path / "payload",
     )
     wrapping = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+    if wrapping_key_callback is not None:
+        wrapping_key_callback(wrapping)
     public = tmp_path / "wrapping.pem"
     public.write_bytes(
         wrapping.public_key().public_bytes(
@@ -120,7 +125,7 @@ async def fixture(
             manifest=manifest,
             source_sha="a" * 40,
             probe_receipt_payload_sha256="5" * 64,
-            private_input_authority_sha256="6" * 64,
+            private_input_authority_sha256=reader_authority_sha256,
             curator_signing_key_sha256=signer_sha,
         )
     )
@@ -148,7 +153,7 @@ async def fixture(
         checked_at="2026-09-06T00:00:00Z",
         provider="hippius",
         probe_receipt_payload_sha256="5" * 64,
-        private_input_authority_sha256="6" * 64,
+        private_input_authority_sha256=reader_authority_sha256,
         transport_sha256=manifest["transport_sha256"],
         payload_sha256=manifest["payload_sha256"],
         catalog_sha256=manifest["catalog_sha256"],
@@ -194,6 +199,7 @@ async def fixture(
     )
     authority, _, worker, grants = await _prepared(
         session_maker,
+        start=start,
         registration_bundle=(registration, wire_receipt),
         execution_profile_sha256=hosted_profile["sha256"],
         policy_sha256=policy_sha256,
@@ -242,7 +248,7 @@ async def fixture(
         payload_authority=tmp_path / "payload/payload-authority.json",
         publication_receipt=tmp_path / "receipt.json",
         trusted_curator_public_key_path=trusted,
-        reader_authority_sha256="6" * 64,
+        reader_authority_sha256=reader_authority_sha256,
         audience="platform-authoring",
         grants=_store(session_maker, worker),
         reader=reader,

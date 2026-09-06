@@ -68,6 +68,9 @@ def test_hosted_worker_launcher_routes_to_native_runtime() -> None:
     assert "services/dittobench-api/internal/codinghostedruntime" in topic_list(
         topic, "owns"
     )
+    assert "apps/platform/ditto/api_server/coding_hosted_runtime.py" in topic_list(
+        topic, "owns"
+    )
 
 
 def test_native_inference_routes_to_its_private_authority() -> None:

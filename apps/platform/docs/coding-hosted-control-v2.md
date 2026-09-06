@@ -1,5 +1,9 @@
 # Native Platform control adapters
 
+The subsequent [Platform startup companion](coding-hosted-platform-runtime-v2.md)
+now assembles these adapters and the native grading path. The scope below records
+the original control-adapter layer; production deployment remains separate.
+
 `HostedAuthoringControl` and `HostedControlServer` implement the Platform side of
 the native authoring worker's control interface. Go's `NewControlClient` supplies
 the concrete `codinghostedworker.Control` implementation. No public HTTP route,

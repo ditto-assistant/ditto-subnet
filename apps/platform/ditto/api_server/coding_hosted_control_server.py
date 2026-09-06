@@ -23,8 +23,15 @@ class HostedControlServer:
         if type(token) is not bytes or len(token) != 32 or not any(token):
             raise ValueError("invalid private control credential")
         self._control, self._token, self._active = control, bytes(token), 0
+        self._tasks: set[asyncio.Task] = set()
+        self._server: asyncio.AbstractServer | None = None
+        self._closing = False
+        self._started = False
 
     async def start(self, path: Path) -> asyncio.AbstractServer:
+        if self._started or self._closing:
+            raise ValueError("private control server already used")
+        self._started = True
         info = path.parent.lstat()
         if (
             not path.is_absolute()
@@ -42,9 +49,10 @@ class HostedControlServer:
             path.chmod(0o600)
             listener.listen(8)
             listener.setblocking(False)
-            return await asyncio.start_unix_server(
+            self._server = await asyncio.start_unix_server(
                 self.handle, sock=listener, limit=65536
             )
+            return self._server
         except BaseException:
             listener.close()
             raise
@@ -52,9 +60,12 @@ class HostedControlServer:
     async def handle(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
-        admitted = self._active < 8
+        task = asyncio.current_task()
+        admitted = not self._closing and self._active < 8
         if admitted:
             self._active += 1
+            if task is not None:
+                self._tasks.add(task)
         try:
             if not admitted:
                 return
@@ -235,6 +246,23 @@ class HostedControlServer:
                 pass
             if admitted:
                 self._active -= 1
+                if task is not None:
+                    self._tasks.discard(task)
+
+    async def shutdown(self) -> None:
+        """Stop admission and finish handlers before dependencies are disposed."""
+        self._closing = True
+        if self._server is not None:
+            self._server.close()
+        tasks = tuple(self._tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        # Python 3.12.1+ waits for client connections here, not just the
+        # listening socket. Cancel/drain their handlers before awaiting it.
+        if self._server is not None:
+            await self._server.wait_closed()
 
     async def _reply(self, writer: asyncio.StreamWriter, value: dict) -> None:
         body = canonical(value)

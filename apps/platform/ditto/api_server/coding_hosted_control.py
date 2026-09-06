@@ -74,6 +74,7 @@ class HostedAuthoringControl:
         authoring_evidence: HostedAuthoringEvidencePublisher,
         bridge_root: Path,
         grading: HostedGradingControl | None = None,
+        evaluation_id: UUID | None = None,
         _test_transport: httpx.MockTransport | None = None,
     ):
         import os
@@ -124,8 +125,18 @@ class HostedAuthoringControl:
         self._bridges: dict[UUID, _Bridge] = {}
         self._bound: dict[UUID, SourceBinding] = {}
         self._locks: dict[UUID, asyncio.Lock] = {}
+        if evaluation_id is not None and (
+            not isinstance(evaluation_id, UUID) or not evaluation_id.int
+        ):
+            raise HostedEvidenceError("control evaluation is invalid")
+        self._evaluation_id = evaluation_id
 
     async def _owner(self, source: SourceBinding, session: AsyncSession) -> None:
+        if (
+            self._evaluation_id is not None
+            and source.evaluation_id != self._evaluation_id
+        ):
+            raise HostedEvidenceError("control evaluation differs")
         await owned_source(session, source, self._worker)
         previous = self._bound.get(source.evaluation_id)
         if previous is not None and previous != source:
@@ -381,3 +392,20 @@ class HostedAuthoringControl:
 
     def __repr__(self) -> str:
         return "HostedAuthoringControl(private=True)"
+
+    async def shutdown(self) -> None:
+        """Call after the Go worker exits and control handlers have drained.
+
+        Attempt every grant boundary even when another fails. Retain all handles
+        and spooled evidence on failure; this does not certify container cleanup.
+        """
+        failed = False
+        for source in tuple(self._bound.values()):
+            for operation in (self.close, self.abort):
+                try:
+                    async with asyncio.timeout(30):
+                        await operation(source)
+                except Exception:
+                    failed = True
+        if failed:
+            raise HostedEvidenceError("control shutdown is unconfirmed")

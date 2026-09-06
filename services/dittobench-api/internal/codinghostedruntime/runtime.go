@@ -14,6 +14,13 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/codingsource"
 )
 
+// Validate checks private startup files without consuming a directory, changing
+// environment, contacting Docker/Platform, or running candidate code.
+func Validate(path string) error {
+	_, err := loadConfig(path)
+	return err
+}
+
 // Run is only for a dedicated Platform worker process. It replaces the process
 // environment before constructing any execution adapters. Never embed it in
 // Platform's HTTP server or a validator. No scheduler/gate is enabled here.

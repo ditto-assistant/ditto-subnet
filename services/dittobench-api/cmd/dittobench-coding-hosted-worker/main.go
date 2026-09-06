@@ -25,10 +25,21 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("dittobench-coding-hosted-worker", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	once := flags.Bool("private-shadow-once", false, "run one approved private shadow attempt")
+	validate := flags.Bool("validate-only", false, "validate private files without starting an attempt")
 	path := flags.String("config", "", "absolute owner-only Platform configuration file")
-	if flags.Parse(args) != nil || flags.NArg() != 0 || !*once || *path == "" {
+	if flags.Parse(args) != nil || flags.NArg() != 0 || *once == *validate || *path == "" {
 		_, _ = fmt.Fprintln(stderr, "requires --private-shadow-once --config <protected-file>")
 		return 2
+	}
+	if *validate {
+		if codinghostedruntime.Validate(*path) != nil {
+			_, _ = fmt.Fprintln(stderr, "hosted worker configuration rejected")
+			return 1
+		}
+		if _, err := fmt.Fprintln(stdout, "hosted worker configuration valid"); err != nil {
+			return 1
+		}
+		return 0
 	}
 	sha, err := codinghostedruntime.Run(ctx, *path)
 	if err != nil {

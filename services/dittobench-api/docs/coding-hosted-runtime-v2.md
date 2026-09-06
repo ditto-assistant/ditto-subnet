@@ -1,5 +1,10 @@
 # One-attempt hosted worker launcher
 
+The [Platform startup companion](../../../apps/platform/docs/coding-hosted-platform-runtime-v2.md)
+now constructs the private control service and this launcher's approved input.
+`--validate-only --config <private-file>` checks that input without starting work;
+it is mutually exclusive with `--private-shadow-once` and is not runtime readiness.
+
 `cmd/dittobench-coding-hosted-worker` connects the native authoring/grading worker
 to its concrete local control client, PostgreSQL start helper, screened-harness
 sandbox, source router and phase-separated executors. It runs only on trusted
@@ -142,9 +147,10 @@ redaction. Existing native worker/input/grader and Go/Python control tests remai
 the composition tests; the new launcher tests do not claim real Docker/private
 provider execution or a live canary.
 
-Still required: Platform control-service startup and protected provider/storage/
-key loading, an assignment-to-launch projection, reviewed production runtime
-images/test drivers, encrypted private-release publication/readback/registration,
-operational reconciliation, and one deployed private shadow canary. No deployment,
-release registration, private-data upload, scoring, weight or emission is enabled
-by building or merging this command.
+The Platform companion now supplies private control startup and the assignment
+projection. Still required: approved installations and custody provisioning,
+reviewed production runtime images/test drivers, encrypted private-release
+publication/readback/registration, operational reconciliation, and a deployed
+private shadow canary. Public signed control retains separate default-off signer
+configuration. No deployment, release registration, private-data upload, scoring,
+weight or emission is enabled by building or merging these commands.

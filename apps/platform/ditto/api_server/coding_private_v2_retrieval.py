@@ -103,6 +103,17 @@ class PrivateV2AuthoringDescriptor:
     objects: tuple[tuple[str, str, int], ...]
 
 
+@dataclass(frozen=True, repr=False)
+class PrivateV2SelectionDescriptor:
+    """Metadata only, before start; grants still gate every plaintext read."""
+
+    registration_sha256: str
+    corpus_release_id: str
+    private_release_sha256: str
+    catalog_index: int
+    task_commitment_sha256: str
+
+
 class PrivateV2InputRetriever:
     """Trusted service primitive; no constructor or route is enabled by default."""
 
@@ -243,6 +254,50 @@ class PrivateV2InputRetriever:
         """Private assembler authority; contains no grader object capability."""
         return await self._describe(grant_id, "authoring", AUTHORING_ROLES)
 
+    def describe_selection(self, catalog_index: int) -> PrivateV2SelectionDescriptor:
+        """Trusted launch projection supplies its index from the locked DB row.
+
+        This verifies metadata membership, not lifecycle or permission to read.
+        It neither contacts Hippius/unwrap nor manufactures a pre-start grant.
+        """
+        try:
+            if type(catalog_index) is not int or not 0 <= catalog_index < 250:
+                raise ValueError("index")
+            leaves = [
+                coding_catalog_leaf_hash(
+                    catalog_index=i,
+                    task_commitment_sha256=task["task_commitment_sha256"],
+                )
+                for i, task in enumerate(self._payload["task_assets"])
+            ]
+            count = 1 << (len(leaves) - 1).bit_length()
+            leaves.extend(
+                coding_catalog_empty_leaf_hash(catalog_index=i)
+                for i in range(len(leaves), count)
+            )
+            level = 0
+            while len(leaves) > 1:
+                leaves = [
+                    coding_catalog_node_hash(
+                        level=level, left_sha256=leaves[i], right_sha256=leaves[i + 1]
+                    )
+                    for i in range(0, len(leaves), 2)
+                ]
+                level += 1
+            if leaves[0] != self._registration.catalog_merkle_root:
+                raise ValueError("root")
+            return PrivateV2SelectionDescriptor(
+                self._registration.registration_sha256,
+                self._registration.corpus_release_id,
+                self._registration.private_release_sha256,
+                catalog_index,
+                self._payload["task_assets"][catalog_index]["task_commitment_sha256"],
+            )
+        except Exception:
+            raise PrivateV2RetrievalError(
+                "private selection metadata is invalid"
+            ) from None
+
     async def describe_grading(self, grant_id: UUID) -> PrivateV2AuthoringDescriptor:
         """Private grading authority, available only after committed patch freeze."""
         return await self._describe(grant_id, "grading", GRADING_ROLES)
@@ -262,31 +317,7 @@ class PrivateV2InputRetriever:
                     or grant.allowed_roles != roles
                 ):
                     raise ValueError("authoring grant")
-                leaves = [
-                    coding_catalog_leaf_hash(
-                        catalog_index=i,
-                        task_commitment_sha256=task["task_commitment_sha256"],
-                    )
-                    for i, task in enumerate(self._payload["task_assets"])
-                ]
-                count = 1 << (len(leaves) - 1).bit_length()
-                leaves.extend(
-                    coding_catalog_empty_leaf_hash(catalog_index=i)
-                    for i in range(len(leaves), count)
-                )
-                level = 0
-                while len(leaves) > 1:
-                    leaves = [
-                        coding_catalog_node_hash(
-                            level=level,
-                            left_sha256=leaves[i],
-                            right_sha256=leaves[i + 1],
-                        )
-                        for i in range(0, len(leaves), 2)
-                    ]
-                    level += 1
-                if leaves[0] != self._registration.catalog_merkle_root:
-                    raise ValueError("catalog root")
+                self.describe_selection(grant.catalog_index)
                 task = self._payload["task_assets"][grant.catalog_index]
                 objects = tuple(
                     (
