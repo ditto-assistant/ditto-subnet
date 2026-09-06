@@ -32,6 +32,16 @@ type GradingProfile struct {
 	ExecutionTimeout     time.Duration                `json:"execution_timeout"`
 }
 
+func (p GradingProfile) Validate() error {
+	if p.Schema != "dittobench-coding-hosted-grading-profile-v2" {
+		return ErrAttempt
+	}
+	return (codinggrader.HostedManifest{GraderContractSHA256: p.GraderContractSHA256,
+		GraderImageDigest: p.ImageDigest, GraderPlatform: "linux/amd64", GraderBundleSHA256: p.GraderBundleSHA256,
+		TestManifestSHA256: p.TestManifestSHA256, ResourcePolicy: p.ResourcePolicy, ExecutionTimeout: p.ExecutionTimeout,
+		Build: p.Build, TestGroups: p.TestGroups}).ValidateExecutionProfile()
+}
+
 func canonicalGrading(value any) ([]byte, error) {
 	raw, err := json.Marshal(value)
 	if err != nil {

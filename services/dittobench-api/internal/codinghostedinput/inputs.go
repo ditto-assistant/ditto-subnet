@@ -129,6 +129,15 @@ func expectedValid(expected Expected) bool {
 	return remaining > 0 && remaining <= time.Hour && expected.MaxPatchBytes > 0 && expected.MaxPatchBytes <= 128<<20 && expected.CatalogIndex >= 0 && expected.CatalogIndex < 250 && expected.CorpusReleaseID != ""
 }
 
+// Validate checks independently supplied authority before consuming a start.
+// This is structural validation, not a replacement for Platform ledger checks.
+func (expected Expected) Validate() error {
+	if !expectedValid(expected) {
+		return ErrInput
+	}
+	return nil
+}
+
 // Prepare takes ownership of a bounded private stream and closes it on every
 // outcome. Cancellation closes the reader, including a blocked/truncated pipe.
 func Prepare(ctx context.Context, expected Expected, profile Profile, source io.ReadCloser) (*Prepared, error) {

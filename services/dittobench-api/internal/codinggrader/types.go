@@ -71,10 +71,10 @@ func (manifest Manifest) validate(now time.Time) error {
 }
 
 func (manifest Manifest) validateProfile(now time.Time, hosted bool) error {
-	version, groupsRequired, contractSHA, lifetime := codingrunner.ContractVersion, evidenceGroups, GraderContractSHA256(), 2*time.Hour
+	version, contractSHA, lifetime := codingrunner.ContractVersion, GraderContractSHA256(), 2*time.Hour
 	resourceDigestFunc, planDigestFunc := ResourceProfileSHA256, GraderPlanSHA256
 	if hosted {
-		version, groupsRequired, contractSHA, lifetime = codingrunner.HostedContractVersion, hostedEvidenceGroups, HostedGraderContractSHA256(), time.Hour
+		version, contractSHA, lifetime = codingrunner.HostedContractVersion, HostedGraderContractSHA256(), time.Hour
 		resourceDigestFunc = HostedResourceProfileSHA256
 		planDigestFunc = func(m Manifest) (string, error) { return HostedGraderPlanSHA256(HostedManifest(m)) }
 	}
@@ -90,19 +90,33 @@ func (manifest Manifest) validateProfile(now time.Time, hosted bool) error {
 	if manifest.Deadline.IsZero() || !manifest.Deadline.After(now) || manifest.Deadline.After(now.Add(lifetime)) {
 		return errors.New("coding grader deadline is outside its bounded lifetime")
 	}
-	if manifest.ExecutionTimeout <= 0 || manifest.ExecutionTimeout > time.Hour ||
-		manifest.ExecutionTimeout%time.Millisecond != 0 {
-		return errors.New("coding grader execution timeout is outside contract bounds")
-	}
 	if manifest.GraderContractSHA256 != contractSHA {
 		return errors.New("coding grader contract digest does not match the compiled contract")
 	}
-	if err := manifest.ResourcePolicy.validate(); err != nil {
+	if err := manifest.validateExecutionProfile(hosted); err != nil {
 		return err
 	}
 	resourceDigest, err := resourceDigestFunc(manifest.ResourcePolicy)
 	if err != nil || resourceDigest != manifest.ResourceProfileSHA256 {
 		return errors.New("coding grader resource profile digest mismatch")
+	}
+	planDigest, err := planDigestFunc(manifest)
+	if err != nil || planDigest != manifest.GraderPlanSHA256 {
+		return errors.New("coding grader plan digest mismatch")
+	}
+	return nil
+}
+
+func (manifest Manifest) validateExecutionProfile(hosted bool) error {
+	groupsRequired := evidenceGroups
+	if hosted {
+		groupsRequired = hostedEvidenceGroups
+	}
+	if manifest.ExecutionTimeout <= 0 || manifest.ExecutionTimeout > time.Hour || manifest.ExecutionTimeout%time.Millisecond != 0 {
+		return errors.New("coding grader execution timeout is outside contract bounds")
+	}
+	if err := manifest.ResourcePolicy.validate(); err != nil {
+		return err
 	}
 	if err := manifest.Build.Command.Validate(); err != nil {
 		return err
@@ -130,10 +144,6 @@ func (manifest Manifest) validateProfile(now time.Time, hosted bool) error {
 	}
 	if !slices.Equal(groups, groupsRequired) {
 		return errors.New("coding grader group order is invalid")
-	}
-	planDigest, err := planDigestFunc(manifest)
-	if err != nil || planDigest != manifest.GraderPlanSHA256 {
-		return errors.New("coding grader plan digest mismatch")
 	}
 	return nil
 }

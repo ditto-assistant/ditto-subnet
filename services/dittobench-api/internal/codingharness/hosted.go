@@ -94,6 +94,15 @@ func (binding HostedBinding) valid(now time.Time) bool {
 		!binding.ImageExpiresAt.After(binding.Deadline) && !binding.ImageExpiresAt.After(now.Add(6*time.Minute))
 }
 
+// Validate permits startup validation before loading an image or consuming its
+// start. The durable start store still independently verifies current authority.
+func (binding HostedBinding) Validate(now time.Time) error {
+	if !binding.valid(now) || binding.Deadline.Nanosecond() != 0 || binding.ProfileCapabilityID != "hosted-"+binding.AttemptID {
+		return ErrInvalid
+	}
+	return nil
+}
+
 func (factory *HostedFactory) Acquire(ctx context.Context, binding HostedBinding) (*HostedHandle, error) {
 	if factory == nil || factory.base == nil || ctx == nil || ctx.Err() != nil || !binding.valid(factory.base.now().UTC()) {
 		return nil, ErrInvalid

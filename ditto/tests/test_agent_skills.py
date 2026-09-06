@@ -62,6 +62,14 @@ def test_hosted_authoring_input_routes_to_both_consumers() -> None:
     assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
 
 
+def test_hosted_worker_launcher_routes_to_native_runtime() -> None:
+    topic = lookup("hosted worker launcher")[0]
+    assert topic["id"] == "coding-hosted-inputs"
+    assert "services/dittobench-api/internal/codinghostedruntime" in topic_list(
+        topic, "owns"
+    )
+
+
 def test_native_inference_routes_to_its_private_authority() -> None:
     topic = lookup("native v2 inference budget")[0]
     assert topic["id"] == "coding-hosted-inference"

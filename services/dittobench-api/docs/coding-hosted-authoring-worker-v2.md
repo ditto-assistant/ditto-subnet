@@ -1,5 +1,9 @@
 # Native Platform authoring coordinator
 
+For the subsequent native grading and executable worker composition, see
+[the one-attempt launcher](coding-hosted-runtime-v2.md). The scope below describes
+the original authoring coordinator, not the entire current hosted execution path.
+
 `internal/codinghostedworker` joins the native harness lifecycle, verified input
 consumer, resource-bound workspace, source router and inference relay into one
 authoring attempt. Its public constructor uses those concrete components.

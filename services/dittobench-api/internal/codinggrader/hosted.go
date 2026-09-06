@@ -30,6 +30,17 @@ func (manifest HostedManifest) Validate(now time.Time) error {
 	return Manifest(manifest).validateProfile(now, true)
 }
 
+// ValidateExecutionProfile checks only the approved template before a patch
+// exists. It does not authorize grading or invent a snapshot/patch identity.
+// Execution still requires full Validate plus committed replay authority.
+func (manifest HostedManifest) ValidateExecutionProfile() error {
+	if manifest.GraderContractSHA256 != HostedGraderContractSHA256() || !ociDigest(manifest.GraderImageDigest) ||
+		manifest.GraderPlatform != "linux/amd64" || !lowerSHA256(manifest.GraderBundleSHA256) || !lowerSHA256(manifest.TestManifestSHA256) {
+		return errors.New("hosted grading execution profile identity is invalid")
+	}
+	return Manifest(manifest).validateExecutionProfile(true)
+}
+
 func HostedGraderContractSHA256() string {
 	value, err := digestCanonical(map[string]any{
 		"schema":                              "dittobench-coding-hosted-grader-contract-v2",
