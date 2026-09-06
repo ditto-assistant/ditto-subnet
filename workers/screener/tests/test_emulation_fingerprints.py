@@ -974,3 +974,105 @@ def test_rev9_findings_never_leak_matched_source_text() -> None:
         assert finding["category"] == "benchmark_emulation"
         for location in finding["locations"]:
             assert set(location) == {"path", "line", "role"}
+
+
+_RUST_SCORER_SLOT_RESCALE = """\
+fn finish(result: &RunResult, task: &TaskSpec, question: &str) -> RunResponse {
+    let answer = crate::optimizer::extract_answer_slot(&result.text);
+    let normalized_money_answer = answer
+        .as_deref()
+        .and_then(|s| normalize_minor_unit_answer_value(&task.answer_contract, s));
+    let normalized_direction_answer = answer.as_deref().and_then(|slot| {
+        normalize_directional_answer_value(question, slot)
+    });
+    let answer = normalized_direction_answer.or(normalized_money_answer).or(answer);
+    RunResponse { final_text: result.text.clone(), answer, abstain: None }
+}
+"""
+
+_RUST_SCORER_SLOT_RESCALE_HELPER_BODY = """\
+fn minor_units_as_major(component: &str) -> Option<String> {
+    let magnitude: i64 = component.trim().parse().ok()?;
+    let rendered = format!("{}.{:02}", magnitude / 100, magnitude % 100);
+    Some(rendered)
+}
+
+fn serialize(task: &TaskSpec, slot: &str) -> Option<String> {
+    if !task.answer_contract.include_minor_units {
+        return None;
+    }
+    minor_units_as_major(slot)
+}
+"""
+
+_RUST_HONEST_CHARACTER_FOLD = """\
+fn finish(result: &RunResult) -> RunResponse {
+    let answer = crate::optimizer::extract_answer_slot(&result.text)
+        .map(|slot| crate::optimizer::ascii_fold(slot.trim()));
+    RunResponse { final_text: result.text.clone(), answer, abstain: None }
+}
+"""
+
+_RUST_CALCULATOR_RECEIPT_IS_NOT_SLOT_RESCALE = """\
+fn receipt(total: i64) -> String {
+    let magnitude = total.abs();
+    format!(
+        "calculator receipt (untrusted advisory): {}.{:02}",
+        magnitude / 100,
+        magnitude % 100
+    )
+}
+"""
+
+
+def test_scorer_slot_rescale_trips_on_aceron_v13_call_site() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/baseline.rs", _RUST_SCORER_SLOT_RESCALE)]
+        )
+    )
+    assert "scorer-slot-rescale" in kinds
+
+
+def test_scorer_slot_rescale_trips_on_request_keyed_helper_body() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/baseline.rs", _RUST_SCORER_SLOT_RESCALE_HELPER_BODY)]
+        )
+    )
+    assert "scorer-slot-rescale" in kinds
+
+
+def test_character_level_fold_is_not_scorer_slot_rescale() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/baseline.rs", _RUST_HONEST_CHARACTER_FOLD)]
+        )
+    )
+    assert "scorer-slot-rescale" not in kinds
+
+
+def test_calculator_receipt_without_slot_writer_is_not_scorer_slot_rescale() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/tooling.rs", _RUST_CALCULATOR_RECEIPT_IS_NOT_SLOT_RESCALE)]
+        )
+    )
+    assert "scorer-slot-rescale" not in kinds
+
+
+def test_scorer_slot_rescale_findings_never_leak_matched_source_text() -> None:
+    findings = find_benchmark_emulation_fingerprints(
+        [("src/baseline.rs", _RUST_SCORER_SLOT_RESCALE)]
+    )
+    encoded = json.dumps(findings)
+    for secret in (
+        "normalize_minor_unit_answer_value",
+        "answer_contract",
+        "effective_input",
+    ):
+        assert secret not in encoded
+    for finding in findings:
+        assert finding["category"] == "benchmark_emulation"
+        for location in finding["locations"]:
+            assert set(location) == {"path", "line", "role"}

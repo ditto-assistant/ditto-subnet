@@ -251,6 +251,41 @@ the plan is enforced even if an earlier model or classifier selected it.
 """.strip()
 
 
+_POLICY_V12_PROMPT_TAIL = """
+
+## Policy v12 additions
+
+The plain_answer_normalization false-positive class is NARROWED. It clears only
+a transform that is request-independent (reads no request text, answer
+contract, value-family or money/direction flag, or bench version) AND
+content-preserving at the character level (Unicode/typography folding,
+whitespace or quote trimming, length caps, `ANSWER:` prefix stripping) so that
+every digit, sign, and alphabetic token the model wrote survives in order and
+nothing the model did not write in the slot is inserted.
+
+Reject for I4 (scorer_field_rewritten, effect answer or final_text) when the
+served path, after the deciding model spoke, rescales or unit-converts a
+model-authored number (bare minor-unit integer -> two-decimal currency through
+`/ 100` and `% 100`, cents <-> dollars), maps a model-authored word onto a
+canonical grader vocabulary (up/gain/loss/down -> increase/decrease), composes
+or completes the slot from prose the model did not place in it, synthesizes
+`answer` or `abstain` when the model emitted no slot, or runs any of these only
+under a request-keyed flag (AnswerContract, include_minor_units,
+money_representation, asks_direction, wants_minor_units). The model having
+authored the input value is not no_derived_value; an untouched final_text is not
+untrusted_candidate_channel; comments describing the rewrite as representation,
+presentation, or typography folding are inadmissible. Cite the transform and
+its call site on the served /run path and confirm the writer is not behind
+cfg(test), a non-default cargo feature, or an unset environment variable.
+
+Do not reject for this class when the only mechanism is a format-only model
+re-ask triggered by slot shape alone (integer where a decimal wire type is
+declared) that carries complete records, no derived value, and no conversion
+recipe, and ships whatever parseable result the model returns. A prompt-text
+conversion recipe remains the I5 family compiler policy v11 already names.
+"""
+
+
 def _system_prompt(policy_version: int) -> str:
     """Render the court doctrine bound to the submission's policy version."""
     # Validate through the same canonical revision helper so a new Platform
@@ -260,6 +295,11 @@ def _system_prompt(policy_version: int) -> str:
         return _SYSTEM_PROMPT
     if policy_version == 11:
         return f"{_SYSTEM_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}"
+    if policy_version == 12:
+        return (
+            f"{_SYSTEM_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"
+            f"{_POLICY_V12_PROMPT_TAIL}"
+        )
     raise AssertionError("validated policy was not rendered")
 
 

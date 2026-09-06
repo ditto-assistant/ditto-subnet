@@ -1555,6 +1555,51 @@ _EMULATION_FINGERPRINTS = (
         window=8,
         scan="raw",
     ),
+    _Fingerprint(
+        # scorer-slot-rescale (policy v12, aceron_v13/v14, yeknom, sn118-det-v1,
+        # poor-miner, Goal, taokika, 2026-09-06): after the deciding model has
+        # spoken, host code rescales the model-authored answer slot (bare
+        # minor-unit integer -> two-decimal currency through `/ 100` + `% 100`)
+        # or canonicalizes a direction word, keyed on request cues such as an
+        # AnswerContract, include_minor_units, or asks_direction. The rescaler
+        # and the slot writer co-occur at the application site or inside the
+        # helper body. Comments beside them call it "representation only" or
+        # "typography folding"; the code path is the only admissible witness.
+        kind="scorer-slot-rescale",
+        severity="high",
+        roles=(
+            _Role(
+                "minor-unit-or-direction-rescaler",
+                re.compile(
+                    r"\b(?:normalize|canonicali[sz]e|format|render|coerce|fix)"
+                    r"_?[a-z0-9_]*(?:minor_unit|money|currency|cents|direction)"
+                    r"[a-z0-9_]*(?:answer|slot|value|money|amount)[a-z0-9_]*\s*\("
+                    r"|\bminor_units_as_major\b"
+                    r"|\bformat_minor_units_as_money\b"
+                    r"|\bschema_ledger_format_bare_minor_units\b"
+                    r"|\bmagnitude\s*(?:/|//)\s*100\b"
+                    r"|\bmagnitude\s*%\s*100\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "request-keyed-answer-slot",
+                re.compile(
+                    r"\banswer_contract\b|\bAnswerContract\b"
+                    r"|\binclude_minor_units\b|\bmoney_representation\b"
+                    r"|\basks_direction\b|\bwants_minor_units\b"
+                    r"|\bminor_unit_request\b"
+                    r"|\b(?:let|const|var)\s+(?:mut\s+)?answer\s*="
+                    r"|\.answer\s*=(?!=)"
+                    r"|[\"']answer[\"']\s*:"
+                    r"|\banswer\s*[:=]\s*(?:normalized|rendered|formatted)",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=40,
+        scan="code",
+    ),
 )
 
 

@@ -373,6 +373,23 @@ def test_l2_policy_v11_prompt_adds_planner_forced_executor_i7() -> None:
     )
 
 
+def test_l2_policy_v12_prompt_adds_scorer_slot_rewrite_i4() -> None:
+    v11 = _l2_review_system_prompt(11)
+    v12 = _l2_review_system_prompt(12)
+
+    assert "SCORER-VISIBLE SLOT REWRITES ARE I4" in v12
+    assert "scorer_field_rewritten" in v12
+    assert "increase/decrease" in v12
+    assert "format-only model re-ask" in v12
+    assert "SCORER-VISIBLE SLOT REWRITES ARE I4" not in v11
+    assert "SCORER-VISIBLE SLOT REWRITES ARE I4" not in _l2_review_system_prompt(10)
+    # Every v11 clause survives verbatim inside v12.
+    from ditto_screener.l2_review import _L2_POLICY_TAILS
+
+    assert _L2_POLICY_TAILS[12].startswith(_L2_POLICY_TAILS[11])
+    assert l2_prompt_revision(12) == "l2-terra-source-review-v37-policy-v12"
+
+
 def test_l2_prompt_rejects_unimplemented_policy_version() -> None:
     with pytest.raises(ValueError, match="not implemented by this build"):
         _l2_review_system_prompt(SCREENING_POLICY_VERSION + 1)

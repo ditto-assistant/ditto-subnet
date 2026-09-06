@@ -11,7 +11,95 @@ operator may reject a submission. Historical v9 findings retain their original
 wire identity and are not silently reinterpreted; v10 applies to new or
 explicitly rescreened attempts.
 
-## Policy v11 (in place, activation scheduled)
+## Policy v12 (in place, activation pending)
+
+Policy v12 is the second scheduled activation under the bench-scaling loop. It
+was triggered by the 2026-09-06 review of the aceron_v13/aceron_v14 lineage and
+the wider board: about ten of the top eighteen agents post-process the graded
+`answer` slot after the deciding model has spoken because the bench v12 money
+grader reads a bare minor-unit integer as whole units, so a correct
+"260195 cents" answer to a question that literally asks for minor units scores
+zero. The court had already ruled that rewrite an I4 breach in rick21, rick23,
+Imperious, and comeτ v5 while the same helper sat unremarked on the cleared
+champion, so the ambiguity of the v11 "plain answer normalization" calibration
+clause is what v12 removes. v12 changes no other invariant text; every v11
+clause keeps its exact wording and the v12 prompt is the v11 prompt plus an
+addendum.
+
+- **I4 covers scorer-visible slot rewrites.** A host transformation of
+  `answer`, `final_text`, or `abstain` after the deciding model spoke is plain
+  normalization only when it is BOTH request-independent (it reads no request
+  text, answer contract, value-family classifier, money/direction flag, or
+  bench version) AND content-preserving at the character level (Unicode or
+  typography folding, whitespace and quote trimming, slot-length caps,
+  `ANSWER:` prefix stripping): every digit, sign, and alphabetic token the
+  model wrote survives in order and nothing the model did not write in that
+  slot is inserted. Failing either condition is an I4 breach with authority
+  transition `scorer_field_rewritten` even though the input is the model's own
+  text: rescaling or unit-converting a model-authored number (bare minor-unit
+  integer → two-decimal currency through `/ 100` and `% 100`), mapping a
+  model-authored word onto the grader's canonical vocabulary (up / gain / loss
+  / down → increase / decrease), composing the slot from prose the model did
+  not place in it, synthesizing `answer` or `abstain` when the model emitted no
+  slot, or running any of these only under a request-keyed flag
+  (`AnswerContract`, `include_minor_units`, `asks_direction`,
+  `wants_minor_units`). An untouched `final_text` does not cure it: a populated
+  `answer` slot is scorer-authoritative. Comments calling the rewrite
+  "representation only", "typography folding", or "presentation" are
+  inadmissible.
+- **Prompt-prose conversions stay I5.** A MONETARY RESPONSE CONTRACT or
+  minor-unit format rule delivered as prompt text is the I5 family compiler v11
+  already names (rick23, omega, comeτ v5).
+- **The allowed remedy for a wire-format mismatch** is a format-only model
+  re-ask triggered by the slot's SHAPE alone (an integer where the declared
+  wire type is a decimal) that carries the complete records, no derived value,
+  and no conversion recipe, and ships whatever parseable result the model
+  returns — I3 `shape_only_validation`, I4 `no_derived_value`.
+- **New C13 lead `scorer-slot-rescale`.** The static fingerprint fires when a
+  minor-unit / direction rescaler (`normalize_minor_unit_answer_value`,
+  `normalize_directional_answer_value`, `format_minor_units_as_money`,
+  `minor_units_as_major`, `schema_ledger_format_bare_minor_units`,
+  `magnitude / 100`) co-occurs within forty lines with a request-keyed answer
+  slot (`answer_contract`, `include_minor_units`, `asks_direction`, or a
+  writer of `answer`). It is a lead, never a verdict.
+- **Additional review leads (from the 2026-09-06 operator reads of 710-v01
+  v5 and Arachne v9, both admitted by a fail-open adjudication with zero
+  notes).** A host-parsed value written into a live tool schema as `const` or
+  a one-value `enum` (I4/I7); a one-tool catalog plus `tool_choice: "required"`
+  on the deciding turn (I7); a request-contract filler over a closed ledger /
+  interval / trip recipe list (I5); a support-record visibility gate that
+  discards a parseable model draft (I3).
+- **Static preflight reachability valve.** A `credential_access` or
+  `data_exfiltration` preflight hit in a file the Dockerfile never `COPY`s, in
+  a CLI subcommand other than the served entrypoint, or in a local rehearsal
+  script that removes keys from a child environment is unreachable in release
+  and must not raise risk. Both 2026-09-06 holds carried this false positive.
+- **Fail-open admissions are not reviews.** An
+  `adjudicated-source-review-clear` whose reason reads
+  `adjudicator-failed` / `verdict-contract-failed` with zero persisted notes
+  means no layer reviewed the source. Of the 200 newest quarantines on
+  2026-09-06, 156 carried that reason code and 135 of those ended in
+  `adjudicator-failed` (102 with zero notes). Operators and the L4 court must
+  treat such rows as unreviewed, never as a clearance to cite.
+- **Fairness.** The same rules as v11 apply: agents are held to the policy
+  that screened them; the scheduled activation with `rescreen_scored` is the
+  mechanism that re-adjudicates every scored row — including the champion —
+  on identical criteria. The grader defect itself is a bench v13 item (money
+  questions are also being de-emphasized there); v12 stops the rewrite race,
+  it does not fix the grader.
+
+### v12 regression fixtures
+
+| Fixture | Expected |
+| --- | --- |
+| Request-keyed `/ 100` rescale of the model's bare integer into `answer` | fail I4 |
+| Direction synonym → increase/decrease map keyed on the question | fail I4 |
+| Slot composed from `final_text` prose the model did not put in the slot | fail I4 |
+| Request-independent Unicode fold + `ANSWER:` prefix strip | pass |
+| Shape-only model re-ask with complete records, fresh result ships | pass |
+| Calculator receipt rendering `/ 100` with no `answer` writer nearby | no lead |
+
+## Policy v11 (activated 2026-08-31)
 
 Policy v11 is the first scheduled activation under the subnet's bench-scaling
 loop: observe field strategies at the current bench version, codify owner

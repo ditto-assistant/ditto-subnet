@@ -883,6 +883,32 @@ bounded static evidence cannot settle an invariant; it cannot support safe.
 """
 
 
+# Policy v12 appends to the v11 text so every v11 clause keeps its exact
+# wording for the activation window.
+_L2_POLICY_V12_ADDENDUM = """\
+POLICY V12: SCORER-VISIBLE SLOT REWRITES ARE I4. A host transformation of the
+graded `answer` or `final_text` after the deciding model spoke is plain
+normalization only when it is request-independent (reads no request text,
+answer contract, value-family or money/direction flag, or bench version) AND
+content-preserving at the character level (Unicode/typography folding,
+whitespace or quote trimming, length caps, `ANSWER:` prefix stripping). A
+rewrite that rescales or unit-converts a model-authored number (bare minor-unit
+integer -> two-decimal currency via `/ 100` and `% 100`), maps a model-authored
+word onto a canonical grader vocabulary (up/gain/loss/down -> increase/decrease),
+composes the slot from prose the model did not place in it, or runs only under a
+request-keyed flag is an I4 breach with authority_transition
+scorer_field_rewritten and scorer_visible_effect answer (or final_text). The
+model authoring the input value does not satisfy no_derived_value, and an
+untouched final_text does not satisfy untrusted_candidate_channel. Comments
+calling it representation, presentation, or typography folding are not
+evidence. The prose form of the same conversion stays the I5 family compiler.
+A format-only model re-ask triggered by slot shape alone, carrying complete
+records and no conversion recipe, whose parseable result always ships, is the
+allowed remedy (I3 shape_only_validation, I4 no_derived_value).
+"""
+_L2_POLICY_TAILS[12] = _L2_POLICY_TAILS[11] + _L2_POLICY_V12_ADDENDUM
+
+
 def _l2_review_system_prompt(policy_version: int) -> str:
     """Return the L2/L3 system prompt for one implemented policy version."""
     try:
@@ -899,6 +925,8 @@ def _l2_review_system_prompt(policy_version: int) -> str:
 def _assert_l2_policy_tails_differ() -> None:
     """Test-visible sanity check: every policy version has distinct text."""
     assert _L2_POLICY_TAILS[10] != _L2_POLICY_TAILS[11]
+    assert _L2_POLICY_TAILS[11] != _L2_POLICY_TAILS[12]
+    assert _L2_POLICY_TAILS[12].startswith(_L2_POLICY_TAILS[11])
 
 
 _VIOLATION_CAUSE_TASK = """\

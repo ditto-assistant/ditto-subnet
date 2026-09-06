@@ -175,11 +175,21 @@ re-adjudicated by the scheduled v11 rescreen with every other cohort member.
 - **Single-success duplicate suppression — production behavior.** Suppressing
   a repeat call after a genuine first successful side effect (read-only tools
   exempt) is not trajectory manipulation.
-- **Answer normalization — scorer gap, not a cheat.** Unicode folding,
-  slot-length caps, and whitespace normalization of the model's own output
-  are symptoms that the grader should be fuzzier; reject only when
-  normalization is so aggressive the served text no longer represents the
-  model's answer.
+- **Answer normalization — scorer gap only when request-independent and
+  character-level.** Unicode folding, slot-length caps, whitespace/quote
+  trimming, and `ANSWER:` prefix stripping of the model's own output are
+  symptoms that the grader should be fuzzier. Under policy v12 the clause is
+  narrowed: a transform that reads the request, an answer contract, or a
+  money/direction flag, or that rescales a number (`/ 100`, cents → dollars),
+  maps a word onto the grader vocabulary (loss → decrease), or composes the
+  slot from prose the model did not put in it, is an I4 scorer-visible slot
+  rewrite (`scorer_field_rewritten`), not normalization. Live holdings:
+  rick21 `6a708f08`, rick23 `190ce24a`, Imperious `5df9335a` (reject);
+  the same helper sat unremarked on cleared aceron_v13 `48df6133` /
+  aceron_v14 `10dfb4fa`, which the v12 scheduled rescreen re-adjudicates on
+  identical criteria. Under v11 text, charge it only with an independent
+  breach or leave it for the rescreen; do not hand-ban one carrier while the
+  others stand.
 
 ## Class labels (search aids, not independent tests)
 

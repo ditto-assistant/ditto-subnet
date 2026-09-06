@@ -16,9 +16,11 @@ from pydantic import (
     model_validator,
 )
 
-SCREENING_POLICY_VERSION = 11
+SCREENING_POLICY_VERSION = 12
 # The oldest policy version a mixed-fleet platform may require during a
-# scheduled activation window (v10 until v11 activates, then v11).
+# scheduled activation window. v10 stays the floor until the v12 activation
+# has re-stamped the scored cohort; raise it in a follow-up, never alongside
+# the policy text that the activation window still has to serve.
 SCREENING_FLOOR_POLICY_VERSION = 10
 TYPED_OUTCOME_POLICY_VERSION = 9
 

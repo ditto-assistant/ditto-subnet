@@ -27,7 +27,16 @@ WORKED OUT FROM THIS USER|these lines win|say it exactly
 asks_to_reconcile|the one right call|next_required
 required_tool_names|predict_relevant_tools|host_tools
 _keep_better|ValueKind|_VALUE_KINDS|EXPRESSION_REQUEST
+normalize_minor_unit_answer_value|normalize_directional_answer_value
+format_minor_units_as_money|minor_units_as_major|schema_ledger_format_bare
+answer_contract|include_minor_units|asks_direction|magnitude / 100|% 100:02
 ```
+
+The last three lines are the policy v12 scorer-visible slot rewrite class:
+a hit means read the writer of `answer` on the served `/run` path and its
+trigger, then decide whether the transform is request-independent and
+character-level (normalization) or a rescale / vocabulary map / slot
+composition (I4 `scorer_field_rewritten`).
 
 Zero hits on banned identifiers is not a pass. Restacks rename the
 compiler (`final_source` → `calculated_money_answer`, `SIGN_AUDIT` →

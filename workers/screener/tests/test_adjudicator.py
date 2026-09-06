@@ -316,7 +316,21 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert "forbidding every other tool" in policy_v10
     assert adjudicator_prompt_revision(10) == "adjudicator-v3-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v3-policy-v11"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v3-policy-v11"
+    assert adjudicator_prompt_revision(12) == "adjudicator-v3-policy-v12"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v3-policy-v12"
+
+
+def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
+    policy_v11 = _system_prompt(11)
+    policy_v12 = _system_prompt(12)
+    assert policy_v12.startswith(policy_v11)
+    assert "plain_answer_normalization false-positive class is NARROWED" in policy_v12
+    assert "scorer_field_rewritten" in policy_v12
+    assert "format-only model" in policy_v12
+    assert "NARROWED" not in policy_v11
+    assert "NARROWED" not in _system_prompt(10)
+    with pytest.raises(ValueError, match="not implemented by this build"):
+        adjudicator_prompt_revision(13)
 
 
 async def test_v11_court_request_and_signed_verdict_bind_policy_version(

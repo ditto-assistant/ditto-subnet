@@ -838,7 +838,9 @@ fn run() -> String {
     assert observation.risk_level == "high"
     assert observation.categories == ("benchmark_emulation",)
     assert observation.finding is not None
-    assert observation.finding["prompt_revision"] == "source-review-v24-policy-v11"
+    assert observation.finding["prompt_revision"] == (
+        f"source-review-v24-policy-v{SCREENING_POLICY_VERSION}"
+    )
     assert observation.finding["evidence"] == [
         {
             "path": "src/memory_solver.rs",
@@ -2099,7 +2101,9 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     assert observation.finding is not None
     assert "use\nanalyze_binary only when" in prompt
     assert 'compact, precomputed\n"binary_analysis"' in prompt
-    assert observation.finding["prompt_revision"] == "source-review-v24-policy-v11"
+    assert observation.finding["prompt_revision"] == (
+        f"source-review-v24-policy-v{SCREENING_POLICY_VERSION}"
+    )
     assert len(observation.finding["invariant_assessment"]["decisions"]) == 7
     initial_inventory = json.loads(
         seen[0]["messages"][1]["content"]
@@ -2903,6 +2907,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
     )
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
+    assert _prompt_revision(12) == "source-review-v24-policy-v12"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -2988,6 +2993,30 @@ def test_policy_v11_prompt_adds_planner_forced_executor_i7() -> None:
     # The v10-only I7 wording must be absent from v11.
     assert "trained head to preselect the exact tool count" not in prompt
     assert "reply_restates_story_ingredient_money. A hit is a lead:" not in prompt
+
+
+def test_policy_v12_prompt_narrows_plain_normalization_to_slot_rewrite_i4() -> None:
+    from ditto_screener.source_review import _source_review_system_prompt as _prompt
+
+    v11 = _prompt(11)
+    v12 = _prompt(12)
+
+    # v12 is v11 plus an addendum: every v11 clause keeps its exact wording.
+    assert v12.startswith(v11.split("\nBATCH RELATED READS.")[0])
+    assert "Planner authorship does not save a\nforced executor" in v12
+    # Distinctive v12-only wording.
+    assert "SCORER-VISIBLE SLOT REWRITES" in v12
+    assert "request-independent" in v12
+    assert "content-preserving at the character level" in v12
+    assert "normalize_minor_unit_answer_value" in v12
+    assert "normalize_directional_answer_value" in v12
+    assert "scorer_field_rewritten" in v12
+    assert "FORMAT-ONLY model re-ask" in v12
+    assert "scorer-slot-rescale" in v12
+    # None of it leaked into the frozen v11 or v10 text.
+    for frozen in (_prompt(10), v11):
+        assert "SCORER-VISIBLE SLOT REWRITES" not in frozen
+        assert "scorer-slot-rescale" not in frozen
 
 
 def test_source_review_prompt_rejects_unimplemented_policy_version() -> None:

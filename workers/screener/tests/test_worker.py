@@ -1051,7 +1051,7 @@ async def test_policy_below_floor_does_not_claim(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
     platform = _FakePlatform([[_item(uuid4())]])
-    platform.required_policy_version = SCREENING_POLICY_VERSION - 2
+    platform.required_policy_version = SCREENING_FLOOR_POLICY_VERSION - 1
     gate = _FakeGate(_decision(ScreeningOutcome.PASS))
     worker = _worker(make_config(), platform, gate)
 
