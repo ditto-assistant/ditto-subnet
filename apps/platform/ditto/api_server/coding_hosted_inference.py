@@ -16,6 +16,7 @@ from ditto.api_models.coding_hosted_inference import (
     HostedInferencePolicy,
     HostedInferenceSettlement,
 )
+from ditto.api_models.coding_hosted_relay import HostedRelayBinding
 from ditto.api_models.coding_inference import (
     _decode_json_document,
     effective_inference_request_budget,
@@ -400,6 +401,23 @@ class HostedInferenceLedger:
         """Recheck authority before releasing a settled response to the worker."""
         async with asyncio.timeout(20), self._sessions() as session, session.begin():
             await self._grant(session, grant_id, active=True)
+
+    async def require_relay_binding(self, binding: HostedRelayBinding) -> None:
+        async with asyncio.timeout(20), self._sessions() as session, session.begin():
+            grant = await self._grant(session, binding.grant_id, active=True)
+            assignment = await session.get(CodingHostedAssignment, grant.evaluation_id)
+            if (
+                grant.evaluation_id != binding.evaluation_id
+                or grant.attempt_id != binding.attempt_id
+                or grant.worker_id != binding.worker_id
+                or grant.assignment_sha256 != binding.assignment_sha256
+                or grant.policy_sha256 != binding.policy_sha256
+                or binding.expires_at_unix > int(grant.expires_at.timestamp())
+                or binding.expires_at_unix <= int((await _now(session)).timestamp())
+                or assignment is None
+                or assignment.authority["artifact_sha256"] != binding.artifact_sha256
+            ):
+                raise HostedInferenceError("hosted relay binding does not match")
 
     async def revoke(self, grant_id: UUID) -> bool:
         async with asyncio.timeout(20), self._sessions() as session, session.begin():

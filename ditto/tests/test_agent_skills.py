@@ -76,6 +76,13 @@ def test_native_provider_routes_to_its_private_authority() -> None:
     )
 
 
+def test_native_relay_routes_to_both_runtime_owners() -> None:
+    topic = lookup("native hosted source relay")[0]
+    assert topic["id"] == "coding-hosted-relay"
+    assert "ditto-subnet-platform" in topic_list(topic, "skills")
+    assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
+
+
 def _tracked_skill_names(prefix: str) -> set[str]:
     completed = subprocess.run(
         ["git", "ls-files", "-z", "--", prefix],

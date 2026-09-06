@@ -361,6 +361,19 @@
       "related": ["coding-attempt-supervisor", "coding-inference-grants", "coding-repair-research", "platform-api", "dittobench-scoring"]
     },
     {
+      "id": "coding-hosted-relay",
+      "title": "Native hosted source relay and private provider bridge",
+      "keywords": ["native hosted source relay", "hosted relay bridge", "native inference socket"],
+      "summary": "Bind the native container source route to the Platform provider adapter over an authenticated bounded local socket.",
+      "skills": ["ditto-subnet-platform", "ditto-subnet-benchmark"],
+      "owns": ["services/dittobench-api/internal/codinghostedrelay", "apps/platform/ditto/api_models/coding_hosted_relay.py", "apps/platform/ditto/api_server/coding_hosted_relay.py", "apps/platform/docs/coding-hosted-relay-v2.md"],
+      "read": ["apps/platform/docs/coding-hosted-relay-v2.md", "apps/platform/docs/coding-hosted-provider-v2.md", "services/dittobench-api/internal/codingsource/hosted.go"],
+      "search": ["rg -n 'HostedRelayBridge|require_relay_binding|lock_miner_request' apps/platform/ditto", "rg -n 'Publish|Revoke|privateSocket' services/dittobench-api/internal/codinghostedrelay"],
+      "validate": ["cd apps/platform && uv run pytest -q ditto/tests/api_server/test_coding_hosted_relay.py", "cd services/dittobench-api && go test -race -p 2 ./internal/codinghostedrelay ./internal/codingsource"],
+      "invariants": ["Only the registered container source can reach the relay.", "A private worker capability is never forwarded to the miner.", "Unknown provider activity retains reservations and cannot authorize freeze.", "No production worker or score path is activated."],
+      "related": ["coding-hosted-inference", "coding-hosted-inputs", "platform-api"]
+    },
+    {
       "id": "coding-hosted-inference",
       "title": "Native hosted inference policy and accounting",
       "keywords": ["hosted inference authority", "native v2 inference", "hosted inference budget", "native hosted provider adapter"],

@@ -17,6 +17,7 @@ from ditto.api_models.coding_hosted_inference import (
     HostedInferencePolicy,
     HostedInferenceSettlement,
 )
+from ditto.api_models.coding_hosted_relay import HostedRelayBinding
 from ditto.api_models.coding_inference import (
     CodingInferenceProviderResponse,
     _decode_json_document,
@@ -285,6 +286,24 @@ class HostedProviderAdapter:
             ) from None
         finally:
             self._busy = False
+
+    async def authorize_relay(self, binding: HostedRelayBinding) -> None:
+        if (
+            self._closed
+            or binding.grant_id != self._grant
+            or binding.policy_sha256 != self._policy.digest()
+        ):
+            raise HostedProviderError("hosted relay authority is unavailable")
+        await self._ledger.require_relay_binding(binding)
+
+    async def complete_miner(
+        self, *, request_id: UUID, miner_request: bytes
+    ) -> ProviderResult:
+        try:
+            locked = self._policy.lock_miner_request(miner_request)
+        except ValueError:
+            raise HostedProviderError("hosted miner request violates policy") from None
+        return await self.complete(request_id=request_id, locked_request=locked)
 
     async def revoke(self) -> bool:
         """Close admission; Boolean describes ONLY the durable ledger drain.

@@ -13,6 +13,9 @@ from ditto.api_models.coding_inference import (
     CodingInferenceSystemMessage,
     CodingInferenceSystemPrompt,
     CodingInferenceToolSchema,
+    _decode_json_document,
+    _exact_keys,
+    coding_inference_canonical_json_bytes,
     coding_inference_digest,
     parse_coding_inference_json,
     system_prompt_digest,
@@ -122,6 +125,42 @@ class HostedInferencePolicy(BaseModel):
         ):
             raise ValueError("hosted prompt or tool policy does not match")
         return request, coding_inference_digest(request)
+
+    def lock_miner_request(self, body: bytes) -> bytes:
+        """Lock the existing miner chat ABI without manufacturing v1 authority."""
+        request = _exact_keys(
+            _decode_json_document(body, maximum_bytes=4 << 20),
+            {
+                "model",
+                "messages",
+                "tools",
+                "tool_choice",
+                "reasoning",
+                "max_completion_tokens",
+                "parallel_tool_calls",
+            },
+            "miner request",
+        )
+        reasoning = _exact_keys(request["reasoning"], {"effort"}, "miner reasoning")
+        request.update(
+            reasoning={"effort": reasoning["effort"], "exclude": True},
+            n=1,
+            stream=False,
+            store=False,
+            usage={"include": True},
+            provider={
+                "only": [self.provider_route],
+                "order": [self.provider_route],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+                "data_collection": "deny",
+                "zdr": True,
+            },
+        )
+        validated, _ = self.locked_request(
+            coding_inference_canonical_json_bytes(request)
+        )
+        return coding_inference_canonical_json_bytes(validated)
 
 
 class HostedInferenceSettlement(BaseModel):

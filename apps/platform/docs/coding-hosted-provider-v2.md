@@ -76,8 +76,8 @@ instance may be recreated to bypass failure or revive a used source capability.
 
 ## Next boundary
 
-Connect this adapter to the native source-bound relay through an authenticated
-private worker transport, with miner request locking, capability lifetime and
-revocation/drain tests. Then integrate full worker execution and sealed terminal
-evidence. There are no schema migrations, public API changes, embeddings,
+The [native source-bound relay](coding-hosted-relay-v2.md) now connects this
+adapter through an authenticated private Unix socket, with miner request locking
+and revocation/drain checks. Next integrate the reviewed budget/provider profile,
+durable evidence publisher and full worker execution. There are no schema migrations, public API changes, embeddings,
 public-practice changes, scoring, weights or emissions in this layer.
