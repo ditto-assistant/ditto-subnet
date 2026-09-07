@@ -400,6 +400,19 @@
       "related": ["coding-hosted-inputs", "coding-inference-grants", "platform-api"]
     },
     {
+      "id": "coding-go-oracle",
+      "title": "Private Go oracle type and syntax frontend",
+      "keywords": ["coding Go grader", "private Go oracle", "Go oracle admission"],
+      "summary": "Process-local private Go test admission with independent API binding; runtime evaluation and qualification remain separate work.",
+      "skills": ["ditto-subnet-benchmark"],
+      "owns": ["services/dittobench-api/internal/codinggooracle"],
+      "read": ["services/dittobench-api/internal/codinggooracle/README.md", "services/dittobench-api/docs/coding-compiled-bootstrap-v2.md"],
+      "search": ["rg -n 'Compile|SupportSources|helpers|MarshalJSON' services/dittobench-api/internal/codinggooracle"],
+      "validate": ["cd services/dittobench-api && go test -race ./internal/codinggooracle", "cd services/dittobench-api && go vet ./internal/codinggooracle"],
+      "invariants": ["Private helper code is never a candidate API and must remain in the trusted parent.", "Type admission does not execute candidate code or prove private grading outcomes.", "Protected corpus audit output stays in the private work context."],
+      "related": ["coding-compiled-bootstrap", "coding-hosted-inputs"]
+    },
+    {
       "id": "coding-compiled-bootstrap",
       "title": "Compiled Coding candidate pre-exec confinement",
       "keywords": ["compiled coding bootstrap", "Go Rust pre-exec", "compiled candidate launcher"],

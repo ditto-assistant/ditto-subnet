@@ -71,6 +71,14 @@ def test_compiled_bootstrap_routes_to_pre_exec_isolation() -> None:
     assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
 
 
+def test_private_go_oracle_routes_to_its_admission_boundary() -> None:
+    topic = lookup("private Go oracle")[0]
+    assert topic["id"] == "coding-go-oracle"
+    assert "services/dittobench-api/internal/codinggooracle" in topic_list(
+        topic, "owns"
+    )
+
+
 def test_native_host_qualification_routes_to_separate_infrastructure() -> None:
     topic = lookup("native v2 host qualification")[0]
     assert topic["id"] == "coding-hosted-host"
