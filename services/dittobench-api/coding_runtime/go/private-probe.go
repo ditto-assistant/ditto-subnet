@@ -240,8 +240,8 @@ func supervisorControl(root *os.Root, group, variant, phase string, input coding
 			return codinggooracle.ErrRuntime
 		}
 	}
-	write := func(name string, body []byte) error {
-		file, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0444)
+	write := func(name string, body []byte, mode os.FileMode) error {
+		file, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 		if err != nil {
 			return codinggooracle.ErrRuntime
 		}
@@ -253,13 +253,13 @@ func supervisorControl(root *os.Root, group, variant, phase string, input coding
 		return nil
 	}
 	for _, file := range input.Files {
-		if path.Base(file.Path) != file.Path || write(path.Join("/workspace", file.Path), file.Bytes) != nil {
+		if path.Base(file.Path) != file.Path || write(path.Join("/workspace", file.Path), file.Bytes, 0444) != nil {
 			return codinggooracle.ErrRuntime
 		}
 	}
 	supportHash := sha256.New()
 	for _, file := range visible {
-		if write(path.Join("/workspace", file.Name), file.Body) != nil {
+		if write(path.Join("/workspace", file.Name), file.Body, 0444) != nil {
 			return codinggooracle.ErrRuntime
 		}
 		digest := sha256.Sum256(file.Body)
@@ -282,7 +282,7 @@ func supervisorControl(root *os.Root, group, variant, phase string, input coding
 			return codinggooracle.ErrSuite
 		}
 		selected = codinggooracle.Source{Name: path.Base(files[0]), Body: body}
-		if write(path.Join("/run/dittobench-grader", selected.Name), body) != nil {
+		if write(path.Join("/run/dittobench-grader", selected.Name), body, 0400) != nil {
 			return codinggooracle.ErrRuntime
 		}
 	}
@@ -324,7 +324,7 @@ func supervisorControl(root *os.Root, group, variant, phase string, input coding
 	}
 	request := map[string]any{"schema": "dittobench-coding-supervisor-request-v1", "nonce": hex.EncodeToString(nonce), "mode": "test", "command_id": command.ID, "command_sha256": hex.EncodeToString(commandDigest[:]), "argv": argv, "timeout_milliseconds": command.Timeout, "expected_total": count, "candidate_uid": 10001, "candidate_gid": 10001}
 	body, err = json.Marshal(request)
-	if err != nil || write("/run/dittobench-control/request.json", body) != nil {
+	if err != nil || write("/run/dittobench-control/request.json", body, 0400) != nil {
 		return codinggooracle.ErrRuntime
 	}
 	requestDigest := sha256.Sum256(body)
