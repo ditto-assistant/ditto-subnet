@@ -1,4 +1,4 @@
-# Trusted Go oracle frontend (in progress)
+# Trusted Go oracle (runtime integration in progress)
 
 This package parses and type-checks protected Go tests without compiling or
 executing them. Candidate source is type-checked only; its initializers do not
@@ -37,8 +37,16 @@ from that root, performs no candidate execution, and reports aggregate admission
 counts plus a suite-set commitment without names, literals or source. Keep that
 output in the private work context, not public PR logs or release artifacts.
 
-This is not a completed Go grading runtime. The value evaluator, non-root fixed
-compiler workflow, generated API bridge, pre-exec launcher integration, trusted
+The parent-side evaluator runs admitted assignments, comparisons, private helpers,
+time operations and assertion branches. It owns pass counts, requires a fresh
+candidate client per test, and waits for verified client closure before completion.
+Synthetic clients exercise the evaluator without importing candidate code. Values
+preserve Go integer widths, nil/interface distinctions and scalar comparison
+semantics; bounded evaluation prevents empty helper loops from escaping deadlines.
+Candidate transport failures and cleanup failures cannot become successful reports.
+
+This is not a completed Go grading runtime. The non-root fixed compiler workflow,
+generated API bridge, pre-exec launcher integration, trusted
 supervisor reports and actual unchanged base/reference executions remain to be
 implemented and verified. Structural/type admission is not runtime qualification,
 catalog approval or activation.
