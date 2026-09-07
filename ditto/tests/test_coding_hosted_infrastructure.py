@@ -17,7 +17,7 @@ def test_native_foundation_is_independent_and_default_off() -> None:
     assert 'source    = "../../modules/coding-hosted-host"' in entry
     assert 'variable "enable_coding_hosted_host"' in entry
     assert "default     = false" in entry
-    assert "enable_coding_hosted_host = false" in prod
+    assert re.search(r"(?m)^enable_coding_hosted_host\s*=\s*false\s*$", prod)
     assert "coding_executor_host_count = 0" in prod
     assert "var.coding_executor" not in entry + SOURCE + VARIABLES
     assert 'role    = "coding_hosted"' in SOURCE

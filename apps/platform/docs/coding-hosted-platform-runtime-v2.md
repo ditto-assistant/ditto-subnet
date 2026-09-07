@@ -94,6 +94,10 @@ executable. It does not implement a KMS server, load a private RSA key, reuse a
 legacy v1 ticket, or authorize arbitrary decryption. Production must provision
 and review the helper and its independently enforced grant/key policy.
 
+The [native custody service and Unix proxy](coding-private-v2-custody.md) now
+provide a concrete, separately owned implementation of this protocol. They are
+explicit private processes, not automatically provisioned or started here.
+
 The helper receives canonical JSON for `PrivateV2UnwrapRequest`, schema
 `dittobench-coding-private-v2-unwrap-v1`. This is the first unwrap-message version
 for native private v2, not the old v1 ticket protocol. It binds grant, evaluation,
@@ -167,8 +171,11 @@ reconciliation; killing a trusted process does not prove Docker cleanup.
 
 No state directory, evidence spool, tombstone or stale container is automatically
 deleted. Spool handles close, but encrypted files remain. Process loss before
-evidence capture remains non-rerunnable. This is not a durable recovery reader,
-host-crash reconciler, bulk retry mechanism or scoring-readiness certification.
+evidence capture remains non-rerunnable. The separate
+[reserved evidence recovery command](coding-evidence-recovery-v2.md) can publish
+complete, already reserved ciphertext without restarting this runtime. Neither
+command is a host-crash reconciler, bulk retry mechanism or scoring-readiness
+certification.
 
 ## Verification and operational boundary
 
@@ -185,6 +192,7 @@ Remaining operational work includes approved installation/production runtime
 images and real test drivers, custody-helper/KMS provisioning, isolated host and
 network policy, encrypted release publication/readback/registration, and a
 deployed private shadow canary. Public signed admission/result delivery retains
-its separate default-off `HostedCodingControl` signer configuration; this worker
+its separate [default-off public signer startup](coding-hosted-control-startup-v2.md);
+this worker
 does not enable it or load a public control signing key. Scoring, weights and
 emissions remain separate activation decisions.

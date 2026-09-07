@@ -22,6 +22,11 @@ from ditto.api_models.inference_concurrency_settings import (
     MAX_CHAT_TOKEN_BUDGET,
     MAX_EMBEDDING_GLOBAL_CONCURRENCY,
 )
+from ditto.api_server.coding_hosted_signer_config import (
+    HostedControlSignerConfig,
+    check_hosted_signer_config,
+    parse_hosted_signer_config_from_env,
+)
 from ditto.api_server.coding_private_catalog import (
     CodingPrivateCatalogConfig,
     parse_coding_private_catalog_config_from_env,
@@ -404,6 +409,11 @@ class ApiServerConfig:
     Absence disables private record loading. A public catalog commitment never
     grants access to private corpus bytes by itself.
     """
+
+    coding_hosted_signer: HostedControlSignerConfig = field(
+        default_factory=HostedControlSignerConfig
+    )
+    """Default-off native-v2 control signer; no secret bytes in API config."""
 
     coding_shadow_reconciliation_enabled: bool = False
     """Permit one explicitly confirmed shadow coding reconciliation request.
@@ -933,6 +943,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             if (value := item.strip())
         ),
         coding_private_catalog=parse_coding_private_catalog_config_from_env(),
+        coding_hosted_signer=parse_hosted_signer_config_from_env(),
         coding_shadow_reconciliation_enabled=reconciliation_enabled,
         coding_shadow_reconciliation_selection_delay_blocks=(
             reconciliation_selection_delay_blocks
@@ -955,6 +966,7 @@ def check_config(config: ApiServerConfig) -> None:
         ApiServerConfigError: When ``port`` is outside ``1..65535`` or
             ``log_level`` is not a stdlib level name.
     """
+    check_hosted_signer_config(config.coding_hosted_signer)
     if not 1 <= config.port <= 65535:
         raise ApiServerConfigError(f"port out of range: {config.port}")
     if config.log_level not in _VALID_LOG_LEVELS:

@@ -58,6 +58,9 @@ after zero-iteration loops or expected exceptions are rejected at admission.
 
 The v2 profile changes data/protocol and syntax admission. An approved v1 image
 or profile does not authorize it: requalify and bind the exact new runtime image.
+The native OCI importer accepts both supported Python profiles and binds the
+actual image profile into its approval. Archive verification and post-import
+inspection reject any profile substitution, even between these supported versions.
 
 Before candidate import, an immutable bridge handshake confirms successful child
 initialization/confinement. A missing handshake is infrastructure failure, not a

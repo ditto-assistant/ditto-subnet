@@ -83,6 +83,17 @@ def write_private(path: Path, body: bytes) -> None:
 
 
 def protected_helper(path: Path) -> None:
+    from ditto.api_server.coding_hosted_installed_worker import (
+        installed_worker_path,
+        require_installed_worker,
+    )
+
+    if installed_worker_path(path):
+        try:
+            require_installed_worker(path)
+            return
+        except Exception:
+            raise HostedRuntimeError("installed hosted worker is unsafe") from None
     private_directory(path.parent)
     info = path.lstat()
     if (

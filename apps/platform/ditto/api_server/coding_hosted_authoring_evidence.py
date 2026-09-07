@@ -113,6 +113,63 @@ async def owned_source(
     return row
 
 
+def load_authoring_spool(
+    spool: HostedEvidenceSpool, object_id: UUID
+) -> tuple[dict, bytes] | None:
+    value = spool.load(object_id)
+    if value is None:
+        return None
+    raw, body = value
+    identity = _decode_json_document(raw, maximum_bytes=16384)
+    if not isinstance(identity, dict) or canonical(identity) != raw:
+        raise HostedEvidenceError("authoring spool identity is invalid")
+    return identity, body
+
+
+def authoring_evidence_blobs(
+    identity: AuthoringIdentity, *, spool: HostedEvidenceSpool, domain: str
+):
+    chunks = []
+    for index in range(identity.chunk_count):
+        object_id = uuid5(
+            identity.source.attempt_id,
+            f"authoring:{identity.manifest.payload_sha256}:{index}",
+        )
+        item = load_authoring_spool(spool, object_id)
+        if item is None:
+            raise HostedEvidenceError("authoring chunk missing")
+        blob = AuthoringBlob.model_validate_json(canonical(item[0]))
+        check_blob(blob, item[1])
+        if (
+            blob.object_id != object_id
+            or blob.ordinal != index
+            or blob.source_sha256 != identity.source.digest()
+            or blob.payload_sha256 != identity.manifest.payload_sha256
+            or blob.storage_domain_sha256 != domain
+        ):
+            raise HostedEvidenceError("authoring chunk identity differs")
+        chunks.append(projection(blob))
+        yield blob, item[1]
+    if (
+        sha(
+            canonical(
+                {
+                    "schema": "dittobench-coding-authoring-chunks-v2",
+                    "chunks": chunks,
+                },
+                1 << 20,
+            )
+        )
+        != identity.chunks_sha256
+    ):
+        raise HostedEvidenceError("authoring chunk manifest differs")
+    top = load_authoring_spool(spool, identity.source.attempt_id)
+    if top is None or top[0] != projection(identity):
+        raise HostedEvidenceError("authoring manifest missing")
+    check_blob(identity.manifest, top[1])
+    yield identity.manifest, top[1]
+
+
 class HostedAuthoringEvidencePublisher:
     def __init__(
         self,
@@ -159,14 +216,7 @@ class HostedAuthoringEvidencePublisher:
             raise HostedEvidenceError("authoring publication authority expired")
 
     def _existing(self, object_id: UUID) -> tuple[dict, bytes] | None:
-        value = self._spool.load(object_id)
-        if value is None:
-            return None
-        raw, body = value
-        identity = _decode_json_document(raw, maximum_bytes=16384)
-        if not isinstance(identity, dict) or canonical(identity) != raw:
-            raise HostedEvidenceError("authoring spool identity is invalid")
-        return identity, body
+        return load_authoring_spool(self._spool, object_id)
 
     async def _prepare(
         self,
@@ -315,45 +365,9 @@ class HostedAuthoringEvidencePublisher:
             return identity
 
     def _blobs(self, identity: AuthoringIdentity):
-        chunks = []
-        for index in range(identity.chunk_count):
-            object_id = uuid5(
-                identity.source.attempt_id,
-                f"authoring:{identity.manifest.payload_sha256}:{index}",
-            )
-            item = self._existing(object_id)
-            if item is None:
-                raise HostedEvidenceError("authoring chunk missing")
-            blob = AuthoringBlob.model_validate_json(canonical(item[0]))
-            check_blob(blob, item[1])
-            if (
-                blob.object_id != object_id
-                or blob.ordinal != index
-                or blob.source_sha256 != identity.source.digest()
-                or blob.payload_sha256 != identity.manifest.payload_sha256
-                or blob.storage_domain_sha256 != self._domain
-            ):
-                raise HostedEvidenceError("authoring chunk identity differs")
-            chunks.append(projection(blob))
-            yield blob, item[1]
-        if (
-            sha(
-                canonical(
-                    {
-                        "schema": "dittobench-coding-authoring-chunks-v2",
-                        "chunks": chunks,
-                    },
-                    1 << 20,
-                )
-            )
-            != identity.chunks_sha256
-        ):
-            raise HostedEvidenceError("authoring chunk manifest differs")
-        top = self._existing(identity.source.attempt_id)
-        if top is None or top[0] != projection(identity):
-            raise HostedEvidenceError("authoring manifest missing")
-        check_blob(identity.manifest, top[1])
-        yield identity.manifest, top[1]
+        return authoring_evidence_blobs(
+            identity, spool=self._spool, domain=self._domain
+        )
 
     async def resume(self, source: SourceBinding) -> str:
         try:
