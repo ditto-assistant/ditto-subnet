@@ -68,8 +68,13 @@ See [Node's assertion contract](https://nodejs.org/api/assert.html#assertrejects
 
 `Promise.resolve` and `Promise.reject` inputs carry typed data descriptions through
 the wire. The confined bridge constructs their native values and attaches rejection
-handlers immediately. `Promise.all` is parent-owned orchestration over proposed API
-references and data values. Byte-array tags preserve Uint8Array versus Buffer identity.
+handlers immediately. For `Promise.all`, the parent builds a bounded batch from a
+literal array of independent API calls, references and data values. The child
+starts all calls in one synchronous loop before promise microtasks can settle
+any earlier call; this preserves single-flight coalescing even when the candidate
+clears its in-flight entry on completion. Nested API calls in batch arguments are
+rejected. The parent still owns all comparisons of the proposed aggregate result.
+Byte-array tags preserve Uint8Array versus Buffer identity.
 
 Test-supplied zero-argument callbacks remain in the trusted parent. Their closed
 instruction set permits bounded local integer increments followed by a data-only

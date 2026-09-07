@@ -304,11 +304,32 @@ function compileSuite(source, allowedModules, suiteRelative = 'suite.ts') {
             ['resolve', 'reject', 'all'].includes(member) &&
             args.length === 1,
         );
-        return {
-          op: 'builtin',
-          name: 'Promise.' + member,
-          value: sub(args[0]),
-        };
+        const value = sub(args[0]);
+        if (member === 'all') {
+          function safe(item) {
+            if (['call', 'construct', 'await', 'increment'].includes(item.op))
+              return false;
+            if (item.op === 'callback' || item.op === 'literal' || item.op === 'name')
+              return true;
+            if (item.op === 'property') return safe(item.base);
+            if (item.op === 'array') return item.values.every(safe);
+            if (item.op === 'object') return item.entries.every(([, v]) => safe(v));
+            if (item.op === 'binary') return safe(item.left) && safe(item.right);
+            if (['builtin', 'negate', 'not'].includes(item.op))
+              return item.name !== 'Promise.all' && safe(item.value);
+            return false;
+          }
+          requireSuite(
+            value.op === 'array' &&
+              value.values.length <= 128 &&
+              value.values.every((item) =>
+                item.op === 'call'
+                  ? safe(item.target) && item.args.every(safe)
+                  : safe(item),
+              ),
+          );
+        }
+        return { op: 'builtin', name: 'Promise.' + member, value };
       }
       if (
         ts.isCallExpression(node) &&

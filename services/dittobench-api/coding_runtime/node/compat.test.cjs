@@ -21,6 +21,41 @@ const {
 const prefix = `import assert from 'node:assert/strict'; import {test} from 'node:test'; import {operation, Cache} from '../demo.ts';`;
 const compile = (body) => compileSuite(prefix + body, ['demo.ts'], 'tests/suite.ts');
 
+test('Promise.all groups sibling API calls before awaiting either result', async () => {
+  const suite = compile(`test('batch', async()=>{const cache=new Cache<number>();
+    assert.deepEqual(await Promise.all([cache.get(),cache.get()]),[5,5]);});`);
+  const operations = [];
+  const child = {
+    initialize: async () => {},
+    close: async () => {},
+    rpc: async (target, op, args) => {
+      operations.push(op);
+      if (op === 'construct') return new Target({ reference: 1 });
+      if (op === 'all') {
+        assert.equal(args.length, 2);
+        for (const item of args)
+          assert.deepEqual(item, {
+            kind: 'call',
+            target: { reference: 1, path: ['get'] },
+            args: [],
+          });
+        return new Target({ reference: 2 });
+      }
+      assert.equal(op, 'await');
+      return [5, 5];
+    },
+  };
+  assert.equal(await runSuite(suite, 1, 1, 1000, () => child), 1);
+  assert.deepEqual(operations, ['construct', 'all', 'await']);
+  assert.throws(
+    () =>
+      compile(
+        `test('bad',async()=>{assert.deepEqual(await Promise.all([operation(operation())]),[1]);});`,
+      ),
+    InvalidSuite,
+  );
+});
+
 test('suite-relative module selection remains bounded by the independent allowlist', () => {
   assert.equal(resolveModule('../demo.ts', ['demo.ts'], 'tests/suite.ts'), 'demo.ts');
   for (const target of [

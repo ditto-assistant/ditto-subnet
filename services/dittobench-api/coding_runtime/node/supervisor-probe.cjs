@@ -102,7 +102,7 @@ if (scenario.startsWith('callback-')) {
     pending: Promise<T>|undefined;
     constructor(private fn:()=>Promise<T>){}
     get():Promise<T>{${scenario === 'callback-double' ? 'this.pending=undefined;' : ''}
-      if(!this.pending)this.pending=Promise.resolve().then(()=>this.fn());return this.pending;
+      if(!this.pending)this.pending=Promise.resolve().then(()=>this.fn()).finally(()=>{this.pending=undefined;});return this.pending;
     }
   }
   export function operation(fn:()=>number):number {${scenario === 'callback-forgery' ? `fs.writeSync(4,JSON.stringify({id:'f'.repeat(32),reference:64,args:['array',[]]})+'\\n');` : ''}return fn();}`;

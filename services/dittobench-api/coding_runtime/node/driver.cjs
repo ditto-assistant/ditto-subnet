@@ -143,6 +143,31 @@ async function evaluate(node, names, child, keepTarget = false) {
       return settle(value, child);
     }
     case 'builtin': {
+      if (node.name === 'Promise.all') {
+        if (node.value.op !== 'array') throw new InvalidSuite();
+        const batch = [];
+        for (const item of node.value.values) {
+          if (item.op === 'call') {
+            const target = await evaluateSub(item.target, true);
+            if (!(target instanceof Target)) throw new CandidateFailure();
+            const args = [];
+            for (const arg of item.args) args.push(await evaluateSub(arg));
+            batch.push({
+              kind: 'call',
+              target: { ...target.identity, path: target.path },
+              args,
+            });
+          } else {
+            const value = await evaluateSub(item);
+            batch.push(
+              value instanceof Target
+                ? { kind: 'reference', target: { ...value.identity, path: value.path } }
+                : { kind: 'data', value },
+            );
+          }
+        }
+        return child.rpc(new Target({ reference: 0 }), 'all', batch);
+      }
       value = await evaluateSub(node.value);
       if (node.name === 'URL') {
         if (typeof value !== 'string') throw new CandidateFailure();
@@ -163,10 +188,6 @@ async function evaluate(node, names, child, keepTarget = false) {
           node.name === 'Promise.resolve' ? 'fulfilled' : 'rejected',
           value,
         );
-      }
-      if (node.name === 'Promise.all') {
-        if (!Array.isArray(value)) throw new CandidateFailure();
-        return new PromiseValue('all', value);
       }
       throw new InvalidSuite();
     }

@@ -122,10 +122,7 @@ function encode(value) {
   }
 }
 
-async function execute(request) {
-  const target = request.target;
-  let value;
-  let receiver;
+async function loadTarget(target) {
   if (typeof target.module === 'string') {
     if (
       !/^[A-Za-z][A-Za-z0-9_/-]*\.(?:js|mjs|cjs|ts|mts|cts)$/.test(target.module) ||
@@ -139,8 +136,13 @@ async function execute(request) {
         await import(pathToFileURL('/workspace/' + target.module).href),
       );
     }
-    value = modules.get(target.module);
-  } else {
+  }
+}
+
+function selectTarget(target) {
+  let value, receiver;
+  if (typeof target.module === 'string') value = modules.get(target.module);
+  else {
     if (!references.has(target.reference)) throw new Error('invalid reference');
     value = references.get(target.reference);
   }
@@ -151,6 +153,42 @@ async function execute(request) {
     receiver = value;
     value = value[part];
   }
+  return { value, receiver };
+}
+
+async function execute(request) {
+  if (request.operation === 'all') {
+    const batch = unpack(request.args);
+    if (!Array.isArray(batch) || batch.length > 128) throw new Error('batch bound');
+    // Load modules before invocation. Calls then run synchronously in one loop,
+    // before Promise microtasks can settle an earlier call in this batch.
+    for (const item of batch) if (item.kind !== 'data') await loadTarget(item.target);
+    const values = [];
+    try {
+      for (const item of batch) {
+        if (item.kind === 'data') values.push(materialize(item.value, invokeCallback));
+        else {
+          const target = selectTarget(item.target);
+          if (item.kind === 'reference') values.push(target.value);
+          else if (item.kind === 'call')
+            values.push(
+              Reflect.apply(
+                target.value,
+                target.receiver,
+                materialize(item.args, invokeCallback),
+              ),
+            );
+          else throw new Error('batch operation');
+        }
+      }
+    } catch (error) {
+      return exception(error, 'throw');
+    }
+    return encode(Promise.all(values));
+  }
+  const target = request.target;
+  await loadTarget(target);
+  let { value, receiver } = selectTarget(target);
   if (request.operation === 'call' || request.operation === 'construct') {
     const args = materialize(unpack(request.args), invokeCallback);
     if (!Array.isArray(args)) throw new Error('invalid arguments');
