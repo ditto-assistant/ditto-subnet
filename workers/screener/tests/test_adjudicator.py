@@ -198,8 +198,8 @@ async def test_deadline_bounds_a_completion_and_its_retry(tmp_path: Path) -> Non
         _key(tmp_path), httpx.MockTransport(handler)
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN], deadline=deadline)
 
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
     assert result.escalation_code == "adjudicator-failed"
     assert requests == 1
 
@@ -294,8 +294,8 @@ async def test_budget_terminated_review_without_evidence_settles_immediately(
         error_code="source-review-lease-budget-exhausted",
     )
 
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
     assert result.escalation_code == "adjudicator-no-evidence"
     assert requests == 0
 
@@ -479,8 +479,8 @@ async def test_a_citation_the_court_never_read_clears_without_proof(
         _archive(tmp_path), notes=[_CONCERN]
     )
 
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
 
 
 async def test_a_hallucinated_path_clears_without_proof(tmp_path: Path) -> None:
@@ -504,8 +504,8 @@ async def test_a_hallucinated_path_clears_without_proof(tmp_path: Path) -> None:
         _archive(tmp_path), notes=[_CONCERN]
     )
 
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
 
 
 async def test_a_line_past_the_end_clears_without_proof(tmp_path: Path) -> None:
@@ -536,8 +536,8 @@ async def test_a_line_past_the_end_clears_without_proof(tmp_path: Path) -> None:
         _archive(tmp_path), notes=[_CONCERN]
     )
 
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
 
 
 async def test_only_inert_citations_clear_without_proof(tmp_path: Path) -> None:
@@ -571,8 +571,8 @@ async def test_only_inert_citations_clear_without_proof(tmp_path: Path) -> None:
         _archive(tmp_path), notes=[_CONCERN]
     )
 
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
 
 
 async def test_a_decision_without_a_published_basis_clears_without_proof(
@@ -603,8 +603,8 @@ async def test_a_decision_without_a_published_basis_clears_without_proof(
         _archive(tmp_path), notes=[_CONCERN]
     )
 
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
 
 
 async def test_an_uncited_decision_clears_without_proof(tmp_path: Path) -> None:
@@ -634,8 +634,8 @@ async def test_an_uncited_decision_clears_without_proof(tmp_path: Path) -> None:
         _archive(tmp_path), notes=[_CONCERN]
     )
 
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
 
 
 async def test_an_exhausted_step_budget_clears_without_proof(tmp_path: Path) -> None:
@@ -670,8 +670,8 @@ async def test_an_exhausted_step_budget_clears_without_proof(tmp_path: Path) -> 
         _key(tmp_path), httpx.MockTransport(handler)
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
 
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
     assert result.notes_considered == 1
 
 
@@ -707,8 +707,8 @@ async def test_a_missing_key_clears_rather_than_punishing_the_miner(
         api_key_file=None, base_url="https://openrouter.test/api/v1"
     ).adjudicate(_archive(tmp_path), notes=[])
 
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
 
 
 async def test_a_wall_clock_timeout_clears_rather_than_holding(
@@ -726,8 +726,8 @@ async def test_a_wall_clock_timeout_clears_rather_than_holding(
         deadline=asyncio.get_running_loop().time() + 0.01,
     )
 
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
 
 
 async def test_a_stalled_completion_retries_once_then_clears(
@@ -749,8 +749,8 @@ async def test_a_stalled_completion_retries_once_then_clears(
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
 
     assert attempts == 2
-    assert result.decision == "clear"
-    assert result.clear_clause == "no_proven_breach_before_deadline"
+    assert result.decision == "escalate"
+    assert result.clear_clause is None
 
 
 @pytest.mark.parametrize("mode", ("off", "shadow", "enforce"))

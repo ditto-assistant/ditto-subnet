@@ -21,9 +21,13 @@ than model size. The host checks every citation against the archive AND
 against what this adjudicator actually read, so a decision resting on a
 hallucinated or unread location is refused rather than executed.
 
-A refused decision settles clear under the published no-proven-breach rule.
-There is no path here that rejects on evidence the host could not verify, and
-a bounded automated court can never strand a submission in an operator hold.
+A refused decision (no key, unreadable archive, no retained evidence, a
+timeout, or a malformed verdict) stays ``escalate``. The policy engine
+carries it as an operator hold, never as an admission: between 2026-08-30
+and 2026-09-06 a refusal settled as a clear and 135 of the 156 newest
+automated clears were court crashes with zero notes, so the champion and
+most of the board were admitted without any review. A held submission is
+visible in Backroom and resolvable in one call; a silent admission is not.
 """
 
 from __future__ import annotations
@@ -86,7 +90,7 @@ _MAX_COMPLETION_TOKENS = 6_000
 # healthy completion responsive and reserve one equal slice for a new
 # connection; an unresponsive provider must settle from retained notes, not
 # spend 150 seconds of a miner's lease.
-_MAX_COMPLETION_REQUEST_SECONDS = 45.0
+_MAX_COMPLETION_REQUEST_SECONDS = 90.0
 _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
 # Bounded by the repository tools themselves; this only caps how many of
 # the served locations are remembered for citation checking.
@@ -420,43 +424,6 @@ def _escalate(
     )
 
 
-def _settle_refusal(
-    adjudication: SourceReviewAdjudication,
-    *,
-    model: str,
-    notes: int,
-    policy_version: int,
-) -> SourceReviewAdjudication:
-    """Turn a refused court output into the only fair terminal fallback.
-
-    A missing, timed-out, exhausted, or malformed court result proves no miner
-    breach.  Reject still requires verified executable citations; when that
-    proof is absent, the published rule is to clear rather than park the
-    submission indefinitely or punish the miner for reviewer infrastructure.
-    """
-    if adjudication.decision != "escalate":
-        return adjudication
-    refusal_code = adjudication.escalation_code or "court-refused"
-    return SourceReviewAdjudication(
-        decision="clear",
-        reason=(
-            f"Automated adjudication ended ({refusal_code}) without a verified "
-            f"policy breach after considering {notes} persisted review notes; "
-            "cleared under "
-            "the no-proven-breach-before-deadline rule"
-        ),
-        clear_clause=AdjudicationClearClause.NO_PROVEN_BREACH,
-        model=model,
-        prompt_revision=adjudicator_prompt_revision(policy_version),
-        policy_version=policy_version,
-        notes_considered=notes,
-        # This is a terminal clear, not an internal escalation, but retaining
-        # the refusal code makes the signed private review evidence honest
-        # about why the no-proven-breach rule settled the case.
-        escalation_code=refusal_code,
-    )
-
-
 def _bounded_sequence(value: object, limit: int) -> list[object]:
     """Take at most ``limit`` items from untrusted model or finding JSON."""
     if not isinstance(value, list):
@@ -627,14 +594,10 @@ class SourceReviewAdjudicator:
             repository = TarSourceRepository(archive_path)
         except (OSError, ValueError) as error:
             logger.warning("adjudication could not start: %s", error)
-            return _settle_refusal(
-                _escalate(
-                    "adjudicator-unavailable",
-                    "Automated adjudication was unavailable",
-                    model=self._model,
-                    notes=note_count,
-                    policy_version=policy_version,
-                ),
+            return _escalate(
+                "adjudicator-unavailable",
+                "Automated adjudication was unavailable on this node; "
+                "held for retry or operator review",
                 model=self._model,
                 notes=note_count,
                 policy_version=policy_version,
@@ -652,14 +615,10 @@ class SourceReviewAdjudicator:
             # An upstream review consumed its discovery budget without
             # recording evidence. There is nothing for the court to decide;
             # settle rather than spend its reserve rediscovering the archive.
-            return _settle_refusal(
-                _escalate(
-                    "adjudicator-no-evidence",
-                    "Automated adjudication received no retained source evidence",
-                    model=self._model,
-                    notes=note_count,
-                    policy_version=policy_version,
-                ),
+            return _escalate(
+                "adjudicator-no-evidence",
+                "Automated adjudication received no retained source evidence; "
+                "held for operator review",
                 model=self._model,
                 notes=note_count,
                 policy_version=policy_version,
@@ -673,14 +632,10 @@ class SourceReviewAdjudicator:
                 # evidence. There is nothing for a court to decide; do not
                 # burn its reserve rediscovering the archive. This is still the
                 # terminal no-proven-breach adjudication, not a retry.
-                return _settle_refusal(
-                    _escalate(
-                        "adjudicator-no-evidence",
-                        "Automated adjudication received no retained source evidence",
-                        model=self._model,
-                        notes=note_count,
-                        policy_version=policy_version,
-                    ),
+                return _escalate(
+                    "adjudicator-no-evidence",
+                    "Automated adjudication received no retained source evidence; "
+                    "held for operator review",
                     model=self._model,
                     notes=note_count,
                     policy_version=policy_version,
@@ -711,27 +666,17 @@ class SourceReviewAdjudicator:
                 type(error).__name__,
                 error,
             )
-            return _settle_refusal(
-                _escalate(
-                    "adjudicator-failed",
-                    "Automated adjudication did not complete",
-                    model=self._model,
-                    notes=note_count,
-                    policy_version=policy_version,
-                ),
+            return _escalate(
+                "adjudicator-failed",
+                "Automated adjudication did not complete; held for operator review",
                 model=self._model,
                 notes=note_count,
                 policy_version=policy_version,
             )
-        return _settle_refusal(
-            self._certify(
-                verdict,
-                repository=repository,
-                read_locations=read_locations,
-                notes=note_count,
-                policy_version=policy_version,
-            ),
-            model=self._model,
+        return self._certify(
+            verdict,
+            repository=repository,
+            read_locations=read_locations,
             notes=note_count,
             policy_version=policy_version,
         )

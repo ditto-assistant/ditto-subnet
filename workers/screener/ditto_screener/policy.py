@@ -550,6 +550,23 @@ class SourceFingerprintTriageModule(_BaseModule):
         )
 
 
+def _court_unavailable(adjudication: Mapping[str, object]) -> bool:
+    """True when the court never started: no key file or unreadable archive."""
+    return adjudication.get("escalation_code") == "adjudicator-unavailable"
+
+
+def _refusal_evidence(
+    module_id: str, adjudication: Mapping[str, object]
+) -> PolicyEvidence:
+    """Name why the court refused so the operator queue shows an unreviewed hold."""
+    code = str(adjudication.get("escalation_code") or "court-refused")
+    return PolicyEvidence(
+        module_id,
+        "source-review-adjudication-refused",
+        f"automated adjudication refused ({code}); held for operator review",
+    )
+
+
 @dataclass(frozen=True)
 class AgenticSourceReviewModule(_BaseModule):
     """Use private read-only source analysis as a quarantine selector only."""
@@ -597,11 +614,30 @@ class AgenticSourceReviewModule(_BaseModule):
                     adjudication=adjudication,
                     review_notes=review_notes,
                 )
-            # A host-refused verdict remains an operator hold, never a retry
-            # loop and never an admission.
+            if _court_unavailable(adjudication):
+                # The court could not even start on this node (no key file,
+                # unreadable archive). That is node infrastructure, not a
+                # verdict: let the platform retry within the attempt budget
+                # instead of parking the miner behind a broken worker.
+                return ModuleResult(
+                    ModuleDisposition.RETRYABLE_INFRA,
+                    (
+                        PolicyEvidence(
+                            self.module_id,
+                            "source-review-unavailable",
+                            "private source-review adjudication was unavailable",
+                        ),
+                    ),
+                    finding=observation.finding,
+                    review_notes=review_notes,
+                )
+            # Every other refusal (no retained evidence, timeout, malformed
+            # verdict) is an operator hold: the court never proved a breach,
+            # but nothing reviewed the source either, so admitting the row
+            # would be a fail-open clear. Never a retry loop, never an admission.
             return ModuleResult(
                 ModuleDisposition.QUARANTINE,
-                evidence,
+                (*evidence, _refusal_evidence(self.module_id, adjudication)),
                 finding=observation.finding,
                 adjudication=adjudication,
                 review_notes=review_notes,
@@ -1258,19 +1294,41 @@ class PolicyEngine:
             # AgenticSourceReviewModule: a court timeout/escalation is an
             # operator hold, never fall-through to the earlier L1/L2 error.
             court_decision = adjudication.get("decision")
+            if court_decision not in {"clear", "reject"} and _court_unavailable(
+                adjudication
+            ):
+                return self._decision(
+                    ScreeningOutcome.RETRYABLE_INFRA,
+                    (
+                        PolicyEvidence(
+                            "agentic-preexecution-review",
+                            "source-review-unavailable",
+                            "private source-review adjudication was unavailable",
+                        ),
+                    ),
+                    observation.finding,
+                    review_audit=observation.review_audit,
+                    review_notes=observation.notes,
+                )
+            evidence: tuple[PolicyEvidence, ...] = (
+                PolicyEvidence(
+                    "agentic-preexecution-review",
+                    "source-review-adjudicated",
+                    "final source-review adjudication completed",
+                ),
+            )
+            if court_decision not in {"clear", "reject"}:
+                evidence = (
+                    *evidence,
+                    _refusal_evidence("agentic-preexecution-review", adjudication),
+                )
             return self._decision(
                 (
                     ScreeningOutcome.PASS
                     if court_decision == "clear"
                     else ScreeningOutcome.QUARANTINE
                 ),
-                (
-                    PolicyEvidence(
-                        "agentic-preexecution-review",
-                        "source-review-adjudicated",
-                        "final source-review adjudication completed",
-                    ),
-                ),
+                evidence,
                 observation.finding,
                 review_audit=observation.review_audit,
                 adjudication=adjudication,

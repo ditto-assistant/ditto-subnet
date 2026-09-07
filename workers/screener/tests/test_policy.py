@@ -1296,3 +1296,66 @@ async def test_oracle_request_envelope_matches_scored_tool_traffic() -> None:
     assert request["bench_version"] == _BENCH_VERSION
     # Scored tool cases carry no user_id; the oracle must not either.
     assert "user_id" not in request
+
+
+def test_unavailable_court_is_retryable_infra_not_a_hold_or_admission() -> None:
+    """No key file / unreadable archive is node infrastructure, not a verdict."""
+    adjudication = {
+        "decision": "escalate",
+        "reason": "Automated adjudication was unavailable on this node",
+        "model": "z-ai/glm-5.3-flash",
+        "prompt_revision": "adjudicator-v3-policy-v12",
+        "notes_considered": 0,
+        "escalation_code": "adjudicator-unavailable",
+    }
+    observation = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="source-review-timeout",
+        failure_disposition="retryable_infra",
+        adjudication=adjudication,
+    )
+    decision = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
+        observation
+    )
+    assert decision.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert decision.evidence[0].code == "source-review-unavailable"
+
+
+@pytest.mark.parametrize(
+    "escalation_code",
+    ["adjudicator-failed", "adjudicator-no-evidence", "verdict-contract-failed"],
+)
+def test_refused_court_holds_for_an_operator_instead_of_admitting(
+    escalation_code: str,
+) -> None:
+    """The 2026-09-06 fail-open: a crashed court with zero notes admitted the board."""
+    adjudication = {
+        "decision": "escalate",
+        "reason": "Automated adjudication did not complete; held for operator review",
+        "model": "z-ai/glm-5.3-flash",
+        "prompt_revision": "adjudicator-v3-policy-v12",
+        "notes_considered": 0,
+        "escalation_code": escalation_code,
+    }
+    observation = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="source-review-timeout",
+        failure_disposition="retryable_infra",
+        adjudication=adjudication,
+    )
+    decision = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
+        observation
+    )
+    assert decision.outcome == ScreeningOutcome.QUARANTINE
+    assert not decision.submits_verdict
+    assert decision.adjudication == adjudication
+    assert [item.code for item in decision.evidence] == [
+        "source-review-adjudicated",
+        "source-review-adjudication-refused",
+    ]

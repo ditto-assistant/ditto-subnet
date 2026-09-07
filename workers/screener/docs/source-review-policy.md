@@ -102,6 +102,11 @@ addendum.
   2026-09-06, 156 carried that reason code and 135 of those ended in
   `adjudicator-failed` (102 with zero notes). Operators and the L4 court must
   treat such rows as unreviewed, never as a clearance to cite.
+  Since 2026-09-07 the worker no longer settles a refusal as a clear: an
+  `adjudicator-failed`, `adjudicator-no-evidence`, or
+  `verdict-contract-failed` court result is carried as a quarantine (an ATH
+  hold on a deferred rescreen), and `adjudicator-unavailable` (no key file or
+  unreadable archive on the node) is a retryable infrastructure outcome.
 - **Fairness.** The same rules as v11 apply: agents are held to the policy
   that screened them; the scheduled activation with `rescreen_scored` is the
   mechanism that re-adjudicates every scored row — including the champion —
