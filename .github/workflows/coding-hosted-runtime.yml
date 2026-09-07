@@ -1,0 +1,47 @@
+name: Native Coding runtime bundle
+on:
+  pull_request:
+    paths:
+      - infra/containers/coding-hosted-runtime.Dockerfile
+      - infra/scripts/build-coding-hosted-runtime.py
+      - infra/ansible/roles/coding_hosted_runtime/**
+      - infra/ansible/playbooks/gcp-coding-hosted-runtime.yml
+      - apps/platform/ditto/api_server/coding_hosted_installed_worker.py
+      - apps/platform/ditto/api_server/coding_hosted_runtime_io.py
+      - .github/workflows/coding-hosted-runtime.yml
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact reviewed monorepo commit to build
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.sha || github.event.pull_request.head.sha || github.sha }}
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Check the dormant installer playbook
+        working-directory: infra/ansible
+        run: uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i localhost, playbooks/gcp-coding-hosted-runtime.yml
+      - name: Prove the disabled role changes no host state
+        working-directory: infra/ansible
+        run: uvx --from ansible-core==2.21.2 ansible-playbook --check -i localhost, tests/coding-hosted-runtime.yml
+      - name: Build, install and smoke-test exact public software
+        env:
+          REQUESTED_SHA: ${{ inputs.sha || github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python3 infra/scripts/build-coding-hosted-runtime.py
+          --revision "$REQUESTED_SHA" --output "$RUNNER_TEMP/native-runtime-artifact"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-coding-runtime-${{ inputs.sha || github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/native-runtime-artifact/
+          if-no-files-found: error
+          retention-days: 7

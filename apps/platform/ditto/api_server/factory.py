@@ -29,6 +29,7 @@ from ditto.api_server.coding_artifact_capabilities import (
 from ditto.api_server.coding_hippius_custody import (
     create_hippius_evidence_runtime_from_env,
 )
+from ditto.api_server.coding_hosted_signer import load_hosted_control_signer
 from ditto.api_server.coding_private_catalog import (
     create_coding_private_catalog_source,
 )
@@ -122,6 +123,7 @@ from ditto.api_server.endpoints import (
     validator_confirmation_router,
     validator_router,
 )
+from ditto.api_server.endpoints.validator_coding_hosted import HostedCodingControl
 from ditto.api_server.endpoints.validator_coding_hosted import (
     router as validator_coding_hosted_router,
 )
@@ -240,7 +242,16 @@ def _render_dashboard(wandb_url: str) -> str | None:
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     config: ApiServerConfig = app.state.config
     async with AsyncExitStack() as stack:
+        # Register teardown before opening dependencies. If anything fails,
+        # no control signer remains reachable through this application.
+        app.state.coding_hosted_control = None
+        stack.callback(setattr, app.state, "coding_hosted_control", None)
         try:
+            signer = load_hosted_control_signer(
+                config.coding_hosted_signer, process_role=_process_role()
+            )
+            if signer is not None:
+                stack.callback(signer.close)
             engine = create_db_engine(config.postgres)
             stack.push_async_callback(engine.dispose)
             app.state.engine = engine
@@ -470,6 +481,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 f"failed to open dependencies during startup: {e}"
             ) from e
 
+        if signer is not None:
+            app.state.coding_hosted_control = HostedCodingControl(signer)
         logger.info(
             f"api server ready on {config.host}:{config.port} "
             f"commit={config.commit_hash}"
@@ -505,6 +518,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.state.coding_hippius_evidence_runtime = None
     app.state.coding_artifact_capability_minter = None
     app.state.coding_inference_grant_transport = None
+    app.state.coding_hosted_control = None
     # Hot-swappable efficiency-bonus policy: the compute path resolves the
     # latest append-only revision through this resolver (short TTL), falling
     # back to the env seed (config.efficiency_bonus) when none exists. The DB

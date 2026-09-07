@@ -70,8 +70,10 @@ remove state as an automatic recovery step.
    then synthetic hostile isolation and unchanged private base/reference
    qualification through the actual executor. VM readiness is not driver proof.
 3. A separately reviewed trusted-control network path and bounded database,
-   provider, Hippius and custody provisioning. This VPC currently has no private
-   PostgreSQL route. Do not expose production PostgreSQL publicly to bypass it.
+   provider, Hippius and custody provisioning. The optional
+   [private PostgreSQL path](coding-hosted-postgres-v2.md) now supplies default-off
+   peering, exact-host firewall rules and guest admission configuration. The VPC
+   still has no private PostgreSQL route by default. Do not expose PostgreSQL publicly.
    Platform control capabilities and candidate egress must remain distinct.
 4. Durable recovery/public signing, encrypted release publication/readback/
    registration and one deployed private shadow canary. Hippius stays the sole

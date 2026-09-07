@@ -1,0 +1,50 @@
+---
+# Rendering/assertion fixture only. Never include base/postgres convergence roles.
+- hosts: role_platform_postgres
+  connection: local
+  gather_facts: false
+  become: false
+  vars_files:
+    - ../group_vars/role_platform_postgres.yml
+  tasks:
+    - name: Prove disabled admission preserves both existing allowlists exactly
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_postgres_enabled is false
+          - coding_hosted_postgres_client_ip == ''
+          - "base_ufw_extra_rules == [{'port': '5432', 'src': '10.30.0.0/24', 'comment': 'Postgres from platform subnet'}]"
+          - "postgres_hba_hosts == [{'database': 'all', 'user': 'ditto', 'address': '10.30.0.0/24', 'method': 'scram-sha-256'}]"
+
+    - name: Select a synthetic single-host fixture
+      ansible.builtin.set_fact:
+        coding_hosted_postgres_enabled: true
+        coding_hosted_postgres_client_ip: 10.33.0.9
+
+    - name: Exercise the real pre-mutation guard
+      ansible.builtin.import_tasks: ../roles/postgres/tasks/coding-hosted-access.yml
+
+    - name: Prove the approved fixture adds only its production database rule
+      ansible.builtin.assert:
+        that:
+          - base_ufw_extra_rules | length == 2
+          - base_ufw_extra_rules[1].src == '10.33.0.9/32'
+          - base_ufw_extra_rules[1].port == '5432'
+          - postgres_hba_hosts | length == 2
+          - "postgres_hba_hosts[1] == {'database': 'ditto_platform_prod', 'user': 'ditto', 'address': '10.33.0.9/32', 'method': 'scram-sha-256'}"
+
+    - name: Exercise invalid source addresses through the same guard
+      ansible.builtin.include_tasks: coding-hosted-postgres-negative.yml
+      loop:
+        - 10.33.0.0
+        - 10.33.0.1
+        - 10.33.0.254
+        - 10.33.0.255
+        - 10.33.0.9/24
+        - 10.30.0.7
+        - 0.0.0.0
+        - "::1"
+        - "10.33.0.9\n"
+        - "10.33.0.9\nhost all all 0.0.0.0/0 trust"
+        - 10.33.0.09
+        - 123
+        - null

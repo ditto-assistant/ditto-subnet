@@ -93,9 +93,11 @@ before approving a runtime. No synthetic test here is a kernel-level proof.
 
 This also blocks future trusted-worker IP traffic under the same UID. Do not
 enable a real worker, add a DNS exception or weaken socket checks to work around
-it. A separately reviewed control/daemon identity and network design must allow
-only the intended trusted connections without giving candidate egress that
-authority. Offline image import and network-none grading qualification are
+it. The separate default-off
+[trusted connectivity role](coding-hosted-connectivity-v2.md) provides an
+operator-started cgroup-scoped profile without changing this qualification role.
+Its kernel enforcement, authenticated router and actual runtime still require
+independent qualification. Offline image import and network-none grading are
 later explicit operator steps, not actions performed by this role.
 
 ## Verification and remaining work

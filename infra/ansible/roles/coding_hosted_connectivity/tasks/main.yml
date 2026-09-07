@@ -1,0 +1,114 @@
+---
+- name: Explain dormant native-v2 connectivity installation
+  ansible.builtin.debug:
+    msg: Native-v2 connectivity is disabled; no policy or worker is installed.
+  when: not (coding_hosted_connectivity_enabled | bool)
+
+- name: Install an operator-started native-v2 connectivity profile
+  when: coding_hosted_connectivity_enabled | bool
+  block:
+    - name: Require the dedicated host and explicit protected runtime paths
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in groups.get('role_coding_hosted', [])
+          - ansible_facts['hostname'] == 'ditto-coding-hosted-v2'
+          - ansible_facts['distribution'] == 'Debian'
+          - coding_hosted_worker_python is match('^/opt/ditto-coding-hosted/[A-Za-z0-9_./-]+$')
+          - coding_hosted_worker_config is match('^/var/lib/ditto-coding-hosted/[A-Za-z0-9_./-]+[.]json$')
+          - "'..' not in coding_hosted_worker_python.split('/')"
+          - "'..' not in coding_hosted_worker_config.split('/')"
+
+    - name: Refuse an active worker without interrupting it
+      ansible.builtin.command:
+        argv: [systemctl, is-active, ditto-coding-hosted-worker.service]
+      register: coding_hosted_worker_active
+      changed_when: false
+      failed_when: coding_hosted_worker_active.rc not in [3, 4]
+
+    - name: Verify the existing isolated host identity
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, -I, /usr/local/lib/ditto-coding-hosted/host-policy.py, identity]
+      register: coding_hosted_connectivity_identity
+      changed_when: false
+
+    - name: Bind the existing numeric identity
+      ansible.builtin.set_fact:
+        coding_hosted_uid: "{{ coding_hosted_connectivity_identity.stdout | int }}"
+
+    - name: Require the existing deny guard and daemon manager
+      ansible.builtin.command:
+        argv: [systemctl, is-active, "{{ item }}"]
+      loop:
+        - ditto-coding-hosted-egress.service
+        - "user@{{ coding_hosted_uid }}.service"
+      changed_when: false
+
+    - name: Inspect the approved installed interpreter
+      ansible.builtin.stat:
+        path: "{{ coding_hosted_worker_python }}"
+        follow: true
+      register: coding_hosted_python_stat
+
+    - name: Require a protected executable interpreter
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_python_stat.stat.isreg | default(false)
+          - coding_hosted_python_stat.stat.uid == 0
+          - not coding_hosted_python_stat.stat.wgrp
+          - not coding_hosted_python_stat.stat.woth
+          - coding_hosted_python_stat.stat.executable
+
+    - name: Inspect the private pre-provisioned runtime configuration
+      ansible.builtin.stat:
+        path: "{{ coding_hosted_worker_config }}"
+        follow: false
+      register: coding_hosted_config_stat
+
+    - name: Require worker-owned private runtime configuration
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_config_stat.stat.isreg | default(false)
+          - coding_hosted_config_stat.stat.uid == coding_hosted_uid | int
+          - coding_hosted_config_stat.stat.mode == '0600'
+          - coding_hosted_config_stat.stat.nlink == 1
+
+    - name: Create the root-only public network-policy directory
+      ansible.builtin.file:
+        path: /etc/ditto-coding-hosted
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Install the fixed network lifecycle guard
+      ansible.builtin.copy:
+        src: connectivity-policy.py
+        dest: /usr/local/lib/ditto-coding-hosted/connectivity-policy.py
+        owner: root
+        group: root
+        mode: "0444"
+
+    - name: Install only the explicit expiring network profile
+      ansible.builtin.copy:
+        content: "{{ coding_hosted_connectivity_profile | to_json }}\n"
+        dest: /etc/ditto-coding-hosted/connectivity.json
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Validate the exact installed profile without changing the firewall
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, -I, /usr/local/lib/ditto-coding-hosted/connectivity-policy.py, validate]
+      changed_when: false
+
+    - name: Install the manual one-attempt worker unit without starting it
+      ansible.builtin.template:
+        src: worker.service.j2
+        dest: /etc/systemd/system/ditto-coding-hosted-worker.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Reload unit definitions without enabling or starting the worker
+      ansible.builtin.systemd_service:
+        daemon_reload: true

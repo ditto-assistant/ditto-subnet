@@ -27,6 +27,7 @@ ignored_paths = [
   "ditto/tests/**",
   "infra/**",
   "scripts/check_netns_incompatible.py",
+  "scripts/test-coding-hosted-connectivity-kernel.py", # CI-only synthetic namespace test
   "scripts/gen_validator_contract.py",
   "scripts/generate_confirmation_installation.py",
   "scripts/run-validator.sh",
