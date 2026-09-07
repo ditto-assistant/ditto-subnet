@@ -1,0 +1,6 @@
+all:
+  children:
+    role_platform_postgres:
+      hosts:
+        ditto-pg-platform:
+          ansible_connection: local

@@ -1,0 +1,16 @@
+---
+- name: Set synthetic invalid source
+  ansible.builtin.set_fact:
+    coding_hosted_postgres_client_ip: "{{ item }}"
+
+- name: Require rejection by the real admission guard
+  block:
+    - ansible.builtin.import_tasks: ../roles/postgres/tasks/coding-hosted-access.yml
+    - name: Fail if invalid admission was accepted
+      ansible.builtin.fail:
+        msg: Invalid synthetic source passed the guard.
+  rescue:
+    - name: Verify the intended guard refused before any convergence
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name == 'Require exact reviewed native Coding database admission'

@@ -13,6 +13,10 @@
   become: true
   gather_facts: true
   pre_tasks:
+    - name: Validate native Coding admission before any host or database mutation
+      ansible.builtin.import_tasks: ../roles/postgres/tasks/coding-hosted-access.yml
+      tags: [coding-postgres-validate]
+
     # The `ditto` role password MUST equal the platform-db-password secret the
     # app reads, or every app->DB connection fails. Hard-fail rather than let the
     # postgres role silently generate a random box password (empty fallback).

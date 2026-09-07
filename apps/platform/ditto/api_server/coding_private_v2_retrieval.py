@@ -114,8 +114,8 @@ class PrivateV2SelectionDescriptor:
     task_commitment_sha256: str
 
 
-class PrivateV2InputRetriever:
-    """Trusted service primitive; no constructor or route is enabled by default."""
+class PrivateV2InputAuthority:
+    """Verified private metadata and role binding; no object reader or key access."""
 
     def __init__(
         self,
@@ -127,9 +127,6 @@ class PrivateV2InputRetriever:
         trusted_curator_public_key_path: Path,
         reader_authority_sha256: str,
         audience: Literal["platform-authoring", "platform-grading"],
-        grants: PrivateV2GrantStore,
-        reader: HippiusPrivateInputReader,
-        unwrapper: PrivateV2Unwrapper,
         clock: Callable[[], int] | None = None,
     ) -> None:
         try:
@@ -235,24 +232,7 @@ class PrivateV2InputRetriever:
         self._manifest = manifest
         self._payload = payload
         self._audience = audience
-        self._grants = grants
-        self._reader = reader
-        self._unwrapper = unwrapper
         self._clock = clock or (lambda: int(time.time()))
-
-    async def read(self, *, grant_id: UUID, role: str) -> bytes:
-        """Return one plaintext object only to the configured trusted Platform role."""
-        try:
-            async with asyncio.timeout(PRIVATE_V2_RETRIEVAL_TIMEOUT_SECONDS):
-                return await self._read(grant_id=grant_id, role=role)
-        except Exception:
-            raise PrivateV2RetrievalError(
-                "private v2 object retrieval failed"
-            ) from None
-
-    async def describe_authoring(self, grant_id: UUID) -> PrivateV2AuthoringDescriptor:
-        """Private assembler authority; contains no grader object capability."""
-        return await self._describe(grant_id, "authoring", AUTHORING_ROLES)
 
     def describe_selection(self, catalog_index: int) -> PrivateV2SelectionDescriptor:
         """Trusted launch projection supplies its index from the locked DB row.
@@ -297,6 +277,132 @@ class PrivateV2InputRetriever:
             raise PrivateV2RetrievalError(
                 "private selection metadata is invalid"
             ) from None
+
+    def _validate_grant(
+        self, grant: PrivateV2ObjectGrant | None, *, grant_id: UUID, role: str
+    ) -> None:
+        now = self._clock()
+        if (
+            grant is None
+            or type(now) is not int
+            or grant.grant_id != grant_id
+            or grant.grant_id.int == 0
+            or grant.evaluation_id.int == 0
+            or grant.attempt_id.int == 0
+            or grant.audience != self._audience
+            or grant.registration_sha256 != self._registration.registration_sha256
+            or type(grant.catalog_index) is not int
+            or not 0 <= grant.catalog_index < 250
+            or type(grant.expires_at_unix) is not int
+            or not now < grant.expires_at_unix <= now + 3600
+            or role not in grant.allowed_roles
+        ):
+            raise ValueError("grant")
+        if grant.phase == "authoring":
+            if (
+                self._audience != "platform-authoring"
+                or role not in _AUTHORING_ROLES
+                or grant.frozen_patch_sha256 is not None
+            ):
+                raise ValueError("authoring phase")
+        elif grant.phase == "grading":
+            digest = grant.frozen_patch_sha256
+            if (
+                self._audience != "platform-grading"
+                or role not in _GRADING_ROLES
+                or not isinstance(digest, str)
+                or len(digest) != 64
+                or any(c not in "0123456789abcdef" for c in digest)
+            ):
+                raise ValueError("grading phase")
+        else:
+            raise ValueError("phase")
+
+    def unwrap_request(
+        self, grant: PrivateV2ObjectGrant, role: str
+    ) -> PrivateV2UnwrapRequest:
+        """Reconstruct key authority; never accept caller-selected ciphertext."""
+        self._validate_grant(grant, grant_id=grant.grant_id, role=role)
+        self.describe_selection(grant.catalog_index)
+        digest = self._payload["task_assets"][grant.catalog_index]["artifacts"][role]
+        _, item = self._objects[digest]
+        aad = coding_canonical_json_bytes(
+            {
+                "schema": "dittobench-coding-private-v2-transport-aad-v1",
+                "payload_sha256": self._manifest["payload_sha256"],
+                "catalog_sha256": self._manifest["catalog_sha256"],
+                "plaintext_sha256": digest,
+                "plaintext_size_bytes": item["plaintext_size_bytes"],
+                "wrapping_key_sha256": self._manifest["wrapping_key_sha256"],
+            },
+            maximum_bytes=16 << 10,
+            label="private v2 transport AAD",
+        )
+        if hashlib.sha256(aad).hexdigest() != item["aad_sha256"]:
+            raise PrivateV2RetrievalError("private unwrap authority is invalid")
+        return PrivateV2UnwrapRequest(
+            schema="dittobench-coding-private-v2-unwrap-v1",
+            grant_id=str(grant.grant_id),
+            evaluation_id=str(grant.evaluation_id),
+            attempt_id=str(grant.attempt_id),
+            registration_sha256=grant.registration_sha256,
+            transport_sha256=self._manifest["transport_sha256"],
+            plaintext_sha256=digest,
+            ciphertext_sha256=item["ciphertext_sha256"],
+            wrapping_key_sha256=self._manifest["wrapping_key_sha256"],
+            wrapped_data_key_b64=item["wrapped_data_key_b64"],
+            aad_sha256=item["aad_sha256"],
+            phase=grant.phase,
+            role=role,
+            audience=grant.audience,
+            expires_at_unix=grant.expires_at_unix,
+            frozen_patch_sha256=grant.frozen_patch_sha256,
+        )
+
+
+class PrivateV2InputRetriever(PrivateV2InputAuthority):
+    """Trusted service primitive; no constructor or route is enabled by default."""
+
+    def __init__(
+        self,
+        *,
+        registration: CodingPrivateV2RegistrationAuthority,
+        transport_manifest: Path,
+        payload_authority: Path,
+        publication_receipt: Path,
+        trusted_curator_public_key_path: Path,
+        reader_authority_sha256: str,
+        audience: Literal["platform-authoring", "platform-grading"],
+        grants: PrivateV2GrantStore,
+        reader: HippiusPrivateInputReader,
+        unwrapper: PrivateV2Unwrapper,
+        clock: Callable[[], int] | None = None,
+    ) -> None:
+        super().__init__(
+            registration=registration,
+            transport_manifest=transport_manifest,
+            payload_authority=payload_authority,
+            publication_receipt=publication_receipt,
+            trusted_curator_public_key_path=trusted_curator_public_key_path,
+            reader_authority_sha256=reader_authority_sha256,
+            audience=audience,
+            clock=clock,
+        )
+        self._grants, self._reader, self._unwrapper = grants, reader, unwrapper
+
+    async def read(self, *, grant_id: UUID, role: str) -> bytes:
+        """Return one plaintext object only to the configured trusted Platform role."""
+        try:
+            async with asyncio.timeout(PRIVATE_V2_RETRIEVAL_TIMEOUT_SECONDS):
+                return await self._read(grant_id=grant_id, role=role)
+        except Exception:
+            raise PrivateV2RetrievalError(
+                "private v2 object retrieval failed"
+            ) from None
+
+    async def describe_authoring(self, grant_id: UUID) -> PrivateV2AuthoringDescriptor:
+        """Private assembler authority; contains no grader object capability."""
+        return await self._describe(grant_id, "authoring", AUTHORING_ROLES)
 
     async def describe_grading(self, grant_id: UUID) -> PrivateV2AuthoringDescriptor:
         """Private grading authority, available only after committed patch freeze."""
@@ -350,6 +456,7 @@ class PrivateV2InputRetriever:
             )
             self._validate_grant(grant, grant_id=grant_id, role=role)
             assert grant is not None
+            self.describe_selection(grant.catalog_index)
             digest = self._payload["task_assets"][grant.catalog_index]["artifacts"][
                 role
             ]
@@ -380,24 +487,7 @@ class PrivateV2InputRetriever:
             ):
                 raise ValueError("ciphertext")
             await self._recheck(grant, role)
-            request = PrivateV2UnwrapRequest(
-                schema="dittobench-coding-private-v2-unwrap-v1",
-                grant_id=str(grant.grant_id),
-                evaluation_id=str(grant.evaluation_id),
-                attempt_id=str(grant.attempt_id),
-                registration_sha256=grant.registration_sha256,
-                transport_sha256=self._manifest["transport_sha256"],
-                plaintext_sha256=digest,
-                ciphertext_sha256=item["ciphertext_sha256"],
-                wrapping_key_sha256=self._manifest["wrapping_key_sha256"],
-                wrapped_data_key_b64=item["wrapped_data_key_b64"],
-                aad_sha256=item["aad_sha256"],
-                phase=grant.phase,
-                role=role,
-                audience=grant.audience,
-                expires_at_unix=grant.expires_at_unix,
-                frozen_patch_sha256=grant.frozen_patch_sha256,
-            )
+            request = self.unwrap_request(grant, role)
             unwrapped = await self._unwrapper.unwrap(request)
             if (
                 unwrapped.request_sha256 != request.digest()
@@ -427,46 +517,6 @@ class PrivateV2InputRetriever:
         if current != grant:
             raise ValueError("grant changed")
         self._validate_grant(current, grant_id=grant.grant_id, role=role)
-
-    def _validate_grant(
-        self, grant: PrivateV2ObjectGrant | None, *, grant_id: UUID, role: str
-    ) -> None:
-        now = self._clock()
-        if (
-            grant is None
-            or type(now) is not int
-            or grant.grant_id != grant_id
-            or grant.grant_id.int == 0
-            or grant.evaluation_id.int == 0
-            or grant.attempt_id.int == 0
-            or grant.audience != self._audience
-            or grant.registration_sha256 != self._registration.registration_sha256
-            or type(grant.catalog_index) is not int
-            or not 0 <= grant.catalog_index < 250
-            or type(grant.expires_at_unix) is not int
-            or not now < grant.expires_at_unix <= now + 3600
-            or role not in grant.allowed_roles
-        ):
-            raise ValueError("grant")
-        if grant.phase == "authoring":
-            if (
-                self._audience != "platform-authoring"
-                or role not in _AUTHORING_ROLES
-                or grant.frozen_patch_sha256 is not None
-            ):
-                raise ValueError("authoring phase")
-        elif grant.phase == "grading":
-            digest = grant.frozen_patch_sha256
-            if (
-                self._audience != "platform-grading"
-                or role not in _GRADING_ROLES
-                or not isinstance(digest, str)
-                or len(digest) != 64
-                or any(c not in "0123456789abcdef" for c in digest)
-            ):
-                raise ValueError("grading phase")
-        else:
-            raise ValueError("phase")
 
 
 def _digest(value: dict[str, Any]) -> str:
