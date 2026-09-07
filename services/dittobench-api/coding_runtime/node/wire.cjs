@@ -19,11 +19,22 @@ class CallbackValue {
     this.reference = reference;
   }
 }
+// One callback transport belongs to one child. Repeated handles must denote the
+// same function, including across separate requests and nested argument values.
+const callbackFunctions = new WeakMap();
 
 function materialize(value, callback) {
   if (value instanceof CallbackValue) {
-    if (!callback) throw new Error('callback transport unavailable');
-    return (...args) => callback(value.reference, args);
+    if (typeof callback !== 'function')
+      throw new Error('callback transport unavailable');
+    let functions = callbackFunctions.get(callback);
+    if (!functions) {
+      functions = new Map();
+      callbackFunctions.set(callback, functions);
+    }
+    if (!functions.has(value.reference))
+      functions.set(value.reference, (...args) => callback(value.reference, args));
+    return functions.get(value.reference);
   }
   if (value instanceof ErrorValue) return new Error(value.message);
   if (value instanceof PromiseValue) {

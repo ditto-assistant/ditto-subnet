@@ -101,6 +101,21 @@ test('typed bytes and data-only promises round trip without changing types', asy
     assert.throws(() => assertValues('ok', [value]), CandidateFailure);
 });
 
+test('repeated callback handles retain function identity across materialization', () => {
+  const callback = (reference, args) => reference + args[0];
+  const value = new CallbackValue(1);
+  const first = materialize(unpack(pack(value)), callback);
+  const second = materialize(unpack(pack([value, value])), callback);
+  assert.equal(first, second[0]);
+  assert.equal(second[0], second[1]);
+  assert.equal(first(4), 5);
+  assert.notEqual(first, materialize(new CallbackValue(2), callback));
+  assert.notEqual(
+    first,
+    materialize(value, () => 5),
+  );
+});
+
 test('exception frames require correlation, phase and bounded text', () => {
   const frame = (value) =>
     Buffer.from(

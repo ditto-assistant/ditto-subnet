@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 image="${1:?supply the locally built synthetic Node test image}"
-for scenario in pass visible bytes commonjs esm javascript cts mts parent-env wrong stdout fake-report early-exit hang oversized wrong-nonce hidden-read report-write spawn signal setuid capabilities environment worker-hang nonfinite opaque unsupported count-mismatch relative-suite typed-inputs expected-rejection expected-throw rejection-fulfilled rejection-sync-throw rejection-import-fail rejection-exit callback-cache callback-sync callback-double callback-forgery; do
+for scenario in pass visible bytes commonjs esm javascript cts mts parent-env wrong stdout fake-report early-exit hang oversized wrong-nonce hidden-read report-write spawn signal setuid capabilities environment worker-hang nonfinite opaque unsupported count-mismatch relative-suite typed-inputs expected-rejection expected-throw rejection-fulfilled rejection-sync-throw rejection-import-fail rejection-exit callback-cache callback-sync callback-double callback-forgery callback-identity; do
   docker run --rm --network none --read-only --ipc none \
     --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add KILL --cap-add SETUID --cap-add SETGID \
     --security-opt no-new-privileges --pids-limit 64 --memory 256m --memory-swap 256m --cpus 1 \

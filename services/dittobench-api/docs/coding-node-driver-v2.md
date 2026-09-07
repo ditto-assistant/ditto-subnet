@@ -80,7 +80,8 @@ Test-supplied zero-argument callbacks remain in the trusted parent. Their closed
 instruction set permits bounded local integer increments followed by a data-only
 return, optionally returning a described Promise. Nested callbacks, candidate API
 calls inside callbacks, loops and arbitrary executable bodies are rejected. The
-candidate receives only a callback reference. Two separate pipes carry bounded,
+candidate receives only a callback reference. Repeated references resolve to the
+same child function within that test process. Two separate pipes carry bounded,
 correlated callback requests/replies; synchronous callbacks return synchronously,
 and declared async callbacks return native Promises in the child. No callback AST,
 assertion, test name or matcher enters the child.

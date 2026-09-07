@@ -46,6 +46,7 @@ const attacks = {
   'callback-sync': '',
   'callback-double': '',
   'callback-forgery': '',
+  'callback-identity': '',
 };
 assert.ok(Object.hasOwn(attacks, scenario));
 for (const directory of [
@@ -107,6 +108,9 @@ if (scenario.startsWith('callback-')) {
   }
   export function operation(fn:()=>number):number {${scenario === 'callback-forgery' ? `fs.writeSync(4,JSON.stringify({id:'f'.repeat(32),reference:64,args:['array',[]]})+'\\n');` : ''}return fn();}`;
 }
+if (scenario === 'callback-identity')
+  candidate =
+    'export function operation(first:()=>number,second:()=>number){return first===second;}';
 fs.writeFileSync('/workspace/' + moduleName, candidate, { mode: 0o444 });
 let suite = `import assert from 'node:assert/strict'; import { test } from 'node:test'; import {Counter, Mode} from './${moduleName}';
 test('add', async () => { const value: Counter = new Counter(3); assert.equal(value.add(Mode.Add), 5); assert.equal(await value.later(4), 9); });
@@ -150,6 +154,10 @@ if (scenario === 'callback-sync' || scenario === 'callback-forgery')
     let calls=0;assert.equal(operation(()=>{calls++;return 5;}),5);assert.equal(calls,1);
   });`;
 let suitePath = scenario === 'visible' ? 'visible.ts' : 'suite.ts';
+if (scenario === 'callback-identity')
+  suite =
+    compatPrefix +
+    `import {operation} from './demo.ts';test('identity',()=>{const fn=()=>5;assert.equal(operation(fn,fn),true);});`;
 if (scenario === 'relative-suite') {
   suite = suite.replace(`'./${moduleName}'`, `'../${moduleName}'`);
   suitePath = 'tests/suite.ts';
