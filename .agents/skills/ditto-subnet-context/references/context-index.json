@@ -610,6 +610,19 @@
       "related": ["coding-hosted-inputs", "infra-cloud", "release-delivery"]
     },
     {
+      "id": "coding-hosted-postgres",
+      "title": "Native Coding private PostgreSQL path",
+      "keywords": ["native private postgres path", "coding hosted postgres peering", "native database guest admission"],
+      "summary": "Prepare separately gated exact-host private PostgreSQL networking and guest admission without creating credentials or starting private execution.",
+      "skills": ["ditto-subnet-release-ops"],
+      "owns": ["infra/terraform/modules/coding-hosted-host/postgres.tf", "infra/ansible/roles/postgres/tasks/coding-hosted-access.yml", "infra/docs/coding-hosted-postgres-v2.md", "ditto/tests/test_coding_hosted_postgres.py"],
+      "read": ["infra/docs/coding-hosted-postgres-v2.md", "infra/docs/coding-hosted-host-v2.md", "infra/ansible/group_vars/role_platform_postgres.yml"],
+      "search": ["rg -n 'postgres_peer|enable_coding_hosted_postgres' infra/terraform", "rg -n 'coding_hosted_postgres' infra/ansible"],
+      "validate": ["terraform -chdir=infra/terraform/modules/coding-hosted-host test", "uv run pytest -q ditto/tests/test_coding_hosted_postgres.py ditto/tests/test_coding_hosted_infrastructure.py", "cd infra/ansible && uvx --from ansible-core==2.21.2 ansible-playbook --check -i tests/coding-hosted-postgres-inventory.yml tests/coding-hosted-postgres.yml"],
+      "invariants": ["Network and guest admission are separately default-off; neither creates a database credential or worker.", "Cloud rules admit only the exact Coding host to the exact PostgreSQL IP on TCP 5432; other private traffic remains denied.", "Guest admission is limited to the existing Platform production database principal and exact client /32.", "HBA reload does not terminate sessions and omitted UFW rules are not automatic revocation; rollback requires exact-resource reconciliation."],
+      "related": ["coding-hosted-host", "infra-cloud", "platform-api"]
+    },
+    {
       "id": "infra-cloud",
       "title": "GCP, Cloudflare, Terraform, Ansible, and secrets",
       "keywords": ["infra", "terraform", "ansible", "gcp", "gcloud", "cloudflare", "secret", "wif", "iam", "oauth", "domain", "vm", "Hippius token", "token age", "token expiry", "rotate Hippius", "renew Hippius"],

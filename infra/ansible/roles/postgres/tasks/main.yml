@@ -2,6 +2,9 @@
 # Idempotent Postgres setup. Ported from
 # backend/scripts/dittobox/setup-postgres.sh.
 
+- name: Validate optional native Coding admission for direct role callers too
+  ansible.builtin.import_tasks: coding-hosted-access.yml
+
 - name: Install psycopg2 (for community.postgresql modules)
   ansible.builtin.apt:
     name: python3-psycopg2
@@ -68,7 +71,7 @@
       {% for h in postgres_hba_hosts | default([]) %}
       host    {{ h.database | default('all') }}    {{ h.user | default(postgres_app_user) }}    {{ h.address }}    {{ h.method | default('scram-sha-256') }}
       {% endfor %}
-  notify: restart postgresql
+  notify: reload postgresql
 
 - name: Ensure secrets file directory
   ansible.builtin.file:

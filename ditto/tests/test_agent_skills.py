@@ -106,6 +106,12 @@ def test_native_relay_routes_to_both_runtime_owners() -> None:
     assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
 
 
+def test_native_database_path_routes_to_private_infrastructure():
+    topic = lookup("native private postgres path")[0]
+    assert topic["id"] == "coding-hosted-postgres"
+    assert topic_list(topic, "skills") == ["ditto-subnet-release-ops"]
+
+
 def test_runtime_budget_routes_to_its_profile_owner() -> None:
     topic = lookup("hosted runtime budget profile")[0]
     assert topic["id"] == "coding-hosted-budget"

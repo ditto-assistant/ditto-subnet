@@ -8,6 +8,11 @@ output "network_name" {
   value       = google_compute_network.this.name
 }
 
+output "network_self_link" {
+  description = "Canonical VPC self-link for explicitly reviewed peering."
+  value       = google_compute_network.this.self_link
+}
+
 output "subnetwork_id" {
   description = "Self-link of the subnet. Pass to compute/gcp (var.subnetwork) and cloudrun (egress subnet)."
   value       = google_compute_subnetwork.this.id

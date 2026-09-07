@@ -30,9 +30,19 @@ base_install_uv: false
 # the OS Login user Ansible itself connects as, mid-converge).
 base_ssh_set_allow_users: false
 
-# UFW default-denies; allow the app VMs to reach Postgres on the private subnet.
-base_ufw_extra_rules:
-  - { port: "5432", src: "10.30.0.0/24", comment: "Postgres from platform subnet" }
+# Separate reviewed guest admission after the native host's private route and
+# candidate network boundary are qualified. The exact IP comes from Terraform's
+# coding_hosted_postgres_access output; never admit the whole Coding subnet.
+coding_hosted_postgres_enabled: false
+coding_hosted_postgres_client_ip: ""
+
+# UFW is additive: disabling this flag is not an automatic rule deletion. Follow
+# the exact-rule rollback procedure; neither this flag nor peering grants keys.
+base_ufw_extra_rules: >-
+  {{ [{'port': '5432', 'src': '10.30.0.0/24', 'comment': 'Postgres from platform subnet'}]
+     + ([{'port': '5432', 'src': coding_hosted_postgres_client_ip + '/32',
+          'comment': 'Postgres from exact native Coding host'}]
+        if coding_hosted_postgres_enabled | bool else []) }}
 
 # Postgres app-role password — MUST equal TF_VAR_db_password used by
 # infra/terraform/stacks/gcp-platform (which stores it in the platform-db-password secret the app
@@ -52,8 +62,11 @@ postgres_databases:
 
 # Allow the platform subnet so the app VMs reach Postgres on :5432 (asyncpg —
 # the platform has no PgBouncer). Subnet-only via the network module's firewall.
-postgres_hba_hosts:
-  - { database: all, user: ditto, address: 10.30.0.0/24, method: scram-sha-256 }
+postgres_hba_hosts: >-
+  {{ [{'database': 'all', 'user': 'ditto', 'address': '10.30.0.0/24', 'method': 'scram-sha-256'}]
+     + ([{'database': 'ditto_platform_prod', 'user': 'ditto',
+          'address': coding_hosted_postgres_client_ip + '/32', 'method': 'scram-sha-256'}]
+        if coding_hosted_postgres_enabled | bool else []) }}
 
 # Tuning for db-staging (e2-standard-2, 2 vCPU / 8 GB). Replaces the role default
 # wholesale (Ansible does not deep-merge dicts). The platform's working set is
