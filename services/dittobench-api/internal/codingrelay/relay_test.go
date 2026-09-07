@@ -379,6 +379,13 @@ func TestRevokeWaitsForFlightAndClosesAdmission(t *testing.T) {
 	fixture := newRelayFixture(t)
 	started := make(chan struct{})
 	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
 	upstream := upstreamFunc(func(_ context.Context, request UpstreamRequest) (UpstreamResult, error) {
 		close(started)
 		<-release
@@ -396,6 +403,26 @@ func TestRevokeWaitsForFlightAndClosesAdmission(t *testing.T) {
 	<-started
 	revokeErr := make(chan error, 1)
 	go func() { revokeErr <- relay.Revoke(t.Context()) }()
+	// Starting a goroutine does not establish that Revoke has closed admission.
+	// Observe that transition under the same mutex before asserting its effect.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		relay.mu.Lock()
+		revoked := relay.revoked
+		relay.mu.Unlock()
+		if revoked {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("revoke did not close admission")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case err := <-revokeErr:
+		t.Fatalf("revoke returned before the active request completed: %v", err)
+	default:
+	}
 	if _, err := relay.Complete(t.Context(), fixture.requests[1]); !errors.Is(err, ErrCapabilityRevoked) {
 		t.Fatalf("revoking relay admitted request: %v", err)
 	}
