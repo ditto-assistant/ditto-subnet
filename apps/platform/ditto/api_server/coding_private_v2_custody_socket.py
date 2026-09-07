@@ -139,9 +139,10 @@ class PrivateV2CustodyServer:
         if server is not None:
             await server.wait_closed()
         if self._inode is not None:
+            owned_inode, self._inode = self._inode, None
             try:
                 info = self._path.lstat()
-                if (info.st_dev, info.st_ino) == self._inode and stat.S_ISSOCK(
+                if (info.st_dev, info.st_ino) == owned_inode and stat.S_ISSOCK(
                     info.st_mode
                 ):
                     self._path.unlink()

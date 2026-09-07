@@ -284,6 +284,8 @@ async def test_socket_rejects_real_unauthorized_peer_before_parsing(custody, tmp
     finally:
         await server.close()
     assert not (root / "custody.sock").exists()
+    assert server._inode is None
+    await server.close()
 
 
 async def test_real_unix_transport_with_simulated_distinct_credentials(
