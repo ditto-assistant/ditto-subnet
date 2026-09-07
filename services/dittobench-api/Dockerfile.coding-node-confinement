@@ -1,0 +1,16 @@
+# Public development qualification fixture; NOT an approved executor runtime.
+FROM node:24.20.0-bookworm@sha256:be23f54a88d34e8824c741b19b91064094f92c1c97b194144bfc8b50d67258e2 AS build
+COPY services/dittobench-api/coding_runtime/node/confinement.c /src/confinement.c
+RUN cc -shared -fPIC -O2 -Wall -Wextra -Werror -I/usr/local/include/node \
+    /src/confinement.c -o /confinement.node
+WORKDIR /opt/coding-node
+COPY services/dittobench-api/coding_runtime/node/package.json services/dittobench-api/coding_runtime/node/package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+
+FROM node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
+LABEL io.heyditto.dittobench.coding-supervisor-fixture="true"
+COPY --from=build --chmod=0555 /confinement.node /opt/coding-node/confinement.node
+COPY --from=build /opt/coding-node/node_modules /opt/coding-node/node_modules
+COPY --chmod=0444 services/dittobench-api/coding_runtime/node/confinement-probe.cjs /opt/coding-node/probe.cjs
+COPY --chmod=0444 services/dittobench-api/coding_runtime/node/child.cjs services/dittobench-api/coding_runtime/node/wire.cjs services/dittobench-api/coding_runtime/node/bridge-probe.cjs /opt/coding-node/
+ENTRYPOINT ["/usr/local/bin/node", "/opt/coding-node/probe.cjs"]
