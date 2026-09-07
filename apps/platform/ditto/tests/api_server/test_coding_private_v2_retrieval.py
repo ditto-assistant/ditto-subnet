@@ -9,7 +9,8 @@ from typing import Any, Literal
 from uuid import UUID
 
 import pytest
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -33,6 +34,11 @@ from ditto.api_server.coding_private_v2_retrieval import (
     PrivateV2RetrievalError,
     PrivateV2UnwrapRequest,
     PrivateV2UnwrapResult,
+)
+from ditto.coding_selection import (
+    coding_catalog_empty_leaf_hash,
+    coding_catalog_leaf_hash,
+    coding_catalog_node_hash,
 )
 
 NOW = 1788590000
@@ -102,15 +108,43 @@ def _fixture(
     *,
     phase: Literal["authoring", "grading"] = "authoring",
     tamper: Literal["payload", "signature", "curator"] | None = None,
+    wrapping_key: rsa.RSAPrivateKey | None = None,
 ) -> tuple[PrivateV2InputRetriever, Grants, Reader, Unwrapper]:
     tmp_path.chmod(0o700)
     digest = hashlib.sha256(PLAIN).hexdigest()
+    leaves = [
+        coding_catalog_leaf_hash(catalog_index=i, task_commitment_sha256="3" * 64)
+        for i in range(250)
+    ]
+    leaves.extend(
+        coding_catalog_empty_leaf_hash(catalog_index=i) for i in range(250, 256)
+    )
+    level = 0
+    while len(leaves) > 1:
+        leaves = [
+            coding_catalog_node_hash(
+                level=level, left_sha256=leaves[i], right_sha256=leaves[i + 1]
+            )
+            for i in range(0, len(leaves), 2)
+        ]
+        level += 1
+    merkle_root = leaves[0]
+    wrapping_sha = (
+        hashlib.sha256(
+            wrapping_key.public_key().public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        ).hexdigest()
+        if wrapping_key
+        else "4" * 64
+    )
     payload = {
         "schema": "dittobench-coding-private-payload-v2",
         "coding_contract_version": 2,
         "weight_eligible": False,
         "catalog_sha256": "1" * 64,
-        "catalog_merkle_root": "2" * 64,
+        "catalog_merkle_root": merkle_root,
         "task_version_count": 250,
         "objects": [{"sha256": digest, "size_bytes": len(PLAIN)}],
         "task_assets": [
@@ -142,7 +176,7 @@ def _fixture(
             "catalog_sha256": "1" * 64,
             "plaintext_sha256": digest,
             "plaintext_size_bytes": len(PLAIN),
-            "wrapping_key_sha256": "4" * 64,
+            "wrapping_key_sha256": wrapping_sha,
         }
     )
     ciphertext = AESGCM(KEY).encrypt(b"n" * 12, PLAIN, aad)
@@ -152,8 +186,8 @@ def _fixture(
         "weight_eligible": False,
         "payload_sha256": payload["payload_sha256"],
         "catalog_sha256": "1" * 64,
-        "catalog_merkle_root": "2" * 64,
-        "wrapping_key_sha256": "4" * 64,
+        "catalog_merkle_root": merkle_root,
+        "wrapping_key_sha256": wrapping_sha,
         "objects": [
             {
                 "plaintext_sha256": digest,
@@ -162,7 +196,18 @@ def _fixture(
                 "ciphertext_sha256": hashlib.sha256(ciphertext).hexdigest(),
                 "ciphertext_size_bytes": len(ciphertext),
                 "nonce_b64": base64.b64encode(b"n" * 12).decode(),
-                "wrapped_data_key_b64": base64.b64encode(b"w" * 384).decode(),
+                "wrapped_data_key_b64": base64.b64encode(
+                    wrapping_key.public_key().encrypt(
+                        KEY,
+                        padding.OAEP(
+                            mgf=padding.MGF1(hashes.SHA256()),
+                            algorithm=hashes.SHA256(),
+                            label=hashlib.sha256(aad).digest(),
+                        ),
+                    )
+                    if wrapping_key
+                    else b"w" * 384
+                ).decode(),
                 "aad_sha256": hashlib.sha256(aad).hexdigest(),
             }
         ],
@@ -202,8 +247,8 @@ def _fixture(
         transport_sha256=str(manifest["transport_sha256"]),
         payload_sha256=str(payload["payload_sha256"]),
         catalog_sha256="1" * 64,
-        catalog_merkle_root="2" * 64,
-        wrapping_key_sha256="4" * 64,
+        catalog_merkle_root=merkle_root,
+        wrapping_key_sha256=wrapping_sha,
         curator_signing_key_sha256=signer_sha,
         curator_signature_b64=base64.b64encode(signature).decode(),
         object_count=1,
@@ -231,10 +276,10 @@ def _fixture(
         "corpus_release_id": "synthetic-release",
         "private_release_sha256": "7" * 64,
         "catalog_sha256": "1" * 64,
-        "catalog_merkle_root": "2" * 64,
+        "catalog_merkle_root": merkle_root,
         "payload_sha256": payload["payload_sha256"],
         "transport_sha256": manifest["transport_sha256"],
-        "wrapping_key_sha256": "4" * 64,
+        "wrapping_key_sha256": wrapping_sha,
         "publication_receipt_sha256": receipt_sha,
         "previous_registration_sha256": None,
     }

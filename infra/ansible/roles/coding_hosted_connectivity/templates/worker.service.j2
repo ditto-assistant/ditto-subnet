@@ -1,0 +1,31 @@
+[Unit]
+Description=One approved private shadow Coding attempt
+Requires=ditto-coding-hosted-egress.service user@{{ coding_hosted_uid }}.service
+After=ditto-coding-hosted-egress.service user@{{ coding_hosted_uid }}.service
+BindsTo=ditto-coding-hosted-egress.service user@{{ coding_hosted_uid }}.service
+
+[Service]
+Type=exec
+User=ditto-coding-hosted
+Group=ditto-coding-hosted
+Slice=system.slice
+Delegate=no
+UMask=0077
+WorkingDirectory=/var/lib/ditto-coding-hosted
+ExecStartPre=+/usr/bin/python3 -I /usr/local/lib/ditto-coding-hosted/connectivity-policy.py install
+ExecStart=/usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 {{ coding_hosted_worker_python }} -I -m ditto.coding_hosted_worker --private-shadow-once --config {{ coding_hosted_worker_config }}
+ExecStopPost=+/usr/bin/python3 -I /usr/local/lib/ditto-coding-hosted/connectivity-policy.py revoke
+Restart=no
+KillMode=control-group
+TimeoutStartSec=60
+TimeoutStopSec=35min
+NoNewPrivileges=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectHome=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
+StandardOutput=null
+StandardError=null
+# No Install section: operator start only, never boot or automatic restart.

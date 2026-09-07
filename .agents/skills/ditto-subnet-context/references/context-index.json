@@ -361,6 +361,19 @@
       "related": ["coding-attempt-supervisor", "coding-inference-grants", "coding-repair-research", "platform-api", "dittobench-scoring"]
     },
     {
+      "id": "coding-hosted-runtime-install",
+      "title": "Pinned native Platform runtime bundle and offline installation",
+      "keywords": ["native runtime bundle", "coding hosted runtime installation", "sealed installed worker"],
+      "summary": "Build public Platform and native Go software from one tracked commit and install a closed hash-verified bundle without activating a worker.",
+      "skills": ["ditto-subnet-release-ops", "ditto-subnet-platform"],
+      "owns": ["infra/containers/coding-hosted-runtime.Dockerfile", "infra/scripts/build-coding-hosted-runtime.py", "infra/ansible/roles/coding_hosted_runtime", "apps/platform/ditto/api_server/coding_hosted_installed_worker.py", "infra/docs/coding-hosted-runtime-install-v2.md"],
+      "read": ["infra/docs/coding-hosted-runtime-install-v2.md", "apps/platform/docs/coding-hosted-platform-runtime-v2.md"],
+      "search": ["rg -n 'require_installed_worker|runtime-bundle|coding_hosted_runtime_enabled' apps/platform/ditto infra"],
+      "validate": ["uv run pytest -q ditto/tests/test_coding_hosted_runtime_bundle.py", "cd apps/platform && uv run pytest -q ditto/tests/api_server/test_coding_hosted_installed_worker.py ditto/tests/api_server/test_coding_hosted_runtime_io.py"],
+      "invariants": ["Build context is one exact tracked Git archive, not untracked files or private material.", "Installation is offline, default-off, root-owned and no-overwrite; it never starts a worker or resolves dependencies on the host.", "The installed-worker exception requires the exact sealed layout, receipt and binary digest; arbitrary root executables remain refused.", "Software installation and import smoke tests do not prove executor image qualification, custody, private execution or canary readiness."],
+      "related": ["coding-hosted-host", "coding-hosted-inputs", "release-delivery"]
+    },
+    {
       "id": "coding-hosted-relay",
       "title": "Native hosted source relay and private provider bridge",
       "keywords": ["native hosted source relay", "hosted relay bridge", "native inference socket"],
@@ -374,6 +387,19 @@
       "related": ["coding-hosted-inference", "coding-hosted-inputs", "platform-api"]
     },
     {
+      "id": "coding-evidence-recovery",
+      "title": "Native reserved ciphertext publication recovery",
+      "keywords": ["native evidence recovery", "reserved ciphertext recovery", "resume reserved evidence", "terminal publication recovery"],
+      "summary": "Recover one existing native evidence reservation from a locked read-only ciphertext spool without execution replay or key loading.",
+      "skills": ["ditto-subnet-platform"],
+      "owns": ["apps/platform/ditto/coding_evidence_recovery.py", "apps/platform/ditto/api_server/coding_evidence_recovery.py", "apps/platform/docs/coding-evidence-recovery-v2.md"],
+      "read": ["apps/platform/docs/coding-evidence-recovery-v2.md", "apps/platform/docs/coding-hosted-platform-runtime-v2.md"],
+      "search": ["rg -n 'HostedEvidenceRecovery|RecoveryTarget|resume-reserved' apps/platform/ditto"],
+      "validate": ["cd apps/platform && uv run pytest -q ditto/tests/api_server/test_coding_evidence_recovery.py ditto/tests/api_server/test_coding_evidence_recovery_cli.py"],
+      "invariants": ["Recovery requires an existing exact reservation and complete local ciphertext; it never creates a fresh attempt or reruns grading or inference.", "Unrelated partial spool entries remain untouched and no key-unwrapping authority is loaded.", "Fresh matching Hippius authority, immutable publication deadlines and verified readback precede append-only finalization.", "No production worker, private canary or scoring activation is enabled."],
+      "related": ["coding-hosted-inputs", "coding-hosted-inference", "platform-api"]
+    },
+    {
       "id": "coding-hosted-budget",
       "title": "Native runtime budget and provider profile",
       "keywords": ["hosted runtime budget profile", "provider billed input cap", "native budget estimator"],
@@ -385,6 +411,19 @@
       "validate": ["cd apps/platform && uv run pytest -q ditto/tests/api_server/test_coding_hosted_budget.py ditto/tests/api_server/test_coding_hosted_provider.py"],
       "invariants": ["The approved native policy commits the exact profile digest.", "No guessed tokenizer, live pricing defaults or automatic profile refresh.", "Profile expiry never releases unverified budget or activates scoring."],
       "related": ["coding-hosted-inference", "coding-hosted-relay", "platform-api"]
+    },
+    {
+      "id": "coding-native-custody",
+      "title": "Native-v2 private key custody and Unix proxy",
+      "keywords": ["native v2 custody", "native custody", "private key custody service", "custody Unix proxy"],
+      "summary": "Authenticate the private worker UID and recheck signed metadata plus live phase grants before releasing a data key.",
+      "skills": ["ditto-subnet-platform"],
+      "owns": ["apps/platform/ditto/api_server/coding_private_v2_custody.py", "apps/platform/ditto/api_server/coding_private_v2_custody_socket.py", "apps/platform/ditto/coding_private_v2_custody.py", "apps/platform/docs/coding-private-v2-custody.md", "apps/platform/ditto/tests/api_server/test_coding_private_v2_custody.py"],
+      "read": ["apps/platform/docs/coding-private-v2-custody.md", "apps/platform/docs/coding-hosted-private-grants.md", "apps/platform/ditto/api_server/coding_private_v2_retrieval.py"],
+      "search": ["rg -n 'active_grant|unwrap_request|peer_uid|close' apps/platform/ditto/api_server/coding_private_v2_custody*.py"],
+      "validate": ["cd apps/platform && uv run pytest -n 2 -q ditto/tests/api_server/test_coding_private_v2_custody.py ditto/tests/api_server/test_coding_private_v2_retrieval.py ditto/tests/api_server/test_coding_hosted_private_grants.py", "cd apps/platform && make lint lint-copy typecheck test"],
+      "invariants": ["Key access follows exact signed-object and current grant validation; revocation is rechecked before key release.", "Worker and custody UIDs differ; validators never receive key or object capabilities.", "No custody service or private execution starts by default."],
+      "related": ["coding-hosted-inputs", "platform-api"]
     },
     {
       "id": "coding-hosted-inference",
@@ -411,6 +450,19 @@
       "validate": ["uv run pytest -q ditto/tests/test_coding_compiled_bootstrap.py", "docker build -f services/dittobench-api/Dockerfile.coding-compiled-bootstrap -t coding-compiled-bootstrap:synthetic .", "bash scripts/test-coding-compiled-bootstrap.sh coding-compiled-bootstrap:synthetic"],
       "invariants": ["No candidate instruction runs before the filter is installed.", "Only the initial trusted bootstrap notification may continue; no untrusted syscall decision or emulation occurs.", "The fixture image is not an approved grading profile, native host qualification or live private canary."],
       "related": ["coding-hosted-inputs", "coding-hosted-host"]
+    },
+    {
+      "id": "coding-hosted-signer",
+      "title": "Native-v2 Platform control signer startup",
+      "keywords": ["hosted control signer", "hosted signer startup", "native v2 public signing"],
+      "summary": "Load a protected Platform-only signer through API startup without enabling private execution or scoring.",
+      "skills": ["ditto-subnet-platform"],
+      "owns": ["apps/platform/ditto/api_server/coding_hosted_signer.py", "apps/platform/ditto/api_server/coding_hosted_signer_config.py", "apps/platform/ditto/tests/api_server/test_coding_hosted_signer.py", "apps/platform/docs/coding-hosted-control-startup-v2.md"],
+      "read": ["apps/platform/docs/coding-hosted-control-startup-v2.md", "apps/platform/ditto/api_server/endpoints/validator_coding_hosted.py", "apps/platform/ditto/api_server/coding_hosted_results.py"],
+      "search": ["rg -n 'coding_hosted_signer|coding_hosted_control' apps/platform/ditto/api_server/config.py apps/platform/ditto/api_server/factory.py"],
+      "validate": ["cd apps/platform && uv run pytest -q ditto/tests/api_server/test_coding_hosted_signer.py ditto/tests/api_server/endpoints/test_validator_coding_hosted.py", "cd apps/platform && make lint lint-copy typecheck test"],
+      "invariants": ["Disabled and relay paths never read the private seed.", "Only canonical Platform status/result envelopes are signed; no request, private-data or weight authority is added.", "Startup failure and shutdown close the signer; deployed key approval remains separate."],
+      "related": ["coding-hosted-inputs", "platform-api"]
     },
     {
       "id": "coding-hosted-inputs",
@@ -610,6 +662,19 @@
       "related": ["infra-cloud", "screener-capacity", "backroom", "platform-host-disk"]
     },
     {
+      "id": "coding-hosted-connectivity",
+      "title": "Native trusted worker cgroup connectivity",
+      "keywords": ["native trusted connectivity", "hosted worker cgroup network", "native worker network profile"],
+      "summary": "Install an operator-started worker unit with expiring cgroup-bound network authority while preserving private same-UID Docker socket access.",
+      "skills": ["ditto-subnet-release-ops"],
+      "owns": ["infra/ansible/roles/coding_hosted_connectivity", "infra/ansible/playbooks/gcp-coding-hosted-connectivity.yml", "infra/docs/coding-hosted-connectivity-v2.md", "ditto/tests/test_coding_hosted_connectivity.py"],
+      "read": ["infra/docs/coding-hosted-connectivity-v2.md", "infra/docs/coding-hosted-daemon-v2.md", "apps/platform/docs/coding-hosted-platform-runtime-v2.md"],
+      "search": ["rg -n 'socket cgroupv2|ExecStopPost|connectivity_enabled' infra/ansible/roles/coding_hosted_connectivity"],
+      "validate": ["uv run pytest -q ditto/tests/test_coding_hosted_connectivity.py ditto/tests/test_coding_hosted_daemon.py", "cd infra/ansible && uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml playbooks/gcp-coding-hosted-connectivity.yml"],
+      "invariants": ["Installation is default-off and never starts or enables the worker.", "Trusted worker destinations and candidate router authority require distinct socket cgroups and a kernel-bounded expiry.", "Failed startup and stop restore the dedicated UID deny policy; no global ruleset flush or state deletion.", "Configuration and synthetic tests do not prove live packet enforcement, custody, private runtime qualification or canary readiness."],
+      "related": ["coding-hosted-host", "coding-hosted-inputs", "infra-cloud"]
+    },
+    {
       "id": "coding-hosted-host",
       "title": "Platform-owned native-v2 qualification host",
       "keywords": ["native v2 host", "coding hosted host", "coding package bootstrap", "host qualification", "Platform-owned host", "coding-hosted-host"],
@@ -621,6 +686,19 @@
       "validate": ["terraform -chdir=infra/terraform/modules/coding-hosted-host test", "terraform -chdir=infra/terraform/stacks/gcp-platform validate", "uv run pytest -q ditto/tests/test_coding_hosted_infrastructure.py ditto/tests/test_coding_executor_infrastructure.py ditto/tests/test_agent_skills.py"],
       "invariants": ["Native-v2 host and custodian grants are absent by default; no validator operator inheritance.", "Host provisioning is not rootless daemon qualification, private-data authority, canary proof or scoring activation."],
       "related": ["coding-hosted-inputs", "infra-cloud", "release-delivery"]
+    },
+    {
+      "id": "coding-hosted-postgres",
+      "title": "Native Coding private PostgreSQL path",
+      "keywords": ["native private postgres path", "coding hosted postgres peering", "native database guest admission"],
+      "summary": "Prepare separately gated exact-host private PostgreSQL networking and guest admission without creating credentials or starting private execution.",
+      "skills": ["ditto-subnet-release-ops"],
+      "owns": ["infra/terraform/modules/coding-hosted-host/postgres.tf", "infra/ansible/roles/postgres/tasks/coding-hosted-access.yml", "infra/docs/coding-hosted-postgres-v2.md", "ditto/tests/test_coding_hosted_postgres.py"],
+      "read": ["infra/docs/coding-hosted-postgres-v2.md", "infra/docs/coding-hosted-host-v2.md", "infra/ansible/group_vars/role_platform_postgres.yml"],
+      "search": ["rg -n 'postgres_peer|enable_coding_hosted_postgres' infra/terraform", "rg -n 'coding_hosted_postgres' infra/ansible"],
+      "validate": ["terraform -chdir=infra/terraform/modules/coding-hosted-host test", "uv run pytest -q ditto/tests/test_coding_hosted_postgres.py ditto/tests/test_coding_hosted_infrastructure.py", "cd infra/ansible && uvx --from ansible-core==2.21.2 ansible-playbook --check -i tests/coding-hosted-postgres-inventory.yml tests/coding-hosted-postgres.yml"],
+      "invariants": ["Network and guest admission are separately default-off; neither creates a database credential or worker.", "Cloud rules admit only the exact Coding host to the exact PostgreSQL IP on TCP 5432; other private traffic remains denied.", "Guest admission is limited to the existing Platform production database principal and exact client /32.", "HBA reload does not terminate sessions and omitted UFW rules are not automatic revocation; rollback requires exact-resource reconciliation."],
+      "related": ["coding-hosted-host", "infra-cloud", "platform-api"]
     },
     {
       "id": "infra-cloud",
