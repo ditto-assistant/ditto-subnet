@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import io
+import os
 import stat
 import tarfile
 from pathlib import Path
@@ -47,7 +48,11 @@ def bundle(tmp_path, monkeypatch):
     python.symlink_to(BUNDLE.PYTHON)
     archive = tmp_path / "runtime.tar"
     BUNDLE.pack(source, archive, REVISION)
-    return source, archive
+    yield source, archive
+    # Restore only our fixture directories for pytest cleanup. Never chmod a
+    # symlink target (the fixture includes the real system Python link).
+    for directory, _dirs, _files in os.walk(tmp_path, followlinks=False):
+        Path(directory).chmod(0o700)
 
 
 def inspect(archive):

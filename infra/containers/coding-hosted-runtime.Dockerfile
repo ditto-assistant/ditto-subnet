@@ -4,7 +4,7 @@ WORKDIR /src/services/dittobench-api
 COPY services/dittobench-api/ ./
 COPY research/dittobench-datagen/ /src/research/dittobench-datagen/
 RUN go mod download && go mod verify
-RUN CGO_ENABLED=0 GOTOOLCHAIN=local go build -mod=readonly -trimpath -buildvcs=false \
+RUN CGO_ENABLED=0 GOTOOLCHAIN=local go build -p 2 -mod=readonly -trimpath -buildvcs=false \
     -o /out/dittobench-coding-hosted-worker ./cmd/dittobench-coding-hosted-worker
 
 FROM ghcr.io/astral-sh/uv:0.11.28@sha256:0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa AS uv
@@ -32,23 +32,23 @@ FROM base AS smoke
 ARG SOURCE_REVISION
 RUN useradd --uid 10001 --create-home --home-dir /tmp/native-smoke --shell /usr/sbin/nologin native-smoke
 COPY --from=assemble /out/runtime.tar /out/runtime.tar
-RUN mkdir -m 0755 -p /opt/ditto-coding-hosted && \
+RUN --network=none mkdir -m 0755 -p /opt/ditto-coding-hosted && \
     /usr/bin/python3.13 -I /runtime-bundle.py install --revision "$SOURCE_REVISION" \
     --archive /out/runtime.tar --sha256 "$(sha256sum /out/runtime.tar | cut -d' ' -f1)" \
     --confirm 'INSTALL VERIFIED CODING RUNTIME'
-RUN /usr/bin/python3.13 -I /runtime-bundle.py verify --revision "$SOURCE_REVISION" \
+RUN --network=none /usr/bin/python3.13 -I /runtime-bundle.py verify --revision "$SOURCE_REVISION" \
     --archive /out/runtime.tar --sha256 "$(sha256sum /out/runtime.tar | cut -d' ' -f1)"
 # Import/run only harmless entrypoint help under an unprivileged identity.
 # No daemon, database, key service, provider, private config or worker is started.
-RUN setpriv --reuid=10001 --regid=10001 --clear-groups env -i PATH=/usr/bin:/bin \
+RUN --network=none setpriv --reuid=10001 --regid=10001 --clear-groups env -i PATH=/usr/bin:/bin \
     /opt/ditto-coding-hosted/${SOURCE_REVISION}/apps/platform/.venv/bin/python -I -B \
     -c 'import sys; from pathlib import Path; import ditto.api_server.coding_hosted_runtime; import ditto.api_server.coding_private_v2_unwrap; from ditto.api_server.coding_hosted_runtime_io import protected_helper; protected_helper(Path(sys.argv[1]))' \
     /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker
-RUN setpriv --reuid=10001 --regid=10001 --clear-groups env -i PATH=/usr/bin:/bin \
+RUN --network=none setpriv --reuid=10001 --regid=10001 --clear-groups env -i PATH=/usr/bin:/bin \
     /opt/ditto-coding-hosted/${SOURCE_REVISION}/apps/platform/.venv/bin/python -I -B \
     -c 'import subprocess,sys; p=subprocess.run([sys.argv[1]],capture_output=True); assert p.returncode == 2 and not p.stdout and p.stderr == b"requires --private-shadow-once --config <protected-file>\n"' \
     /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker
-RUN printf X >> /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker && \
+RUN --network=none printf X >> /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker && \
     if setpriv --reuid=10001 --regid=10001 --clear-groups env -i PATH=/usr/bin:/bin \
       /opt/ditto-coding-hosted/${SOURCE_REVISION}/apps/platform/.venv/bin/python -I -B \
       -c 'import sys; from pathlib import Path; from ditto.api_server.coding_hosted_runtime_io import protected_helper; protected_helper(Path(sys.argv[1]))' \
