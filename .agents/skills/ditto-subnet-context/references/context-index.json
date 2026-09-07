@@ -452,6 +452,19 @@
       "related": ["coding-hosted-inputs", "coding-hosted-host"]
     },
     {
+      "id": "coding-node-runtime",
+      "title": "Restricted Node and TypeScript private Coding oracle",
+      "keywords": ["coding node runtime", "coding typescript grader", "node call ast", "Node TypeScript driver"],
+      "summary": "Trusted assertion interpretation with a separate confined Node candidate process; runtime qualification and activation remain separate.",
+      "skills": ["ditto-subnet-benchmark", "ditto-subnet-release-ops"],
+      "owns": ["services/dittobench-api/coding_runtime/node", "services/dittobench-api/Dockerfile.coding-node", "services/dittobench-api/Dockerfile.coding-node-confinement", "scripts/test-coding-node-driver.sh", "scripts/test-coding-node-confinement.sh", "services/dittobench-api/docs/coding-node-driver-v2.md"],
+      "read": ["services/dittobench-api/docs/coding-node-driver-v2.md", "services/dittobench-api/docs/coding-python-driver-v2.md", "docs/coding-platform-private-execution-v2.md"],
+      "search": ["rg -n 'compileSuite|runSuite|SECCOMP_FILTER_FLAG_TSYNC' services/dittobench-api/coding_runtime/node"],
+      "validate": ["cd services/dittobench-api/coding_runtime/node && npm ci --ignore-scripts --no-audit --no-fund && node --test '*.test.cjs'", "docker build -f services/dittobench-api/Dockerfile.coding-node --target test -t coding-node:synthetic .", "bash scripts/test-coding-node-driver.sh coding-node:synthetic"],
+      "invariants": ["The trusted parent never imports candidate modules or executes test source.", "Only API targets and parameters enter the non-root candidate process; counts and assertions remain trusted.", "Synthetic driver tests do not qualify a private suite, native host or production release."],
+      "related": ["coding-hosted-inputs", "coding-hosted-host"]
+    },
+    {
       "id": "coding-hosted-signer",
       "title": "Native-v2 Platform control signer startup",
       "keywords": ["hosted control signer", "hosted signer startup", "native v2 public signing"],

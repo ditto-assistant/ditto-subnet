@@ -14,6 +14,8 @@ on:
       - scripts/sandbox-docker-entrypoint.sh
       - scripts/test-validator-embedding-gateway.sh
       - scripts/test-coding-python-driver.sh
+      - scripts/test-coding-node-driver.sh
+      - scripts/test-coding-node-confinement.sh
       - .github/workflows/dittobench.yml
 
 concurrency:
@@ -28,6 +30,40 @@ env:
   SERVICE_DIR: services/dittobench-api
 
 jobs:
+  node-coding-driver:
+    name: restricted Node TypeScript driver isolation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.20.0'
+      - name: Closed oracle, channel and value-protocol regressions
+        working-directory: services/dittobench-api/coding_runtime/node
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test '*.test.cjs'
+      - run: docker build -f services/dittobench-api/Dockerfile.coding-node-confinement -t coding-node-confinement:synthetic .
+      - run: bash scripts/test-coding-node-confinement.sh coding-node-confinement:synthetic
+      - run: docker build -f services/dittobench-api/Dockerfile.coding-node --target test -t coding-node:synthetic .
+      - run: bash scripts/test-coding-node-driver.sh coding-node:synthetic
+      - name: Build production target with the exact checked-out revision
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          docker build -f services/dittobench-api/Dockerfile.coding-node --target runtime --build-arg DITTOBENCH_SOURCE_SHA="$SOURCE_SHA" -t coding-node:runtime .
+          docker image inspect coding-node:runtime | jq -e --arg sha "$SOURCE_SHA" \
+            '.[0].Config.Labels["org.opencontainers.image.revision"] == $sha and .[0].Config.Labels["io.heyditto.dittobench.coding-test-driver-profile"] == "node-call-ast-v1" and .[0].Config.Env == ["PATH=/usr/local/bin:/usr/bin:/bin"]'
+      - name: Runtime contains no probes or credential-shaped environment
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --entrypoint /usr/local/bin/node coding-node:runtime -e \
+            'const fs=require("node:fs"),assert=require("node:assert/strict"); assert.equal(fs.existsSync("/opt/probe.cjs"),false); assert.equal(fs.readdirSync("/opt/coding-node").some(n=>/probe|test/.test(n)),false); assert.equal(Object.keys(process.env).some(n=>/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/.test(n)),false);'
+
   python-coding-driver:
     name: restricted Python driver isolation
     runs-on: ubuntu-24.04

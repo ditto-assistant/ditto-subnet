@@ -31,3 +31,5 @@ LABEL io.heyditto.dittobench.coding-supervisor-fixture="true"
 COPY --chmod=0400 services/dittobench-api/coding_runtime/python/probe.py /opt/probe.py
 
 FROM runtime-base AS runtime
+ARG DITTOBENCH_SOURCE_SHA=unknown
+LABEL org.opencontainers.image.revision="${DITTOBENCH_SOURCE_SHA}"

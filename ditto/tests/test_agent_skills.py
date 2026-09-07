@@ -70,6 +70,13 @@ def test_hosted_authoring_input_routes_to_both_consumers() -> None:
     assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
 
 
+def test_node_typescript_grader_routes_to_its_private_oracle() -> None:
+    topic = lookup("coding typescript grader")[0]
+    assert topic["id"] == "coding-node-runtime"
+    assert "services/dittobench-api/coding_runtime/node" in topic_list(topic, "owns")
+    assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
+
+
 def test_native_custody_routes_to_platform_only():
     topic = lookup("native v2 custody Unix proxy")[0]
     assert topic["id"] == "coding-native-custody"
