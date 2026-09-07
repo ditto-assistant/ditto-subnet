@@ -361,6 +361,19 @@
       "related": ["coding-attempt-supervisor", "coding-inference-grants", "coding-repair-research", "platform-api", "dittobench-scoring"]
     },
     {
+      "id": "coding-hosted-runtime-install",
+      "title": "Pinned native Platform runtime bundle and offline installation",
+      "keywords": ["native runtime bundle", "coding hosted runtime installation", "sealed installed worker"],
+      "summary": "Build public Platform and native Go software from one tracked commit and install a closed hash-verified bundle without activating a worker.",
+      "skills": ["ditto-subnet-release-ops", "ditto-subnet-platform"],
+      "owns": ["infra/containers/coding-hosted-runtime.Dockerfile", "infra/scripts/build-coding-hosted-runtime.py", "infra/ansible/roles/coding_hosted_runtime", "apps/platform/ditto/api_server/coding_hosted_installed_worker.py", "infra/docs/coding-hosted-runtime-install-v2.md"],
+      "read": ["infra/docs/coding-hosted-runtime-install-v2.md", "apps/platform/docs/coding-hosted-platform-runtime-v2.md"],
+      "search": ["rg -n 'require_installed_worker|runtime-bundle|coding_hosted_runtime_enabled' apps/platform/ditto infra"],
+      "validate": ["uv run pytest -q ditto/tests/test_coding_hosted_runtime_bundle.py", "cd apps/platform && uv run pytest -q ditto/tests/api_server/test_coding_hosted_installed_worker.py ditto/tests/api_server/test_coding_hosted_runtime_io.py"],
+      "invariants": ["Build context is one exact tracked Git archive, not untracked files or private material.", "Installation is offline, default-off, root-owned and no-overwrite; it never starts a worker or resolves dependencies on the host.", "The installed-worker exception requires the exact sealed layout, receipt and binary digest; arbitrary root executables remain refused.", "Software installation and import smoke tests do not prove executor image qualification, custody, private execution or canary readiness."],
+      "related": ["coding-hosted-host", "coding-hosted-inputs", "release-delivery"]
+    },
+    {
       "id": "coding-hosted-relay",
       "title": "Native hosted source relay and private provider bridge",
       "keywords": ["native hosted source relay", "hosted relay bridge", "native inference socket"],

@@ -112,6 +112,12 @@ def test_runtime_budget_routes_to_its_profile_owner() -> None:
     assert "ditto-subnet-platform" in topic_list(topic, "skills")
 
 
+def test_native_bundle_routes_to_build_and_installation():
+    topic = lookup("native runtime bundle")[0]
+    assert topic["id"] == "coding-hosted-runtime-install"
+    assert "ditto-subnet-release-ops" in topic_list(topic, "skills")
+
+
 def _tracked_skill_names(prefix: str) -> set[str]:
     completed = subprocess.run(
         ["git", "ls-files", "-z", "--", prefix],
