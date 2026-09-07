@@ -1,4 +1,4 @@
-# Trusted Go oracle (runtime integration in progress)
+# Trusted Go oracle (qualification in progress)
 
 This package parses and type-checks protected Go tests without compiling or
 executing them. Candidate source is type-checked only; its initializers do not
@@ -50,7 +50,9 @@ The process client launches sealed executables through the pre-exec bootstrap an
 uses a separate bounded, correlated API pipe. It binds argument values to Go
 parameter types before transport, including contextually typed nil arguments.
 
-This is not yet a selectable production Go grading runtime. Supervisor report
-packaging, complete adversarial transport coverage and unchanged private
-base/reference controls remain qualification gates. Structural/type admission
-alone is not runtime qualification, catalog approval or activation.
+The `codinggodriver` package connects the oracle to the existing trusted supervisor
+report ABI; see the [driver contract](../../docs/coding-go-driver-v2.md). This is
+not yet a selectable production Go grading runtime. Complete adversarial transport
+coverage, unchanged repeated private base/reference controls and native-host image
+approval remain qualification gates. Structural/type admission alone is not runtime
+qualification, catalog approval or activation.
