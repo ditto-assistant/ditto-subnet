@@ -1,0 +1,7 @@
+---
+- name: Install the dormant Platform native-v2 trusted connectivity profile
+  hosts: role_coding_hosted
+  become: true
+  gather_facts: true
+  roles:
+    - coding_hosted_connectivity

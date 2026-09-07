@@ -55,6 +55,12 @@ def test_context_index_paths_exist() -> None:
     )
 
 
+def test_native_worker_network_routes_to_scoped_connectivity():
+    topic = lookup("native trusted connectivity")[0]
+    assert topic["id"] == "coding-hosted-connectivity"
+    assert topic_list(topic, "skills") == ["ditto-subnet-release-ops"]
+
+
 def test_hosted_authoring_input_routes_to_both_consumers() -> None:
     topic = lookup("hosted authoring input assembler")[0]
     assert topic["id"] == "coding-hosted-inputs"

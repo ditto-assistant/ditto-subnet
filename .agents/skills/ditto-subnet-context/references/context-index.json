@@ -597,6 +597,19 @@
       "related": ["infra-cloud", "screener-capacity", "backroom", "platform-host-disk"]
     },
     {
+      "id": "coding-hosted-connectivity",
+      "title": "Native trusted worker cgroup connectivity",
+      "keywords": ["native trusted connectivity", "hosted worker cgroup network", "native worker network profile"],
+      "summary": "Install an operator-started worker unit with expiring cgroup-bound network authority while preserving private same-UID Docker socket access.",
+      "skills": ["ditto-subnet-release-ops"],
+      "owns": ["infra/ansible/roles/coding_hosted_connectivity", "infra/ansible/playbooks/gcp-coding-hosted-connectivity.yml", "infra/docs/coding-hosted-connectivity-v2.md", "ditto/tests/test_coding_hosted_connectivity.py"],
+      "read": ["infra/docs/coding-hosted-connectivity-v2.md", "infra/docs/coding-hosted-daemon-v2.md", "apps/platform/docs/coding-hosted-platform-runtime-v2.md"],
+      "search": ["rg -n 'socket cgroupv2|ExecStopPost|connectivity_enabled' infra/ansible/roles/coding_hosted_connectivity"],
+      "validate": ["uv run pytest -q ditto/tests/test_coding_hosted_connectivity.py ditto/tests/test_coding_hosted_daemon.py", "cd infra/ansible && uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml playbooks/gcp-coding-hosted-connectivity.yml"],
+      "invariants": ["Installation is default-off and never starts or enables the worker.", "Trusted worker destinations and candidate router authority require distinct socket cgroups and a kernel-bounded expiry.", "Failed startup and stop restore the dedicated UID deny policy; no global ruleset flush or state deletion.", "Configuration and synthetic tests do not prove live packet enforcement, custody, private runtime qualification or canary readiness."],
+      "related": ["coding-hosted-host", "coding-hosted-inputs", "infra-cloud"]
+    },
+    {
       "id": "coding-hosted-host",
       "title": "Platform-owned native-v2 qualification host",
       "keywords": ["native v2 host", "coding hosted host", "coding package bootstrap", "host qualification", "Platform-owned host", "coding-hosted-host"],
