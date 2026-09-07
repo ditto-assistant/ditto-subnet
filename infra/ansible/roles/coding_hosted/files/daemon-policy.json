@@ -1,4 +1,5 @@
 {
+  "features": {"containerd-snapshotter": true},
   "labels": ["io.heyditto.dittobench.isolated=true"],
   "log-driver": "none",
   "ipv6": false,

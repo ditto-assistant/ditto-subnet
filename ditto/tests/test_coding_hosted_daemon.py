@@ -29,6 +29,7 @@ def good_info():
         "Labels": ["io.heyditto.dittobench.isolated=true"],
         "CgroupDriver": "systemd",
         "CgroupVersion": "2",
+        "DriverStatus": [["driver-type", "io.containerd.snapshotter.v1"]],
         "Containers": 0,
         "Images": 0,
         "MemoryLimit": True,
@@ -120,6 +121,7 @@ def test_identity_rejects_numeric_alias_mapping(monkeypatch):
         ("Labels", "io.heyditto.dittobench.isolated=true"),
         ("CgroupDriver", "none"),
         ("CgroupVersion", "1"),
+        ("DriverStatus", []),
         ("Containers", 1),
         ("Images", 1),
         ("Containers", False),
@@ -315,6 +317,7 @@ def test_service_has_private_socket_clean_environment_and_fail_closed_lifecycle(
     policy = json.loads((ROLE / "files/daemon-policy.json").read_text())
     assert policy["log-driver"] == "none" and policy["no-new-privileges"] is True
     assert policy["live-restore"] is False
+    assert policy["features"] == {"containerd-snapshotter": True}
 
 
 def test_bootstrap_is_separately_gated_after_fresh_host_checks():

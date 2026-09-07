@@ -1,0 +1,7 @@
+---
+coding_hosted_image_import_enabled: false
+# Public software files on the controller, never private inputs or credentials.
+coding_hosted_image_archive: ""
+coding_hosted_image_approval: ""
+# Independently reviewed approval-file SHA-256; do not derive during apply.
+coding_hosted_image_approval_sha256: ""

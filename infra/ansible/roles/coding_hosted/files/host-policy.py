@@ -130,6 +130,9 @@ def validate_info(info):
     require(isinstance(info.get("Labels"), list))
     require("io.heyditto.dittobench.isolated=true" in info["Labels"])
     require(info.get("CgroupDriver") == "systemd" and info.get("CgroupVersion") == "2")
+    require(
+        ["driver-type", "io.containerd.snapshotter.v1"] in info.get("DriverStatus", [])
+    )
     for field in ("Containers", "Images"):
         require(type(info.get(field)) is int and info[field] == 0)
     for field in ("MemoryLimit", "SwapLimit", "CpuCfsQuota", "PidsLimit"):

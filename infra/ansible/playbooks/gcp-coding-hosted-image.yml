@@ -1,0 +1,7 @@
+---
+- name: Import an approved public image on the existing native-v2 host
+  hosts: role_coding_hosted
+  become: true
+  gather_facts: true
+  roles:
+    - coding_hosted_image

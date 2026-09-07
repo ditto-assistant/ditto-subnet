@@ -1,0 +1,99 @@
+---
+- name: Explain dormant native-v2 image importer
+  ansible.builtin.debug:
+    msg: Native-v2 image import is disabled; no files or daemon state are changed.
+  when: not (coding_hosted_image_import_enabled | bool)
+
+- name: Import one explicitly approved public native-v2 image
+  when: coding_hosted_image_import_enabled | bool
+  block:
+    - name: Require the native host and independent artifact approval
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in groups.get('role_coding_hosted', [])
+          - ansible_facts['hostname'] == 'ditto-coding-hosted-v2'
+          - ansible_facts['distribution'] == 'Debian'
+          - ansible_facts['architecture'] == 'x86_64'
+          - coding_hosted_image_approval_sha256 is match('^[0-9a-f]{64}$')
+          - coding_hosted_image_archive is match('^/')
+          - coding_hosted_image_approval is match('^/')
+
+    - name: Inspect the immutable staging parent without following links
+      ansible.builtin.stat:
+        path: /opt/ditto-coding-hosted-images
+        follow: false
+      register: coding_hosted_image_parent
+
+    - name: Refuse an unprotected staging parent
+      ansible.builtin.assert:
+        that:
+          - >-
+            not coding_hosted_image_parent.stat.exists or
+            (coding_hosted_image_parent.stat.isdir | default(false) and
+             coding_hosted_image_parent.stat.uid == 0 and
+             coding_hosted_image_parent.stat.mode == '0755')
+
+    - name: Inspect the exact approval destination without replacing it
+      ansible.builtin.stat:
+        path: "/opt/ditto-coding-hosted-images/{{ coding_hosted_image_approval_sha256 }}"
+        follow: false
+      register: coding_hosted_image_existing
+
+    - name: Refuse retained staging or previous import state
+      ansible.builtin.assert:
+        that:
+          - not coding_hosted_image_existing.stat.exists
+        fail_msg: First import only; retained or partial state needs separate operator review.
+
+    - name: Create root-owned public artifact directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - /opt/ditto-coding-hosted-images
+        - "/opt/ditto-coding-hosted-images/{{ coding_hosted_image_approval_sha256 }}"
+
+    - name: Stage public software and approval without overwriting retained files
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "/opt/ditto-coding-hosted-images/{{ coding_hosted_image_approval_sha256 }}/{{ item.name }}"
+        owner: root
+        group: root
+        mode: "0444"
+        force: false
+      loop:
+        - {src: "{{ coding_hosted_image_archive }}", name: image.oci.tar}
+        - {src: "{{ coding_hosted_image_approval }}", name: approval.json}
+        - {src: image-bundle.py, name: image-bundle.py}
+
+    - name: Verify and import through only the dedicated native daemon identity
+      ansible.builtin.command:
+        argv:
+          - runuser
+          - -u
+          - ditto-coding-hosted
+          - --
+          - /usr/bin/python3
+          - -I
+          - "/opt/ditto-coding-hosted-images/{{ coding_hosted_image_approval_sha256 }}/image-bundle.py"
+          - import
+          - --archive
+          - "/opt/ditto-coding-hosted-images/{{ coding_hosted_image_approval_sha256 }}/image.oci.tar"
+          - --approval
+          - "/opt/ditto-coding-hosted-images/{{ coding_hosted_image_approval_sha256 }}/approval.json"
+          - --approval-sha256
+          - "{{ coding_hosted_image_approval_sha256 }}"
+      register: coding_hosted_image_result
+      changed_when: true
+
+    - name: Retain a private receipt only after complete post-import verification
+      ansible.builtin.copy:
+        content: "{{ coding_hosted_image_result.stdout }}\n"
+        dest: "/opt/ditto-coding-hosted-images/{{ coding_hosted_image_approval_sha256 }}/import-receipt.json"
+        owner: root
+        group: root
+        mode: "0600"
+        force: false
