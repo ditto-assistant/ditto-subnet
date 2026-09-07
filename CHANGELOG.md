@@ -2,6 +2,51 @@
 
 <!-- version list -->
 
+## v0.237.0 (2026-09-07)
+
+### Features
+
+- Package and verify the installed native coding runtime
+  ([#1701](https://github.com/ditto-assistant/ditto-subnet/pull/1701),
+  [`f7cdd75`](https://github.com/ditto-assistant/ditto-subnet/commit/f7cdd756cd1fffe2532cef8ff98ba1d5788fe12a))
+
+- Recover reserved native coding evidence without replay
+  ([#1698](https://github.com/ditto-assistant/ditto-subnet/pull/1698),
+  [`1e107ad`](https://github.com/ditto-assistant/ditto-subnet/commit/1e107ad823b46bf57f4e6f0ff95b678098c6e94e))
+
+- **coding**: Add grant-bound native key custody service
+  ([#1697](https://github.com/ditto-assistant/ditto-subnet/pull/1697),
+  [`253f172`](https://github.com/ditto-assistant/ditto-subnet/commit/253f172d4d00d2b7c6ea3f196e1188d10622f268))
+
+- **coding**: Add trusted Node TypeScript assertion driver
+  ([#1703](https://github.com/ditto-assistant/ditto-subnet/pull/1703),
+  [`6780336`](https://github.com/ditto-assistant/ditto-subnet/commit/67803361db16b472c8e62a90f8f846cd86b85ad4))
+
+- **coding**: Import approved native executor OCI images
+  ([#1702](https://github.com/ditto-assistant/ditto-subnet/pull/1702),
+  [`5195b03`](https://github.com/ditto-assistant/ditto-subnet/commit/5195b034e5eb1b85b092725c3052465745ad5be5))
+
+- **coding**: Wire protected platform control signer startup
+  ([#1696](https://github.com/ditto-assistant/ditto-subnet/pull/1696),
+  [`8e853d1`](https://github.com/ditto-assistant/ditto-subnet/commit/8e853d17c7cd11fc1b24fd3594bf8a38ab561f72))
+
+- **infra**: Add default-off native coding daemon role
+  ([#1695](https://github.com/ditto-assistant/ditto-subnet/pull/1695),
+  [`95db09f`](https://github.com/ditto-assistant/ditto-subnet/commit/95db09f8eee5e4358d2e7168e46dcf64b3fb5d36))
+
+- **infra**: Add dormant platform coding v2 host foundation
+  ([#1694](https://github.com/ditto-assistant/ditto-subnet/pull/1694),
+  [`4e9bf3b`](https://github.com/ditto-assistant/ditto-subnet/commit/4e9bf3b16b65dca30f14b441fc83c8847d92b1de))
+
+- **infra**: Add the native private PostgreSQL path
+  ([#1700](https://github.com/ditto-assistant/ditto-subnet/pull/1700),
+  [`bead870`](https://github.com/ditto-assistant/ditto-subnet/commit/bead870ac896cd119b67a30a5a0ab048747908d9))
+
+- **infra**: Scope native worker connectivity by cgroup
+  ([#1699](https://github.com/ditto-assistant/ditto-subnet/pull/1699),
+  [`fd7c3fa`](https://github.com/ditto-assistant/ditto-subnet/commit/fd7c3fa35918a35c51c05c98f23d01b3a635dac0))
+
+
 ## v0.236.0 (2026-09-07)
 
 ### Features
