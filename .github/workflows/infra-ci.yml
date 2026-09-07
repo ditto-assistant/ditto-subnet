@@ -49,6 +49,12 @@ jobs:
         working-directory: ${{ matrix.root }}
         run: tflint --init && tflint
 
+      - name: Test dormant native-v2 host with mocked provider
+        if: matrix.root == 'infra/terraform/stacks/gcp-platform'
+        run: |
+          terraform -chdir=infra/terraform/modules/coding-hosted-host init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/terraform/modules/coding-hosted-host test
+
   ansible:
     runs-on: ubuntu-latest
     defaults:

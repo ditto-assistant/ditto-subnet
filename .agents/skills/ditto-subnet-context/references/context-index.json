@@ -597,6 +597,19 @@
       "related": ["infra-cloud", "screener-capacity", "backroom", "platform-host-disk"]
     },
     {
+      "id": "coding-hosted-host",
+      "title": "Platform-owned native-v2 qualification host",
+      "keywords": ["native v2 host", "coding hosted host", "host qualification", "Platform-owned host", "coding-hosted-host"],
+      "summary": "Default-off native-v2 host foundation, independent of the legacy validator/scorer cohort; provisioning and runtime approval stay separate.",
+      "skills": ["ditto-subnet-release-ops"],
+      "owns": ["infra/terraform/modules/coding-hosted-host", "infra/terraform/stacks/gcp-platform/coding-hosted.tf", "infra/docs/coding-hosted-host-v2.md", "ditto/tests/test_coding_hosted_infrastructure.py"],
+      "read": ["infra/docs/coding-hosted-host-v2.md", "infra/docs/ci-bootstrap.md", "docs/coding-platform-private-execution-v2.md", "services/dittobench-api/docs/coding-hosted-runtime-v2.md"],
+      "search": ["rg -n 'coding_hosted|enabled|operators' infra/terraform/modules/coding-hosted-host infra/terraform/stacks/gcp-platform/coding-hosted.tf", "rg -n 'DockerSocket|0600|RequireRootless' services/dittobench-api/internal/codinghostedruntime"],
+      "validate": ["terraform -chdir=infra/terraform/modules/coding-hosted-host test", "terraform -chdir=infra/terraform/stacks/gcp-platform validate", "uv run pytest -q ditto/tests/test_coding_hosted_infrastructure.py ditto/tests/test_coding_executor_infrastructure.py ditto/tests/test_agent_skills.py"],
+      "invariants": ["Native-v2 host and custodian grants are absent by default; no validator operator inheritance.", "Host provisioning is not rootless daemon qualification, private-data authority, canary proof or scoring activation."],
+      "related": ["coding-hosted-inputs", "infra-cloud", "release-delivery"]
+    },
+    {
       "id": "infra-cloud",
       "title": "GCP, Cloudflare, Terraform, Ansible, and secrets",
       "keywords": ["infra", "terraform", "ansible", "gcp", "gcloud", "cloudflare", "secret", "wif", "iam", "oauth", "domain", "vm", "Hippius token", "token age", "token expiry", "rotate Hippius", "renew Hippius"],

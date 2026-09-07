@@ -1,5 +1,9 @@
 # Dedicated shadow-coding executor hosts
 
+This legacy validator/scorer cohort is not the Platform-owned native-v2 host.
+See [the separate native-v2 foundation](coding-hosted-host-v2.md); do not reuse
+this role's operator, socket or validator transport configuration for native v2.
+
 The optional GCP coding-executor cohort is the physical boundary for a future
 shadow coding canary. It is absent by default:
 

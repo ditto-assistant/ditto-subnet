@@ -62,6 +62,13 @@ def test_hosted_authoring_input_routes_to_both_consumers() -> None:
     assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
 
 
+def test_native_host_qualification_routes_to_separate_infrastructure() -> None:
+    topic = lookup("native v2 host qualification")[0]
+    assert topic["id"] == "coding-hosted-host"
+    assert topic_list(topic, "skills") == ["ditto-subnet-release-ops"]
+    assert "infra/terraform/modules/coding-hosted-host" in topic_list(topic, "owns")
+
+
 def test_hosted_worker_launcher_routes_to_native_runtime() -> None:
     topic = lookup("hosted worker launcher")[0]
     assert topic["id"] == "coding-hosted-inputs"
