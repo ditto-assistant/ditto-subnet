@@ -138,6 +138,7 @@ paths = [
   "scripts/test-coding-python-driver.sh",
   "scripts/test-coding-compiled-bootstrap.sh",
   "scripts/test-coding-go-build.sh",
+  "scripts/test-coding-go-driver.sh",
   "packages/dittobench-coding-contract/**",
 ]
 

@@ -77,6 +77,11 @@ def test_private_go_oracle_routes_to_its_admission_boundary() -> None:
     assert "services/dittobench-api/internal/codinggooracle" in topic_list(
         topic, "owns"
     )
+    driver = lookup("coding Go runtime driver")[0]
+    assert driver["id"] == "coding-go-oracle"
+    assert "services/dittobench-api/internal/codinggodriver" in topic_list(
+        driver, "owns"
+    )
 
 
 def test_native_host_qualification_routes_to_separate_infrastructure() -> None:

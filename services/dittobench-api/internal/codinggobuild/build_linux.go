@@ -173,6 +173,10 @@ func run(ctx context.Context, root string, uid, gid uint32, arguments ...string)
 		return nil, err
 	}
 	if waitErr != nil {
+		var exit *exec.ExitError
+		if ctx.Err() == nil && errors.As(waitErr, &exit) && exit.ExitCode() > 0 {
+			return nil, ErrCompilation
+		}
 		return nil, ErrBuild
 	}
 	return output.Bytes(), nil

@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path"
 	"regexp"
 	"strings"
@@ -55,17 +57,18 @@ func (c *observedCandidate) Method(ctx context.Context, receiver codinggooracle.
 func main() {
 	group := flag.String("group", "", "opaque group identifier")
 	variant := flag.String("variant", "", "base or reference")
+	phase := flag.String("supervisor-phase", "", "optional visible or hidden supervisor control")
 	flag.Parse()
-	if !regexp.MustCompile(`^private-group-[0-9]{3}$`).MatchString(*group) || (*variant != "base" && *variant != "reference") {
+	if !regexp.MustCompile(`^private-group-[0-9]{3}$`).MatchString(*group) || (*variant != "base" && *variant != "reference") || (*phase != "" && *phase != "visible" && *phase != "hidden") {
 		os.Exit(70)
 	}
-	if err := qualify(*group, *variant); err != nil {
+	if err := qualify(*group, *variant, *phase); err != nil {
 		println("private Go qualification failed")
 		os.Exit(70)
 	}
 }
 
-func qualify(group, variant string) error {
+func qualify(group, variant, phase string) error {
 	root, err := os.OpenRoot("/private-input")
 	if err != nil {
 		return codinggobuild.ErrBuild
@@ -136,6 +139,9 @@ func qualify(group, variant string) error {
 	}
 	if len(candidate) == 0 || len(visible) == 0 {
 		return codinggobuild.ErrBuild
+	}
+	if phase != "" {
+		return supervisorControl(root, group, variant, phase, request, visible, hex.EncodeToString(inputHash.Sum(nil)))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 	defer cancel()
@@ -222,4 +228,134 @@ func qualify(group, variant string) error {
 		return codinggooracle.ErrRuntime
 	}
 	return nil
+}
+
+// supervisorControl deliberately runs one suite in a fresh disposable container.
+// It copies only snapshot-authorized files: reference workspaces can contain old
+// injected graders and must never be mounted as the candidate workspace.
+func supervisorControl(root *os.Root, group, variant, phase string, input codinggobuild.Request, visible []codinggooracle.Source, inputDigest string) error {
+	for _, directory := range []string{"/workspace", "/run/dittobench-grader", "/run/dittobench-control"} {
+		entries, err := os.ReadDir(directory)
+		if err != nil || len(entries) != 0 {
+			return codinggooracle.ErrRuntime
+		}
+	}
+	write := func(name string, body []byte) error {
+		file, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0444)
+		if err != nil {
+			return codinggooracle.ErrRuntime
+		}
+		_, err = file.Write(body)
+		closeErr := file.Close()
+		if err != nil || closeErr != nil {
+			return codinggooracle.ErrRuntime
+		}
+		return nil
+	}
+	for _, file := range input.Files {
+		if path.Base(file.Path) != file.Path || write(path.Join("/workspace", file.Path), file.Bytes) != nil {
+			return codinggooracle.ErrRuntime
+		}
+	}
+	supportHash := sha256.New()
+	for _, file := range visible {
+		if write(path.Join("/workspace", file.Name), file.Body) != nil {
+			return codinggooracle.ErrRuntime
+		}
+		digest := sha256.Sum256(file.Body)
+		supportHash.Write([]byte(file.Name))
+		supportHash.Write(digest[:])
+	}
+	var selected codinggooracle.Source
+	if phase == "visible" {
+		if len(visible) != 1 {
+			return codinggooracle.ErrSuite
+		}
+		selected = visible[0]
+	} else {
+		files, err := fs.Glob(root.FS(), path.Join("groups", group, "grader", "*_test.go"))
+		if err != nil || len(files) != 1 {
+			return codinggooracle.ErrSuite
+		}
+		body, err := root.ReadFile(files[0])
+		if err != nil || len(body) > 512<<10 {
+			return codinggooracle.ErrSuite
+		}
+		selected = codinggooracle.Source{Name: path.Base(files[0]), Body: body}
+		if write(path.Join("/run/dittobench-grader", selected.Name), body) != nil {
+			return codinggooracle.ErrRuntime
+		}
+	}
+	parsed, err := parser.ParseFile(token.NewFileSet(), "private_test.go", selected.Body, parser.SkipObjectResolution)
+	if err != nil {
+		return codinggooracle.ErrSuite
+	}
+	count := 0
+	for _, declaration := range parsed.Decls {
+		if function, ok := declaration.(*ast.FuncDecl); ok && function.Recv == nil && strings.HasPrefix(function.Name.Name, "Test") {
+			count++
+		}
+	}
+	if count < 1 {
+		return codinggooracle.ErrSuite
+	}
+	argv := []string{"dittobench-test-driver", "--group", phase, "--suite", selected.Name, "--package-path", input.ModulePath, "--candidate-timeout-ms", "5000", "--build-timeout-ms", "120000"}
+	for _, name := range input.Functions {
+		argv = append(argv, "--function", name)
+	}
+	if phase == "hidden" {
+		for _, file := range visible {
+			argv = append(argv, "--support", file.Name)
+		}
+	}
+	command := struct {
+		Argv    []string `json:"argv"`
+		ID      string   `json:"id"`
+		Timeout int      `json:"timeout_milliseconds"`
+	}{argv, "private-control", 150000}
+	body, err := json.Marshal(command)
+	if err != nil {
+		return codinggooracle.ErrRuntime
+	}
+	commandDigest := sha256.Sum256(append(body, '\n'))
+	nonce := make([]byte, 24)
+	if _, err := rand.Read(nonce); err != nil {
+		return codinggooracle.ErrRuntime
+	}
+	request := map[string]any{"schema": "dittobench-coding-supervisor-request-v1", "nonce": hex.EncodeToString(nonce), "mode": "test", "command_id": command.ID, "command_sha256": hex.EncodeToString(commandDigest[:]), "argv": argv, "timeout_milliseconds": command.Timeout, "expected_total": count, "candidate_uid": 10001, "candidate_gid": 10001}
+	body, err = json.Marshal(request)
+	if err != nil || write("/run/dittobench-control/request.json", body) != nil {
+		return codinggooracle.ErrRuntime
+	}
+	requestDigest := sha256.Sum256(body)
+	ctx, cancel := context.WithTimeout(context.Background(), 160*time.Second)
+	defer cancel()
+	commandRun := exec.CommandContext(ctx, "/usr/local/bin/dittobench-coding-supervisor", "--request", "/run/dittobench-control/request.json", "--response", "/run/dittobench-control/response.json")
+	if commandRun.Run() != nil {
+		return codinggooracle.ErrRuntime
+	}
+	body, err = os.ReadFile("/run/dittobench-control/response.json")
+	if err != nil {
+		return codinggooracle.ErrRuntime
+	}
+	responseDigest := sha256.Sum256(body)
+	var response struct {
+		Passed, Total   int
+		Completed       bool
+		ProcessTreeDead bool `json:"process_tree_dead"`
+		Stdout, Stderr  string
+	}
+	if json.Unmarshal(body, &response) != nil || !response.Completed || !response.ProcessTreeDead || response.Total != count || response.Stdout != "" || response.Stderr != "" || response.Passed < 0 || response.Passed > count {
+		return codinggooracle.ErrRuntime
+	}
+	if (variant == "reference" || phase == "visible") && response.Passed != count || variant == "base" && phase == "hidden" && response.Passed == count {
+		return codinggooracle.ErrRuntime
+	}
+	suiteDigest := sha256.Sum256(selected.Body)
+	return json.NewEncoder(os.Stdout).Encode(struct {
+		Schema, Group, Variant, Phase                                                         string
+		InputSHA256, SuiteSHA256, SupportSHA256, CommandSHA256, RequestSHA256, ResponseSHA256 string
+		Passed, Total                                                                         int
+		Completed, ProcessTreeDead, RuntimeQualification                                      bool
+	}{"dittobench-go-supervisor-local-control-v1", group, variant, phase, inputDigest, hex.EncodeToString(suiteDigest[:]), hex.EncodeToString(supportHash.Sum(nil)), hex.EncodeToString(commandDigest[:]), hex.EncodeToString(requestDigest[:]), hex.EncodeToString(responseDigest[:]), response.Passed, response.Total, true, true, false})
 }

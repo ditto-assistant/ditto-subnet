@@ -113,6 +113,8 @@ def test_dittobench_workflow_is_release_owned(components, ignored_paths) -> None
         "scripts/test-coding-python-driver.sh",
         "scripts/test-coding-compiled-bootstrap.sh",
         "scripts/test-coding-go-build.sh",
+        "scripts/test-coding-go-driver.sh",
+        "services/dittobench-api/Dockerfile.coding-go",
         "services/dittobench-api/coding_runtime/compiled/bootstrap.c",
         "services/dittobench-api/Dockerfile.coding-compiled-bootstrap",
         "services/dittobench-api/integrations/longmemeval/longmemeval_adapter.py",

@@ -14,6 +14,7 @@ import (
 )
 
 var ErrBuild = errors.New("candidate Go build rejected")
+var ErrCompilation = errors.New("candidate Go compilation failed")
 
 const bridgeSymbol = "DittobenchCandidateBridgeV1"
 

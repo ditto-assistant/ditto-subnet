@@ -15,6 +15,8 @@ on:
       - scripts/test-validator-embedding-gateway.sh
       - scripts/test-coding-python-driver.sh
       - scripts/test-coding-compiled-bootstrap.sh
+      - scripts/test-coding-go-build.sh
+      - scripts/test-coding-go-driver.sh
       - .github/workflows/dittobench.yml
 
 concurrency:
@@ -29,6 +31,29 @@ env:
   SERVICE_DIR: services/dittobench-api
 
 jobs:
+  go-coding-driver:
+    name: trusted Go driver isolation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - run: docker build -f services/dittobench-api/Dockerfile.coding-go-build-probe -t coding-go-build:synthetic .
+      - run: bash scripts/test-coding-go-build.sh coding-go-build:synthetic
+      - run: docker build -f services/dittobench-api/Dockerfile.coding-go --target test -t coding-go:synthetic .
+      - run: bash scripts/test-coding-go-driver.sh coding-go:synthetic
+      - name: Build and inspect the production target
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          docker build -f services/dittobench-api/Dockerfile.coding-go --target runtime --build-arg DITTOBENCH_SOURCE_SHA="$SOURCE_SHA" -t coding-go:runtime .
+          docker image inspect coding-go:runtime | jq -e --arg sha "$SOURCE_SHA" \
+            '.[0].Config.Labels["org.opencontainers.image.revision"] == $sha and .[0].Config.Labels["io.heyditto.dittobench.coding-test-driver-profile"] == "go-call-ast-v1" and .[0].Config.Env == ["PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"]'
+          docker run --rm --network none --read-only --cap-drop ALL --entrypoint /bin/sh coding-go:runtime -c \
+            'test ! -e /opt/probe && test ! -e /src && test ! -e /opt/private-probe && test ! -e /opt/go-private-probe'
+
   compiled-coding-bootstrap:
     name: compiled candidate pre-exec confinement
     runs-on: ubuntu-24.04
