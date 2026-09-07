@@ -1,0 +1,39 @@
+FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS supervisor
+WORKDIR /src/services/dittobench-api
+COPY services/dittobench-api/go.mod services/dittobench-api/go.sum ./
+COPY research/dittobench-datagen/go.mod /src/research/dittobench-datagen/go.mod
+RUN go mod download
+COPY services/dittobench-api/internal/ /src/services/dittobench-api/internal/
+COPY services/dittobench-api/cmd/dittobench-coding-supervisor/ /src/services/dittobench-api/cmd/dittobench-coding-supervisor/
+COPY research/dittobench-datagen/ /src/research/dittobench-datagen/
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+    -o /out/supervisor ./cmd/dittobench-coding-supervisor
+
+FROM node:24.20.0-bookworm@sha256:be23f54a88d34e8824c741b19b91064094f92c1c97b194144bfc8b50d67258e2 AS build
+COPY services/dittobench-api/coding_runtime/node/confinement.c /src/confinement.c
+RUN cc -shared -fPIC -O2 -Wall -Wextra -Werror -I/usr/local/include/node \
+    /src/confinement.c -o /confinement.node
+WORKDIR /opt/coding-node
+COPY services/dittobench-api/coding_runtime/node/package.json services/dittobench-api/coding_runtime/node/package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+
+FROM node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS node
+FROM scratch AS runtime-base
+COPY --from=node / /
+ENV PATH=/usr/local/bin:/usr/bin:/bin
+LABEL io.heyditto.dittobench.coding-supervisor-contract="1"
+LABEL io.heyditto.dittobench.coding-test-driver-profile="node-call-ast-v1"
+COPY --from=supervisor --chmod=0555 /out/supervisor /usr/local/bin/dittobench-coding-supervisor
+COPY --from=build --chmod=0555 /confinement.node /opt/coding-node/confinement.node
+COPY --from=build /opt/coding-node/node_modules /opt/coding-node/node_modules
+COPY --chmod=0444 services/dittobench-api/coding_runtime/node/child.cjs services/dittobench-api/coding_runtime/node/wire.cjs services/dittobench-api/coding_runtime/node/suite.cjs services/dittobench-api/coding_runtime/node/channel.cjs services/dittobench-api/coding_runtime/node/driver.cjs /opt/coding-node/
+COPY --chmod=0555 services/dittobench-api/coding_runtime/node/entrypoint.cjs /usr/local/bin/dittobench-test-driver
+ENTRYPOINT ["/usr/local/bin/dittobench-coding-supervisor"]
+
+FROM runtime-base AS test
+LABEL io.heyditto.dittobench.coding-supervisor-fixture="true"
+COPY --chmod=0400 services/dittobench-api/coding_runtime/node/supervisor-probe.cjs /opt/probe.cjs
+
+FROM runtime-base AS runtime
+ARG DITTOBENCH_SOURCE_SHA=unknown
+LABEL org.opencontainers.image.revision="${DITTOBENCH_SOURCE_SHA}"
