@@ -62,6 +62,13 @@ def test_hosted_authoring_input_routes_to_both_consumers() -> None:
     assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
 
 
+def test_node_typescript_grader_routes_to_its_private_oracle() -> None:
+    topic = lookup("coding typescript grader")[0]
+    assert topic["id"] == "coding-node-runtime"
+    assert "services/dittobench-api/coding_runtime/node" in topic_list(topic, "owns")
+    assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
+
+
 def test_native_host_qualification_routes_to_separate_infrastructure() -> None:
     topic = lookup("native v2 host qualification")[0]
     assert topic["id"] == "coding-hosted-host"

@@ -1,7 +1,9 @@
-# Native Node/TypeScript driver work
+# Native Node/TypeScript driver
 
-This directory is work in progress, not an approved runtime profile. No private
-suite, reference patch, catalog approval or deployment is included.
+This directory implements the `node-call-ast-v1` runtime-image candidate, not an
+approved private runtime deployment. See the [driver contract](../../docs/coding-node-driver-v2.md)
+for supported syntax, integration tests and remaining qualification gates. No
+private suite, reference patch, catalog approval or deployment is included.
 
 The native confinement addon checks real/effective/saved non-root IDs, empty
 supplementary groups and zero permitted/effective/inheritable capabilities.
@@ -29,7 +31,7 @@ node --test services/dittobench-api/coding_runtime/node/wire.test.cjs
 
 The result wire preserves JSON-shaped data, undefined, negative zero, big integers
 and Buffers through explicit tags, with depth/count bounds. Candidate-side values
-remain untrusted proposals. A future trusted parent must own all assertions,
+remain untrusted proposals. The trusted parent owns all assertions,
 counts, timeouts, nonces and final reports; no test source or expected answer may
 enter the candidate process.
 
@@ -39,8 +41,9 @@ candidate build hooks or tsconfig loading; container tests exercise enums,
 constructor parameter properties, classes, method receivers, asynchronous returns
 and lossless wire values. Those tests prove bridge behavior, not trusted grading.
 
-The trusted assertion driver and full image/supervisor qualification still need
-implementation and validation before this directory becomes a selectable
-language profile. No hidden suite or expected value is sent through the bridge.
+The trusted assertion driver is tested through the Go supervisor with public
+correct and adversarial candidates. No hidden suite or expected value is sent
+through the bridge. Private suite compatibility, native host qualification and
+explicit image/profile approval remain required before selection.
 
 Reference: [Linux seccomp thread synchronization](https://man7.org/linux/man-pages/man2/seccomp.2.html).

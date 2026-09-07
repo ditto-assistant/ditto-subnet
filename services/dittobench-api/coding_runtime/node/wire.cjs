@@ -21,17 +21,28 @@ function pack(value, depth = 0, state = { count: 0 }) {
   }
   if (Buffer.isBuffer(value)) return ['buffer', value.toString('base64')];
   if (Array.isArray(value)) {
-    if (Object.keys(value).length !== value.length ||
-        Object.getOwnPropertyNames(value).length !== value.length + 1 ||
-        Object.getOwnPropertySymbols(value).length !== 0 ||
-        !Array.from({ length: value.length }, (_, i) => Object.hasOwn(value, i)).every(Boolean)) {
+    if (
+      Object.keys(value).length !== value.length ||
+      Object.getOwnPropertyNames(value).length !== value.length + 1 ||
+      Object.getOwnPropertySymbols(value).length !== 0 ||
+      !Array.from({ length: value.length }, (_, i) => Object.hasOwn(value, i)).every(
+        Boolean,
+      )
+    ) {
       throw new Error('non-plain array');
     }
     return ['array', value.map(nested)];
   }
-  if (typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype &&
-      Object.getOwnPropertySymbols(value).length === 0) {
-    if (Object.values(Object.getOwnPropertyDescriptors(value)).some((d) => !d.enumerable || !Object.hasOwn(d, 'value'))) {
+  if (
+    typeof value === 'object' &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    Object.getOwnPropertySymbols(value).length === 0
+  ) {
+    if (
+      Object.values(Object.getOwnPropertyDescriptors(value)).some(
+        (d) => !d.enumerable || !Object.hasOwn(d, 'value'),
+      )
+    ) {
       throw new Error('non-plain object');
     }
     return ['object', Object.keys(value).map((key) => [key, nested(value[key])])];
@@ -53,8 +64,15 @@ function unpack(wire, depth = 0, state = { count: 0 }) {
   const nested = (item) => unpack(item, depth + 1, state);
   if (kind === 'boolean' && typeof value === 'boolean') return value;
   if (kind === 'string' && typeof value === 'string') return value;
-  if (kind === 'number' && typeof value === 'number' && Number.isFinite(value)) return value;
-  if (kind === 'bigint' && typeof value === 'string' && /^(0|-?[1-9][0-9]*)$/.test(value) && value.length <= 4096) return BigInt(value);
+  if (kind === 'number' && typeof value === 'number' && Number.isFinite(value))
+    return value;
+  if (
+    kind === 'bigint' &&
+    typeof value === 'string' &&
+    /^(0|-?[1-9][0-9]*)$/.test(value) &&
+    value.length <= 4096
+  )
+    return BigInt(value);
   if (kind === 'buffer' && typeof value === 'string') {
     const decoded = Buffer.from(value, 'base64');
     if (decoded.toString('base64') !== value) throw new Error('invalid base64');
@@ -63,10 +81,12 @@ function unpack(wire, depth = 0, state = { count: 0 }) {
   if (kind === 'array' && Array.isArray(value)) return value.map(nested);
   if (kind === 'object' && Array.isArray(value)) {
     const entries = value.map((entry) => {
-      if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string') throw new Error('invalid object');
+      if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string')
+        throw new Error('invalid object');
       return [entry[0], nested(entry[1])];
     });
-    if (new Set(entries.map(([key]) => key)).size !== entries.length) throw new Error('duplicate key');
+    if (new Set(entries.map(([key]) => key)).size !== entries.length)
+      throw new Error('duplicate key');
     return Object.fromEntries(entries);
   }
   throw new Error('unsupported wire value');

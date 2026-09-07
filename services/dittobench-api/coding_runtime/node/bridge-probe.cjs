@@ -9,7 +9,9 @@ const { pack, unpack } = require('./wire.cjs');
 
 async function main() {
   fs.mkdirSync('/workspace', { recursive: true, mode: 0o755 });
-  fs.writeFileSync('/workspace/demo.ts', `
+  fs.writeFileSync(
+    '/workspace/demo.ts',
+    `
     export enum Mode { Add = 2 }
     export class Counter {
       constructor(public value: number) {}
@@ -20,14 +22,20 @@ async function main() {
       console.log('ordinary diagnostics, not protocol');
       return value;
     }
-  `, { mode: 0o444 });
+  `,
+    { mode: 0o444 },
+  );
   const child = spawn(process.execPath, ['/opt/coding-node/child.cjs'], {
-    uid: 10001, gid: 10001, cwd: '/workspace',
+    uid: 10001,
+    gid: 10001,
+    cwd: '/workspace',
     env: { PATH: '/usr/local/bin:/usr/bin:/bin' },
     stdio: ['pipe', 'ignore', 'pipe', 'pipe'],
   });
   let stderr = '';
-  child.stderr.on('data', (value) => { stderr = (stderr + value.toString()).slice(-8192); });
+  child.stderr.on('data', (value) => {
+    stderr = (stderr + value.toString()).slice(-8192);
+  });
   let pending = Buffer.alloc(0);
   let waiting;
   let rejectWait;
@@ -35,21 +43,28 @@ async function main() {
     pending = Buffer.concat([pending, chunk]);
     if (pending.length > 65536) return rejectWait?.(new Error('oversized frame'));
     if (pending.includes(10)) {
-      if (!waiting || pending.indexOf(10) !== pending.length - 1) throw new Error('unsolicited frame');
+      if (!waiting || pending.indexOf(10) !== pending.length - 1)
+        throw new Error('unsolicited frame');
       const resolve = waiting;
       waiting = undefined;
-      const frame = pending.toString(); pending = Buffer.alloc(0);
+      const frame = pending.toString();
+      pending = Buffer.alloc(0);
       resolve(frame);
     }
   });
   child.on('exit', () => rejectWait?.(new Error('bridge exited: ' + stderr)));
   function frame() {
-    return new Promise((resolve, reject) => { waiting = resolve; rejectWait = reject; });
+    return new Promise((resolve, reject) => {
+      waiting = resolve;
+      rejectWait = reject;
+    });
   }
   async function rpc(target, operation, args = []) {
     const id = randomBytes(16).toString('hex');
     const response = frame();
-    child.stdin.write(JSON.stringify({ id, target, operation, args: pack(args) }) + '\n');
+    child.stdin.write(
+      JSON.stringify({ id, target, operation, args: pack(args) }) + '\n',
+    );
     const decoded = JSON.parse(await response);
     assert.equal(decoded.id, id);
     return decoded.result;
@@ -59,18 +74,30 @@ async function main() {
   try {
     assert.equal(await frame(), 'DITTO-NODE-CHILD-READY-V1\n');
     const target = (path) => ({ module: 'demo.ts', path });
-    assert.deepStrictEqual(await rpc(target(['Mode', 'Add']), 'get'), { kind: 'data', value: pack(2) });
+    assert.deepStrictEqual(await rpc(target(['Mode', 'Add']), 'get'), {
+      kind: 'data',
+      value: pack(2),
+    });
     const created = await rpc(target(['Counter']), 'construct', [3]);
     assert.equal(created.kind, 'reference');
     const ref = (path) => ({ reference: created.value, path });
-    assert.deepStrictEqual(await rpc(ref(['add']), 'call', [2]), { kind: 'data', value: pack(5) });
+    assert.deepStrictEqual(await rpc(ref(['add']), 'call', [2]), {
+      kind: 'data',
+      value: pack(5),
+    });
     const promise = await rpc(ref(['later']), 'call', [4]);
     assert.equal(promise.kind, 'reference');
     const resolved = await rpc({ reference: promise.value, path: [] }, 'await');
     assert.deepStrictEqual(resolved, { kind: 'data', value: pack(9) });
-    const echoed = await rpc(target(['echo']), 'call', [{ x: [undefined, Buffer.from([0, 255]), 12345678901234567890n] }]);
-    assert.deepStrictEqual(unpack(echoed.value), { x: [undefined, Buffer.from([0, 255]), 12345678901234567890n] });
-    assert.deepStrictEqual(await rpc({ module: '../hidden.ts', path: [] }, 'get'), { kind: 'failure' });
+    const echoed = await rpc(target(['echo']), 'call', [
+      { x: [undefined, Buffer.from([0, 255]), 12345678901234567890n] },
+    ]);
+    assert.deepStrictEqual(unpack(echoed.value), {
+      x: [undefined, Buffer.from([0, 255]), 12345678901234567890n],
+    });
+    assert.deepStrictEqual(await rpc({ module: '../hidden.ts', path: [] }, 'get'), {
+      kind: 'failure',
+    });
   } finally {
     child.kill('SIGKILL');
     await closed;
@@ -78,4 +105,7 @@ async function main() {
   }
   console.log('Confined TypeScript API bridge passed');
 }
-main().catch((error) => { console.error(error); process.exitCode = 1; });
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
