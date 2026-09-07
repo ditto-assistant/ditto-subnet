@@ -45,8 +45,12 @@ preserve Go integer widths, nil/interface distinctions and scalar comparison
 semantics; bounded evaluation prevents empty helper loops from escaping deadlines.
 Candidate transport failures and cleanup failures cannot become successful reports.
 
-This is not a completed Go grading runtime. The non-root fixed compiler workflow,
-generated API bridge, pre-exec launcher integration, trusted
-supervisor reports and actual unchanged base/reference executions remain to be
-implemented and verified. Structural/type admission is not runtime qualification,
-catalog approval or activation.
+The fixed non-root compiler and generated API bridge live in `codinggobuild`.
+The process client launches sealed executables through the pre-exec bootstrap and
+uses a separate bounded, correlated API pipe. It binds argument values to Go
+parameter types before transport, including contextually typed nil arguments.
+
+This is not yet a selectable production Go grading runtime. Supervisor report
+packaging, complete adversarial transport coverage and unchanged private
+base/reference controls remain qualification gates. Structural/type admission
+alone is not runtime qualification, catalog approval or activation.

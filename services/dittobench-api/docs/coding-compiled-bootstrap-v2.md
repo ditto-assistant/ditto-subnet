@@ -20,6 +20,11 @@ C bootstrap with a verified executable descriptor and private socketpair.
    protected canonical directories. It verifies the expected SHA-256 on that same
    descriptor, with a 256 MiB bound and stable size/mtime/ctime. Paths are not
    reopened to select the candidate executable.
+   The Go integration can instead provide a root-owned anonymous executable FD
+   sealed against write/grow/shrink and further seal changes. The bootstrap checks
+   those seals whenever the link count is zero; an arbitrary unlinked file or
+   writable memory file is not accepted. This keeps writable scratch mounts
+   non-executable while allowing one explicitly verified compiled program.
 3. The immutable bootstrap verifies its descriptor and root-parent private Unix
    socket peer. It proves it has exactly one thread, drops all real/effective/saved
    UID/GID values to the non-root identity, clears groups, requires empty candidate

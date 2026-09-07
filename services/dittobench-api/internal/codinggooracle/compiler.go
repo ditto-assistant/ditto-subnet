@@ -55,6 +55,17 @@ type Suite struct {
 
 func (s *Suite) TestCount() int { return len(s.tests) }
 
+// APISignatures projects only the independently approved candidate API set.
+// Private test/helper names, literals, assertions and counts are not included.
+func (s *Suite) APISignatures() map[string]*types.Signature {
+	result := map[string]*types.Signature{}
+	for object := range s.api {
+		function := object.(*types.Func)
+		result[function.Name()] = function.Signature()
+	}
+	return result
+}
+
 type imports struct {
 	api      *types.Package
 	delegate types.Importer

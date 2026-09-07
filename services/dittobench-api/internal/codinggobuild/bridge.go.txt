@@ -1,0 +1,154 @@
+package PACKAGE_NAME
+
+import (
+ dittobenchBufio "bufio"
+ dittobenchBytes "bytes"
+ dittobenchJSON "encoding/json"
+ dittobenchMath "math"
+ dittobenchOS "os"
+ dittobenchReflect "reflect"
+ dittobenchStrconv "strconv"
+ dittobenchTime "time"
+)
+
+// This entire process remains untrusted. Values are proposed API results, never
+// assertions, expected counts, hidden test names or authoritative grading reports.
+type dittobenchValue struct {
+ Kind string `json:"kind"`
+ Type string `json:"type"`
+ Text string `json:"text,omitempty"`
+ Items []dittobenchValue `json:"items,omitempty"`
+ Length int `json:"length,omitempty"`
+ Capacity int `json:"capacity,omitempty"`
+ Reference uint64 `json:"reference,omitempty"`
+ Instant *dittobenchInstant `json:"instant,omitempty"`
+}
+type dittobenchInstant struct {
+ Seconds string `json:"seconds"`
+ Nanoseconds int `json:"nanoseconds"`
+ Location uint64 `json:"location"`
+ Name string `json:"name"`
+ Offset int `json:"offset"`
+ UTC bool `json:"utc"`
+}
+type dittobenchRequest struct {
+ ID string `json:"id"`
+ Function string `json:"function,omitempty"`
+ Reference uint64 `json:"reference,omitempty"`
+ Method string `json:"method,omitempty"`
+ Arguments []dittobenchValue `json:"arguments"`
+}
+type dittobenchResponse struct {
+ ID string `json:"id"`
+ Values []dittobenchValue `json:"values,omitempty"`
+ Arguments []dittobenchValue `json:"arguments,omitempty"`
+ Failed bool `json:"failed,omitempty"`
+}
+var dittobenchFunctions=map[string]dittobenchReflect.Value{
+FUNCTION_BINDINGS
+}
+var dittobenchReferences=map[uint64]dittobenchReflect.Value{}
+var dittobenchLocations=map[uint64]*dittobenchTime.Location{}
+var dittobenchLocationInfo=map[uint64]dittobenchInstant{}
+
+func dittobenchType(t dittobenchReflect.Type) string {
+ if t.Name()!=""&&t.PkgPath()!="" {return t.PkgPath()+"."+t.Name()}
+ switch t.Kind(){case dittobenchReflect.Slice:return "[]"+dittobenchType(t.Elem());case dittobenchReflect.Pointer:return "*"+dittobenchType(t.Elem())}
+ return t.String()
+}
+func dittobenchNeed(ok bool){if !ok{panic("invalid API value")}}
+func dittobenchEncode(value dittobenchReflect.Value,depth int) dittobenchValue {
+ dittobenchNeed(depth<=32)
+ wire:=dittobenchValue{Type:dittobenchType(value.Type())}
+ switch value.Kind(){
+ case dittobenchReflect.Interface,dittobenchReflect.Pointer:
+  if value.IsNil(){wire.Kind="nil";return wire}
+  dittobenchNeed(len(dittobenchReferences)<4096)
+  wire.Kind="reference";wire.Reference=uint64(len(dittobenchReferences)+1);dittobenchReferences[wire.Reference]=value;return wire
+ case dittobenchReflect.Bool:wire.Kind="bool";wire.Text=dittobenchStrconv.FormatBool(value.Bool())
+ case dittobenchReflect.String:wire.Kind="string";wire.Text=value.String()
+ case dittobenchReflect.Int,dittobenchReflect.Int8,dittobenchReflect.Int16,dittobenchReflect.Int32,dittobenchReflect.Int64:
+  wire.Kind=value.Kind().String();wire.Text=dittobenchStrconv.FormatInt(value.Int(),10)
+ case dittobenchReflect.Uint,dittobenchReflect.Uint8,dittobenchReflect.Uint16,dittobenchReflect.Uint32,dittobenchReflect.Uint64:
+  wire.Kind=value.Kind().String();wire.Text=dittobenchStrconv.FormatUint(value.Uint(),10)
+ case dittobenchReflect.Float32:wire.Kind="float32";wire.Text=dittobenchStrconv.FormatUint(uint64(dittobenchMath.Float32bits(float32(value.Float()))),16)
+ case dittobenchReflect.Float64:wire.Kind="float64";wire.Text=dittobenchStrconv.FormatUint(dittobenchMath.Float64bits(value.Float()),16)
+ case dittobenchReflect.Slice:
+  if value.IsNil(){wire.Kind="nil";return wire}
+  dittobenchNeed(value.Cap()<=4096);wire.Kind="slice";wire.Length=value.Len();wire.Capacity=value.Cap()
+  all:=value.Slice(0,value.Cap());for i:=0;i<all.Len();i++{wire.Items=append(wire.Items,dittobenchEncode(all.Index(i),depth+1))}
+ default:panic("unsupported API result")
+ }
+ return wire
+}
+func dittobenchDecode(wire dittobenchValue,t dittobenchReflect.Type,depth int)dittobenchReflect.Value {
+ dittobenchNeed(depth<=32&&wire.Type==dittobenchType(t))
+ value:=dittobenchReflect.New(t).Elem()
+ if wire.Kind=="nil" {switch t.Kind(){case dittobenchReflect.Interface,dittobenchReflect.Pointer,dittobenchReflect.Slice,dittobenchReflect.Map:return value};panic("invalid nil")}
+ if t==dittobenchReflect.TypeOf(dittobenchTime.Time{}) {
+  dittobenchNeed(wire.Kind=="time"&&wire.Instant!=nil)
+  instant:=*wire.Instant;seconds,err:=dittobenchStrconv.ParseInt(instant.Seconds,10,64)
+  dittobenchNeed(err==nil&&dittobenchStrconv.FormatInt(seconds,10)==instant.Seconds&&instant.Nanoseconds>=0&&instant.Nanoseconds<1000000000)
+  location:=dittobenchTime.UTC
+  if !instant.UTC {
+   dittobenchNeed(instant.Location>0&&instant.Location<=4096&&instant.Offset>-86400&&instant.Offset<86400)
+   if previous,ok:=dittobenchLocationInfo[instant.Location];ok{dittobenchNeed(previous.Name==instant.Name&&previous.Offset==instant.Offset)}else{dittobenchLocationInfo[instant.Location]=instant;dittobenchLocations[instant.Location]=dittobenchTime.FixedZone(instant.Name,instant.Offset)}
+   location=dittobenchLocations[instant.Location]
+  }else{dittobenchNeed(instant.Location==0&&instant.Offset==0&&instant.Name=="UTC")}
+  return dittobenchReflect.ValueOf(dittobenchTime.Unix(seconds,int64(instant.Nanoseconds)).In(location))
+ }
+ dittobenchNeed(wire.Kind==t.Kind().String())
+ switch t.Kind(){
+ case dittobenchReflect.Bool:dittobenchNeed(wire.Text=="true"||wire.Text=="false");value.SetBool(wire.Text=="true")
+ case dittobenchReflect.String:value.SetString(wire.Text)
+ case dittobenchReflect.Int,dittobenchReflect.Int8,dittobenchReflect.Int16,dittobenchReflect.Int32,dittobenchReflect.Int64:
+  number,err:=dittobenchStrconv.ParseInt(wire.Text,10,t.Bits());dittobenchNeed(err==nil&&dittobenchStrconv.FormatInt(number,10)==wire.Text);value.SetInt(number)
+ case dittobenchReflect.Uint,dittobenchReflect.Uint8,dittobenchReflect.Uint16,dittobenchReflect.Uint32,dittobenchReflect.Uint64:
+  number,err:=dittobenchStrconv.ParseUint(wire.Text,10,t.Bits());dittobenchNeed(err==nil&&dittobenchStrconv.FormatUint(number,10)==wire.Text);value.SetUint(number)
+ case dittobenchReflect.Float32:
+  bits,err:=dittobenchStrconv.ParseUint(wire.Text,16,32);dittobenchNeed(err==nil);value.SetFloat(float64(dittobenchMath.Float32frombits(uint32(bits))))
+ case dittobenchReflect.Float64:
+  bits,err:=dittobenchStrconv.ParseUint(wire.Text,16,64);dittobenchNeed(err==nil);value.SetFloat(dittobenchMath.Float64frombits(bits))
+ case dittobenchReflect.Slice:
+  dittobenchNeed(wire.Length>=0&&wire.Capacity>=wire.Length&&wire.Capacity<=4096&&len(wire.Items)==wire.Capacity)
+  value=dittobenchReflect.MakeSlice(t,wire.Capacity,wire.Capacity)
+  for i,item:=range wire.Items{value.Index(i).Set(dittobenchDecode(item,t.Elem(),depth+1))}
+  value=value.Slice(0,wire.Length)
+ default:panic("unsupported API argument")
+ }
+ return value
+}
+func dittobenchCall(request dittobenchRequest)(response dittobenchResponse){
+ response.ID=request.ID
+ defer func(){if recover()!=nil{response=dittobenchResponse{ID:request.ID,Failed:true}}}()
+ function:=dittobenchFunctions[request.Function]
+ if request.Reference!=0 {
+  dittobenchNeed(request.Function==""&&request.Method!="")
+  receiver,ok:=dittobenchReferences[request.Reference];dittobenchNeed(ok)
+  function=receiver.MethodByName(request.Method)
+ }else{dittobenchNeed(request.Method=="")}
+ dittobenchNeed(function.IsValid()&&function.Kind()==dittobenchReflect.Func&&!function.Type().IsVariadic()&&len(request.Arguments)==function.Type().NumIn())
+ arguments:=make([]dittobenchReflect.Value,len(request.Arguments))
+ for i,wire:=range request.Arguments{arguments[i]=dittobenchDecode(wire,function.Type().In(i),0)}
+ values:=function.Call(arguments)
+ for _,value:=range values{response.Values=append(response.Values,dittobenchEncode(value,0))}
+ // Only reference-like arguments have observable caller-side mutations. Scalar
+ // and time arguments are copied by Go; do not invent effects on caller values.
+ for _,value:=range arguments{if value.Kind()==dittobenchReflect.Slice{response.Arguments=append(response.Arguments,dittobenchEncode(value,0))}else{response.Arguments=append(response.Arguments,dittobenchValue{Kind:"unchanged",Type:dittobenchType(value.Type())})}}
+ return response
+}
+
+func DittobenchCandidateBridgeV1(){
+ output:=dittobenchOS.NewFile(5,"candidate-api")
+ dittobenchNeed(output!=nil)
+ if _,err:=output.Write([]byte("DITTO-GO-API-READY-V1\n"));err!=nil{return}
+ scanner:=dittobenchBufio.NewScanner(dittobenchOS.Stdin);scanner.Buffer(make([]byte,4096),65536)
+ for scanner.Scan(){
+  var request dittobenchRequest
+  decoder:=dittobenchJSON.NewDecoder(dittobenchBytes.NewReader(scanner.Bytes()));decoder.DisallowUnknownFields()
+  if decoder.Decode(&request)!=nil||len(request.ID)!=32{return}
+  response:=dittobenchCall(request)
+  raw,err:=dittobenchJSON.Marshal(response);if err!=nil||len(raw)+1>65536{return}
+  raw=append(raw,'\n');for len(raw)>0{n,err:=output.Write(raw);if err!=nil{return};raw=raw[n:]}
+ }
+}

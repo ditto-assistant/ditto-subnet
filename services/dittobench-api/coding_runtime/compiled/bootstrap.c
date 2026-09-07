@@ -144,8 +144,17 @@ int main(int argc, char **argv) {
     require(binary >= 3 && binary < 1024 && notify >= 3 && notify < 1024 && binary != notify);
     struct stat info;
     require(fstat((int)binary, &info) == 0 && S_ISREG(info.st_mode) &&
-            (info.st_mode & 07777) == 0555 && info.st_uid == 0 && info.st_nlink == 1 &&
+            (info.st_mode & 07777) == 0555 && info.st_uid == 0 &&
             info.st_size >= (off_t)sizeof(Elf64_Ehdr) && info.st_size <= (256LL << 20));
+    if (info.st_nlink == 0) {
+        /* Anonymous executables need immutable byte/size/seal state. This is
+         * not acceptance of arbitrary unlinked files or writable memfds. */
+        const int required_seals = F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE;
+        int seals = fcntl((int)binary, F_GET_SEALS);
+        require(seals >= 0 && (seals & required_seals) == required_seals);
+    } else {
+        require(info.st_nlink == 1);
+    }
     Elf64_Ehdr elf;
     require(pread((int)binary, &elf, sizeof(elf), 0) == sizeof(elf) &&
             !memcmp(elf.e_ident, ELFMAG, SELFMAG) && elf.e_ident[EI_CLASS] == ELFCLASS64 &&
