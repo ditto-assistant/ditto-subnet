@@ -89,6 +89,12 @@ async function evaluate(node, names, child, keepTarget = false) {
     }
     case 'property': {
       const base = await evaluateSub(node.base, true);
+      if (
+        base instanceof PromiseValue ||
+        base instanceof CallbackValue ||
+        base instanceof ParentMethod
+      )
+        throw new CandidateFailure();
       if (base instanceof Target) value = base.property(node.key);
       else if (base instanceof URL || base instanceof URLSearchParams) {
         const properties =

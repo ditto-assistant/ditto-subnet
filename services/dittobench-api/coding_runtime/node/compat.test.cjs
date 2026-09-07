@@ -116,6 +116,23 @@ test('repeated callback handles retain function identity across materialization'
   );
 });
 
+test('private transport wrapper fields cannot become assertion values', async () => {
+  for (const [expression, expected] of [
+    ['Promise.resolve(1).state', "'fulfilled'"],
+    ['fn.reference', '1'],
+  ]) {
+    const suite = compile(
+      `test('opaque',()=>{const fn=()=>5;assert.equal(${expression},${expected});});`,
+    );
+    const child = {
+      initialize: async () => {},
+      close: async () => {},
+      registerCallback: () => new CallbackValue(1),
+    };
+    assert.equal(await runSuite(suite, 1, 1, 1000, () => child), 0);
+  }
+});
+
 test('exception frames require correlation, phase and bounded text', () => {
   const frame = (value) =>
     Buffer.from(

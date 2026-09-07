@@ -91,6 +91,8 @@ per test, eight active requests and 64 KiB buffered frames. Unknown references,
 duplicate request IDs, malformed data and excessive requests fail the test. The
 same child deadline and process cleanup cover both API and callback channels.
 Captured mutable locals belong to one test and reset with its fresh process.
+Internal promise, callback and bound-method wrapper fields cannot be inspected
+or used as assertion values.
 
 This v2 protocol requires its own exact image qualification; a v1 image approval
 does not authorize it. Syntax admission does not establish base/reference outcomes
