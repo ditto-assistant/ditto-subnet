@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Explicit, expiring cgroup-bound network authority for one trusted worker."""
 
+import hashlib
 import ipaddress
 import json
 import os
@@ -91,14 +92,22 @@ def policy(config, uid, now):
     candidate = pairs(config["candidate_tcp"], candidate=True)
     require(tcp and candidate)
     daemon = f"user.slice/user-{uid}.slice/user@{uid}.service"
+    encoded = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
+    worker_mark = int.from_bytes(hashlib.sha256(encoded).digest()[:4], "big")
+    worker_mark = (worker_mark & 0x7FFFFFFF) or 1
+    daemon_mark = worker_mark | 0x80000000
     lines = [
         f"add table inet {TABLE}",
         f"flush table inet {TABLE}",
         f"add chain inet {TABLE} {CHAIN} {{ type filter hook output "
         "priority -150; policy accept; }",
+        f"add chain inet {TABLE} scoped_input {{ type filter hook input "
+        "priority -150; policy accept; }",
+        f"add set inet {TABLE} lease {{ type uid; flags timeout; }}",
+        f"add element inet {TABLE} lease {{ {uid} timeout {expires - now}s }}",
     ]
-    # Every accept depends on a timed cgroup element. Expiry also cuts existing
-    # connections; there is deliberately no blanket established/related bypass.
+    # Initiation depends on timed cgroup elements; listener-bound replies also
+    # require a timed UID lease. There is no blanket established/related bypass.
     for name, path in (("worker", WORKER), ("daemon", daemon)):
         lines.extend(
             [
@@ -111,6 +120,8 @@ def policy(config, uid, now):
     window = f"meta time >= {issued} meta time < {expires}"
     worker = f"{prefix} {window} socket cgroupv2 level 2 @worker"
     daemon_rule = f"{prefix} {window} socket cgroupv2 level 3 @daemon"
+    inbound = f"add rule inet {TABLE} scoped_input {window}"
+    reply = f"{prefix} {window} meta skuid @lease"
     if config["trusted_loopback_tcp"]:
         lines.append(f"{worker} ip daddr 127.0.0.1 meta l4proto tcp counter accept")
     for address, port in tcp:
@@ -124,17 +135,29 @@ def policy(config, uid, now):
         lines.append(
             f"{daemon_rule} ip daddr {address} tcp dport {port} counter accept"
         )
-        # Only replies from these scoped local listeners, not arbitrary inbound
-        # connections, gain a worker response path.
+        # SYN-ACKs can carry request sockets, for which socket cgroupv2 cannot
+        # recover full-socket ancestry. Bind the incoming connection to the
+        # actual scoped listener, then authorize only its marked replies.
+        # Never overwrite a pre-existing conntrack mark owned by another policy.
         lines.append(
-            f"{worker} ip saddr {address} tcp sport {port} ct direction reply "
-            "ct state established counter accept"
+            f"{inbound} ip daddr {address} tcp dport {port} "
+            "socket cgroupv2 level 2 @worker ct direction original "
+            f"ct state new ct mark 0 ct mark set {worker_mark}"
+        )
+        lines.append(
+            f"{reply} ip saddr {address} tcp sport {port} ct direction reply "
+            f"ct state established ct mark {worker_mark} counter accept"
         )
     # The trusted worker reaches Docker-published harness ports via loopback.
     # Daemon replies do not authorize a new outbound candidate connection.
     lines.append(
-        f"{daemon_rule} ip daddr 127.0.0.1 meta l4proto tcp ct direction reply "
-        "ct state established counter accept"
+        f"{inbound} ip daddr 127.0.0.1 meta l4proto tcp "
+        "socket cgroupv2 level 3 @daemon ct direction original "
+        f"ct state new ct mark 0 ct mark set {daemon_mark}"
+    )
+    lines.append(
+        f"{reply} ip daddr 127.0.0.1 meta l4proto tcp ct direction reply "
+        f"ct state established ct mark {daemon_mark} counter accept"
     )
     lines.append(f"{prefix} counter reject with icmpx type admin-prohibited")
     return "\n".join(lines) + "\n"

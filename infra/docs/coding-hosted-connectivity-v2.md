@@ -11,7 +11,8 @@ dedicated UID and private mode-0600 Docker socket. Network authority is separate
 by the socket's cgroup ancestry: the trusted worker runs in the root-owned,
 nondelegated `system.slice/ditto-coding-hosted-worker.service`; the daemon and
 RootlessKit remain below `user.slice/user-UID.slice/user@UID.service`. All accept
-rules require both the exact UID and the corresponding cgroup. This does not
+rules require the exact UID and cgroup authority, directly for initiation and
+through a listener-bound conntrack mark for replies. This does not
 isolate one compromised same-UID host process from another; host administrators,
 the daemon and the trusted worker remain trusted. Candidate identities and
 container boundaries must separately prevent gaining that host identity.
@@ -66,6 +67,15 @@ to trusted loopback harness connections. Those narrowly scoped reply rules still
 require the same unexpired cgroup authority. Image pull access, public internet,
 database, provider and Hippius authority are not granted to the daemon.
 
+TCP handshake reply packets can carry request sockets rather than full sockets.
+For replies, the input hook verifies the real listening socket's cgroup and
+approved endpoint before assigning an otherwise-zero conntrack mark. Worker and
+daemon reply marks differ and are derived from the exact profile; the output
+hook requires that mark, the UID, reply direction/state, endpoint and an unexpired
+UID lease. Existing nonzero marks are never overwritten. Audit other host rules
+that write/copy conntrack marks; no competing mark writer may mint these values.
+The input hook assigns metadata only and never bypasses another ingress policy.
+
 ## Startup, expiry and stop
 
 After separate installation/qualification approval, use
@@ -85,7 +95,7 @@ Configuration/kernel/commit failures attempt to restore deny and fail startup.
 
 The dedicated table is reused, never the global ruleset. A distinct
 `scoped_output` chain runs after connection tracking; the original qualification
-chain is not repurposed with a different hook priority. Cgroup-set elements have
+chain is not repurposed with a different hook priority. Cgroup and reply-lease sets have
 kernel timeouts, and every accept also checks the absolute Unix expiry, so
 installation delay cannot extend the window. Expiry denies existing traffic as
 well as new connections. It is not a promise that a timed-out evaluation can be

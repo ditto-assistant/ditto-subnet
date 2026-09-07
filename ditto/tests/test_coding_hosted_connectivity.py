@@ -45,7 +45,10 @@ def test_worker_and_daemon_have_distinct_expiring_socket_authority():
     assert len(accepts) == 8
     for line in accepts:
         assert "meta skuid 1001 meta time >= 2000000000 meta time < 2000000600" in line
-        assert "socket cgroupv2 level" in line
+        assert "socket cgroupv2 level" in line or (
+            "meta skuid @lease" in line
+            and "ct direction reply ct state established ct mark" in line
+        )
         if "tcp dport 443" in line or "tcp dport 5432" in line or "dport 53" in line:
             assert "level 2 @worker" in line
         if "tcp dport 18080" in line:
@@ -56,6 +59,14 @@ def test_worker_and_daemon_have_distinct_expiring_socket_authority():
         "meta skuid 1001 counter reject with icmpx type admin-prohibited"
     )
     assert "ip6 daddr" not in text and "ip6 saddr" not in text
+    assert (
+        "socket cgroupv2 level 2 @worker ct direction original "
+        "ct state new ct mark 0 ct mark set" in text
+    )
+    assert (
+        "socket cgroupv2 level 3 @daemon ct direction original "
+        "ct state new ct mark 0 ct mark set" in text
+    )
 
 
 @pytest.mark.parametrize(
