@@ -796,6 +796,7 @@ class BuildGate:
             api_key_file=config.source_review_api_key_file,
             model=config.source_review_model,
             base_url=config.source_review_base_url,
+            inference_provider=config.review_inference_provider,
             timeout_seconds=config.source_review_timeout_seconds,
             max_steps=config.source_review_max_steps,
             max_read_bytes=config.source_review_max_read_bytes,
@@ -808,6 +809,7 @@ class BuildGate:
         l2_reviewer = TerraSolSourceReviewAgent(
             api_key_file=config.source_review_api_key_file,
             base_url=config.source_review_base_url,
+            inference_provider=config.review_inference_provider,
             harness=IsolatedCodingHarness(
                 docker_bin=config.docker_bin,
                 image=config.l2_analyzer_image,

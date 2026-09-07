@@ -13,6 +13,10 @@ import os
 from dataclasses import dataclass, field
 
 from ditto_screener.errors import ScreenerConfigError
+from ditto_screener.review_provider import (
+    REVIEW_INFERENCE_PROVIDERS,
+    default_review_base_url,
+)
 
 
 @dataclass(frozen=True)
@@ -137,7 +141,11 @@ class ScreenerConfig:
     """Mode-0600 append-only journal for quarantine/inconclusive outcomes."""
 
     source_review_api_key_file: str | None
-    """Root-controlled OpenRouter key file for private source review."""
+    """Root-controlled review-gateway key file (OpenRouter or Ditto Inference)."""
+
+    review_inference_provider: str
+    """``openrouter`` or ``ditto``: which OpenAI-compatible gateway every review
+    layer (L1, L2, L3, L4) calls with the key above."""
 
     source_review_model: str
     source_review_base_url: str
@@ -271,6 +279,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         ScreenerConfigError: when a required value is missing or no signing
             source is configured.
     """
+    review_inference_provider = os.environ.get(
+        "SCREENER_REVIEW_INFERENCE_PROVIDER", "openrouter"
+    )
     config = ScreenerConfig(
         platform_api_url=_require(
             "SCREENER_PLATFORM_API_URL",
@@ -335,12 +346,12 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         source_review_api_key_file=(
             os.environ.get("SCREENER_SOURCE_REVIEW_API_KEY_FILE") or None
         ),
+        review_inference_provider=review_inference_provider,
         source_review_model=os.environ.get(
             "SCREENER_SOURCE_REVIEW_MODEL", "openai/gpt-5.6-luna"
         ),
-        source_review_base_url=os.environ.get(
-            "SCREENER_SOURCE_REVIEW_BASE_URL", "https://openrouter.ai/api/v1"
-        ),
+        source_review_base_url=os.environ.get("SCREENER_SOURCE_REVIEW_BASE_URL")
+        or default_review_base_url(review_inference_provider),
         source_review_timeout_seconds=_parse_float(
             "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "1800"
         ),
@@ -374,7 +385,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         l2_review_model=os.environ.get(
             "SCREENER_L2_REVIEW_MODEL", "openai/gpt-5.6-terra"
         ),
-        l2_review_provider=os.environ.get("SCREENER_L2_REVIEW_PROVIDER", "openrouter"),
+        l2_review_provider=os.environ.get(
+            "SCREENER_L2_REVIEW_PROVIDER", review_inference_provider
+        ),
         l2_fallback_models=_parse_csv(
             "SCREENER_L2_FALLBACK_MODELS", "z-ai/glm-5.2,openai/gpt-5.6-sol"
         ),
@@ -382,7 +395,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         l3_review_model=os.environ.get(
             "SCREENER_L3_REVIEW_MODEL", "openai/gpt-5.6-sol"
         ),
-        l3_review_provider=os.environ.get("SCREENER_L3_REVIEW_PROVIDER", "openrouter"),
+        l3_review_provider=os.environ.get(
+            "SCREENER_L3_REVIEW_PROVIDER", review_inference_provider
+        ),
         l2_analyzer_image=os.environ.get(
             "SCREENER_L2_ANALYZER_IMAGE", "ditto-screener-l2-analyzer:active"
         ),
@@ -507,16 +522,24 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             "SCREENER_L2_REVIEW_MODEL must be openai/gpt-5.6-terra or "
             "moonshotai/kimi-k3"
         )
-    if config.l2_review_provider != "openrouter":
-        raise ScreenerConfigError("SCREENER_L2_REVIEW_PROVIDER must be openrouter")
+    if config.review_inference_provider not in REVIEW_INFERENCE_PROVIDERS:
+        raise ScreenerConfigError(
+            "SCREENER_REVIEW_INFERENCE_PROVIDER must be openrouter or ditto"
+        )
+    if config.l2_review_provider != config.review_inference_provider:
+        raise ScreenerConfigError(
+            "SCREENER_L2_REVIEW_PROVIDER must match SCREENER_REVIEW_INFERENCE_PROVIDER"
+        )
     if config.l2_fallback_models != ("z-ai/glm-5.2", "openai/gpt-5.6-sol"):
         raise ScreenerConfigError(
             "SCREENER_L2_FALLBACK_MODELS must be z-ai/glm-5.2,openai/gpt-5.6-sol"
         )
     if config.l3_review_model != "openai/gpt-5.6-sol":
         raise ScreenerConfigError("SCREENER_L3_REVIEW_MODEL must be openai/gpt-5.6-sol")
-    if config.l3_review_provider != "openrouter":
-        raise ScreenerConfigError("SCREENER_L3_REVIEW_PROVIDER must be openrouter")
+    if config.l3_review_provider != config.review_inference_provider:
+        raise ScreenerConfigError(
+            "SCREENER_L3_REVIEW_PROVIDER must match SCREENER_REVIEW_INFERENCE_PROVIDER"
+        )
     if config.l2_analyzer_image != "ditto-screener-l2-analyzer:active":
         raise ScreenerConfigError(
             "SCREENER_L2_ANALYZER_IMAGE must be ditto-screener-l2-analyzer:active"

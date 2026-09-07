@@ -43,10 +43,10 @@ import httpx
 
 from ditto_screener.evidence_quality import citation_admissibility
 from ditto_screener.source_review import (
-    _OPENROUTER_ATTRIBUTION_HEADERS,
     TarSourceRepository,
     _execute_tool,
     _retryable_model_error_type,
+    review_gateway_headers,
 )
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
@@ -567,9 +567,11 @@ class SourceReviewAdjudicator:
         max_steps: int = _MAX_STEPS,
         max_completion_tokens: int = _MAX_COMPLETION_TOKENS,
         transport: httpx.AsyncBaseTransport | None = None,
+        inference_provider: str = "openrouter",
     ) -> None:
         self._api_key_file = api_key_file
         self._base_url = base_url.rstrip("/")
+        self._inference_provider = inference_provider
         self._model = model
         self._timeout_seconds = timeout_seconds
         self._max_steps = max(1, int(max_steps))
@@ -936,7 +938,7 @@ class SourceReviewAdjudicator:
                         f"{self._base_url}/chat/completions",
                         headers={
                             "Authorization": f"Bearer {api_key}",
-                            **_OPENROUTER_ATTRIBUTION_HEADERS,
+                            **review_gateway_headers(self._inference_provider),
                         },
                         json=request,
                         timeout=effective_timeout,
@@ -1060,6 +1062,9 @@ def build_adjudicator(config: object) -> SourceReviewAdjudicator | None:
     return SourceReviewAdjudicator(
         api_key_file=getattr(config, "source_review_api_key_file", None),
         base_url=str(getattr(config, "source_review_base_url", "")),
+        inference_provider=str(
+            getattr(config, "review_inference_provider", "openrouter")
+        ),
         model=str(getattr(config, "adjudicator_model", _DEFAULT_MODEL)),
         timeout_seconds=float(getattr(config, "adjudicator_timeout_seconds", 600.0)),
         max_steps=int(getattr(config, "adjudicator_max_steps", _MAX_STEPS)),

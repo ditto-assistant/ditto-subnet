@@ -656,6 +656,7 @@ async def test_current_starter_kit_passes_real_default_v7_luna_review(
         run_timeout_seconds=120.0,
         max_tarball_bytes=20 * 1024 * 1024,
         source_review_api_key_file=key_file,
+        review_inference_provider="openrouter",
     )
     client = httpx.AsyncClient(transport=httpx.MockTransport(artifact))
     gate = BuildGate(

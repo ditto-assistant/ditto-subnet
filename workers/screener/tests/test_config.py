@@ -107,14 +107,23 @@ def test_remote_build_timeout_is_independent_and_configurable(
         ),
         ("SCREENER_L2_REVIEW_MODE", "always", "off, shadow, or enforce"),
         ("SCREENER_L2_REVIEW_MODEL", "openai/other", "gpt-5.6-terra"),
-        ("SCREENER_L2_REVIEW_PROVIDER", "azure", "must be openrouter"),
+        ("SCREENER_REVIEW_INFERENCE_PROVIDER", "azure", "must be openrouter or ditto"),
+        (
+            "SCREENER_L2_REVIEW_PROVIDER",
+            "ditto",
+            "must match SCREENER_REVIEW_INFERENCE_PROVIDER",
+        ),
         (
             "SCREENER_L2_FALLBACK_MODELS",
             "openai/gpt-5.6-luna",
             "z-ai/glm-5.2,openai/gpt-5.6-sol",
         ),
         ("SCREENER_L3_REVIEW_MODEL", "openai/gpt-5.6-terra", "gpt-5.6-sol"),
-        ("SCREENER_L3_REVIEW_PROVIDER", "azure", "must be openrouter"),
+        (
+            "SCREENER_L3_REVIEW_PROVIDER",
+            "ditto",
+            "must match SCREENER_REVIEW_INFERENCE_PROVIDER",
+        ),
         ("SCREENER_L2_MAX_INPUT_TOKENS", "1000001", "1000000"),
         ("SCREENER_L2_MAX_COST_USD", "20", r"in \(0, 10\]"),
         ("SCREENER_L2_ANALYST_REASONING_EFFORT", "high", "model_default"),
@@ -258,3 +267,36 @@ def test_static_preflight_shadow_requires_audit_journal(
         match="SCREENER_STATIC_PREFLIGHT_AUDIT_FILE is required in shadow mode",
     ):
         parse_screener_config_from_env()
+
+
+def test_ditto_inference_provider_moves_every_review_layer(monkeypatch) -> None:
+    """One switch: the layers share the key, the gateway root, and the routing."""
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_REVIEW_INFERENCE_PROVIDER", "ditto")
+    monkeypatch.delenv("SCREENER_SOURCE_REVIEW_BASE_URL", raising=False)
+    monkeypatch.delenv("SCREENER_L2_REVIEW_PROVIDER", raising=False)
+    monkeypatch.delenv("SCREENER_L3_REVIEW_PROVIDER", raising=False)
+    cfg = parse_screener_config_from_env()
+    assert cfg.review_inference_provider == "ditto"
+    assert cfg.source_review_base_url == "https://api.heyditto.ai/v1"
+    assert cfg.l2_review_provider == "ditto"
+    assert cfg.l3_review_provider == "ditto"
+
+
+def test_review_base_url_override_wins_over_the_provider_default(monkeypatch) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_REVIEW_INFERENCE_PROVIDER", "ditto")
+    monkeypatch.setenv(
+        "SCREENER_SOURCE_REVIEW_BASE_URL", "https://inference.example.test/v1"
+    )
+    cfg = parse_screener_config_from_env()
+    assert cfg.source_review_base_url == "https://inference.example.test/v1"
+
+
+def test_openrouter_stays_the_default_review_gateway(monkeypatch) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.delenv("SCREENER_REVIEW_INFERENCE_PROVIDER", raising=False)
+    monkeypatch.delenv("SCREENER_SOURCE_REVIEW_BASE_URL", raising=False)
+    cfg = parse_screener_config_from_env()
+    assert cfg.review_inference_provider == "openrouter"
+    assert cfg.source_review_base_url == "https://openrouter.ai/api/v1"

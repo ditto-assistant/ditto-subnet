@@ -290,6 +290,16 @@ sudo sed -n 's/^\(DESCRIPTOR\|REVISION\|VERSION\|UPDATED_AT\)=/\1=/p' \
   /var/lib/ditto-screener-fleet/updater/managed-release.env
 ```
 
+### Review gateway
+
+`screener_fleet_review_inference_provider` selects which OpenAI-compatible
+gateway carries private source review: `openrouter` or `ditto` (Ditto
+Inference). The source-review secret in Secret Manager must hold the matching
+key (`ditto_inf_…` for `ditto`). Set `screener_fleet_review_inference_base_url`
+only to override the provider default. Roll the provider one node at a time:
+re-run Ansible with the node `draining`, confirm the first L1 note lands in the
+review journal, then set the node `active`.
+
 ### Seeing adoption from Backroom
 
 The updater writes the activated `SCREENER_FLEET_REVISION`,
