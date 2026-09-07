@@ -1,0 +1,129 @@
+---
+- name: Require explicit immutable package and signing-key selections
+  ansible.builtin.assert:
+    that:
+      - coding_hosted_daemon_enabled | bool
+      - coding_hosted_packages_enabled | bool
+      - ansible_facts['distribution_release'] == 'trixie'
+      - coding_hosted_docker_version is match('^[0-9][A-Za-z0-9.+:~_-]+$')
+      - coding_hosted_containerd_version is match('^[0-9][A-Za-z0-9.+:~_-]+$')
+      - coding_hosted_docker_key_sha256 is match('^[0-9a-f]{64}$')
+    fail_msg: Bootstrap requires reviewed Debian 13 Docker/containerd versions and Docker signing-key SHA-256.
+
+- name: Inspect installed packages without removing or upgrading them
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Refuse an existing container runtime or conflicting package
+  ansible.builtin.assert:
+    that:
+      - item not in ansible_facts.packages
+    fail_msg: Existing runtime packages require separate reconciliation; bootstrap never removes or replaces them.
+  loop: [docker-ce, docker-ce-cli, docker-ce-rootless-extras, containerd.io, docker.io, containerd, runc, podman-docker]
+
+- name: Refuse a running containerd service without stopping it
+  ansible.builtin.command:
+    argv: [systemctl, is-active, containerd.service]
+  register: coding_hosted_containerd_active
+  changed_when: false
+  failed_when: coding_hosted_containerd_active.rc not in [3, 4]
+
+# Masking works before package unit files exist. Do not try to disable a
+# nonexistent unit here, and never use state=stopped to bypass the guards.
+- name: Mask runtime units before any apt operation
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    masked: true
+  loop: [docker.service, docker.socket, containerd.service]
+
+- name: Install Debian rootless prerequisites without service autostart
+  ansible.builtin.apt:
+    name: [ca-certificates, dbus-user-session, uidmap, slirp4netns, nftables]
+    state: present
+    update_cache: true
+    policy_rc_d: 101
+    install_recommends: false
+    allow_unauthenticated: false
+    allow_downgrade: false
+    fail_on_autoremove: true
+    auto_install_module_deps: false
+
+- name: Create the root-owned dedicated repository key directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Fetch only the checksum-approved Docker signing key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/debian/gpg
+    dest: /etc/apt/keyrings/coding-hosted-docker.asc
+    checksum: "sha256:{{ coding_hosted_docker_key_sha256 }}"
+    validate_certs: true
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure the fixed signed Debian 13 amd64 Docker source
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/coding-hosted-docker.sources
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Types: deb
+      URIs: https://download.docker.com/linux/debian
+      Suites: trixie
+      Components: stable
+      Architectures: amd64
+      Signed-By: /etc/apt/keyrings/coding-hosted-docker.asc
+
+- name: Prefer the approved Docker origin for runtime packages
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/coding-hosted-docker
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Package: docker-ce docker-ce-cli docker-ce-rootless-extras containerd.io
+      Pin: origin download.docker.com
+      Pin-Priority: 990
+
+- name: Install exact Docker and containerd versions without service autostart
+  ansible.builtin.apt:
+    name:
+      - "docker-ce={{ coding_hosted_docker_version }}"
+      - "docker-ce-cli={{ coding_hosted_docker_version }}"
+      - "docker-ce-rootless-extras={{ coding_hosted_docker_version }}"
+      - "containerd.io={{ coding_hosted_containerd_version }}"
+    state: present
+    update_cache: true
+    policy_rc_d: 101
+    install_recommends: false
+    allow_unauthenticated: false
+    allow_downgrade: false
+    fail_on_autoremove: true
+    auto_install_module_deps: false
+
+- name: Disable the now-installed masked runtime units without starting them
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+    masked: true
+  loop: [docker.service, docker.socket, containerd.service]
+
+- name: Verify installed containerd identity
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, '--showformat=${Version}', containerd.io]
+  register: coding_hosted_containerd_package
+  changed_when: false
+  failed_when: coding_hosted_containerd_package.stdout != coding_hosted_containerd_version
+
+- name: Confirm package installation left rootful services inactive
+  ansible.builtin.command:
+    argv: [systemctl, is-active, docker.service, docker.socket, containerd.service]
+  register: coding_hosted_bootstrap_services
+  changed_when: false
+  failed_when: coding_hosted_bootstrap_services.rc not in [3, 4]

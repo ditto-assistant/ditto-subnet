@@ -116,6 +116,8 @@ def execute(args, *, payload=None, uid=None):
 
 def validate_info(info):
     require(isinstance(info, dict))
+    require(info.get("OSType") == "linux" and info.get("Architecture") == "x86_64")
+    require(info.get("DockerRootDir") == str(DAEMON_HOME / "docker"))
     require(
         any(
             value == "name=rootless"

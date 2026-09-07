@@ -24,6 +24,38 @@
       changed_when: false
       failed_when: coding_hosted_rootful.rc not in [3, 4]
 
+    - name: Inspect existing native-v2 account without altering it
+      ansible.builtin.getent:
+        database: passwd
+        key: ditto-coding-hosted
+        fail_key: false
+
+    - name: Refuse an existing native account before changing any policy
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.getent_passwd['ditto-coding-hosted'] is none
+        fail_msg: First provisioning only; reconcile existing accounts, user services and retained state separately.
+
+    - name: Inspect the intended home without following links
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop: [/var/lib/ditto-coding-hosted, /run/ditto-coding-hosted]
+      register: coding_hosted_previous_home
+
+    - name: Refuse existing home contents or symlinks without deleting them
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        fail_msg: Existing native-v2 state requires explicit reconciliation before first provisioning.
+      loop: "{{ coding_hosted_previous_home.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Bootstrap reviewed packages only after fresh-host checks
+      ansible.builtin.include_tasks: packages.yml
+      when: coding_hosted_packages_enabled | bool
+
     - name: Verify preinstalled Docker package versions
       ansible.builtin.command:
         argv:
@@ -65,34 +97,6 @@
           - not item.stat.wgrp
           - not item.stat.woth
       loop: "{{ coding_hosted_prerequisites.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-
-    - name: Inspect existing native-v2 account without altering it
-      ansible.builtin.getent:
-        database: passwd
-        key: ditto-coding-hosted
-        fail_key: false
-
-    - name: Refuse an existing native account before changing any policy
-      ansible.builtin.assert:
-        that:
-          - ansible_facts.getent_passwd['ditto-coding-hosted'] is none
-        fail_msg: First provisioning only; reconcile existing accounts, user services and retained state separately.
-
-    - name: Inspect the intended home without following links
-      ansible.builtin.stat:
-        path: "{{ item }}"
-        follow: false
-      loop: [/var/lib/ditto-coding-hosted, /run/ditto-coding-hosted]
-      register: coding_hosted_previous_home
-
-    - name: Refuse existing home contents or symlinks without deleting them
-      ansible.builtin.assert:
-        that:
-          - not item.stat.exists
-        fail_msg: Existing native-v2 state requires explicit reconciliation before first provisioning.
-      loop: "{{ coding_hosted_previous_home.results }}"
       loop_control:
         label: "{{ item.item }}"
 

@@ -70,6 +70,10 @@ def test_native_host_qualification_routes_to_separate_infrastructure() -> None:
     assert "infra/ansible/roles/coding_hosted" in topic_list(topic, "owns")
 
 
+def test_coding_package_bootstrap_routes_to_native_host():
+    assert lookup("coding package bootstrap")[0]["id"] == "coding-hosted-host"
+
+
 def test_hosted_worker_launcher_routes_to_native_runtime() -> None:
     topic = lookup("hosted worker launcher")[0]
     assert topic["id"] == "coding-hosted-inputs"

@@ -22,6 +22,9 @@ spec.loader.exec_module(POLICY)
 
 def good_info():
     return {
+        "OSType": "linux",
+        "Architecture": "x86_64",
+        "DockerRootDir": "/var/lib/ditto-coding-hosted/docker",
         "SecurityOptions": ["name=rootless", "name=seccomp,profile=builtin"],
         "Labels": ["io.heyditto.dittobench.isolated=true"],
         "CgroupDriver": "systemd",
@@ -108,6 +111,9 @@ def test_identity_rejects_numeric_alias_mapping(monkeypatch):
 @pytest.mark.parametrize(
     "field,value",
     [
+        ("OSType", "windows"),
+        ("Architecture", "aarch64"),
+        ("DockerRootDir", "/var/lib/docker"),
         ("SecurityOptions", ["name=not-rootless"]),
         ("SecurityOptions", []),
         ("Labels", ["io.heyditto.dittobench.isolated=false"]),
@@ -247,6 +253,9 @@ def test_role_is_default_off_and_has_no_legacy_or_worker_activation():
     assert defaults == {
         "coding_hosted_daemon_enabled": False,
         "coding_hosted_docker_version": "",
+        "coding_hosted_packages_enabled": False,
+        "coding_hosted_containerd_version": "",
+        "coding_hosted_docker_key_sha256": "",
     }
     source = (ROLE / "tasks/main.yml").read_text()
     tasks = yaml.safe_load(source)
@@ -261,6 +270,12 @@ def test_role_is_default_off_and_has_no_legacy_or_worker_activation():
     )
     assert source.index("Commit deny policy") < source.index("Enable persistence")
     assert "create_home: false" in source
+    assert source.index("Refuse existing home contents") < source.index(
+        "Bootstrap reviewed packages"
+    )
+    assert source.index("Bootstrap reviewed packages") < source.index(
+        "Verify preinstalled Docker"
+    )
     assert "masked: true" in source and "enabled: false" in source
     assert source.index("Refuse an active rootful") < source.index(
         "Mask inactive rootful"
@@ -300,3 +315,95 @@ def test_service_has_private_socket_clean_environment_and_fail_closed_lifecycle(
     policy = json.loads((ROLE / "files/daemon-policy.json").read_text())
     assert policy["log-driver"] == "none" and policy["no-new-privileges"] is True
     assert policy["live-restore"] is False
+
+
+def test_bootstrap_is_separately_gated_after_fresh_host_checks():
+    source = (ROLE / "tasks/main.yml").read_text()
+    tasks = yaml.safe_load(source)[1]["block"]
+    bootstrap = next(
+        t for t in tasks if t.get("ansible.builtin.include_tasks") == "packages.yml"
+    )
+    assert bootstrap["when"] == "coding_hosted_packages_enabled | bool"
+    assert source.index("Refuse existing home contents") < source.index(
+        bootstrap["name"]
+    )
+    package_tasks = yaml.safe_load((ROLE / "tasks/packages.yml").read_text())
+    guards = package_tasks[0]["ansible.builtin.assert"]["that"]
+    assert "coding_hosted_daemon_enabled | bool" in guards
+    assert "coding_hosted_packages_enabled | bool" in guards
+    assert any("docker_key_sha256" in g for g in guards)
+    assert any("containerd_version" in g for g in guards)
+
+
+def test_bootstrap_masks_before_apt_and_never_replaces_installed_runtimes():
+    tasks = yaml.safe_load((ROLE / "tasks/packages.yml").read_text())
+    mask_index = next(
+        i
+        for i, t in enumerate(tasks)
+        if t["name"] == "Mask runtime units before any apt operation"
+    )
+    assert set(tasks[mask_index]["loop"]) == {
+        "docker.service",
+        "docker.socket",
+        "containerd.service",
+    }
+    mask = tasks[mask_index]["ansible.builtin.systemd_service"]
+    assert mask["masked"] is True and "state" not in mask and "enabled" not in mask
+    reject_index = next(
+        i
+        for i, t in enumerate(tasks)
+        if t["name"].startswith("Refuse an existing container")
+    )
+    assert reject_index < mask_index
+    assert "docker.io" in tasks[reject_index]["loop"]
+    installs = [
+        (i, t["ansible.builtin.apt"])
+        for i, t in enumerate(tasks)
+        if "ansible.builtin.apt" in t
+    ]
+    assert len(installs) == 2
+    for index, apt in installs:
+        assert mask_index < index
+        assert apt["policy_rc_d"] == 101
+        assert apt["allow_unauthenticated"] is False
+        assert apt["allow_downgrade"] is False
+        assert apt["install_recommends"] is False
+        assert apt["auto_install_module_deps"] is False
+        assert apt["fail_on_autoremove"] is True
+        assert apt["state"] == "present"
+    assert installs[1][1]["name"] == [
+        "docker-ce={{ coding_hosted_docker_version }}",
+        "docker-ce-cli={{ coding_hosted_docker_version }}",
+        "docker-ce-rootless-extras={{ coding_hosted_docker_version }}",
+        "containerd.io={{ coding_hosted_containerd_version }}",
+    ]
+
+
+def test_bootstrap_uses_fixed_signed_origin_and_verifies_after_install():
+    tasks = yaml.safe_load((ROLE / "tasks/packages.yml").read_text())
+    download = next(
+        t["ansible.builtin.get_url"] for t in tasks if "ansible.builtin.get_url" in t
+    )
+    assert download["url"] == "https://download.docker.com/linux/debian/gpg"
+    assert download["checksum"] == "sha256:{{ coding_hosted_docker_key_sha256 }}"
+    assert download["validate_certs"] is True
+    repo = next(
+        t["ansible.builtin.copy"]
+        for t in tasks
+        if "ansible.builtin.copy" in t
+        and t["ansible.builtin.copy"]["dest"].endswith(".sources")
+    )
+    assert (
+        "Suites: trixie" in repo["content"]
+        and "Architectures: amd64" in repo["content"]
+    )
+    assert "Signed-By: /etc/apt/keyrings/coding-hosted-docker.asc" in repo["content"]
+    assert "trusted=yes" not in repo["content"]
+    assert tasks[-1]["ansible.builtin.command"]["argv"] == [
+        "systemctl",
+        "is-active",
+        "docker.service",
+        "docker.socket",
+        "containerd.service",
+    ]
+    assert tasks[-1]["failed_when"].endswith(".rc not in [3, 4]")

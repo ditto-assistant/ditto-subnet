@@ -1,6 +1,9 @@
 ---
 coding_hosted_daemon_enabled: false
 # Exact reviewed version shared by docker-ce, docker-ce-cli and rootless-extras.
-# Provision packages in the approved base image; this role never installs them
-# or lets a package post-install start a rootful daemon.
+# Existing approved packages remain supported. Bootstrap requires a separate
+# explicit gate, exact containerd version and independently reviewed key hash.
 coding_hosted_docker_version: ""
+coding_hosted_packages_enabled: false
+coding_hosted_containerd_version: ""
+coding_hosted_docker_key_sha256: ""

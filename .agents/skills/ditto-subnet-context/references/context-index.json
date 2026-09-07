@@ -599,7 +599,7 @@
     {
       "id": "coding-hosted-host",
       "title": "Platform-owned native-v2 qualification host",
-      "keywords": ["native v2 host", "coding hosted host", "host qualification", "Platform-owned host", "coding-hosted-host"],
+      "keywords": ["native v2 host", "coding hosted host", "coding package bootstrap", "host qualification", "Platform-owned host", "coding-hosted-host"],
       "summary": "Default-off native-v2 host foundation, independent of the legacy validator/scorer cohort; provisioning and runtime approval stay separate.",
       "skills": ["ditto-subnet-release-ops"],
       "owns": ["infra/terraform/modules/coding-hosted-host", "infra/terraform/stacks/gcp-platform/coding-hosted.tf", "infra/ansible/roles/coding_hosted", "infra/ansible/playbooks/gcp-coding-hosted.yml", "infra/docs/coding-hosted-host-v2.md", "infra/docs/coding-hosted-daemon-v2.md", "ditto/tests/test_coding_hosted_infrastructure.py", "ditto/tests/test_coding_hosted_daemon.py"],

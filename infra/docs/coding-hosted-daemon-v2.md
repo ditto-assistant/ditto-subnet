@@ -9,14 +9,33 @@ called by application deployment or the legacy coding-executor playbook.
 
 ## Preconditions and operator boundary
 
-An explicitly approved base image must already contain reviewed Docker Engine,
-CLI and rootless-extras packages at the same exact operator-supplied
-`coding_hosted_docker_version` (empty by default), plus Debian's Python, systemd,
-dbus-user-session, uidmap, slirp4netns and nftables prerequisites. The role checks
-package versions and protected executable files. It does not fetch a floating
-installer, enable rootful Docker to install packages, grant cloud privileges, or
-provide base-image/package attestation. Review the actual installed binaries,
-dependencies and package provenance before applying the role.
+An approved base image must contain Debian Python (including `python3-apt`),
+systemd and working authenticated Debian repositories. There are two supported
+paths: preinstalled approved Docker/rootless prerequisites, or explicit package
+bootstrap using `coding_hosted_packages_enabled: true` alongside the daemon gate.
+Both require the same exact operator-supplied `coding_hosted_docker_version` for
+Engine, CLI and rootless-extras. Bootstrap additionally requires an exact
+`coding_hosted_containerd_version` and independently reviewed
+`coding_hosted_docker_key_sha256`; all three selections default empty.
+
+Bootstrap runs only after the fresh-host/account/home checks. It refuses
+existing container runtime packages and active containerd, masks Docker and
+containerd units **before apt**, and uses `policy_rc_d: 101` for every apt action.
+It installs Debian rootless prerequisites, verifies Docker's HTTPS signing key
+against the supplied SHA-256, configures a fixed Debian 13 amd64 signed source,
+and installs the four exactly selected runtime packages. It disables dependency
+auto-install by the Ansible module, unauthenticated packages, downgrades,
+recommended extras and automatic removals. It verifies installed versions and
+inactive services afterward. The package flag alone cannot activate the role.
+See [Docker's Debian instructions](https://docs.docker.com/engine/install/debian/)
+and [Ansible's service-start suppression](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/apt_module.html#parameter-policy_rc_d).
+
+No floating convenience installer or container image is executed. Debian
+dependency versions follow the approved base-image repository snapshot; this is
+not a full transitive package lock or a base-image security attestation. Existing
+APT trust/configuration and selected package provenance still require approval.
+These are public OS dependencies, not an alternative store for private Coding
+inputs or evidence. No cloud privilege or private-data capability is granted.
 
 An active rootful service/socket is refused, not stopped. After fresh-host checks,
 the inactive rootful units are disabled and masked so reboot or package hooks
@@ -82,7 +101,8 @@ later explicit operator steps, not actions performed by this role.
 ## Verification and remaining work
 
 After starting the empty daemon, the role verifies its exact rootless security
-marker and isolated ownership label, private socket/empty client directory,
+marker and isolated ownership label, Linux amd64 architecture and exact daemon
+data root, private socket/empty client directory,
 cgroup support, and zero images/containers. Its redacted output says
 `private_execution_ready=false`, `shadow_only=true`, `weight_eligible=false`.
 It is not an approved runtime profile, live packet-denial certificate or canary.
