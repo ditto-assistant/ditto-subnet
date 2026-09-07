@@ -2250,6 +2250,7 @@ def _public_entry(
         median_ms=r.median_ms,
         n=r.n,
         eligible=r.eligible,
+        shadow=r.shadow,
         bench_version=bench_version,
         settled_composite=settled_composite,
         rollout_composite=rollout_composite,

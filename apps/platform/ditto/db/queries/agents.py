@@ -118,6 +118,7 @@ async def insert_agent(
     prompt_fingerprint: dict | None = None,
     code_embedding: list | None = None,
     code_embed_model: str | None = None,
+    shadow: bool = False,
 ) -> int:
     """Insert one ``agents`` row inside the caller-owned transaction.
 
@@ -142,6 +143,13 @@ async def insert_agent(
     (see
     :mod:`ditto.api_server.embedding`), stored in shadow mode; ``None`` when the
     embedder is disabled or the embed failed.
+
+    ``shadow`` opts this submission into *shadow mode*: it is graded and screened
+    exactly like any other but is forced ineligible, so it never ranks on the
+    public board, never earns validator weight, and never counts toward a
+    bench-version authority quorum (see :attr:`ditto.db.models.Agent.shadow`).
+    Defaults to ``False`` so ordinary uploads are unaffected; a caller that wants
+    an unproven or opt-in router graded-without-displacing passes ``True``.
 
     Raises:
         DbIntegrityError: Any constraint violation on ``agents``
@@ -186,6 +194,7 @@ async def insert_agent(
         prompt_fingerprint=prompt_fingerprint,
         code_embedding=code_embedding,
         code_embed_model=code_embed_model,
+        shadow=shadow,
     )
     session.add(row)
     try:

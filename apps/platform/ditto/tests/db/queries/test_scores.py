@@ -22,11 +22,13 @@ from ditto.db.queries.confirmation_scores import confirmation_composites_by_seed
 from ditto.db.queries.score_ranking import official_composites
 from ditto.db.queries.scores import (
     MIN_ELIGIBLE_CASES,
+    count_ranked_quorum_agents,
     list_eligible_ledger,
     list_provisional_ledger,
     list_scores_for_agent,
     quorum_composites,
     quorum_ledger_proof_rows,
+    ranked_quorum_agent_ids,
     upsert_score,
 )
 
@@ -196,6 +198,7 @@ async def _seed_scored(
     code_embed_model: str | None = None,
     coldkey: str | None = None,
     name: str = "agent",
+    shadow: bool = False,
 ) -> Agent:
     """Seed one agent + its score row, in the given lifecycle state."""
     agent = Agent(
@@ -210,6 +213,7 @@ async def _seed_scored(
         prompt_fingerprint=prompt_fingerprint,
         code_embedding=code_embedding,
         code_embed_model=code_embed_model,
+        shadow=shadow,
     )
     async with session.begin():
         session.add(agent)
@@ -1467,6 +1471,121 @@ class TestListProvisionalLedger:
         }
 
 
+class TestShadowSubmissions:
+    """A shadow submission is graded but never ranks, weighs, or counts.
+
+    Shadow is the per-submission dial (``agents.shadow``) that lets an unproven
+    or opt-in router be scored and screened -- and get real feedback -- without
+    displacing proven work. It must behave as ``eligible = False`` everywhere the
+    ledger, the weight fold, and the authority quorum look, while the row itself
+    stays visible so the submitter still learns from it.
+    """
+
+    async def test_scored_shadow_row_is_kept_but_demoted_below_a_weaker_peer(
+        self, session: AsyncSession
+    ) -> None:
+        """A shadow run keeps its (higher) composite yet ranks below a real one.
+
+        The whole point: grading is unchanged, only *ranking* is withheld. So a
+        shadow agent that scores better than an ordinary agent must still appear
+        on the board (visible feedback) but sit below it (eligible sorts first).
+        """
+        ordinary = await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=0.50,
+            created_at=_FIRST_SEEN,
+            n=MIN_ELIGIBLE_CASES,
+        )
+        shadowed = await _seed_scored(
+            session,
+            miner=_MINER_B,
+            composite=0.90,
+            created_at=_FIRST_SEEN,
+            n=MIN_ELIGIBLE_CASES,
+            shadow=True,
+        )
+
+        ledger = await list_eligible_ledger(session)
+        by_id = {row.agent_id: row for row in ledger}
+
+        # Both graded rows are present -- shadow is demoted, never dropped.
+        assert set(by_id) == {ordinary.agent_id, shadowed.agent_id}
+        assert by_id[shadowed.agent_id].composite == pytest.approx(0.90)
+        assert by_id[ordinary.agent_id].eligible is True
+        assert by_id[shadowed.agent_id].eligible is False
+        # eligible sorts first, so the weaker ordinary run outranks the shadow one.
+        assert ledger[0].agent_id == ordinary.agent_id
+
+    async def test_shadow_run_never_counts_toward_the_authority_quorum(
+        self, session: AsyncSession
+    ) -> None:
+        """A full-quorum shadow agent is excluded from the rollout quorum set.
+
+        Rollout activation gates on ``ranked_quorum_agent_ids`` /
+        ``count_ranked_quorum_agents``; a shadow agent that assembled a complete
+        quorum must not be able to tip a bench-version flip.
+        """
+        ordinary = await _seed_versioned_agent(
+            session,
+            miner=_MINER,
+            created_at=_FIRST_SEEN,
+            source_composite=0.60,
+        )
+        shadowed = await _seed_versioned_agent(
+            session,
+            miner=_MINER_B,
+            created_at=_FIRST_SEEN,
+            source_composite=0.80,
+            shadow=True,
+        )
+
+        ranked = await ranked_quorum_agent_ids(session, bench_version=_ROLLOUT_FROM)
+        assert ordinary.agent_id in ranked
+        assert shadowed.agent_id not in ranked
+
+        count = await count_ranked_quorum_agents(session, bench_version=_ROLLOUT_FROM)
+        assert count == 1
+
+    async def test_provisional_overlay_flags_shadow_and_forces_ineligible(
+        self, session: AsyncSession
+    ) -> None:
+        """While evaluating, the submitter sees the shadow flag and no rank.
+
+        The provisional overlay is the submitter's live feedback surface. A
+        shadow run there must carry ``shadow=True`` and ``eligible=False`` even
+        with a full, positive score, so the miner can tell 'deliberately shadow'
+        apart from 'sub-floor', while an ordinary peer stays ``eligible=True``.
+        """
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=0.70,
+            created_at=_FIRST_SEEN,
+            n=MIN_ELIGIBLE_CASES,
+            status=AgentStatus.EVALUATING,
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER_B,
+            composite=0.70,
+            created_at=_FIRST_SEEN,
+            n=MIN_ELIGIBLE_CASES,
+            status=AgentStatus.EVALUATING,
+            shadow=True,
+        )
+
+        rows = {
+            row.miner_hotkey: row
+            for row, _count in await list_provisional_ledger(session)
+        }
+
+        assert rows[_MINER].shadow is False
+        assert rows[_MINER].eligible is True
+        assert rows[_MINER_B].shadow is True
+        assert rows[_MINER_B].eligible is False
+
+
 class TestListScoresForBenchVersion:
     async def test_filters_by_first_class_version_not_advisory_details(
         self, session: AsyncSession
@@ -1555,6 +1674,7 @@ async def _seed_versioned_agent(
     desired_n: int = MIN_ELIGIBLE_CASES,
     status: AgentStatus = AgentStatus.SCORED,
     coldkey: str | None = None,
+    shadow: bool = False,
 ) -> Agent:
     """One agent with a full source-era quorum and an optional target-era one."""
     agent = Agent(
@@ -1565,6 +1685,7 @@ async def _seed_versioned_agent(
         size_bytes=524288,
         status=status,
         created_at=created_at,
+        shadow=shadow,
     )
     async with session.begin():
         session.add(agent)
