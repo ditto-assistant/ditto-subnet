@@ -67,6 +67,7 @@ def test_native_host_qualification_routes_to_separate_infrastructure() -> None:
     assert topic["id"] == "coding-hosted-host"
     assert topic_list(topic, "skills") == ["ditto-subnet-release-ops"]
     assert "infra/terraform/modules/coding-hosted-host" in topic_list(topic, "owns")
+    assert "infra/ansible/roles/coding_hosted" in topic_list(topic, "owns")
 
 
 def test_hosted_worker_launcher_routes_to_native_runtime() -> None:

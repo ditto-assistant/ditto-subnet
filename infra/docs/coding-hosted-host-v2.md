@@ -58,12 +58,14 @@ remove state as an automatic recovery step.
 
 ## Required next layers
 
-1. A separate native-v2 daemon/host role, targeting `role_coding_hosted` only.
+1. The separate [native-v2 daemon role](coding-hosted-daemon-v2.md), targeting
+   `role_coding_hosted` only, is now available but remains default-off.
    Its worker-owned socket must be mode `0600` in a private `0700` directory;
    the legacy role's group-shared `0660` socket is not compatible. Prove rootless
    identity, the isolated-daemon label, empty daemon credentials, UID/subuid
    separation and the candidate firewall/proxy boundary. Do not weaken existing
-   launcher checks. No current Ansible playbook targets this new role.
+   launcher checks. Its deny-all qualification profile is not a private-worker
+   network profile and has not been applied or qualified by these code tests.
 2. Approved installed Platform/Go revisions and digest-verified image import,
    then synthetic hostile isolation and unchanged private base/reference
    qualification through the actual executor. VM readiness is not driver proof.

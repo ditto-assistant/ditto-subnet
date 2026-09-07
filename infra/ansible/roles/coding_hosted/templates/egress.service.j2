@@ -1,0 +1,12 @@
+[Unit]
+Description=Deny all native-v2 daemon-identity IPv4 and IPv6 egress
+Before=user@{{ coding_hosted_uid }}.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 -I /usr/local/lib/ditto-coding-hosted/host-policy.py guard
+# No ExecStop: stopping this service must not remove the deny policy.
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+---
+coding_hosted_daemon_enabled: false
+# Exact reviewed version shared by docker-ce, docker-ce-cli and rootless-extras.
+# Provision packages in the approved base image; this role never installs them
+# or lets a package post-install start a rootful daemon.
+coding_hosted_docker_version: ""

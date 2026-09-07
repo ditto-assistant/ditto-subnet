@@ -1,0 +1,21 @@
+[Unit]
+Description=Platform native-v2 qualification-only rootless Docker
+
+[Service]
+Type=notify
+NotifyAccess=all
+UMask=0077
+ExecStartPre=/usr/bin/systemctl is-active --quiet ditto-coding-hosted-egress.service
+ExecStart=/usr/bin/env -i PATH=/usr/bin:/bin HOME=/var/lib/ditto-coding-hosted XDG_RUNTIME_DIR=/run/user/{{ coding_hosted_uid }} DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ coding_hosted_uid }}/bus NOTIFY_SOCKET=${NOTIFY_SOCKET} /usr/bin/dockerd-rootless.sh --host=unix:///run/ditto-coding-hosted/docker.sock --group=ditto-coding-hosted --data-root=/var/lib/ditto-coding-hosted/docker --exec-root=/run/user/{{ coding_hosted_uid }}/coding-hosted-exec --pidfile=/run/user/{{ coding_hosted_uid }}/coding-hosted.pid --config-file=/usr/local/lib/ditto-coding-hosted/daemon-policy.json
+ExecStartPost=/usr/bin/chmod 0600 /run/ditto-coding-hosted/docker.sock
+Restart=no
+TimeoutStartSec=120
+TimeoutStopSec=1800
+KillMode=mixed
+Delegate=cpu cpuset io memory pids
+TasksMax=8192
+MemoryMax=24G
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,7 @@
+[Unit]
+Requires=ditto-coding-hosted-egress.service
+After=ditto-coding-hosted-egress.service
+BindsTo=ditto-coding-hosted-egress.service
+
+[Service]
+Delegate=cpu cpuset io memory pids

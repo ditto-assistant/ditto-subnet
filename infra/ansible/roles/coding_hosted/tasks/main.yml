@@ -1,0 +1,265 @@
+---
+- name: Explain dormant native-v2 daemon profile
+  ansible.builtin.debug:
+    msg: Native-v2 daemon provisioning is disabled; no host state is changed.
+  when: not (coding_hosted_daemon_enabled | bool)
+
+- name: Provision qualification-only native-v2 daemon
+  when: coding_hosted_daemon_enabled | bool
+  block:
+    - name: Require the dedicated Platform host and reviewed package identity
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in groups.get('role_coding_hosted', [])
+          - ansible_facts['hostname'] == 'ditto-coding-hosted-v2'
+          - ansible_facts['architecture'] == 'x86_64'
+          - ansible_facts['distribution'] == 'Debian'
+          - coding_hosted_docker_version is match('^[0-9][A-Za-z0-9.+:~_-]+$')
+        fail_msg: Require the dedicated native-v2 host and exact reviewed Docker package version.
+
+    - name: Refuse an active rootful daemon or socket without stopping it
+      ansible.builtin.command:
+        argv: [systemctl, is-active, docker.service, docker.socket]
+      register: coding_hosted_rootful
+      changed_when: false
+      failed_when: coding_hosted_rootful.rc not in [3, 4]
+
+    - name: Verify preinstalled Docker package versions
+      ansible.builtin.command:
+        argv:
+          - dpkg-query
+          - -W
+          - '--showformat=${Version}\n'
+          - docker-ce
+          - docker-ce-cli
+          - docker-ce-rootless-extras
+      register: coding_hosted_packages
+      changed_when: false
+
+    - name: Refuse unreviewed or mixed Docker packages
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_packages.stdout_lines | length == 3
+          - coding_hosted_packages.stdout_lines | unique | list == [coding_hosted_docker_version]
+
+    - name: Inspect required base-image executables and cgroup v2
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: true
+      loop:
+        - /usr/bin/docker
+        - /usr/bin/dockerd-rootless.sh
+        - /usr/bin/newuidmap
+        - /usr/bin/newgidmap
+        - /usr/bin/slirp4netns
+        - /usr/sbin/nft
+        - /sys/fs/cgroup/cgroup.controllers
+      register: coding_hosted_prerequisites
+
+    - name: Require protected installed prerequisites
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.uid == 0
+          - not item.stat.wgrp
+          - not item.stat.woth
+      loop: "{{ coding_hosted_prerequisites.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Inspect existing native-v2 account without altering it
+      ansible.builtin.getent:
+        database: passwd
+        key: ditto-coding-hosted
+        fail_key: false
+
+    - name: Refuse an existing native account before changing any policy
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.getent_passwd['ditto-coding-hosted'] is none
+        fail_msg: First provisioning only; reconcile existing accounts, user services and retained state separately.
+
+    - name: Inspect the intended home without following links
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop: [/var/lib/ditto-coding-hosted, /run/ditto-coding-hosted]
+      register: coding_hosted_previous_home
+
+    - name: Refuse existing home contents or symlinks without deleting them
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        fail_msg: Existing native-v2 state requires explicit reconciliation before first provisioning.
+      loop: "{{ coding_hosted_previous_home.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Create the dedicated empty primary group
+      ansible.builtin.group:
+        name: ditto-coding-hosted
+        state: present
+
+    - name: Mask inactive rootful units so reboot or package hooks cannot start them
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: false
+        masked: true
+      loop: [docker.service, docker.socket]
+
+    - name: Create a fresh unprivileged account with automatically allocated subuids
+      ansible.builtin.user:
+        name: ditto-coding-hosted
+        group: ditto-coding-hosted
+        home: /var/lib/ditto-coding-hosted
+        shell: /usr/sbin/nologin
+        # Create the empty private home ourselves; never inherit skel user units.
+        create_home: false
+        password_lock: true
+        system: false
+      when: ansible_facts.getent_passwd['ditto-coding-hosted'] is none
+
+    - name: Ensure the dedicated account password remains locked
+      ansible.builtin.user:
+        name: ditto-coding-hosted
+        password_lock: true
+
+    - name: Install public root-owned qualification policy
+      ansible.builtin.file:
+        path: /usr/local/lib/ditto-coding-hosted
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install fixed policy files
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/usr/local/lib/ditto-coding-hosted/{{ item }}"
+        owner: root
+        group: root
+        mode: "0444"
+      loop: [host-policy.py, daemon-policy.json]
+
+    - name: Verify identity and subordinate ranges without reallocating them
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, -I, /usr/local/lib/ditto-coding-hosted/host-policy.py, identity]
+      register: coding_hosted_identity
+      changed_when: false
+
+    - name: Bind the verified numeric daemon identity
+      ansible.builtin.set_fact:
+        coding_hosted_uid: "{{ coding_hosted_identity.stdout | int }}"
+
+    - name: Refuse a running user manager rather than interrupting its workloads
+      ansible.builtin.command:
+        argv: [systemctl, is-active, "user@{{ coding_hosted_uid }}.service"]
+      register: coding_hosted_manager
+      changed_when: false
+      failed_when: coding_hosted_manager.rc not in [3, 4]
+
+    - name: Create private daemon directories without recursive ownership changes
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: ditto-coding-hosted
+        group: ditto-coding-hosted
+        mode: "0700"
+      loop:
+        - /var/lib/ditto-coding-hosted
+        - /var/lib/ditto-coding-hosted/docker
+        - /var/lib/ditto-coding-hosted/empty-client
+        - /var/lib/ditto-coding-hosted/.config
+        - /var/lib/ditto-coding-hosted/.config/systemd
+        - /var/lib/ditto-coding-hosted/.config/systemd/user
+        - /run/ditto-coding-hosted
+
+    - name: Preserve private socket directory across reboot
+      ansible.builtin.copy:
+        dest: /etc/tmpfiles.d/ditto-coding-hosted.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: "d /run/ditto-coding-hosted 0700 ditto-coding-hosted ditto-coding-hosted -\n"
+
+    - name: Create the per-user manager drop-in directory
+      ansible.builtin.file:
+        path: "/etc/systemd/system/user@{{ coding_hosted_uid }}.service.d"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Bind this user manager to its deny guard and delegated controllers
+      ansible.builtin.template:
+        src: manager.conf.j2
+        dest: "/etc/systemd/system/user@{{ coding_hosted_uid }}.service.d/coding-hosted.conf"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install the root-owned deny-all egress service
+      ansible.builtin.template:
+        src: egress.service.j2
+        dest: /etc/systemd/system/ditto-coding-hosted-egress.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install the supported user-scoped rootless daemon unit
+      ansible.builtin.template:
+        src: daemon.service.j2
+        dest: /var/lib/ditto-coding-hosted/.config/systemd/user/coding-hosted-docker.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Commit deny policy before starting any user manager
+      ansible.builtin.systemd_service:
+        name: ditto-coding-hosted-egress.service
+        daemon_reload: true
+        enabled: true
+        state: restarted
+
+    - name: Enable persistence for only the dedicated qualification identity
+      ansible.builtin.command:
+        argv: [loginctl, enable-linger, ditto-coding-hosted]
+      changed_when: true
+
+    - name: Start the guard-bound delegated user manager
+      ansible.builtin.systemd_service:
+        name: "user@{{ coding_hosted_uid }}.service"
+        state: started
+
+    - name: Start only the empty rootless daemon through the user manager
+      ansible.builtin.command:
+        argv:
+          - runuser
+          - -u
+          - ditto-coding-hosted
+          - --
+          - env
+          - -i
+          - PATH=/usr/bin:/bin
+          - "XDG_RUNTIME_DIR=/run/user/{{ coding_hosted_uid }}"
+          - "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ coding_hosted_uid }}/bus"
+          - systemctl
+          - --user
+          - enable
+          - --now
+          - coding-hosted-docker.service
+      changed_when: true
+
+    - name: Verify private socket, empty daemon, cgroups and isolated identity
+      ansible.builtin.command:
+        argv:
+          - runuser
+          - -u
+          - ditto-coding-hosted
+          - --
+          - /usr/bin/python3
+          - -I
+          - /usr/local/lib/ditto-coding-hosted/host-policy.py
+          - verify
+      changed_when: false
