@@ -268,6 +268,7 @@ def compile_suite(source, candidate_modules):
                         and isinstance(context.args[0], ast.Name)
                         and context.args[0].id in EXCEPTIONS
                         and context.args[0].id not in assigned
+                        and context.args[0].id not in pytest_imports
                         and context.args[0].id not in symbols
                     ):
                         raise InvalidSuite()

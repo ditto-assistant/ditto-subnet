@@ -279,6 +279,18 @@ def test_context():
         driver.compile_suite(before_import, {"demo_pkg.operations"})
 
 
+def test_local_pytest_alias_cannot_impersonate_builtin_exception():
+    source = """import pytest
+from demo import operation
+def test_context():
+    import pytest as ValueError
+    with pytest.raises(ValueError):
+        operation()
+"""
+    with pytest.raises(driver.InvalidSuite):
+        driver.compile_suite(source, {"demo"})
+
+
 def test_loop_resource_limit_is_a_failure_and_closes_child(monkeypatch):
     closed = []
 
