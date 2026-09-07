@@ -23351,10 +23351,12 @@ export interface components {
          * @description Terminal clear/reject decision on a review that would otherwise hold.
          *
          *     ``escalate`` is never a model choice. The adjudicator is asked for clear
-         *     or reject; the host uses ``escalate`` internally when the returned
-         *     decision fails its contract. The terminal court wrapper converts that
-         *     refusal to the explicit no-proven-breach clear clause, so malformed or
-         *     exhausted automation cannot strand or reject a miner without proof.
+         *     or reject; the host uses ``escalate`` when the court could not start, ran
+         *     out of budget, timed out, or returned a decision that fails its contract.
+         *     An escalation is carried as an operator hold (quarantine): malformed or
+         *     exhausted automation can neither reject a miner without proof nor admit
+         *     one without a review. ``no_proven_breach_before_deadline`` remains a valid
+         *     historical clear clause for rows settled before 2026-09-07.
          */
         SourceReviewAdjudication: {
             /** Citations */
