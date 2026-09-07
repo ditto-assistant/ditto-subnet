@@ -62,6 +62,12 @@ def test_hosted_authoring_input_routes_to_both_consumers() -> None:
     assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
 
 
+def test_native_custody_routes_to_platform_only():
+    topic = lookup("native v2 custody Unix proxy")[0]
+    assert topic["id"] == "coding-native-custody"
+    assert topic_list(topic, "skills") == ["ditto-subnet-platform"]
+
+
 def test_native_host_qualification_routes_to_separate_infrastructure() -> None:
     topic = lookup("native v2 host qualification")[0]
     assert topic["id"] == "coding-hosted-host"

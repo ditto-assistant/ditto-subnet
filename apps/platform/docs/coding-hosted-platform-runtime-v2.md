@@ -94,6 +94,10 @@ executable. It does not implement a KMS server, load a private RSA key, reuse a
 legacy v1 ticket, or authorize arbitrary decryption. Production must provision
 and review the helper and its independently enforced grant/key policy.
 
+The [native custody service and Unix proxy](coding-private-v2-custody.md) now
+provide a concrete, separately owned implementation of this protocol. They are
+explicit private processes, not automatically provisioned or started here.
+
 The helper receives canonical JSON for `PrivateV2UnwrapRequest`, schema
 `dittobench-coding-private-v2-unwrap-v1`. This is the first unwrap-message version
 for native private v2, not the old v1 ticket protocol. It binds grant, evaluation,

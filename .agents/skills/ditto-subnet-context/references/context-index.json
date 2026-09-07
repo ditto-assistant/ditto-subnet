@@ -387,6 +387,19 @@
       "related": ["coding-hosted-inference", "coding-hosted-relay", "platform-api"]
     },
     {
+      "id": "coding-native-custody",
+      "title": "Native-v2 private key custody and Unix proxy",
+      "keywords": ["native v2 custody", "native custody", "private key custody service", "custody Unix proxy"],
+      "summary": "Authenticate the private worker UID and recheck signed metadata plus live phase grants before releasing a data key.",
+      "skills": ["ditto-subnet-platform"],
+      "owns": ["apps/platform/ditto/api_server/coding_private_v2_custody.py", "apps/platform/ditto/api_server/coding_private_v2_custody_socket.py", "apps/platform/ditto/coding_private_v2_custody.py", "apps/platform/docs/coding-private-v2-custody.md", "apps/platform/ditto/tests/api_server/test_coding_private_v2_custody.py"],
+      "read": ["apps/platform/docs/coding-private-v2-custody.md", "apps/platform/docs/coding-hosted-private-grants.md", "apps/platform/ditto/api_server/coding_private_v2_retrieval.py"],
+      "search": ["rg -n 'active_grant|unwrap_request|peer_uid|close' apps/platform/ditto/api_server/coding_private_v2_custody*.py"],
+      "validate": ["cd apps/platform && uv run pytest -n 2 -q ditto/tests/api_server/test_coding_private_v2_custody.py ditto/tests/api_server/test_coding_private_v2_retrieval.py ditto/tests/api_server/test_coding_hosted_private_grants.py", "cd apps/platform && make lint lint-copy typecheck test"],
+      "invariants": ["Key access follows exact signed-object and current grant validation; revocation is rechecked before key release.", "Worker and custody UIDs differ; validators never receive key or object capabilities.", "No custody service or private execution starts by default."],
+      "related": ["coding-hosted-inputs", "platform-api"]
+    },
+    {
       "id": "coding-hosted-inference",
       "title": "Native hosted inference policy and accounting",
       "keywords": ["hosted inference authority", "native v2 inference", "hosted inference budget", "native hosted provider adapter"],
