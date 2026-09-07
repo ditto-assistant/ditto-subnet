@@ -20,6 +20,20 @@ from dittobench_wire import pack, unpack
 
 MAX_MESSAGE = 65536
 NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,79}$")
+EXCEPTIONS = frozenset(
+    {
+        "ValueError",
+        "TypeError",
+        "KeyError",
+        "IndexError",
+        "RuntimeError",
+        "OverflowError",
+        "ZeroDivisionError",
+        "ArithmeticError",
+        "LookupError",
+    }
+)
+PYTEST = object()
 
 
 class InvalidSuite(ValueError):
@@ -28,6 +42,11 @@ class InvalidSuite(ValueError):
 
 class CandidateFailure(ValueError):
     pass
+
+
+class CandidateException(CandidateFailure):
+    def __init__(self, kinds):
+        self.kinds = frozenset(kinds)
 
 
 @dataclass(frozen=True)
@@ -57,9 +76,10 @@ def read_suite(root, relative):
 
 def compile_suite(source, candidate_modules):
     if not candidate_modules or any(
-        not NAME.fullmatch(name)
-        or name in sys.stdlib_module_names
-        or name in {"pytest", "pluggy", "packaging", "iniconfig", "pygments"}
+        not all(NAME.fullmatch(part) for part in name.split("."))
+        or name.split(".")[0] in sys.stdlib_module_names
+        or name.split(".")[0]
+        in {"pytest", "pluggy", "packaging", "iniconfig", "pygments", "dittobench_wire"}
         for name in candidate_modules
     ):
         raise InvalidSuite()
@@ -79,10 +99,21 @@ def compile_suite(source, candidate_modules):
         ast.Attribute,
         ast.Constant,
         ast.List,
+        ast.Tuple,
         ast.Dict,
         ast.Compare,
         ast.Eq,
         ast.NotEq,
+        ast.Is,
+        ast.IsNot,
+        ast.Subscript,
+        ast.BoolOp,
+        ast.And,
+        ast.Or,
+        ast.For,
+        ast.With,
+        ast.withitem,
+        ast.Import,
         ast.Assert,
         ast.Expr,
         ast.keyword,
@@ -92,7 +123,18 @@ def compile_suite(source, candidate_modules):
     if any(not isinstance(node, allowed) for node in ast.walk(tree)):
         raise InvalidSuite()
     for node in tree.body:
-        if isinstance(node, ast.ImportFrom):
+        if isinstance(node, ast.Import):
+            for item in node.names:
+                local = item.asname or item.name
+                if (
+                    item.name != "pytest"
+                    or not NAME.fullmatch(local)
+                    or local in symbols
+                ):
+                    raise InvalidSuite()
+                # A syntax marker, never an imported pytest module or callable.
+                symbols[local] = PYTEST
+        elif isinstance(node, ast.ImportFrom):
             if node.level or node.module not in candidate_modules:
                 raise InvalidSuite()
             for item in node.names:
@@ -123,18 +165,12 @@ def compile_suite(source, candidate_modules):
                 or node.args.defaults
                 or node.args.kw_defaults
                 or getattr(node, "type_params", [])
-                or not any(isinstance(n, ast.Assert) for n in node.body)
+                or not any(
+                    isinstance(n, (ast.Assert, ast.With)) for n in ast.walk(node)
+                )
                 or not any(isinstance(n, ast.Call) for n in ast.walk(node))
             ):
                 raise InvalidSuite()
-            for statement in node.body:
-                if not isinstance(statement, (ast.Assign, ast.Expr, ast.Assert)):
-                    raise InvalidSuite()
-                if isinstance(statement, ast.Assign) and (
-                    len(statement.targets) != 1
-                    or not isinstance(statement.targets[0], ast.Name)
-                ):
-                    raise InvalidSuite()
             tests.append(node)
         elif not (
             isinstance(node, ast.Expr)
@@ -143,7 +179,7 @@ def compile_suite(source, candidate_modules):
         ):
             raise InvalidSuite()
     if (
-        not symbols
+        not any(isinstance(value, Target) for value in symbols.values())
         or not 1 <= len(tests) <= 1000
         or len({n.name for n in tests}) != len(tests)
     ):
@@ -153,23 +189,93 @@ def compile_suite(source, candidate_modules):
     for test in tests:
         # Python assignment makes a name local for the entire function. Do not
         # accidentally resolve an unbound local to an imported remote symbol.
-        assigned = {n.targets[0].id for n in test.body if isinstance(n, ast.Assign)}
-        known = set(symbols) - assigned
-        for statement in test.body:
-            expression = (
-                statement.value
-                if isinstance(statement, (ast.Assign, ast.Expr))
-                else statement.test
-            )
+        assigned = {
+            n.id
+            for n in ast.walk(test)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+        }
+        pytest_imports = {
+            item.asname or item.name
+            for node in ast.walk(test)
+            if isinstance(node, ast.Import)
+            for item in node.names
+        }
+        known = set(symbols) - assigned - pytest_imports
+
+        def expression(node, bound, pytest_imports=pytest_imports):
             if any(
                 isinstance(n, ast.Name)
                 and isinstance(n.ctx, ast.Load)
-                and n.id not in known
-                for n in ast.walk(expression)
+                and (
+                    n.id not in bound
+                    or symbols.get(n.id) is PYTEST
+                    or n.id in pytest_imports
+                )
+                for n in ast.walk(node)
             ):
                 raise InvalidSuite()
-            if isinstance(statement, ast.Assign):
-                known.add(statement.targets[0].id)
+
+        def statements(body, bound, assigned=assigned, pytest_imports=pytest_imports):
+            for statement in body:
+                if isinstance(statement, ast.Import):
+                    for item in statement.names:
+                        local = item.asname or item.name
+                        if item.name != "pytest" or not NAME.fullmatch(local):
+                            raise InvalidSuite()
+                        bound.add(local)
+                elif isinstance(statement, ast.Assign):
+                    if len(statement.targets) != 1 or not isinstance(
+                        statement.targets[0], ast.Name
+                    ):
+                        raise InvalidSuite()
+                    expression(statement.value, bound)
+                    bound.add(statement.targets[0].id)
+                elif isinstance(statement, (ast.Expr, ast.Assert)):
+                    expression(
+                        statement.value
+                        if isinstance(statement, ast.Expr)
+                        else statement.test,
+                        bound,
+                    )
+                elif isinstance(statement, ast.For):
+                    if not isinstance(statement.target, ast.Name) or statement.orelse:
+                        raise InvalidSuite()
+                    expression(statement.iter, bound)
+                    statements(statement.body, bound | {statement.target.id})
+                elif isinstance(statement, ast.With):
+                    if (
+                        len(statement.items) != 1
+                        or statement.items[0].optional_vars is not None
+                        or len(statement.body) != 1
+                        or not isinstance(statement.body[0], ast.Expr)
+                        or not isinstance(statement.body[0].value, ast.Call)
+                    ):
+                        raise InvalidSuite()
+                    context = statement.items[0].context_expr
+                    if not (
+                        isinstance(context, ast.Call)
+                        and isinstance(context.func, ast.Attribute)
+                        and isinstance(context.func.value, ast.Name)
+                        and context.func.attr == "raises"
+                        and (
+                            symbols.get(context.func.value.id) is PYTEST
+                            or context.func.value.id in pytest_imports
+                        )
+                        and context.func.value.id in bound
+                        and context.func.value.id not in assigned
+                        and len(context.args) == 1
+                        and not context.keywords
+                        and isinstance(context.args[0], ast.Name)
+                        and context.args[0].id in EXCEPTIONS
+                        and context.args[0].id not in assigned
+                        and context.args[0].id not in symbols
+                    ):
+                        raise InvalidSuite()
+                    statements(statement.body, set(bound))
+                else:
+                    raise InvalidSuite()
+
+        statements(test.body, known)
     # No dangerous attributes, splats, non-JSON literals, or complex comparisons.
     for node in ast.walk(tree):
         if isinstance(node, ast.Assert) and node.msg is not None:
@@ -192,6 +298,15 @@ def compile_suite(source, candidate_modules):
             raise InvalidSuite()
         if isinstance(node, ast.Compare) and len(node.ops) != 1:
             raise InvalidSuite()
+        if isinstance(node, ast.Compare) and isinstance(
+            node.ops[0], (ast.Is, ast.IsNot)
+        ):
+            other = node.comparators[0]
+            if not isinstance(other, ast.Constant) or type(other.value) not in (
+                bool,
+                type(None),
+            ):
+                raise InvalidSuite()
         if isinstance(node, ast.Dict):
             if any(
                 not isinstance(k, ast.Constant) or type(k.value) is not str
@@ -314,6 +429,19 @@ class Child:
             raise CandidateFailure()
         if result["kind"] == "data":
             return unpack(result["value"])
+        if result["kind"] == "exception":
+            kinds = result["value"]
+            if (
+                type(kinds) is not list
+                or not kinds
+                or len(kinds) > len(EXCEPTIONS)
+                or any(
+                    type(kind) is not str or kind not in EXCEPTIONS for kind in kinds
+                )
+                or len(set(kinds)) != len(kinds)
+            ):
+                raise CandidateFailure()
+            raise CandidateException(kinds)
         if (
             result["kind"] == "reference"
             and type(result["value"]) is int
@@ -342,8 +470,32 @@ def evaluate(node, names, child, *, target=False):
         if not isinstance(base, Target):
             raise CandidateFailure()
         value = Target(base.module, base.reference, (*base.path, node.attr))
-    elif isinstance(node, ast.List):
-        return [evaluate(n, names, child) for n in node.elts]
+    elif isinstance(node, (ast.List, ast.Tuple)):
+        values = [evaluate(n, names, child) for n in node.elts]
+        return tuple(values) if isinstance(node, ast.Tuple) else values
+    elif isinstance(node, ast.Subscript):
+        value = evaluate(node.value, names, child)
+        index = evaluate(node.slice, names, child)
+        if type(value) not in (list, tuple, dict, str, bytes) or type(index) not in (
+            int,
+            str,
+            bool,
+        ):
+            raise CandidateFailure()
+        return value[index]
+    elif isinstance(node, ast.BoolOp):
+        for part in node.values:
+            value = evaluate(part, names, child)
+            if isinstance(value, Target):
+                raise CandidateFailure()
+            if (
+                isinstance(node.op, ast.And)
+                and not value
+                or isinstance(node.op, ast.Or)
+                and value
+            ):
+                return value
+        return value
     elif isinstance(node, ast.Dict):
         keys = [evaluate(n, names, child) for n in node.keys]
         if any(type(k) is not str for k in keys) or len(set(keys)) != len(keys):
@@ -366,6 +518,10 @@ def evaluate(node, names, child, *, target=False):
     elif isinstance(node, ast.Compare):
         left = evaluate(node.left, names, child)
         right = evaluate(node.comparators[0], names, child)
+        if isinstance(node.ops[0], ast.Is):
+            return left is right
+        if isinstance(node.ops[0], ast.IsNot):
+            return left is not right
         if isinstance(left, Target) or isinstance(right, Target):
             raise CandidateFailure()
         return left == right if isinstance(node.ops[0], ast.Eq) else left != right
@@ -379,11 +535,21 @@ def evaluate(node, names, child, *, target=False):
 def run_suite(symbols, tests, uid, gid, timeout):
     passed = 0
     for test in tests:
+        deadline = time.monotonic() + timeout
         child = Child(uid, gid, timeout)
         names = dict(symbols)
-        try:
-            for statement in test.body:
-                if isinstance(statement, ast.Assign):
+        budget = 10000
+
+        def statements(body, names=names, child=child, deadline=deadline):
+            nonlocal budget
+            for statement in body:
+                budget -= 1
+                if budget < 0 or time.monotonic() >= deadline:
+                    raise CandidateFailure()
+                if isinstance(statement, ast.Import):
+                    for item in statement.names:
+                        names[item.asname or item.name] = PYTEST
+                elif isinstance(statement, ast.Assign):
                     names[statement.targets[0].id] = evaluate(
                         statement.value, names, child
                     )
@@ -393,6 +559,27 @@ def run_suite(symbols, tests, uid, gid, timeout):
                     result = evaluate(statement.test, names, child)
                     if isinstance(result, Target) or not result:
                         raise CandidateFailure()
+                elif isinstance(statement, ast.For):
+                    values = evaluate(statement.iter, names, child)
+                    if type(values) not in (list, tuple) or len(values) > 10000:
+                        raise CandidateFailure()
+                    for value in values:
+                        names[statement.target.id] = value
+                        statements(statement.body)
+                elif isinstance(statement, ast.With):
+                    expected = statement.items[0].context_expr.args[0].id
+                    try:
+                        statements(statement.body)
+                    except CandidateException as exception:
+                        if expected not in exception.kinds:
+                            raise CandidateFailure() from None
+                    else:
+                        raise CandidateFailure()
+                else:
+                    raise InvalidSuite()
+
+        try:
+            statements(test.body)
             passed += 1
         except InvalidSuite:
             raise
@@ -403,6 +590,7 @@ def run_suite(symbols, tests, uid, gid, timeout):
             ValueError,
             KeyError,
             TypeError,
+            IndexError,
         ):
             pass
         finally:

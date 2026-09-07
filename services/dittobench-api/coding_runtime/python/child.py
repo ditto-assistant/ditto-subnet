@@ -2,7 +2,7 @@
 
 import ctypes
 import errno
-import importlib.util
+import importlib
 import json
 import os
 import platform
@@ -11,6 +11,17 @@ import sys
 from dittobench_wire import pack, unpack
 
 MAX_MESSAGE = 65536
+EXCEPTIONS = (
+    ValueError,
+    TypeError,
+    KeyError,
+    IndexError,
+    RuntimeError,
+    OverflowError,
+    ZeroDivisionError,
+    ArithmeticError,
+    LookupError,
+)
 
 
 def confine():
@@ -114,21 +125,39 @@ def main():
             if "module" in target:
                 name = target["module"]
                 if name not in modules:
-                    spec = importlib.util.spec_from_file_location(
-                        name, f"/workspace/{name}.py"
-                    )
-                    module = importlib.util.module_from_spec(spec)
-                    sys.modules[name] = module
-                    spec.loader.exec_module(module)
-                    modules[name] = module
+                    # The parent binds the dotted module independently of tests.
+                    # Refuse a fallback to an installed non-workspace module.
+                    location = "/workspace/" + name.replace(".", "/")
+                    if not (
+                        os.path.isfile(location + ".py")
+                        or os.path.isfile(location + "/__init__.py")
+                    ):
+                        raise ImportError("candidate module unavailable")
+                    modules[name] = importlib.import_module(name)
                 value = modules[name]
             else:
                 value = references[target["reference"]]
             for part in target["path"]:
                 value = getattr(value, part)
             if request["operation"] == "call":
-                value = value(*unpack(request["args"]), **unpack(request["kwargs"]))
-            result = encode(value)
+                args, kwargs = unpack(request["args"]), unpack(request["kwargs"])
+                try:
+                    value = value(*args, **kwargs)
+                except Exception as exception:
+                    kinds = [
+                        kind.__name__
+                        for kind in EXCEPTIONS
+                        if isinstance(exception, kind)
+                    ]
+                    result = (
+                        {"kind": "exception", "value": kinds}
+                        if kinds
+                        else {"kind": "failure"}
+                    )
+                else:
+                    result = encode(value)
+            else:
+                result = encode(value)
         except BaseException:
             result = {"kind": "failure"}
         response = (

@@ -70,6 +70,13 @@ def test_native_host_qualification_routes_to_separate_infrastructure() -> None:
     assert "infra/ansible/roles/coding_hosted" in topic_list(topic, "owns")
 
 
+def test_private_python_oracle_routes_to_its_runtime_boundary():
+    topic = lookup("Python suite compatibility")[0]
+    assert topic["id"] == "coding-python-oracle"
+    assert "services/dittobench-api/coding_runtime/python" in topic_list(topic, "owns")
+    assert topic_list(topic, "skills") == ["ditto-subnet-benchmark"]
+
+
 def test_coding_package_bootstrap_routes_to_native_host():
     assert lookup("coding package bootstrap")[0]["id"] == "coding-hosted-host"
 

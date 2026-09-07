@@ -59,6 +59,16 @@ attacks = {
     "environment": 'import os\n        if "SYNTHETIC_SECRET" in os.environ: return 999',
     "tuple": "return (5,)",
     "bytes": "return amount",
+    "tuple-value": "return amount",
+    "package": "pass",
+    "raises": "raise ValueError('synthetic exception')",
+    "raises-subclass": (
+        "class LocalError(ValueError): pass\n"
+        "        raise LocalError('synthetic exception')"
+    ),
+    "raises-return": "return None",
+    "raises-exit": "import os; os._exit(0)",
+    "raises-import": "pass",
 }
 if case not in attacks and case not in {"unsupported", "count-mismatch"}:
     raise ValueError("unknown synthetic scenario")
@@ -81,7 +91,27 @@ if case == "bytes":
         "    assert Counter(0).add({'x': [b'\\x00\\xff']}) == {'x': [b'\\x00\\xff']}\n"
     )
 if case == "unsupported":
-    suite += "\ndef test_loop():\n    for x in [1]:\n        assert x == 1\n"
+    suite += "\ndef test_loop():\n    while True:\n        assert x == 1\n"
+if case == "tuple-value":
+    suite = """from demo import Counter
+def test_data():
+    for number in (1, 2):
+        value = Counter(0).add((number, True, None, b'abc'))
+        assert value[0] == number
+        assert value[1] is True and value[2] is None
+        assert value == (number, True, None, b'abc')
+"""
+if case.startswith("raises"):
+    suite = """import pytest
+from demo import Counter
+def test_rejects():
+    with pytest.raises(ValueError):
+        Counter(0).add(0)
+"""
+    if case == "raises-import":
+        source = "raise ValueError('synthetic import failure')\n" + source
+if case == "package":
+    suite = suite.replace("from demo import", "from demo_pkg.operations import")
 workspace = Path("/workspace")
 control = Path("/run/dittobench-control")
 grader = Path("/run/dittobench-grader")
@@ -90,11 +120,22 @@ for root in (workspace, control, grader):
 control.chmod(0o700)
 grader.chmod(0o700)
 (workspace / "demo.py").write_text(source)
+if case == "package":
+    package = workspace / "demo_pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "values.py").write_text("START = 0\n")
+    (package / "operations.py").write_text(
+        "from .values import START\n"
+        + source.replace("self.value = value", "self.value = value + START")
+    )
 (workspace / "visible.py").write_text(suite)
 (grader / "suite.py").write_text(suite)
 for path in (workspace / "demo.py", workspace / "visible.py", grader / "suite.py"):
     path.chmod(0o444)
-total = 1 if case in {"tuple", "bytes"} else 2
+total = (
+    1 if case in {"tuple", "bytes", "tuple-value"} or case.startswith("raises") else 2
+)
 if case == "count-mismatch":
     total = 3
 argv = [
@@ -106,7 +147,7 @@ argv = [
     "--candidate-timeout-ms",
     "1000",
     "--module",
-    "demo",
+    "demo_pkg.operations" if case == "package" else "demo",
 ]
 command = {"argv": argv, "id": "synthetic", "timeout_milliseconds": 15000}
 digest = hashlib.sha256(
@@ -168,7 +209,18 @@ else:
     report = json.loads((control / "response.json").read_bytes())
     expected = (
         0
-        if case in {"wrong", "early-exit", "fake-report", "oversized", "hang", "tuple"}
+        if case
+        in {
+            "wrong",
+            "early-exit",
+            "fake-report",
+            "oversized",
+            "hang",
+            "tuple",
+            "raises-return",
+            "raises-exit",
+            "raises-import",
+        }
         else total
     )
     assert report["passed"] == expected and report["total"] == total, (case, report)

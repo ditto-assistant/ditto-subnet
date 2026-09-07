@@ -14,10 +14,12 @@ COPY services/dittobench-api/coding_runtime/python/requirements.txt /tmp/require
 RUN python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt
 # Copy runtime files without inheriting base-image credential-shaped ENV names.
 FROM scratch AS runtime-base
+ARG DITTOBENCH_SOURCE_SHA=unknown
 COPY --from=python / /
 ENV PATH=/usr/local/bin:/usr/bin:/bin
 LABEL io.heyditto.dittobench.coding-supervisor-contract="1"
-LABEL io.heyditto.dittobench.coding-test-driver-profile="python-call-ast-v1"
+LABEL io.heyditto.dittobench.coding-test-driver-profile="python-call-ast-v2"
+LABEL org.opencontainers.image.revision="${DITTOBENCH_SOURCE_SHA}"
 COPY --from=build --chmod=0555 /out/supervisor /usr/local/bin/dittobench-coding-supervisor
 COPY --chmod=0555 services/dittobench-api/coding_runtime/python/driver.py /usr/local/bin/dittobench-test-driver
 COPY --chmod=0444 services/dittobench-api/coding_runtime/python/child.py /usr/local/lib/dittobench-child.py

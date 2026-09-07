@@ -27,6 +27,8 @@ def pack(value, depth=0):
         return {"kind": "bytes", "value": base64.b64encode(value).decode("ascii")}
     if type(value) is list:
         return {"kind": "list", "value": [pack(v, depth + 1) for v in value]}
+    if type(value) is tuple:
+        return {"kind": "tuple", "value": [pack(v, depth + 1) for v in value]}
     if type(value) is dict and all(type(k) is str for k in value):
         return {
             "kind": "dict",
@@ -45,6 +47,8 @@ def unpack(node, depth=0):
         return base64.b64decode(value, validate=True)
     if kind == "list" and type(value) is list:
         return [unpack(v, depth + 1) for v in value]
+    if kind == "tuple" and type(value) is list:
+        return tuple(unpack(v, depth + 1) for v in value)
     if kind == "dict" and type(value) is dict and all(type(k) is str for k in value):
         return {k: unpack(v, depth + 1) for k, v in value.items()}
     raise ValueError("invalid data type")

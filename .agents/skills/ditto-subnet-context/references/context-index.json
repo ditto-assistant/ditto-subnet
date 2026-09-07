@@ -400,6 +400,19 @@
       "related": ["coding-hosted-inputs", "coding-inference-grants", "platform-api"]
     },
     {
+      "id": "coding-python-oracle",
+      "title": "Private Python oracle and suite compatibility",
+      "keywords": ["restricted Python oracle", "private Python driver", "Python suite compatibility"],
+      "summary": "Parent-owned Python assertions with a confined candidate API process; unchanged private runtime controls remain separate qualification evidence.",
+      "skills": ["ditto-subnet-benchmark"],
+      "owns": ["services/dittobench-api/coding_runtime/python", "services/dittobench-api/Dockerfile.coding-python", "scripts/test-coding-python-driver.sh", "ditto/tests/test_coding_python_driver.py"],
+      "read": ["services/dittobench-api/docs/coding-python-driver-v2.md", "docs/coding-platform-private-execution-v2.md"],
+      "search": ["rg -n 'compile_suite|CandidateException|EXCEPTIONS|run_suite' services/dittobench-api/coding_runtime/python"],
+      "validate": ["uv run pytest -q ditto/tests/test_coding_python_driver.py", "bash scripts/test-coding-python-driver.sh coding-python:synthetic"],
+      "invariants": ["Never execute candidate code in the parent oracle.", "Expected exceptions are API behavior, not transport or initialization failure.", "Syntax admission does not qualify a runtime or activate a release."],
+      "related": ["coding-hosted-inputs", "coding-hosted-host"]
+    },
+    {
       "id": "coding-hosted-inputs",
       "title": "Native hosted input and worker runtime",
       "keywords": ["hosted authoring input", "coding hosted input assembly", "native input handoff", "hosted worker launcher"],

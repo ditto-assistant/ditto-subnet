@@ -1,6 +1,6 @@
 # Restricted Python test-driver image
 
-`Dockerfile.coding-python` builds the initial `python-call-ast-v1` runtime-image
+`Dockerfile.coding-python` builds the `python-call-ast-v2` runtime-image
 candidate. It contains the existing Go supervisor, pinned Python 3.13.14, a
 restricted parent-owned assertion interpreter, and an isolated candidate API
 bridge. Pytest and its dependencies are hash-locked for authoring diagnostics;
@@ -18,16 +18,19 @@ The protected suite remains source text inside the trusted grader. The parent
 parses its AST but never executes it with Python `eval`, `exec`, or an import of
 the candidate. It interprets only:
 
-- flat absolute `from module import export` declarations, with simple public
-  module/export identifiers and an independently approved candidate-module allowlist;
+- absolute `from module import export` declarations, with public dotted
+  module names, simple export identifiers and an independently approved module allowlist;
 - distinct, undecorated, no-argument `test_*` functions with assertions and calls
   (an optional literal `-> None` return annotation is allowed);
 - local assignments, candidate API calls and public attributes;
-- JSON and byte-string literals, lists/string-keyed dictionaries, numeric negation, and single
-  equality/inequality comparisons.
+- JSON and byte-string literals, tuples/lists/string-keyed dictionaries, numeric
+  negation, indexing, single equality/inequality comparisons, singleton identity
+  checks against `None`/booleans, and short-circuit `and`/`or`;
+- bounded list/tuple loops and `with pytest.raises(BuiltinError): candidate_call()`
+  checks. Pytest is a parent-owned syntax marker, never imported by the oracle.
 
-Loops, fixtures, decorators, pytest context managers, standard-library imports,
-tuple literals, splats, assertion messages, chained comparisons, dunder access,
+Unbounded loops, fixtures, decorators, other context managers, standard-library imports,
+splats, assertion messages, chained comparisons, arbitrary identity checks, dunder access,
 unbound locals and unsupported statements are rejected. The driver checks the
 number of discovered test functions against the approved expected count. It does
 not fill an expected count with invented successes.
@@ -36,11 +39,25 @@ Each test receives a fresh candidate process. Imports and calls are represented
 by opaque remote targets. The child loads only the named workspace module and
 returns JSON values or opaque object references. References support subsequent
 attribute/method operations, not arbitrary reference-valued arguments. The
-profile accepts only JSON-shaped data and builtin byte strings; tuples, custom container
-types and nonfinite values are not silently converted into equivalent-looking
-lists/numbers. Byte strings use explicit base64-tagged envelopes, including within
-lists/dictionaries, without interpreting user dictionary keys as protocol tags.
+profile accepts JSON-shaped data, builtin byte strings and tuples. Tuples retain
+their type through an explicit wire tag; custom container types and nonfinite
+values are not silently converted into equivalent-looking lists/numbers. Byte
+strings use explicit base64-tagged envelopes, including within lists/dictionaries
+and tuples, without interpreting user dictionary keys as protocol tags.
 Qualify the exact suite and API against these restrictions.
+
+Expected-exception checks admit only the fixed builtin exception family allowlist
+and a single candidate-call expression. Only a correlated API-call exception can
+satisfy them. Import failures, malformed frames, process exits, timeouts, assertion
+failures and a normally returning API cannot. Exception messages and custom type
+names are not transported. Named builtin ancestry permits ordinary subclasses
+without loading any candidate type in the parent. Context aliases, message matching
+and candidate-defined exception types remain unsupported. Loops are bounded by
+10,000 parent statement steps and the per-test deadline; possibly unbound names
+after zero-iteration loops or expected exceptions are rejected at admission.
+
+The v2 profile changes data/protocol and syntax admission. An approved v1 image
+or profile does not authorize it: requalify and bind the exact new runtime image.
 
 Before candidate import, an immutable bridge handshake confirms successful child
 initialization/confinement. A missing handshake is infrastructure failure, not a

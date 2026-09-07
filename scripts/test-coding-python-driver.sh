@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 image="${1:?supply the locally built synthetic test image}"
-for scenario in pass visible stdout bytes wrong early-exit fake-report oversized hang hidden-read report-write fork threads exec setsid setuid capabilities environment tuple unsupported count-mismatch; do
+for scenario in pass visible stdout bytes wrong early-exit fake-report oversized hang hidden-read report-write fork threads exec setsid setuid capabilities environment tuple tuple-value package raises raises-subclass raises-return raises-exit raises-import unsupported count-mismatch; do
   docker run --rm --network none --read-only --ipc none \
     --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add KILL --cap-add SETUID --cap-add SETGID \
     --security-opt no-new-privileges --pids-limit 64 --memory 256m --memory-swap 256m --cpus 1 \
