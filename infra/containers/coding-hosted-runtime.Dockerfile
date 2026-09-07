@@ -1,10 +1,13 @@
 # Public software only; build via the Git-archive wrapper, never a worktree context.
 FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS go-build
+RUN apk add --no-cache build-base
 WORKDIR /src/services/dittobench-api
 COPY services/dittobench-api/ ./
 COPY research/dittobench-datagen/ /src/research/dittobench-datagen/
 RUN go mod download && go mod verify
-RUN CGO_ENABLED=0 GOTOOLCHAIN=local go build -p 2 -mod=readonly -trimpath -buildvcs=false \
+RUN --mount=type=cache,id=ditto-native-runtime-go-build,target=/root/.cache/go-build \
+    CGO_ENABLED=1 GOTOOLCHAIN=local go build -p 2 -mod=readonly -trimpath -buildvcs=false \
+    -ldflags="-s -w -linkmode external -extldflags '-static'" \
     -o /out/dittobench-coding-hosted-worker ./cmd/dittobench-coding-hosted-worker
 
 FROM ghcr.io/astral-sh/uv:0.11.28@sha256:0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa AS uv
