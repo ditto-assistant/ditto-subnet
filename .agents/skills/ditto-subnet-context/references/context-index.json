@@ -374,6 +374,19 @@
       "related": ["coding-hosted-inference", "coding-hosted-inputs", "platform-api"]
     },
     {
+      "id": "coding-evidence-recovery",
+      "title": "Native reserved ciphertext publication recovery",
+      "keywords": ["native evidence recovery", "reserved ciphertext recovery", "resume reserved evidence", "terminal publication recovery"],
+      "summary": "Recover one existing native evidence reservation from a locked read-only ciphertext spool without execution replay or key loading.",
+      "skills": ["ditto-subnet-platform"],
+      "owns": ["apps/platform/ditto/coding_evidence_recovery.py", "apps/platform/ditto/api_server/coding_evidence_recovery.py", "apps/platform/docs/coding-evidence-recovery-v2.md"],
+      "read": ["apps/platform/docs/coding-evidence-recovery-v2.md", "apps/platform/docs/coding-hosted-platform-runtime-v2.md"],
+      "search": ["rg -n 'HostedEvidenceRecovery|RecoveryTarget|resume-reserved' apps/platform/ditto"],
+      "validate": ["cd apps/platform && uv run pytest -q ditto/tests/api_server/test_coding_evidence_recovery.py ditto/tests/api_server/test_coding_evidence_recovery_cli.py"],
+      "invariants": ["Recovery requires an existing exact reservation and complete local ciphertext; it never creates a fresh attempt or reruns grading or inference.", "Unrelated partial spool entries remain untouched and no key-unwrapping authority is loaded.", "Fresh matching Hippius authority, immutable publication deadlines and verified readback precede append-only finalization.", "No production worker, private canary or scoring activation is enabled."],
+      "related": ["coding-hosted-inputs", "coding-hosted-inference", "platform-api"]
+    },
+    {
       "id": "coding-hosted-budget",
       "title": "Native runtime budget and provider profile",
       "keywords": ["hosted runtime budget profile", "provider billed input cap", "native budget estimator"],

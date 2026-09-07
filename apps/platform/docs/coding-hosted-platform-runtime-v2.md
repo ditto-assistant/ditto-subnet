@@ -167,8 +167,11 @@ reconciliation; killing a trusted process does not prove Docker cleanup.
 
 No state directory, evidence spool, tombstone or stale container is automatically
 deleted. Spool handles close, but encrypted files remain. Process loss before
-evidence capture remains non-rerunnable. This is not a durable recovery reader,
-host-crash reconciler, bulk retry mechanism or scoring-readiness certification.
+evidence capture remains non-rerunnable. The separate
+[reserved evidence recovery command](coding-evidence-recovery-v2.md) can publish
+complete, already reserved ciphertext without restarting this runtime. Neither
+command is a host-crash reconciler, bulk retry mechanism or scoring-readiness
+certification.
 
 ## Verification and operational boundary
 

@@ -55,6 +55,14 @@ def test_context_index_paths_exist() -> None:
     )
 
 
+def test_native_reserved_recovery_routes_to_operator_command() -> None:
+    topic = lookup("native evidence recovery")[0]
+    assert topic["id"] == "coding-evidence-recovery"
+    assert "apps/platform/ditto/coding_evidence_recovery.py" in topic_list(
+        topic, "owns"
+    )
+
+
 def test_hosted_authoring_input_routes_to_both_consumers() -> None:
     topic = lookup("hosted authoring input assembler")[0]
     assert topic["id"] == "coding-hosted-inputs"

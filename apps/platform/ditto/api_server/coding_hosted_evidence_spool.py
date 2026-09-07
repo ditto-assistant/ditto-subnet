@@ -89,15 +89,19 @@ def _write(directory: int, name: str, body: bytes) -> None:
 
 
 class HostedEvidenceSpool:
-    def __init__(self, root: Path, *, max_bytes: int, max_objects: int):
+    def __init__(
+        self, root: Path, *, max_bytes: int, max_objects: int, read_only: bool = False
+    ):
         if (
-            type(max_bytes) is not int
+            type(read_only) is not bool
+            or type(max_bytes) is not int
             or not 16384 <= max_bytes <= 1 << 40
             or type(max_objects) is not int
             or not 1 <= max_objects <= 65536
         ):
             raise HostedEvidenceError("evidence capacity is invalid")
         self._path = root
+        self._read_only = read_only
         self._root = _root(root)
         self._lock = -1
         self._closed = False
@@ -107,7 +111,7 @@ class HostedEvidenceSpool:
         try:
             self._lock = os.open(
                 ".lock",
-                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                os.O_RDWR | os.O_NOFOLLOW | (0 if read_only else os.O_CREAT),
                 0o600,
                 dir_fd=self._root,
             )
@@ -120,7 +124,8 @@ class HostedEvidenceSpool:
             ):
                 raise HostedEvidenceError("evidence process lock is unsafe")
             fcntl.flock(self._lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self._usage()
+            if not read_only:
+                self._usage()
         except BaseException:
             self.close()
             raise
@@ -142,6 +147,14 @@ class HostedEvidenceSpool:
                 raise HostedEvidenceError("evidence process lock changed")
         finally:
             os.close(observed)
+
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
+    @property
+    def bounds(self) -> tuple[int, int]:
+        return self._max_bytes, self._max_objects
 
     def _directory(self, request_id: UUID) -> int:
         fd = os.open(
@@ -215,6 +228,8 @@ class HostedEvidenceSpool:
 
     def store(self, request_id: UUID, identity: bytes, sealed: bytes) -> None:
         self._check()
+        if self.read_only:
+            raise HostedEvidenceError("recovery spool is read-only")
         count, size = self._usage()
         if (
             count >= self._max_objects

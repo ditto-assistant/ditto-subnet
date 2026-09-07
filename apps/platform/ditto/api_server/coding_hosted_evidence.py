@@ -136,6 +136,64 @@ class HostedEvidenceReceipt:
     weight_eligible: bool = False
 
 
+async def inference_evidence_source(
+    session: AsyncSession,
+    request_id: UUID,
+    worker_id: UUID,
+    *,
+    lock: bool = False,
+    allow_expired: bool = False,
+) -> _Source:
+    row = await session.get(
+        CodingHostedInferenceRequest, request_id, with_for_update=lock
+    )
+    if (
+        row is None
+        or row.state != "settled"
+        or row.finalized_at is None
+        or row.settlement is None
+    ):
+        raise HostedEvidenceError("native inference settlement is unavailable")
+    grant = await session.get(CodingHostedInferenceGrant, row.grant_id)
+    if grant is None or grant.worker_id != worker_id:
+        raise HostedEvidenceError("native evidence worker does not own request")
+    policy = HostedInferencePolicy.model_validate(grant.policy)
+    settlement = HostedInferenceSettlement.model_validate(row.settlement)
+    if (
+        policy.runtime_profile_sha256 is None
+        or policy.digest() != grant.policy_sha256
+        or settlement.digest() != row.settlement_sha256
+    ):
+        raise HostedEvidenceError("native evidence source identity differs")
+    deadline = int(row.finalized_at.timestamp()) + 86400
+    if not allow_expired and (await _now(session)).timestamp() >= deadline:
+        raise HostedEvidenceError("native evidence publication window expired")
+    fields = {
+        "request_id": str(request_id),
+        "grant_id": str(grant.grant_id),
+        "evaluation_id": str(grant.evaluation_id),
+        "attempt_id": str(grant.attempt_id),
+        "worker_id": str(worker_id),
+        "assignment_sha256": grant.assignment_sha256,
+        "policy_sha256": grant.policy_sha256,
+        "settlement_sha256": row.settlement_sha256,
+        "runtime_profile_sha256": policy.runtime_profile_sha256,
+        "publication_deadline_unix": deadline,
+    }
+    reservation = DispatchReservation(
+        grant.grant_id,
+        request_id,
+        row.sequence,
+        row.locked_request_sha256,
+        False,
+        int(grant.expires_at.timestamp()),
+        grant.evaluation_id,
+        grant.attempt_id,
+        grant.policy_sha256,
+    )
+    return _Source(fields, policy, settlement, reservation, row.created_at.timestamp())
+
+
 class HostedInferenceEvidencePublisher:
     """Trusted Platform owner only. No public route, activation or credentials API.
 
@@ -185,55 +243,8 @@ class HostedInferenceEvidencePublisher:
     async def _source(
         self, session: AsyncSession, request_id: UUID, *, lock: bool = False
     ) -> _Source:
-        row = await session.get(
-            CodingHostedInferenceRequest, request_id, with_for_update=lock
-        )
-        if (
-            row is None
-            or row.state != "settled"
-            or row.finalized_at is None
-            or row.settlement is None
-        ):
-            raise HostedEvidenceError("native inference settlement is unavailable")
-        grant = await session.get(CodingHostedInferenceGrant, row.grant_id)
-        if grant is None or grant.worker_id != self._worker:
-            raise HostedEvidenceError("native evidence worker does not own request")
-        policy = HostedInferencePolicy.model_validate(grant.policy)
-        settlement = HostedInferenceSettlement.model_validate(row.settlement)
-        if (
-            policy.runtime_profile_sha256 is None
-            or policy.digest() != grant.policy_sha256
-            or settlement.digest() != row.settlement_sha256
-        ):
-            raise HostedEvidenceError("native evidence source identity differs")
-        deadline = int(row.finalized_at.timestamp()) + 86400
-        if (await _now(session)).timestamp() >= deadline:
-            raise HostedEvidenceError("native evidence publication window expired")
-        fields = {
-            "request_id": str(request_id),
-            "grant_id": str(grant.grant_id),
-            "evaluation_id": str(grant.evaluation_id),
-            "attempt_id": str(grant.attempt_id),
-            "worker_id": str(self._worker),
-            "assignment_sha256": grant.assignment_sha256,
-            "policy_sha256": grant.policy_sha256,
-            "settlement_sha256": row.settlement_sha256,
-            "runtime_profile_sha256": policy.runtime_profile_sha256,
-            "publication_deadline_unix": deadline,
-        }
-        reservation = DispatchReservation(
-            grant.grant_id,
-            request_id,
-            row.sequence,
-            row.locked_request_sha256,
-            False,
-            int(grant.expires_at.timestamp()),
-            grant.evaluation_id,
-            grant.attempt_id,
-            grant.policy_sha256,
-        )
-        return _Source(
-            fields, policy, settlement, reservation, row.created_at.timestamp()
+        return await inference_evidence_source(
+            session, request_id, self._worker, lock=lock
         )
 
     async def _snapshot(self, request_id: UUID) -> _Source:
