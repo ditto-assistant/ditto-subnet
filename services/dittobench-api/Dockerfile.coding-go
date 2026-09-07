@@ -1,0 +1,40 @@
+FROM golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS toolchain
+FROM toolchain AS build
+WORKDIR /src/services/dittobench-api
+COPY services/dittobench-api/go.mod services/dittobench-api/go.sum ./
+COPY research/dittobench-datagen/go.mod /src/research/dittobench-datagen/go.mod
+RUN go mod download
+COPY services/dittobench-api/internal/ ./internal/
+COPY services/dittobench-api/cmd/dittobench-coding-go-driver/ ./cmd/dittobench-coding-go-driver/
+COPY services/dittobench-api/cmd/dittobench-coding-supervisor/ ./cmd/dittobench-coding-supervisor/
+COPY research/dittobench-datagen/ /src/research/dittobench-datagen/
+COPY services/dittobench-api/coding_runtime/compiled/bootstrap.c /src/bootstrap.c
+COPY services/dittobench-api/coding_runtime/go/supervisor-probe.go ./coding_runtime/go/supervisor-probe.go
+RUN mkdir /out && cc -O2 -Wall -Wextra -Werror /src/bootstrap.c -o /out/bootstrap \
+    && CGO_ENABLED=0 go build -trimpath -o /out/driver ./cmd/dittobench-coding-go-driver \
+    && CGO_ENABLED=0 go build -trimpath -o /out/supervisor ./cmd/dittobench-coding-supervisor \
+    && CGO_ENABLED=0 go build -trimpath -o /out/probe ./coding_runtime/go/supervisor-probe.go
+
+FROM build AS private-probe
+COPY services/dittobench-api/coding_runtime/go/private-probe.go ./coding_runtime/go/private-probe.go
+RUN CGO_ENABLED=0 go build -trimpath -o /out/private-probe ./coding_runtime/go/private-probe.go
+
+FROM scratch AS runtime-base
+ARG DITTOBENCH_SOURCE_SHA=unknown
+COPY --from=toolchain / /
+ENV PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
+LABEL io.heyditto.dittobench.coding-supervisor-contract="1"
+LABEL io.heyditto.dittobench.coding-test-driver-profile="go-call-ast-v1"
+LABEL org.opencontainers.image.revision="${DITTOBENCH_SOURCE_SHA}"
+COPY --from=build --chmod=0555 /out/bootstrap /usr/local/libexec/dittobench-compiled-bootstrap
+COPY --from=build --chmod=0555 /out/driver /usr/local/bin/dittobench-test-driver
+COPY --from=build --chmod=0555 /out/supervisor /usr/local/bin/dittobench-coding-supervisor
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/dittobench-coding-supervisor"]
+
+FROM runtime-base AS test
+LABEL io.heyditto.dittobench.coding-supervisor-fixture="true"
+COPY --from=build --chmod=0555 /out/probe /opt/probe
+COPY --from=private-probe --chmod=0555 /out/private-probe /opt/private-probe
+
+FROM runtime-base AS runtime

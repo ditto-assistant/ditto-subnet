@@ -70,6 +70,28 @@ def test_hosted_authoring_input_routes_to_both_consumers() -> None:
     assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
 
 
+def test_compiled_bootstrap_routes_to_pre_exec_isolation() -> None:
+    topic = lookup("compiled candidate launcher")[0]
+    assert topic["id"] == "coding-compiled-bootstrap"
+    assert "services/dittobench-api/coding_runtime/compiled" in topic_list(
+        topic, "owns"
+    )
+    assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
+
+
+def test_private_go_oracle_routes_to_its_admission_boundary() -> None:
+    topic = lookup("private Go oracle")[0]
+    assert topic["id"] == "coding-go-oracle"
+    assert "services/dittobench-api/internal/codinggooracle" in topic_list(
+        topic, "owns"
+    )
+    driver = lookup("coding Go runtime driver")[0]
+    assert driver["id"] == "coding-go-oracle"
+    assert "services/dittobench-api/internal/codinggodriver" in topic_list(
+        driver, "owns"
+    )
+
+
 def test_node_typescript_grader_routes_to_its_private_oracle() -> None:
     topic = lookup("coding typescript grader")[0]
     assert topic["id"] == "coding-node-runtime"
