@@ -400,6 +400,19 @@
       "related": ["coding-hosted-inputs", "coding-inference-grants", "platform-api"]
     },
     {
+      "id": "coding-hosted-signer",
+      "title": "Native-v2 Platform control signer startup",
+      "keywords": ["hosted control signer", "hosted signer startup", "native v2 public signing"],
+      "summary": "Load a protected Platform-only signer through API startup without enabling private execution or scoring.",
+      "skills": ["ditto-subnet-platform"],
+      "owns": ["apps/platform/ditto/api_server/coding_hosted_signer.py", "apps/platform/ditto/api_server/coding_hosted_signer_config.py", "apps/platform/ditto/tests/api_server/test_coding_hosted_signer.py", "apps/platform/docs/coding-hosted-control-startup-v2.md"],
+      "read": ["apps/platform/docs/coding-hosted-control-startup-v2.md", "apps/platform/ditto/api_server/endpoints/validator_coding_hosted.py", "apps/platform/ditto/api_server/coding_hosted_results.py"],
+      "search": ["rg -n 'coding_hosted_signer|coding_hosted_control' apps/platform/ditto/api_server/config.py apps/platform/ditto/api_server/factory.py"],
+      "validate": ["cd apps/platform && uv run pytest -q ditto/tests/api_server/test_coding_hosted_signer.py ditto/tests/api_server/endpoints/test_validator_coding_hosted.py", "cd apps/platform && make lint lint-copy typecheck test"],
+      "invariants": ["Disabled and relay paths never read the private seed.", "Only canonical Platform status/result envelopes are signed; no request, private-data or weight authority is added.", "Startup failure and shutdown close the signer; deployed key approval remains separate."],
+      "related": ["coding-hosted-inputs", "platform-api"]
+    },
+    {
       "id": "coding-hosted-inputs",
       "title": "Native hosted input and worker runtime",
       "keywords": ["hosted authoring input", "coding hosted input assembly", "native input handoff", "hosted worker launcher"],

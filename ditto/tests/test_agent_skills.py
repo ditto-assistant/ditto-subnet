@@ -85,6 +85,12 @@ def test_hosted_worker_launcher_routes_to_native_runtime() -> None:
     )
 
 
+def test_hosted_signer_startup_routes_to_platform():
+    topic = lookup("hosted control signer startup")[0]
+    assert topic["id"] == "coding-hosted-signer"
+    assert topic_list(topic, "skills") == ["ditto-subnet-platform"]
+
+
 def test_native_inference_routes_to_its_private_authority() -> None:
     topic = lookup("native v2 inference budget")[0]
     assert topic["id"] == "coding-hosted-inference"
