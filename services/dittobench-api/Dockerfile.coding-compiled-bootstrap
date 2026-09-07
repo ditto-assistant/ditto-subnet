@@ -1,0 +1,21 @@
+# Development fixture only: this does not contain a trusted test oracle.
+FROM golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS go-build
+COPY services/dittobench-api/coding_runtime/compiled/bootstrap.c services/dittobench-api/coding_runtime/compiled/probe.c services/dittobench-api/coding_runtime/compiled/abi.c services/dittobench-api/coding_runtime/compiled/probe.go /src/
+RUN mkdir /out && cc -O2 -Wall -Wextra -Werror /src/bootstrap.c -o /out/bootstrap \
+    && cc -O2 -Wall -Wextra -Werror -pthread /src/probe.c -o /out/c-init \
+    && cc -O2 -Wall -Wextra -Werror /src/abi.c -o /out/abi \
+    && GOTOOLCHAIN=local CGO_ENABLED=0 go build -trimpath -o /out/go-init /src/probe.go
+
+FROM rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922 AS rust-build
+COPY services/dittobench-api/coding_runtime/compiled/probe.rs /src/probe.rs
+RUN rustc --version && rustc --edition=2021 -D warnings /src/probe.rs -o /rust-init
+
+FROM python:3.13.14-slim@sha256:69e18bd8d831d88e0ef70239dc7771ab7c28bc296ae78ac75cde71e60aa4434f
+LABEL io.heyditto.dittobench.coding-supervisor-fixture="true"
+COPY --from=go-build --chmod=0555 /out/bootstrap /usr/local/libexec/dittobench-compiled-bootstrap
+COPY --from=go-build --chmod=0555 /out/c-init /out/go-init /opt/compiled/candidates/
+COPY --from=rust-build --chmod=0555 /rust-init /opt/compiled/candidates/rust-init
+COPY --from=go-build --chmod=0555 /out/abi /opt/compiled/abi
+COPY --chmod=0444 services/dittobench-api/coding_runtime/compiled/launcher.py services/dittobench-api/coding_runtime/compiled/probe.py /opt/compiled/
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/python3", "-I", "/opt/compiled/probe.py"]

@@ -62,6 +62,15 @@ def test_hosted_authoring_input_routes_to_both_consumers() -> None:
     assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
 
 
+def test_compiled_bootstrap_routes_to_pre_exec_isolation() -> None:
+    topic = lookup("compiled candidate launcher")[0]
+    assert topic["id"] == "coding-compiled-bootstrap"
+    assert "services/dittobench-api/coding_runtime/compiled" in topic_list(
+        topic, "owns"
+    )
+    assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
+
+
 def test_native_host_qualification_routes_to_separate_infrastructure() -> None:
     topic = lookup("native v2 host qualification")[0]
     assert topic["id"] == "coding-hosted-host"

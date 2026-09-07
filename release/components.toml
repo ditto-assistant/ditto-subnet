@@ -136,6 +136,7 @@ paths = [
   "services/dittobench-api/skills-lock.json",
   "services/dittobench-api/testdata/**",
   "scripts/test-coding-python-driver.sh",
+  "scripts/test-coding-compiled-bootstrap.sh",
   "packages/dittobench-coding-contract/**",
 ]
 

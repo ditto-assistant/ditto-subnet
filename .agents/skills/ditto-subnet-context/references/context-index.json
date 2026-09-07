@@ -400,6 +400,19 @@
       "related": ["coding-hosted-inputs", "coding-inference-grants", "platform-api"]
     },
     {
+      "id": "coding-compiled-bootstrap",
+      "title": "Compiled Coding candidate pre-exec confinement",
+      "keywords": ["compiled coding bootstrap", "Go Rust pre-exec", "compiled candidate launcher"],
+      "summary": "One-time trusted pre-exec handoff installs confinement before Go init or native constructors; not a trusted grader or production runtime approval.",
+      "skills": ["ditto-subnet-benchmark", "ditto-subnet-release-ops"],
+      "owns": ["services/dittobench-api/coding_runtime/compiled", "services/dittobench-api/Dockerfile.coding-compiled-bootstrap", "scripts/test-coding-compiled-bootstrap.sh", "services/dittobench-api/docs/coding-compiled-bootstrap-v2.md", "ditto/tests/test_coding_compiled_bootstrap.py"],
+      "read": ["services/dittobench-api/docs/coding-compiled-bootstrap-v2.md", "docs/coding-platform-private-execution-v2.md"],
+      "search": ["rg -n 'CONTINUE|SYS_seccomp|PR_SET_SECCOMP|single_thread|continue_initial_exec' services/dittobench-api/coding_runtime/compiled"],
+      "validate": ["uv run pytest -q ditto/tests/test_coding_compiled_bootstrap.py", "docker build -f services/dittobench-api/Dockerfile.coding-compiled-bootstrap -t coding-compiled-bootstrap:synthetic .", "bash scripts/test-coding-compiled-bootstrap.sh coding-compiled-bootstrap:synthetic"],
+      "invariants": ["No candidate instruction runs before the filter is installed.", "Only the initial trusted bootstrap notification may continue; no untrusted syscall decision or emulation occurs.", "The fixture image is not an approved grading profile, native host qualification or live private canary."],
+      "related": ["coding-hosted-inputs", "coding-hosted-host"]
+    },
+    {
       "id": "coding-hosted-inputs",
       "title": "Native hosted input and worker runtime",
       "keywords": ["hosted authoring input", "coding hosted input assembly", "native input handoff", "hosted worker launcher"],
