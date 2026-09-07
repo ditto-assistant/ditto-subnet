@@ -2,9 +2,16 @@
 const { spawn } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
 const { TextDecoder } = require('node:util');
-const { pack, unpack } = require('./wire.cjs');
+const { pack, unpack, CallbackValue } = require('./wire.cjs');
 const MAX_MESSAGE = 65536;
 class CandidateFailure extends Error {}
+class CandidateException extends CandidateFailure {
+  constructor(phase, text) {
+    super('candidate API exception');
+    this.phase = phase;
+    this.text = text;
+  }
+}
 class InfrastructureFailure extends Error {}
 class Target {
   constructor(identity, path = []) {
@@ -43,6 +50,14 @@ function decodeResponse(raw, id) {
     if (!exact(result, ['kind', 'value'])) throw new CandidateFailure();
     if (result.kind === 'data') return unpack(result.value);
     if (
+      result.kind === 'exception' &&
+      exact(result.value, ['phase', 'text']) &&
+      ['throw', 'reject'].includes(result.value.phase) &&
+      typeof result.value.text === 'string' &&
+      result.value.text.length <= 4096
+    )
+      throw new CandidateException(result.value.phase, result.value.text);
+    if (
       result.kind === 'reference' &&
       Number.isSafeInteger(result.value) &&
       result.value > 0 &&
@@ -50,7 +65,8 @@ function decodeResponse(raw, id) {
     ) {
       return new Target({ reference: result.value });
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof CandidateException) throw error;
     throw new CandidateFailure();
   }
   throw new CandidateFailure();
@@ -63,12 +79,16 @@ class Child {
     this.error = null;
     this.pending = Buffer.alloc(0);
     this.waiter = null;
+    this.callbacks = new Map();
+    this.callbackIDs = new Set();
+    this.callbackBuffer = Buffer.alloc(0);
+    this.callbackActive = 0;
     this.process = spawn('/usr/local/bin/node', ['/opt/coding-node/child.cjs'], {
       cwd: '/workspace',
       uid,
       gid,
       env: { PATH: '/usr/local/bin:/usr/bin:/bin' },
-      stdio: ['pipe', 'ignore', 'ignore', 'pipe'],
+      stdio: ['pipe', 'ignore', 'ignore', 'pipe', 'pipe', 'pipe'],
       detached: false,
     });
     this.closed = new Promise((resolve) => this.process.once('close', resolve));
@@ -76,6 +96,9 @@ class Child {
     this.process.on('error', () => this.fail(new InfrastructureFailure()));
     this.process.stdin.on('error', () => this.fail(new CandidateFailure()));
     this.process.stdio[3].on('error', () => this.fail(new CandidateFailure()));
+    this.process.stdio[4].on('error', () => this.fail(new CandidateFailure()));
+    this.process.stdio[5].on('error', () => this.fail(new CandidateFailure()));
+    this.process.stdio[4].on('data', (chunk) => this.receiveCallbacks(chunk));
     this.process.on('exit', () => {
       if (!this.closing)
         this.fail(
@@ -95,6 +118,62 @@ class Child {
     if (this.waiter) {
       this.waiter.reject(this.error);
       this.waiter = null;
+    }
+  }
+  registerCallback(callback) {
+    if (typeof callback !== 'function' || this.callbacks.size >= 64 || this.closing)
+      throw new CandidateFailure();
+    const reference = this.callbacks.size + 1;
+    this.callbacks.set(reference, callback);
+    return new CallbackValue(reference);
+  }
+  receiveCallbacks(chunk) {
+    if (this.error || this.closing) return;
+    if (chunk.length + this.callbackBuffer.length > MAX_MESSAGE)
+      return this.fail(new CandidateFailure());
+    this.callbackBuffer = Buffer.concat([this.callbackBuffer, chunk]);
+    let end;
+    while ((end = this.callbackBuffer.indexOf(10)) !== -1) {
+      const frame = this.callbackBuffer.subarray(0, end);
+      this.callbackBuffer = this.callbackBuffer.subarray(end + 1);
+      this.handleCallback(frame).catch(() => this.fail(new CandidateFailure()));
+    }
+  }
+  async handleCallback(frame) {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(frame);
+    const request = JSON.parse(text);
+    if (
+      !this.initialized ||
+      this.closing ||
+      this.error ||
+      !exact(request, ['id', 'reference', 'args']) ||
+      JSON.stringify(request) !== text ||
+      typeof request.id !== 'string' ||
+      !/^[0-9a-f]{32}$/.test(request.id) ||
+      this.callbackIDs.has(request.id) ||
+      this.callbackIDs.size >= 1024 ||
+      !Number.isSafeInteger(request.reference) ||
+      !this.callbacks.has(request.reference) ||
+      this.callbackActive >= 8 ||
+      !Array.isArray(unpack(request.args))
+    )
+      throw new CandidateFailure();
+    this.callbackIDs.add(request.id);
+    this.callbackActive++;
+    try {
+      const value = await this.callbacks.get(request.reference)();
+      const result = { kind: 'data', value: pack(value) };
+      const response = JSON.stringify({ id: request.id, result }) + '\n';
+      if (
+        this.closing ||
+        this.error ||
+        Buffer.byteLength(response) > MAX_MESSAGE ||
+        this.process.stdio[5].writableLength > MAX_MESSAGE
+      )
+        throw new CandidateFailure();
+      this.process.stdio[5].write(response);
+    } finally {
+      this.callbackActive--;
     }
   }
   frame() {
@@ -151,6 +230,7 @@ class Child {
   }
   async close() {
     this.closing = true;
+    this.callbacks.clear();
     clearTimeout(this.timer);
     this.process.kill('SIGKILL');
     let timeout;
@@ -171,6 +251,7 @@ module.exports = {
   Child,
   Target,
   CandidateFailure,
+  CandidateException,
   InfrastructureFailure,
   decodeResponse,
 };

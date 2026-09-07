@@ -7,14 +7,70 @@ const {
   Child,
   Target,
   CandidateFailure,
+  CandidateException,
   InfrastructureFailure,
 } = require('./channel.cjs');
-const { pack } = require('./wire.cjs');
+const { pack, PromiseValue, ErrorValue, CallbackValue } = require('./wire.cjs');
+class ParentMethod {
+  constructor(receiver, name) {
+    this.receiver = receiver;
+    this.name = name;
+  }
+}
+
+async function settle(value, child) {
+  if (value instanceof Target) return child.rpc(value, 'await');
+  if (value instanceof PromiseValue) {
+    if (value.state === 'all') {
+      const results = [];
+      for (const item of value.value) results.push(await settle(item, child));
+      return results;
+    }
+    if (value.state === 'rejected') {
+      const error = new CandidateException(
+        'reject',
+        value.value instanceof ErrorValue
+          ? 'Error: ' + value.value.message
+          : String(value.value),
+      );
+      error.callbackValue = value.value;
+      throw error;
+    }
+    return settle(value.value, child);
+  }
+  return value;
+}
 
 async function evaluate(node, names, child, keepTarget = false) {
   const evaluateSub = (item, target = false) => evaluate(item, names, child, target);
   let value;
   switch (node.op) {
+    case 'increment': {
+      const current = names.get(node.name);
+      if (!Number.isSafeInteger(current) || current >= Number.MAX_SAFE_INTEGER)
+        throw new CandidateFailure();
+      names.set(node.name, current + 1);
+      return current + 1;
+    }
+    case 'callback': {
+      return child.registerCallback(async () => {
+        for (const action of node.actions) {
+          if (action.op === 'increment') {
+            const current = names.get(action.name);
+            if (!Number.isSafeInteger(current) || current >= Number.MAX_SAFE_INTEGER)
+              throw new CandidateFailure();
+            names.set(action.name, current + 1);
+          } else {
+            const value = await evaluateSub(action.value);
+            pack(value);
+            return node.async && !(value instanceof PromiseValue)
+              ? new PromiseValue('fulfilled', value)
+              : value;
+          }
+        }
+        throw new InvalidSuite();
+      });
+    }
     case 'literal':
       return node.value;
     case 'name':
@@ -34,7 +90,30 @@ async function evaluate(node, names, child, keepTarget = false) {
     case 'property': {
       const base = await evaluateSub(node.base, true);
       if (base instanceof Target) value = base.property(node.key);
-      else {
+      else if (base instanceof URL || base instanceof URLSearchParams) {
+        const properties =
+          base instanceof URL
+            ? new Set([
+                'href',
+                'origin',
+                'protocol',
+                'host',
+                'hostname',
+                'port',
+                'pathname',
+                'search',
+                'hash',
+                'searchParams',
+              ])
+            : new Set(['size']);
+        const methods =
+          base instanceof URL
+            ? new Set(['toString'])
+            : new Set(['get', 'getAll', 'has', 'toString']);
+        if (properties.has(node.key)) return base[node.key];
+        if (methods.has(node.key)) return new ParentMethod(base, node.key);
+        throw new CandidateFailure();
+      } else {
         if (Buffer.isBuffer(base) && node.key === 'length') return base.length;
         if (
           base === null ||
@@ -49,14 +128,47 @@ async function evaluate(node, names, child, keepTarget = false) {
     case 'call':
     case 'construct': {
       const target = await evaluateSub(node.target, true);
-      if (!(target instanceof Target)) throw new CandidateFailure();
       const args = [];
       for (const item of node.args) args.push(await evaluateSub(item));
+      if (target instanceof ParentMethod && node.op === 'call') {
+        if (args.some((arg) => typeof arg !== 'string') || args.length > 2)
+          throw new CandidateFailure();
+        return target.receiver[target.name](...args);
+      }
+      if (!(target instanceof Target)) throw new CandidateFailure();
       return child.rpc(target, node.op, args);
     }
     case 'await': {
       value = await evaluateSub(node.value);
-      return value instanceof Target ? child.rpc(value, 'await') : value;
+      return settle(value, child);
+    }
+    case 'builtin': {
+      value = await evaluateSub(node.value);
+      if (node.name === 'URL') {
+        if (typeof value !== 'string') throw new CandidateFailure();
+        try {
+          return new URL(value);
+        } catch {
+          throw new CandidateFailure();
+        }
+      }
+      if (node.name === 'Error') {
+        if (typeof value !== 'string' || value.length > 4096)
+          throw new CandidateFailure();
+        return new ErrorValue(value);
+      }
+      if (node.name === 'Promise.resolve' || node.name === 'Promise.reject') {
+        pack(value);
+        return new PromiseValue(
+          node.name === 'Promise.resolve' ? 'fulfilled' : 'rejected',
+          value,
+        );
+      }
+      if (node.name === 'Promise.all') {
+        if (!Array.isArray(value)) throw new CandidateFailure();
+        return new PromiseValue('all', value);
+      }
+      throw new InvalidSuite();
     }
     case 'negate': {
       value = await evaluateSub(node.value);
@@ -107,6 +219,15 @@ function assertValues(method, values) {
   // Opaque references are usable API targets, not evidence of value equality,
   // truthiness, object identity, exception type or trusted internal state.
   try {
+    if (
+      values.some(
+        (value) =>
+          value instanceof PromiseValue ||
+          value instanceof ErrorValue ||
+          value instanceof CallbackValue,
+      )
+    )
+      throw new CandidateFailure();
     values.forEach((value) => pack(value));
   } catch {
     throw new CandidateFailure();
@@ -163,6 +284,36 @@ async function runSuite(
           for (const node of instruction.args)
             values.push(await evaluate(node, names, child));
           assertValues(instruction.method, values);
+        } else if (instruction.op === 'exception') {
+          let observed;
+          if (instruction.method === 'throws') {
+            try {
+              await evaluate(instruction.invoke, names, child);
+            } catch (error) {
+              if (!(error instanceof CandidateException) || error.phase !== 'throw')
+                throw error;
+              observed = error;
+            }
+          } else {
+            // Synchronous call failure is outside the rejection assertion.
+            const promise = await evaluate(instruction.invoke, names, child);
+            if (!(promise instanceof Target)) throw new CandidateFailure();
+            try {
+              await child.rpc(promise, 'await-rejection');
+            } catch (error) {
+              if (!(error instanceof CandidateException) || error.phase !== 'reject')
+                throw error;
+              observed = error;
+            }
+          }
+          if (
+            !observed ||
+            (instruction.match &&
+              !new RegExp(instruction.match.source, instruction.match.flags).test(
+                observed.text,
+              ))
+          )
+            throw new CandidateFailure();
         } else throw new InvalidSuite();
       }
       success = true;
@@ -280,7 +431,7 @@ async function main() {
     args.group === 'visible' ? '/workspace' : '/run/dittobench-grader',
     args.suite,
   );
-  const suite = compileSuite(source, args.module);
+  const suite = compileSuite(source, args.module, args.suite);
   if (suite.tests.length !== args['dittobench-expected']) throw new InvalidSuite();
   const passed = await runSuite(
     suite,
@@ -312,4 +463,11 @@ async function main() {
   process.exitCode = passed === suite.tests.length ? 0 : 1;
 }
 
-module.exports = { main, evaluate, runSuite, parseArgs, readSuite, assertValues };
+module.exports = {
+  main,
+  evaluate,
+  runSuite,
+  parseArgs,
+  readSuite,
+  assertValues,
+};

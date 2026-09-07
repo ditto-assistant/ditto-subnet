@@ -94,7 +94,7 @@ jobs:
         run: |
           docker build -f services/dittobench-api/Dockerfile.coding-node --target runtime --build-arg DITTOBENCH_SOURCE_SHA="$SOURCE_SHA" -t coding-node:runtime .
           docker image inspect coding-node:runtime | jq -e --arg sha "$SOURCE_SHA" \
-            '.[0].Config.Labels["org.opencontainers.image.revision"] == $sha and .[0].Config.Labels["io.heyditto.dittobench.coding-test-driver-profile"] == "node-call-ast-v1" and .[0].Config.Env == ["PATH=/usr/local/bin:/usr/bin:/bin"]'
+            '.[0].Config.Labels["org.opencontainers.image.revision"] == $sha and .[0].Config.Labels["io.heyditto.dittobench.coding-test-driver-profile"] == "node-call-ast-v2" and .[0].Config.Env == ["PATH=/usr/local/bin:/usr/bin:/bin"]'
       - name: Runtime contains no probes or credential-shaped environment
         run: |
           docker run --rm --network none --read-only --cap-drop ALL \

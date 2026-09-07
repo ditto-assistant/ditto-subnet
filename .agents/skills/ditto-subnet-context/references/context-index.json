@@ -480,7 +480,7 @@
     {
       "id": "coding-node-runtime",
       "title": "Restricted Node and TypeScript private Coding oracle",
-      "keywords": ["coding node runtime", "coding typescript grader", "node call ast", "Node TypeScript driver"],
+      "keywords": ["coding node runtime", "coding typescript grader", "node call ast", "Node TypeScript driver", "Node suite compatibility"],
       "summary": "Trusted assertion interpretation with a separate confined Node candidate process; runtime qualification and activation remain separate.",
       "skills": ["ditto-subnet-benchmark", "ditto-subnet-release-ops"],
       "owns": ["services/dittobench-api/coding_runtime/node", "services/dittobench-api/Dockerfile.coding-node", "services/dittobench-api/Dockerfile.coding-node-confinement", "scripts/test-coding-node-driver.sh", "scripts/test-coding-node-confinement.sh", "services/dittobench-api/docs/coding-node-driver-v2.md"],

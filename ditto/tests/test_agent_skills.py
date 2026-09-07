@@ -95,6 +95,7 @@ def test_private_go_oracle_routes_to_its_admission_boundary() -> None:
 def test_node_typescript_grader_routes_to_its_private_oracle() -> None:
     topic = lookup("coding typescript grader")[0]
     assert topic["id"] == "coding-node-runtime"
+    assert lookup("Node suite compatibility")[0]["id"] == "coding-node-runtime"
     assert "services/dittobench-api/coding_runtime/node" in topic_list(topic, "owns")
     assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
 

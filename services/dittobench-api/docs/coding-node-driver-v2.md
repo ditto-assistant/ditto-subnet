@@ -1,6 +1,6 @@
 # Restricted Node/TypeScript test-driver image
 
-`Dockerfile.coding-node` implements the `node-call-ast-v1` runtime-image candidate.
+`Dockerfile.coding-node` implements the `node-call-ast-v2` runtime-image candidate.
 It contains the existing Go supervisor, pinned Node 24.20.0, integrity-locked
 TypeScript 5.9.3, a closed trusted assertion interpreter and a separate non-root
 candidate API bridge. It neither runs the original suite as JavaScript nor
@@ -26,26 +26,70 @@ test('increments', async () => {
 ```
 
 The parser accepts named/default/namespace candidate imports from independently
-approved workspace-relative modules. `node:test`, `node:assert/strict` and literal
+approved workspace-relative modules. Relative imports are resolved against the
+approved logical suite path, including `../` inside the workspace. Escapes, bare
+imports, URL schemes, query strings and modules outside the allowlist are rejected.
+`node:test`, `node:assert/strict` and literal
 `Buffer.from` construction from `node:buffer` are trusted builtins, never delegated
 to candidate code. Test declarations are distinct, named `test` calls with a
-no-argument arrow/function body, optionally async. Every test must have at least
+no-argument arrow/function body, optionally async. An arrow may return an assertion
+expression directly. Every test must have at least
 one assertion, and the discovered test count must equal the approved total.
 
 Bodies support local `const`/`let` initialization, API calls/construction, public
 properties and constant indexing, awaited API results, JSON-shaped literals,
 undefined, big integers, byte literals, numeric negation, primitive comparisons
-and limited arithmetic. Type annotations are parsed but not type-checked.
+and limited arithmetic. Primitive `number`, `string` and `boolean` type arguments
+are accepted without changing runtime values. Type annotations are parsed but not
+type-checked. Additional data operations include literal `Uint8Array` values,
+absolute URL parsing with read-only URL/search-parameter access, and `Date.parse`
+of literal UTC ISO timestamps. Ambient clocks remain unsupported.
 `equal`/`strictEqual` and their negations compare scalar values with Node strict
 semantics, including negative zero. Deep assertions compare transported data;
 opaque object references cannot establish equality, truthiness or object identity.
 
 Loops, conditions, hooks, fixtures, skips, test contexts, nested tests, assertion
-messages, exception assertions, arbitrary imports, dynamic loading, local callable
+messages, arbitrary imports, dynamic loading, arbitrary local callable
 execution, prototype access, spreading/destructuring and unsupported expressions
-are rejected before candidate execution. Reference-valued API arguments and
+are rejected before candidate execution. Ordinary reference-valued API arguments and
 arbitrary native objects are outside this profile. Type-only imports, decorators
 and unsupported TypeScript test syntax are not silently erased into acceptance.
+
+## Exceptions, promises and bounded callbacks
+
+`assert.throws(() => candidateCall())` observes only a correlated synchronous API
+exception. `assert.rejects(candidatePromise)` must be awaited or returned by the
+test callback and observes only a rejected native Promise. Synchronous call errors,
+import failures, fulfillment, exits and transport failures cannot satisfy a rejection
+assertion. Optional regex matching admits only bounded literal substring patterns
+with an optional `i` flag; executable matchers and complex regex syntax are rejected.
+Exception text stays in the private grader process and never becomes a report field.
+See [Node's assertion contract](https://nodejs.org/api/assert.html#assertrejectsasyncfn-error-message).
+
+`Promise.resolve` and `Promise.reject` inputs carry typed data descriptions through
+the wire. The confined bridge constructs their native values and attaches rejection
+handlers immediately. `Promise.all` is parent-owned orchestration over proposed API
+references and data values. Byte-array tags preserve Uint8Array versus Buffer identity.
+
+Test-supplied zero-argument callbacks remain in the trusted parent. Their closed
+instruction set permits bounded local integer increments followed by a data-only
+return, optionally returning a described Promise. Nested callbacks, candidate API
+calls inside callbacks, loops and arbitrary executable bodies are rejected. The
+candidate receives only a callback reference. Two separate pipes carry bounded,
+correlated callback requests/replies; synchronous callbacks return synchronously,
+and declared async callbacks return native Promises in the child. No callback AST,
+assertion, test name or matcher enters the child.
+
+The callback channel permits at most 64 registered callbacks, 1024 unique requests
+per test, eight active requests and 64 KiB buffered frames. Unknown references,
+duplicate request IDs, malformed data and excessive requests fail the test. The
+same child deadline and process cleanup cover both API and callback channels.
+Captured mutable locals belong to one test and reset with its fresh process.
+
+This v2 protocol requires its own exact image qualification; a v1 image approval
+does not authorize it. Syntax admission does not establish base/reference outcomes
+or general JavaScript compatibility. Promise identity, timing-sensitive callback
+interleavings, custom thenables and arbitrary native objects need separate profiles.
 
 The pinned TypeScript parser produces a closed instruction representation. It
 does not evaluate, compile or execute the suite. Assertions and expected values

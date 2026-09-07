@@ -22,7 +22,7 @@ FROM scratch AS runtime-base
 COPY --from=node / /
 ENV PATH=/usr/local/bin:/usr/bin:/bin
 LABEL io.heyditto.dittobench.coding-supervisor-contract="1"
-LABEL io.heyditto.dittobench.coding-test-driver-profile="node-call-ast-v1"
+LABEL io.heyditto.dittobench.coding-test-driver-profile="node-call-ast-v2"
 COPY --from=supervisor --chmod=0555 /out/supervisor /usr/local/bin/dittobench-coding-supervisor
 COPY --from=build --chmod=0555 /confinement.node /opt/coding-node/confinement.node
 COPY --from=build /opt/coding-node/node_modules /opt/coding-node/node_modules

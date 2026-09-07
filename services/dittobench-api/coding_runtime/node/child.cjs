@@ -4,12 +4,49 @@
 const fs = require('node:fs');
 const { pathToFileURL, fileURLToPath } = require('node:url');
 const { registerHooks } = require('node:module');
+const { isPromise } = require('node:util').types;
+const { randomBytes } = require('node:crypto');
 const ts = require('/opt/coding-node/node_modules/typescript');
-const { pack, unpack } = require('/opt/coding-node/wire.cjs');
+const { pack, unpack, materialize } = require('/opt/coding-node/wire.cjs');
 const MAX_MESSAGE = 65536;
 const modules = new Map();
 const references = new Map();
 const identities = new WeakMap();
+const promises = new WeakMap();
+function invokeCallback(reference, args) {
+  const id = randomBytes(16).toString('hex');
+  write(Buffer.from(JSON.stringify({ id, reference, args: pack(args) }) + '\n'), 4);
+  let pending = Buffer.alloc(0);
+  // The reverse pipe preserves synchronous callback returns. The parent owns
+  // the process deadline and can terminate this wait; no private code is sent.
+  while (true) {
+    const chunk = Buffer.alloc(4096);
+    let count;
+    try {
+      count = fs.readSync(5, chunk);
+    } catch (error) {
+      if (error.code !== 'EAGAIN') throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+      continue;
+    }
+    if (!count || pending.length + count > MAX_MESSAGE)
+      throw new Error('callback frame');
+    pending = Buffer.concat([pending, chunk.subarray(0, count)]);
+    const end = pending.indexOf(10);
+    if (end === -1) continue;
+    if (end !== pending.length - 1) throw new Error('callback frame');
+    const response = JSON.parse(pending.subarray(0, end).toString('utf8'));
+    if (response.id !== id || response.result.kind !== 'data')
+      throw new Error('callback identity');
+    return materialize(unpack(response.result.value), invokeCallback);
+  }
+}
+
+function exception(value, phase) {
+  const text = String(value);
+  if (text.length > 4096) throw new Error('exception bound');
+  return { kind: 'exception', value: { phase, text } };
+}
 
 // The pinned compiler runs only in this non-root confined process when handling
 // candidate TypeScript. It never reads a candidate tsconfig or runs build hooks.
@@ -44,12 +81,12 @@ registerHooks({
   },
 });
 
-function write(raw) {
+function write(raw, descriptor = 3) {
   if (raw.length > MAX_MESSAGE) process.exit(1);
   let offset = 0;
   while (offset < raw.length) {
     try {
-      offset += fs.writeSync(3, raw, offset, raw.length - offset);
+      offset += fs.writeSync(descriptor, raw, offset, raw.length - offset);
     } catch (error) {
       if (error.code !== 'EAGAIN') throw error;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
@@ -58,6 +95,17 @@ function write(raw) {
 }
 
 function encode(value) {
+  if (isPromise(value) && !promises.has(value)) {
+    // Attach immediately, before returning its reference, so an early rejection
+    // cannot terminate the child before the trusted parent's await request.
+    promises.set(
+      value,
+      value.then(
+        (result) => ({ fulfilled: true, result }),
+        (result) => ({ fulfilled: false, result }),
+      ),
+    );
+  }
   try {
     return { kind: 'data', value: pack(value) };
   } catch {
@@ -104,14 +152,30 @@ async function execute(request) {
     value = value[part];
   }
   if (request.operation === 'call' || request.operation === 'construct') {
-    const args = unpack(request.args);
+    const args = materialize(unpack(request.args), invokeCallback);
     if (!Array.isArray(args)) throw new Error('invalid arguments');
-    value =
-      request.operation === 'call'
-        ? Reflect.apply(value, receiver, args)
-        : Reflect.construct(value, args);
-  } else if (request.operation === 'await') {
-    value = await value;
+    try {
+      value =
+        request.operation === 'call'
+          ? Reflect.apply(value, receiver, args)
+          : Reflect.construct(value, args);
+    } catch (error) {
+      return exception(error, 'throw');
+    }
+  } else if (request.operation === 'await' || request.operation === 'await-rejection') {
+    if (request.operation === 'await-rejection' && !isPromise(value))
+      throw new Error('promise required');
+    if (isPromise(value) && promises.has(value)) {
+      const settled = await promises.get(value);
+      if (!settled.fulfilled) return exception(settled.result, 'reject');
+      value = settled.result;
+    } else {
+      try {
+        value = await value;
+      } catch (error) {
+        return exception(error, 'reject');
+      }
+    }
   } else if (request.operation !== 'get') {
     throw new Error('invalid operation');
   }

@@ -1,6 +1,6 @@
 # Native Node/TypeScript driver
 
-This directory implements the `node-call-ast-v1` runtime-image candidate, not an
+This directory implements the `node-call-ast-v2` runtime-image candidate, not an
 approved private runtime deployment. See the [driver contract](../../docs/coding-node-driver-v2.md)
 for supported syntax, integration tests and remaining qualification gates. No
 private suite, reference patch, catalog approval or deployment is included.

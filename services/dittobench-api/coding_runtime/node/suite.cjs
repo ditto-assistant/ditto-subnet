@@ -2,6 +2,7 @@
 // Parse trusted source to a closed instruction set. Never evaluate/transpile/run
 // the suite and never load a candidate module into the trusted parent.
 const ts = require('./node_modules/typescript');
+const path = require('node:path').posix;
 const NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,79}$/;
 const MODULE = /^[A-Za-z][A-Za-z0-9_/-]*\.(?:js|mjs|cjs|ts|mts|cts)$/;
 const ASSERTIONS = new Set([
@@ -14,8 +15,11 @@ const ASSERTIONS = new Set([
   'notDeepEqual',
   'notDeepStrictEqual',
   'ok',
+  'throws',
+  'rejects',
 ]);
 const RESERVED = new Set(['undefined', '__proto__', 'prototype', 'constructor']);
+const BUILTINS = new Set(['Uint8Array', 'URL', 'Promise', 'Error', 'Date']);
 
 class InvalidSuite extends Error {}
 function requireSuite(ok) {
@@ -33,8 +37,32 @@ function validModule(name) {
   );
 }
 
-function compileSuite(source, allowedModules) {
+function validSuitePath(name) {
+  return (
+    typeof name === 'string' &&
+    name.length <= 240 &&
+    /^[A-Za-z][A-Za-z0-9_./-]*\.(?:js|mjs|cjs|ts|mts|cts)$/.test(name) &&
+    name.split('/').every((part) => part && part !== '.' && part !== '..')
+  );
+}
+
+function resolveModule(specifier, allowedModules, suiteRelative) {
+  requireSuite(validSuitePath(suiteRelative));
+  requireSuite(
+    typeof specifier === 'string' &&
+      specifier.length <= 240 &&
+      (specifier.startsWith('./') || specifier.startsWith('../')) &&
+      !specifier.includes('\\') &&
+      !specifier.includes('\0'),
+  );
+  const module = path.join(path.dirname(suiteRelative), specifier);
+  requireSuite(validModule(module) && allowedModules.includes(module));
+  return module;
+}
+
+function compileSuite(source, allowedModules, suiteRelative = 'suite.ts') {
   requireSuite(typeof source === 'string' && Buffer.byteLength(source) <= 512 * 1024);
+  requireSuite(validSuitePath(suiteRelative));
   requireSuite(
     allowedModules.length > 0 &&
       allowedModules.every(validModule) &&
@@ -53,14 +81,90 @@ function compileSuite(source, allowedModules) {
   const titles = new Set();
   let nodes = 0;
   let asyncAllowed = false;
+  let callbackAllowed = true;
   function bind(names, name, value) {
-    requireSuite(validName(name) && !names.has(name));
+    requireSuite(validName(name) && !BUILTINS.has(name) && !names.has(name));
     names.set(name, value);
   }
   function expression(node, names, depth = 0) {
     requireSuite(node && depth <= 32 && ++nodes <= 20000);
     const sub = (value) => expression(value, names, depth + 1);
+    if (ts.isArrowFunction(node)) {
+      requireSuite(
+        callbackAllowed &&
+          node.parameters.length === 0 &&
+          !node.typeParameters &&
+          !node.type &&
+          (!node.modifiers ||
+            (node.modifiers.length === 1 &&
+              node.modifiers[0].kind === ts.SyntaxKind.AsyncKeyword)),
+      );
+      const actions = [];
+      const statements = ts.isBlock(node.body) ? node.body.statements : [node.body];
+      requireSuite(statements.length > 0 && statements.length <= 16);
+      const previous = callbackAllowed;
+      callbackAllowed = false;
+      try {
+        for (let index = 0; index < statements.length; index++) {
+          const statement = statements[index];
+          const expr = ts.isExpressionStatement(statement)
+            ? statement.expression
+            : statement;
+          if (
+            ts.isPostfixUnaryExpression(expr) &&
+            expr.operator === ts.SyntaxKind.PlusPlusToken &&
+            ts.isIdentifier(expr.operand) &&
+            names.get(expr.operand.text)?.kind === 'local' &&
+            names.get(expr.operand.text)?.mutable
+          ) {
+            actions.push({ op: 'increment', name: expr.operand.text });
+          } else {
+            requireSuite(
+              index === statements.length - 1 &&
+                (ts.isReturnStatement(statement) || statement === node.body),
+            );
+            const value = sub(
+              ts.isReturnStatement(statement) ? statement.expression : statement,
+            );
+            function dataOnly(item) {
+              if (item.op === 'literal') return true;
+              if (item.op === 'name') return names.get(item.name)?.kind === 'local';
+              if (item.op === 'increment') return true;
+              if (item.op === 'array') return item.values.every(dataOnly);
+              if (item.op === 'object')
+                return item.entries.every(([, entry]) => dataOnly(entry));
+              if (item.op === 'negate') return dataOnly(item.value);
+              if (
+                item.op === 'builtin' &&
+                ['Error', 'Promise.resolve', 'Promise.reject'].includes(item.name)
+              )
+                return dataOnly(item.value);
+              return false;
+            }
+            requireSuite(dataOnly(value));
+            actions.push({ op: 'return', value });
+          }
+        }
+      } finally {
+        callbackAllowed = previous;
+      }
+      requireSuite(actions.at(-1)?.op === 'return');
+      return {
+        op: 'callback',
+        actions,
+        async: Boolean(node.modifiers?.length),
+      };
+    }
     if (ts.isParenthesizedExpression(node)) return sub(node.expression);
+    if (
+      !callbackAllowed &&
+      ts.isPrefixUnaryExpression(node) &&
+      node.operator === ts.SyntaxKind.PlusPlusToken &&
+      ts.isIdentifier(node.operand) &&
+      names.get(node.operand.text)?.kind === 'local' &&
+      names.get(node.operand.text)?.mutable
+    )
+      return { op: 'increment', name: node.operand.text };
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
       return { op: 'literal', value: node.text };
     if (ts.isNumericLiteral(node)) {
@@ -113,7 +217,11 @@ function compileSuite(source, allowedModules) {
     }
     if (ts.isPropertyAccessExpression(node) && !node.questionDotToken) {
       requireSuite(validName(node.name.text));
-      return { op: 'property', base: sub(node.expression), key: node.name.text };
+      return {
+        op: 'property',
+        base: sub(node.expression),
+        key: node.name.text,
+      };
     }
     if (ts.isElementAccessExpression(node) && !node.questionDotToken) {
       const key = sub(node.argumentExpression);
@@ -122,15 +230,86 @@ function compileSuite(source, allowedModules) {
           ((typeof key.value === 'string' && !RESERVED.has(key.value)) ||
             (Number.isSafeInteger(key.value) && key.value >= 0)),
       );
-      return { op: 'property', base: sub(node.expression), key: String(key.value) };
+      return {
+        op: 'property',
+        base: sub(node.expression),
+        key: String(key.value),
+      };
     }
     if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
       requireSuite(
         !node.questionDotToken &&
-          !node.typeArguments &&
-          node.arguments &&
-          node.arguments.length <= 128,
+          (!node.typeArguments ||
+            (node.typeArguments.length <= 8 &&
+              node.typeArguments.every((type) =>
+                [
+                  ts.SyntaxKind.NumberKeyword,
+                  ts.SyntaxKind.StringKeyword,
+                  ts.SyntaxKind.BooleanKeyword,
+                ].includes(type.kind),
+              ))) &&
+          (node.arguments || ts.isNewExpression(node)) &&
+          (node.arguments?.length ?? 0) <= 128,
       );
+      const base = ts.isPropertyAccessExpression(node.expression)
+        ? node.expression.expression
+        : node.expression;
+      if (ts.isIdentifier(base) && BUILTINS.has(base.text)) {
+        const member = ts.isPropertyAccessExpression(node.expression)
+          ? node.expression.name.text
+          : '';
+        const args = node.arguments ?? [];
+        if (base.text === 'Uint8Array') {
+          requireSuite(
+            (member === 'from' && ts.isCallExpression(node) && args.length === 1) ||
+              (!member && ts.isNewExpression(node) && args.length === 0),
+          );
+          const items = args.length ? sub(args[0]) : { op: 'array', values: [] };
+          requireSuite(
+            items.op === 'array' &&
+              items.values.every(
+                (item) =>
+                  item.op === 'literal' &&
+                  Number.isInteger(item.value) &&
+                  item.value >= 0 &&
+                  item.value <= 255,
+              ),
+          );
+          return {
+            op: 'literal',
+            value: Uint8Array.from(items.values.map((item) => item.value)),
+          };
+        }
+        if (base.text === 'URL' || base.text === 'Error') {
+          requireSuite(!member && ts.isNewExpression(node) && args.length === 1);
+          return { op: 'builtin', name: base.text, value: sub(args[0]) };
+        }
+        if (base.text === 'Date') {
+          requireSuite(
+            member === 'parse' &&
+              ts.isCallExpression(node) &&
+              args.length === 1 &&
+              ts.isStringLiteral(args[0]),
+          );
+          requireSuite(
+            /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(args[0].text),
+          );
+          const value = Date.parse(args[0].text);
+          requireSuite(Number.isFinite(value));
+          return { op: 'literal', value };
+        }
+        requireSuite(
+          base.text === 'Promise' &&
+            ts.isCallExpression(node) &&
+            ['resolve', 'reject', 'all'].includes(member) &&
+            args.length === 1,
+        );
+        return {
+          op: 'builtin',
+          name: 'Promise.' + member,
+          value: sub(args[0]),
+        };
+      }
       if (
         ts.isCallExpression(node) &&
         ts.isPropertyAccessExpression(node.expression) &&
@@ -178,7 +357,7 @@ function compileSuite(source, allowedModules) {
       return {
         op: ts.isNewExpression(node) ? 'construct' : 'call',
         target: sub(node.expression),
-        args: node.arguments.map(sub),
+        args: (node.arguments ?? []).map(sub),
       };
     }
     if (ts.isAwaitExpression(node)) {
@@ -190,9 +369,16 @@ function compileSuite(source, allowedModules) {
       requireSuite(
         ['===', '!==', '+', '-', '*', '<', '<=', '>', '>='].includes(operator),
       );
-      return { op: 'binary', operator, left: sub(node.left), right: sub(node.right) };
+      return {
+        op: 'binary',
+        operator,
+        left: sub(node.left),
+        right: sub(node.right),
+      };
     }
-    throw new InvalidSuite('unsupported expression');
+    const error = new InvalidSuite('unsupported expression');
+    error.syntaxKind = ts.SyntaxKind[node.kind];
+    throw error;
   }
   function assertion(call) {
     if (!ts.isCallExpression(call) || call.questionDotToken || call.typeArguments)
@@ -229,8 +415,7 @@ function compileSuite(source, allowedModules) {
       else if (specifier === 'node:test') kind = 'test';
       else if (specifier === 'node:buffer') kind = 'buffer';
       else {
-        module = specifier.startsWith('./') ? specifier.slice(2) : '';
-        requireSuite(allowedModules.includes(module));
+        module = resolveModule(specifier, allowedModules, suiteRelative);
         kind = 'candidate';
       }
       const clause = statement.importClause;
@@ -241,7 +426,11 @@ function compileSuite(source, allowedModules) {
       if (clause.namedBindings) {
         if (ts.isNamespaceImport(clause.namedBindings)) {
           requireSuite(!['test', 'buffer'].includes(kind));
-          bind(imports, clause.namedBindings.name.text, { kind, module, path: [] });
+          bind(imports, clause.namedBindings.name.text, {
+            kind,
+            module,
+            path: [],
+          });
         } else {
           for (const item of clause.namedBindings.elements) {
             const exported = (item.propertyName ?? item.name).text;
@@ -288,7 +477,9 @@ function compileSuite(source, allowedModules) {
         !fn.asteriskToken &&
         fn.parameters.length === 0 &&
         !fn.typeParameters &&
-        ts.isBlock(fn.body) &&
+        (ts.isBlock(fn.body) ||
+          ts.isCallExpression(fn.body) ||
+          ts.isAwaitExpression(fn.body)) &&
         (!fn.modifiers ||
           fn.modifiers.every((m) => m.kind === ts.SyntaxKind.AsyncKeyword)),
     );
@@ -298,7 +489,7 @@ function compileSuite(source, allowedModules) {
     );
     const instructions = [];
     let assertions = 0;
-    for (const item of fn.body.statements) {
+    for (const item of ts.isBlock(fn.body) ? fn.body.statements : [fn.body]) {
       if (ts.isVariableStatement(item)) {
         requireSuite(
           !item.modifiers &&
@@ -310,22 +501,70 @@ function compileSuite(source, allowedModules) {
             ts.isIdentifier(decl.name) && decl.initializer && !decl.exclamationToken,
           );
           const value = expression(decl.initializer, names);
-          bind(names, decl.name.text, { kind: 'local' });
+          bind(names, decl.name.text, {
+            kind: 'local',
+            mutable: (item.declarationList.flags & ts.NodeFlags.Let) !== 0,
+          });
           instructions.push({ op: 'bind', name: decl.name.text, value });
         }
       } else {
-        requireSuite(ts.isExpressionStatement(item));
-        const method = assertion(item.expression);
+        requireSuite(ts.isExpressionStatement(item) || item === fn.body);
+        let call = ts.isExpressionStatement(item) ? item.expression : item;
+        const awaited = ts.isAwaitExpression(call);
+        if (awaited) {
+          requireSuite(asyncAllowed);
+          call = call.expression;
+        }
+        const method = assertion(call);
         if (method) {
-          requireSuite(item.expression.arguments.length === (method === 'ok' ? 1 : 2));
+          if (method === 'throws' || method === 'rejects') {
+            requireSuite(call.arguments.length >= 1 && call.arguments.length <= 2);
+            // A promise assertion must be awaited or returned by the test callback.
+            requireSuite(method !== 'rejects' || awaited || item === fn.body);
+            let target = call.arguments[0];
+            if (method === 'throws') {
+              requireSuite(
+                ts.isArrowFunction(target) &&
+                  !target.modifiers &&
+                  target.parameters.length === 0 &&
+                  !target.typeParameters &&
+                  !target.type &&
+                  ts.isCallExpression(target.body),
+              );
+              target = target.body;
+            }
+            requireSuite(ts.isCallExpression(target));
+            const invoke = expression(target, names);
+            requireSuite(invoke.op === 'call');
+            let match = null;
+            if (call.arguments.length === 2) {
+              const pattern = call.arguments[1];
+              requireSuite(
+                pattern.kind === ts.SyntaxKind.RegularExpressionLiteral &&
+                  /^\/[A-Za-z0-9 _:-]{1,128}\/i?$/.test(pattern.text),
+              );
+              const slash = pattern.text.lastIndexOf('/');
+              match = {
+                source: pattern.text.slice(1, slash),
+                flags: pattern.text.slice(slash + 1),
+              };
+            }
+            instructions.push({ op: 'exception', method, invoke, match });
+            assertions++;
+            continue;
+          }
+          requireSuite(call.arguments.length === (method === 'ok' ? 1 : 2));
           instructions.push({
             op: 'assert',
             method,
-            args: item.expression.arguments.map((arg) => expression(arg, names)),
+            args: call.arguments.map((arg) => expression(arg, names)),
           });
           assertions++;
         } else {
-          const value = expression(item.expression, names);
+          const value = expression(
+            ts.isExpressionStatement(item) ? item.expression : item,
+            names,
+          );
           requireSuite(['call', 'await'].includes(value.op));
           instructions.push({ op: 'discard', value });
         }
@@ -341,4 +580,10 @@ function compileSuite(source, allowedModules) {
   return { imports, tests };
 }
 
-module.exports = { compileSuite, InvalidSuite, validModule };
+module.exports = {
+  compileSuite,
+  InvalidSuite,
+  validModule,
+  validSuitePath,
+  resolveModule,
+};
