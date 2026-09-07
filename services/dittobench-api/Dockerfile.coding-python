@@ -1,0 +1,31 @@
+FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS build
+WORKDIR /src/services/dittobench-api
+COPY services/dittobench-api/go.mod services/dittobench-api/go.sum ./
+COPY research/dittobench-datagen/go.mod /src/research/dittobench-datagen/go.mod
+RUN go mod download
+COPY services/dittobench-api/internal/ /src/services/dittobench-api/internal/
+COPY services/dittobench-api/cmd/dittobench-coding-supervisor/ /src/services/dittobench-api/cmd/dittobench-coding-supervisor/
+COPY research/dittobench-datagen/ /src/research/dittobench-datagen/
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+    -o /out/supervisor ./cmd/dittobench-coding-supervisor
+
+FROM python:3.13.14-slim@sha256:69e18bd8d831d88e0ef70239dc7771ab7c28bc296ae78ac75cde71e60aa4434f AS python
+COPY services/dittobench-api/coding_runtime/python/requirements.txt /tmp/requirements.txt
+RUN python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt
+# Copy runtime files without inheriting base-image credential-shaped ENV names.
+FROM scratch AS runtime-base
+COPY --from=python / /
+ENV PATH=/usr/local/bin:/usr/bin:/bin
+LABEL io.heyditto.dittobench.coding-supervisor-contract="1"
+LABEL io.heyditto.dittobench.coding-test-driver-profile="python-call-ast-v1"
+COPY --from=build --chmod=0555 /out/supervisor /usr/local/bin/dittobench-coding-supervisor
+COPY --chmod=0555 services/dittobench-api/coding_runtime/python/driver.py /usr/local/bin/dittobench-test-driver
+COPY --chmod=0444 services/dittobench-api/coding_runtime/python/child.py /usr/local/lib/dittobench-child.py
+COPY --chmod=0444 services/dittobench-api/coding_runtime/python/wire.py /usr/local/lib/python3.13/site-packages/dittobench_wire.py
+ENTRYPOINT ["/usr/local/bin/dittobench-coding-supervisor"]
+
+FROM runtime-base AS test
+LABEL io.heyditto.dittobench.coding-supervisor-fixture="true"
+COPY --chmod=0400 services/dittobench-api/coding_runtime/python/probe.py /opt/probe.py
+
+FROM runtime-base AS runtime

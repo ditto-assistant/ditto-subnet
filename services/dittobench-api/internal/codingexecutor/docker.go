@@ -236,11 +236,11 @@ func (executor *Executor) inspectContainerPolicy(
 	slices.Sort(wantSecurity)
 	capDrop := upperSorted(value.HostConfig.CapDrop)
 	capAdd := upperSorted(value.HostConfig.CapAdd)
-	wantCapAdd := []string{"CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID"}
+	wantCapAdd := []string{"CHOWN", "DAC_OVERRIDE", "KILL", "SETGID", "SETUID"}
 	if value.Image != executor.imageID || value.Config.User != "0:0" ||
 		!slices.Equal(value.Config.Entrypoint, []string{executor.config.SupervisorPath}) ||
 		!value.HostConfig.ReadonlyRootfs || value.HostConfig.NetworkMode != "none" ||
-		value.HostConfig.IpcMode != "none" || value.HostConfig.UTSMode != "private" ||
+		value.HostConfig.IpcMode != "none" || value.HostConfig.UTSMode != "" ||
 		!slices.Equal(capDrop, []string{"ALL"}) || !slices.Equal(capAdd, wantCapAdd) ||
 		!slices.Equal(security, wantSecurity) || value.HostConfig.Privileged || value.HostConfig.AutoRemove ||
 		value.HostConfig.Memory != int64(policy.MemoryLimitBytes) ||

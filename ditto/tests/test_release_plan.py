@@ -109,6 +109,8 @@ def test_dittobench_workflow_is_release_owned(components, ignored_paths) -> None
     "path",
     [
         "services/dittobench-api/Dockerfile.egress-proxy",
+        "services/dittobench-api/coding_runtime/python/driver.py",
+        "scripts/test-coding-python-driver.sh",
         "services/dittobench-api/integrations/longmemeval/longmemeval_adapter.py",
         "services/dittobench-api/scripts/calibrate.sh",
         "services/dittobench-api/calibration/token-efficiency-v5/contract.json",

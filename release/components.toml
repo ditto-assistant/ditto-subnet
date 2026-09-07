@@ -126,6 +126,7 @@ paths = [
   "services/dittobench-api/Dockerfile*",
   "services/dittobench-api/calibration/**",
   "services/dittobench-api/cmd/**",
+  "services/dittobench-api/coding_runtime/**",
   "services/dittobench-api/compat/**",
   "services/dittobench-api/go.mod",
   "services/dittobench-api/go.sum",
@@ -134,6 +135,7 @@ paths = [
   "services/dittobench-api/scripts/**",
   "services/dittobench-api/skills-lock.json",
   "services/dittobench-api/testdata/**",
+  "scripts/test-coding-python-driver.sh",
   "packages/dittobench-coding-contract/**",
 ]
 

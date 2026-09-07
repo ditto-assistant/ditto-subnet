@@ -147,6 +147,27 @@ can become competitive evidence.
 
 ## Required acceptance evidence
 
+### Restricted Python oracle profile
+
+The initial Python execution image may interpret a deliberately restricted AST
+of the approved test source in its trusted parent. It must never import or
+execute candidate Python in that parent. Candidate calls run under a different
+non-root identity, with no inherited private descriptors, through bounded JSON
+messages. Assertions and expected values remain parent-owned; candidate output
+is only a proposed API result, never a test count or success receipt.
+
+The profile must reject unsupported test syntax before candidate execution,
+count actual discovered test functions, and require that count to match the
+approved plan. Missing replies, exit-zero shortcuts, malformed values and
+timeouts cannot pass a test. The child must be unable to read protected tests,
+write control receipts, fork/escape its process group, or execute another program.
+All child termination must be verified before a trusted report is written.
+
+This profile supports only its explicit Python subset. It does not reinterpret
+arbitrary pytest, Node, Go or Rust results as trusted evidence, silently rewrite
+private graders, or authorize a new release/image/profile. New runtime-image
+qualification and unchanged-private-suite compatibility remain acceptance gates.
+
 Implementation PRs must execute the following tests with synthetic secrets
 and private-data markers; this document itself does not provide runtime proof.
 

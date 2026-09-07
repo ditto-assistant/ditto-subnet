@@ -56,7 +56,6 @@ with:
 --network none
 --read-only
 --ipc none
---uts private
 --init
 --cap-drop ALL
 --security-opt no-new-privileges
@@ -68,11 +67,17 @@ with:
 ```
 
 The trusted supervisor parent runs as root only inside the rootless user
-namespace with the minimal `CHOWN`, `DAC_OVERRIDE`, `SETUID`, and `SETGID`
+namespace with the minimal `CHOWN`, `DAC_OVERRIDE`, `KILL`, `SETUID`, and `SETGID`
 capabilities. Authoring/build children run from candidate-owned scratch copies
 under the plan-bound non-root UID/GID and inherit no root capabilities. The
+parent needs `KILL` to terminate children running under a different UID. The
 trusted test driver retains only what it needs to launch its own non-root
 candidate child and must not pass the control or protected descriptors into it.
+
+UTS isolation uses Docker's default (`HostConfig.UTSMode == ""`); host sharing
+is rejected. Docker does not accept the literal CLI option `--uts private`.
+The restricted Python driver/image is described in
+[coding-python-driver-v2.md](coding-python-driver-v2.md).
 
 No environment variables, proxy settings, credentials, host gateway, published
 port, Docker socket, or caller-selected entrypoint are supplied.

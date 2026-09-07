@@ -13,6 +13,7 @@ on:
       - Dockerfile.sandbox-docker
       - scripts/sandbox-docker-entrypoint.sh
       - scripts/test-validator-embedding-gateway.sh
+      - scripts/test-coding-python-driver.sh
       - .github/workflows/dittobench.yml
 
 concurrency:
@@ -27,6 +28,23 @@ env:
   SERVICE_DIR: services/dittobench-api
 
 jobs:
+  python-coding-driver:
+    name: restricted Python driver isolation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker build -f services/dittobench-api/Dockerfile.coding-python --target test -t coding-python:synthetic .
+      - run: bash scripts/test-coding-python-driver.sh coding-python:synthetic
+      - run: docker build -f services/dittobench-api/Dockerfile.coding-python --target runtime -t coding-python:runtime .
+      - name: Runtime image excludes synthetic probes and credential-shaped environment
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --entrypoint /usr/local/bin/python3 coding-python:runtime -I -c \
+            'import os; assert not os.path.exists("/opt/probe.py"); assert not any(any(k in name for k in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")) for name in os.environ)'
+
   validator-stack-gateway:
     name: validator stack embedding gateway
     runs-on: ubuntu-24.04

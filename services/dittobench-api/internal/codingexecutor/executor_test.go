@@ -428,7 +428,8 @@ func TestPreflightRejectsUntrustedDaemonAndImage(t *testing.T) {
 
 func TestPreflightAttestationRequiresObservedContainerPolicy(t *testing.T) {
 	tests := map[string]func(*dockerContainerInspection){
-		"network": func(value *dockerContainerInspection) { value.HostConfig.NetworkMode = "bridge" },
+		"host uts": func(value *dockerContainerInspection) { value.HostConfig.UTSMode = "host" },
+		"network":  func(value *dockerContainerInspection) { value.HostConfig.NetworkMode = "bridge" },
 		"candidate mount": func(value *dockerContainerInspection) {
 			for index := range value.Mounts {
 				if value.Mounts[index].Destination == workspaceMountPath {
