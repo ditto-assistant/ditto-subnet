@@ -5,8 +5,8 @@ locals {
   operators = var.enabled ? var.operators : toset([])
 }
 
-# A separate VPC has no inherited Platform DB rules, subnet routes, or peering.
-# The fixed CIDR is private to this network; future connectivity needs review.
+# A separate VPC inherits no Platform DB firewall rules. By default there is no
+# peering; postgres.tf adds only a separately reviewed, explicitly gated path.
 resource "google_compute_network" "host" {
   count                   = var.enabled ? 1 : 0
   project                 = var.project

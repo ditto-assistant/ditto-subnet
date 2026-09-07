@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - infra/**
+      - scripts/test-coding-hosted-connectivity-kernel.py
       - .github/workflows/infra-ci.yml
       - .github/workflows/infra-plan-apply.yml
   push:
     branches: [main]
     paths:
       - infra/**
+      - scripts/test-coding-hosted-connectivity-kernel.py
       - .github/workflows/infra-ci.yml
       - .github/workflows/infra-plan-apply.yml
 
@@ -17,6 +19,19 @@ permissions:
   contents: read
 
 jobs:
+  coding-connectivity-kernel:
+    name: Native Coding network kernel boundary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install test-only network tools
+        run: sudo apt-get update && sudo apt-get install -y nftables iproute2
+      - name: Test synthetic cgroup rules in a separate network namespace
+        run: sudo unshare --net python3 scripts/test-coding-hosted-connectivity-kernel.py
+
   terraform:
     name: Terraform / ${{ matrix.root }}
     runs-on: ubuntu-latest
@@ -72,6 +87,12 @@ jobs:
 
       - name: Syntax-check subnet playbooks
         run: |
-          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/hetzner-screener-fleet.yml; do
+          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/hetzner-screener-fleet.yml; do
             uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml "$playbook"
           done
+
+      - name: Check native PostgreSQL admission rendering without host mutations
+        run: >-
+          uvx --from ansible-core==2.21.2 ansible-playbook --check
+          -i tests/coding-hosted-postgres-inventory.yml
+          tests/coding-hosted-postgres.yml

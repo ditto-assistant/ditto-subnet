@@ -1,0 +1,88 @@
+---
+- name: Explain dormant native runtime installation
+  ansible.builtin.debug:
+    msg: Native runtime installation is disabled; no package, version or worker is changed.
+  when: not (coding_hosted_runtime_enabled | bool)
+
+- name: Install only an explicitly approved local runtime bundle
+  when: coding_hosted_runtime_enabled | bool
+  block:
+    - name: Require the dedicated host and exact independent artifact approval
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in groups.get('role_coding_hosted', [])
+          - ansible_facts['hostname'] == 'ditto-coding-hosted-v2'
+          - ansible_facts['distribution'] == 'Debian'
+          - ansible_facts['distribution_major_version'] == '13'
+          - coding_hosted_runtime_revision is match('^[0-9a-f]{40}$')
+          - coding_hosted_runtime_revision | length == 40
+          - coding_hosted_runtime_sha256 is match('^[0-9a-f]{64}$')
+          - coding_hosted_runtime_sha256 | length == 64
+          - coding_hosted_runtime_archive is match('^/')
+
+    - name: Inspect the native software parent without following links
+      ansible.builtin.stat:
+        path: /opt/ditto-coding-hosted
+        follow: false
+      register: coding_hosted_software_parent
+
+    - name: Refuse unsafe existing software parents without repairing them
+      ansible.builtin.assert:
+        that:
+          - not coding_hosted_software_parent.stat.exists or (coding_hosted_software_parent.stat.isdir and not coding_hosted_software_parent.stat.islnk and coding_hosted_software_parent.stat.uid == 0 and not coding_hosted_software_parent.stat.wgrp and not coding_hosted_software_parent.stat.woth)
+
+    - name: Create a missing root-owned software parent
+      ansible.builtin.file:
+        path: /opt/ditto-coding-hosted
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: not coding_hosted_software_parent.stat.exists
+
+    - name: Install the public offline verifier
+      ansible.builtin.copy:
+        src: runtime-bundle.py
+        dest: /opt/ditto-coding-hosted/runtime-bundle.py
+        owner: root
+        group: root
+        mode: "0444"
+
+    - name: Inspect the exact immutable version prefix
+      ansible.builtin.stat:
+        path: "/opt/ditto-coding-hosted/{{ coding_hosted_runtime_revision }}"
+        follow: false
+      register: coding_hosted_runtime_prefix
+
+    - name: Install a new verified version without starting it
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3.13
+          - -I
+          - /opt/ditto-coding-hosted/runtime-bundle.py
+          - install
+          - --revision
+          - "{{ coding_hosted_runtime_revision }}"
+          - --archive
+          - "{{ coding_hosted_runtime_archive }}"
+          - --sha256
+          - "{{ coding_hosted_runtime_sha256 }}"
+          - --confirm
+          - INSTALL VERIFIED CODING RUNTIME
+      when: not coding_hosted_runtime_prefix.stat.exists
+      changed_when: true
+
+    - name: Verify all installed bytes and host compatibility even for existing versions
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3.13
+          - -I
+          - /opt/ditto-coding-hosted/runtime-bundle.py
+          - verify
+          - --revision
+          - "{{ coding_hosted_runtime_revision }}"
+          - --archive
+          - "{{ coding_hosted_runtime_archive }}"
+          - --sha256
+          - "{{ coding_hosted_runtime_sha256 }}"
+      changed_when: false
