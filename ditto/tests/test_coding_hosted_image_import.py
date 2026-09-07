@@ -19,6 +19,7 @@ import yaml
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "infra/ansible/roles/coding_hosted_image/files/image-bundle.py"
 spec = importlib.util.spec_from_file_location("hosted_image", SCRIPT)
+assert spec is not None and spec.loader is not None
 POLICY = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(POLICY)
 REVISION = "1" * 40
