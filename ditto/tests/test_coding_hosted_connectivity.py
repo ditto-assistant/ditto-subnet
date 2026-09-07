@@ -37,6 +37,7 @@ def profile():
 
 def test_worker_and_daemon_have_distinct_expiring_socket_authority():
     text = POLICY.policy(profile(), 1001, 2000000000)
+    assert "type cgroupsv2; flags timeout;" in text
     assert '"system.slice/ditto-coding-hosted-worker.service" timeout 600s' in text
     assert '"user.slice/user-1001.slice/user@1001.service" timeout 600s' in text
     rules = text.splitlines()

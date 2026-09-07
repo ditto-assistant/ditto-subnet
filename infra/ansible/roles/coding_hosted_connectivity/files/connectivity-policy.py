@@ -102,7 +102,7 @@ def policy(config, uid, now):
     for name, path in (("worker", WORKER), ("daemon", daemon)):
         lines.extend(
             [
-                f"add set inet {TABLE} {name} {{ type cgroupv2; flags timeout; }}",
+                f"add set inet {TABLE} {name} {{ type cgroupsv2; flags timeout; }}",
                 f'add element inet {TABLE} {name} {{ "{path}" '
                 f"timeout {expires - now}s }}",
             ]
