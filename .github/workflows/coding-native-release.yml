@@ -1,0 +1,67 @@
+name: Coding native release set
+
+on:
+  pull_request:
+    paths:
+      - infra/scripts/build-coding-native-release.py
+      - infra/scripts/build-coding-hosted-runtime.py
+      - infra/ansible/roles/coding_hosted_image/files/image-bundle.py
+      - infra/ansible/roles/coding_hosted_runtime/files/runtime-bundle.py
+      - ditto/tests/test_coding_native_release.py
+      - ditto/tests/test_coding_hosted_image_import.py
+      - .github/workflows/coding-native-release.yml
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Exact reviewed source commit; builds public artifacts only
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Public artifact and refusal regressions
+        run: >-
+          uv run --frozen pytest -q ditto/tests/test_coding_native_release.py
+          ditto/tests/test_coding_hosted_image_import.py
+          ditto/tests/test_coding_hosted_runtime_bundle.py
+      - name: Lint release-set tooling
+        run: |
+          uv run --frozen ruff check infra/scripts/build-coding-native-release.py ditto/tests/test_coding_native_release.py
+          uv run --frozen ruff format --check infra/scripts/build-coding-native-release.py ditto/tests/test_coding_native_release.py
+  public-build:
+    if: github.event_name == 'workflow_dispatch'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - name: Build all five public artifacts from tracked Git bytes
+        env:
+          REQUESTED_SHA: ${{ inputs.sha }}
+        run: >-
+          python3 -I infra/scripts/build-coding-native-release.py build
+          --revision "$REQUESTED_SHA" --output "$RUNNER_TEMP/coding-native-release"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coding-native-release-${{ inputs.sha }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/coding-native-release/release.json
+            ${{ runner.temp }}/coding-native-release/native/runtime.tar
+            ${{ runner.temp }}/coding-native-release/*/runtime.oci.tar
+            ${{ runner.temp }}/coding-native-release/*/approval.json
