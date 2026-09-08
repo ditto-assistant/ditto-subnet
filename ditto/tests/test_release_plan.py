@@ -112,6 +112,7 @@ def test_dittobench_workflow_is_release_owned(components, ignored_paths) -> None
         "services/dittobench-api/coding_runtime/python/driver.py",
         "scripts/test-coding-python-driver.sh",
         "scripts/test-coding-compiled-bootstrap.sh",
+        "scripts/test-coding-rust-bridge.sh",
         "scripts/test-coding-go-build.sh",
         "scripts/test-coding-go-driver.sh",
         "services/dittobench-api/Dockerfile.coding-go",
