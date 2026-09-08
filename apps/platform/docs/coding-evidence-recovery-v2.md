@@ -101,3 +101,24 @@ ambiguous execution without durable evidence remain exact-resource operator
 reconciliation cases. Do not delete their tombstones or reuse their attempts.
 The command does not enable a service, provision credentials, decrypt evidence,
 prove container cleanup or qualify a live private canary.
+
+## Process-death qualification regressions
+
+`test_coding_evidence_process_recovery.py` exercises a real separate writer
+process and kernel file lock, terminating only that test-owned process with
+SIGKILL before capture, after directory creation, after sealed-byte persistence,
+and after the complete store returns. The parent proves that a live owner blocks
+recovery, process death releases the original lock without replacing it, partial
+captures remain unmodified and unusable, committed bytes survive unchanged, and
+read-only recovery cannot create new captures. A writer restart also refuses
+retained partial state rather than repairing it automatically.
+
+These are public synthetic byte/lock tests on the test host, not power-loss,
+native-host, encryption, PostgreSQL reservation or Hippius durability evidence.
+The existing database-backed recovery suite separately verifies reservation
+identity, lost acknowledgements, expiry, corrupt remote bytes, and phase-specific
+finalization without candidate/inference/grading re-execution. Actual operational
+gate 4 still requires approved fault drills on the intended native host with the
+real encrypted spool, ledger and exact Hippius readback. Keep that evidence
+separate from CI and reconcile the exact owning process/containers before any
+operational recovery invocation.
