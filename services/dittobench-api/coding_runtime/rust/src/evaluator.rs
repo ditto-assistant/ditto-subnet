@@ -536,6 +536,10 @@ impl Context<'_> {
                     syn::BinOp::Eq(_) => self.comparison(&b.left, &b.right)?,
                     syn::BinOp::Ne(_) => !self.comparison(&b.left, &b.right)?,
                     syn::BinOp::And(_) | syn::BinOp::Or(_) => {
+                        // Short-circuiting does not waive declared Boolean types.
+                        // These checks never call the API.
+                        self.boolean_type(&b.left)?;
+                        self.boolean_type(&b.right)?;
                         let left = self.eval(&b.left, Some(&Type::Bool))?;
                         let Data::Bool(left) = left.data() else {
                             return oracle();
@@ -607,6 +611,40 @@ impl Context<'_> {
         self.charge(&value)?;
         Ok(value)
     }
+    fn boolean_type(&self, expr: &Expr) -> ResultValue<()> {
+        match expr {
+            Expr::Paren(p) => self.boolean_type(&p.expr),
+            Expr::Unary(u) if matches!(u.op, syn::UnOp::Not(_)) => self.boolean_type(&u.expr),
+            Expr::Binary(b) if matches!(b.op, syn::BinOp::And(_) | syn::BinOp::Or(_)) => {
+                self.boolean_type(&b.left)?;
+                self.boolean_type(&b.right)
+            }
+            _ if self.infer(expr) == Some(Type::Bool) => Ok(()),
+            _ => oracle(),
+        }
+    }
+
+    fn projection_hint(&self, expr: &Expr, hint: Option<&Type>) -> ResultValue<Option<Type>> {
+        // Infer constants even when empty input never invokes the projection.
+        // Check their ranges; do not manufacture a type-only success.
+        match expr {
+            Expr::Lit(l) => match &l.lit {
+                syn::Lit::Int(n) => Ok(Some(self.number(n, false, hint)?.kind().clone())),
+                _ => Ok(self.infer(expr)),
+            },
+            Expr::Paren(p) => self.projection_hint(&p.expr, hint),
+            Expr::Unary(u) if matches!(u.op, syn::UnOp::Neg(_)) => {
+                if let Expr::Lit(l) = u.expr.as_ref() {
+                    if let syn::Lit::Int(n) = &l.lit {
+                        return Ok(Some(self.number(n, true, hint)?.kind().clone()));
+                    }
+                }
+                Ok(self.infer(expr))
+            }
+            _ => Ok(self.infer(expr)),
+        }
+    }
+
     fn number(
         &self,
         literal: &syn::LitInt,
@@ -687,8 +725,9 @@ impl Context<'_> {
             element(Some(base.deref().kind())).ok_or(Failure::Fatal(EvaluationError::Oracle))?;
         self.type_bindings
             .insert(name.clone(), Type::Ref(Box::new(input_type.clone())));
-        let output_type = self.infer(&closure.body);
+        let output_type = self.projection_hint(&closure.body, element(hint));
         self.type_bindings.remove(&name);
+        let output_type = output_type?;
         let mut values = Vec::new();
         let mut kind = None;
         for item in items {
@@ -711,8 +750,8 @@ impl Context<'_> {
         }
         Ok(Value::new(
             Type::Vec(Box::new(
-                kind.or_else(|| element(hint).cloned())
-                    .or(output_type)
+                kind.or(output_type)
+                    .or_else(|| element(hint).cloned())
                     .ok_or(Failure::Fatal(EvaluationError::Oracle))?,
             )),
             Data::Sequence(values),

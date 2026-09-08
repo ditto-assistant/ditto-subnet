@@ -34,6 +34,9 @@ type, and API failures. The evaluator returns no report if cleanup fails.
   inspection, indexing, and iterator projections stay parent-owned. Projection
   callbacks are data expressions, not candidate code. Static element hints
   handle empty projected sequences without requesting extra candidate results.
+  Short-circuit operands must have Boolean type descriptions even when skipped.
+  Empty projections preserve the body's known type over an incompatible expected
+  type; constant integer bodies retain checked defaults without running a callback.
 - A false assertion, failed unwrap/index, checked negation overflow, candidate
   failure, or wrong return schema fails that test. A valid domain `Err` value is
   data, not a transport failure. Transport, oracle/type, budget, and cleanup

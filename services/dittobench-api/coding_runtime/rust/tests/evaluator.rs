@@ -637,3 +637,72 @@ fn rust_generic_equality_boundaries_do_not_collapse_to_payload_equality() {
         Some(EvaluationError::Oracle)
     );
 }
+
+#[test]
+fn skipped_boolean_branches_still_check_declared_types() {
+    for body in [
+        "assert!(true || repair::f());",
+        "assert!(!(false && repair::f()));",
+        "assert!(true || (false || repair::f()));",
+        "assert!(true || 1);",
+    ] {
+        let plan = single(body, sig(i64_type()));
+        let mut api = factory(vec![]);
+        assert_eq!(
+            plan.run(&mut api, Limits::default()).err(),
+            Some(EvaluationError::Oracle)
+        );
+        assert_eq!(api.trace.borrow().calls.len(), 0);
+        assert_eq!(api.trace.borrow().finishes, 1);
+    }
+}
+
+#[test]
+fn constant_projection_type_does_not_depend_on_candidate_length() {
+    let kind = Type::Vec(Box::new(i64_type()));
+    for length in [0, 2] {
+        let expected = if length == 0 { "vec![]" } else { "vec![1, 1]" };
+        let plan = single(
+            &format!(
+                "assert_eq!(repair::f().iter().map(|item| 1).collect::<Vec<_>>(), {expected});"
+            ),
+            sig(kind.clone()),
+        );
+        let value = Value::new(kind.clone(), Data::Sequence(vec![int(7); length])).unwrap();
+        let mut api = factory(vec![vec![Ok(value)]]);
+        assert_eq!(plan.run(&mut api, Limits::default()).unwrap().passed(), 1);
+        assert_eq!(api.trace.borrow().calls.len(), 1);
+    }
+    for literal in ["256u8", "-0u8", "2147483648"] {
+        let plan = single(
+            &format!(
+                "assert_eq!(repair::f().iter().map(|item| {literal}).collect::<Vec<_>>(), vec![]);"
+            ),
+            sig(kind.clone()),
+        );
+        let value = Value::new(kind.clone(), Data::Sequence(vec![])).unwrap();
+        let mut api = factory(vec![vec![Ok(value)]]);
+        assert_eq!(
+            plan.run(&mut api, Limits::default()).err(),
+            Some(EvaluationError::Oracle)
+        );
+        assert_eq!(api.trace.borrow().finishes, 1);
+    }
+}
+
+#[test]
+fn empty_projection_cannot_adopt_an_incompatible_expected_type() {
+    let input = Type::Vec(Box::new(Type::Tuple(vec![i64_type()])));
+    let expected = Type::Vec(Box::new(Type::Int(Integer::U8)));
+    let plan = program("#[test] fn example() { assert_eq!(repair::f().iter().map(|item| item.0).collect::<Vec<_>>(), repair::g()); }",
+        BTreeMap::from([("f".into(), sig(input.clone())), ("g".into(), sig(expected.clone()))]), 1);
+    let mut api = factory(vec![vec![
+        Ok(Value::new(input, Data::Sequence(vec![])).unwrap()),
+        Ok(Value::new(expected, Data::Sequence(vec![])).unwrap()),
+    ]]);
+    assert_eq!(
+        plan.run(&mut api, Limits::default()).err(),
+        Some(EvaluationError::Oracle)
+    );
+    assert_eq!(api.trace.borrow().finishes, 1);
+}
