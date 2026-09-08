@@ -1,7 +1,7 @@
 use coding_rust_suite::{
     bridge::{generate, BridgeError},
     evaluator::Signature,
-    native::{decode_slice, referent, NativeDecode, NativeValue},
+    native::{decode_slice, referent, BorrowDecode, NativeDecode, NativeValue},
     value::{Integer, Type, Value},
 };
 use sha2::{Digest, Sha256};
@@ -65,6 +65,50 @@ fn native_conversion_is_bounded_before_serialization() {
     assert!(NativeValue::to_value(&vec![vec![true; 2000]; 3]).is_err());
 }
 
+#[test]
+fn nested_text_views_preserve_container_types_and_lifetimes() {
+    let data = encode(vec![(-2i32, u64::MAX, "borrowed row")]);
+    let rows = <Vec<(i32, u64, &str)> as BorrowDecode>::from_borrowed(&data).unwrap();
+    assert_eq!(rows, vec![(-2, u64::MAX, "borrowed row")]);
+    assert!(<Vec<(i32, u64, String)> as BorrowDecode>::from_borrowed(&data).is_err());
+    let some = encode(Some("optional"));
+    assert_eq!(
+        <Option<&str> as BorrowDecode>::from_borrowed(&some).unwrap(),
+        Some("optional")
+    );
+    let none = encode(None::<&str>);
+    assert_eq!(
+        <Option<&str> as BorrowDecode>::from_borrowed(&none).unwrap(),
+        None
+    );
+    let array = encode(["one", "two"]);
+    assert_eq!(
+        <[&str; 2] as BorrowDecode>::from_borrowed(&array).unwrap(),
+        ["one", "two"]
+    );
+    assert!(<Vec<&str> as BorrowDecode>::from_borrowed(&array).is_err());
+    let error = encode(Err::<u64, &str>("domain"));
+    assert_eq!(
+        <Result<u64, &str> as BorrowDecode>::from_borrowed(&error).unwrap(),
+        Err("domain")
+    );
+}
+
+#[test]
+fn nested_text_input_codegen_has_scoped_views_and_higher_ranked_abi() {
+    let mut table = schema();
+    table.get_mut("api::copy").unwrap().parameters =
+        vec![Type::Option(Box::new(Type::Ref(Box::new(Type::Text))))];
+    let generated = generate(&table).unwrap();
+    assert!(generated
+        .source()
+        .contains("Option<&'_ str> as BorrowDecode"));
+    assert!(generated
+        .source()
+        .contains("for<'a> fn(::core::option::Option<&'a str>)"));
+    assert!(!generated.source().contains("transmute"));
+}
+
 fn schema() -> BTreeMap<String, Signature> {
     BTreeMap::from([(
         "api::copy".into(),
@@ -108,7 +152,7 @@ fn unsupported_input_borrows_and_source_injection_are_rejected() {
         assert_eq!(generate(&table).err(), Some(BridgeError::Schema));
     }
     for kind in [
-        Type::Vec(Box::new(Type::Ref(Box::new(Type::Text)))),
+        Type::Vec(Box::new(Type::Ref(Box::new(Type::Int(Integer::U8))))),
         Type::Ref(Box::new(Type::Ref(Box::new(Type::Int(Integer::U8))))),
     ] {
         let mut table = schema();

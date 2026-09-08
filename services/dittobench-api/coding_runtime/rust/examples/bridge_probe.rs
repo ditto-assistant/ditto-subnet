@@ -22,6 +22,28 @@ fn table() -> BTreeMap<String, Signature> {
     ])));
     BTreeMap::from([
         (
+            "api::echo_rows".into(),
+            Signature {
+                parameters: vec![Type::Vec(Box::new(Type::Tuple(vec![
+                    Type::Int(Integer::I32),
+                    Type::Int(Integer::U64),
+                    Type::Ref(Box::new(Type::Text)),
+                ])))],
+                result: Type::Vec(Box::new(Type::Tuple(vec![
+                    Type::Int(Integer::I32),
+                    Type::Int(Integer::U64),
+                    Type::Ref(Box::new(Type::Text)),
+                ]))),
+            },
+        ),
+        (
+            "api::choose_text".into(),
+            Signature {
+                parameters: vec![Type::Option(Box::new(Type::Ref(Box::new(Type::Text))))],
+                result: Type::Ref(Box::new(Type::Text)),
+            },
+        ),
+        (
             "api::fresh".into(),
             Signature {
                 parameters: vec![],
@@ -224,6 +246,21 @@ fn main() {
             .unwrap()
     };
     for (name, args, expected) in [
+        (
+            "api::echo_rows",
+            vec![encoded(vec![(-2i32, u64::MAX, "borrowed row")])],
+            encoded(vec![(-2i32, u64::MAX, "borrowed row")]),
+        ),
+        (
+            "api::choose_text",
+            vec![encoded(Some("optional"))],
+            encoded("optional"),
+        ),
+        (
+            "api::choose_text",
+            vec![encoded(None::<&str>)],
+            encoded("fallback"),
+        ),
         ("api::check", vec![], true.to_value().unwrap()),
         (
             "api::add",

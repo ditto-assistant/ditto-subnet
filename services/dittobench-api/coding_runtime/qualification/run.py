@@ -170,7 +170,7 @@ def main():
     parser.add_argument("--helper", type=Path, required=True)
     parser.add_argument("--checkout", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--jobs", type=int, default=2, choices=(1, 2))
+    parser.add_argument("--jobs", type=int, default=2, choices=(1, 2, 4))
     parser.add_argument("--collect-failures", action="store_true")
     args = parser.parse_args()
     os.umask(0o077)

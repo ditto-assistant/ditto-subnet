@@ -12,7 +12,12 @@ An implementation cannot silently change an approved argument or return type;
 the fixed compilation fails on an incompatible signature. Shared input borrows
 have local owned backing storage, which survives the call and conversion of
 borrowed results. The initial input profile supports owned primitives/containers
-and one top-level immutable borrow; nested input borrows are rejected. Borrowed
+and one top-level immutable borrow. Containers may also contain `&str` leaves:
+the sealed `BorrowDecode` implementations borrow text directly from the confined
+request's owned `Value` strings, preserving exact enum/tuple/container types.
+Local backing storage and the request remain alive until output serialization;
+Rust lifetimes prevent those views from escaping. Nested non-text borrows and
+borrowed aggregates inside containers remain rejected. Borrowed
 outputs are copied into typed data descriptions. Lifetimes are not transmitted.
 
 `native` supplies sealed conversions for the approved standard-library data

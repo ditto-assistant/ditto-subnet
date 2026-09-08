@@ -49,6 +49,10 @@ python3 run.py --plan /ABS/PRIVATE/plan.json --images /ABS/PRIVATE/images.json \
   --checkout /ABS/CHECKOUT --output /ABS/PRIVATE/new-matrix --jobs 2
 ```
 
+Concurrency is bounded to 1, 2 or 4 containers. Use 4 only on an operator host
+with capacity for the corresponding aggregate CPU/RAM limits; per-container
+limits and private-data boundaries do not change.
+
 The runner requires all four languages and complete base/reference × visible/
 hidden coverage for each group, with two repeats. Reference and base-visible
 controls must pass; base-hidden controls must expose at least one failing test.

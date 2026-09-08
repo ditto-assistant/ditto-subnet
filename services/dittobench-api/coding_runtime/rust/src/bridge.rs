@@ -47,6 +47,15 @@ fn borrowed(kind: &Type) -> bool {
         _ => false,
     }
 }
+fn input_view(kind: &Type) -> bool {
+    match kind {
+        Type::Ref(t) => **t == Type::Text,
+        Type::Vec(t) | Type::Slice(t) | Type::Array(t, _) | Type::Option(t) => input_view(t),
+        Type::Tuple(ts) => ts.iter().all(input_view),
+        Type::Result(a, b) => input_view(a) && input_view(b),
+        _ => true,
+    }
+}
 fn integer(k: Integer) -> &'static str {
     match k {
         Integer::U8 => "u8",
@@ -129,13 +138,13 @@ pub fn generate(table: &BTreeMap<String, Signature>) -> Result<GeneratedBridge, 
             } else {
                 kind
             };
-            if borrowed(owned) {
+            if !input_view(owned) {
                 return Err(BridgeError::Schema);
             }
         }
     }
     let mut out = Output(String::new());
-    out.push("// Generated public API bridge; never append private suite source.\n#[cfg(not(all(target_os=\"linux\",target_arch=\"x86_64\",target_pointer_width=\"64\")))] compile_error!(\"Linux amd64 bridge required\");\nextern crate candidate;\nuse coding_rust_suite::{native::{NativeValue,NativeDecode,ConversionError,referent,decode_slice},value::{Type,Integer,Value},evaluator::Signature,wire::{Request,decode_request},wire_unix::{read_frame,write_frame}};\nuse std::{os::{fd::FromRawFd,unix::net::UnixStream},time::{Instant,Duration}};\n#[allow(unused_imports)] use std::net::Shutdown;\nfn schema()->Vec<Signature>{vec![\n")?;
+    out.push("// Generated public API bridge; never append private suite source.\n#[cfg(not(all(target_os=\"linux\",target_arch=\"x86_64\",target_pointer_width=\"64\")))] compile_error!(\"Linux amd64 bridge required\");\nextern crate candidate;\nuse coding_rust_suite::{native::{NativeValue,BorrowDecode,ConversionError,referent,decode_borrowed_slice},value::{Type,Integer,Value},evaluator::Signature,wire::{Request,decode_request},wire_unix::{read_frame,write_frame}};\nuse std::{os::{fd::FromRawFd,unix::net::UnixStream},time::{Instant,Duration}};\n#[allow(unused_imports)] use std::net::Shutdown;\nfn schema()->Vec<Signature>{vec![\n")?;
     for signature in table.values() {
         out.push(&format!(
             "Signature{{parameters:vec![{}],result:{}}},\n",
@@ -159,15 +168,15 @@ pub fn generate(table: &BTreeMap<String, Signature>) -> Result<GeneratedBridge, 
                     let input = format!("referent(&arguments[{n}])?");
                     match t.as_ref() {
                         Type::Slice(element) => {
-                            out.push(&format!("let storage{n}=decode_slice::<{}>({input})?; let argument{n}=storage{n}.as_slice();\n",native(element,lifetime)))?;
+                            out.push(&format!("let storage{n}=decode_borrowed_slice::<{}>({input})?; let argument{n}=storage{n}.as_slice();\n",native(element,"'_")))?;
                         }
-                        Type::Text => out.push(&format!("let storage{n}=<String as NativeDecode>::from_value({input})?; let argument{n}=storage{n}.as_str();\n"))?,
-                        _ => out.push(&format!("let storage{n}=<{} as NativeDecode>::from_value({input})?; let argument{n}=&storage{n};\n",native(t,lifetime)))?,
+                        Type::Text => out.push(&format!("let storage{n}=<String as BorrowDecode>::from_borrowed({input})?; let argument{n}=storage{n}.as_str();\n"))?,
+                        _ => out.push(&format!("let storage{n}=<{} as BorrowDecode>::from_borrowed({input})?; let argument{n}=&storage{n};\n",native(t,"'_")))?,
                     }
                 }
                 _ => out.push(&format!(
-                    "let argument{n}=<{} as NativeDecode>::from_value(&arguments[{n}])?;\n",
-                    native(kind, lifetime)
+                    "let argument{n}=<{} as BorrowDecode>::from_borrowed(&arguments[{n}])?;\n",
+                    native(kind, "'_")
                 ))?,
             }
         }
