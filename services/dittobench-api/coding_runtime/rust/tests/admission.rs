@@ -228,9 +228,9 @@ fn rejects_open_ended_expression_forms() {
         "(|| true)()",
         "return true",
         "panic!()",
-        "repair::transform().unwrap()",
+        "repair::transform().unwrap_or(true)",
         "repair::transform().field",
-        "[true][0]",
+        "[true][repair::transform()]",
         "true as bool",
         "&mut true",
         "*true",
@@ -273,7 +273,7 @@ fn rejects_invalid_controller_policy() {
         &[][..],
         &["transform", "transform"][..],
         &["None"][..],
-        &["a::b"][..],
+        &["a::"][..],
     ] {
         let mut contract = policy(source);
         contract.functions = functions;

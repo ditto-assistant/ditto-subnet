@@ -2,7 +2,7 @@
 //! This is not a grader, compiler, sandbox, or candidate-facing protocol.
 
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use syn::{parse::Parser, punctuated::Punctuated, Expr, Item, Path, Stmt, Token, UseTree};
 
 const MAX_SOURCE: usize = 32 * 1024;
@@ -10,12 +10,17 @@ const MAX_PUNCTUATION: usize = 256;
 const MAX_OPEN_DELIMITERS: usize = 64;
 const MAX_TESTS: usize = 32;
 const MAX_DEPTH: usize = 32;
+const MAX_API_SEGMENTS: usize = 4;
 const RESERVED: [&str; 4] = ["Some", "None", "Ok", "Err"];
+const INTEGER_TYPES: [&str; 10] = [
+    "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64", "isize",
+];
 
 /// Supplied by the trusted controller, never inferred from candidate source or
 /// imports in the suite. The digest binds exact private source bytes.
 pub struct Policy<'a> {
     pub crate_name: &'a str,
+    /// Exact crate-relative paths, e.g. `encoding::decode`, not module prefixes.
     pub functions: &'a [&'a str],
     pub expected_tests: usize,
     pub source_sha256: [u8; 32],
@@ -32,7 +37,7 @@ pub struct AdmittedSuite {
     source_sha256: [u8; 32],
     crate_name: String,
     functions: Vec<String>,
-    imports: BTreeSet<String>,
+    imports: BTreeMap<String, String>,
     // Retain only admitted syntax for a future trusted evaluator. No public AST
     // accessor: admission must not become a source export to the candidate.
     tests: Vec<syn::ItemFn>,
@@ -119,17 +124,67 @@ fn plain_path(path: &Path) -> Result<Vec<String>> {
         .collect()
 }
 
+fn api_path(value: &str) -> bool {
+    value.len() <= MAX_API_SEGMENTS * 66
+        && value.split("::").count() <= MAX_API_SEGMENTS
+        && value
+            .split("::")
+            .all(|part| identifier(part) && !RESERVED.contains(&part))
+}
+
+fn named(ident: &syn::Ident, expected: &str) -> bool {
+    identifier(&ident.to_string()) && ident == expected
+}
+
+fn import_tree(
+    tree: &UseTree,
+    prefix: &[String],
+    policy: &Policy<'_>,
+    imports: &mut BTreeMap<String, String>,
+    depth: usize,
+) -> Result<()> {
+    if depth >= MAX_DEPTH || prefix.len() >= MAX_API_SEGMENTS {
+        return Err(AdmissionError::Limit);
+    }
+    match tree {
+        UseTree::Path(path) => {
+            let name = path.ident.to_string();
+            require(identifier(&name))?;
+            let mut prefix = prefix.to_vec();
+            prefix.push(name);
+            import_tree(&path.tree, &prefix, policy, imports, depth + 1)
+        }
+        UseTree::Group(group) => {
+            require(!group.items.is_empty())?;
+            for child in &group.items {
+                import_tree(child, prefix, policy, imports, depth + 1)?;
+            }
+            Ok(())
+        }
+        UseTree::Name(leaf) => {
+            let name = leaf.ident.to_string();
+            let mut path = prefix.to_vec();
+            path.push(name.clone());
+            let path = path.join("::");
+            require(policy.functions.contains(&path.as_str()) && !imports.contains_key(&name))?;
+            imports.insert(name, path);
+            Ok(())
+        }
+        _ => Err(AdmissionError::Unsupported),
+    }
+}
+
 /// Parse in the protected controller process only. No imports are loaded, macros
 /// expanded, files opened, cargo invoked, or candidate code executed.
 pub fn admit(source: &str, policy: &Policy<'_>) -> Result<AdmittedSuite> {
     if !identifier(policy.crate_name)
         || ["std", "core", "alloc", "crate", "self", "super"].contains(&policy.crate_name)
+        || INTEGER_TYPES.contains(&policy.crate_name)
+        || RESERVED.contains(&policy.crate_name)
+        || policy.crate_name == "Vec"
         || policy.functions.is_empty()
         || policy.functions.len() > 64
-        || policy
-            .functions
-            .iter()
-            .any(|name| !identifier(name) || RESERVED.contains(name))
+        || policy.functions.iter().any(|name| !api_path(name))
         || policy.functions.iter().collect::<BTreeSet<_>>().len() != policy.functions.len()
         || !(1..=MAX_TESTS).contains(&policy.expected_tests)
     {
@@ -150,7 +205,7 @@ pub fn admit(source: &str, policy: &Policy<'_>) -> Result<AdmittedSuite> {
     }
     let file = syn::parse_file(source).map_err(|_| AdmissionError::Syntax)?;
     require(file.attrs.is_empty() && file.shebang.is_none())?;
-    let mut imports = BTreeSet::new();
+    let mut imports = BTreeMap::new();
     let mut tests = Vec::new();
     let mut names = BTreeSet::new();
     // Resolve imports first: source order must not affect name binding.
@@ -164,19 +219,8 @@ pub fn admit(source: &str, policy: &Policy<'_>) -> Result<AdmittedSuite> {
             let UseTree::Path(root) = &item.tree else {
                 return Err(AdmissionError::Unsupported);
             };
-            require(root.ident == policy.crate_name)?;
-            let leaves: Vec<&UseTree> = match root.tree.as_ref() {
-                UseTree::Group(group) => group.items.iter().collect(),
-                leaf => vec![leaf],
-            };
-            require(!leaves.is_empty())?;
-            for leaf in leaves {
-                let UseTree::Name(leaf) = leaf else {
-                    return Err(AdmissionError::Unsupported);
-                };
-                let name = leaf.ident.to_string();
-                require(policy.functions.contains(&name.as_str()) && imports.insert(name))?;
-            }
+            require(named(&root.ident, policy.crate_name))?;
+            import_tree(&root.tree, &[], policy, &mut imports, 0)?;
         }
     }
     for item in file.items {
@@ -201,6 +245,7 @@ pub fn admit(source: &str, policy: &Policy<'_>) -> Result<AdmittedSuite> {
                         && matches!(sig.output, syn::ReturnType::Default)
                         && identifier(&sig.ident.to_string())
                         && !policy.functions.contains(&sig.ident.to_string().as_str())
+                        && !imports.contains_key(&sig.ident.to_string())
                         && sig.ident != policy.crate_name
                         && !RESERVED.contains(&sig.ident.to_string().as_str())
                         && names.insert(sig.ident.to_string()),
@@ -209,6 +254,7 @@ pub fn admit(source: &str, policy: &Policy<'_>) -> Result<AdmittedSuite> {
                     policy,
                     imports: &imports,
                     locals: BTreeSet::new(),
+                    in_projection: false,
                 };
                 let mut assertions = 0;
                 for statement in &test.block.stmts {
@@ -228,6 +274,7 @@ pub fn admit(source: &str, policy: &Policy<'_>) -> Result<AdmittedSuite> {
                                     && !RESERVED.contains(&name.as_str())
                                     && name != policy.crate_name
                                     && !policy.functions.contains(&name.as_str())
+                                    && !imports.contains_key(&name)
                                     && !context.locals.contains(&name),
                             )?;
                             let init = local.init.as_ref().ok_or(AdmissionError::Unsupported)?;
@@ -278,7 +325,7 @@ fn policy_digest(policy: &Policy<'_>) -> [u8; 32] {
     hash.update(b"coding-rust-suite-admission-v1\0");
     hash.update(policy.source_sha256);
     hash.update((policy.expected_tests as u64).to_be_bytes());
-    // Identifiers cannot contain NUL; sorted set order is unambiguous and does
+    // Approved paths cannot contain NUL; sorted set order is unambiguous and does
     // not make the caller's list ordering part of the authority.
     hash.update(policy.crate_name.as_bytes());
     hash.update([0]);
@@ -291,8 +338,9 @@ fn policy_digest(policy: &Policy<'_>) -> [u8; 32] {
 
 struct Context<'a, 'b> {
     policy: &'a Policy<'b>,
-    imports: &'a BTreeSet<String>,
+    imports: &'a BTreeMap<String, String>,
     locals: BTreeSet<String>,
+    in_projection: bool,
 }
 
 impl Context<'_, '_> {
@@ -341,7 +389,14 @@ impl Context<'_, '_> {
             Expr::Path(expr) => {
                 require(expr.attrs.is_empty() && expr.qself.is_none())?;
                 let name = plain_path(&expr.path)?;
-                require(name.len() == 1 && (name[0] == "None" || self.locals.contains(&name[0])))
+                require(match name.as_slice() {
+                    [value] => value == "None" || self.locals.contains(value),
+                    [primitive, constant] => {
+                        INTEGER_TYPES.contains(&primitive.as_str())
+                            && ["MIN", "MAX"].contains(&constant.as_str())
+                    }
+                    _ => false,
+                })
             }
             Expr::Call(expr) => {
                 require(expr.attrs.is_empty())?;
@@ -354,10 +409,11 @@ impl Context<'_, '_> {
                     [name] if ["Some", "Ok", "Err"].contains(&name.as_str()) => {
                         expr.args.len() == 1
                     }
-                    [name] => self.imports.contains(name),
-                    [root, name] => {
-                        root == self.policy.crate_name
-                            && self.policy.functions.contains(&name.as_str())
+                    [name] => !self.in_projection && self.imports.contains_key(name),
+                    [root, tail @ ..] if !tail.is_empty() => {
+                        !self.in_projection
+                            && root == self.policy.crate_name
+                            && self.policy.functions.contains(&tail.join("::").as_str())
                     }
                     _ => false,
                 };
@@ -366,6 +422,38 @@ impl Context<'_, '_> {
                     next(arg)?;
                 }
                 Ok(())
+            }
+            Expr::MethodCall(expr) => {
+                require(expr.attrs.is_empty())?;
+                match expr.method.to_string().as_str() {
+                    "unwrap" | "unwrap_err" | "is_ok" | "is_err" | "is_some" | "is_none"
+                    | "len" | "is_empty" => {
+                        require(expr.turbofish.is_none() && expr.args.is_empty())?;
+                        next(&expr.receiver)
+                    }
+                    "collect" => self.projection(expr, depth),
+                    _ => Err(AdmissionError::Unsupported),
+                }
+            }
+            Expr::Field(expr) => {
+                require(
+                    expr.attrs.is_empty()
+                        && matches!(&expr.member,
+                    syn::Member::Unnamed(index) if index.index < 16),
+                )?;
+                next(&expr.base)
+            }
+            Expr::Index(expr) => {
+                require(expr.attrs.is_empty())?;
+                let Expr::Lit(index) = expr.index.as_ref() else {
+                    return Err(AdmissionError::Unsupported);
+                };
+                require(
+                    index.attrs.is_empty()
+                        && matches!(&index.lit, syn::Lit::Int(value)
+                    if value.suffix().is_empty() && value.base10_parse::<u16>().is_ok_and(|v| v < 4096)),
+                )?;
+                next(&expr.expr)
             }
             Expr::Array(expr) => {
                 require(expr.attrs.is_empty())?;
@@ -423,5 +511,119 @@ impl Context<'_, '_> {
             }
             _ => Err(AdmissionError::Unsupported),
         }
+    }
+
+    fn projection(&self, collect: &syn::ExprMethodCall, depth: usize) -> Result<()> {
+        // One syntactically closed parent-owned projection, not an executable
+        // Rust closure or a candidate callback. No arbitrary iterator protocol.
+        require(!self.in_projection && collect.args.is_empty())?;
+        let generic = collect
+            .turbofish
+            .as_ref()
+            .ok_or(AdmissionError::Unsupported)?;
+        require(generic.args.len() == 1)?;
+        let Some(syn::GenericArgument::Type(syn::Type::Path(vector))) = generic.args.first() else {
+            return Err(AdmissionError::Unsupported);
+        };
+        require(
+            vector.qself.is_none()
+                && vector.path.leading_colon.is_none()
+                && vector.path.segments.len() == 1,
+        )?;
+        let segment = &vector.path.segments[0];
+        require(named(&segment.ident, "Vec"))?;
+        let syn::PathArguments::AngleBracketed(element) = &segment.arguments else {
+            return Err(AdmissionError::Unsupported);
+        };
+        require(
+            element.colon2_token.is_none()
+                && element.args.len() == 1
+                && matches!(
+                    element.args.first(),
+                    Some(syn::GenericArgument::Type(syn::Type::Infer(_)))
+                ),
+        )?;
+        let Expr::MethodCall(map) = collect.receiver.as_ref() else {
+            return Err(AdmissionError::Unsupported);
+        };
+        require(
+            map.attrs.is_empty()
+                && named(&map.method, "map")
+                && map.turbofish.is_none()
+                && map.args.len() == 1,
+        )?;
+        let Expr::MethodCall(iter) = map.receiver.as_ref() else {
+            return Err(AdmissionError::Unsupported);
+        };
+        require(
+            iter.attrs.is_empty()
+                && named(&iter.method, "iter")
+                && iter.turbofish.is_none()
+                && iter.args.is_empty(),
+        )?;
+        let Some(Expr::Closure(closure)) = map.args.first() else {
+            return Err(AdmissionError::Unsupported);
+        };
+        require(
+            closure.attrs.is_empty()
+                && closure.lifetimes.is_none()
+                && closure.constness.is_none()
+                && closure.movability.is_none()
+                && closure.asyncness.is_none()
+                && closure.capture.is_none()
+                && matches!(closure.output, syn::ReturnType::Default)
+                && closure.inputs.len() == 1,
+        )?;
+        let Some(syn::Pat::Ident(binding)) = closure.inputs.first() else {
+            return Err(AdmissionError::Unsupported);
+        };
+        let name = binding.ident.to_string();
+        require(
+            binding.attrs.is_empty()
+                && binding.by_ref.is_none()
+                && binding.mutability.is_none()
+                && binding.subpat.is_none()
+                && identifier(&name)
+                && !RESERVED.contains(&name.as_str())
+                && name != self.policy.crate_name
+                && !self.policy.functions.contains(&name.as_str())
+                && !self.imports.contains_key(&name)
+                && !self.locals.contains(&name),
+        )?;
+        // Charge the skipped collect/map/iter/closure levels as well.
+        self.expression(&iter.receiver, depth + 3)?;
+        let mut locals = self.locals.clone();
+        locals.insert(name);
+        Context {
+            policy: self.policy,
+            imports: self.imports,
+            locals,
+            in_projection: true,
+        }
+        .expression(&closure.body, depth + 3)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opaque_suite_retains_exact_nested_import_targets() {
+        let source = "use repair::{encoding::decode, verify::inspect}; #[test] fn example() { assert!(inspect(decode(1))); }";
+        let suite = admit(
+            source,
+            &Policy {
+                crate_name: "repair",
+                functions: &["encoding::decode", "verify::inspect"],
+                expected_tests: 1,
+                source_sha256: Sha256::digest(source.as_bytes()).into(),
+            },
+        )
+        .ok()
+        .unwrap();
+        assert_eq!(suite.imports.get("decode").unwrap(), "encoding::decode");
+        assert_eq!(suite.imports.get("inspect").unwrap(), "verify::inspect");
+        assert_eq!(suite.import_count(), 2);
     }
 }
