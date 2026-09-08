@@ -102,6 +102,7 @@ import {
   agentCodingCertificationInputSchema,
   agentCodingCertificationStatusSchema,
   codingCatalogControlSchema,
+  codingPrivateV2ReleasesSchema,
   getCodingCatalogInputSchema,
   registerCodingCatalogInputSchema,
   retireCodingCatalogInputSchema,
@@ -2061,6 +2062,15 @@ export async function fetchCodingCatalogReleases(rawInput: unknown) {
     `/api/v1/admin/coding-catalog/releases?limit=${input.limit}`,
   )
   return codingCatalogControlSchema.parse(payload)
+}
+
+export async function fetchCodingPrivateV2Releases(rawInput: unknown) {
+  const input = getCodingCatalogInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/coding-private-v2-releases?limit=${input.limit}`,
+  )
+  type NativeResponse = PlatformOperations['get_private_v2_releases_api_v1_admin_coding_private_v2_releases_get']['responses'][200]['content']['application/json']
+  return codingPrivateV2ReleasesSchema.parse(payload) satisfies NativeResponse
 }
 
 export async function registerCodingCatalogRelease(rawInput: unknown, actor: string) {

@@ -5094,6 +5094,54 @@ export const getCodingCatalogInputSchema = z.object({
   limit: z.number().int().min(1).max(100).default(50),
 })
 
+// Native private-v2 registration is separate from the older catalog surface.
+// Explicit projections strip unknown fields at every level: no future object
+// coordinates, publication receipts or key material may leak through this read.
+const codingPrivateV2Digest = z.string().regex(/^[0-9a-f]{64}$/)
+const codingPrivateV2RegistrationSchema = z.object({
+  schema: z.literal('dittobench-coding-private-v2-registration-v1'),
+  coding_contract_version: z.literal(2),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+  corpus_release_id: z.string().min(1).max(256),
+  private_release_sha256: codingPrivateV2Digest,
+  catalog_sha256: codingPrivateV2Digest,
+  catalog_merkle_root: codingPrivateV2Digest,
+  payload_sha256: codingPrivateV2Digest,
+  transport_sha256: codingPrivateV2Digest,
+  wrapping_key_sha256: codingPrivateV2Digest,
+  publication_receipt_sha256: codingPrivateV2Digest,
+  previous_registration_sha256: codingPrivateV2Digest.nullable(),
+  registration_sha256: codingPrivateV2Digest,
+})
+
+export const codingPrivateV2ReleasesSchema = z.object({
+  total: z.number().int().nonnegative(),
+  releases: z.array(z.object({
+    release_row_id: z.string().uuid(),
+    registration: codingPrivateV2RegistrationSchema,
+    publication_source_sha: z.string().regex(/^[0-9a-f]{40}$/),
+    provider_probe_receipt_sha256: codingPrivateV2Digest,
+    private_input_authority_sha256: codingPrivateV2Digest,
+    curator_signing_key_sha256: codingPrivateV2Digest,
+    publication_object_count: z.number().int().min(1).max(10_000),
+    status: z.enum(['registered', 'quarantined', 'retired']),
+    registered_reason: z.string(),
+    registered_actor: z.string(),
+    registered_at: z.string(),
+    lifecycle_event_count: z.number().int().min(0).max(2),
+    latest_event_reason: z.string().nullable(),
+    latest_event_actor: z.string().nullable(),
+    latest_event_at: z.string().nullable(),
+    shadow_only: z.literal(true),
+    selectable: z.literal(false),
+    weight_eligible: z.literal(false),
+  })).max(100),
+  shadow_only: z.literal(true),
+  selectable: z.literal(false),
+  weight_eligible: z.literal(false),
+})
+
 export const registerCodingCatalogInputSchema = z.object({
   commitment: codingCatalogCommitmentSchema,
   signature: z.string().regex(/^[0-9a-fA-F]{128}$/),

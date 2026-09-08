@@ -14,6 +14,20 @@ not be.
 
 ## Authorization
 
+`get_coding_private_v2_releases` reads native private-v2 registration digests and
+quarantine/retirement audit state through Platform's existing admin endpoint.
+It is distinct from the older `get_coding_catalog_releases` surface. A result
+from one cannot establish the state of the other. Its bounded `limit` defaults
+to 50 (maximum 100); `total` remains the full registry count, so an omitted row
+outside the returned window is not evidence of absence.
+
+This is a `backroom:read` tool only. It strips unknown response fields, including
+nested ones, and exposes no full publication receipts, private source, storage
+coordinates, wrapped keys or credentials. The registered publication/probe/key
+digests are historical commitments, not fresh connectivity or custody checks.
+Registration remains non-selectable and weight-ineligible; it does not approve
+native execution, a canary or a rollout. No private-v2 mutation tool is added.
+
 The MCP endpoint is a full OAuth 2.1 resource. `@cloudflare/workers-oauth-provider`
 owns `/authorize`, `/token`, and `/register`; discovery lives at
 `/.well-known/oauth-authorization-server/mcp` and `/.well-known/mcp/server.json`.

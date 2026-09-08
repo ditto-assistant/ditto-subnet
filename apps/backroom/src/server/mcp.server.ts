@@ -146,6 +146,7 @@ import {
   fetchAgentScoringReadiness,
   fetchAgentCodingCertifications,
   fetchCodingCatalogReleases,
+  fetchCodingPrivateV2Releases,
   registerCodingCatalogRelease,
   retireCodingCatalogRelease,
   supersedeCodingCatalogRelease,
@@ -482,6 +483,10 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 // Keep the catalog decision-grade; the original, detailed operation notes stay
 // available on demand through `get_backroom_tool_help`.
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
+  agent_scoring_readiness:
+    'Read one submission\'s scoring blockers: dataset, screened image, policy version, status, and lease eligibility.',
+  get_agent_coding_certifications:
+    'Artifact-bound coding certifications; weight_eligible is always false. Requires backroom:read.',
   get_screener_capacity:
     'Read screener capacity, provider priorities, and recent build, runtime, and source-review jobs before manual retry.',
   set_screener_provider_settings:
@@ -490,6 +495,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Apply complete revisioned concurrency limits for one enrolled screener node after reading get_screener_capacity.',
   get_coding_catalog_releases:
     'Read signed shadow catalog commitments, retirement, and exposure counts.',
+  get_coding_private_v2_releases:
+    'Read native private-v2 registration digests and lifecycle state; never enables execution.',
   register_coding_catalog_release:
     'Register one curator-signed, weight-zero catalog commitment.',
   supersede_coding_catalog_release:
@@ -1350,6 +1357,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchCodingCatalogReleases(input)),
+  )
+
+  registerTool(
+    'get_coding_private_v2_releases',
+    {
+      title: 'Get native private Coding v2 registrations',
+      description:
+        'Read Platform-owned native private-v2 release registrations, publication/key/probe digest commitments, and quarantine/retirement audit metadata. Separate from get_coding_catalog_releases, which reads the older contract-v1 catalog. Returns at most limit rows (default 50, maximum 100) and the untruncated total. No private source, object URLs/keys, wrapped keys, credentials or full publication receipts are returned. Registration remains selectable=false, shadow_only=true, weight_eligible=false and is not evidence of current Hippius access, key custody, native host qualification, canary completion or rollout approval. Requires backroom:read; no mutation is performed.',
+      inputSchema: getCodingCatalogInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchCodingPrivateV2Releases(input)),
   )
 
   registerTool(

@@ -137,6 +137,7 @@ describe('Backroom MCP tools', () => {
         'get_agent_coding_certifications',
         'get_agent_coding_shadow_evaluations',
         'get_coding_catalog_releases',
+        'get_coding_private_v2_releases',
         'get_agent_core_qualification',
         'get_agent_scores',
         'get_leaderboard',
@@ -6983,6 +6984,108 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+
+  it('reads native private-v2 registry state without exposing private payload extensions', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const registration = {
+      schema: 'dittobench-coding-private-v2-registration-v1',
+      coding_contract_version: 2,
+      shadow_only: true,
+      weight_eligible: false,
+      corpus_release_id: 'opaque-native-release',
+      private_release_sha256: 'a'.repeat(64),
+      catalog_sha256: 'b'.repeat(64),
+      catalog_merkle_root: 'c'.repeat(64),
+      payload_sha256: 'd'.repeat(64),
+      transport_sha256: 'e'.repeat(64),
+      wrapping_key_sha256: 'f'.repeat(64),
+      publication_receipt_sha256: '1'.repeat(64),
+      previous_registration_sha256: null,
+      registration_sha256: '2'.repeat(64),
+      wrapped_data_key: 'must-strip-nested-private-field',
+    }
+    const row = {
+      release_row_id: '11111111-1111-4111-8111-111111111111',
+      registration,
+      publication_source_sha: 'a'.repeat(40),
+      provider_probe_receipt_sha256: '3'.repeat(64),
+      private_input_authority_sha256: '4'.repeat(64),
+      curator_signing_key_sha256: '5'.repeat(64),
+      publication_object_count: 652,
+      status: 'registered',
+      registered_reason: 'synthetic registration audit',
+      registered_actor: 'synthetic-operator',
+      registered_at: '2026-09-08T00:00:00Z',
+      lifecycle_event_count: 0,
+      latest_event_reason: null,
+      latest_event_actor: null,
+      latest_event_at: null,
+      shadow_only: true,
+      selectable: false,
+      weight_eligible: false,
+      publication_receipt: { objects: ['must-strip-private-object-coordinate'] },
+    }
+    const payload = { total: 7, releases: [row], shadow_only: true, selectable: false,
+      weight_eligible: false, provider_credential: 'must-strip-private-credential' }
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const tools = await client.listTools()
+      expect(tools.tools.find((tool) => tool.name === 'get_coding_private_v2_releases')?.annotations)
+        .toMatchObject({ readOnlyHint: true, destructiveHint: false, idempotentHint: true })
+      for (const status of ['registered', 'quarantined', 'retired']) {
+        row.status = status
+        const response = await client.callTool({ name: 'get_coding_private_v2_releases', arguments: { limit: 25 } })
+        expect(response.isError, readTextResult(response)).not.toBe(true)
+        expect(readJsonResult(response)).toMatchObject({ total: 7, selectable: false, weight_eligible: false })
+        expect(readTextResult(response)).toContain(status)
+        expect(readTextResult(response)).toContain(registration.registration_sha256)
+        expect(readTextResult(response)).not.toContain('must-strip')
+      }
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://platform-api.heyditto.ai/api/v1/admin/coding-private-v2-releases?limit=25',
+        expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer platform-admin-token' }) }),
+      )
+      expect(fetchMock.mock.calls.every(([_url, options]) => !options.body && (!options.method || options.method === 'GET'))).toBe(true)
+      const before = fetchMock.mock.calls.length
+      for (const limit of [0, 101, 1.5]) {
+        const response = await client.callTool({ name: 'get_coding_private_v2_releases', arguments: { limit } })
+        expect(response.isError).toBe(true)
+      }
+      expect(fetchMock.mock.calls.length).toBe(before)
+      payload.selectable = true
+      expect((await client.callTool({ name: 'get_coding_private_v2_releases', arguments: {} })).isError).toBe(true)
+      payload.selectable = false
+      registration.coding_contract_version = 1
+      expect((await client.callTool({ name: 'get_coding_private_v2_releases', arguments: {} })).isError).toBe(true)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('preserves an empty native registry and never falls back to the v1 catalog', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      total: 0, releases: [], shadow_only: true, selectable: false, weight_eligible: false,
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_coding_private_v2_releases', arguments: {} })
+      expect(readJsonResult(response)).toEqual({ total: 0, releases: [], shadow_only: true, selectable: false, weight_eligible: false })
+      expect(fetchMock.mock.calls[0][0]).toBe('https://platform-api.heyditto.ai/api/v1/admin/coding-private-v2-releases?limit=50')
+      fetchMock.mockResolvedValue(Response.json({ detail: 'not deployed' }, { status: 404 }))
+      const unavailable = await client.callTool({ name: 'get_coding_private_v2_releases', arguments: {} })
+      expect(unavailable.isError).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(fetchMock.mock.calls.every(([url]) => String(url).includes('/coding-private-v2-releases?'))).toBe(true)
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   it('registers, reads, and retires signed shadow coding catalog commitments', async () => {
