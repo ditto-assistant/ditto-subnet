@@ -314,16 +314,18 @@ pub(crate) fn equal(a: &Value, b: &Value) -> Result<bool, ValueError> {
 
 fn comparable(a: &Type, b: &Type) -> bool {
     match (a, b) {
+        (Type::Array(a, an), Type::Array(b, bn)) => an == bn && comparable(a, b),
         (
             Type::Vec(a) | Type::Slice(a) | Type::Array(a, _),
             Type::Vec(b) | Type::Slice(b) | Type::Array(b, _),
         ) => comparable(a, b),
-        (Type::Ref(a), Type::Ref(b)) | (Type::Option(a), Type::Option(b)) => comparable(a, b),
+        // A Text target beneath a reference denotes str, not an owned String.
+        // Do not recursively turn &&str == &str into String == &str.
+        (Type::Ref(a), Type::Ref(b)) if **a == Type::Text || **b == Type::Text => a == b,
+        (Type::Ref(a), Type::Ref(b)) => comparable(a, b),
         (Type::Ref(a), Type::Text) | (Type::Text, Type::Ref(a)) => **a == Type::Text,
-        (Type::Tuple(a), Type::Tuple(b)) => {
-            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| comparable(a, b))
-        }
-        (Type::Result(a, ae), Type::Result(b, be)) => comparable(a, b) && comparable(ae, be),
+        // Rust's tuple, Option, and Result PartialEq require the same types.
+        // The default exact comparison below retains those generic boundaries.
         _ => a == b,
     }
 }

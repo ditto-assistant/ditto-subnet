@@ -554,3 +554,86 @@ fn u64_comparisons_are_lossless_and_locals_do_not_silently_cast() {
     );
     assert_eq!(api.trace.borrow().calls.len(), 0);
 }
+
+#[test]
+fn rust_generic_equality_boundaries_do_not_collapse_to_payload_equality() {
+    let text = Value::new(Type::Text, Data::Text("public".into())).unwrap();
+    let borrowed = Value::new(
+        Type::Ref(Box::new(Type::Text)),
+        Data::Ref(Box::new(text.clone())),
+    )
+    .unwrap();
+    let reference = borrowed.kind().clone();
+    let pairs = [
+        (
+            Value::new(
+                Type::Option(Box::new(Type::Text)),
+                Data::Some(Box::new(text.clone())),
+            )
+            .unwrap(),
+            Value::new(
+                Type::Option(Box::new(reference.clone())),
+                Data::Some(Box::new(borrowed.clone())),
+            )
+            .unwrap(),
+        ),
+        (
+            Value::new(
+                Type::Tuple(vec![Type::Text]),
+                Data::Tuple(vec![text.clone()]),
+            )
+            .unwrap(),
+            Value::new(
+                Type::Tuple(vec![reference.clone()]),
+                Data::Tuple(vec![borrowed.clone()]),
+            )
+            .unwrap(),
+        ),
+        (
+            Value::new(
+                Type::Result(Box::new(Type::Text), Box::new(Type::Bool)),
+                Data::Ok(Box::new(text)),
+            )
+            .unwrap(),
+            Value::new(
+                Type::Result(Box::new(reference), Box::new(Type::Bool)),
+                Data::Ok(Box::new(borrowed)),
+            )
+            .unwrap(),
+        ),
+        (
+            Value::new(
+                Type::Array(Box::new(Type::Bool), 1),
+                Data::Sequence(vec![Value::boolean(true)]),
+            )
+            .unwrap(),
+            Value::new(
+                Type::Array(Box::new(Type::Bool), 2),
+                Data::Sequence(vec![Value::boolean(true); 2]),
+            )
+            .unwrap(),
+        ),
+    ];
+    for (a, b) in pairs {
+        let schema = BTreeMap::from([
+            ("a".into(), sig(a.kind().clone())),
+            ("b".into(), sig(b.kind().clone())),
+        ]);
+        let plan = program(
+            "#[test] fn example() { assert_eq!(repair::a(), repair::b()); }",
+            schema,
+            1,
+        );
+        let mut api = factory(vec![vec![Ok(a), Ok(b)]]);
+        assert_eq!(
+            plan.run(&mut api, Limits::default()).err(),
+            Some(EvaluationError::Oracle)
+        );
+        assert_eq!(api.trace.borrow().finishes, 1);
+    }
+    let plan = single("assert_eq!(&\"public\", \"public\");", sig(Type::Bool));
+    assert_eq!(
+        plan.run(&mut factory(vec![]), Limits::default()).err(),
+        Some(EvaluationError::Oracle)
+    );
+}

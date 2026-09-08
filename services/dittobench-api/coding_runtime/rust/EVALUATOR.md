@@ -24,6 +24,8 @@ type, and API failures. The evaluator returns no report if cleanup fails.
 - Text is owned UTF-8 data; a reference-to-text description represents a string
   borrow. `.len()` counts UTF-8 bytes. Supported equality is structural, with
   explicit sequence and text-borrow compatibility, never stringification.
+  Tuples/options/results keep exact generic types, arrays keep equal-length
+  comparison requirements, and string borrows do not erase reference depth.
 - The only implicit API argument conversion is a borrowed array/vector to an
   explicitly declared borrowed slice with the same element type. Integer casts,
   owned-container conversions, custom objects, and custom trait dispatch do not
