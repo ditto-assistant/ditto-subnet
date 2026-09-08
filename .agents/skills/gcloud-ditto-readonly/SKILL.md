@@ -32,6 +32,20 @@ JSON `null` is not SQL NULL: `col IS NOT NULL` is true for a stored JSON
 `observation->'review_audit'`) must compare against `'null'::jsonb` or the
 "present" branch silently includes empty values.
 
+## PostgreSQL recovery diagnostics
+
+For a database that rejects connections during recovery, use the fixed,
+read-only host diagnostic (no SQL or credentials):
+
+```bash
+.agents/skills/gcloud-ditto-readonly/scripts/inspect_platform_postgres.sh
+```
+
+The manual `Diagnose Platform PostgreSQL` workflow runs this same bounded
+script from main under the protected prod environment and the existing
+Platform deployment identity. It accepts no remote commands or target inputs,
+changes no IAM, and never restarts PostgreSQL or modifies WAL/data files.
+
 ## Platform API logs
 
 The API runs under pm2 as `ditto-api` (user `deploy`). Live logs are
