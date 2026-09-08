@@ -166,6 +166,38 @@ def test_install_denies_first_then_checks_and_commits(monkeypatch):
     assert commands[1][0] == commands[2][0]
 
 
+def test_rollout_endpoint_cap_is_versioned_and_requires_exact_start_pin(monkeypatch):
+    import hashlib
+    import json
+
+    config = profile()
+    config["candidate_tcp"] = [
+        {"address": "10.30.0.4", "port": 18080 + i} for i in range(8)
+    ]
+    with pytest.raises(ValueError):
+        POLICY.policy(config, 1001, 2000000000)
+    config["schema"] = "dittobench-coding-hosted-connectivity-v3"
+    assert "18087" in POLICY.policy(config, 1001, 2000000000)
+    commands = lifecycle(monkeypatch)
+    monkeypatch.setattr(POLICY, "configuration", lambda: config)
+    with pytest.raises(ValueError):
+        POLICY.main(["install"])
+    assert commands[-1][0] == "synthetic-deny"
+    checksum = hashlib.sha256(
+        json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    commands.clear()
+    POLICY.main(["install-rollout", checksum])
+    assert len(commands) == 3
+    commands.clear()
+    with pytest.raises(ValueError):
+        POLICY.main(["install-rollout", "0" * 64])
+    assert all(body == "synthetic-deny" for body, _kwargs in commands)
+    config["candidate_tcp"].append({"address": "10.30.0.4", "port": 18088})
+    with pytest.raises(ValueError):
+        POLICY.policy(config, 1001, 2000000000)
+
+
 def test_validation_never_changes_firewall_or_requires_worker_cgroup(monkeypatch):
     commands = lifecycle(monkeypatch)
 

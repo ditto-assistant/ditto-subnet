@@ -307,7 +307,11 @@ async def verify_runtime_result(
 
 
 async def run_runtime(path: Path) -> str:
-    config = load_runtime_config(path)
+    return await run_loaded_runtime(load_runtime_config(path))
+
+
+async def run_loaded_runtime(config: HostedRuntimeConfig) -> str:
+    """Execute one already-loaded configuration; never reload mutable policy files."""
     wire = config.wire
     engine = create_db_engine(config.postgres)
     sessions = create_session_maker(engine)

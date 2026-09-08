@@ -170,6 +170,7 @@ def main():
             ("10.20.0.7", 5432),
             ("1.1.1.1", 443),
             ("10.30.0.4", 18080),
+            ("10.30.0.4", 18087),
             ("169.254.169.254", 80),
             ("203.0.113.7", 443),
             ("127.0.0.1", 18081),
@@ -179,7 +180,7 @@ def main():
         listeners.append(echo("127.0.0.53", 53))
         listeners.append(echo("127.0.0.53", 53, udp=True))
 
-        def compiled(seconds):
+        def compiled(seconds, rollout=False):
             now = int(time.time())
             profile = {
                 "schema": "dittobench-coding-hosted-connectivity-v2",
@@ -198,6 +199,11 @@ def main():
                     {"address": "10.30.0.4", "port": 18082},
                 ],
             }
+            if rollout:
+                profile["schema"] = "dittobench-coding-hosted-connectivity-v3"
+                profile["candidate_tcp"] = [
+                    {"address": "10.30.0.4", "port": 18080 + i} for i in range(8)
+                ]
             body = policy.policy(profile, TEST_UID, now)
             # Substitute only the test-owned cgroup names, retaining the exact
             # production ancestor depths, syntax and all policy predicates.
@@ -235,6 +241,13 @@ def main():
 
         reply(worker, "10.30.0.4", 18082)
         reply(daemon, "127.0.0.1", 18083)
+
+        # The larger endpoint set is explicit v3 authority, not a v2 relaxation.
+        isolated(daemon, lambda: reaches("10.30.0.4", 18087, False))
+        nft(compiled(120, rollout=True))
+        isolated(daemon, lambda: reaches("10.30.0.4", 18087, True))
+        isolated(None, lambda: reaches("10.30.0.4", 18087, False))
+        isolated(daemon, lambda: reaches("169.254.169.254", 80, False))
 
         nft(compiled(3))
 

@@ -96,3 +96,8 @@ jobs:
           uvx --from ansible-core==2.21.2 ansible-playbook --check
           -i tests/coding-hosted-postgres-inventory.yml
           tests/coding-hosted-postgres.yml
+
+      - name: Prove native connectivity stays disabled in both worker modes
+        run: >-
+          uvx --from ansible-core==2.21.2 ansible-playbook --check
+          -i localhost, tests/coding-hosted-connectivity.yml

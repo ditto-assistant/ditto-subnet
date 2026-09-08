@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -116,8 +118,22 @@ def postgres_config(entries: object) -> tuple[PostgresConfig, tuple[str, ...]]:
     return result, tuple(entries)
 
 
-def load_runtime_config(path: Path) -> HostedRuntimeConfig:
-    wire = HostedPlatformRuntimeInput.model_validate(read_json(path))
+def load_runtime_config(
+    path: Path, *, expected_sha256: str | None = None
+) -> HostedRuntimeConfig:
+    if expected_sha256 is None:
+        document = read_json(path)
+    else:
+        from ditto.api_models.coding_inference import _decode_json_document
+
+        body = read_private(path, 65536)
+        if (
+            re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+            or hashlib.sha256(body).hexdigest() != expected_sha256
+        ):
+            raise HostedRuntimeError("runtime configuration commitment differs")
+        document = _decode_json_document(body, maximum_bytes=65536)
+    wire = HostedPlatformRuntimeInput.model_validate(document)
     private_directory(Path(wire.runtime_root))
     private_directory(Path(wire.unwrap_work_root))
     protected_helper(Path(wire.worker_executable))

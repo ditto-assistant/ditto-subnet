@@ -17,6 +17,11 @@
           - coding_hosted_worker_config is match('^/var/lib/ditto-coding-hosted/[A-Za-z0-9_./-]+[.]json$')
           - "'..' not in coding_hosted_worker_python.split('/')"
           - "'..' not in coding_hosted_worker_config.split('/')"
+          - coding_hosted_worker_mode in ['single', 'rollout']
+          - coding_hosted_worker_mode != 'rollout' or coding_hosted_rollout_approval_sha256 is match('^[0-9a-f]{64}$')
+          - coding_hosted_worker_mode != 'rollout' or coding_hosted_rollout_connectivity_sha256 is match('^[0-9a-f]{64}$')
+          - coding_hosted_worker_mode != 'rollout' or coding_hosted_connectivity_profile.get('schema') == 'dittobench-coding-hosted-connectivity-v3'
+          - coding_hosted_worker_mode != 'single' or coding_hosted_connectivity_profile.get('schema') == 'dittobench-coding-hosted-connectivity-v2'
 
     - name: Refuse an active worker without interrupting it
       ansible.builtin.command:

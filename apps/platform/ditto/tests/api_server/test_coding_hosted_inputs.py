@@ -7,7 +7,7 @@ import io
 import json
 import os
 import subprocess
-import time
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -76,7 +76,6 @@ async def fixture(
     session_maker,
     hosted_profile,
     *,
-    expires_soon=False,
     policy_sha256=None,
     grading_profile_factory=None,
     reader_authority_sha256="6" * 64,
@@ -208,7 +207,6 @@ async def fixture(
             if grading_profile_factory
             else None
         ),
-        deadline=int(time.time()) + 2 if expires_soon else None,
     )
 
     class Reader:
@@ -342,10 +340,10 @@ async def test_encrypted_assembly_constructs_native_go_workspace(
     "fault", ["assignment", "attempt", "ciphertext", "freeze", "expiry"]
 )
 async def test_authoring_assembly_fails_closed(
-    tmp_path, session_maker, hosted_profile, fault
+    tmp_path, session_maker, hosted_profile, fault, monkeypatch
 ):
     authority, worker, _, _, assembler, reader, unwrapper = await fixture(
-        tmp_path, session_maker, hosted_profile, expires_soon=fault == "expiry"
+        tmp_path, session_maker, hosted_profile
     )
     args = {
         "evaluation_id": authority.evaluation_id,
@@ -361,7 +359,12 @@ async def test_authoring_assembly_fails_closed(
     if fault == "freeze":
         reader.hook = lambda: _freeze(session_maker, authority, worker)
     if fault == "expiry":
-        await asyncio.sleep(2.1)
+        # Finish real database setup before testing the exact expiry boundary;
+        # scheduler contention must not expire the fixture before it is started.
+        async def expired(_session):
+            return datetime.fromtimestamp(authority.deadline_unix, UTC)
+
+        monkeypatch.setattr("ditto.api_server.coding_hosted_inputs._now", expired)
     with pytest.raises(HostedInputError):
         await assembler.assemble(**args)
     if fault in {"assignment", "attempt", "expiry"}:
