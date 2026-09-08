@@ -13,8 +13,10 @@ import pytest
 from ditto.tests.test_coding_hosted_image_import import POLICY as IMAGE
 from ditto.tests.test_coding_qualification import RUNNER, image
 
+RUNNER_FILE = RUNNER.__file__
+assert RUNNER_FILE is not None
 SPEC = importlib.util.spec_from_file_location(
-    "native_matrix", Path(RUNNER.__file__).with_name("native.py")
+    "native_matrix", Path(RUNNER_FILE).with_name("native.py")
 )
 assert SPEC is not None and SPEC.loader is not None
 NATIVE = importlib.util.module_from_spec(SPEC)
