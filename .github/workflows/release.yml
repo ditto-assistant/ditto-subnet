@@ -1731,10 +1731,10 @@ jobs:
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "$exact" >/dev/null
           cosign attest --yes \
-            --type io.heyditto.dittobench.coding-executor-scorer-release.v1 \
+            --type https://heyditto.ai/attestations/coding-executor-scorer-release/v1 \
             --predicate build/coding-executor-scorer/manifest.json "$exact"
           cosign verify-attestation \
-            --type io.heyditto.dittobench.coding-executor-scorer-release.v1 \
+            --type https://heyditto.ai/attestations/coding-executor-scorer-release/v1 \
             --certificate-identity-regexp '^https://github.com/ditto-assistant/ditto-subnet/.github/workflows/release.yml@refs/heads/main$' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "$exact" >/dev/null

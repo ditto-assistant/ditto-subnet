@@ -38,7 +38,7 @@ verified_attestation="$(mktemp)"
 trap 'rm -f "$verified_attestation"' EXIT
 cosign verify-attestation \
   --output json \
-  --type io.heyditto.dittobench.coding-executor-scorer-release.v1 \
+  --type https://heyditto.ai/attestations/coding-executor-scorer-release/v1 \
   --certificate-identity-regexp '^https://github.com/ditto-assistant/ditto-subnet/.github/workflows/release.yml@refs/heads/main$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   "$image_reference" >"$verified_attestation"
@@ -63,7 +63,7 @@ for record in records:
         canonical = (json.dumps(predicate, sort_keys=True, separators=(",", ":")) + "\n").encode()
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         continue
-    if statement.get("predicateType") == "io.heyditto.dittobench.coding-executor-scorer-release.v1" and canonical == release:
+    if statement.get("predicateType") == "https://heyditto.ai/attestations/coding-executor-scorer-release/v1" and canonical == release:
         break
 else:
     raise SystemExit("release manifest is not the exact verified scorer attestation predicate")
