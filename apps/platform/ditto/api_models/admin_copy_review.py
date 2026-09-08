@@ -298,3 +298,30 @@ class AdminCopyReviewPrecedentList(BaseModel):
         Literal["copy", "benchmark_overfit", "deferred_source_review"] | None
     ) = None
     status: Literal["resolved", "all"]
+
+
+class AdminFailOpenBackfillRequest(BaseModel):
+    """Open operator holds for scored rows admitted by a fail-open court clear."""
+
+    model_config = ConfigDict(extra="ignore")
+    dry_run: bool = True
+    limit: Annotated[int, Field(ge=1, le=500)] = 200
+
+
+class AdminFailOpenBackfillCandidate(BaseModel):
+    agent_id: UUID
+    agent_name: str | None
+    agent_version: int | None
+    agent_status: str
+    admitting_attempt_id: UUID
+    admitted_at: datetime
+    score_count: int
+    action: Literal["opened", "would_open", "skipped_pending", "skipped_cleared"]
+
+
+class AdminFailOpenBackfillResponse(BaseModel):
+    dry_run: bool
+    scanned: int
+    opened: int
+    skipped: int
+    items: list[AdminFailOpenBackfillCandidate]

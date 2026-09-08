@@ -107,6 +107,12 @@ addendum.
   `verdict-contract-failed` court result is carried as a quarantine (an ATH
   hold on a deferred rescreen), and `adjudicator-unavailable` (no key file or
   unreadable archive on the node) is a retryable infrastructure outcome.
+  The platform fails closed on the rows already admitted this way: at score
+  finalization or on a later rescreen, an agent whose newest court record is a
+  fail-open clear is held in `ath_pending_review` ("Automated review did not
+  complete; held for operator source review") until an operator clears it,
+  and `POST /admin/copy-reviews/backfill-fail-open` opens the same hold for
+  the existing scored cohort (see `apps/platform/docs/ath-review-queue.md`).
 - **Fairness.** The same rules as v11 apply: agents are held to the policy
   that screened them; the scheduled activation with `rescreen_scored` is the
   mechanism that re-adjudicates every scored row — including the champion —

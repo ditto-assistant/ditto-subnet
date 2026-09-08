@@ -30,6 +30,9 @@ from ditto.api_models.admin_copy_review import (
     AdminCopyReviewResolveRequest,
     AdminCopyReviewResolveResponse,
     AdminDeferredReviewEvidence,
+    AdminFailOpenBackfillCandidate,
+    AdminFailOpenBackfillRequest,
+    AdminFailOpenBackfillResponse,
     AdminSourceDiffFileDetail,
     AdminSourceDiffManifest,
 )
@@ -38,6 +41,14 @@ from ditto.api_server.anti_copy_comparison import compare_anti_copy_pair
 from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.fail_open_admission import (
+    ADJUDICATED_CLEAR_REASON_CODE,
+    BACKFILL_ACTOR,
+    evidence_marks_fail_open,
+    hold_fail_open_admission,
+    operator_cleared_since,
+    pending_review,
+)
 from ditto.api_server.source_diff import (
     build_source_diff_manifest,
     unified_diff_for_file,
@@ -54,6 +65,7 @@ from ditto.db.models import (
     AthReview,
     AthReviewAction,
     Score,
+    ScreeningQuarantine,
     ValidatorTicket,
 )
 from ditto.db.queries.artifact_fetch_audit import (
@@ -761,6 +773,116 @@ async def get_copy_review_current_comparison(
         raise HTTPException(status_code=409, detail="current comparison unavailable")
     comparison = compare_anti_copy_pair(candidate=candidate, reference=reference)
     return comparison.to_wire()
+
+
+@router.post(
+    "/copy-reviews/backfill-fail-open",
+    response_model=AdminFailOpenBackfillResponse,
+)
+async def backfill_fail_open_admissions(
+    payload: AdminFailOpenBackfillRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> AdminFailOpenBackfillResponse:
+    """Hold every scored/live agent whose admitting court clear was fail-open.
+
+    One-shot and idempotent: an agent already held, or cleared by an operator
+    after the admitting attempt, is skipped. ``dry_run`` (the default) lists
+    what would change and writes nothing. Scores are never touched; a resolved
+    operator ``clear`` restores the previous status exactly as for any other
+    ATH hold. Every opened hold is audited as ``platform:fail-open-backfill``.
+    """
+    now = datetime.now(UTC)
+    items: list[AdminFailOpenBackfillCandidate] = []
+    opened = skipped = 0
+    async with session.begin():
+        rows = await session.execute(
+            select(ScreeningQuarantine, Agent)
+            .join(Agent, Agent.agent_id == ScreeningQuarantine.agent_id)
+            .where(
+                ScreeningQuarantine.reason_code == ADJUDICATED_CLEAR_REASON_CODE,
+                Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
+            )
+            .order_by(ScreeningQuarantine.created_at.desc())
+        )
+        seen: set[UUID] = set()
+        for quarantine, agent in rows.all():
+            # Newest adjudicated record per agent decides; older rows are history.
+            if agent.agent_id in seen:
+                continue
+            seen.add(agent.agent_id)
+            newest = await session.scalar(
+                select(ScreeningQuarantine)
+                .where(
+                    ScreeningQuarantine.agent_id == agent.agent_id,
+                    ScreeningQuarantine.reason_code.like("adjudicated-source-review-%"),
+                )
+                .order_by(ScreeningQuarantine.created_at.desc())
+                .limit(1)
+            )
+            if newest is None or newest.quarantine_id != quarantine.quarantine_id:
+                continue
+            if not evidence_marks_fail_open(quarantine.evidence):
+                continue
+            if len(items) >= payload.limit:
+                break
+            score_count = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Score)
+                    .where(Score.agent_id == agent.agent_id)
+                )
+                or 0
+            )
+            action: str
+            if await pending_review(session, agent_id=agent.agent_id) is not None:
+                action = "skipped_pending"
+            elif await operator_cleared_since(
+                session, agent_id=agent.agent_id, since=quarantine.created_at
+            ):
+                action = "skipped_cleared"
+            elif payload.dry_run:
+                action = "would_open"
+            else:
+                locked = await session.scalar(
+                    select(Agent)
+                    .where(Agent.agent_id == agent.agent_id)
+                    .with_for_update()
+                )
+                assert locked is not None
+                review = await hold_fail_open_admission(
+                    session,
+                    locked,
+                    admission=quarantine,
+                    now=now,
+                    actor=BACKFILL_ACTOR,
+                    source="fail-open-backfill",
+                    score_count=score_count,
+                )
+                action = "opened" if review is not None else "skipped_pending"
+            if action == "opened":
+                opened += 1
+            elif action.startswith("skipped"):
+                skipped += 1
+            items.append(
+                AdminFailOpenBackfillCandidate(
+                    agent_id=agent.agent_id,
+                    agent_name=agent.name,
+                    agent_version=agent.version,
+                    agent_status=agent.status.value,
+                    admitting_attempt_id=quarantine.attempt_id,
+                    admitted_at=quarantine.created_at,
+                    score_count=score_count,
+                    action=action,  # type: ignore[arg-type]
+                )
+            )
+    return AdminFailOpenBackfillResponse(
+        dry_run=payload.dry_run,
+        scanned=len(items),
+        opened=opened,
+        skipped=skipped,
+        items=items,
+    )
 
 
 @router.post(

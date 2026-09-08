@@ -153,6 +153,11 @@ from ditto.api_server.endpoints.validator import (
     ChainDep,
     _verify_signature,
 )
+from ditto.api_server.fail_open_admission import (
+    FAIL_OPEN_REVIEW_REASON,
+    adjudication_is_fail_open,
+    hold_fail_open_admission,
+)
 from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
 from ditto.api_server.screener_node_identity import is_enrolled_node_heartbeat_instance
@@ -180,6 +185,7 @@ from ditto.db.models import (
     BenchmarkRollout,
     BenchmarkRolloutMember,
     ProviderOutageCircuit,
+    Score,
     ScoredPolicyRescreenRelease,
     ScreenedImageUpload,
     ScreenerCapacityEvent,
@@ -5071,6 +5077,10 @@ def _quarantine_payload_json(
             ),
             "summary": adjudication.reason[:240],
             "digest": payload.adjudication_digest,
+            # The clause is what separates a certified clear from the court's
+            # fallback; the platform holds fail-open admissions on it.
+            "clear_clause": adjudication.clear_clause,
+            "escalation_code": adjudication.escalation_code,
         }
         evidence_json = [*(evidence_json or [])[:15], adjudication_evidence]
     finding_json = (
@@ -5450,7 +5460,20 @@ async def submit_result(
             "policy-only rescreen requires a retained verified screened image"
         )
     public_reason: str | None
-    if deferred_deep_attempt and outcome_value == "pass":
+    fail_open_admission = (
+        payload.adjudication is not None
+        and adjudication_is_fail_open(
+            decision=payload.adjudication.decision,
+            clear_clause=payload.adjudication.clear_clause,
+            reason=payload.adjudication.reason,
+        )
+    )
+    if deferred_deep_attempt and outcome_value == "pass" and fail_open_admission:
+        # The court never reviewed the source; a fallback clear cannot lift a
+        # reward hold. The pending deferred review stays open for an operator.
+        target = AgentStatus.ATH_PENDING_REVIEW
+        public_reason = FAIL_OPEN_REVIEW_REASON
+    elif deferred_deep_attempt and outcome_value == "pass":
         target = restore_status
         public_reason = None
     elif deferred_deep_attempt and outcome_value in {
@@ -5915,9 +5938,45 @@ async def submit_result(
                 verified_upload.verified_at if verified_upload is not None else None
             )
         if (
+            fail_open_admission
+            and payload.passed
+            and not deferred_deep_attempt
+            and agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
+        ):
+            # A policy rescreen of an already-scored row that the court could
+            # not review: keep the scores, remove the row from the eligible
+            # ledger until an operator reads it.
+            admission = (
+                await session.scalar(
+                    select(ScreeningQuarantine).where(
+                        ScreeningQuarantine.attempt_id == attempt.attempt_id
+                    )
+                )
+                if attempt is not None
+                else None
+            )
+            if admission is not None:
+                await hold_fail_open_admission(
+                    session,
+                    agent,
+                    admission=admission,
+                    now=datetime.now(UTC),
+                    actor="platform:fail-open-admission",
+                    source="screen-result",
+                    score_count=int(
+                        await session.scalar(
+                            select(func.count())
+                            .select_from(Score)
+                            .where(Score.agent_id == agent.agent_id)
+                        )
+                        or 0
+                    ),
+                )
+        if (
             deferred_deep_attempt
             and deferred_review_active_now
             and outcome_value == "pass"
+            and not fail_open_admission
         ):
             assert deferred_review is not None
             cleared_at = datetime.now(UTC)

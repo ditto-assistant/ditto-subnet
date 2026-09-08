@@ -633,6 +633,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/copy-reviews/backfill-fail-open": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Backfill Fail Open Admissions
+         * @description Hold every scored/live agent whose admitting court clear was fail-open.
+         *
+         *     One-shot and idempotent: an agent already held, or cleared by an operator
+         *     after the admitting attempt, is skipped. ``dry_run`` (the default) lists
+         *     what would change and writes nothing. Scores are never touched; a resolved
+         *     operator ``clear`` restores the previous status exactly as for any other
+         *     ATH hold. Every opened hold is audited as ``platform:fail-open-backfill``.
+         */
+        post: operations["backfill_fail_open_admissions_api_v1_admin_copy_reviews_backfill_fail_open_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/copy-reviews/precedents": {
         parameters: {
             query?: never;
@@ -7246,6 +7272,66 @@ export interface components {
              * @default false
              */
             idempotent: boolean;
+        };
+        /** AdminFailOpenBackfillCandidate */
+        AdminFailOpenBackfillCandidate: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "opened" | "would_open" | "skipped_pending" | "skipped_cleared";
+            /**
+             * Admitted At
+             * Format: date-time
+             */
+            admitted_at: string;
+            /**
+             * Admitting Attempt Id
+             * Format: uuid
+             */
+            admitting_attempt_id: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string | null;
+            /** Agent Status */
+            agent_status: string;
+            /** Agent Version */
+            agent_version: number | null;
+            /** Score Count */
+            score_count: number;
+        };
+        /**
+         * AdminFailOpenBackfillRequest
+         * @description Open operator holds for scored rows admitted by a fail-open court clear.
+         */
+        AdminFailOpenBackfillRequest: {
+            /**
+             * Dry Run
+             * @default true
+             */
+            dry_run: boolean;
+            /**
+             * Limit
+             * @default 200
+             */
+            limit: number;
+        };
+        /** AdminFailOpenBackfillResponse */
+        AdminFailOpenBackfillResponse: {
+            /** Dry Run */
+            dry_run: boolean;
+            /** Items */
+            items: components["schemas"]["AdminFailOpenBackfillCandidate"][];
+            /** Opened */
+            opened: number;
+            /** Scanned */
+            scanned: number;
+            /** Skipped */
+            skipped: number;
         };
         /** AdminHotkeyBanAuditEntry */
         AdminHotkeyBanAuditEntry: {
@@ -27061,6 +27147,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminCopyReviewList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backfill_fail_open_admissions_api_v1_admin_copy_reviews_backfill_fail_open_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminFailOpenBackfillRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminFailOpenBackfillResponse"];
                 };
             };
             /** @description Validation Error */
