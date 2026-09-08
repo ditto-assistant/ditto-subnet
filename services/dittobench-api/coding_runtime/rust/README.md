@@ -3,14 +3,16 @@
 This crate provides a non-executing, closed syntax admission gate and a separate
 parent-owned typed data evaluator. It is **not a standalone runtime grader** and
 is not wired into the supervisor or runtime image selection. Admitting a suite
-never means its tests passed. See [the evaluator boundary](EVALUATOR.md).
+never means its tests passed. See [the evaluator boundary](EVALUATOR.md) and
+[the bounded data channel](WIRE.md).
 
 The trusted controller supplies the independently approved crate/function names,
 exact source SHA-256, and nonzero expected test count. The parser does not discover
 authority from candidate files or suite imports. `syn` parses source and macro
-arguments without loading modules or expanding macros. There is no filesystem,
-compiler, cargo, subprocess, or candidate loading path in this library. Evaluation
-calls a trusted adapter interface; its isolated IPC implementation is still pending.
+arguments without loading modules or expanding macros. There is no compiler,
+cargo, subprocess, or candidate loading path in this library. The data channel
+uses OS entropy and an already-connected Unix socket. Evaluation calls a trusted
+adapter interface; compiler/launcher integration is still pending.
 The opaque result also binds a domain-separated digest of the source, approved
 namespace/function set, and expected count; future evaluation must preserve that
 same authority rather than reusing admission with another policy.
@@ -88,8 +90,8 @@ build contexts, or candidate binaries.
    inventory. Structural audits against pristine snapshot exports are not
    production API approval or runtime qualification; do not silently fall back
    to `cargo test` or inject private tests into candidate code.
-2. Qualify the parent evaluator against private controls, implement the bounded
-   typed byte transport and compiler allowlist/bridge, and add a separately
+2. Qualify the parent evaluator against private controls, integrate its bounded
+   typed transport with the compiler allowlist/bridge, and add a separately
    constrained non-root compiler phase.
 3. Seal the compiled candidate and integrate the existing pre-exec bootstrap,
    deadlines, kill/reap verification, and supervisor-owned result accounting.

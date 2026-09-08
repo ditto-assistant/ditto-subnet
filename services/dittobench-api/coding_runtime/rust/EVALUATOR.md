@@ -62,8 +62,9 @@ cumulative charged payload; callers may lower, but not raise, these bounds.
 Budgets reset per test, and final counts are derived only from completed tests.
 Charged payload is not a measurement of allocator overhead or process RSS.
 
-`CandidateApi` and `ApiFactory` are trusted adapter interfaces, **not implemented
-byte transports or sandbox launchers**. A production adapter must:
+`CandidateApi` and `ApiFactory` remain trusted adapter interfaces. The
+[bounded data channel](WIRE.md) is available, but it is **not a sandbox launcher
+or cleanup adapter**. A production adapter must:
 
 1. Launch a fresh confined candidate process for each test, never link/load
    candidate code into the parent, and bind the exact source/API/compiler profile.

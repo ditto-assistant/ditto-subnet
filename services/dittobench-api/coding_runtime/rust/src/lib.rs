@@ -1,8 +1,11 @@
-//! Protected Rust suite admission and parent-owned typed data evaluation.
-//! This is not a compiler, sandbox, byte transport, or standalone runtime grader.
+//! Protected Rust admission, parent-owned data evaluation, and bounded channels.
+//! This is not a compiler, sandbox, or standalone runtime grader.
 
 pub mod evaluator;
 pub mod value;
+pub mod wire;
+#[cfg(unix)]
+pub mod wire_unix;
 
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
