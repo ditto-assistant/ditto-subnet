@@ -78,7 +78,7 @@ the original source before compiling to verify independence.
 
 The separate [Linux runtime adapter](RUNTIME.md) now consumes staged inputs,
 owns fixed non-root compiler groups, seals output, and owns per-test processes.
-Authenticated manifest/image authority, enclosing container cgroup lifecycle,
-signed receipts, supervisor integration, private controls, and native-host
-qualification remain required. No catalog, infrastructure, or Coding activation
-changes are made here.
+The [protected driver](DRIVER.md) connects authenticated manifest/image authority,
+enclosing container policy, and private receipt binding. Private controls,
+native-host qualification, and operational approval remain required. No catalog,
+infrastructure, or Coding activation changes are made here.

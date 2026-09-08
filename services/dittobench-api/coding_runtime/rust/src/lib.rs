@@ -7,6 +7,8 @@ pub mod artifact;
 pub mod bridge;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub mod compiler;
+#[cfg(all(target_os = "linux", target_arch = "x86_64", feature = "driver"))]
+pub mod driver;
 pub mod evaluator;
 pub mod native;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

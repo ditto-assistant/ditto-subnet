@@ -166,6 +166,7 @@ type BuildRun struct {
 
 // TestRun is the trusted executor's out-of-process group completion receipt.
 type TestRun struct {
+	Runtime            *RuntimeEvidence
 	CommandID          string
 	CommandSHA256      string
 	ExecutorInstanceID string
@@ -219,19 +220,20 @@ type Executor interface {
 
 // ExecutionReceipt is one canonical executor completion record.
 type ExecutionReceipt struct {
-	Schema                string  `json:"schema"`
-	Sequence              uint32  `json:"sequence"`
-	Phase                 string  `json:"phase"`
-	Group                 *string `json:"group"`
-	CommandID             string  `json:"command_id"`
-	CommandSHA256         string  `json:"command_sha256"`
-	ExecutorInstanceID    string  `json:"executor_instance_id"`
-	ReturnCode            int     `json:"returncode"`
-	Passed                uint32  `json:"passed"`
-	Total                 uint32  `json:"total"`
-	Completed             bool    `json:"completed"`
-	TimedOut              bool    `json:"timed_out"`
-	PreviousReceiptSHA256 string  `json:"previous_receipt_sha256"`
+	Runtime               *RuntimeEvidence `json:"runtime,omitempty"`
+	Schema                string           `json:"schema"`
+	Sequence              uint32           `json:"sequence"`
+	Phase                 string           `json:"phase"`
+	Group                 *string          `json:"group"`
+	CommandID             string           `json:"command_id"`
+	CommandSHA256         string           `json:"command_sha256"`
+	ExecutorInstanceID    string           `json:"executor_instance_id"`
+	ReturnCode            int              `json:"returncode"`
+	Passed                uint32           `json:"passed"`
+	Total                 uint32           `json:"total"`
+	Completed             bool             `json:"completed"`
+	TimedOut              bool             `json:"timed_out"`
+	PreviousReceiptSHA256 string           `json:"previous_receipt_sha256"`
 }
 
 // Result is the deterministic grader outcome later embedded in task evidence.

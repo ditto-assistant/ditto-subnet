@@ -88,7 +88,8 @@ Supervisor integration must bind approved schema and generated bridge to the
 same build/program authority, preserve failure classification, and sign/seal the
 complete private execution receipt only after all cleanup checks pass. No private
 oracle bytes may be included in image builds or candidate binaries. These
-integration and native qualification steps remain required before production use.
+integration is implemented by the optional [supervisor driver](DRIVER.md);
+native qualification and operational approval remain required before production use.
 
 ## Public controls
 

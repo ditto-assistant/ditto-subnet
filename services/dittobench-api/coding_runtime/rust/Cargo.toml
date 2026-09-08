@@ -7,7 +7,18 @@ publish = false
 [dependencies]
 getrandom = "=0.3.4"
 libc = "=0.2.189"
+serde = { version = "=1.0.229", features = ["derive"], optional = true }
+serde_json = { version = "=1.0.151", optional = true }
 sha2 = "=0.10.9"
 syn = { version = "=2.0.119", default-features = false, features = ["full", "parsing"] }
+
+[features]
+default = []
+driver = ["dep:serde", "dep:serde_json"]
+
+[[bin]]
+name = "driver"
+path = "src/bin/driver.rs"
+required-features = ["driver"]
 
 [workspace]

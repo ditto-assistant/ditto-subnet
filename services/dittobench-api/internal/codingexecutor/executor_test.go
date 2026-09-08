@@ -166,6 +166,10 @@ func (docker *fakeDocker) Run(_ context.Context, args ...string) error {
 		ReturnCode: 0, Passed: request.ExpectedTotal, Total: request.ExpectedTotal,
 		Completed: true, ProcessTreeDead: true,
 	}
+	if request.Rust != nil {
+		sha := strings.Repeat("c", 64)
+		response.Runtime = &codinggrader.RuntimeEvidence{Schema: "dittobench-coding-rust-runtime-v1", AuthoritySHA256: request.Rust.AuthoritySHA256, InputsSHA256: request.Rust.InputsSHA256, ImageSHA256: request.Rust.ImageSHA256, ProgramSHA256: sha, CompilerSHA256: sha, BridgeLibrarySHA256: sha, Outcome: "evaluated", BuildSHA256: sha, ArtifactSHA256: sha}
+	}
 	docker.mu.Lock()
 	docker.requests = append(docker.requests, request)
 	mutate := docker.responseMutate
@@ -213,9 +217,11 @@ func inspectionFromArgs(container fakeContainer) dockerContainerInspection {
 	inspection.HostConfig.NanoCPUs = int64(cpu * 1_000_000_000)
 	inspection.HostConfig.PidsLimit, _ = strconv.ParseInt(flagValue(args, "--pids-limit"), 10, 64)
 	inspection.HostConfig.LogConfig.Type = flagValue(args, "--log-driver")
-	tmpfs := flagValue(args, "--tmpfs")
-	if path, options, ok := strings.Cut(tmpfs, ":"); ok {
-		inspection.HostConfig.Tmpfs = map[string]string{path: options}
+	inspection.HostConfig.Tmpfs = map[string]string{}
+	for _, tmpfs := range flagValues(args, "--tmpfs") {
+		if path, options, ok := strings.Cut(tmpfs, ":"); ok {
+			inspection.HostConfig.Tmpfs[path] = options
+		}
 	}
 	for _, raw := range flagValues(args, "--mount") {
 		mount := dockerMountInspection{Type: "bind"}

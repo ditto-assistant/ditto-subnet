@@ -139,6 +139,7 @@ paths = [
   "scripts/test-coding-python-driver.sh",
   "scripts/test-coding-compiled-bootstrap.sh",
   "scripts/test-coding-rust-bridge.sh",
+  "scripts/test-coding-rust-driver.sh",
   "scripts/test-coding-go-build.sh",
   "scripts/test-coding-go-driver.sh",
   "scripts/test-coding-node-driver.sh",

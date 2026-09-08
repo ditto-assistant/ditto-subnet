@@ -8,7 +8,9 @@ never means its tests passed. See [the evaluator boundary](EVALUATOR.md) and
 The [fixed API bridge](BRIDGE.md) adds a public compiled control.
 The [Linux compiler and process adapters](RUNTIME.md) add fixed compilation,
 sealed executables, pre-exec confinement, and cleanup-owned evaluation sessions.
-Supervisor integration and private runtime qualification remain pending.
+The optional [protected supervisor driver](DRIVER.md) connects authenticated
+freeze/API/image bindings to the private report and evidence chain. Private
+runtime qualification and operational activation remain pending.
 The [frozen compiler-input boundary](INPUTS.md) provides descriptor-relative
 manifest capture, readonly materialization, and a fixed compiler recipe.
 
@@ -83,8 +85,9 @@ needs an outer memory/CPU deadline.
 
 ```sh
 cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-features
+cargo test --locked --no-default-features
 ```
 
 Tests are public synthetic controls only. The lockfile pins all dependencies;
@@ -99,8 +102,8 @@ build contexts, or candidate binaries.
    to `cargo test` or inject private tests into candidate code.
 2. Qualify the integrated compiler, typed transport, and parent evaluator against
    private controls in the approved native execution profile.
-3. Connect authenticated freeze and image authority, supervisor-owned result
-   accounting, whole-container cleanup, and signed evidence receipts.
+3. Qualify the integrated freeze/image authority, supervisor-owned accounting,
+   whole-container cleanup and signed/sealed evidence path on the native host.
 4. Run base/reference and hostile controls, then separately qualify the native
    host/runtime image and private shadow canary.
 

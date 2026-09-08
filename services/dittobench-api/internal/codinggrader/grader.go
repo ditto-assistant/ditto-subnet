@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
@@ -237,10 +238,17 @@ func grade(ctx context.Context, manifest Manifest, submission codingrunner.Froze
 				allTestsPassed = false
 				break
 			}
+			if run.Runtime != nil && (run.Runtime.Validate() != nil || !run.Completed || run.TimedOut || run.Runtime.ImageSHA256 != strings.TrimPrefix(manifest.GraderImageDigest, "sha256:") || (run.Runtime.Outcome == "compile_failed" && (run.Passed != 0 || run.ReturnCode != 1))) {
+				controlPlaneFailure = true
+				failureCode = "grader_runtime_evidence"
+				allTestsPassed = false
+				break
+			}
 			testEvidence[index].Passed = run.Passed
 			groupCopy := group.Group
 			receipts, receiptRoot, err = appendReceipt(receipts, receiptRoot, ExecutionReceipt{
 				Schema: receiptSchema, Phase: "test", Group: &groupCopy,
+				Runtime:   run.Runtime.Clone(),
 				CommandID: run.CommandID, CommandSHA256: commandSHA, ExecutorInstanceID: run.ExecutorInstanceID,
 				ReturnCode: run.ReturnCode, Passed: run.Passed, Total: run.Total,
 				Completed: run.Completed, TimedOut: run.TimedOut,
@@ -382,6 +390,7 @@ func appendReceipt(
 }
 
 func cloneReceipt(receipt ExecutionReceipt) ExecutionReceipt {
+	receipt.Runtime = receipt.Runtime.Clone()
 	if receipt.Group != nil {
 		group := *receipt.Group
 		receipt.Group = &group

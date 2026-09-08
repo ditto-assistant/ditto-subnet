@@ -25,10 +25,11 @@ const maxModelVisibleCommandOutput = 24 << 10
 // Executor is a shadow-only adapter for both authoring commands and pristine
 // grading. Each command receives a fresh, exact-name networkless container.
 type Executor struct {
-	config     Config
-	docker     dockerCLI
-	instanceID string
-	imageID    string
+	config        Config
+	docker        dockerCLI
+	instanceID    string
+	imageID       string
+	driverProfile string
 
 	preflightMu sync.Mutex
 	preflightOK bool
@@ -215,6 +216,7 @@ func (executor *Executor) Test(
 		return codinggrader.TestRun{}, err
 	}
 	return codinggrader.TestRun{
+		Runtime:   result.response.Runtime.Clone(),
 		CommandID: result.response.CommandID, CommandSHA256: result.response.CommandSHA256,
 		ExecutorInstanceID: executor.instanceID, ReturnCode: result.response.ReturnCode,
 		Passed: result.response.Passed, Total: result.response.Total,
@@ -277,6 +279,12 @@ func (executor *Executor) execute(
 		TimeoutMilliseconds: command.Timeout.Milliseconds(), ExpectedTotal: expectedTotal,
 		CandidateUID: executor.config.CandidateUID, CandidateGID: executor.config.CandidateGID,
 	}
+	if executor.driverProfile == rustDriverProfile && mode == modeTest {
+		request.Rust, err = prepareRustInputs(workspace, protected, control, command.Argv, executor.config.Manifest.GraderImageDigest)
+		if err != nil {
+			return result, err
+		}
+	}
 	requestPath := filepath.Join(control, "request.json")
 	responsePath := filepath.Join(control, "response.json")
 	if err := writeRequest(requestPath, request); err != nil {
@@ -311,6 +319,9 @@ func (executor *Executor) execute(
 		return result, errors.Join(runErr, terminalErr)
 	}
 	if terminal.State.OOMKilled {
+		if request.Rust != nil {
+			return result, errors.New("Rust driver container OOM has no authoritative phase report")
+		}
 		result.response = supervisorResponse{
 			Schema: supervisorResponseSchema, Nonce: request.Nonce, Mode: mode,
 			CommandID: command.ID, CommandSHA256: commandSHA, ReturnCode: 137,
@@ -435,8 +446,11 @@ func (executor *Executor) createArgs(
 		"--memory", strconv.FormatUint(policy.MemoryLimitBytes, 10),
 		"--memory-swap", strconv.FormatUint(policy.MemoryLimitBytes, 10),
 		"--cpus", formatCPU(policy.CPUQuotaMillis), "--ulimit", "nofile=1024:1024",
-		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=" + strconv.FormatUint(policy.ScratchLimitBytes, 10),
+		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=" + strconv.FormatUint(executor.temporaryBytes(), 10),
 		"--log-driver", "none", "--stop-timeout", "1", "--workdir", workspaceMountPath,
+	}
+	if executor.driverProfile == rustDriverProfile {
+		args = append(args, "--tmpfs", "/out:"+executor.rustOutputOptions())
 	}
 	if executor.config.SeccompProfile != "" {
 		args = append(args, "--security-opt", "seccomp="+executor.config.SeccompProfile)

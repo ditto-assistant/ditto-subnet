@@ -1,0 +1,49 @@
+FROM golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS supervisor
+WORKDIR /src/services/dittobench-api
+COPY services/dittobench-api/go.mod services/dittobench-api/go.sum ./
+COPY research/dittobench-datagen/go.mod /src/research/dittobench-datagen/go.mod
+RUN go mod download
+COPY services/dittobench-api/internal/ ./internal/
+COPY services/dittobench-api/cmd/dittobench-coding-supervisor/ ./cmd/dittobench-coding-supervisor/
+COPY research/dittobench-datagen/ /src/research/dittobench-datagen/
+RUN CGO_ENABLED=0 go build -trimpath -o /out/supervisor ./cmd/dittobench-coding-supervisor
+
+FROM rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922 AS toolchain
+RUN chmod -R go-w /usr/local/rustup
+
+FROM toolchain AS build
+WORKDIR /src/rust
+COPY services/dittobench-api/coding_runtime/rust/Cargo.toml services/dittobench-api/coding_runtime/rust/Cargo.lock ./
+COPY services/dittobench-api/coding_runtime/rust/src/ ./src/
+COPY services/dittobench-api/coding_runtime/compiled/bootstrap.c /src/bootstrap.c
+RUN cargo build --locked --release --no-default-features --lib \
+    && mkdir -p /out/deps \
+    && cp target/release/deps/*.rlib /out/deps/ \
+    && cp target/release/libcoding_rust_suite.rlib /out/deps/libcoding_rust_suite.rlib \
+    && cargo build --locked --release --features driver --bin driver \
+    && cp target/release/driver /out/driver \
+    && cc -O2 -Wall -Wextra -Werror /src/bootstrap.c -o /out/bootstrap
+
+FROM scratch AS runtime-base
+ARG DITTOBENCH_SOURCE_SHA=unknown
+COPY --from=toolchain / /
+ENV PATH=/usr/local/bin:/usr/bin:/bin
+LABEL io.heyditto.dittobench.coding-supervisor-contract="1"
+LABEL io.heyditto.dittobench.coding-test-driver-profile="rust-call-ast-v1"
+LABEL org.opencontainers.image.revision="${DITTOBENCH_SOURCE_SHA}"
+COPY --from=build --chmod=0555 /out/bootstrap /usr/local/libexec/dittobench-compiled-bootstrap
+COPY --from=build --chmod=0555 /out/driver /usr/local/bin/dittobench-test-driver
+COPY --from=build /out/deps/ /opt/deps/
+COPY --from=supervisor --chmod=0555 /out/supervisor /usr/local/bin/dittobench-coding-supervisor
+RUN mkdir -p /opt/coding-rust /workspace /out \
+    && ln -s /usr/local/rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu/bin/rustc /opt/rustc \
+    && /usr/bin/python3 -c 'import hashlib,json,pathlib; p=pathlib.Path; body={"schema":"dittobench-coding-rust-toolchain-v1","compiler_sha256":hashlib.sha256(p("/opt/rustc").read_bytes()).hexdigest(),"bridge_library_sha256":hashlib.sha256(p("/opt/deps/libcoding_rust_suite.rlib").read_bytes()).hexdigest()}; p("/opt/coding-rust/toolchain.json").write_text(json.dumps(body,sort_keys=True,separators=(",",":")))' \
+    && chmod 0444 /opt/coding-rust/toolchain.json
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/dittobench-coding-supervisor"]
+
+FROM runtime-base AS test
+LABEL io.heyditto.dittobench.coding-supervisor-fixture="true"
+COPY --chmod=0400 services/dittobench-api/coding_runtime/rust/fixture/supervisor_probe.py /opt/probe.py
+
+FROM runtime-base AS runtime

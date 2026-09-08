@@ -164,36 +164,41 @@ func ociDigest(value string) bool {
 }
 
 type supervisorRequest struct {
-	Schema              string        `json:"schema"`
-	Nonce               string        `json:"nonce"`
-	Mode                executionMode `json:"mode"`
-	CommandID           string        `json:"command_id"`
-	CommandSHA256       string        `json:"command_sha256"`
-	Argv                []string      `json:"argv"`
-	TimeoutMilliseconds int64         `json:"timeout_milliseconds"`
-	ExpectedTotal       uint32        `json:"expected_total"`
-	CandidateUID        uint32        `json:"candidate_uid"`
-	CandidateGID        uint32        `json:"candidate_gid"`
+	Rust                *rustInputBinding `json:"rust,omitempty"`
+	Schema              string            `json:"schema"`
+	Nonce               string            `json:"nonce"`
+	Mode                executionMode     `json:"mode"`
+	CommandID           string            `json:"command_id"`
+	CommandSHA256       string            `json:"command_sha256"`
+	Argv                []string          `json:"argv"`
+	TimeoutMilliseconds int64             `json:"timeout_milliseconds"`
+	ExpectedTotal       uint32            `json:"expected_total"`
+	CandidateUID        uint32            `json:"candidate_uid"`
+	CandidateGID        uint32            `json:"candidate_gid"`
 }
 
 type supervisorResponse struct {
-	Schema           string        `json:"schema"`
-	Nonce            string        `json:"nonce"`
-	Mode             executionMode `json:"mode"`
-	CommandID        string        `json:"command_id"`
-	CommandSHA256    string        `json:"command_sha256"`
-	ReturnCode       int           `json:"returncode"`
-	Passed           uint32        `json:"passed"`
-	Total            uint32        `json:"total"`
-	Completed        bool          `json:"completed"`
-	TimedOut         bool          `json:"timed_out"`
-	Stdout           string        `json:"stdout"`
-	Stderr           string        `json:"stderr"`
-	WorkspaceMutated bool          `json:"workspace_mutated"`
-	ProcessTreeDead  bool          `json:"process_tree_dead"`
+	Runtime          *codinggrader.RuntimeEvidence `json:"runtime,omitempty"`
+	Schema           string                        `json:"schema"`
+	Nonce            string                        `json:"nonce"`
+	Mode             executionMode                 `json:"mode"`
+	CommandID        string                        `json:"command_id"`
+	CommandSHA256    string                        `json:"command_sha256"`
+	ReturnCode       int                           `json:"returncode"`
+	Passed           uint32                        `json:"passed"`
+	Total            uint32                        `json:"total"`
+	Completed        bool                          `json:"completed"`
+	TimedOut         bool                          `json:"timed_out"`
+	Stdout           string                        `json:"stdout"`
+	Stderr           string                        `json:"stderr"`
+	WorkspaceMutated bool                          `json:"workspace_mutated"`
+	ProcessTreeDead  bool                          `json:"process_tree_dead"`
 }
 
 func (response supervisorResponse) validate(request supervisorRequest, maximumOutput int) error {
+	if err := validateRuntimeBinding(response.Runtime, request, response.Completed, response.Passed, response.ReturnCode); err != nil {
+		return err
+	}
 	if response.Schema != supervisorResponseSchema || response.Nonce != request.Nonce || response.Mode != request.Mode ||
 		response.CommandID != request.CommandID || response.CommandSHA256 != request.CommandSHA256 ||
 		!response.ProcessTreeDead || response.Passed > response.Total || response.Total != request.ExpectedTotal ||

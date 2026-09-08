@@ -161,6 +161,21 @@ func (executor *Executor) preflightDocker(ctx context.Context) error {
 		return errors.New("coding supervisor certification fixture is not a production grader image")
 	}
 	executor.imageID = image.ID
+	executor.driverProfile = image.Config.Labels["io.heyditto.dittobench.coding-test-driver-profile"]
+	if executor.driverProfile == rustDriverProfile {
+		policy := executor.config.Manifest.ResourcePolicy
+		if executor.config.CandidateUID != 10001 || executor.config.CandidateGID != 10001 || policy.ScratchLimitBytes < 256<<20 || policy.MemoryLimitBytes < 1<<30 || policy.PidsLimit < 64 {
+			return errors.New("Rust runtime resource profile is insufficient")
+		}
+		for _, group := range executor.config.Manifest.TestGroups {
+			if group.ExpectedTotal > 32 {
+				return errors.New("Rust group exceeds the closed evaluator bound")
+			}
+			if _, _, _, err := rustCommand(group.Command.Argv); err != nil {
+				return err
+			}
+		}
+	}
 	return executor.probeContainerPolicy(ctx)
 }
 
@@ -247,11 +262,11 @@ func (executor *Executor) inspectContainerPolicy(
 		value.HostConfig.MemorySwap != int64(policy.MemoryLimitBytes) ||
 		value.HostConfig.NanoCPUs != int64(policy.CPUQuotaMillis)*1_000_000 ||
 		value.HostConfig.PidsLimit != int64(policy.PidsLimit) || value.HostConfig.LogConfig.Type != "none" ||
-		!tmpfsMatches(value.HostConfig.Tmpfs["/tmp"], policy.ScratchLimitBytes) ||
+		!executor.scratchMatches(value.HostConfig.Tmpfs) ||
 		slices.ContainsFunc(value.Config.Env, credentialImageEnvironment) {
 		return errors.New("coding sandbox container policy does not satisfy the attested plan")
 	}
-	return verifyContainerMounts(value.Mounts, mode, workspace, protected, control)
+	return verifyContainerMountsForProfile(value.Mounts, mode, workspace, protected, control, executor.driverProfile)
 }
 
 func (executor *Executor) inspectTerminalState(container string) (dockerContainerInspection, error) {
@@ -291,6 +306,10 @@ func verifyContainerMounts(
 	protected string,
 	control string,
 ) error {
+	return verifyContainerMountsForProfile(mounts, mode, workspace, protected, control, "")
+}
+
+func verifyContainerMountsForProfile(mounts []dockerMountInspection, mode executionMode, workspace, protected, control, profile string) error {
 	want := map[string]struct {
 		source string
 		rw     bool
@@ -306,6 +325,9 @@ func verifyContainerMounts(
 	}
 	for _, mount := range mounts {
 		if mount.Type == "tmpfs" && mount.Destination == "/tmp" {
+			continue
+		}
+		if profile == rustDriverProfile && mount.Type == "tmpfs" && mount.Destination == "/out" {
 			continue
 		}
 		expected, ok := want[mount.Destination]

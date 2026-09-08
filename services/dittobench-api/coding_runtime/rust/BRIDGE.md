@@ -74,8 +74,8 @@ native API signature must fail compilation.
 
 This module is a bridge generator, not a supervisor driver. The separate
 [runtime adapters](RUNTIME.md) now own fixed compilation, sealed artifacts,
-per-test process launch, and verified cleanup. Authenticated freeze-to-manifest
-wiring, enclosing container/cgroup lifecycle, signed execution receipt binding,
-supervisor integration, and private base/reference controls remain required. The
+per-test process launch, and verified cleanup. The [protected driver](DRIVER.md)
+connects freeze/image authority, enclosing container policy, and private receipt
+binding. Native qualification and private base/reference controls remain required. The
 fixture's PID/RAM/scratch settings are not production runtime approval. No private
 suite is linked into candidate binaries and no catalog or activation gate changes.

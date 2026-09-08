@@ -16,6 +16,7 @@ on:
       - scripts/test-coding-python-driver.sh
       - scripts/test-coding-compiled-bootstrap.sh
       - scripts/test-coding-rust-bridge.sh
+      - scripts/test-coding-rust-driver.sh
       - scripts/test-coding-go-build.sh
       - scripts/test-coding-go-driver.sh
       - scripts/test-coding-node-driver.sh
@@ -34,6 +35,27 @@ env:
   SERVICE_DIR: services/dittobench-api
 
 jobs:
+  rust-coding-driver:
+    name: trusted Rust supervisor driver isolation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - run: docker build -f services/dittobench-api/Dockerfile.coding-rust --target test -t coding-rust-driver:synthetic .
+      - run: bash scripts/test-coding-rust-driver.sh coding-rust-driver:synthetic
+      - name: Build and inspect production target without activation
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          docker build -f services/dittobench-api/Dockerfile.coding-rust --target runtime --build-arg DITTOBENCH_SOURCE_SHA="$SOURCE_SHA" -t coding-rust-driver:runtime .
+          docker image inspect coding-rust-driver:runtime | jq -e --arg sha "$SOURCE_SHA" \
+            '.[0].Config.Labels["org.opencontainers.image.revision"] == $sha and .[0].Config.Labels["io.heyditto.dittobench.coding-test-driver-profile"] == "rust-call-ast-v1" and .[0].Config.Env == ["PATH=/usr/local/bin:/usr/bin:/bin"] and .[0].Config.Labels["io.heyditto.dittobench.coding-supervisor-fixture"] == null'
+          docker run --rm --network none --read-only --cap-drop ALL --entrypoint /bin/sh coding-rust-driver:runtime -c \
+            'test ! -e /opt/probe.py && test ! -e /src && test ! -e /opt/fixture && test -x /usr/local/bin/dittobench-test-driver'
+
   rust-coding-bridge:
     name: compiled Rust API bridge isolation
     runs-on: ubuntu-24.04
@@ -63,8 +85,9 @@ jobs:
         working-directory: services/dittobench-api/coding_runtime/rust
         run: |
           cargo fmt --check
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-features
+          cargo test --locked --no-default-features
 
   go-coding-driver:
     name: trusted Go driver isolation

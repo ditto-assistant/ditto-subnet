@@ -85,7 +85,7 @@ fn source_path(path: &str) -> bool {
 fn cstring(name: &[u8]) -> Result<CString> {
     CString::new(name).map_err(|_| InputError::Path)
 }
-fn open_at(parent: &File, name: &[u8], flags: i32, mode: u32) -> Result<File> {
+pub(crate) fn open_at(parent: &File, name: &[u8], flags: i32, mode: u32) -> Result<File> {
     let name = cstring(name)?;
     // Every name is a single component; each directory is held by a live FD.
     let fd = unsafe {
@@ -101,7 +101,7 @@ fn open_at(parent: &File, name: &[u8], flags: i32, mode: u32) -> Result<File> {
     }
     Ok(unsafe { File::from_raw_fd(fd) })
 }
-fn absolute_directory(path: &Path, owner: u32) -> Result<File> {
+pub(crate) fn absolute_directory(path: &Path, owner: u32) -> Result<File> {
     let text = path.to_str().ok_or(InputError::Path)?;
     if !text.starts_with('/') || text.len() > 4096 {
         return Err(InputError::Path);
@@ -154,7 +154,7 @@ fn directory(meta: &Metadata, owner: u32, device: u64) -> Result<()> {
     }
     Ok(())
 }
-fn same(a: &Metadata, b: &Metadata) -> bool {
+pub(crate) fn same(a: &Metadata, b: &Metadata) -> bool {
     a.dev() == b.dev()
         && a.ino() == b.ino()
         && a.mode() == b.mode()

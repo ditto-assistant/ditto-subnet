@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ditto-assistant/dittobench-api/internal/codinggrader"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
 	"golang.org/x/sys/unix"
 )
@@ -27,11 +28,12 @@ const supervisorKillGrace = 5 * time.Second
 const trustedTestReportSchema = "dittobench-coding-trusted-test-report-v1"
 
 type trustedTestReport struct {
-	Schema    string `json:"schema"`
-	Nonce     string `json:"nonce"`
-	Passed    uint32 `json:"passed"`
-	Total     uint32 `json:"total"`
-	Completed bool   `json:"completed"`
+	Runtime   *codinggrader.RuntimeEvidence `json:"runtime,omitempty"`
+	Schema    string                        `json:"schema"`
+	Nonce     string                        `json:"nonce"`
+	Passed    uint32                        `json:"passed"`
+	Total     uint32                        `json:"total"`
+	Completed bool                          `json:"completed"`
 }
 
 // SupervisorMain runs the trusted container-parent contract. It returns an
@@ -109,6 +111,9 @@ func readSupervisorRequest(path string) (supervisorRequest, error) {
 }
 
 func (request supervisorRequest) validate() error {
+	if request.Rust != nil && (request.Mode != modeTest || request.Rust.validate() != nil || request.CandidateUID != 10001 || request.CandidateGID != 10001) {
+		return errors.New("Rust supervisor binding is invalid")
+	}
 	decodedNonce, nonceErr := hex.DecodeString(request.Nonce)
 	command := codingrunner.CommandSpec{
 		ID: request.CommandID, Argv: append([]string(nil), request.Argv...),
@@ -178,6 +183,9 @@ func executeSupervisorRequestAt(
 			"--dittobench-candidate-uid", fmt.Sprint(request.CandidateUID),
 			"--dittobench-candidate-gid", fmt.Sprint(request.CandidateGID),
 		)
+		if request.Rust != nil {
+			childArguments = append(childArguments, "--dittobench-rust-inputs", controlMountPath+"/rust-inputs.json", "--dittobench-rust-inputs-sha256", request.Rust.InputsSHA256)
+		}
 	}
 	command := exec.CommandContext(commandContext, request.Argv[0], childArguments...)
 	command.Dir = childWorkspace
@@ -230,11 +238,21 @@ func executeSupervisorRequestAt(
 		response.WorkspaceMutated = snapshotErr != nil || afterWorkspaceSHA != beforeWorkspaceSHA
 	}
 	if request.Mode == modeTest && response.Completed {
+		// A driver crash, setup failure or report-write failure is infrastructure,
+		// not a candidate score. Candidate failures must be handled by the driver
+		// and reported with its conventional 0/1 completed-report exit status.
+		if response.ReturnCode != 0 && response.ReturnCode != 1 {
+			return response, errors.New("trusted test driver did not complete authoritatively")
+		}
 		report, err := readTrustedTestReport(testReportPath, request)
 		if err != nil {
 			return response, err
 		}
 		response.Passed = report.Passed
+		response.Runtime = report.Runtime.Clone()
+		if err := validateRuntimeBinding(response.Runtime, request, true, response.Passed, response.ReturnCode); err != nil {
+			return response, err
+		}
 	}
 	return response, nil
 }
@@ -399,7 +417,11 @@ func readTrustedTestReport(path string, request supervisorRequest) (trustedTestR
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return report, errors.New("trusted test report contains trailing content")
 	}
-	if report.Schema != trustedTestReportSchema || report.Nonce != request.Nonce || !report.Completed ||
+	wantSchema := trustedTestReportSchema
+	if request.Rust != nil {
+		wantSchema = "dittobench-coding-trusted-test-report-v2"
+	}
+	if report.Schema != wantSchema || report.Nonce != request.Nonce || !report.Completed ||
 		report.Total != request.ExpectedTotal || report.Passed > report.Total {
 		return report, errors.New("trusted test report authority is invalid")
 	}

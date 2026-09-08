@@ -95,6 +95,7 @@ func installTrustedTestDriver(t *testing.T) {
 	script := `#!/bin/sh
 mode=pass
 if [ "${1:-}" = timeout ]; then mode=timeout; shift; fi
+if [ "${1:-}" = report-error ]; then mode=report-error; shift; fi
 report=
 nonce=
 expected=
@@ -112,6 +113,7 @@ if [ "$mode" = timeout ]; then
 fi
 umask 077
 printf '{"schema":"dittobench-coding-trusted-test-report-v1","nonce":"%s","passed":%s,"total":%s,"completed":true}\n' "$nonce" "$expected" "$expected" > "$report"
+if [ "$mode" = report-error ]; then exit 70; fi
 `
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -136,6 +138,23 @@ func TestSupervisorRunsAuthoringAndTestCommandsWithTrustedReceipts(t *testing.T)
 	if !testResponse.Completed || testResponse.ReturnCode != 0 || testResponse.Passed != 2 || testResponse.Total != 2 ||
 		testResponse.Stdout != "" || testResponse.Stderr != "" {
 		t.Fatalf("test response=%#v", testResponse)
+	}
+}
+
+func TestSupervisorRejectsValidLookingReportFromFailedDriver(t *testing.T) {
+	installTrustedTestDriver(t)
+	request := supervisorRequestFixture(t, modeTest, []string{trustedTestDriverName, "report-error"}, time.Second, 2)
+	control := t.TempDir()
+	requestPath := filepath.Join(control, "request.json")
+	responsePath := filepath.Join(control, "response.json")
+	if err := writeRequest(requestPath, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := supervisorMainAt(t.Context(), []string{"--request", requestPath, "--response", responsePath}, t.TempDir()); err == nil {
+		t.Fatal("failed driver report was accepted")
+	}
+	if _, err := os.Stat(responsePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("failed driver produced authoritative response")
 	}
 }
 
