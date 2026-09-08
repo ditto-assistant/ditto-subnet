@@ -22,8 +22,17 @@ pub struct Policy<'a> {
 }
 
 /// Deliberately no Debug/Display/Serialize: names and expected values are private.
+///
+/// ```compile_fail
+/// fn log_suite(suite: coding_rust_suite::AdmittedSuite) {
+///     println!("{suite:?}");
+/// }
+/// ```
 pub struct AdmittedSuite {
     source_sha256: [u8; 32],
+    crate_name: String,
+    functions: Vec<String>,
+    imports: BTreeSet<String>,
     // Retain only admitted syntax for a future trusted evaluator. No public AST
     // accessor: admission must not become a source export to the candidate.
     tests: Vec<syn::ItemFn>,
@@ -36,6 +45,25 @@ impl AdmittedSuite {
 
     pub fn source_sha256(&self) -> [u8; 32] {
         self.source_sha256
+    }
+
+    /// Binds the approved namespace/function set and expected count, so a later
+    /// evaluator cannot reuse admission under a different call authority.
+    pub fn policy_sha256(&self) -> [u8; 32] {
+        policy_digest(&Policy {
+            crate_name: &self.crate_name,
+            functions: &self
+                .functions
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            expected_tests: self.tests.len(),
+            source_sha256: self.source_sha256,
+        })
+    }
+
+    pub fn import_count(&self) -> usize {
+        self.imports.len()
     }
 }
 
@@ -234,8 +262,31 @@ pub fn admit(source: &str, policy: &Policy<'_>) -> Result<AdmittedSuite> {
     }
     Ok(AdmittedSuite {
         source_sha256: digest,
+        crate_name: policy.crate_name.to_owned(),
+        functions: policy
+            .functions
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect(),
+        imports,
         tests,
     })
+}
+
+fn policy_digest(policy: &Policy<'_>) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"coding-rust-suite-admission-v1\0");
+    hash.update(policy.source_sha256);
+    hash.update((policy.expected_tests as u64).to_be_bytes());
+    // Identifiers cannot contain NUL; sorted set order is unambiguous and does
+    // not make the caller's list ordering part of the authority.
+    hash.update(policy.crate_name.as_bytes());
+    hash.update([0]);
+    for name in policy.functions.iter().collect::<BTreeSet<_>>() {
+        hash.update(name.as_bytes());
+        hash.update([0]);
+    }
+    hash.finalize().into()
 }
 
 struct Context<'a, 'b> {

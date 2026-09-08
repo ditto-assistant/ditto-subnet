@@ -30,6 +30,7 @@ fn admits_bound_calls_and_private_data_without_execution() {
     "#;
     let suite = admit(source, &policy(source)).ok().unwrap();
     assert_eq!(suite.test_count(), 1);
+    assert_eq!(suite.import_count(), 2);
     assert_eq!(suite.source_sha256(), policy(source).source_sha256);
 }
 
@@ -339,4 +340,27 @@ fn bounded_malformed_inputs_do_not_panic() {
             let _ = admit(&source, &policy(&source));
         }
     }
+}
+
+#[test]
+fn receipt_binds_api_authority_independent_of_list_order() {
+    let source = "#[test] fn example() { assert!(true); }";
+    let mut contract = policy(source);
+    let original = admit(source, &contract).ok().unwrap().policy_sha256();
+    contract.functions = &["inspect", "transform"];
+    assert_eq!(
+        admit(source, &contract).ok().unwrap().policy_sha256(),
+        original
+    );
+    contract.functions = &["transform"];
+    assert_ne!(
+        admit(source, &contract).ok().unwrap().policy_sha256(),
+        original
+    );
+    contract = policy(source);
+    contract.crate_name = "another";
+    assert_ne!(
+        admit(source, &contract).ok().unwrap().policy_sha256(),
+        original
+    );
 }

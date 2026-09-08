@@ -9,6 +9,9 @@ exact source SHA-256, and nonzero expected test count. The parser does not disco
 authority from candidate files or suite imports. `syn` parses source and macro
 arguments without loading modules or expanding macros. There is no filesystem,
 compiler, cargo, subprocess, or candidate execution path in this library.
+The opaque result also binds a domain-separated digest of the source, approved
+namespace/function set, and expected count; future evaluation must preserve that
+same authority rather than reusing admission with another policy.
 
 The source and returned opaque `AdmittedSuite` must remain in the protected
 Platform-side grader process. The result has no public AST accessor or
