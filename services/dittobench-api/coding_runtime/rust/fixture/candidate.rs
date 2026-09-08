@@ -13,7 +13,7 @@ extern "C" fn constructor(){
 #[link_section=".init_array"]
 static BEFORE_MAIN:extern "C" fn()=constructor;
 pub mod api{
-    pub fn echo_rows(rows:Vec<(i32,u64,&str)>)->Vec<(i32,u64,&str)>{rows}
+    pub fn echo_rows(rows:Vec<(i32,u64,&'static str)>)->Vec<(i32,u64,&'static str)>{rows}
     pub fn choose_text(value:Option<&str>)->&str{value.unwrap_or("fallback")}
     static CALLS:std::sync::atomic::AtomicUsize=std::sync::atomic::AtomicUsize::new(0);
     pub fn fresh()->bool{CALLS.fetch_add(1,super::Ordering::Relaxed)==0}

@@ -13,10 +13,14 @@ the fixed compilation fails on an incompatible signature. Shared input borrows
 have local owned backing storage, which survives the call and conversion of
 borrowed results. The initial input profile supports owned primitives/containers
 and one top-level immutable borrow. Containers may also contain `&str` leaves:
-the sealed `BorrowDecode` implementations borrow text directly from the confined
-request's owned `Value` strings, preserving exact enum/tuple/container types.
-Local backing storage and the request remain alive until output serialization;
-Rust lifetimes prevent those views from escaping. Nested non-text borrows and
+sealed conversions preserve exact enum/tuple/container types. Ordinary top-level
+borrows use request/local backing storage. Nested string leaves receive valid
+static storage in the confined process so APIs explicitly requiring
+`&'static str` are callable without lifetime casts. One budget spans the entire
+session: at most 4 MiB of text and 262,144 string allocations, checked before
+copying. Only text is retained, not whole requests or type trees; it is reclaimed
+when the per-test process is terminated/reaped. Request-scoped `BorrowDecode`
+views remain separately lifetime-checked. Nested non-text borrows and
 borrowed aggregates inside containers remain rejected. Borrowed
 outputs are copied into typed data descriptions. Lifetimes are not transmitted.
 

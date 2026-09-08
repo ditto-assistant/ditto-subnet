@@ -38,15 +38,6 @@ impl Output {
         Ok(())
     }
 }
-fn borrowed(kind: &Type) -> bool {
-    match kind {
-        Type::Ref(_) => true,
-        Type::Vec(t) | Type::Slice(t) | Type::Array(t, _) | Type::Option(t) => borrowed(t),
-        Type::Tuple(ts) => ts.iter().any(borrowed),
-        Type::Result(a, b) => borrowed(a) || borrowed(b),
-        _ => false,
-    }
-}
 fn input_view(kind: &Type) -> bool {
     match kind {
         Type::Ref(t) => **t == Type::Text,
@@ -93,6 +84,13 @@ fn native(kind: &Type, lifetime: &str) -> String {
         ),
         Type::Ref(t) if **t == Type::Text => format!("&{lifetime} str"),
         Type::Ref(t) => format!("&{lifetime} {}", native(t, lifetime)),
+    }
+}
+fn parameter_native(kind: &Type, lifetime: &str) -> String {
+    match kind {
+        Type::Ref(t) if **t != Type::Text => format!("&{lifetime} {}", native(t, "'static")),
+        Type::Ref(_) => native(kind, lifetime),
+        _ => native(kind, "'static"),
     }
 }
 fn schema(kind: &Type) -> String {
@@ -144,7 +142,7 @@ pub fn generate(table: &BTreeMap<String, Signature>) -> Result<GeneratedBridge, 
         }
     }
     let mut out = Output(String::new());
-    out.push("// Generated public API bridge; never append private suite source.\n#[cfg(not(all(target_os=\"linux\",target_arch=\"x86_64\",target_pointer_width=\"64\")))] compile_error!(\"Linux amd64 bridge required\");\nextern crate candidate;\nuse coding_rust_suite::{native::{NativeValue,BorrowDecode,ConversionError,referent,decode_borrowed_slice},value::{Type,Integer,Value},evaluator::Signature,wire::{Request,decode_request},wire_unix::{read_frame,write_frame}};\nuse std::{os::{fd::FromRawFd,unix::net::UnixStream},time::{Instant,Duration}};\n#[allow(unused_imports)] use std::net::Shutdown;\nfn schema()->Vec<Signature>{vec![\n")?;
+    out.push("// Generated public API bridge; never append private suite source.\n#[cfg(not(all(target_os=\"linux\",target_arch=\"x86_64\",target_pointer_width=\"64\")))] compile_error!(\"Linux amd64 bridge required\");\nextern crate candidate;\nuse coding_rust_suite::{native::{NativeValue,BorrowDecode,StaticTextDecode,StaticTextBudget,ConversionError,referent,decode_static_slice},value::{Type,Integer,Value},evaluator::Signature,wire::{Request,decode_request},wire_unix::{read_frame,write_frame}};\nuse std::{os::{fd::FromRawFd,unix::net::UnixStream},time::{Instant,Duration}};\n#[allow(unused_imports)] use std::net::Shutdown;\nfn schema()->Vec<Signature>{vec![\n")?;
     for signature in table.values() {
         out.push(&format!(
             "Signature{{parameters:vec![{}],result:{}}},\n",
@@ -157,9 +155,12 @@ pub fn generate(table: &BTreeMap<String, Signature>) -> Result<GeneratedBridge, 
             schema(&signature.result)
         ))?;
     }
-    out.push("]}\nfn dispatch(request:&Request)->Result<Value,ConversionError>{ let arguments=request.arguments(); match request.function(){\n")?;
+    out.push("]}\nfn dispatch(request:&Request,budget:&mut StaticTextBudget)->Result<Value,ConversionError>{ let arguments=request.arguments(); match request.function(){\n")?;
     for (index, (name, signature)) in table.iter().enumerate() {
-        let has_borrow = signature.parameters.iter().any(borrowed);
+        let has_borrow = signature
+            .parameters
+            .iter()
+            .any(|kind| matches!(kind, Type::Ref(_)));
         let lifetime = if has_borrow { "'a" } else { "'static" };
         out.push(&format!("{index}=>{{\n"))?;
         for (n, kind) in signature.parameters.iter().enumerate() {
@@ -168,22 +169,22 @@ pub fn generate(table: &BTreeMap<String, Signature>) -> Result<GeneratedBridge, 
                     let input = format!("referent(&arguments[{n}])?");
                     match t.as_ref() {
                         Type::Slice(element) => {
-                            out.push(&format!("let storage{n}=decode_borrowed_slice::<{}>({input})?; let argument{n}=storage{n}.as_slice();\n",native(element,"'_")))?;
+                            out.push(&format!("let storage{n}=decode_static_slice::<{}>({input},budget)?; let argument{n}=storage{n}.as_slice();\n",native(element,"'static")))?;
                         }
                         Type::Text => out.push(&format!("let storage{n}=<String as BorrowDecode>::from_borrowed({input})?; let argument{n}=storage{n}.as_str();\n"))?,
-                        _ => out.push(&format!("let storage{n}=<{} as BorrowDecode>::from_borrowed({input})?; let argument{n}=&storage{n};\n",native(t,"'_")))?,
+                        _ => out.push(&format!("let storage{n}=<{} as StaticTextDecode>::from_static_text({input},budget)?; let argument{n}=&storage{n};\n",native(t,"'static")))?,
                     }
                 }
                 _ => out.push(&format!(
-                    "let argument{n}=<{} as BorrowDecode>::from_borrowed(&arguments[{n}])?;\n",
-                    native(kind, "'_")
+                    "let argument{n}=<{} as StaticTextDecode>::from_static_text(&arguments[{n}],budget)?;\n",
+                    native(kind, "'static")
                 ))?,
             }
         }
         let binder = if has_borrow { "for<'a> " } else { "" };
-        out.push(&format!("let function:{binder}fn({})->{}=::candidate::{name};\nlet result=function({}); NativeValue::to_value(&result)\n}},\n",signature.parameters.iter().map(|t|native(t,lifetime)).collect::<Vec<_>>().join(","),native(&signature.result,lifetime),(0..signature.parameters.len()).map(|n|format!("argument{n}")).collect::<Vec<_>>().join(",")))?;
+        out.push(&format!("let function:{binder}fn({})->{}=::candidate::{name};\nlet result=function({}); NativeValue::to_value(&result)\n}},\n",signature.parameters.iter().map(|t|parameter_native(t,lifetime)).collect::<Vec<_>>().join(","),native(&signature.result,lifetime),(0..signature.parameters.len()).map(|n|format!("argument{n}")).collect::<Vec<_>>().join(",")))?;
     }
-    out.push("_=>Err(ConversionError)}}\nfn main(){\nstd::panic::set_hook(Box::new(|_|{}));\n// FD 0 is exclusively inherited from the verified pre-exec launcher.\n// This template does NOT install confinement; constructors run before main.\nlet mut socket=unsafe{UnixStream::from_raw_fd(0)};\nif socket.set_nonblocking(false).is_err(){return;}\nlet deadline=Instant::now()+Duration::from_secs(30); let schema=schema();\nfor _ in 0..128 {\nlet Ok(frame)=read_frame(&mut socket,deadline) else{break};\nlet Ok(request)=decode_request(&frame,&schema) else{break};\nlet output=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||dispatch(&request))).ok().and_then(Result::ok);\nlet Ok(response)=request.response(output.as_ref()) else{break};\nif write_frame(&mut socket,&response,deadline).is_err() || output.is_none(){break}\n}\nlet _=socket.shutdown(Shutdown::Both);\n}\n")?;
+    out.push("_=>Err(ConversionError)}}\nfn main(){\nstd::panic::set_hook(Box::new(|_|{}));\n// FD 0 is exclusively inherited from the verified pre-exec launcher.\n// This template does NOT install confinement; constructors run before main.\nlet mut socket=unsafe{UnixStream::from_raw_fd(0)};\nif socket.set_nonblocking(false).is_err(){return;}\nlet deadline=Instant::now()+Duration::from_secs(30); let schema=schema(); let mut text_budget=StaticTextBudget::default();\nfor _ in 0..128 {\nlet Ok(frame)=read_frame(&mut socket,deadline) else{break};\nlet Ok(request)=decode_request(&frame,&schema) else{break};\nlet output=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||dispatch(&request,&mut text_budget))).ok().and_then(Result::ok);\nlet Ok(response)=request.response(output.as_ref()) else{break};\nif write_frame(&mut socket,&response,deadline).is_err() || output.is_none(){break}\n}\nlet _=socket.shutdown(Shutdown::Both);\n}\n")?;
     let digest = Sha256::digest(out.0.as_bytes()).into();
     Ok(GeneratedBridge {
         source: out.0,

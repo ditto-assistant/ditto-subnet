@@ -1,7 +1,10 @@
 use coding_rust_suite::{
     bridge::{generate, BridgeError},
     evaluator::Signature,
-    native::{decode_slice, referent, BorrowDecode, NativeDecode, NativeValue},
+    native::{
+        decode_slice, referent, BorrowDecode, NativeDecode, NativeValue, StaticTextBudget,
+        StaticTextDecode,
+    },
     value::{Integer, Type, Value},
 };
 use sha2::{Digest, Sha256};
@@ -95,18 +98,31 @@ fn nested_text_views_preserve_container_types_and_lifetimes() {
 }
 
 #[test]
-fn nested_text_input_codegen_has_scoped_views_and_higher_ranked_abi() {
+fn nested_text_input_codegen_has_bounded_static_text_and_exact_abi() {
     let mut table = schema();
     table.get_mut("api::copy").unwrap().parameters =
         vec![Type::Option(Box::new(Type::Ref(Box::new(Type::Text))))];
     let generated = generate(&table).unwrap();
     assert!(generated
         .source()
-        .contains("Option<&'_ str> as BorrowDecode"));
+        .contains("Option<&'static str> as StaticTextDecode"));
     assert!(generated
         .source()
-        .contains("for<'a> fn(::core::option::Option<&'a str>)"));
+        .contains("fn(::core::option::Option<&'static str>)"));
     assert!(!generated.source().contains("transmute"));
+}
+
+#[test]
+fn static_text_is_valid_after_request_data_is_dropped() {
+    let mut budget = StaticTextBudget::default();
+    let text: &'static str;
+    {
+        let input = encode(Some("static control"));
+        text = <Option<&'static str> as StaticTextDecode>::from_static_text(&input, &mut budget)
+            .unwrap()
+            .unwrap();
+    }
+    assert_eq!(text, "static control");
 }
 
 fn schema() -> BTreeMap<String, Signature> {
