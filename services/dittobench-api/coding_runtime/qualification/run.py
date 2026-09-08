@@ -171,6 +171,7 @@ def main():
     parser.add_argument("--checkout", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=2, choices=(1, 2))
+    parser.add_argument("--collect-failures", action="store_true")
     args = parser.parse_args()
     os.umask(0o077)
     plan = private_json(args.plan)
@@ -323,11 +324,22 @@ def main():
             }
             if result.stdout:
                 record["observation"] = json.loads(result.stdout)
-            save(args.output, f"case-{index:04}-{replicate}.json", record)
-            require(
+            observation = record.get("observation", {})
+            record["ok"] = (
                 result.returncode == 0
                 and not result.stderr
-                and record.get("observation", {}).get("expectation_matched") is True,
+                and observation.get("schema")
+                == "dittobench-private-compatibility-observation-v1"
+                and observation.get("case_sha256") == digest(encoded(case) + b"\n")
+                and observation.get("expectation_matched") is True
+                and observation.get("completed") is True
+                and observation.get("process_tree_dead") is True
+                and observation.get("runtime_qualification") is False
+                and observation.get("production_api_approval") is False
+            )
+            save(args.output, f"case-{index:04}-{replicate}.json", record)
+            require(
+                record["ok"] or args.collect_failures,
                 "private control failed; private receipt retained",
             )
             return record
@@ -354,13 +366,16 @@ def main():
                 if task is not None:
                     pending.add(pool.submit(run, task))
     by_case = {}
+    repeat_equal = True
     for record in records:
-        value = stable(record["observation"])
-        require(
-            record["index"] not in by_case or by_case[record["index"]] == value,
-            "private control results changed across repeats",
+        value = stable(record.get("observation", {}))
+        repeat_equal = (
+            repeat_equal
+            and "observation" in record
+            and (record["index"] not in by_case or by_case[record["index"]] == value)
         )
         by_case[record["index"]] = value
+    passed = all(record["ok"] for record in records) and repeat_equal
     require(
         digest(args.helper.read_bytes()) == helper_sha
         and output(["git", "rev-parse", "HEAD"], cwd=args.checkout) == source
@@ -381,8 +396,9 @@ def main():
                 language: sum(key[0] == language for key in coverage)
                 for language in PROFILES
             },
-            "repeat_results_equal": True,
-            "private_controls_passed": True,
+            "repeat_results_equal": repeat_equal,
+            "failed_controls": sum(not record["ok"] for record in records),
+            "private_controls_passed": passed,
             "runtime_qualification": False,
             "production_api_approval": False,
             "native_host_ready": False,
@@ -390,6 +406,12 @@ def main():
             "weight_eligible": False,
         },
     )
+    if not passed:
+        print(
+            f"Private matrix completed: {len(records)} controls; "
+            "failures retained privately."
+        )
+        raise SystemExit(1)
     print(
         f"Private matrix passed: {len(records)} controls; "
         "native qualification remains separate."

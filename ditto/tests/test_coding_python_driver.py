@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 import sys
 from pathlib import Path
@@ -88,6 +89,71 @@ def test_oracles_and_counts_are_parent_owned(monkeypatch):
     assert len(children) == 2 and all(c.closed for c in children)
     symbols, tests = driver.compile_suite(SUITE.replace("== 5", "== 999"), {"demo"})
     assert driver.run_suite(symbols, tests, 10001, 10001, 1) == 1
+
+
+def test_plain_utf8_encoding_is_parent_data_without_extra_candidate_calls(monkeypatch):
+    source = """from demo import echo
+def test_encoding():
+    assert echo("orbital-雪".encode()) == b"orbital-\\xe9\\x9b\\xaa"
+"""
+    calls, closed = [], []
+
+    class Child:
+        def __init__(self, *_):
+            pass
+
+        def rpc(self, target, operation, args=None, kwargs=None):
+            assert not kwargs
+            calls.append((target.path, operation, args))
+            return args[0]
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(driver, "Child", Child)
+    symbols, tests = driver.compile_suite(source, {"demo"})
+    assert driver.run_suite(symbols, tests, 10001, 10001, 1) == 1
+    assert calls == [(("echo",), "call", ["orbital-雪".encode()])]
+    assert closed == [True]
+
+
+def test_encoding_is_bounded_and_never_dispatches_subclass_hooks():
+    class Hostile(str):
+        def encode(self, *_args, **_kwargs):
+            raise AssertionError("parent hook executed")
+
+    class Child:
+        def rpc(self, *_args, **_kwargs):
+            raise AssertionError("unexpected candidate call")
+
+    node = ast.parse("value.encode()", mode="eval").body
+    with pytest.raises(driver.CandidateFailure):
+        driver.evaluate(node, {"value": Hostile("x")}, Child())
+    for text in ["x" * (driver.MAX_MESSAGE + 1), "雪" * driver.MAX_MESSAGE, "\ud800"]:
+        with pytest.raises(driver.InvalidSuite):
+            driver.evaluate(node, {"value": text}, Child())
+    for expression in ["value.encode('ascii')", "value.encode(errors='ignore')"]:
+        with pytest.raises(driver.InvalidSuite):
+            driver.evaluate(
+                ast.parse(expression, mode="eval").body, {"value": "x"}, Child()
+            )
+
+
+def test_remote_method_receiver_is_evaluated_only_once():
+    calls = []
+
+    class Child:
+        def rpc(self, target, operation, args=None, kwargs=None):
+            assert operation == "call" and not args and not kwargs
+            calls.append(target.path)
+            return driver.Target(None, 1, ()) if target.module else b"result"
+
+    node = ast.parse("make().encode()", mode="eval").body
+    assert (
+        driver.evaluate(node, {"make": driver.Target("demo", None, ("make",))}, Child())
+        == b"result"
+    )
+    assert calls == [("make",), ("encode",)]
 
 
 @pytest.mark.parametrize(

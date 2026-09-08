@@ -80,6 +80,11 @@ even when the source test files are unchanged. A parse-only audit is not grading
 
 ## Process and filesystem confinement
 
+Plain `str.encode()` without arguments is a bounded parent-owned UTF-8 data
+operation. It uses the exact built-in string type and fixed strict UTF-8 codec;
+subclass hooks, arbitrary codecs/error handlers and method references are not
+delegated to parent Python execution. Remote method receivers are evaluated once.
+
 The parent is root only inside the existing isolated rootless executor container.
 The child starts with the plan-bound nonzero UID/GID, no supplementary groups,
 no inherited private descriptors, an explicit minimal environment, and isolated

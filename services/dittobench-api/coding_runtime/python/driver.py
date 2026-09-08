@@ -510,7 +510,26 @@ def evaluate(node, names, child, *, target=False):
             raise CandidateFailure()
         return -value
     elif isinstance(node, ast.Call):
-        function = evaluate(node.func, names, child, target=True)
+        if isinstance(node.func, ast.Attribute):
+            # Evaluate the receiver exactly once. Plain UTF-8 encoding is a
+            # closed parent data operation, never getattr/candidate dispatch or
+            # a caller-selected codec/error-handler lookup.
+            base = evaluate(node.func.value, names, child, target=True)
+            if type(base) is str and node.func.attr == "encode":
+                if node.args or node.keywords or len(base) > MAX_MESSAGE:
+                    raise InvalidSuite()
+                try:
+                    value = str.encode(base, "utf-8", "strict")
+                except UnicodeEncodeError:
+                    raise InvalidSuite() from None
+                if len(value) > MAX_MESSAGE:
+                    raise InvalidSuite()
+                return value
+            if not isinstance(base, Target):
+                raise CandidateFailure()
+            function = Target(base.module, base.reference, (*base.path, node.func.attr))
+        else:
+            function = evaluate(node.func, names, child, target=True)
         if not isinstance(function, Target):
             raise InvalidSuite()
         args = [evaluate(n, names, child) for n in node.args]

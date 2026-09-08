@@ -63,6 +63,9 @@ results/input commitments must agree across repeats; nonce-bound response bytes
 and per-execution runtime receipts are retained but not expected to be identical.
 Files are exclusive mode 0600 beneath a fresh mode-0700 output directory. A failure
 does not overwrite old receipts or synthesize a passing summary.
+Use `--collect-failures` for a diagnostic sweep: every safely cleaned-up control
+is recorded, a failing summary remains failing, and the command exits nonzero.
+It does not skip tests, relax expectations, or continue after unconfirmed cleanup.
 
 The local image binding is explicitly a config ID, not an approved native OCI
 manifest. Source labels and these operator-generated receipts are not independent
