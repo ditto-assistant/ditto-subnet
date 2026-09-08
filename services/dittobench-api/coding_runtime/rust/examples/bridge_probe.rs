@@ -22,6 +22,20 @@ fn table() -> BTreeMap<String, Signature> {
     ])));
     BTreeMap::from([
         (
+            "api::fresh".into(),
+            Signature {
+                parameters: vec![],
+                result: Type::Bool,
+            },
+        ),
+        (
+            "api::hang".into(),
+            Signature {
+                parameters: vec![],
+                result: Type::Bool,
+            },
+        ),
+        (
             "api::add".into(),
             Signature {
                 parameters: vec![int.clone(), int.clone()],
@@ -87,6 +101,11 @@ fn same(actual: Value, expected: Value) {
 fn main() {
     let mode = std::env::args().nth(1).expect("public fixture mode");
     let table = table();
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if mode == "process-check" {
+        process_check(table);
+        return;
+    }
     if mode == "generate" {
         print!("{}", bridge::generate(&table).unwrap().source());
         return;
@@ -94,6 +113,7 @@ fn main() {
     #[cfg(target_os = "linux")]
     if [
         "stage",
+        "stage-build",
         "library-args",
         "bridge-args",
         "compiler-program",
@@ -113,7 +133,7 @@ fn main() {
             }
             return;
         }
-        if mode != "stage" {
+        if mode != "stage" && mode != "stage-build" {
             let arguments = if mode == "library-args" {
                 CompilerRecipe::LIBRARY
             } else {
@@ -143,6 +163,51 @@ fn main() {
             .stage(std::path::Path::new(&output), &generated)
             .ok()
             .unwrap();
+        if mode == "stage-build" {
+            use coding_rust_suite::compiler::{compile, CompileError, ToolchainIdentity};
+            // Public fixture authority only. Production must receive image and
+            // tool hashes from its independent authenticated image verifier.
+            let identity = ToolchainIdentity {
+                image_sha256: Sha256::digest(
+                    b"public synthetic image identity; not a production approval",
+                )
+                .into(),
+                compiler_sha256: Sha256::digest(std::fs::read("/opt/rustc").unwrap()).into(),
+                bridge_library_sha256: Sha256::digest(
+                    std::fs::read("/opt/deps/libcoding_rust_suite.rlib").unwrap(),
+                )
+                .into(),
+            };
+            let wrong = ToolchainIdentity {
+                compiler_sha256: [1; 32],
+                ..identity
+            };
+            assert!(matches!(
+                compile(&staged, wrong, Duration::from_secs(60)),
+                Err(CompileError::Toolchain)
+            ));
+            // Prove compile uses the already captured bytes, not reopened source.
+            std::fs::write(
+                std::path::Path::new(&source).join("src/lib.rs"),
+                b"changed after capture",
+            )
+            .unwrap();
+            let build = compile(&staged, identity, Duration::from_secs(60)).unwrap();
+            assert_ne!(build.sha256(), build.artifact_sha256());
+            // A second build may not reuse even a successfully populated /out.
+            assert!(matches!(
+                compile(&staged, identity, Duration::from_secs(60)),
+                Err(CompileError::Output)
+            ));
+            assert_eq!(
+                unsafe { libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG) },
+                -1
+            );
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ECHILD)
+            );
+        }
         println!("{}", staged.directory().display());
         return;
     }
@@ -199,4 +264,86 @@ fn main() {
     }
     assert!(matches!(call("api::panic", &[]), Reply::CandidateFailure));
     println!("public bridge calls verified");
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn process_check(table: BTreeMap<String, Signature>) {
+    use coding_rust_suite::{
+        artifact::Artifact,
+        evaluator::{ApiError, ApiFactory, Limits, Program},
+        process::{Deadlines, ProcessFactory},
+        Policy,
+    };
+    use sha2::{Digest, Sha256};
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::{fs::OpenOptions, os::unix::fs::OpenOptionsExt};
+    // Deliberately non-CLOEXEC trusted FD: child launch must close it even when
+    // another trusted caller did not set the descriptor flag itself.
+    let private = std::fs::File::open("/run/dittobench-grader/secret").unwrap();
+    let leaked = unsafe { libc::fcntl(private.as_raw_fd(), libc::F_DUPFD, 200) };
+    assert_eq!(leaked, 200);
+    let _held = unsafe { OwnedFd::from_raw_fd(leaked) };
+    let source = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open("/out/candidate")
+        .unwrap();
+    let artifact = Artifact::seal_output(&source, 10001).unwrap();
+    let suite = r#"
+        #[test] fn first(){assert!(candidate::api::fresh());assert!(candidate::api::check());assert_eq!(candidate::api::add(2,3),5);}
+        #[test] fn panic(){assert!(candidate::api::panic());}
+        #[test] fn next(){assert!(candidate::api::fresh());assert!(candidate::api::check());}
+    "#;
+    let names: Vec<_> = table.keys().map(String::as_str).collect();
+    let admitted = coding_rust_suite::admit(
+        suite,
+        &Policy {
+            crate_name: "candidate",
+            functions: &names,
+            expected_tests: 3,
+            source_sha256: Sha256::digest(suite.as_bytes()).into(),
+        },
+    )
+    .unwrap();
+    let program = Program::bind(admitted, table.clone()).unwrap();
+    let mut factory = ProcessFactory::new(artifact, table.clone(), Deadlines::default()).unwrap();
+    let report = program.run(&mut factory, Limits::default()).unwrap();
+    assert_eq!((report.passed(), report.failed()), (2, 1));
+    let artifact = Artifact::seal_output(&source, 10001).unwrap();
+    let mut bounded = ProcessFactory::new(
+        artifact,
+        table,
+        Deadlines {
+            execution: Duration::from_millis(100),
+            ..Deadlines::default()
+        },
+    )
+    .unwrap();
+    let mut api = bounded.start().unwrap();
+    assert!(matches!(
+        api.call("api::hang", &[]),
+        Err(ApiError::Transport)
+    ));
+    assert!(matches!(
+        api.call("api::check", &[]),
+        Err(ApiError::Transport)
+    ));
+    api.finish().unwrap();
+    api.finish().unwrap();
+    assert!(matches!(
+        api.call("api::check", &[]),
+        Err(ApiError::Transport)
+    ));
+    drop(api);
+    // Dropping a live, unused session must also terminate and reap it.
+    drop(factory.start().unwrap());
+    assert_eq!(
+        unsafe { libc::waitpid(-1, std::ptr::null_mut(), libc::WNOHANG) },
+        -1
+    );
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ECHILD)
+    );
+    println!("native Rust parent evaluation, fresh sessions, timeout and reap verified");
 }

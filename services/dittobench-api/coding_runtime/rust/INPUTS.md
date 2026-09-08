@@ -76,7 +76,9 @@ and recipe invariants. The public compiled fixture now uses these captured input
 files and recipe commands, excludes a synthetic unlisted test file, and mutates
 the original source before compiling to verify independence.
 
-Private base/reference controls, the general production compiler/cgroup lifecycle,
-artifact receipts, the per-test `CandidateApi` adapter, supervisor integration,
-and native-host qualification remain pending. No catalog, infrastructure, or
-Coding activation changes are made here.
+The separate [Linux runtime adapter](RUNTIME.md) now consumes staged inputs,
+owns fixed non-root compiler groups, seals output, and owns per-test processes.
+Authenticated manifest/image authority, enclosing container cgroup lifecycle,
+signed receipts, supervisor integration, private controls, and native-host
+qualification remain required. No catalog, infrastructure, or Coding activation
+changes are made here.

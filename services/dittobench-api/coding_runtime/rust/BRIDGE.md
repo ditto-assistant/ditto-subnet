@@ -72,10 +72,10 @@ native API signature must fail compilation.
 
 ## Remaining production work
 
-This is a bridge generator and public compiled control, **not** the production
-compiler/`CandidateApi` adapter or supervisor driver. Authenticated freeze-to-manifest
-wiring, compiler sandbox/cgroup lifecycle, artifact
-receipt binding, per-test process ownership and cleanup integration, bounded
-diagnostic handling, and private base/reference controls remain required. The
+This module is a bridge generator, not a supervisor driver. The separate
+[runtime adapters](RUNTIME.md) now own fixed compilation, sealed artifacts,
+per-test process launch, and verified cleanup. Authenticated freeze-to-manifest
+wiring, enclosing container/cgroup lifecycle, signed execution receipt binding,
+supervisor integration, and private base/reference controls remain required. The
 fixture's PID/RAM/scratch settings are not production runtime approval. No private
 suite is linked into candidate binaries and no catalog or activation gate changes.

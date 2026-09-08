@@ -79,6 +79,8 @@ or cleanup adapter**. A production adapter must:
 5. Bind limits, transport/compiler revisions, candidate digest, image and host
    identity, and cleanup evidence in the enclosing private execution receipt.
 
-Current tests use public synthetic adapters only. They prove core behavior, not
-IPC isolation, compiler confinement, private base/reference performance, native
-host qualification, or a deployed canary. No activation gate changes here.
+Core tests use public synthetic adapters. The separate [Linux runtime
+controls](RUNTIME.md) exercise compiled candidates through this evaluator and
+verify fresh processes, constructor confinement, deadlines, and reap. Neither
+set proves private base/reference performance, native-host qualification, or a
+deployed canary. No activation gate changes here.

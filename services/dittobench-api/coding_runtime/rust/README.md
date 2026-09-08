@@ -5,18 +5,21 @@ parent-owned typed data evaluator. It is **not a standalone runtime grader** and
 is not wired into the supervisor or runtime image selection. Admitting a suite
 never means its tests passed. See [the evaluator boundary](EVALUATOR.md) and
 [the bounded data channel](WIRE.md).
-The [fixed API bridge](BRIDGE.md) adds a public compiled control; production
-compiler/launcher integration and private runtime qualification remain pending.
+The [fixed API bridge](BRIDGE.md) adds a public compiled control.
+The [Linux compiler and process adapters](RUNTIME.md) add fixed compilation,
+sealed executables, pre-exec confinement, and cleanup-owned evaluation sessions.
+Supervisor integration and private runtime qualification remain pending.
 The [frozen compiler-input boundary](INPUTS.md) provides descriptor-relative
 manifest capture, readonly materialization, and a fixed compiler recipe.
 
 The trusted controller supplies the independently approved crate/function names,
 exact source SHA-256, and nonzero expected test count. The parser does not discover
 authority from candidate files or suite imports. `syn` parses source and macro
-arguments without loading modules or expanding macros. There is no compiler,
-cargo, subprocess, or candidate loading path in this library. The data channel
-uses OS entropy and an already-connected Unix socket. Evaluation calls a trusted
-adapter interface; compiler/launcher integration is still pending.
+arguments without loading modules or expanding macros. Admission and evaluation
+do not invoke a compiler or load candidate code. The separate Linux adapters
+execute only the fixed compiler recipe and confined candidate process. There is
+no Cargo or in-process candidate loading path. The data channel uses OS entropy
+and a private Unix socket; the process adapter owns termination and reap.
 The opaque result also binds a domain-separated digest of the source, approved
 namespace/function set, and expected count; future evaluation must preserve that
 same authority rather than reusing admission with another policy.
@@ -94,11 +97,10 @@ build contexts, or candidate binaries.
    inventory. Structural audits against pristine snapshot exports are not
    production API approval or runtime qualification; do not silently fall back
    to `cargo test` or inject private tests into candidate code.
-2. Qualify the parent evaluator against private controls, integrate its bounded
-   typed transport with the compiler allowlist/bridge, and add a separately
-   constrained non-root compiler phase.
-3. Seal the compiled candidate and integrate the existing pre-exec bootstrap,
-   deadlines, kill/reap verification, and supervisor-owned result accounting.
+2. Qualify the integrated compiler, typed transport, and parent evaluator against
+   private controls in the approved native execution profile.
+3. Connect authenticated freeze and image authority, supervisor-owned result
+   accounting, whole-container cleanup, and signed evidence receipts.
 4. Run base/reference and hostile controls, then separately qualify the native
    host/runtime image and private shadow canary.
 

@@ -93,9 +93,9 @@ with tempfile.TemporaryDirectory(prefix="rust-bridge-", dir="/scratch") as direc
     )
     staged = Path(
         subprocess.check_output(
-            ["/opt/bridge-probe", "stage", str(frozen), str(control)],
+            ["/opt/bridge-probe", "stage-build", str(frozen), str(control)],
             env={},
-            timeout=5,
+            timeout=75,
             text=True,
         ).strip()
     )
@@ -111,14 +111,24 @@ with tempfile.TemporaryDirectory(prefix="rust-bridge-", dir="/scratch") as direc
     assert (staged / "src/lib.rs").read_bytes() == Path(
         "/opt/fixture/candidate.rs"
     ).read_bytes()
-    for mode in ("library-args", "bridge-args"):
-        arguments = subprocess.check_output(
-            ["/opt/bridge-probe", mode], env={}, timeout=5, text=True
-        ).splitlines()
-        assert compile_source(arguments, staged, fixed_recipe=True) == 0
     binary = Path("/out/candidate")
     print("manifest-only frozen inputs and fixed compiler recipe verified", flush=True)
     assert not marker.exists()
+    native = subprocess.run(
+        ["/opt/bridge-probe", "process-check"],
+        env={},
+        capture_output=True,
+        timeout=30,
+    )
+    assert native.returncode == 0, native.stderr[:4096].decode(
+        "utf-8", errors="replace"
+    )
+    assert native.stdout == (
+        b"native Rust parent evaluation, fresh sessions, timeout and reap verified\n"
+    )
+    print(native.stdout.decode().strip(), flush=True)
+    assert marker.read_bytes() == b"public constructor"
+    marker.unlink()
     fd = os.open(binary, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     sealed = os.memfd_create(
         "public-rust-bridge", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING | 0x10

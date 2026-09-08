@@ -1,9 +1,16 @@
 //! Protected Rust admission, parent-owned data evaluation, and bounded channels.
-//! This is not a compiler, sandbox, or standalone runtime grader.
+//! Linux adapters require a separately qualified private executor container.
+//! This is not a standalone runtime grader or host sandbox.
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub mod artifact;
 pub mod bridge;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub mod compiler;
 pub mod evaluator;
 pub mod native;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub mod process;
 pub mod value;
 pub mod wire;
 #[cfg(unix)]

@@ -77,9 +77,9 @@ sending inputs. It must still impose an outer wall-clock/process-resource guard,
 including OS entropy acquisition, scheduling and bounded decoding work. This
 module does not set up sandboxing or classify launch-stage versus candidate-stage
 I/O faults. The separate session and framing APIs let that adapter preserve fault
-provenance. Closing a socket never proves termination or reaping; a future
-compiler/launcher adapter must own and verify those operations before returning
-`CandidateApi::finish()` success.
+provenance. Closing a socket never proves termination or reaping. The separate
+[process adapter](RUNTIME.md) owns and verifies those operations before returning
+`CandidateApi::finish()` success; `Channel` itself still cannot certify cleanup.
 
 Current tests use public synthetic values and local Unix socket pairs. They cover
 malformed values/frames, replay and cross-session responses, shared budgets,
