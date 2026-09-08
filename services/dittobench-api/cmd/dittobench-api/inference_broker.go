@@ -3999,15 +3999,17 @@ func (b *inferenceBroker) proxy(
 			return
 		}
 		atCapacity := legacyGateway == "" && trustedChatHandler == nil && platformIsAtCapacity(resp)
-		candidateBody, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
-		_ = resp.Body.Close()
 		responseStatus = resp.StatusCode
+		// Book the trusted status before reading its body. A stalled error body
+		// or caller cancellation cannot erase an already observed Platform 500.
 		if legacyGateway == "" && trustedChatHandler == nil && responseStatus == http.StatusInternalServerError {
 			session.mu.Lock()
 			session.platformInternalFailures++
 			session.mu.Unlock()
 		}
 		responseFailureClass = resp.Header.Get(minerRecoverableFailureHeader)
+		candidateBody, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
+		_ = resp.Body.Close()
 		if readErr != nil || len(candidateBody) > 16<<20 {
 			return
 		}

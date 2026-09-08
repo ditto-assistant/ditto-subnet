@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
 	"github.com/ditto-assistant/dittobench-api/internal/store"
@@ -139,5 +140,56 @@ func TestPlatformInternalFailureRequiresPlatformTransport(t *testing.T) {
 				t.Fatalf("transport misattributed as Platform: snapshot=%+v err=%v status=%d", got, err, recorder.Code)
 			}
 		})
+	}
+}
+
+type stalledPlatformErrorBody struct {
+	ctx     context.Context
+	started chan struct{}
+}
+
+func (body stalledPlatformErrorBody) Read([]byte) (int, error) {
+	close(body.started)
+	<-body.ctx.Done()
+	return 0, body.ctx.Err()
+}
+func (stalledPlatformErrorBody) Close() error { return nil }
+
+func TestPlatformInternalFailureRecordedBeforeErrorBodyCompletes(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.NotFoundHandler())
+	defer upstream.Close()
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", llm.V9AggregateProfileRevision, llm.V7HarnessModel)
+	id := prepared["session_id"]
+	claimAndBindBrokerSession(t, broker, id, "192.0.2.31", protocol.BenchVersionV12)
+	started := make(chan struct{})
+	broker.client.Transport = ablationRoundTripper(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 500, Header: make(http.Header), Body: stalledPlatformErrorBody{ctx: r.Context(), started: started}}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("broker did not release the canceled response")
+		}
+	}()
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b","messages":[{"role":"user","content":"Reply OK"}]}`)).WithContext(ctx)
+	request.RemoteAddr = "192.0.2.31:4321"
+	go func() { defer close(done); broker.proxy(httptest.NewRecorder(), request, broker.sessions[id], 0) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("response body was never read")
+	}
+	// The trusted status already proves infrastructure failed. Finalization must
+	// see it even while the response body is stalled or being canceled.
+	got, err := broker.snapshot(id)
+	if err != nil || got.PlatformInternalFailures != 1 {
+		t.Fatalf("lost received Platform 500 while body is pending: snapshot=%+v err=%v", got, err)
 	}
 }
