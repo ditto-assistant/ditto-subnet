@@ -33,6 +33,26 @@ env:
   SERVICE_DIR: services/dittobench-api
 
 jobs:
+  rust-suite-admission:
+    name: protected Rust suite admission
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: '1.97.1'
+          components: rustfmt, clippy
+      - name: Check closed syntax and source-free failures
+        working-directory: services/dittobench-api/coding_runtime/rust
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
   go-coding-driver:
     name: trusted Go driver isolation
     runs-on: ubuntu-24.04
