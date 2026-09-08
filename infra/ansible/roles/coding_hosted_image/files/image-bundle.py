@@ -41,7 +41,33 @@ LAYER_TYPES = {
 }
 ENTRYPOINT = ["/usr/local/bin/dittobench-coding-supervisor"]
 PROFILE = "python-call-ast-v1"
-PROFILES = frozenset({PROFILE, "python-call-ast-v2"})
+PROFILES = frozenset(
+    {
+        PROFILE,
+        "python-call-ast-v2",
+        "node-call-ast-v2",
+        "go-call-ast-v1",
+        "rust-call-ast-v1",
+    }
+)
+
+
+def profile_environment(profile):
+    return [
+        "PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"
+        if profile == "go-call-ast-v1"
+        else "PATH=/usr/local/bin:/usr/bin:/bin"
+    ]
+
+
+def profile_workdirs(profile):
+    return (
+        ("/workspace",)
+        if profile in {"go-call-ast-v1", "rust-call-ast-v1"}
+        else ("", "/")
+    )
+
+
 PREFIX = "io.heyditto.dittobench."
 SOCKET = Path("/run/ditto-coding-hosted/docker.sock")
 HOME_DIR = Path("/var/lib/ditto-coding-hosted")
@@ -144,17 +170,22 @@ def scan_archive(stream):
 
 def config_policy(config, revision):
     require(isinstance(config, dict), "missing image config")
+    labels = config.get("Labels", {})
+    require(isinstance(labels, dict), "invalid image labels")
+    profile = labels.get(PREFIX + "coding-test-driver-profile")
+    require(profile in PROFILES, "unapproved driver profile")
     require(config.get("Entrypoint") == ENTRYPOINT, "wrong supervisor entrypoint")
     require(
-        config.get("Env") == ["PATH=/usr/local/bin:/usr/bin:/bin"],
+        config.get("Env") == profile_environment(profile),
         "unexpected image environment",
     )
     require(config.get("User", "") in ("", "0", "0:0"), "wrong supervisor user")
     for field in ("Volumes", "Cmd", "Healthcheck", "OnBuild", "ExposedPorts"):
         require(not config.get(field), "unexpected image execution defaults")
-    require(config.get("WorkingDir", "") in ("", "/"), "unexpected working directory")
-    labels = config.get("Labels", {})
-    require(isinstance(labels, dict), "invalid image labels")
+    require(
+        config.get("WorkingDir", "") in profile_workdirs(profile),
+        "unexpected working directory",
+    )
     require(
         labels.get(PREFIX + "coding-supervisor-contract") == "1",
         "wrong supervisor contract",
@@ -171,7 +202,7 @@ def config_policy(config, revision):
         labels.get("org.opencontainers.image.revision") == revision,
         "source revision mismatch",
     )
-    return labels[PREFIX + "coding-test-driver-profile"]
+    return profile
 
 
 class BlobReader:

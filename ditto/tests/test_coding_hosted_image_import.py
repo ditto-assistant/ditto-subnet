@@ -26,13 +26,14 @@ REVISION = "1" * 40
 REPO = "coding-hosted-fixture.invalid/public/image"
 
 
-def configuration():
+def configuration(profile=POLICY.PROFILE):
     return {
         "Entrypoint": POLICY.ENTRYPOINT,
-        "Env": ["PATH=/usr/local/bin:/usr/bin:/bin"],
+        "Env": POLICY.profile_environment(profile),
+        "WorkingDir": POLICY.profile_workdirs(profile)[0],
         "Labels": {
             POLICY.PREFIX + "coding-supervisor-contract": "1",
-            POLICY.PREFIX + "coding-test-driver-profile": POLICY.PROFILE,
+            POLICY.PREFIX + "coding-test-driver-profile": profile,
             "org.opencontainers.image.revision": REVISION,
         },
     }
@@ -88,8 +89,7 @@ def prepared(tmp_path, repository=REPO, profile=POLICY.PROFILE):
     source, output, manifest = (
         tmp_path / n for n in ("source.tar", "image.tar", "approval.json")
     )
-    config = configuration()
-    config["Labels"][POLICY.PREFIX + "coding-test-driver-profile"] = profile
+    config = configuration(profile)
     source.write_bytes(tar_bytes(fixture_entries(config).items()))
     approval = POLICY.prepare(source, output, manifest, repository, REVISION)
     raw = manifest.read_bytes()
@@ -125,14 +125,13 @@ def test_prepare_never_overwrites_existing_output(tmp_path):
     assert output.read_bytes() == before
 
 
-@pytest.mark.parametrize("profile", ["python-call-ast-v1", "python-call-ast-v2"])
+@pytest.mark.parametrize("profile", sorted(POLICY.PROFILES))
 def test_driver_profile_is_bound_to_archive_and_loaded_image(tmp_path, profile):
     output, raw, sha, approval = prepared(tmp_path, profile=profile)
     assert approval["driver_profile"] == profile
     with output.open("rb") as stream:
         assert POLICY.verify(stream, raw, sha) == approval
-    config = configuration()
-    config["Labels"][POLICY.PREFIX + "coding-test-driver-profile"] = profile
+    config = configuration(profile)
     loaded = [
         {
             "RepoDigests": [approval["image_ref"]],
@@ -151,9 +150,23 @@ def test_driver_profile_is_bound_to_archive_and_loaded_image(tmp_path, profile):
         pytest.raises(ValueError, match="approval fields"),
     ):
         POLICY.verify(stream, altered, hashlib.sha256(altered).hexdigest())
-    config["Labels"][POLICY.PREFIX + "coding-test-driver-profile"] = other
+    loaded[0]["Config"] = configuration(other)
     with pytest.raises(ValueError, match="loaded driver profile"):
         POLICY.validate_loaded(loaded, approval)
+
+
+@pytest.mark.parametrize("profile", sorted(POLICY.PROFILES))
+def test_profile_specific_environment_and_workdir_are_not_interchangeable(profile):
+    config = configuration(profile)
+    config["Env"] = ["PATH=/usr/bin:/bin"]
+    with pytest.raises(ValueError, match="environment"):
+        POLICY.config_policy(config, REVISION)
+    config = configuration(profile)
+    config["WorkingDir"] = (
+        "/" if profile in {"go-call-ast-v1", "rust-call-ast-v1"} else "/workspace"
+    )
+    with pytest.raises(ValueError, match="working directory"):
+        POLICY.config_policy(config, REVISION)
 
 
 @pytest.mark.parametrize(

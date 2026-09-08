@@ -21,4 +21,9 @@ name = "driver"
 path = "src/bin/driver.rs"
 required-features = ["driver"]
 
+[[bin]]
+name = "inventory"
+path = "src/bin/inventory.rs"
+required-features = ["driver"]
+
 [workspace]
