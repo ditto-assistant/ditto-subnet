@@ -1,5 +1,8 @@
-//! Non-executing, fail-closed admission for protected Rust oracle source.
-//! This is not a grader, compiler, sandbox, or candidate-facing protocol.
+//! Protected Rust suite admission and parent-owned typed data evaluation.
+//! This is not a compiler, sandbox, byte transport, or standalone runtime grader.
+
+pub mod evaluator;
+pub mod value;
 
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -38,7 +41,7 @@ pub struct AdmittedSuite {
     crate_name: String,
     functions: Vec<String>,
     imports: BTreeMap<String, String>,
-    // Retain only admitted syntax for a future trusted evaluator. No public AST
+    // Retain only admitted syntax for the trusted evaluator. No public AST
     // accessor: admission must not become a source export to the candidate.
     tests: Vec<syn::ItemFn>,
 }

@@ -1,14 +1,16 @@
-# Protected Rust suite admission
+# Protected Rust oracle core
 
-This crate is the first Rust oracle layer: a non-executing, closed syntax
-admission gate. It is **not a grader** and is not wired into the supervisor or
-runtime image selection. Admitting a suite never means its tests passed.
+This crate provides a non-executing, closed syntax admission gate and a separate
+parent-owned typed data evaluator. It is **not a standalone runtime grader** and
+is not wired into the supervisor or runtime image selection. Admitting a suite
+never means its tests passed. See [the evaluator boundary](EVALUATOR.md).
 
 The trusted controller supplies the independently approved crate/function names,
 exact source SHA-256, and nonzero expected test count. The parser does not discover
 authority from candidate files or suite imports. `syn` parses source and macro
 arguments without loading modules or expanding macros. There is no filesystem,
-compiler, cargo, subprocess, or candidate execution path in this library.
+compiler, cargo, subprocess, or candidate loading path in this library. Evaluation
+calls a trusted adapter interface; its isolated IPC implementation is still pending.
 The opaque result also binds a domain-separated digest of the source, approved
 namespace/function set, and expected count; future evaluation must preserve that
 same authority rather than reusing admission with another policy.
@@ -51,12 +53,13 @@ routing; this library is not an isolation boundary.
   projections, block bodies, general closures, custom collectors, and arbitrary
   iterator protocols are rejected. The binder never escapes its projection.
 
-These method and projection forms are descriptions for a **future parent-owned
+These method and projection forms are descriptions for the **parent-owned data
 evaluator**, not permission to dispatch candidate methods or execute Rust
-closures. That evaluator must implement typed data semantics (including reference,
-integer-width, result, and sequence behavior), operation/allocation budgets, and
-fail closed on invalid receivers, failed unwraps, or out-of-range access. Syntax
-admission alone intentionally cannot determine whether such operations succeed.
+closures. It implements checked integer-width, reference-description, result,
+and sequence operations with operation/data budgets. Invalid receivers stop
+evaluation; failed unwraps and out-of-range accesses fail the current test.
+Syntax admission alone cannot determine whether such operations succeed. This
+closed data model is not a general Rust type, ownership, or lifetime checker.
 
 Limits are applied before the recursive lexer: 32 KiB source, 256 ASCII
 punctuation bytes, and 64 opening delimiter bytes in total. These deliberately
@@ -85,8 +88,9 @@ build contexts, or candidate binaries.
    inventory. Structural audits against pristine snapshot exports are not
    production API approval or runtime qualification; do not silently fall back
    to `cargo test` or inject private tests into candidate code.
-2. Build the parent-owned evaluator, typed candidate API transport, compiler
-   allowlist/bridge, and a separately constrained non-root compiler phase.
+2. Qualify the parent evaluator against private controls, implement the bounded
+   typed byte transport and compiler allowlist/bridge, and add a separately
+   constrained non-root compiler phase.
 3. Seal the compiled candidate and integrate the existing pre-exec bootstrap,
    deadlines, kill/reap verification, and supervisor-owned result accounting.
 4. Run base/reference and hostile controls, then separately qualify the native
