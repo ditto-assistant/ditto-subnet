@@ -7,6 +7,8 @@ never means its tests passed. See [the evaluator boundary](EVALUATOR.md) and
 [the bounded data channel](WIRE.md).
 The [fixed API bridge](BRIDGE.md) adds a public compiled control; production
 compiler/launcher integration and private runtime qualification remain pending.
+The [frozen compiler-input boundary](INPUTS.md) provides descriptor-relative
+manifest capture, readonly materialization, and a fixed compiler recipe.
 
 The trusted controller supplies the independently approved crate/function names,
 exact source SHA-256, and nonzero expected test count. The parser does not discover

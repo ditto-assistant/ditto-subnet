@@ -8,6 +8,8 @@ pub mod value;
 pub mod wire;
 #[cfg(unix)]
 pub mod wire_unix;
+#[cfg(target_os = "linux")]
+pub mod workspace;
 
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};

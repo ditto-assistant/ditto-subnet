@@ -91,6 +91,61 @@ fn main() {
         print!("{}", bridge::generate(&table).unwrap().source());
         return;
     }
+    #[cfg(target_os = "linux")]
+    if [
+        "stage",
+        "library-args",
+        "bridge-args",
+        "compiler-program",
+        "compiler-environment",
+    ]
+    .contains(&mode.as_str())
+    {
+        use coding_rust_suite::workspace::{CompilerRecipe, Manifest, Snapshot};
+        use sha2::{Digest, Sha256};
+        if mode == "compiler-program" {
+            println!("{}", CompilerRecipe::PROGRAM);
+            return;
+        }
+        if mode == "compiler-environment" {
+            for (key, value) in CompilerRecipe::ENVIRONMENT {
+                println!("{key}={value}");
+            }
+            return;
+        }
+        if mode != "stage" {
+            let arguments = if mode == "library-args" {
+                CompilerRecipe::LIBRARY
+            } else {
+                CompilerRecipe::BRIDGE
+            };
+            for argument in arguments {
+                println!("{argument}");
+            }
+            return;
+        }
+        let source = std::env::args().nth(2).expect("public source root");
+        let output = std::env::args().nth(3).expect("public staging parent");
+        // Fixture authority comes from the immutable image, not the source tree
+        // being inspected. Production must use its authenticated freeze manifest.
+        let original = std::fs::read("/opt/fixture/candidate.rs").unwrap();
+        let manifest = Manifest::new(BTreeMap::from([(
+            "src/lib.rs".into(),
+            Sha256::digest(original).into(),
+        )]))
+        .ok()
+        .unwrap();
+        let captured = Snapshot::capture(std::path::Path::new(&source), 0, &manifest)
+            .ok()
+            .unwrap();
+        let generated = bridge::generate(&table).unwrap();
+        let staged = captured
+            .stage(std::path::Path::new(&output), &generated)
+            .ok()
+            .unwrap();
+        println!("{}", staged.directory().display());
+        return;
+    }
     let socket = unsafe { UnixStream::from_raw_fd(0) };
     let mut channel = Channel::new(socket, table.values().cloned().collect()).unwrap();
     let names: Vec<_> = table.keys().collect();

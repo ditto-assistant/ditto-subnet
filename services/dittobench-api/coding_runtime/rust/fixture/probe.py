@@ -22,15 +22,27 @@ grader.chmod(0o700)
 (grader / "secret").write_text("public synthetic private-file marker")
 (grader / "secret").chmod(0o400)
 assert os.geteuid() == 0
-compiler = "/opt/rustc"
-tool_env = {"PATH": "/usr/bin:/bin"}
+compiler = subprocess.check_output(
+    ["/opt/bridge-probe", "compiler-program"], env={}, timeout=5, text=True
+).strip()
+tool_env = dict(
+    line.split("=", 1)
+    for line in subprocess.check_output(
+        ["/opt/bridge-probe", "compiler-environment"], env={}, timeout=5, text=True
+    ).splitlines()
+)
+assert compiler == "/opt/rustc" and tool_env == {"PATH": "/usr/bin:/bin"}
 marker = Path("/tmp/rust-bridge-entered")
 assert not marker.exists()
 
 
-def compile_source(arguments, directory):
+def compile_source(arguments, directory, *, fixed_recipe=False):
     process = subprocess.Popen(
-        [compiler, "--edition=2021", "-C", "overflow-checks=yes", *arguments],
+        [
+            compiler,
+            *([] if fixed_recipe else ["--edition=2021", "-C", "overflow-checks=yes"]),
+            *arguments,
+        ],
         cwd=directory,
         env=tool_env,
         user=10001,
@@ -68,34 +80,44 @@ with tempfile.TemporaryDirectory(prefix="rust-bridge-", dir="/scratch") as direc
     )
     print("non-root compiler denied protected grader read", flush=True)
 
-    library = directory / "libcandidate.rlib"
-    assert (
-        compile_source(
-            [
-                "--crate-name=candidate",
-                "--crate-type=rlib",
-                "/opt/fixture/candidate.rs",
-                "-o",
-                str(library),
-            ],
-            directory,
-        )
-        == 0
+    control = Path("/scratch/input-control")
+    control.mkdir(mode=0o755)
+    frozen = control / "frozen"
+    frozen.mkdir(mode=0o700)
+    (frozen / "src").mkdir(mode=0o755)
+    (frozen / "src/lib.rs").write_bytes(Path("/opt/fixture/candidate.rs").read_bytes())
+    (frozen / "src/lib.rs").chmod(0o600)
+    (frozen / "tests").mkdir(mode=0o700)
+    (frozen / "tests/hidden.rs").write_text(
+        "public synthetic oracle; never a compiler input"
     )
-    binary = directory / "candidate"
-    bridge_args = [
-        "--crate-name=coding_bridge",
-        "/opt/fixture/bridge.rs",
-        "--extern",
-        "candidate=" + str(library),
-        "--extern",
-        "coding_rust_suite=/opt/deps/libcoding_rust_suite.rlib",
-        "-L",
-        "dependency=/opt/deps",
-        "-o",
-        str(binary),
-    ]
-    assert compile_source(bridge_args, directory) == 0
+    staged = Path(
+        subprocess.check_output(
+            ["/opt/bridge-probe", "stage", str(frozen), str(control)],
+            env={},
+            timeout=5,
+            text=True,
+        ).strip()
+    )
+    assert staged.parent == control
+    assert {str(p.relative_to(staged)) for p in staged.rglob("*") if p.is_file()} == {
+        "src/lib.rs",
+        "bridge.rs",
+    }
+    assert stat.S_IMODE(staged.stat().st_mode) == 0o555
+    assert stat.S_IMODE((staged / "src/lib.rs").stat().st_mode) == 0o444
+    # Mutation of the original tree after capture cannot alter staged bytes.
+    (frozen / "src/lib.rs").write_text("changed after freeze capture")
+    assert (staged / "src/lib.rs").read_bytes() == Path(
+        "/opt/fixture/candidate.rs"
+    ).read_bytes()
+    for mode in ("library-args", "bridge-args"):
+        arguments = subprocess.check_output(
+            ["/opt/bridge-probe", mode], env={}, timeout=5, text=True
+        ).splitlines()
+        assert compile_source(arguments, staged, fixed_recipe=True) == 0
+    binary = Path("/out/candidate")
+    print("manifest-only frozen inputs and fixed compiler recipe verified", flush=True)
     assert not marker.exists()
     fd = os.open(binary, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     sealed = os.memfd_create(

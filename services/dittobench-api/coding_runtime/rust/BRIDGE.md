@@ -57,6 +57,12 @@ its digest, and passes only a same-parent Unix stream as candidate stdin. The
 immutable bootstrap independently checks the executable and seals before its
 one-time confined `execveat` handoff. Existing path-based callers are unchanged.
 
+The fixture's successful build now uses the [frozen input boundary](INPUTS.md):
+only manifest-listed source and the generated bridge reach the compiler. It
+excludes an unlisted test file and changes the original source after capture to
+verify that the compiler still consumes the committed snapshot. The compiler
+program, environment, and command arguments come from the fixed recipe.
+
 Controls verify protected grader reads are denied during compilation, a wrong
 digest never enters the candidate, constructors run only after confinement,
 typed API round trips preserve borrowed text, slices, owned nested values,
@@ -67,8 +73,8 @@ native API signature must fail compilation.
 ## Remaining production work
 
 This is a bridge generator and public compiled control, **not** the production
-compiler/`CandidateApi` adapter or supervisor driver. General candidate workspace
-admission, source-file allowlists, compiler sandbox/cgroup lifecycle, artifact
+compiler/`CandidateApi` adapter or supervisor driver. Authenticated freeze-to-manifest
+wiring, compiler sandbox/cgroup lifecycle, artifact
 receipt binding, per-test process ownership and cleanup integration, bounded
 diagnostic handling, and private base/reference controls remain required. The
 fixture's PID/RAM/scratch settings are not production runtime approval. No private
