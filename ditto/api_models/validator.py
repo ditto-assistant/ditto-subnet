@@ -1673,6 +1673,22 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = 5
+    track_shares_bps: Annotated[
+        dict[str, int],
+        Field(
+            default_factory=dict,
+            description=(
+                "Optional per-track emission share in basis points (0-10000), "
+                "keyed by track id (``memory``/``coding``/``router``). The "
+                "operator-owned governance knob for the multi-competition split, "
+                "served already-resolved like ``burn_share`` so the whole fleet "
+                "folds one decided allocation. Absent (an older platform) or "
+                "malformed falls back to the validator's compiled "
+                "``TRACK_SHARES_BPS`` — see ``weights.resolve_track_shares`` — so "
+                "omission is never a change from the shipped single-pool split."
+            ),
+        ),
+    ]
 
     model_config = ConfigDict(
         json_schema_extra={

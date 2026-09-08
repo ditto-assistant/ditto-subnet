@@ -36,6 +36,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/pprofserver"
 	"github.com/ditto-assistant/dittobench-api/internal/ratelimit"
 	"github.com/ditto-assistant/dittobench-api/internal/release"
+	"github.com/ditto-assistant/dittobench-api/internal/routerharness"
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
 	"github.com/ditto-assistant/dittobench-api/internal/scorer"
@@ -2908,6 +2909,42 @@ func harnessSandboxEnvWithCapability(
 	env["OPENROUTER_API_KEY"] = capability
 	env["OLLAMA_BASE_URL"] = base
 	return env, nil
+}
+
+// routerHarnessSandboxEnv builds the sandbox env for the SHADOW router
+// competition track (SN118 "DittoBench" router track). It is the deliberate
+// INVERSE of harnessSandboxEnvForProvider's model lock: the miner owns the
+// model, provider, and routing, so a miner's router service is the LLM backend.
+//
+// Two invariants distinguish it from the locked path:
+//
+//   - It does NOT apply lockedEnvKeys. Caller-supplied env survives verbatim so
+//     the miner can configure its own routing; there is no model to protect.
+//   - It injects NEITHER DITTOBENCH_MODEL NOR DITTOBENCH_INFERENCE_BASE_URL.
+//
+// Instead it points each big-four coding harness at the miner's multi-protocol
+// router front door via that harness's own base-URL/token env vars (see
+// routerharness.Harness.BaseURLEnv): Claude Code -> ANTHROPIC_BASE_URL +
+// ANTHROPIC_AUTH_TOKEN (ANTHROPIC_API_KEY emptied); Codex -> OPENAI_BASE_URL with
+// the Responses wire_api marker; opencode + Grok -> OPENAI_BASE_URL. All harness
+// base URLs resolve to the same miner router; the router path per harness is
+// carried by routerharness, not the env. placeholderKey authorizes nothing on
+// the scorer side — the miner's router owns real provider credentials.
+//
+// This is shadow scaffolding: it is not wired into any live scoring path.
+func routerHarnessSandboxEnv(reqEnv map[string]string, minerRouterBaseURL, placeholderKey string) map[string]string {
+	env := make(map[string]string, len(reqEnv)+8)
+	// Router track inverts the lock: no lockedEnvKeys filter, caller env survives.
+	for key, value := range reqEnv {
+		env[key] = value
+	}
+	// Point every big-four harness at the miner's router front door.
+	for _, harness := range routerharness.Harnesses() {
+		for key, value := range harness.BaseURLEnv().Env(minerRouterBaseURL, placeholderKey) {
+			env[key] = value
+		}
+	}
+	return env
 }
 
 // probeHarnessModelRoute sends one isolated, discarded request through the

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from ipaddress import ip_address, ip_network
 from urllib.parse import urlsplit
@@ -78,6 +78,29 @@ TOP5_MAX_COHORT_SIZE = 25
 # still routes to burn rather than zeroing the chain.
 MINER_EMISSION_SHARE = 1.0
 FINNEY_BURN_HOTKEY = "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz"  # SN118 UID 0
+
+# --- Competition-track emission split (scalable, retirable registry) ---
+# The subnet is splitting from a single competition into several independent
+# ones (memory, coding, router -- with room for more). The chain accepts exactly
+# one weight vector per validator, so each track folds separately and the
+# results are blended by per-track share into one ``put_weights`` (see
+# ``weights.blend_track_weights`` / ``tracks.TrackRegistry``). Keeping the split
+# in integer basis points -- not floats -- means every validator folds identical
+# byte-for-byte shares with no rounding disagreement; matches the Go scorer's
+# ``scoregates.BasisPointScale``.
+BASIS_POINT_SCALE = 10_000
+# Compiled fallback split. v1 ships memory at the full pool with coding and
+# router at 0 bps (shadow), so a single-track registry reproduces today's fold
+# byte-for-byte. The platform ``LedgerResponse.track_shares_bps`` field may later
+# override this the same way ``burn_share`` overrides ``MINER_EMISSION_SHARE``
+# (see ``weights.resolve_track_shares``); a missing or malformed field folds back
+# to exactly this dict. The eligible sum must never exceed ``BASIS_POINT_SCALE``.
+TRACK_SHARES_BPS = {"memory": BASIS_POINT_SCALE, "coding": 0, "router": 0}
+# Router track rank shares: the relative emission slice each ranked router miner
+# receives (champion first). Only ratios matter -- ``blend_track_weights``
+# normalizes the router vector to the track's bps share -- so these need not sum
+# to one. Inert while the router track is SHADOW / not weight-eligible.
+ROUTER_RANK_SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
 _CODING_EXECUTOR_PRIVATE_NETWORKS = tuple(
     ip_network(value) for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
@@ -445,6 +468,36 @@ class ValidatorConfig:
 
     coding_canary_poll_seconds: float = 10.0
     """Idle polling interval for the public certification canary worker."""
+
+    # --- Competition-track split (scalable, retirable registry) ---
+    track_shares_bps: dict[str, int] = field(
+        default_factory=lambda: dict(TRACK_SHARES_BPS)
+    )
+    """Compiled fallback per-track emission split in basis points. The live split
+    comes from the platform ledger's ``track_shares_bps``; this is what the fold
+    uses when that field is absent or invalid (see
+    ``weights.resolve_track_shares``). v1 ships memory at the full pool, coding
+    and router at 0 — a single-track registry that reproduces today's fold
+    byte-for-byte. Not env-tunable: a per-validator override would fork
+    consensus, so the split moves only by shipping a release or by the
+    platform serving the field to the whole fleet at once."""
+
+    router_track_state: str = "shadow"
+    """Lifecycle state of the router track (``shadow``/``active``/``retiring``/
+    ``retired``). ``shadow`` (v1) folds and logs a router vector every cycle but
+    contributes zero emission; promotion flips this to ``active``. Compiled-only
+    for consensus safety."""
+
+    router_weight_eligible: bool = False
+    """Whether the router track may contribute emissions. ``False`` throughout the
+    shadow rollout — nothing the router folds touches the chain until this and
+    ``router_track_state`` are promoted together."""
+
+    router_rank_shares: tuple[float, ...] = ROUTER_RANK_SHARES
+    """Relative emission slice per ranked router miner (champion first). Only
+    ratios matter — ``blend_track_weights`` normalizes the router vector to the
+    track's bps share — so these need not sum to one. Inert while the router
+    track is shadow / not eligible."""
 
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured (wallet files)."""
