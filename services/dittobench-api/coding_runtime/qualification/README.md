@@ -81,6 +81,9 @@ Local controls pin a local Unix engine for the invocation: the default is
 `unix:///var/run/docker.sock`, or an explicit local `DOCKER_HOST`. `DOCKER_CONTEXT`
 and remote engines are refused. The native host/name/data root is also refused
 by this diagnostic path; omitting native approval flags must not bypass its gates.
+Local calls also use a fresh empty private `docker-client` directory and a clean
+environment, so ambient registry credentials and client proxy settings are not
+inherited. That empty directory is retained beneath the private output root.
 
 ## Separately approved native controls
 

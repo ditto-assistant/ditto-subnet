@@ -327,21 +327,30 @@ def test_native_parent_symlink_and_shared_ancestor_refused(tmp_path):
         NATIVE.protected_parents(path)
 
 
-def test_local_mode_cannot_select_native_or_remote_engine(monkeypatch):
+def test_local_mode_cannot_select_native_or_remote_engine(monkeypatch, tmp_path):
+    client = tmp_path / "client"
+    client.mkdir(mode=0o700)
+    monkeypatch.setenv("SYNTHETIC_SECRET", "must-not-inherit")
     monkeypatch.setattr(RUNNER.platform, "node", lambda: "synthetic-local")
     monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
     monkeypatch.delenv("DOCKER_HOST", raising=False)
     assert (
-        RUNNER.local_engine_environment()["DOCKER_HOST"]
+        RUNNER.local_engine_environment(client)["DOCKER_HOST"]
         == "unix:///var/run/docker.sock"
     )
     monkeypatch.setenv("DOCKER_CONTEXT", "native")
     with pytest.raises(ValueError):
-        RUNNER.local_engine_environment()
+        RUNNER.local_engine_environment(client)
     monkeypatch.delenv("DOCKER_CONTEXT")
     monkeypatch.setenv("DOCKER_HOST", "ssh://native")
     with pytest.raises(ValueError):
-        RUNNER.local_engine_environment()
+        RUNNER.local_engine_environment(client)
+    monkeypatch.delenv("DOCKER_HOST")
+    assert "SYNTHETIC_SECRET" not in RUNNER.local_engine_environment(client)
+    assert RUNNER.local_engine_environment(client)["DOCKER_CONFIG"] == str(client)
+    (client / "config.json").write_bytes(b"{}")
+    with pytest.raises(ValueError):
+        RUNNER.local_engine_environment(client)
     RUNNER.local_engine_policy(
         {"Name": "synthetic-local", "DockerRootDir": "/var/lib/docker"}
     )

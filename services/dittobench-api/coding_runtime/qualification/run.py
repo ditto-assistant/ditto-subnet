@@ -45,7 +45,7 @@ def load_native():
     return value
 
 
-def local_engine_environment():
+def local_engine_environment(client_directory):
     # The diagnostic path must not silently become a native run through a
     # mutable Docker context or a remote engine. Nondefault local Unix sockets
     # remain explicit through DOCKER_HOST; native hosts require the approval path.
@@ -60,10 +60,23 @@ def local_engine_environment():
     require(
         platform.node() != "ditto-coding-hosted-v2", "native host requires approval"
     )
-    environment = dict(os.environ)
-    environment.pop("DOCKER_CONTEXT", None)
-    environment["DOCKER_HOST"] = host
-    return environment
+    require(
+        client_directory.is_absolute()
+        and client_directory.resolve() == client_directory
+        and client_directory.is_dir()
+        and client_directory.stat().st_uid == os.geteuid()
+        and client_directory.stat().st_mode & 0o777 == 0o700
+        and not list(client_directory.iterdir()),
+        "local Docker client directory is unsafe",
+    )
+    # Do not inherit registry credentials or config-based proxy environment injection.
+    return {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "DOCKER_HOST": host,
+        "DOCKER_CONFIG": str(client_directory),
+    }
 
 
 def local_engine_policy(info):
@@ -354,7 +367,13 @@ def main():
             jobs=args.jobs,
         )
     docker = binding.command if binding else lambda argv: ["docker", *argv]
-    engine = {"env": binding.environment if binding else local_engine_environment()}
+    args.output.mkdir(mode=0o700)
+    if binding:
+        engine = {"env": binding.environment}
+    else:
+        client_directory = args.output / "docker-client"
+        client_directory.mkdir(mode=0o700)
+        engine = {"env": local_engine_environment(client_directory)}
     if binding:
         binding.check_daemon(
             json.loads(output(docker(["info", "--format", "{{json .}}"]), **engine))
@@ -383,7 +402,6 @@ def main():
             "descriptor": value.get("Descriptor"),
             "repo_digests": value.get("RepoDigests", []),
         }
-    args.output.mkdir(mode=0o700)
     if binding:
         binding.consume()
     save(
