@@ -11,6 +11,9 @@ on:
       - infra/ansible/roles/coding_hosted/files/host-policy.py
       - ditto/tests/test_coding_native_release.py
       - ditto/tests/test_coding_native_host_preflight.py
+      - ditto/tests/test_coding_native_matrix.py
+      - ditto/tests/test_coding_qualification.py
+      - services/dittobench-api/coding_runtime/qualification/**
       - ditto/tests/test_coding_hosted_image_import.py
       - .github/workflows/coding-native-release.yml
   workflow_dispatch:
@@ -37,6 +40,7 @@ jobs:
         run: >-
           uv run --frozen pytest -q ditto/tests/test_coding_native_release.py
           ditto/tests/test_coding_native_host_preflight.py
+          ditto/tests/test_coding_native_matrix.py ditto/tests/test_coding_qualification.py
           ditto/tests/test_coding_hosted_image_import.py
           ditto/tests/test_coding_hosted_runtime_bundle.py
       - name: Lint release-set tooling
@@ -45,6 +49,8 @@ jobs:
           uv run --frozen ruff format --check infra/scripts/build-coding-native-release.py ditto/tests/test_coding_native_release.py
           uv run --frozen ruff check infra/scripts/inspect-coding-native-host.py ditto/tests/test_coding_native_host_preflight.py
           uv run --frozen ruff format --check infra/scripts/inspect-coding-native-host.py ditto/tests/test_coding_native_host_preflight.py
+          uv run --frozen ruff check services/dittobench-api/coding_runtime/qualification/native.py services/dittobench-api/coding_runtime/qualification/run.py ditto/tests/test_coding_native_matrix.py
+          uv run --frozen ruff format --check services/dittobench-api/coding_runtime/qualification/native.py services/dittobench-api/coding_runtime/qualification/run.py ditto/tests/test_coding_native_matrix.py
   public-build:
     if: github.event_name == 'workflow_dispatch'
     needs: verify

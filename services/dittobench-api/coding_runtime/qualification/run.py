@@ -6,11 +6,16 @@ only in bounded disposable containers, selected by inspected immutable image IDs
 
 import argparse
 import concurrent.futures
+import contextlib
 import hashlib
+import importlib.util
 import json
 import os
+import platform
 import re
+import stat
 import subprocess
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -22,6 +27,59 @@ PROFILES = {
     "rust": "rust-call-ast-v1",
 }
 PREFIX = "io.heyditto.dittobench."
+
+
+@contextlib.contextmanager
+def retained_case(root):
+    # Never delete replay inputs while container removal might be unconfirmed.
+    # Even successful cases remain private operator evidence, not public output.
+    yield tempfile.mkdtemp(prefix="case-", dir=root)
+
+
+def load_native():
+    path = Path(__file__).resolve().with_name("native.py")
+    spec = importlib.util.spec_from_file_location("coding_native_binding", path)
+    assert spec is not None and spec.loader is not None
+    value = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(value)
+    return value
+
+
+def local_engine_environment():
+    # The diagnostic path must not silently become a native run through a
+    # mutable Docker context or a remote engine. Nondefault local Unix sockets
+    # remain explicit through DOCKER_HOST; native hosts require the approval path.
+    require(
+        not os.environ.get("DOCKER_CONTEXT"), "local controls refuse Docker contexts"
+    )
+    host = os.environ.get("DOCKER_HOST") or "unix:///var/run/docker.sock"
+    require(
+        host.startswith("unix:///") and not any(c.isspace() for c in host),
+        "local controls require an explicit local Unix engine",
+    )
+    require(
+        platform.node() != "ditto-coding-hosted-v2", "native host requires approval"
+    )
+    environment = dict(os.environ)
+    environment.pop("DOCKER_CONTEXT", None)
+    environment["DOCKER_HOST"] = host
+    return environment
+
+
+def local_engine_policy(info):
+    require(
+        type(info) is dict
+        and type(info.get("Name")) is str
+        and bool(info["Name"])
+        and type(info.get("DockerRootDir")) is str
+        and bool(info["DockerRootDir"]),
+        "local engine identity missing",
+    )
+    require(
+        info["Name"] != "ditto-coding-hosted-v2"
+        and info["DockerRootDir"] != "/var/lib/ditto-coding-hosted/docker",
+        "native engine requires approval",
+    )
 
 
 def require(value, message):
@@ -37,14 +95,41 @@ def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
-def private_json(path, maximum=8 << 20):
+def private_document(path, maximum=8 << 20):
     require(path.is_absolute() and path.resolve() == path, "noncanonical private path")
-    info = path.lstat()
-    require(
-        path.is_file() and not info.st_mode & 0o077 and info.st_size <= maximum,
-        "private file mode/size rejected",
-    )
-    return json.loads(path.read_bytes())
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(fd)
+        require(
+            stat.S_ISREG(info.st_mode)
+            and info.st_nlink == 1
+            and info.st_uid == os.geteuid()
+            and not info.st_mode & 0o077
+            and 0 < info.st_size <= maximum,
+            "private file mode/size rejected",
+        )
+        raw = stream.read(maximum + 1)
+        after = os.fstat(fd)
+        linked = path.lstat()
+        require(
+            (info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            == (after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+            and (after.st_dev, after.st_ino) == (linked.st_dev, linked.st_ino),
+            "private input changed during read",
+        )
+
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            require(key not in value, "duplicate private JSON key")
+            value[key] = item
+        return value
+
+    return json.loads(raw, object_pairs_hook=unique), digest(raw)
+
+
+def private_json(path, maximum=8 << 20):
+    return private_document(path, maximum)[0]
 
 
 def save(root, name, value):
@@ -172,10 +257,24 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=2, choices=(1, 2, 4))
     parser.add_argument("--collect-failures", action="store_true")
+    parser.add_argument("--private-native-controls-once", action="store_true")
+    parser.add_argument("--native-approval", type=Path)
+    parser.add_argument("--native-approval-sha256")
+    parser.add_argument("--native-release-index", type=Path)
     args = parser.parse_args()
+    native_options = (
+        args.private_native_controls_once,
+        args.native_approval,
+        args.native_approval_sha256,
+        args.native_release_index,
+    )
+    if any(native_options) and not all(native_options):
+        parser.error(
+            "native controls require explicit opt-in and complete independent pins"
+        )
     os.umask(0o077)
-    plan = private_json(args.plan)
-    images = private_json(args.images)
+    plan, plan_sha = private_document(args.plan)
+    images, images_sha = private_document(args.images)
     source = output(["git", "rev-parse", "HEAD"], cwd=args.checkout)
     require(
         re.fullmatch(r"[0-9a-f]{40}", source)
@@ -233,35 +332,77 @@ def main():
         args.helper.is_file() and not args.helper.stat().st_mode & 0o022,
         "operator helper must be protected",
     )
+    helper_sha = digest(args.helper.read_bytes())
+    binding = None
+    if args.private_native_controls_once:
+        require(
+            args.checkout.resolve() == Path(__file__).resolve().parents[4],
+            "native runner must belong to the approved checkout",
+        )
+        native = load_native()
+        native.validate_paths(
+            args.corpus, args.helper, args.output.parent, args.plan, args.images
+        )
+        binding = native.Binding(
+            args.native_approval,
+            args.native_approval_sha256,
+            args.native_release_index,
+            source=source,
+            plan_sha=plan_sha,
+            helper_sha=helper_sha,
+            controls=len(cases) * 2,
+            jobs=args.jobs,
+        )
+    docker = binding.command if binding else lambda argv: ["docker", *argv]
+    engine = {"env": binding.environment if binding else local_engine_environment()}
+    if binding:
+        binding.check_daemon(
+            json.loads(output(docker(["info", "--format", "{{json .}}"]), **engine))
+        )
+    else:
+        local_engine_policy(
+            json.loads(output(docker(["info", "--format", "{{json .}}"]), **engine))
+        )
     resolved = {}
+    execution_refs = {}
     inspected = {}
     for language, reference in images.items():
         require(
             isinstance(reference, str) and not reference.startswith("-"),
             "image reference rejected",
         )
-        value = json.loads(output(["docker", "image", "inspect", reference]))[0]
+        value = json.loads(output(docker(["image", "inspect", reference]), **engine))[0]
         resolved[language] = image_policy(value, language, source)
+        execution_refs[language] = resolved[language]
+        if binding:
+            execution_refs[language], resolved[language] = binding.select_image(
+                language, reference, value
+            )
         inspected[language] = {
             "id": value["Id"],
             "descriptor": value.get("Descriptor"),
             "repo_digests": value.get("RepoDigests", []),
         }
     args.output.mkdir(mode=0o700)
-    helper_sha = digest(args.helper.read_bytes())
+    if binding:
+        binding.consume()
     save(
         args.output,
         "provenance.json",
         {
             "source_sha": source,
-            "plan_sha256": digest(args.plan.read_bytes()),
+            "plan_sha256": plan_sha,
+            "image_references_sha256": images_sha,
             "helper_sha256": helper_sha,
             "runner_sha256": digest(Path(__file__).read_bytes()),
             "images": inspected,
             "kernel": output(["uname", "-r"]),
             "runtime_qualification": False,
             "production_api_approval": False,
-            "image_binding_kind": "local_config_id_not_native_import_approval",
+            "image_binding_kind": "approved_native_oci_manifest"
+            if binding
+            else "local_config_id_not_native_import_approval",
+            **({"native_control_authority": binding.provenance()} if binding else {}),
         },
     )
 
@@ -272,42 +413,49 @@ def main():
         require(language in PROFILES, "unknown language")
         case["image_sha256"] = resolved[language][7:]
         name = "coding-private-control-" + uuid.uuid4().hex
-        with tempfile.TemporaryDirectory(prefix="case-", dir=args.output) as temp:
+        with retained_case(args.output) as temp:
             folder = Path(temp)
             save(folder, "case.json", case)
-            command = [
-                "docker",
-                "run",
-                "--name",
-                name,
-                "--rm",
-                *envelope(language),
-                "--mount",
-                f"type=bind,src={args.corpus},dst=/private-input,readonly",
-                "--mount",
-                f"type=bind,src={folder},dst=/private-control,readonly",
-                "--mount",
-                f"type=bind,src={args.helper},dst=/operator/control,readonly",
-                "--entrypoint",
-                "/operator/control",
-                resolved[language],
-            ]
+            command = docker(
+                [
+                    "run",
+                    "--name",
+                    name,
+                    "--rm",
+                    "--pull=never",
+                    *envelope(language),
+                    "--mount",
+                    f"type=bind,src={args.corpus},dst=/private-input,readonly",
+                    "--mount",
+                    f"type=bind,src={folder},dst=/private-control,readonly",
+                    "--mount",
+                    f"type=bind,src={args.helper},dst=/operator/control,readonly",
+                    "--entrypoint",
+                    "/operator/control",
+                    execution_refs[language],
+                ]
+            )
             try:
-                result = subprocess.run(command, capture_output=True, timeout=210)
+                timeout = binding.control_timeout() if binding else 210
+                result = subprocess.run(
+                    command, capture_output=True, timeout=timeout, **engine
+                )
             except subprocess.TimeoutExpired:
                 subprocess.run(
-                    ["docker", "rm", "-f", name],
+                    docker(["rm", "-f", name]),
                     capture_output=True,
                     timeout=20,
                     check=True,
+                    **engine,
                 )
                 raise RuntimeError(
                     "private control timed out; container removed"
                 ) from None
             inspection = subprocess.run(
-                ["docker", "container", "inspect", name],
+                docker(["container", "inspect", name]),
                 capture_output=True,
                 timeout=20,
+                **engine,
             )
             require(
                 inspection.returncode != 0 and b"No such" in inspection.stderr,
@@ -378,10 +526,16 @@ def main():
     passed = all(record["ok"] for record in records) and repeat_equal
     require(
         digest(args.helper.read_bytes()) == helper_sha
+        and private_document(args.plan)[1] == plan_sha
+        and private_document(args.images)[1] == images_sha
         and output(["git", "rev-parse", "HEAD"], cwd=args.checkout) == source
         and not output(["git", "status", "--porcelain"], cwd=args.checkout),
         "operator or checkout changed during controls",
     )
+    if binding:
+        binding.check_daemon(
+            json.loads(output(docker(["info", "--format", "{{json .}}"]), **engine))
+        )
     save(
         args.output,
         "summary.json",
@@ -404,6 +558,15 @@ def main():
             "native_host_ready": False,
             "canary_completed": False,
             "weight_eligible": False,
+            **(
+                {
+                    "native_control_authority": binding.provenance(),
+                    "native_controls_passed": passed,
+                    "image_binding_kind": "approved_native_oci_manifest",
+                }
+                if binding
+                else {}
+            ),
         },
     )
     if not passed:
@@ -419,4 +582,21 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.dont_write_bytecode = True
+    try:
+        main()
+    except (
+        ValueError,
+        OSError,
+        KeyError,
+        TypeError,
+        IndexError,
+        AttributeError,
+        RuntimeError,
+        subprocess.SubprocessError,
+    ):
+        print(
+            "private matrix rejected; inputs and receipts retained for review",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
