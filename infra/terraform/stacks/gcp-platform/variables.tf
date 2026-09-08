@@ -37,6 +37,17 @@ variable "cloudflare_zone_id" {
 
 # --- Postgres VM ---
 
+variable "pg_boot_disk_gb" {
+  description = "PostgreSQL VM boot disk capacity. The live cluster is on /var/lib/postgresql on this filesystem. Grow the live disk before applying this pin; never replace the VM to resize it."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.pg_boot_disk_gb >= 100
+    error_message = "PostgreSQL boot disk must be at least 100 GB."
+  }
+}
+
 variable "pg_data_disk_gb" {
   description = "Postgres data disk size in GB (separate, survives instance replacement)."
   type        = number

@@ -103,6 +103,7 @@ module "pg_vm" {
   location              = var.zone
   subnetwork            = module.network.subnetwork_id
   network_tags          = [module.network.postgres_target_tag, module.network.ssh_target_tag]
+  boot_disk_gb          = var.pg_boot_disk_gb
   data_disk_gb          = var.pg_data_disk_gb
   assign_public_ip      = false
   service_account_email = var.vm_service_account_email

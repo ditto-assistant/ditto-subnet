@@ -1,0 +1,72 @@
+name: Recover Platform PostgreSQL disk capacity
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type GROW PLATFORM POSTGRES BOOT DISK TO 100GB
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-postgres-disk-recovery
+  cancel-in-progress: false
+
+jobs:
+  grow-cloud-disk:
+    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'GROW PLATFORM POSTGRES BOOT DISK TO 100GB'
+    environment: infra-apply
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_TF_APPLY_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Verify exact existing disk and grow in place
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud compute disks describe ditto-pg-platform --project=ditto-app-dev --zone=us-central1-a --format=json > /tmp/disk.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/disk.json'))
+          assert d['name']=='ditto-pg-platform' and d['status']=='READY'
+          assert d['users']==['https://www.googleapis.com/compute/v1/projects/ditto-app-dev/zones/us-central1-a/instances/ditto-pg-platform']
+          assert int(d['sizeGb']) in (30,100), 'unexpected disk size; refusing mutation'
+          print('Reviewed operation: existing ditto-pg-platform disk', d['sizeGb'], 'GB -> 100 GB; no replacement or deletion')
+          PY
+          if [ "$(jq -r .sizeGb /tmp/disk.json)" = 30 ]; then
+            gcloud compute disks resize ditto-pg-platform --project=ditto-app-dev --zone=us-central1-a --size=100GB --quiet
+          fi
+          test "$(gcloud compute disks describe ditto-pg-platform --project=ditto-app-dev --zone=us-central1-a --format='value(sizeGb)')" = 100
+  expand-guest-and-check:
+    needs: grow-cloud-disk
+    environment: prod
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_PLATFORM_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Expand verified root filesystem and recover PostgreSQL readiness
+        run: .agents/skills/ditto-subnet-release-ops/scripts/recover_platform_postgres_disk.sh 'GROW PLATFORM POSTGRES BOOT DISK TO 100GB'
+      - name: Record bounded post-recovery diagnostics
+        if: always()
+        run: .agents/skills/gcloud-ditto-readonly/scripts/inspect_platform_postgres.sh

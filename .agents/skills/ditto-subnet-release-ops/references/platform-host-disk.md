@@ -80,3 +80,24 @@ df -h /
 
 Protected plan/apply after the live size already matches. If a plan still
 shows instance replacement, abort.
+
+## Dedicated Platform PostgreSQL root disk
+
+The September 2026 incident filled `ditto-pg-platform`'s 30 GB root filesystem.
+The live PostgreSQL 17 main cluster was at `/var/lib/postgresql/17/main` on
+`/dev/sda1`, not on the separately attached data volume. It completed WAL redo,
+then failed to write init files and `current_logfiles.tmp` with ENOSPC.
+
+Run `inspect_platform_postgres.sh` first. The manual
+`Recover Platform PostgreSQL disk capacity` workflow is restricted to main and
+requires `GROW PLATFORM POSTGRES BOOT DISK TO 100GB`. Its infra-apply job validates
+the exact disk name, attachment, and current size (30 or already 100 GB), then
+grows that disk in place. Its dependent prod job verifies the guest's device,
+filesystem, cloud capacity, and cluster directory before expanding the partition
+and ext4. It restarts the exact PostgreSQL cluster only if readiness remains
+unavailable after restoring disk headroom. No log, database, or WAL file is deleted.
+
+`pg_boot_disk_gb=100` pins this capacity in Terraform. Refresh and review the
+protected Terraform plan after the live grow; never apply a plan that replaces
+the database VM. This workflow does not migrate the cluster to the attached data
+disk or change persistent IAM.
