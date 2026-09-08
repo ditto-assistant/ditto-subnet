@@ -78,6 +78,29 @@ resource "google_secret_manager_secret_iam_member" "screener_source_review_acces
   ]
 }
 
+# Ditto Inference key for the private review layers (L1 Luna, L2 Terra, L3 Sol,
+# L4 GLM) once a node sets screener_fleet_review_inference_provider = ditto.
+# Deliberately a separate secret from validator-openrouter-key: that one is
+# shared by validators, the platform relay, the DittoBench role, and the Targon
+# CLI, so moving the screener to another gateway must never rotate their key.
+# Terraform owns the container only; an operator adds the ditto_inf_ version.
+resource "google_secret_manager_secret" "screener_review_ditto_inference_key" {
+  count     = (var.enable_screener || var.enable_screener_prod || var.enable_screener_fleet) ? 1 : 0
+  project   = var.project
+  secret_id = "screener-review-ditto-inference-key"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "screener_review_ditto_inference_access" {
+  count     = (var.enable_screener || var.enable_screener_prod || var.enable_screener_fleet) ? 1 : 0
+  project   = var.project
+  secret_id = google_secret_manager_secret.screener_review_ditto_inference_key[0].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.screener_worker.email}"
+}
+
 # --- The VM (private; label role=screener → Ansible group role_screener). ---
 #
 # Reuses the platform runtime SA (run_sa_email), which validator.tf already

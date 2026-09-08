@@ -79,7 +79,12 @@ the VM:
   `shadow`; the service creates and repairs the journal and its parent to
   mode 0600 and 0700 respectively, and rejects symlink targets.
 - `SCREENER_SOURCE_REVIEW_API_KEY_FILE`: mode-0400 OpenRouter key file readable
-  only by the screener service user. The default reviewer model is
+  only by the screener service user. On the Hetzner fleet the secret agent
+  materializes it from Secret Manager `validator-openrouter-key`; a node moving
+  its review layers to Ditto Inference points
+  `screener_fleet_source_review_secret_id` at
+  `screener-review-ditto-inference-key` (Terraform `screener.tf`) instead, so
+  the validators' shared OpenRouter secret is never rotated for the screener. The default reviewer model is
   `openai/gpt-5.6-luna`; every request enforces ZDR and denies data collection.
   Optional escalation uses `openai/gpt-5.6-terra` for L2, followed by exact
   `openai/gpt-5.6-sol` for the independent L3 clearance critic. L2 retains an

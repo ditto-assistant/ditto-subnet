@@ -151,3 +151,18 @@ def test_infra_workflow_keeps_x509_identity_opt_in() -> None:
     assert "SCREENER_FLEET_X509_CA_CERTIFICATE_PEM" in text
     assert "enable_screener_fleet_x509_identity" in text
     assert "SERVICE_ACCOUNT_KEY" not in text
+
+
+def test_ditto_inference_review_key_is_a_separate_secret_with_its_own_grant() -> None:
+    """The screener gateway can move without rotating the validators' shared key."""
+    terraform = (TERRAFORM.parent / "screener.tf").read_text()
+
+    assert 'secret_id = "screener-review-ditto-inference-key"' in terraform
+    assert (
+        "google_secret_manager_secret.screener_review_ditto_inference_key[0].secret_id"
+        in terraform
+    )
+    # The OpenRouter grant stays: nodes still on that gateway keep working.
+    assert 'secret_id = "validator-openrouter-key"' in terraform
+    # Terraform never writes a version; the operator supplies the key material.
+    assert "google_secret_manager_secret_version" not in terraform
