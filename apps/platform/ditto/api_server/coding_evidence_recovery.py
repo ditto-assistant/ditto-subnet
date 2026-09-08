@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid5
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.coding_hosted_control import AuthoringIdentity
@@ -230,6 +230,9 @@ class HostedEvidenceRecovery:
         self, target: RecoveryTarget, *, publication: bool = False
     ) -> RecoveryRecord:
         async with asyncio.timeout(20), self._sessions() as session, session.begin():
+            await session.execute(
+                text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            )
             record = await self._record(session, target)
             if publication and not record.finalized:
                 now = await session.scalar(select(func.clock_timestamp()))
@@ -441,3 +444,71 @@ class HostedEvidenceRecovery:
             raise HostedEvidenceError(
                 "native evidence recovery publication failed"
             ) from None
+
+    async def verify_readback(self, target: RecoveryTarget) -> dict:
+        """Fresh exact-key reads of finalized ciphertext; never upload or finalize."""
+        try:
+            async with asyncio.timeout(3600), self._spool.lock:
+                record = await self._snapshot(target)
+                if (
+                    not record.finalized
+                    or self._config is None
+                    or self._probe_path is None
+                ):
+                    raise HostedEvidenceError("finalized readback is unavailable")
+                count, size = self._inspect(record)
+                config = self._config
+                probe, probe_sha = load_hippius_probe_receipt(self._probe_path)
+                domain = sha(
+                    canonical(
+                        {
+                            "provider": "hippius",
+                            "endpoint": config.endpoint_url,
+                            "region": config.region,
+                            "bucket": config.bucket,
+                        }
+                    )
+                )
+
+                def fresh():
+                    checked = datetime.fromisoformat(
+                        probe.checked_at.replace("Z", "+00:00")
+                    )
+                    if (
+                        probe.sealed_evidence_authority_sha256
+                        != config.authority_sha256
+                        or domain != record.domain
+                        or not 0
+                        <= (datetime.now(UTC) - checked).total_seconds()
+                        < 86400
+                    ):
+                        raise HostedEvidenceError("readback storage authority differs")
+
+                fresh()
+                transport = (
+                    self._test_transport
+                    or AiobotoHippiusSealedEvidenceTransport(config)
+                )
+                for key, body, identity in self._blobs(record):
+                    fresh()
+                    async with asyncio.timeout(config.timeout_seconds):
+                        found = await transport.get_object(key=key, max_bytes=len(body))
+                    checker = (
+                        checked_blob
+                        if isinstance(identity, HostedEvidenceIdentity)
+                        else check_blob
+                    )
+                    checker(identity, found)
+                fresh()
+                if await self._snapshot(target) != record:
+                    raise HostedEvidenceError("readback identity changed")
+                return {
+                    **self._receipt(target, "verified", count, size),
+                    "schema": "dittobench-coding-evidence-readback-v2",
+                    "probe_sha256": probe_sha,
+                    "storage_domain_sha256": domain,
+                    "checked_at": datetime.now(UTC).isoformat(),
+                    "uploaded": False,
+                }
+        except Exception:
+            raise HostedEvidenceError("native evidence readback failed") from None

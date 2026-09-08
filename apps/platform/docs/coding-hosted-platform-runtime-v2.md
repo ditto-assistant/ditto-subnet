@@ -196,3 +196,10 @@ its separate [default-off public signer startup](coding-hosted-control-startup-v
 this worker
 does not enable it or load a public control signing key. Scoring, weights and
 emissions remain separate activation decisions.
+
+After a separately authorized full-path canary completes, the
+[read-only canary evidence verifier](coding-native-canary-evidence-v2.md) checks
+its signed result/acknowledgement, closed task, settled inference set and fresh
+Hippius readbacks. It neither launches nor repairs the run, and its evidence
+report does not replace native-host, calibration, physical-cleanup or rollout
+approval.
