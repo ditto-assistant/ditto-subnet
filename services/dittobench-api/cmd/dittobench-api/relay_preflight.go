@@ -31,6 +31,9 @@ type relayHealthSnapshot struct {
 	// to the miner. A successful later request can complete the run; the scorer
 	// does not relabel these as validator infrastructure.
 	MinerRecoverableFailures uint64 `json:"miner_recoverable_failures"`
+	// A Platform 500 invalidates the run even if other calls succeeded. An
+	// upstream completion may have been lost during its settlement transaction.
+	PlatformInternalFailures uint64 `json:"platform_internal_failures"`
 	// GrantDenials counts platform-side refusals to reserve capacity for this
 	// ticket's grant (revoked lease, rewritten/passed ticket deadline,
 	// exhausted budget, per-ticket concurrency). Deliberately separate from
@@ -102,6 +105,7 @@ type relayExecutionSummary struct {
 	Successes                 uint64 `json:"successes"`
 	InfrastructureFailures    uint64 `json:"infrastructure_failures"`
 	MinerRecoverableFailures  uint64 `json:"miner_recoverable_failures,omitempty"`
+	PlatformInternalFailures  uint64 `json:"platform_internal_failures,omitempty"`
 	GrantDenials              uint64 `json:"grant_denials,omitempty"`
 	GrantAgentDeclines        uint64 `json:"grant_agent_declines,omitempty"`
 	DeclineEvidenceMismatches uint64 `json:"decline_evidence_mismatches,omitempty"`
@@ -450,6 +454,7 @@ func unusedV8ChatLane(benchVersion int, usage protocol.TokenUsage, execution rel
 		execution.Successes == 0 &&
 		execution.InfrastructureFailures == 0 &&
 		execution.MinerRecoverableFailures == 0 &&
+		execution.PlatformInternalFailures == 0 &&
 		execution.GrantDenials == 0 &&
 		execution.AgentRequestRejections == 0 &&
 		execution.CapacityExhaustions == 0 &&
@@ -468,6 +473,10 @@ func unusedV8ChatLane(benchVersion int, usage protocol.TokenUsage, execution rel
 func relayDegradedSince(start, end relayHealthSnapshot) error {
 	if relayRestarted(start, end) {
 		return fmt.Errorf("relay restarted during benchmark")
+	}
+	// Platform failure wins attribution over a concurrent agent budget decline.
+	if end.PlatformInternalFailures > start.PlatformInternalFailures {
+		return fmt.Errorf("platform returned %d internal error(s) during benchmark; inference admission or settlement failed", end.PlatformInternalFailures-start.PlatformInternalFailures)
 	}
 	if end.GrantDenials > start.GrantDenials {
 		denials := end.GrantDenials - start.GrantDenials
@@ -534,8 +543,10 @@ func relayDegradedSince(start, end relayHealthSnapshot) error {
 // lease; the failed calls already remain committed to RelayExecution and any
 // case the miner did not recover still grades normally.
 //
-// A wholly unavailable route remains validator infrastructure. Grant denials
-// also remain terminal even when another overlapping call succeeded: they can
+// Platform internal errors cannot be recovered by an unrelated success: the
+// accounting transaction may have lost a paid completion. They remain
+// infrastructure failures. A wholly unavailable route remains infrastructure.
+// Grant denials also remain terminal even when another overlapping call succeeded: they can
 // mean a revoked/expired lease or an agent-spent allowance, and those ownership
 // rules must still flow through relayFinalizeFailure. Counter rollback remains
 // fail-closed because no delta can be trusted after a relay restart.
@@ -543,7 +554,7 @@ func relayCompletedSince(start, end relayHealthSnapshot) error {
 	if relayRestarted(start, end) {
 		return fmt.Errorf("relay restarted during benchmark")
 	}
-	if end.GrantDenials > start.GrantDenials {
+	if end.PlatformInternalFailures > start.PlatformInternalFailures || end.GrantDenials > start.GrantDenials {
 		return relayDegradedSince(start, end)
 	}
 	if end.Successes > start.Successes {
@@ -560,6 +571,7 @@ func relayRestarted(start, end relayHealthSnapshot) bool {
 	return end.Requests < start.Requests || end.Successes < start.Successes ||
 		end.InfrastructureFailures < start.InfrastructureFailures ||
 		end.MinerRecoverableFailures < start.MinerRecoverableFailures ||
+		end.PlatformInternalFailures < start.PlatformInternalFailures ||
 		end.GrantDenials < start.GrantDenials ||
 		end.GrantAgentDeclines < start.GrantAgentDeclines ||
 		end.DeclineEvidenceMismatches < start.DeclineEvidenceMismatches ||
@@ -572,6 +584,7 @@ func relayRestarted(start, end relayHealthSnapshot) bool {
 		end.CallerCancellations < start.CallerCancellations ||
 		end.UpstreamAttempts < start.UpstreamAttempts ||
 		end.MinerRecoverableFailures-start.MinerRecoverableFailures > end.Requests-start.Requests ||
+		end.PlatformInternalFailures-start.PlatformInternalFailures > end.Requests-start.Requests ||
 		// A subset counter that outran its total means the two were updated
 		// inconsistently; refuse to classify on it rather than guess.
 		end.GrantAgentDeclines-start.GrantAgentDeclines > end.GrantDenials-start.GrantDenials ||
@@ -589,6 +602,7 @@ func relayExecutionSince(start, end relayHealthSnapshot) (relayExecutionSummary,
 		Successes:                 end.Successes - start.Successes,
 		InfrastructureFailures:    end.InfrastructureFailures - start.InfrastructureFailures,
 		MinerRecoverableFailures:  end.MinerRecoverableFailures - start.MinerRecoverableFailures,
+		PlatformInternalFailures:  end.PlatformInternalFailures - start.PlatformInternalFailures,
 		GrantDenials:              end.GrantDenials - start.GrantDenials,
 		GrantAgentDeclines:        end.GrantAgentDeclines - start.GrantAgentDeclines,
 		DeclineEvidenceMismatches: end.DeclineEvidenceMismatches - start.DeclineEvidenceMismatches,

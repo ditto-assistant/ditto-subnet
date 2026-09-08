@@ -356,7 +356,10 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		outcome.elapsed = time.Since(started)
 		deliverable, settleErr = d.settleRequest(ctx, headers, outcome)
 		if settleErr != nil {
-			d.Logger.Error("chat: settle", slog.String("error", settleErr.Error()))
+			d.Logger.Error("chat: settle", slog.String("error", settleErr.Error()),
+				slog.String("request_id", relayhttp.RequestID(r.Context())),
+				slog.String("grant_id", headers.grant.String()),
+				slog.String("nonce", headers.nonce.String()))
 		}
 	}
 	// The settle must run even on a panic in the provider path (the Python

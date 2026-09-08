@@ -86,6 +86,29 @@ size/age, zstd-compressed and PUT to every configured sink under
 traces/v1/lane=<inference|confirmation>/kind=<chat|embedding>/dt=YYYY-MM-DD/hour=HH/<relay>-<first>-<last>-<id>.jsonl.zst
 ```
 
+A successful upstream result is not proof of delivery: inspect
+`response.http_status` and `response.deliverable` alongside `outcome.status`.
+When the admission succeeded but the settlement transaction failed, the relay
+returns HTTP 500 and includes a private `settlement_failure` diagnostic in the
+trace. Its `kind` distinguishes PostgreSQL, deadline, cancellation, and other
+internal errors; PostgreSQL errors include a validated five-character `sqlstate`.
+It contains no exception message, SQL, query arguments, or connection string.
+Use Backroom `peek_inference_trace` with `includeBodies=true` to inspect it. Chat
+settlement log entries also carry the request ID, grant ID, and nonce so operators
+can correlate the exact database exception. This diagnostic survives transaction
+rollback because the trace spool is independent of the database.
+
+The scorer counts chat HTTP 500 responses from its authenticated Platform
+transport as `platform_internal_failures`. A later successful call does not make
+such a run scoreable: finalization reports the existing
+`validator_infrastructure / model_relay_unavailable` failure. This works with old
+relays without new response headers. Ordinary provider 502/504 and miner-owned
+structured-output failures retain their existing recovery semantics. The change
+does not replay paid requests, change numeric scoring, or invalidate previously
+accepted scores. Roll out the scorer guard and relay diagnostics, establish a
+healthy route, then use a separately reviewed recovery for affected historical
+samples; canonical-score replacement is not continual-retest replacement.
+
 Sinks are S3-compatible buckets addressed by presigned SigV4 URLs (Hippius
 rejects header-signed PUTs; Backblaze B2 and AWS accept both).
 `INFERENCE_TRACE_SINKS=hippius,backblaze` names them; the `hippius` sink

@@ -2,11 +2,14 @@ package inference
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ditto-assistant/model-relay/internal/postgres"
@@ -190,6 +193,30 @@ func marshalNoEscape(v any) ([]byte, error) {
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
+// traceSettlementFailure keeps the diagnostic outside the failed transaction.
+// Never serialize err.Error(): PostgreSQL details can contain private query data.
+func traceSettlementFailure(err error) *traces.SettlementFailure {
+	if err == nil {
+		return nil
+	}
+	diagnostic := &traces.SettlementFailure{Kind: "internal_error"}
+	var pgErr *pgconn.PgError
+	switch {
+	case errors.As(err, &pgErr):
+		diagnostic.Kind = "postgres_error"
+		if len(pgErr.Code) == 5 && strings.IndexFunc(pgErr.Code, func(r rune) bool {
+			return !(r >= '0' && r <= '9' || r >= 'A' && r <= 'Z')
+		}) == -1 {
+			diagnostic.SQLState = pgErr.Code
+		}
+	case errors.Is(err, context.DeadlineExceeded):
+		diagnostic.Kind = "deadline_exceeded"
+	case errors.Is(err, context.Canceled):
+		diagnostic.Kind = "canceled"
+	}
+	return diagnostic
+}
+
 // traceResponseStatus is the HTTP status the miner saw for a settled call.
 func traceResponseStatus(settleErr error, failure *httpError, deliverable bool, raw []byte) int {
 	switch {
@@ -259,6 +286,7 @@ func (d *Deps) traceChatSettled(t chatTrace) {
 			LatencyMs:          t.outcome.elapsed.Milliseconds(),
 			Phases:             tracePhases(phases, false),
 		},
+		SettlementFailure: traceSettlementFailure(t.settleErr),
 		Response: &traces.Response{
 			HTTPStatus:  traceResponseStatus(t.settleErr, t.failure, t.deliverable, t.raw),
 			Body:        traces.RawJSON(t.raw),
@@ -340,6 +368,7 @@ func (d *Deps) traceEmbeddingSettled(t embeddingTrace) {
 			LatencyMs:         t.outcome.elapsed.Milliseconds(),
 			Phases:            tracePhases(phases, strip),
 		},
+		SettlementFailure: traceSettlementFailure(t.settleErr),
 		Response: &traces.Response{
 			HTTPStatus:  traceResponseStatus(t.settleErr, t.failure, t.deliverable, t.raw),
 			Body:        traces.RawJSON(raw),
@@ -469,6 +498,7 @@ func (d *Deps) traceConfirmationSettled(t confirmationTrace) {
 			LatencyMs:         t.finished.Sub(t.started).Milliseconds(),
 			Phases:            tracePhases(phases, strip),
 		},
+		SettlementFailure: traceSettlementFailure(t.settleErr),
 		Response: &traces.Response{
 			HTTPStatus:  traceResponseStatus(t.settleErr, t.failure, t.deliverable, t.raw),
 			Body:        traces.RawJSON(raw),

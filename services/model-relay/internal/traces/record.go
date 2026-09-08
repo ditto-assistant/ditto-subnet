@@ -54,17 +54,18 @@ const (
 // raw JSON bodies are embedded verbatim (json.RawMessage) so nothing the
 // provider or the miner sent is re-interpreted on the way to storage.
 type Record struct {
-	Schema     string     `json:"schema"`
-	Event      string     `json:"event"`
-	RecordedAt time.Time  `json:"recorded_at"`
-	Relay      Relay      `json:"relay"`
-	Request    Request    `json:"request"`
-	Grant      *Grant     `json:"grant,omitempty"`
-	Admission  *Admission `json:"admission,omitempty"`
-	Upstream   *Upstream  `json:"upstream,omitempty"`
-	Response   *Response  `json:"response,omitempty"`
-	Usage      *Usage     `json:"usage,omitempty"`
-	Outcome    *Outcome   `json:"outcome,omitempty"`
+	Schema            string             `json:"schema"`
+	Event             string             `json:"event"`
+	RecordedAt        time.Time          `json:"recorded_at"`
+	Relay             Relay              `json:"relay"`
+	Request           Request            `json:"request"`
+	Grant             *Grant             `json:"grant,omitempty"`
+	Admission         *Admission         `json:"admission,omitempty"`
+	Upstream          *Upstream          `json:"upstream,omitempty"`
+	Response          *Response          `json:"response,omitempty"`
+	Usage             *Usage             `json:"usage,omitempty"`
+	Outcome           *Outcome           `json:"outcome,omitempty"`
+	SettlementFailure *SettlementFailure `json:"settlement_failure,omitempty"`
 }
 
 // Relay identifies the process that produced the record.
@@ -167,6 +168,14 @@ type Response struct {
 	HTTPStatus  int             `json:"http_status"`
 	Body        json.RawMessage `json:"body,omitempty"` // the sanitized body, exact wire bytes
 	Deliverable bool            `json:"deliverable"`
+}
+
+// SettlementFailure records database-delivery failure separately from the
+// upstream result. It deliberately excludes exception messages, SQL, arguments,
+// and connection strings; the existing artifact-scoped trace reader exposes it.
+type SettlementFailure struct {
+	Kind     string `json:"kind"`
+	SQLState string `json:"sqlstate,omitempty"`
 }
 
 // Usage is the receipted accounting.

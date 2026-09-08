@@ -245,6 +245,10 @@ type brokerSession struct {
 	// the harness can handle itself. They remain failed requests and are
 	// returned unchanged, but do not make the validator infrastructure degraded.
 	minerRecoverableFailures uint64
+	// platformInternalFailures counts HTTP 500 responses from the authenticated
+	// Platform endpoint. Provider failures are translated to 502/504 there; a
+	// 500 means Platform itself could not admit or settle the request.
+	platformInternalFailures uint64
 	grantDenials             uint64
 	usageAvailable           uint64
 	usageUnavailable         uint64
@@ -3742,6 +3746,7 @@ func (b *inferenceBroker) health(w http.ResponseWriter, session *brokerSession) 
 		Successes:                 session.successes,
 		InfrastructureFailures:    session.failures,
 		MinerRecoverableFailures:  session.minerRecoverableFailures,
+		PlatformInternalFailures:  session.platformInternalFailures,
 		GrantDenials:              session.grantDenials,
 		GrantAgentDeclines:        session.grantAgentDeclines,
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
@@ -3997,6 +4002,11 @@ func (b *inferenceBroker) proxy(
 		candidateBody, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
 		_ = resp.Body.Close()
 		responseStatus = resp.StatusCode
+		if legacyGateway == "" && trustedChatHandler == nil && responseStatus == http.StatusInternalServerError {
+			session.mu.Lock()
+			session.platformInternalFailures++
+			session.mu.Unlock()
+		}
 		responseFailureClass = resp.Header.Get(minerRecoverableFailureHeader)
 		if readErr != nil || len(candidateBody) > 16<<20 {
 			return
@@ -4254,6 +4264,7 @@ func (b *inferenceBroker) snapshot(id string) (relayHealthSnapshot, error) {
 		AccountingVersion: 2, Status: "ok", Requests: session.requests,
 		Successes: session.successes, InfrastructureFailures: session.failures,
 		MinerRecoverableFailures: session.minerRecoverableFailures,
+		PlatformInternalFailures: session.platformInternalFailures,
 		GrantDenials:             session.grantDenials, EmbeddingRetries: session.embeddingRetries,
 		GrantAgentDeclines:        session.grantAgentDeclines,
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,

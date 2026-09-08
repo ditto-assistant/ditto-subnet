@@ -216,3 +216,47 @@ func truncateStr(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+func TestSuccessfulProviderResponseWithFailedSettlementIsDiagnosable(t *testing.T) {
+	upstream := fakeChatUpstream(t, nil)
+	defer upstream.Close()
+	f := newPGFixture(t, chatTestConfig(t, upstream.URL))
+	f.seedRoute(t)
+	// Inject the failure after provider success in an isolated test database.
+	_, err := f.pool.Exec(context.Background(), `
+ CREATE FUNCTION reject_test_settlement() RETURNS trigger LANGUAGE plpgsql AS $$
+ BEGIN RAISE EXCEPTION 'private test query value' USING ERRCODE = '40001'; END;
+ $$;
+ CREATE TRIGGER reject_test_settlement BEFORE UPDATE OF status ON inference_requests
+ FOR EACH ROW WHEN (NEW.status = 'completed') EXECUTE FUNCTION reject_test_settlement();`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spool, dir := newTraceSpool(t)
+	f.deps.Traces = spool
+	nonce := uuid.New()
+	body := []byte(chatBody)
+	w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), f.signedProxyHeaders(1, nonce, body)))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	recs := drainTraces(t, spool, dir)
+	if len(recs) != 1 {
+		t.Fatalf("records=%d", len(recs))
+	}
+	r := recs[0]
+	if r.Outcome.Status != "completed" || r.Response.HTTPStatus != 500 || r.Response.Deliverable || r.Upstream.Phases[0].Status != 200 {
+		t.Fatalf("lost upstream/delivery distinction: %+v", r)
+	}
+	if r.SettlementFailure == nil || r.SettlementFailure.Kind != "postgres_error" || r.SettlementFailure.SQLState != "40001" {
+		t.Fatalf("missing database failure evidence: %+v", r.SettlementFailure)
+	}
+	raw, _ := json.Marshal(r)
+	if strings.Contains(string(raw), "private test query value") || strings.Contains(w.Body.String(), "40001") {
+		t.Fatal("private exception escaped its boundary")
+	}
+	var status string
+	if err := f.pool.QueryRow(context.Background(), "SELECT status FROM inference_requests WHERE grant_id=$1 AND nonce=$2", f.grantID, nonce).Scan(&status); err != nil || status != "started" {
+		t.Fatalf("failed transaction unexpectedly committed: status=%s err=%v", status, err)
+	}
+}
