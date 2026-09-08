@@ -1,7 +1,9 @@
 //! Protected Rust admission, parent-owned data evaluation, and bounded channels.
 //! This is not a compiler, sandbox, or standalone runtime grader.
 
+pub mod bridge;
 pub mod evaluator;
+pub mod native;
 pub mod value;
 pub mod wire;
 #[cfg(unix)]

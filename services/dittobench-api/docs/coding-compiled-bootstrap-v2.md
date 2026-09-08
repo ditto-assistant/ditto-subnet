@@ -20,7 +20,7 @@ C bootstrap with a verified executable descriptor and private socketpair.
    protected canonical directories. It verifies the expected SHA-256 on that same
    descriptor, with a 256 MiB bound and stable size/mtime/ctime. Paths are not
    reopened to select the candidate executable.
-   The Go integration can instead provide a root-owned anonymous executable FD
+   The Go integration and Python container helper can instead use a root-owned anonymous executable FD
    sealed against write/grow/shrink and further seal changes. The bootstrap checks
    those seals whenever the link count is zero; an arbitrary unlinked file or
    writable memory file is not accepted. This keeps writable scratch mounts
@@ -83,6 +83,13 @@ is correct, or that a test passed. The caller still owns the API protocol,
 assertions, expected values, runtime/output deadlines, termination and final report.
 Keep private tests and expected answers outside the candidate binary and process.
 
+The Python helper accepts either its original protected path or a sealed
+descriptor, which it duplicates before checking mode/owner/link count, seals and
+digest. An optional `api_socket` must be a same-parent AF_UNIX stream; it becomes
+candidate stdin without passing other API descriptors. The caller retains
+ownership of its original descriptor/socket and must close them and verify
+candidate termination. Socket closure is not process-cleanup authority.
+
 Compiler execution is not covered. A future Go/Rust driver must compile only
 candidate-authorized source and bridge material in a separately constrained phase,
 terminate that phase, and seal the resulting file before launch. Private repository
@@ -112,7 +119,7 @@ Real-container probes verify:
 - missing parent termination authority rejected before candidate entry;
 - C/Rust constructors and Go `init` running under confinement;
 - denied fork, exec, later `execveat`, filter replacement, private-file access and
-  foreign signals; empty candidate environment;
+  foreign signals; a fixed PATH-only candidate environment without inherited credentials;
 - new-thread inheritance and Go asynchronous preemption with one scheduler P.
 
 ```bash

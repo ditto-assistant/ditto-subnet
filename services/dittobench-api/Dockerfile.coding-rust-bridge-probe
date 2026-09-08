@@ -1,0 +1,23 @@
+# Public fixture only. Candidate source is compiled as non-root at run time.
+FROM rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922
+LABEL io.heyditto.dittobench.coding-supervisor-fixture="true"
+WORKDIR /src
+COPY services/dittobench-api/coding_runtime/rust/Cargo.toml services/dittobench-api/coding_runtime/rust/Cargo.lock ./
+COPY services/dittobench-api/coding_runtime/rust/src/ ./src/
+COPY services/dittobench-api/coding_runtime/rust/examples/ ./examples/
+RUN cargo build --locked --release --lib --example bridge_probe \
+    && mkdir -p /opt/deps /opt/fixture /workspace /usr/local/libexec \
+    && cp target/release/deps/*.rlib /opt/deps/ \
+    && cp target/release/libcoding_rust_suite.rlib /opt/deps/libcoding_rust_suite.rlib \
+    && cp target/release/examples/bridge_probe /opt/bridge-probe \
+    && /opt/bridge-probe generate > /opt/fixture/bridge.rs \
+    && ln -s "$(rustc --print sysroot)/bin/rustc" /opt/rustc \
+    && chmod 0555 /opt/bridge-probe
+COPY --chmod=0444 services/dittobench-api/coding_runtime/rust/fixture/candidate.rs /opt/fixture/candidate.rs
+COPY services/dittobench-api/coding_runtime/compiled/bootstrap.c /src/bootstrap.c
+RUN cc -O2 -Wall -Wextra -Werror /src/bootstrap.c -o /usr/local/libexec/dittobench-compiled-bootstrap \
+    && chmod 0555 /usr/local/libexec/dittobench-compiled-bootstrap
+COPY --chmod=0444 services/dittobench-api/coding_runtime/compiled/launcher.py /opt/launcher.py
+COPY --chmod=0444 services/dittobench-api/coding_runtime/rust/fixture/probe.py /opt/probe.py
+WORKDIR /workspace
+ENTRYPOINT ["/usr/bin/python3", "-I", "/opt/probe.py"]

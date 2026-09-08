@@ -1,6 +1,8 @@
 """Read-only unit tests; native launch probes run only in the synthetic image."""
 
 import array
+import ctypes
+import fcntl
 import hashlib
 import importlib.util
 import os
@@ -39,6 +41,64 @@ def test_bounded_parent_termination_authority():
     LAUNCHER.validate_parent_status(parent_status().replace("00e0", "00e3"))
 
 
+def test_api_socket_requires_parent_owned_unix_stream():
+    parent, peer = socket.socketpair()
+    with parent, peer:
+        LAUNCHER.validate_api_socket(peer)
+    with (
+        socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as wrong,
+        pytest.raises(LAUNCHER.BootstrapError),
+    ):
+        LAUNCHER.validate_api_socket(wrong)
+    with pytest.raises(LAUNCHER.BootstrapError):
+        LAUNCHER.validate_api_socket(0)
+
+
+@pytest.mark.parametrize("sealed", [False, True])
+def test_sealed_descriptor_is_duplicated_and_rechecked(monkeypatch, sealed):
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.memfd_create.argtypes = (ctypes.c_char_p, ctypes.c_uint)
+    libc.memfd_create.restype = ctypes.c_int
+    fd = libc.memfd_create(b"public-elf-probe", 0x13)  # CLOEXEC | ALLOW_SEALING | EXEC
+    assert fd >= 0
+    try:
+        raw = elf_bytes()
+        os.write(fd, raw)
+        os.fchmod(fd, 0o555)
+        # Unit test checks descriptor mechanics without root or execution.
+        original = LAUNCHER.os.fstat
+
+        def root_stat(value):
+            stat = original(value)
+            return SimpleNamespace(
+                st_mode=stat.st_mode,
+                st_uid=0,
+                st_nlink=stat.st_nlink,
+                st_size=stat.st_size,
+            )
+
+        monkeypatch.setattr(
+            LAUNCHER, "os", SimpleNamespace(fstat=root_stat, close=os.close)
+        )
+        if sealed:
+            fcntl.fcntl(
+                fd,
+                1033,  # Linux F_ADD_SEALS
+                LAUNCHER.REQUIRED_SEALS,
+            )
+            duplicate = LAUNCHER.sealed_program_fd(fd)
+            try:
+                assert duplicate != fd and not os.get_inheritable(duplicate)
+            finally:
+                os.close(duplicate)
+        else:
+            with pytest.raises(LAUNCHER.BootstrapError):
+                LAUNCHER.sealed_program_fd(fd)
+        assert os.pread(fd, len(raw), 0) == raw
+    finally:
+        os.close(fd)
+
+
 @pytest.mark.parametrize(
     "old,new",
     [
@@ -61,6 +121,20 @@ def test_verifies_exact_elf_bytes_without_running_them(tmp_path):
     with path.open("rb") as stream:
         LAUNCHER.verify_program(stream.fileno(), hashlib.sha256(raw).hexdigest())
         assert stream.tell() == 0
+
+
+def test_digest_verification_does_not_move_shared_descriptor_offset(tmp_path):
+    raw = elf_bytes()
+    path = tmp_path / "fixture"
+    path.write_bytes(raw)
+    with path.open("rb") as stream:
+        stream.seek(17)
+        duplicate = os.dup(stream.fileno())
+        try:
+            LAUNCHER.verify_program(duplicate, hashlib.sha256(raw).hexdigest())
+            assert stream.tell() == 17
+        finally:
+            os.close(duplicate)
 
 
 @pytest.mark.parametrize(

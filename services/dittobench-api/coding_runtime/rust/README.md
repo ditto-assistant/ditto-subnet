@@ -5,6 +5,8 @@ parent-owned typed data evaluator. It is **not a standalone runtime grader** and
 is not wired into the supervisor or runtime image selection. Admitting a suite
 never means its tests passed. See [the evaluator boundary](EVALUATOR.md) and
 [the bounded data channel](WIRE.md).
+The [fixed API bridge](BRIDGE.md) adds a public compiled control; production
+compiler/launcher integration and private runtime qualification remain pending.
 
 The trusted controller supplies the independently approved crate/function names,
 exact source SHA-256, and nonzero expected test count. The parser does not discover

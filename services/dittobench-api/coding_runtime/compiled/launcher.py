@@ -33,6 +33,10 @@ NOTIF_ID_VALID = 0x40082102
 ARCH = 0xC000003E
 SYS_EXECVEAT = 322
 AT_EMPTY_PATH = 0x1000
+# Linux UAPI; some Python builds omit these fcntl names. The native bootstrap
+# independently checks the same mandatory seal set before exec.
+F_GET_SEALS = 1034
+REQUIRED_SEALS = 0xF  # SEAL | SHRINK | GROW | WRITE
 
 
 class BootstrapError(ValueError):
@@ -105,8 +109,9 @@ def verify_program(fd, expected_sha256):
         "Linux amd64 ELF program required",
     )
     digest, total = hashlib.sha256(), 0
-    os.lseek(fd, 0, os.SEEK_SET)
-    while chunk := os.read(fd, 1 << 20):
+    # Duplicated descriptors share a seek offset. Pread keeps verification
+    # independent from another trusted caller reading the same sealed artifact.
+    while chunk := os.pread(fd, 1 << 20, total):
         total += len(chunk)
         require(total <= MAX_BINARY, "program exceeds size bound")
         digest.update(chunk)
@@ -118,7 +123,6 @@ def verify_program(fd, expected_sha256):
         and before.st_ctime_ns == after.st_ctime_ns,
         "program digest or metadata changed",
     )
-    os.lseek(fd, 0, os.SEEK_SET)
 
 
 def notification_sizes():
@@ -222,7 +226,45 @@ def terminate(process):
                 stream.close()
 
 
-def launch(binary, expected_sha256, uid, gid, startup_timeout=5):
+def sealed_program_fd(source_fd):
+    require(
+        platform.system() == "Linux" and platform.machine() == "x86_64",
+        "Linux amd64 sealed descriptor required",
+    )
+    require(type(source_fd) is int and source_fd >= 0, "invalid sealed descriptor")
+    fd = fcntl.fcntl(source_fd, fcntl.F_DUPFD_CLOEXEC, 3)
+    try:
+        info = os.fstat(fd)
+        require(
+            stat.S_ISREG(info.st_mode)
+            and stat.S_IMODE(info.st_mode) == 0o555
+            and info.st_uid == 0
+            and info.st_nlink == 0
+            and 64 <= info.st_size <= MAX_BINARY
+            and fcntl.fcntl(fd, F_GET_SEALS) & REQUIRED_SEALS == REQUIRED_SEALS,
+            "unsealed executable descriptor",
+        )
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def validate_api_socket(api_socket):
+    require(isinstance(api_socket, socket.socket), "API socket required")
+    require(
+        api_socket.family == socket.AF_UNIX
+        and api_socket.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE)
+        == socket.SOCK_STREAM
+        and struct.unpack(
+            "3i", api_socket.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+        )
+        == (os.getpid(), os.geteuid(), os.getegid()),
+        "API socket must belong to this trusted parent",
+    )
+
+
+def launch(binary, expected_sha256, uid, gid, startup_timeout=5, *, api_socket=None):
     """Return a child whose initial exec was authorized under an installed filter.
 
     Success is NOT a language or test success. Caller must own API assertions,
@@ -248,9 +290,11 @@ def launch(binary, expected_sha256, uid, gid, startup_timeout=5):
         "invalid startup deadline",
     )
     validate_parent_status(Path("/proc/self/status").read_text())
+    if api_socket is not None:
+        validate_api_socket(api_socket)
     bootstrap_fd = readonly_program(BOOTSTRAP)
     os.close(bootstrap_fd)
-    fd = readonly_program(binary)
+    fd = sealed_program_fd(binary) if type(binary) is int else readonly_program(binary)
     process = None
     try:
         verify_program(fd, expected_sha256)
@@ -272,7 +316,7 @@ def launch(binary, expected_sha256, uid, gid, startup_timeout=5):
                     str(uid),
                     str(gid),
                 ],
-                stdin=subprocess.PIPE,
+                stdin=api_socket if api_socket is not None else subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 cwd="/workspace",

@@ -15,6 +15,7 @@ on:
       - scripts/test-validator-embedding-gateway.sh
       - scripts/test-coding-python-driver.sh
       - scripts/test-coding-compiled-bootstrap.sh
+      - scripts/test-coding-rust-bridge.sh
       - scripts/test-coding-go-build.sh
       - scripts/test-coding-go-driver.sh
       - scripts/test-coding-node-driver.sh
@@ -33,6 +34,18 @@ env:
   SERVICE_DIR: services/dittobench-api
 
 jobs:
+  rust-coding-bridge:
+    name: compiled Rust API bridge isolation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - run: docker build -f services/dittobench-api/Dockerfile.coding-rust-bridge-probe -t coding-rust-bridge:synthetic .
+      - run: bash scripts/test-coding-rust-bridge.sh coding-rust-bridge:synthetic
+
   rust-suite-admission:
     name: protected Rust suite admission
     runs-on: ubuntu-24.04
