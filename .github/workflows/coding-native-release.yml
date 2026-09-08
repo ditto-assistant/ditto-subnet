@@ -4,10 +4,13 @@ on:
   pull_request:
     paths:
       - infra/scripts/build-coding-native-release.py
+      - infra/scripts/inspect-coding-native-host.py
       - infra/scripts/build-coding-hosted-runtime.py
       - infra/ansible/roles/coding_hosted_image/files/image-bundle.py
       - infra/ansible/roles/coding_hosted_runtime/files/runtime-bundle.py
+      - infra/ansible/roles/coding_hosted/files/host-policy.py
       - ditto/tests/test_coding_native_release.py
+      - ditto/tests/test_coding_native_host_preflight.py
       - ditto/tests/test_coding_hosted_image_import.py
       - .github/workflows/coding-native-release.yml
   workflow_dispatch:
@@ -33,12 +36,15 @@ jobs:
       - name: Public artifact and refusal regressions
         run: >-
           uv run --frozen pytest -q ditto/tests/test_coding_native_release.py
+          ditto/tests/test_coding_native_host_preflight.py
           ditto/tests/test_coding_hosted_image_import.py
           ditto/tests/test_coding_hosted_runtime_bundle.py
       - name: Lint release-set tooling
         run: |
           uv run --frozen ruff check infra/scripts/build-coding-native-release.py ditto/tests/test_coding_native_release.py
           uv run --frozen ruff format --check infra/scripts/build-coding-native-release.py ditto/tests/test_coding_native_release.py
+          uv run --frozen ruff check infra/scripts/inspect-coding-native-host.py ditto/tests/test_coding_native_host_preflight.py
+          uv run --frozen ruff format --check infra/scripts/inspect-coding-native-host.py ditto/tests/test_coding_native_host_preflight.py
   public-build:
     if: github.event_name == 'workflow_dispatch'
     needs: verify
