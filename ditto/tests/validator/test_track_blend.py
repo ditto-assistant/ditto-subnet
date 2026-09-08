@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -20,6 +20,7 @@ from ditto.api_models.router_ledger import (
     RouterHarnessResult,
     RouterLedgerEntry,
 )
+from ditto.api_models.validator import LedgerResponse
 from ditto.validator.config import BASIS_POINT_SCALE
 from ditto.validator.tracks import (
     TRACK_MEMORY,
@@ -215,12 +216,16 @@ _DEFAULT_SHARES = {TRACK_MEMORY: BASIS_POINT_SCALE, "coding": 0, TRACK_ROUTER: 0
 
 
 def test_resolve_track_shares_uses_default_when_absent() -> None:
-    ledger = SimpleNamespace()  # no track_shares_bps attribute
+    # An older platform omits it; pydantic defaults it to {}, which the resolver
+    # reads as "no served split" and folds the compiled default.
+    ledger = LedgerResponse(entries=[], count=0)
     assert resolve_track_shares(ledger, default=_DEFAULT_SHARES) == _DEFAULT_SHARES
 
 
 def test_resolve_track_shares_reads_valid_platform_map() -> None:
-    ledger = SimpleNamespace(track_shares_bps={TRACK_MEMORY: 8000, TRACK_ROUTER: 2000})
+    ledger = LedgerResponse(
+        entries=[], count=0, track_shares_bps={TRACK_MEMORY: 8000, TRACK_ROUTER: 2000}
+    )
     assert resolve_track_shares(ledger, default=_DEFAULT_SHARES) == {
         TRACK_MEMORY: 8000,
         TRACK_ROUTER: 2000,
@@ -239,5 +244,7 @@ def test_resolve_track_shares_reads_valid_platform_map() -> None:
     ],
 )
 def test_resolve_track_shares_falls_back_on_malformed(bad: dict[Any, Any]) -> None:
-    ledger = SimpleNamespace(track_shares_bps=bad)
+    # Built by hand rather than through the model, which would already have
+    # rejected or coerced these; the resolver is the runtime defense-in-depth.
+    ledger = cast("LedgerResponse", SimpleNamespace(track_shares_bps=bad))
     assert resolve_track_shares(ledger, default=_DEFAULT_SHARES) == _DEFAULT_SHARES

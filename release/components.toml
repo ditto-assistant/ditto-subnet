@@ -96,6 +96,8 @@ paths = [
   "ditto/api_models/coding_certification_leases.py",
   "ditto/api_models/confirmation_progress.py",
   "ditto/api_models/inference.py",
+  "ditto/api_models/router_ledger.py",
+  "ditto/api_models/router_harness.py",
   "ditto/api_models/stack_health.py",
   "ditto/api_models/system_health.py",
   "ditto/api_models/upload.py",
