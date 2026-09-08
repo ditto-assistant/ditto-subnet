@@ -110,6 +110,20 @@ resource "google_secret_manager_secret_iam_member" "screener_fleet_x509_source_r
   depends_on = [google_secret_manager_secret.validator_openrouter_key]
 }
 
+# The bare-metal fleet's secret agent reads whichever secret
+# screener_fleet_source_review_secret_id names. Grant the Ditto Inference review
+# key alongside the OpenRouter one so a node can switch gateways with a single
+# Ansible variable; the container itself is declared in screener.tf.
+resource "google_secret_manager_secret_iam_member" "screener_fleet_x509_ditto_inference_review" {
+  count     = local.screener_fleet_x509_count
+  project   = var.project
+  secret_id = "screener-review-ditto-inference-key"
+  role      = "roles/secretmanager.secretAccessor"
+  member    = google_service_account.screener_fleet_x509[0].member
+
+  depends_on = [google_secret_manager_secret.screener_review_ditto_inference_key]
+}
+
 output "screener_fleet_x509_provider" {
   description = "Provider audience for subnet-screener-1's non-secret external-account configuration."
   value       = var.enable_screener_fleet_x509_identity ? google_iam_workload_identity_pool_provider.screener_fleet_x509[0].name : ""
