@@ -31,11 +31,30 @@ the native launcher's socket checks to make the old role fit.
 - A dedicated telemetry-only service account. No provider, storage, registry,
   PostgreSQL, Secret Manager, signing or key-custody permission is granted.
 - Explicit `user:email` Platform custodians through instance-scoped OS Login
-  and IAP SSH (port 22 only), plus actAs on this otherwise-empty runtime identity.
+  and destination-IP-scoped IAP SSH (port 22 only), plus actAs on this
+  otherwise-empty runtime identity.
   `coding_hosted_operators` defaults empty and enabling without it fails. No
-  project-wide compute viewer or tunnel grant is added; operators need existing
-  approved discovery permissions. Existing broader project/org grants must also
-  be audited before approval; this module does not revoke inherited access.
+  project-wide compute viewer or unconditional tunnel grant is added; operators
+  need existing approved discovery permissions. Existing broader project/org
+  grants must also be audited before approval; this module does not revoke
+  inherited access.
+
+The project-level IAP binding uses `destination.ip` from the host module's primary
+private address and `destination.port == 22`, following
+[Google's TCP forwarding conditions](https://docs.cloud.google.com/iap/docs/using-tcp-forwarding).
+Do not match a Compute hostname through `resource.name`: IAP tunnel instances
+are not listed as supporting that attribute in the
+[IAM attribute reference](https://docs.cloud.google.com/iam/docs/conditions-attribute-reference#resource-name).
+The previous hostname condition was followed by a live IAP `4033: not authorized`
+even with valid user authentication and the host's OS Login grant.
+
+This is an IP/port restriction, not an instance-ID or VPC attestation. Before
+applying it, verify that the destination IP identifies only this intended VM
+across the project's networks; retain that uniqueness as infrastructure changes.
+If the address is reused, reassigned or the host is replaced, review the binding
+again. Do not broaden it to a subnet or port-only condition. Successful mocked
+plans do not prove effective IAM or a working tunnel: after a separately approved
+apply, test Brian's actual IAP SSH access before host installation or qualification.
 
 The host may download provisioning packages over HTTP(S) through NAT scoped to
 its subnet. Higher-priority egress rules deny RFC1918 and link-local destinations;

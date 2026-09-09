@@ -169,7 +169,8 @@ resource "google_compute_instance_iam_member" "osadmin" {
 }
 
 # The stack apply service account cannot administer instance-level IAP IAM.
-# Keep this project-level binding scoped to this exact host and SSH port.
+# IAP TCP conditions expose destination.ip/port, not the Compute resource.name.
+# Bind to the host's actual primary private address; no hostname inference.
 resource "google_project_iam_member" "ssh" {
   for_each = local.operators
   project  = var.project
@@ -178,8 +179,8 @@ resource "google_project_iam_member" "ssh" {
 
   condition {
     title       = "only_${replace(local.name, "-", "_")}_ssh"
-    description = "IAP SSH access only to this Platform-owned qualification host."
-    expression  = "resource.name.extract('/instances/{name}') == '${local.name}' && destination.port == 22"
+    description = "IAP SSH only to the qualification host's private destination IP."
+    expression  = "destination.ip == '${module.host[0].internal_ip}' && destination.port == 22"
   }
 }
 

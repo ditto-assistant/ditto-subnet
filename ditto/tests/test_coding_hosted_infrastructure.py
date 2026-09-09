@@ -93,12 +93,15 @@ def test_vm_uses_existing_protected_compute_module() -> None:
         assert f"google_compute_firewall.{rule}," in SOURCE
 
 
-def test_operators_are_explicit_and_host_scoped() -> None:
+def test_operators_are_explicit_and_destination_scoped() -> None:
     assert "!var.enabled || length(var.operators) > 0" in VARIABLES
     assert 'variable "operators"' in VARIABLES and "default     = []" in VARIABLES
     assert 'resource "google_project_iam_member" "ssh"' in SOURCE
-    assert "resource.name.extract('/instances/{name}') == '${local.name}'" in SOURCE
-    assert "destination.port == 22" in SOURCE
+    assert (
+        "expression  = \"destination.ip == '${module.host[0].internal_ip}' "
+        '&& destination.port == 22"' in SOURCE
+    )
+    assert "resource.name.extract(" not in SOURCE
     assert 'resource "google_iap_tunnel_instance_iam_member" "ssh"' not in SOURCE
     assert "roles/compute.viewer" not in SOURCE
 
@@ -106,11 +109,12 @@ def test_operators_are_explicit_and_host_scoped() -> None:
 def test_tests_are_mocked_plan_only_and_run_in_ci() -> None:
     tests = (MODULE / "tests/host.tftest.hcl").read_text()
     assert 'mock_provider "google" {}' in tests
-    assert len(re.findall(r'^run "', tests, re.MULTILINE)) == 10
-    assert len(re.findall(r"command\s*= plan", tests)) == 10
+    assert len(re.findall(r'^run "', tests, re.MULTILINE)) == 11
+    assert len(re.findall(r"command\s*= plan", tests)) == 11
     assert "command = apply" not in tests
     assert "expect_failures = [var.operators]" in tests
     assert "expect_failures = [var.boot_disk_gb]" in tests
+    assert 'run "iap_follows_resolved_private_address"' in tests
     workflow = (ROOT / ".github/workflows/infra-ci.yml").read_text()
     assert "terraform/modules/coding-hosted-host test" in workflow
     assert "terraform/modules/coding-hosted-host init -backend=false" in workflow
