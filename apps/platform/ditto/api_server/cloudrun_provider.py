@@ -300,21 +300,29 @@ class CloudRunComputeProvider:
         return 200 <= response.status_code < 300
 
     async def _job_error_message(self, job_id: str) -> str:
-        job = await self._client.get_job(job_id)
-        execution = _job_execution_ref(job)
-        name = str(execution.get("name", "")) if execution is not None else ""
         parts: list[str] = []
-        if name:
-            detail = await self._client.get_execution(name)
-            status = _execution_status(detail)
-            conditions = status.get("conditions", detail.get("conditions"))
-            if isinstance(conditions, list):
-                for row in conditions:
-                    if not isinstance(row, dict):
-                        continue
-                    message = str(row.get("message") or "").strip()
-                    if message:
-                        parts.append(message)
+        try:
+            job = await self._client.get_job(job_id)
+            execution = _job_execution_ref(job)
+            name = str(execution.get("name", "")) if execution is not None else ""
+            if name:
+                detail = await self._client.get_execution(name)
+                status = _execution_status(detail)
+                conditions = status.get("conditions", detail.get("conditions"))
+                if isinstance(conditions, list):
+                    for row in conditions:
+                        if not isinstance(row, dict):
+                            continue
+                        message = str(row.get("message") or "").strip()
+                        if message:
+                            parts.append(message)
+        except CloudRunAPIError:
+            # Terminal execution metadata can disappear or transiently 404
+            # before Cloud Logging has been read.  The log stream is an
+            # independent source and carries the submission-builder stage
+            # marker used to distinguish artifact failures from provider
+            # failures, so never skip it when the detail lookup races.
+            pass
         try:
             messages = await self._client.list_job_logs(job_id, limit=400)
         except CloudRunAPIError:
