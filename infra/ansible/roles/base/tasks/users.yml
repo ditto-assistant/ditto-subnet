@@ -33,6 +33,18 @@
     mode: "0700"
   loop: "{{ base_team_members }}"
 
+- name: Ensure team members' SSH keys are installed
+  ansible.posix.authorized_key:
+    user: "{{ item.0.key }}"
+    key: "{{ item.1 }}"
+    state: present
+  loop: >-
+    {{ base_team_ssh_keys | dict2items
+       | selectattr('key', 'in', base_team_members)
+       | subelements('value') }}
+  loop_control:
+    label: "{{ item.0.key }}"
+
 - name: Ensure team sudoers grant
   ansible.builtin.copy:
     dest: /etc/sudoers.d/ditto-team

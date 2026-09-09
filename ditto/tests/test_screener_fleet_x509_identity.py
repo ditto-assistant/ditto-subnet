@@ -166,3 +166,12 @@ def test_ditto_inference_review_key_is_a_separate_secret_with_its_own_grant() ->
     assert 'secret_id = "validator-openrouter-key"' in terraform
     # Terraform never writes a version; the operator supplies the key material.
     assert "google_secret_manager_secret_version" not in terraform
+    # The bare-metal secret agent is the x509 service account, not the GCE worker
+    # account, so it needs its own grant on the Ditto secret.
+    x509 = TERRAFORM.read_text()
+    assert (
+        'resource "google_secret_manager_secret_iam_member" '
+        '"screener_fleet_x509_ditto_inference_review"' in x509
+    )
+    assert x509.count('secret_id = "screener-review-ditto-inference-key"') == 1
+    assert "google_secret_manager_secret.screener_review_ditto_inference_key" in x509

@@ -22,21 +22,18 @@ def test_manual_platform_deploy_requires_release_tag_or_force() -> None:
     assert "[0-9]+$'" in contract
 
 
-def test_manual_screener_deploy_requires_release_tag_or_force() -> None:
-    workflow = yaml.safe_load(
-        (ROOT / ".github/workflows/screener-deploy.yml").read_text()
-    )
-    dispatch = _triggers(workflow)["workflow_dispatch"]["inputs"]
-    resolve = next(
-        step
-        for step in workflow["jobs"]["discover"]["steps"]
-        if step.get("name") == "Resolve the immutable released revision"
-    )
+def test_screener_delivery_has_no_scheduled_push_workflow() -> None:
+    assert not (ROOT / ".github/workflows/screener-deploy.yml").exists()
 
-    assert dispatch["force"]["default"] is False
-    assert "git tag --points-at" in resolve["run"]
-    assert '"$FORCE_DEPLOY" != true' in resolve["run"]
-    assert "[0-9]+$'" in resolve["run"]
+    release = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
+    steps = release["jobs"]["assemble-screener-fleet-release"]["steps"]
+    handoff = next(
+        step
+        for step in steps
+        if step.get("name") == "Record pull-based screener delivery"
+    )
+    assert "zero-sized GCE fleet is a successful no-op" in handoff["run"]
+    assert "screener-fleet-stable" in steps[-2]["run"]
 
 
 def _platform_deploy_command() -> str:

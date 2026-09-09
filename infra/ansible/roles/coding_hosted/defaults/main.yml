@@ -7,3 +7,7 @@ coding_hosted_docker_version: ""
 coding_hosted_packages_enabled: false
 coding_hosted_containerd_version: ""
 coding_hosted_docker_key_sha256: ""
+# Explicit one-time recovery for a retained first-provisioning package set.
+coding_hosted_package_recovery_enabled: false
+coding_hosted_package_recovery_docker_version: ""
+coding_hosted_package_recovery_containerd_version: ""

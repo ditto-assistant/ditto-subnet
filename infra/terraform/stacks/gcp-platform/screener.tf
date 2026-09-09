@@ -152,7 +152,7 @@ variable "enable_screener_prod" {
 }
 
 variable "screener_prod_zone" {
-  description = "Zone for the prod screener VM. This remains independent of var.zone because the deploy workflow targets us-central1-c."
+  description = "Zone retained for the legacy static prod screener VM."
   type        = string
   default     = "us-central1-c"
 }

@@ -84,6 +84,7 @@
         - /usr/bin/newuidmap
         - /usr/bin/newgidmap
         - /usr/bin/slirp4netns
+        - /usr/sbin/sysctl
         - /usr/sbin/nft
         - /sys/fs/cgroup/cgroup.controllers
       register: coding_hosted_prerequisites

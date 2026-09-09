@@ -421,7 +421,7 @@ fi
 # currently running worker.
 configure_docker_endpoint
 
-# Refresh the protected key on every scheduled deployment run so Secret Manager
+# Refresh the protected key on every host-local pull check so Secret Manager
 # rotation does not require an unrelated code change.
 materialize_source_review_key
 

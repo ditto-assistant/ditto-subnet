@@ -8,18 +8,52 @@
       - coding_hosted_docker_version is match('^[0-9][A-Za-z0-9.+:~_-]+$')
       - coding_hosted_containerd_version is match('^[0-9][A-Za-z0-9.+:~_-]+$')
       - coding_hosted_docker_key_sha256 is match('^[0-9a-f]{64}$')
+      - >-
+        (not (coding_hosted_package_recovery_enabled | bool)
+         and coding_hosted_package_recovery_docker_version == ''
+         and coding_hosted_package_recovery_containerd_version == '')
+        or
+        (coding_hosted_package_recovery_enabled | bool
+         and coding_hosted_package_recovery_docker_version is match('^[0-9][A-Za-z0-9.+:~_-]+$')
+         and coding_hosted_package_recovery_containerd_version is match('^[0-9][A-Za-z0-9.+:~_-]+$')
+         and coding_hosted_package_recovery_docker_version != coding_hosted_docker_version
+         and coding_hosted_package_recovery_containerd_version != coding_hosted_containerd_version)
     fail_msg: Bootstrap requires reviewed Debian 13 Docker/containerd versions and Docker signing-key SHA-256.
 
 - name: Inspect installed packages without removing or upgrading them
   ansible.builtin.package_facts:
     manager: apt
 
-- name: Refuse an existing container runtime or conflicting package
+- name: Refuse conflicting distribution container packages
   ansible.builtin.assert:
     that:
       - item not in ansible_facts.packages
-    fail_msg: Existing runtime packages require separate reconciliation; bootstrap never removes or replaces them.
-  loop: [docker-ce, docker-ce-cli, docker-ce-rootless-extras, containerd.io, docker.io, containerd, runc, podman-docker]
+    fail_msg: Conflicting runtime packages require separate reconciliation.
+  loop: [docker.io, containerd, runc, podman-docker]
+
+- name: Refuse existing Docker packages during ordinary first provisioning
+  ansible.builtin.assert:
+    that:
+      - item not in ansible_facts.packages
+    fail_msg: Existing runtime packages require an exact approved recovery.
+  loop: [docker-ce, docker-ce-cli, docker-ce-rootless-extras, containerd.io]
+  when: not (coding_hosted_package_recovery_enabled | bool)
+
+- name: Require exact retained Docker versions during approved recovery
+  ansible.builtin.assert:
+    that:
+      - item.name in ansible_facts.packages
+      - ansible_facts.packages[item.name] | length == 1
+      - ansible_facts.packages[item.name][0].version == item.version
+    fail_msg: Retained runtime packages differ from the approved recovery state.
+  loop:
+    - {name: docker-ce, version: "{{ coding_hosted_package_recovery_docker_version }}"}
+    - {name: docker-ce-cli, version: "{{ coding_hosted_package_recovery_docker_version }}"}
+    - {name: docker-ce-rootless-extras, version: "{{ coding_hosted_package_recovery_docker_version }}"}
+    - {name: containerd.io, version: "{{ coding_hosted_package_recovery_containerd_version }}"}
+  loop_control:
+    label: "{{ item.name }}"
+  when: coding_hosted_package_recovery_enabled | bool
 
 - name: Refuse a running containerd service without stopping it
   ansible.builtin.command:
@@ -27,6 +61,16 @@
   register: coding_hosted_containerd_active
   changed_when: false
   failed_when: coding_hosted_containerd_active.rc not in [3, 4]
+
+- name: Require rootful units masked during approved recovery
+  ansible.builtin.command:
+    argv: [systemctl, is-enabled, docker.service, docker.socket, containerd.service]
+  register: coding_hosted_recovery_masks
+  changed_when: false
+  failed_when: >-
+    coding_hosted_recovery_masks.rc not in [0, 1]
+    or coding_hosted_recovery_masks.stdout_lines != ['masked', 'masked', 'masked']
+  when: coding_hosted_package_recovery_enabled | bool
 
 # Masking works before package unit files exist. Do not try to disable a
 # nonexistent unit here, and never use state=stopped to bypass the guards.
@@ -80,24 +124,9 @@
       Architectures: amd64
       Signed-By: /etc/apt/keyrings/coding-hosted-docker.asc
 
-- name: Prefer the approved Docker origin for runtime packages
+- name: Pin exact versions before the approved Docker origin
   ansible.builtin.copy:
     dest: /etc/apt/preferences.d/coding-hosted-docker
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      Package: docker-ce docker-ce-cli docker-ce-rootless-extras containerd.io
-      Pin: origin download.docker.com
-      Pin-Priority: 990
-
-# Ansible's python-apt preflight can ignore its temporary exact-version pin when
-# several repository versions exist, then reject the requested older version
-# before apt-get runs. Make apt's durable candidate itself equal the reviewed
-# versions; the post-install checks below remain authoritative.
-- name: Pin exact approved Docker and containerd candidates
-  ansible.builtin.copy:
-    dest: /etc/apt/preferences.d/coding-hosted-docker-versions
     owner: root
     group: root
     mode: "0644"
@@ -110,19 +139,28 @@
       Pin: version {{ coding_hosted_containerd_version }}
       Pin-Priority: 1001
 
+      Package: docker-ce docker-ce-cli docker-ce-rootless-extras containerd.io
+      Pin: origin download.docker.com
+      Pin-Priority: 990
+
+- name: Remove the superseded later-sorting version pin fragment
+  ansible.builtin.file:
+    dest: /etc/apt/preferences.d/coding-hosted-docker-versions
+    state: absent
+
 - name: Install exact Docker and containerd versions without service autostart
   ansible.builtin.apt:
     name:
-      - docker-ce
-      - docker-ce-cli
-      - docker-ce-rootless-extras
-      - containerd.io
+      - "docker-ce={{ coding_hosted_docker_version }}"
+      - "docker-ce-cli={{ coding_hosted_docker_version }}"
+      - "docker-ce-rootless-extras={{ coding_hosted_docker_version }}"
+      - "containerd.io={{ coding_hosted_containerd_version }}"
     state: present
     update_cache: true
     policy_rc_d: 101
     install_recommends: false
     allow_unauthenticated: false
-    allow_downgrade: false
+    allow_downgrade: "{{ coding_hosted_package_recovery_enabled | bool }}"
     fail_on_autoremove: true
     auto_install_module_deps: false
 

@@ -113,6 +113,16 @@ def test_controller_deploy_proves_exact_fresh_controller_heartbeat() -> None:
     assert 'as_deploy git -C "$CONTROLLER_ROOT" cat-file -e' in updater
 
 
+def test_controller_deploy_identity_has_no_gce_worker_access() -> None:
+    terraform = (GCP_ROOT / "screener-deploy.tf").read_text()
+
+    assert "screener_deploy_actas_worker" not in terraform
+    assert 'for_each = toset(["roles/compute.viewer"])' in terraform
+    assert 'resource "google_compute_instance_iam_member"' in terraform
+    assert 'resource "google_iap_tunnel_instance_iam_member"' in terraform
+    assert "module.screener_capacity_controller_vm[0].hostname" in terraform
+
+
 def test_controller_deploy_releases_only_the_stopped_writer_epoch() -> None:
     updater = (
         ROOT / "services" / "screener-orchestrator" / "scripts" / "update-controller.sh"

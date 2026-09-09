@@ -28,7 +28,15 @@ jobs:
         with:
           persist-credentials: false
       - name: Install test-only network tools
-        run: sudo apt-get update && sudo apt-get install -y nftables iproute2
+        run: |
+          # Only Ubuntu packages are needed here. Ignore unrelated third-party
+          # runner sources, which can be temporarily inconsistent while their
+          # repository metadata is being published.
+          sudo apt-get \
+            -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources \
+            -o Dir::Etc::sourceparts=- \
+            update
+          sudo apt-get install -y nftables iproute2
       - name: Test synthetic cgroup rules in a separate network namespace
         run: sudo unshare --net python3 scripts/test-coding-hosted-connectivity-kernel.py
 

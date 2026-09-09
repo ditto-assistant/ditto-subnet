@@ -2,6 +2,55 @@
 
 <!-- version list -->
 
+## v0.245.0 (2026-09-09)
+
+### Bug Fixes
+
+- **ansible**: Install team SSH keys, so host access survives the bootstrap
+  ([#1759](https://github.com/ditto-assistant/ditto-subnet/pull/1759),
+  [`4bd61bc`](https://github.com/ditto-assistant/ditto-subnet/commit/4bd61bc76acca36a789ff9d87949e85e8279f90a))
+
+- **infra**: Adopt existing coding evidence secrets
+  ([#1751](https://github.com/ditto-assistant/ditto-subnet/pull/1751),
+  [`5c8b8fe`](https://github.com/ditto-assistant/ditto-subnet/commit/5c8b8fe05ffcc6182caebaf1111528fbae054858))
+
+- **infra**: Bind coding IAP access to destination IP
+  ([#1753](https://github.com/ditto-assistant/ditto-subnet/pull/1753),
+  [`6c7e4b7`](https://github.com/ditto-assistant/ditto-subnet/commit/6c7e4b73ffb25ce8f933a634abca8441ade7be96))
+
+- **infra**: Include sysctl in native daemon path
+  ([#1758](https://github.com/ditto-assistant/ditto-subnet/pull/1758),
+  [`080cb4f`](https://github.com/ditto-assistant/ditto-subnet/commit/080cb4fd2783efc78b4bdddf1e9907888cd0783a))
+
+- **infra**: Let screeners pull signed releases
+  ([#1754](https://github.com/ditto-assistant/ditto-subnet/pull/1754),
+  [`a41205a`](https://github.com/ditto-assistant/ditto-subnet/commit/a41205a206f6c6f644764dda8a3584d9317a7e50))
+
+- **infra**: Pin approved native Docker candidates
+  ([#1755](https://github.com/ditto-assistant/ditto-subnet/pull/1755),
+  [`dd369df`](https://github.com/ditto-assistant/ditto-subnet/commit/dd369dfa02ebaf40302d2719009092b4699ce2b2))
+
+- **infra**: Recover pinned native Docker packages
+  ([#1757](https://github.com/ditto-assistant/ditto-subnet/pull/1757),
+  [`384c05e`](https://github.com/ditto-assistant/ditto-subnet/commit/384c05eed96eec354c89bd49d71bcac740c8ed49))
+
+- **infra**: Settle runtime-owned scaling drift
+  ([#1752](https://github.com/ditto-assistant/ditto-subnet/pull/1752),
+  [`3b1316e`](https://github.com/ditto-assistant/ditto-subnet/commit/3b1316e37b32869cf03b533d25494fc1ae66a000))
+
+### Chores
+
+- **infra**: Propose native coding host with named custodian
+  ([#1750](https://github.com/ditto-assistant/ditto-subnet/pull/1750),
+  [`934271d`](https://github.com/ditto-assistant/ditto-subnet/commit/934271d142480cbd733b8d7dfe497db2c39ee742))
+
+### Features
+
+- **infra**: Admit native coding host to postgres
+  ([#1760](https://github.com/ditto-assistant/ditto-subnet/pull/1760),
+  [`8e0ed20`](https://github.com/ditto-assistant/ditto-subnet/commit/8e0ed20002b3defebc639518f4fc241743cfcb80))
+
+
 ## v0.244.0 (2026-09-09)
 
 ### Bug Fixes

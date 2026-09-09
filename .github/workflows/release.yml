@@ -1234,6 +1234,17 @@ jobs:
             test "$promoted" = "$DESCRIPTOR_DIGEST"
           done
 
+      - name: Record pull-based screener delivery
+        env:
+          DESCRIPTOR_DIGEST: ${{ steps.descriptor.outputs.digest }}
+        run: |
+          {
+            echo "### Screener fleet release"
+            echo
+            echo "Published and authenticated \`$SCREENER_FLEET_REPOSITORY@$DESCRIPTOR_DIGEST\`."
+            echo "Live Hetzner and GCE workers pull the signed stable channel; a zero-sized GCE fleet is a successful no-op."
+          } >>"$GITHUB_STEP_SUMMARY"
+
   # The validator image spends most of its cold multi-platform build compiling
   # Python/system dependencies. Build each architecture on matching native
   # standard runners in parallel, then merge the immutable child digests. The

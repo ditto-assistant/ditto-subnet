@@ -62,8 +62,10 @@ consume the resulting immutable release commit:
 - the capacity controller and its trusted-builder sibling deploy together from
   the exact release commit over IAP whenever either orchestrator or screener
   source changes;
-- the five-minute GCE screener reconciling deploy resolves the latest GitHub
-  release tag instead of deploying an arbitrary current `main` SHA.
+- release publication advances one keyless-signed screener-fleet descriptor;
+  both Hetzner and live GCE overflow workers authenticate and pull that stable
+  channel themselves. A zero-sized GCE fleet is a successful no-op and creates
+  no GitHub-hosted discovery or SSH deployment run.
 
 Release planning starts from the latest published semantic tag so queued or
 failed pre-tag runs carry their changes into the next attempt. Once semantic
