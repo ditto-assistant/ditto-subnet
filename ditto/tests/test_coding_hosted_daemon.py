@@ -375,10 +375,10 @@ def test_bootstrap_masks_before_apt_and_never_replaces_installed_runtimes():
         assert apt["fail_on_autoremove"] is True
         assert apt["state"] == "present"
     assert installs[1][1]["name"] == [
-        "docker-ce={{ coding_hosted_docker_version }}",
-        "docker-ce-cli={{ coding_hosted_docker_version }}",
-        "docker-ce-rootless-extras={{ coding_hosted_docker_version }}",
-        "containerd.io={{ coding_hosted_containerd_version }}",
+        "docker-ce",
+        "docker-ce-cli",
+        "docker-ce-rootless-extras",
+        "containerd.io",
     ]
 
 
@@ -402,6 +402,26 @@ def test_bootstrap_uses_fixed_signed_origin_and_verifies_after_install():
     )
     assert "Signed-By: /etc/apt/keyrings/coding-hosted-docker.asc" in repo["content"]
     assert "trusted=yes" not in repo["content"]
+    pin_task = next(
+        t
+        for t in tasks
+        if t["name"] == "Pin exact approved Docker and containerd candidates"
+    )
+    pin = pin_task["ansible.builtin.copy"]
+    assert pin["dest"] == "/etc/apt/preferences.d/coding-hosted-docker-versions"
+    assert (
+        "Package: docker-ce docker-ce-cli docker-ce-rootless-extras" in pin["content"]
+    )
+    assert "Pin: version {{ coding_hosted_docker_version }}" in pin["content"]
+    assert "Package: containerd.io" in pin["content"]
+    assert "Pin: version {{ coding_hosted_containerd_version }}" in pin["content"]
+    assert pin["content"].count("Pin-Priority: 1001") == 2
+    install_index = next(
+        i
+        for i, task in enumerate(tasks)
+        if task["name"].startswith("Install exact Docker")
+    )
+    assert tasks.index(pin_task) < install_index
     assert tasks[-1]["ansible.builtin.command"]["argv"] == [
         "systemctl",
         "is-active",

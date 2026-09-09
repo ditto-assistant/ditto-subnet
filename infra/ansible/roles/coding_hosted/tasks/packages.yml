@@ -91,13 +91,32 @@
       Pin: origin download.docker.com
       Pin-Priority: 990
 
+# Ansible's python-apt preflight can ignore its temporary exact-version pin when
+# several repository versions exist, then reject the requested older version
+# before apt-get runs. Make apt's durable candidate itself equal the reviewed
+# versions; the post-install checks below remain authoritative.
+- name: Pin exact approved Docker and containerd candidates
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/coding-hosted-docker-versions
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      Package: docker-ce docker-ce-cli docker-ce-rootless-extras
+      Pin: version {{ coding_hosted_docker_version }}
+      Pin-Priority: 1001
+
+      Package: containerd.io
+      Pin: version {{ coding_hosted_containerd_version }}
+      Pin-Priority: 1001
+
 - name: Install exact Docker and containerd versions without service autostart
   ansible.builtin.apt:
     name:
-      - "docker-ce={{ coding_hosted_docker_version }}"
-      - "docker-ce-cli={{ coding_hosted_docker_version }}"
-      - "docker-ce-rootless-extras={{ coding_hosted_docker_version }}"
-      - "containerd.io={{ coding_hosted_containerd_version }}"
+      - docker-ce
+      - docker-ce-cli
+      - docker-ce-rootless-extras
+      - containerd.io
     state: present
     update_cache: true
     policy_rc_d: 101

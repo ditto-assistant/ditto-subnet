@@ -23,7 +23,12 @@ existing container runtime packages and active containerd, masks Docker and
 containerd units **before apt**, and uses `policy_rc_d: 101` for every apt action.
 It installs Debian rootless prerequisites, verifies Docker's HTTPS signing key
 against the supplied SHA-256, configures a fixed Debian 13 amd64 signed source,
-and installs the four exactly selected runtime packages. It disables dependency
+pins apt's candidates to the four exactly selected runtime package versions,
+and installs only those candidates. The durable version pin works around an
+[upstream Ansible python-apt candidate bug](https://github.com/ansible/ansible/issues/82763)
+that can reject an available explicit version before invoking apt-get when a
+repository contains newer versions. The role still verifies every installed
+package version afterward. It disables dependency
 auto-install by the Ansible module, unauthenticated packages, downgrades,
 recommended extras and automatic removals. It verifies installed versions and
 inactive services afterward. The package flag alone cannot activate the role.
