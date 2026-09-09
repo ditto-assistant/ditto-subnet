@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v0.246.0 (2026-09-09)
+
+### Bug Fixes
+
+- **infra**: Allow Terraform to manage screener IAP policy
+  ([#1762](https://github.com/ditto-assistant/ditto-subnet/pull/1762),
+  [`074e8bf`](https://github.com/ditto-assistant/ditto-subnet/commit/074e8bfe90509e185ea98c5b8ba9daa7eaa1af79))
+
+- **platform**: Show final policy rejection evidence only
+  ([#1763](https://github.com/ditto-assistant/ditto-subnet/pull/1763),
+  [`3622c66`](https://github.com/ditto-assistant/ditto-subnet/commit/3622c66d1d96cee573f98c0c4ec73585cb2b1968))
+
+### Features
+
+- **infra**: Grant the fleet x509 identity access to the Ditto review key
+  ([#1719](https://github.com/ditto-assistant/ditto-subnet/pull/1719),
+  [`4f12ba9`](https://github.com/ditto-assistant/ditto-subnet/commit/4f12ba9a49c1f84770d358bacc88c7a15225aed1))
+
+- **screener**: Route private review through Ditto Inference
+  ([#1693](https://github.com/ditto-assistant/ditto-subnet/pull/1693),
+  [`3ece11a`](https://github.com/ditto-assistant/ditto-subnet/commit/3ece11a70274da9971caa70e9b3b94beb07b49df))
+
+
 ## v0.245.0 (2026-09-09)
 
 ### Bug Fixes
