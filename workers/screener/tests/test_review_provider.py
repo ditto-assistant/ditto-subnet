@@ -43,7 +43,7 @@ def test_build_adjudicator_binds_the_configured_provider() -> None:
     court = build_adjudicator(_Config())
     assert court is not None
     assert court._inference_provider == "ditto"
-    assert court._base_url == "https://api.heyditto.ai/v1"
+    assert court._base_url == "https://inference.heyditto.ai/v1"
 
 
 def test_adjudicator_sends_only_the_bearer_to_ditto(tmp_path) -> None:

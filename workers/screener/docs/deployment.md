@@ -87,7 +87,7 @@ the VM:
   `z-ai/glm-5.2`, and `z-ai/glm-5.3-flash` (requested ids stay as the signed
   review evidence records them), and store its `ditto_inf_` key in the key
   file below. `SCREENER_SOURCE_REVIEW_BASE_URL` overrides the provider default
-  (`https://api.heyditto.ai/v1` for `ditto`, `https://openrouter.ai/api/v1` for
+  (`https://inference.heyditto.ai/v1` for `ditto`, `https://openrouter.ai/api/v1` for
   `openrouter`). Under `ditto` the worker sends only the bearer token — no
   OpenRouter attribution or metadata headers, no `provider` routing block,
   and no `models` failover chain; the endpoint's model routes take that role,

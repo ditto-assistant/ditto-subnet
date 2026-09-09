@@ -13,7 +13,7 @@ from __future__ import annotations
 
 REVIEW_INFERENCE_PROVIDERS: tuple[str, ...] = ("openrouter", "ditto")
 OPENROUTER_REVIEW_BASE_URL = "https://openrouter.ai/api/v1"
-DITTO_INFERENCE_BASE_URL = "https://api.heyditto.ai/v1"
+DITTO_INFERENCE_BASE_URL = "https://inference.heyditto.ai/v1"
 
 OPENROUTER_ATTRIBUTION_HEADERS: dict[str, str] = {
     # https://openrouter.ai/docs/app-attribution

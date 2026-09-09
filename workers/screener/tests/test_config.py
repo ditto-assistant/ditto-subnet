@@ -278,7 +278,7 @@ def test_ditto_inference_provider_moves_every_review_layer(monkeypatch) -> None:
     monkeypatch.delenv("SCREENER_L3_REVIEW_PROVIDER", raising=False)
     cfg = parse_screener_config_from_env()
     assert cfg.review_inference_provider == "ditto"
-    assert cfg.source_review_base_url == "https://api.heyditto.ai/v1"
+    assert cfg.source_review_base_url == "https://inference.heyditto.ai/v1"
     assert cfg.l2_review_provider == "ditto"
     assert cfg.l3_review_provider == "ditto"
 
