@@ -27,6 +27,33 @@ team_members:
   - nick
   - nickanderson
 
+# Public keys for those accounts, re-asserted on every converge so access to a
+# host outlives the bootstrap key it was built with.
+#
+# Only members listed in team_members above are installed; an entry here for
+# anyone else is ignored rather than silently granted access.
+#
+# Keys are ADDED, never pruned. Making this authoritative (authorized_key's
+# exclusive: true) would be the tidier model, but the base role runs AFTER
+# playbooks/hetzner-screener-fleet.yml has installed the bootstrap operator's
+# key in pre_tasks — so on a first converge an exclusive write would delete the
+# key currently holding the connection open, and root SSH is disabled by the
+# same role moments later. Remove a departing member's access by removing their
+# account (team_members), not by editing this map.
+# Transcribed from the keys already granting access on prod-ditto-1 and
+# prod-ditto-2 (identical on both, 2026-09-09), so this codifies the fleet's
+# existing state rather than introducing a new set.
+team_ssh_keys:
+  peyton:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPYZJllfLZ4wsb7boMu2HQvedMcfqv4Uj0mEA5Nd7LEU peyton@Peyton-MBP.local"
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILnWOx1b9p7pifTNSOjeHU0EYRXhIgnLweQ3v0YgQniT peyton@Peytons-Mac-mini.local"
+  omar:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID4+E4YEmXZjdppyJAVkNgq0AgBM6Vo1W513HkGmFEYh omarbarazanji@Omars-MacBook-Pro.local"
+  nick:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICOz0LNyDM5hn8EZEHq5jPhIobum6GHsKuX4R6Cl38xw snipolas@Nicholass-Mac-mini.local"
+  nickanderson:
+    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKmoMK+u4Xh3BygcBjvPr4p6QpXf1OCyFVT3K+eWB5lt nick@omniaura.ai"
+
 # Port allocations — was scripts/dittobox/config.sh lines 18-43.
 # 340x: prod backend blue/green
 # 341x: prod share blue/green

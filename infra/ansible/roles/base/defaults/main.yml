@@ -51,6 +51,17 @@ base_ufw_open_ports:
 # group_vars/all.yml.
 base_team_members: "{{ team_members | default(['peyton', 'omar', 'nick', 'nickanderson']) }}"
 
+# Public keys installed for those members, as {username: [key, ...]}. Empty by
+# default so a host that has never declared keys is not changed by this role;
+# the real map lives in group_vars/all.yml.
+#
+# Without this the accounts above are unreachable: base creates the user, the
+# ~/.ssh directory and an sshd AllowUsers entry, but never a key, so the only
+# way in was a bootstrap key passed at converge time (see
+# playbooks/hetzner-screener-fleet.yml) — which is per-host, per-run state, not
+# something a later converge re-asserts.
+base_team_ssh_keys: "{{ team_ssh_keys | default({}) }}"
+
 # SSH hardening (matches scripts/dittobox/bootstrap.sh sshd_config.d/ditto.conf).
 base_ssh_allow_users: "{{ base_team_members + ['deploy'] }}"
 
