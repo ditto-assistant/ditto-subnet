@@ -258,6 +258,9 @@ def test_role_is_default_off_and_has_no_legacy_or_worker_activation():
         "coding_hosted_packages_enabled": False,
         "coding_hosted_containerd_version": "",
         "coding_hosted_docker_key_sha256": "",
+        "coding_hosted_package_recovery_enabled": False,
+        "coding_hosted_package_recovery_docker_version": "",
+        "coding_hosted_package_recovery_containerd_version": "",
     }
     source = (ROLE / "tasks/main.yml").read_text()
     tasks = yaml.safe_load(source)
@@ -336,6 +339,7 @@ def test_bootstrap_is_separately_gated_after_fresh_host_checks():
     assert "coding_hosted_packages_enabled | bool" in guards
     assert any("docker_key_sha256" in g for g in guards)
     assert any("containerd_version" in g for g in guards)
+    assert any("package_recovery_enabled" in g for g in guards)
 
 
 def test_bootstrap_masks_before_apt_and_never_replaces_installed_runtimes():
@@ -352,13 +356,38 @@ def test_bootstrap_masks_before_apt_and_never_replaces_installed_runtimes():
     }
     mask = tasks[mask_index]["ansible.builtin.systemd_service"]
     assert mask["masked"] is True and "state" not in mask and "enabled" not in mask
-    reject_index = next(
+    conflict_index = next(
         i
         for i, t in enumerate(tasks)
-        if t["name"].startswith("Refuse an existing container")
+        if t["name"] == "Refuse conflicting distribution container packages"
     )
-    assert reject_index < mask_index
-    assert "docker.io" in tasks[reject_index]["loop"]
+    ordinary_index = next(
+        i
+        for i, t in enumerate(tasks)
+        if t["name"]
+        == "Refuse existing Docker packages during ordinary first provisioning"
+    )
+    recovery_index = next(
+        i
+        for i, t in enumerate(tasks)
+        if t["name"]
+        == "Require exact retained Docker versions during approved recovery"
+    )
+    assert conflict_index < ordinary_index < mask_index
+    assert conflict_index < recovery_index < mask_index
+    assert "docker.io" in tasks[conflict_index]["loop"]
+    assert "docker-ce" in tasks[ordinary_index]["loop"]
+    assert tasks[ordinary_index]["when"].startswith("not ")
+    assert tasks[recovery_index]["when"] == (
+        "coding_hosted_package_recovery_enabled | bool"
+    )
+    masks = next(
+        task
+        for task in tasks
+        if task["name"] == "Require rootful units masked during approved recovery"
+    )
+    assert masks["when"] == "coding_hosted_package_recovery_enabled | bool"
+    assert "['masked', 'masked', 'masked']" in masks["failed_when"]
     installs = [
         (i, t["ansible.builtin.apt"])
         for i, t in enumerate(tasks)
@@ -369,17 +398,20 @@ def test_bootstrap_masks_before_apt_and_never_replaces_installed_runtimes():
         assert mask_index < index
         assert apt["policy_rc_d"] == 101
         assert apt["allow_unauthenticated"] is False
-        assert apt["allow_downgrade"] is False
         assert apt["install_recommends"] is False
         assert apt["auto_install_module_deps"] is False
         assert apt["fail_on_autoremove"] is True
         assert apt["state"] == "present"
     assert installs[1][1]["name"] == [
-        "docker-ce",
-        "docker-ce-cli",
-        "docker-ce-rootless-extras",
-        "containerd.io",
+        "docker-ce={{ coding_hosted_docker_version }}",
+        "docker-ce-cli={{ coding_hosted_docker_version }}",
+        "docker-ce-rootless-extras={{ coding_hosted_docker_version }}",
+        "containerd.io={{ coding_hosted_containerd_version }}",
     ]
+    assert installs[0][1]["allow_downgrade"] is False
+    assert installs[1][1]["allow_downgrade"] == (
+        "{{ coding_hosted_package_recovery_enabled | bool }}"
+    )
 
 
 def test_bootstrap_uses_fixed_signed_origin_and_verifies_after_install():
@@ -405,10 +437,10 @@ def test_bootstrap_uses_fixed_signed_origin_and_verifies_after_install():
     pin_task = next(
         t
         for t in tasks
-        if t["name"] == "Pin exact approved Docker and containerd candidates"
+        if t["name"] == "Pin exact versions before the approved Docker origin"
     )
     pin = pin_task["ansible.builtin.copy"]
-    assert pin["dest"] == "/etc/apt/preferences.d/coding-hosted-docker-versions"
+    assert pin["dest"] == "/etc/apt/preferences.d/coding-hosted-docker"
     assert (
         "Package: docker-ce docker-ce-cli docker-ce-rootless-extras" in pin["content"]
     )
@@ -416,12 +448,24 @@ def test_bootstrap_uses_fixed_signed_origin_and_verifies_after_install():
     assert "Package: containerd.io" in pin["content"]
     assert "Pin: version {{ coding_hosted_containerd_version }}" in pin["content"]
     assert pin["content"].count("Pin-Priority: 1001") == 2
+    assert pin["content"].index("Pin: version") < pin["content"].index(
+        "Pin: origin download.docker.com"
+    )
+    cleanup = next(
+        task
+        for task in tasks
+        if task["name"] == "Remove the superseded later-sorting version pin fragment"
+    )
+    assert cleanup["ansible.builtin.file"] == {
+        "dest": "/etc/apt/preferences.d/coding-hosted-docker-versions",
+        "state": "absent",
+    }
     install_index = next(
         i
         for i, task in enumerate(tasks)
         if task["name"].startswith("Install exact Docker")
     )
-    assert tasks.index(pin_task) < install_index
+    assert tasks.index(pin_task) < tasks.index(cleanup) < install_index
     assert tasks[-1]["ansible.builtin.command"]["argv"] == [
         "systemctl",
         "is-active",

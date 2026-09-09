@@ -22,13 +22,16 @@ Bootstrap runs only after the fresh-host/account/home checks. It refuses
 existing container runtime packages and active containerd, masks Docker and
 containerd units **before apt**, and uses `policy_rc_d: 101` for every apt action.
 It installs Debian rootless prerequisites, verifies Docker's HTTPS signing key
-against the supplied SHA-256, configures a fixed Debian 13 amd64 signed source,
-pins apt's candidates to the four exactly selected runtime package versions,
-and installs only those candidates. The durable version pin works around an
-[upstream Ansible python-apt candidate bug](https://github.com/ansible/ansible/issues/82763)
-that can reject an available explicit version before invoking apt-get when a
-repository contains newer versions. The role still verifies every installed
-package version afterward. It disables dependency
+against the supplied SHA-256, and configures a fixed Debian 13 amd64 signed
+source. One preferences file puts exact-version records before its origin
+record: APT uses the first matching specific record, so a later version fragment
+cannot override an earlier package-specific origin record. This ordering follows
+[APT's documented priority rules](https://manpages.debian.org/trixie/apt/apt_preferences.5.en.html)
+and also gives Ansible's python-apt preflight the selected exact candidate,
+avoiding its known
+[explicit-version candidate bug](https://github.com/ansible/ansible/issues/82763).
+The role requests exact versions and verifies every installed package afterward.
+It disables dependency
 auto-install by the Ansible module, unauthenticated packages, downgrades,
 recommended extras and automatic removals. It verifies installed versions and
 inactive services afterward. The package flag alone cannot activate the role.
@@ -41,6 +44,17 @@ not a full transitive package lock or a base-image security attestation. Existin
 APT trust/configuration and selected package provenance still require approval.
 These are public OS dependencies, not an alternative store for private Coding
 inputs or evidence. No cloud privilege or private-data capability is granted.
+
+An extraordinary first-provisioning recovery can set
+`coding_hosted_package_recovery_enabled: true` only with exact observed Docker
+and containerd versions in the two recovery variables. The role accepts that
+mode only while the main fresh-host guards still prove the native account and
+all state directories absent, conflicting distribution packages absent, and all
+rootful units inactive and masked. The installed set must contain exactly the
+four expected Docker-origin packages at the approved observed versions. Only
+then may apt downgrade them to the independently approved target versions; the
+ordinary path keeps downgrade permission false. This is not an update mechanism
+for a provisioned daemon and cannot reconcile images, containers or private data.
 
 An active rootful service/socket is refused, not stopped. After fresh-host checks,
 the inactive rootful units are disabled and masked so reboot or package hooks
