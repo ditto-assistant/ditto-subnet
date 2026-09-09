@@ -5,6 +5,9 @@ cd "$(dirname "$0")/../.."
 runtime_diagnostics() {
   status=$?
   if [ "$status" -ne 0 ]; then
+    # startup.sh's own trap is gone by the time this file runs, so repeat the
+    # sentinel the controller watches for on the serial console.
+    echo "sn118-preview: startup failed with status ${status}" >&2
     docker compose -f preview/cloud/compose.yml ps >&2 || true
     docker compose -f preview/cloud/compose.yml logs --no-color --tail=200 >&2 || true
   fi

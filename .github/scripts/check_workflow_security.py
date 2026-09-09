@@ -15,7 +15,14 @@ TRIGGERS = {
 TRIGGER_RE = re.compile(r"^\s*(" + "|".join(sorted(TRIGGERS)) + r")\s*:")
 USES_RE = re.compile(r"\buses:\s*([^\s#]+)")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-PR_TARGET_ALLOWLIST = {"preview-stack.yml"}
+# No workflow in this repository may use a privileged trigger. The stack preview
+# controller used to be the one exception; it is now dispatch-only, so the
+# allowlist is empty and re-adding a name to it is a reviewable security change.
+PR_TARGET_ALLOWLIST: frozenset[str] = frozenset()
+# The one workflow that holds cloud credentials. Keyed separately from the
+# allowlist above: keying the marker checks below off an allowlist that is now
+# empty would silently disable them while CI stayed green.
+TRUSTED_CONTROLLER = "preview-stack.yml"
 
 
 def main() -> int:
@@ -29,16 +36,11 @@ def main() -> int:
             for number, raw in enumerate(path.read_text().splitlines(), 1):
                 line = raw.split("#", 1)[0]
                 trigger = TRIGGER_RE.match(line)
-                if trigger:
-                    allowed = (
-                        trigger.group(1) == "pull_request_target"
-                        and path.name in PR_TARGET_ALLOWLIST
+                if trigger and path.name not in PR_TARGET_ALLOWLIST:
+                    failures.append(
+                        f"{path}:{number}: privileged trigger "
+                        f"{trigger.group(1)!r} is forbidden"
                     )
-                    if not allowed:
-                        failures.append(
-                            f"{path}:{number}: privileged trigger "
-                            f"{trigger.group(1)!r} is forbidden"
-                        )
                 action = USES_RE.search(line)
                 if action:
                     target = action.group(1)
@@ -49,18 +51,35 @@ def main() -> int:
                                 f"{path}:{number}: external action must use a full "
                                 f"40-character commit SHA: {target}"
                             )
-            if path.name in PR_TARGET_ALLOWLIST:
+            if path.name == TRUSTED_CONTROLLER:
                 contents = path.read_text()
                 required = (
                     "environment: preview-stack",
                     "ref: ${{ github.event.repository.default_branch }}",
                     "persist-credentials: false",
-                    "github.event.pull_request.head.repo.full_name",
+                    "workflow_dispatch:",
+                    "github.ref == 'refs/heads/main'",
+                    '[[ "$INPUT_PR" =~ ^[1-9][0-9]*$ ]]',
+                    'sha="$(jq -r .head.sha <<<"$pr_json")"',
+                    "fork previews are not allowed",
+                )
+                # Colon-suffixed where it matters: this scan reads comments too,
+                # and prose about the old trigger must not trip the check.
+                forbidden = (
+                    "pull_request_target:",
+                    "ref: ${{ github.event.pull_request.head.sha }}",
+                    "${{ inputs.sha }}",
                 )
                 for marker in required:
                     if marker not in contents:
                         failures.append(
                             f"{path}: trusted preview controller is missing {marker!r}"
+                        )
+                for marker in forbidden:
+                    if marker in contents:
+                        failures.append(
+                            f"{path}: trusted preview controller must not "
+                            f"contain {marker!r}"
                         )
                 if (
                     "actions/checkout" in contents

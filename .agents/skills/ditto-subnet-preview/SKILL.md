@@ -22,8 +22,9 @@ Two local stacks, not one. Pick the surface, then load its reference.
 
 Local `preview up` never launches Platform, dashboard, Backroom, a chain,
 scorer, or validator. `compose` reports required URLs; it does not claim they
-are live. PR `stack` and `stack-copy` plans are separately provisioned by the
-trusted cloud controller after its Terraform stack is activated. No preview
+are live. PR `stack` and `stack-copy` plans are provisioned only by a
+maintainer dispatching `.github/workflows/preview-stack.yml`, after its
+Terraform stack is activated; nothing creates a preview VM automatically. No preview
 workflow mints GitHub Releases, `v*` images, or `compat-2`.
 
 Read [`references/cheatcodes.md`](references/cheatcodes.md) for the overlay.
@@ -93,14 +94,19 @@ Dispatch `.github/workflows/preview.yml` with `profiles` and an optional exact
 SHA. It validates composition and the mock controls at that SHA. Dashboard-only
 same-repo PRs may also publish a native `pages.dev` URL after the Pages project
 and `preview` environment are activated; that publisher checks out the default
-branch and never uses `workflow_run` or `pull_request_target`. PR selection
-fails closed to `stack` for unknown runtime paths.
+branch, and no workflow in this repository uses `workflow_run` or
+`pull_request_target`. PR selection fails closed to `stack` for unknown runtime
+paths.
 
-Same-repository PRs selected as `stack` or `stack-copy` are handled by
-`.github/workflows/preview-stack.yml`. It posts dashboard, Platform, and
-Backroom URLs after readiness. Eight atomic lease slots cap global active
-previews; updates reuse a slot, while close and hourly TTL reconciliation tear
-it down. `stack-copy` consumes only the latest artifact made by the protected
+Same-repository `stack` and `stack-copy` previews come from dispatching
+`.github/workflows/preview-stack.yml` with a PR number, an `action`
+(`provision`/`retire`), and a `profile` (`auto`/`stack`/`stack-copy`). It runs
+only on the default branch and resolves the head commit from the API rather than
+from the operator. It posts dashboard, Platform, and Backroom URLs after
+readiness. Eight atomic lease slots cap global active previews; a re-dispatch
+reuses the slot its PR already holds. Reconciliation runs every 15 minutes and
+keeps a preview while its PR is open, up to a 24-hour lease cap, retiring it
+four hours after the PR closes. `stack-copy` consumes only the latest artifact made by the protected
 main-only sanitizer workflow. Applying `infra/terraform/stacks/gcp-preview`
 and configuring the protected `preview-stack` and `prod` environments are
 separate activation steps.
