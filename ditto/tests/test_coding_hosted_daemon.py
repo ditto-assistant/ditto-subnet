@@ -311,6 +311,8 @@ def test_service_has_private_socket_clean_environment_and_fail_closed_lifecycle(
     guard = (ROLE / "templates/egress.service.j2").read_text()
     assert "UMask=0077" in daemon and "chmod 0600" in daemon
     assert "ExecStart=/usr/bin/env -i " in daemon
+    assert "PATH=/usr/sbin:/usr/bin:/bin" in daemon
+    assert "PATH=/usr/bin:/bin HOME=" not in daemon
     assert "Type=notify" in daemon and "NOTIFY_SOCKET=${NOTIFY_SOCKET}" in daemon
     assert "Restart=no" in daemon and "TimeoutStopSec=1800" in daemon
     assert "Delegate=cpu cpuset io memory pids" in daemon
@@ -339,6 +341,11 @@ def test_bootstrap_is_separately_gated_after_fresh_host_checks():
     assert "coding_hosted_packages_enabled | bool" in guards
     assert any("docker_key_sha256" in g for g in guards)
     assert any("containerd_version" in g for g in guards)
+    source = (ROLE / "tasks/main.yml").read_text()
+    assert "/usr/sbin/sysctl" in source
+    assert source.index("/usr/sbin/sysctl") < source.index(
+        "Create the dedicated empty primary group"
+    )
     assert any("package_recovery_enabled" in g for g in guards)
 
 

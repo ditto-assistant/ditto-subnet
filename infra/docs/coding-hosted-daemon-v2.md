@@ -87,7 +87,10 @@ Hippius and custody provisioning remain separate reviewed work.
 
 Docker runs as a **user service**, not a system service with `User=`. Its process
 gets an explicit clean environment (including systemd's own `NOTIFY_SOCKET`
-for the ready handshake), a root-owned public daemon policy, no image
+for the ready handshake). The fixed PATH includes `/usr/sbin` because Docker's
+rootless launcher calls the protected host `/usr/sbin/sysctl` inside its user
+and network namespace setup; the role verifies that executable before creating
+the native account. The process receives a root-owned public daemon policy, no image
 or registry credential, no container log collection, no live-restore and no
 automatic daemon restart. The per-user manager (not every host user) delegates
 CPU, cpuset, IO, memory and PID controllers. Startup verification requires cgroup
@@ -129,6 +132,11 @@ cgroup support, and zero images/containers. Its redacted output says
 It is not an approved runtime profile, live packet-denial certificate or canary.
 Verification failure leaves resources intact for exact-resource reconciliation;
 it must never trigger blind re-provisioning or private attempt replay.
+If startup fails before a socket or daemon exists, verify the exact packages,
+identity/ranges, protected policy/unit bytes, active deny guard, empty data and
+client directories, and absence of unexpected processes before a separately
+reviewed unit-only recovery. Do not rerun first provisioning against an existing
+account or use a failed unit as evidence that the daemon never changed state.
 
 Local tests exercise identity/range/metadata rejection, policy generation,
 socket permissions, command environment and role/CI contracts. Ansible syntax
