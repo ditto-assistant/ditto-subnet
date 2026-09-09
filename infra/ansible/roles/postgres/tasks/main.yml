@@ -48,6 +48,39 @@
       {% endfor %}
   notify: restart postgresql
 
+- name: Install the collector-log retention script
+  ansible.builtin.template:
+    src: ditto-pg-log-prune.sh.j2
+    dest: /usr/local/sbin/ditto-pg-log-prune
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the collector-log retention service and timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - ditto-pg-log-prune.service
+    - ditto-pg-log-prune.timer
+  register: postgres_log_prune_units
+
+- name: Enable the collector-log retention timer
+  ansible.builtin.systemd:
+    name: ditto-pg-log-prune.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ postgres_log_prune_units.changed }}"
+
+- name: Prune collector logs once now so a converge never leaves a full disk
+  ansible.builtin.systemd:
+    name: ditto-pg-log-prune.service
+    state: started
+  changed_when: false
+
 - name: Render pg_hba.conf
   ansible.builtin.copy:
     dest: "{{ pg_hba_path }}"
