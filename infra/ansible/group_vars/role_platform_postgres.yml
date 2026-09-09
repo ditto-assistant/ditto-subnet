@@ -33,8 +33,8 @@ base_ssh_set_allow_users: false
 # Separate reviewed guest admission after the native host's private route and
 # candidate network boundary are qualified. The exact IP comes from Terraform's
 # coding_hosted_postgres_access output; never admit the whole Coding subnet.
-coding_hosted_postgres_enabled: false
-coding_hosted_postgres_client_ip: ""
+coding_hosted_postgres_enabled: true
+coding_hosted_postgres_client_ip: "10.33.0.2"
 
 # UFW is additive: disabling this flag is not an automatic rule deletion. Follow
 # the exact-rule rollback procedure; neither this flag nor peering grants keys.

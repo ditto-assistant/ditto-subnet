@@ -15,7 +15,7 @@ coding_executor_host_count = 0
 # Requires a reviewed protected plan/apply; no runtime or private-data authority.
 enable_coding_hosted_host     = true
 coding_hosted_operators       = ["user:brian@omniaura.ai"]
-enable_coding_hosted_postgres = false
+enable_coding_hosted_postgres = true
 # The generator VM must never become persistent production intent. The
 # protected plan workflow overrides this only for a supervised bootstrap/armed
 # window, then seals a teardown plan returning it to absent.

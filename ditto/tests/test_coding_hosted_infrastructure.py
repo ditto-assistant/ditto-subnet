@@ -24,14 +24,14 @@ def test_native_foundation_is_independent_and_default_off() -> None:
     assert "var.enabled ? var.operators : toset([])" in SOURCE
 
 
-def test_production_intent_names_one_custodian_without_database_activation() -> None:
+def test_production_intent_names_one_custodian_with_database_path() -> None:
     prod = (STACK / "prod.auto.tfvars").read_text()
     assert re.search(r"(?m)^enable_coding_hosted_host\s*=\s*true\s*$", prod)
     assert re.search(
         r'(?m)^coding_hosted_operators\s*=\s*\["user:brian@omniaura\.ai"\]\s*$',
         prod,
     )
-    assert re.search(r"(?m)^enable_coding_hosted_postgres\s*=\s*false\s*$", prod)
+    assert re.search(r"(?m)^enable_coding_hosted_postgres\s*=\s*true\s*$", prod)
     assert "coding_executor_host_count = 0" in prod
     # The reusable module still refuses activation without an explicit override.
     assert re.search(r'variable "enabled"\s*\{[^}]*default\s*=\s*false', VARIABLES)

@@ -11,7 +11,7 @@ def read(path):
     return (ROOT / path).read_text()
 
 
-def test_private_database_path_is_separately_default_off():
+def test_private_database_path_requires_explicit_production_intent():
     module = read("infra/terraform/modules/coding-hosted-host/postgres.tf")
     stack = read("infra/terraform/stacks/gcp-platform/coding-hosted.tf")
     intent = read("infra/terraform/stacks/gcp-platform/prod.auto.tfvars")
@@ -21,7 +21,7 @@ def test_private_database_path_is_separately_default_off():
         "!var.enable_coding_hosted_postgres || var.enable_coding_hosted_host" in stack
     )
     assert any(
-        line.split("=") == ["enable_coding_hosted_postgres", "false"]
+        line.split("=") == ["enable_coding_hosted_postgres", "true"]
         for line in ("".join(line.split()) for line in intent.splitlines())
     )
     assert "module.pg_vm.internal_ip" in stack
@@ -31,10 +31,10 @@ def test_private_database_path_is_separately_default_off():
     assert "database_login_ready = false" in module
 
 
-def test_guest_gate_is_off_and_does_not_create_credentials():
+def test_guest_gate_admits_only_the_reviewed_host_and_creates_no_credentials():
     config = yaml.safe_load(read("infra/ansible/group_vars/role_platform_postgres.yml"))
-    assert config["coding_hosted_postgres_enabled"] is False
-    assert config["coding_hosted_postgres_client_ip"] == ""
+    assert config["coding_hosted_postgres_enabled"] is True
+    assert config["coding_hosted_postgres_client_ip"] == "10.33.0.2"
     assert "ditto_platform_prod" in config["postgres_hba_hosts"]
     assert "scram-sha-256" in config["postgres_hba_hosts"]
     assert (
