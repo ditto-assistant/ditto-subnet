@@ -1,7 +1,6 @@
 import re
 from pathlib import Path
 
-
 ROOT = Path(__file__).parents[2]
 GCP_ROOT = ROOT / "infra" / "terraform" / "stacks" / "gcp-platform"
 
