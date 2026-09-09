@@ -11,20 +11,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const getInferenceProviderRouteForUpdate = `-- name: GetInferenceProviderRouteForUpdate :one
+const getInferenceRoutingPolicy = `-- name: GetInferenceRoutingPolicy :one
 
-SELECT model, provider, profile_revision, status, calibration_status, context_length, quantization, prompt_price_per_token, completion_price_per_token, ewma_tokens_per_second, ewma_latency_ms, ewma_error_rate, ewma_timeout_rate, ewma_tool_accuracy, ewma_composite, calibration_tool_accuracy, calibration_composite, calibration_sample_count, calibration_revision, calibration_manifest_sha256, calibrated_at, ewma_cost_microusd, sample_count, selected_ticket_count, exploration_ticket_count, last_selected_at, cooldown_until, discovered_at, last_observed_at, updated_at FROM inference_provider_routes
+SELECT model, revision, enabled, speed_weight, cost_weight, exploration_weight, exploration_ticket_budget, min_tool_accuracy, min_composite, min_calibration_samples, max_error_rate, max_timeout_rate, cooldown_seconds, ewma_alpha, updated_at FROM inference_routing_policies
 WHERE model = $1::text
-  AND provider = $2::text
-  AND profile_revision = $3::text
-FOR UPDATE
 `
-
-type GetInferenceProviderRouteForUpdateParams struct {
-	Model           string `json:"model"`
-	Provider        string `json:"provider"`
-	ProfileRevision string `json:"profileRevision"`
-}
 
 // Provider routes and routing policies. Route rows sit OUTSIDE the
 // ticket->grant->request lock chain and are only ever locked singly, after
@@ -32,53 +23,6 @@ type GetInferenceProviderRouteForUpdateParams struct {
 // (record_route_observation). The relay never writes
 // inference_routing_policies (platform admin owns them) and never touches
 // routes on the embedding lane.
-// Lock the route row a chat settle observes: PK is
-// (model, provider, profile_revision) where model = grant.allowed_models[0],
-// provider = grant.route_provider, profile_revision = grant.route_profile.
-// Missing row => the observation is a no-op.
-func (q *Queries) GetInferenceProviderRouteForUpdate(ctx context.Context, arg GetInferenceProviderRouteForUpdateParams) (InferenceProviderRoute, error) {
-	row := q.db.QueryRow(ctx, getInferenceProviderRouteForUpdate, arg.Model, arg.Provider, arg.ProfileRevision)
-	var i InferenceProviderRoute
-	err := row.Scan(
-		&i.Model,
-		&i.Provider,
-		&i.ProfileRevision,
-		&i.Status,
-		&i.CalibrationStatus,
-		&i.ContextLength,
-		&i.Quantization,
-		&i.PromptPricePerToken,
-		&i.CompletionPricePerToken,
-		&i.EwmaTokensPerSecond,
-		&i.EwmaLatencyMs,
-		&i.EwmaErrorRate,
-		&i.EwmaTimeoutRate,
-		&i.EwmaToolAccuracy,
-		&i.EwmaComposite,
-		&i.CalibrationToolAccuracy,
-		&i.CalibrationComposite,
-		&i.CalibrationSampleCount,
-		&i.CalibrationRevision,
-		&i.CalibrationManifestSha256,
-		&i.CalibratedAt,
-		&i.EwmaCostMicrousd,
-		&i.SampleCount,
-		&i.SelectedTicketCount,
-		&i.ExplorationTicketCount,
-		&i.LastSelectedAt,
-		&i.CooldownUntil,
-		&i.DiscoveredAt,
-		&i.LastObservedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const getInferenceRoutingPolicy = `-- name: GetInferenceRoutingPolicy :one
-SELECT model, revision, enabled, speed_weight, cost_weight, exploration_weight, exploration_ticket_budget, min_tool_accuracy, min_composite, min_calibration_samples, max_error_rate, max_timeout_rate, cooldown_seconds, ewma_alpha, updated_at FROM inference_routing_policies
-WHERE model = $1::text
-`
-
 // Unlocked policy read (EWMA alpha, cooldown). Missing row => observation
 // no-op.
 func (q *Queries) GetInferenceRoutingPolicy(ctx context.Context, model string) (InferenceRoutingPolicy, error) {
@@ -104,58 +48,87 @@ func (q *Queries) GetInferenceRoutingPolicy(ctx context.Context, model string) (
 	return i, err
 }
 
-const updateInferenceProviderRouteObservation = `-- name: UpdateInferenceProviderRouteObservation :exec
-UPDATE inference_provider_routes
-SET sample_count = $1::bigint,
-    ewma_latency_ms = $2::double precision,
-    ewma_tokens_per_second = $3::double precision,
-    ewma_error_rate = $4::double precision,
-    ewma_timeout_rate = $5::double precision,
-    ewma_cost_microusd = $6::double precision,
-    status = $7::text,
-    cooldown_until = $8::timestamptz,
+const observeInferenceProviderRoute = `-- name: ObserveInferenceProviderRoute :execrows
+UPDATE inference_provider_routes AS r
+SET sample_count = r.sample_count + 1,
+    ewma_latency_ms = CASE
+        WHEN r.ewma_latency_ms IS NULL THEN $1::double precision
+        ELSE p.ewma_alpha * $1::double precision
+             + (1 - p.ewma_alpha) * r.ewma_latency_ms
+    END,
+    ewma_tokens_per_second = CASE
+        WHEN NOT $2::boolean THEN r.ewma_tokens_per_second
+        WHEN r.ewma_tokens_per_second IS NULL THEN $3::double precision
+        ELSE p.ewma_alpha * $3::double precision
+             + (1 - p.ewma_alpha) * r.ewma_tokens_per_second
+    END,
+    ewma_error_rate = p.ewma_alpha * $4::double precision
+        + (1 - p.ewma_alpha) * r.ewma_error_rate,
+    ewma_timeout_rate = p.ewma_alpha * $5::double precision
+        + (1 - p.ewma_alpha) * r.ewma_timeout_rate,
+    ewma_cost_microusd = CASE
+        WHEN NOT $6::boolean THEN r.ewma_cost_microusd
+        WHEN r.ewma_cost_microusd IS NULL THEN $7::double precision
+        ELSE p.ewma_alpha * $7::double precision
+             + (1 - p.ewma_alpha) * r.ewma_cost_microusd
+    END,
+    status = CASE WHEN $8::boolean THEN 'healthy' ELSE 'degraded' END,
+    cooldown_until = CASE
+        WHEN $8::boolean THEN NULL
+        ELSE $9::timestamptz + make_interval(secs => p.cooldown_seconds)
+    END,
     last_observed_at = $9::timestamptz,
-    updated_at = $10::timestamptz
-WHERE model = $11::text
-  AND provider = $12::text
-  AND profile_revision = $13::text
+    updated_at = $9::timestamptz
+FROM inference_routing_policies AS p
+WHERE r.model = $10::text
+  AND r.provider = $11::text
+  AND r.profile_revision = $12::text
+  AND p.model = r.model
 `
 
-type UpdateInferenceProviderRouteObservationParams struct {
-	SampleCount         int64              `json:"sampleCount"`
-	EwmaLatencyMs       pgtype.Float8      `json:"ewmaLatencyMs"`
-	EwmaTokensPerSecond pgtype.Float8      `json:"ewmaTokensPerSecond"`
-	EwmaErrorRate       float64            `json:"ewmaErrorRate"`
-	EwmaTimeoutRate     float64            `json:"ewmaTimeoutRate"`
-	EwmaCostMicrousd    pgtype.Float8      `json:"ewmaCostMicrousd"`
-	Status              string             `json:"status"`
-	CooldownUntil       pgtype.Timestamptz `json:"cooldownUntil"`
-	LastObservedAt      pgtype.Timestamptz `json:"lastObservedAt"`
-	Now                 pgtype.Timestamptz `json:"now"`
-	Model               string             `json:"model"`
-	Provider            string             `json:"provider"`
-	ProfileRevision     string             `json:"profileRevision"`
+type ObserveInferenceProviderRouteParams struct {
+	LatencyMs               float64            `json:"latencyMs"`
+	TokensPerSecondObserved bool               `json:"tokensPerSecondObserved"`
+	TokensPerSecond         float64            `json:"tokensPerSecond"`
+	ErrorObserved           float64            `json:"errorObserved"`
+	TimeoutObserved         float64            `json:"timeoutObserved"`
+	CostObserved            bool               `json:"costObserved"`
+	CostMicrousd            float64            `json:"costMicrousd"`
+	Success                 bool               `json:"success"`
+	Now                     pgtype.Timestamptz `json:"now"`
+	Model                   string             `json:"model"`
+	Provider                string             `json:"provider"`
+	ProfileRevision         string             `json:"profileRevision"`
 }
 
-// Write back one chat-settle observation. Every value is computed by the
-// caller from the LOCKED route row + policy (EWMA folds, healthy/degraded
-// status, cooldown_until = now + policy.cooldown_seconds on failure and NULL
-// on success), so this is a plain absolute-value write.
-func (q *Queries) UpdateInferenceProviderRouteObservation(ctx context.Context, arg UpdateInferenceProviderRouteObservationParams) error {
-	_, err := q.db.Exec(ctx, updateInferenceProviderRouteObservation,
-		arg.SampleCount,
-		arg.EwmaLatencyMs,
-		arg.EwmaTokensPerSecond,
-		arg.EwmaErrorRate,
-		arg.EwmaTimeoutRate,
-		arg.EwmaCostMicrousd,
-		arg.Status,
-		arg.CooldownUntil,
-		arg.LastObservedAt,
+// Fold one chat-settle observation into the route row in a single statement.
+// Before 2026-09-08 this was SELECT ... FOR UPDATE, a policy read, EWMA math
+// in Go, then an UPDATE: every chat settle on the subnet took the same one of
+// ~22 route rows exclusively across three round trips while still holding
+// its ticket->grant->request locks, so route contention (1.2 s average
+// waits) inflated every rail behind it. The EWMA folds, healthy/degraded
+// status, and cooldown are computed here from the current row and the
+// model's routing policy under the UPDATE's own brief row lock. A missing
+// route or policy row updates nothing (0 rows), matching the old no-op.
+//
+//	ewma(prev, x) = alpha*x + (1-alpha)*prev, seeded with x when prev is NULL.
+func (q *Queries) ObserveInferenceProviderRoute(ctx context.Context, arg ObserveInferenceProviderRouteParams) (int64, error) {
+	result, err := q.db.Exec(ctx, observeInferenceProviderRoute,
+		arg.LatencyMs,
+		arg.TokensPerSecondObserved,
+		arg.TokensPerSecond,
+		arg.ErrorObserved,
+		arg.TimeoutObserved,
+		arg.CostObserved,
+		arg.CostMicrousd,
+		arg.Success,
 		arg.Now,
 		arg.Model,
 		arg.Provider,
 		arg.ProfileRevision,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

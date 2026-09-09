@@ -85,7 +85,7 @@ func (f *fixture) inTx(t *testing.T, fn func(ctx context.Context, tx pgx.Tx, q *
 	q := f.queries.WithTx(tx)
 
 	// Lock rank 1: the owning ticket. Lock rank 2: the grant.
-	if _, err := q.GetValidatorTicketForUpdate(ctx, dbpg.GetValidatorTicketForUpdateParams{
+	if _, err := q.GetValidatorTicketForShare(ctx, dbpg.GetValidatorTicketForShareParams{
 		AgentID:         pgUUID(f.agentID),
 		BenchVersion:    testBenchVersion,
 		ValidatorHotkey: testHotkey,

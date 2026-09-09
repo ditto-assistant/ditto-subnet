@@ -6705,10 +6705,24 @@ CREATE INDEX inference_grants_expiry_idx ON public.inference_grants USING btree 
 
 
 --
+-- Name: inference_grants_validator_hotkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX inference_grants_validator_hotkey_idx ON public.inference_grants USING btree (validator_hotkey);
+
+
+--
 -- Name: inference_provider_routes_selection_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX inference_provider_routes_selection_idx ON public.inference_provider_routes USING btree (model, calibration_status, status);
+
+
+--
+-- Name: inference_requests_grant_kind_started_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX inference_requests_grant_kind_started_idx ON public.inference_requests USING btree (grant_id, request_kind, started_at);
 
 
 --
