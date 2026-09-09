@@ -347,6 +347,13 @@ resource "google_compute_region_autoscaler" "screener_fleet" {
     }
 
   }
+
+  # The fenced controller owns this one field: OFF at zero GCE target and
+  # ONLY_SCALE_OUT only while bounded fallback capacity is active. Terraform
+  # continues to own the policy bounds, cooldown, and backlog metric.
+  lifecycle {
+    ignore_changes = [autoscaling_policy[0].mode]
+  }
 }
 
 output "screener_fleet_mig" {

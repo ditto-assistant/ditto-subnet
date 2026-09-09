@@ -136,6 +136,14 @@ resource "google_cloud_run_v2_service" "datapipeline" {
   labels              = { role = "datapipeline", managed = "terraform" }
   deletion_protection = false
 
+  # Keep scale-to-zero explicit at the service level. Cloud Run reports a
+  # zero manual count even in AUTOMATIC mode, so ignore only that inapplicable
+  # API default while retaining ownership of the automatic mode and minimum.
+  scaling {
+    scaling_mode       = "AUTOMATIC"
+    min_instance_count = 0
+  }
+
   template {
     # Runs as the platform SA (needs no GCP permissions itself — it makes no GCP
     # calls; this just avoids the broad default compute SA).
@@ -172,7 +180,10 @@ resource "google_cloud_run_v2_service" "datapipeline" {
   }
 
   lifecycle {
-    ignore_changes = [template[0].containers[0].image]
+    ignore_changes = [
+      scaling[0].manual_instance_count,
+      template[0].containers[0].image,
+    ]
   }
 
   depends_on = [google_artifact_registry_repository.datapipeline]
