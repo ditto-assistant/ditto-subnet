@@ -6239,6 +6239,98 @@ class TestPublicActivity:
         assert entry["review_original_reason"] == original_reason
         assert "operator@example.com" not in response.text
 
+    async def test_direct_policy_rejection_supersedes_public_similarity_evidence(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        duplicate_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_B,
+                status=AgentStatus.SCORED,
+                name="earlier-agent",
+            )
+        )
+        rejected_id = UUID(
+            await _seed_k3(
+                session_maker,
+                miner=_MINER_A,
+                composites=[0.81, 0.79, 0.80],
+                status=AgentStatus.BANNED,
+            )
+        )
+        review_id = uuid4()
+        opened_at = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
+        resolved_at = datetime(2026, 8, 2, 13, 0, tzinfo=UTC)
+        original_reason = "Source similarity requires comparison with earlier-agent."
+        rejection_reason = (
+            "Reject taokika_v9 v1 under policy v12 for I7 "
+            "(tool-planning freedom). The served path withholds the runtime "
+            "catalog before the deciding model can inspect it."
+        )
+        async with session_maker() as session, session.begin():
+            rejected = await session.get(Agent, rejected_id)
+            assert rejected is not None
+            rejected.name = "taokika_v9"
+            rejected.version = 1
+            rejected.duplicate_of = duplicate_id
+            rejected.review_reason = original_reason
+            session.add(
+                AthReview(
+                    review_id=review_id,
+                    agent_id=rejected_id,
+                    status="resolved",
+                    opened_at=opened_at,
+                    resolved_at=resolved_at,
+                    resolved_by="operator@example.com",
+                    resolution="reject",
+                    resolution_reason=rejection_reason,
+                    original_duplicate_of=duplicate_id,
+                    original_reason=original_reason,
+                    original_policy_version=12,
+                    original_evidence={"sha256": rejected.sha256},
+                    algorithm_provenance={"review_kind": "copy"},
+                )
+            )
+            session.add(
+                AthReviewAction(
+                    action_id=uuid4(),
+                    review_id=review_id,
+                    action="reject",
+                    reason=rejection_reason,
+                    actor="operator@example.com",
+                    evidence={"previous_status": "scored"},
+                    created_at=resolved_at,
+                )
+            )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+
+        activity = await client.get(
+            f"/api/v1/public/activity?q={rejected_id}&limit=200"
+        )
+        summary = await client.get(f"/api/v1/public/agent/{rejected_id}/summary")
+
+        assert activity.status_code == 200
+        assert summary.status_code == 200
+        for entry in (activity.json()["entries"][0], summary.json()):
+            assert entry["review_event"] == "rejected"
+            assert entry["review_reason"] == rejection_reason
+            assert entry["review_original_reason"] is None
+            assert entry["duplicate_of"] is None
+            assert entry["duplicate_name"] is None
+            assert entry["duplicate_version"] is None
+            assert entry["duplicate_hotkey"] is None
+
+        # The public projection changes; the immutable review origin remains.
+        async with session_maker() as session:
+            review = await session.get(AthReview, review_id)
+            assert review is not None
+            assert review.original_reason == original_reason
+            assert review.original_duplicate_of == duplicate_id
+
     async def test_unadopted_previous_generation_is_not_counted_as_waiting(
         self,
         app: FastAPI,

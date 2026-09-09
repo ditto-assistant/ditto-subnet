@@ -4991,8 +4991,20 @@ def _public_activity_response(
     avatars = avatar_urls or {}
     matches = duplicate_metadata or {}
 
+    def _review(row: Any) -> _PublicAthReviewSnapshot | None:
+        return (ath_reviews or {}).get(row.agent.agent_id)
+
+    def _show_similarity_evidence(row: Any) -> bool:
+        return not _supersedes_public_similarity_evidence(_review(row))
+
+    def _review_original_reason(row: Any) -> str | None:
+        review = _review(row)
+        if review is None or not _show_similarity_evidence(row):
+            return None
+        return review.original_reason
+
     def _matched(row: Any) -> _DuplicateSubmissionMetadata | None:
-        if row.agent.duplicate_of is None:
+        if row.agent.duplicate_of is None or not _show_similarity_evidence(row):
             return None
         return matches.get(row.agent.duplicate_of)
 
@@ -5022,7 +5034,9 @@ def _public_activity_response(
                     if row_status in ("waiting_screening", "screening")
                     else row.agent.screening_reason
                 ),
-                duplicate_of=row.agent.duplicate_of,
+                duplicate_of=(
+                    row.agent.duplicate_of if _show_similarity_evidence(row) else None
+                ),
                 duplicate_name=_public_duplicate_name(
                     (matched := _matched(row)),
                     claims,
@@ -5047,11 +5061,7 @@ def _public_activity_response(
                     if row.agent.agent_id in (ath_reviews or {})
                     else None
                 ),
-                review_original_reason=(
-                    (ath_reviews or {})[row.agent.agent_id].original_reason
-                    if row.agent.agent_id in (ath_reviews or {})
-                    else None
-                ),
+                review_original_reason=_review_original_reason(row),
                 review_opened_at=(
                     (ath_reviews or {})[row.agent.agent_id].opened_at
                     if row.agent.agent_id in (ath_reviews or {})
@@ -5207,6 +5217,25 @@ class _PublicAthReviewSnapshot:
     event_at: datetime
     opened_at: datetime
     original_reason: str
+    original_duplicate_of: UUID | None
+
+
+_DIRECT_POLICY_V12_REJECTION = re.compile(
+    r"\A(?:review rejected:\s*)?reject\b.*\bunder policy v12 for I[1-7]\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _supersedes_public_similarity_evidence(
+    review: _PublicAthReviewSnapshot | None,
+) -> bool:
+    """Keep a final direct policy-v12 rejection as the sole public evidence."""
+    return bool(
+        review is not None
+        and review.event == "rejected"
+        and review.original_duplicate_of is not None
+        and _DIRECT_POLICY_V12_REJECTION.match(review.reason.strip())
+    )
 
 
 async def _ath_review_public_snapshot(
@@ -5276,6 +5305,7 @@ async def _ath_review_public_snapshot(
             opened_at=opened_at,
             original_reason=review.original_reason
             or "Submission routed to ATH review.",
+            original_duplicate_of=review.original_duplicate_of,
         )
 
     active_agent_ids = {
@@ -5998,9 +6028,10 @@ async def agent_summary(
         else {}
     )
     review = ath_reviews.get(agent_id)
+    show_similarity_evidence = not _supersedes_public_similarity_evidence(review)
     duplicate = (
         duplicate_metadata.get(row.agent.duplicate_of)
-        if row.agent.duplicate_of is not None
+        if row.agent.duplicate_of is not None and show_similarity_evidence
         else None
     )
     from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
@@ -6038,14 +6069,18 @@ async def agent_summary(
             if status in {"waiting_screening", "screening"}
             else row.agent.screening_reason
         ),
-        duplicate_of=row.agent.duplicate_of,
+        duplicate_of=row.agent.duplicate_of if show_similarity_evidence else None,
         duplicate_name=_public_duplicate_name(duplicate, handle_claims, strike=True),
         duplicate_version=duplicate.version if duplicate is not None else None,
         duplicate_hotkey=duplicate.miner_hotkey if duplicate is not None else None,
         review_reason=review.reason if review is not None else row.agent.review_reason,
         review_event=review.event if review is not None else None,
         review_event_at=review.event_at if review is not None else None,
-        review_original_reason=review.original_reason if review is not None else None,
+        review_original_reason=(
+            review.original_reason
+            if review is not None and show_similarity_evidence
+            else None
+        ),
         review_opened_at=review.opened_at if review is not None else None,
         preserved_composite=ath_composites.get(agent_id),
         active_benchmarks=[
