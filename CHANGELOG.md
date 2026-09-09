@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.246.1 (2026-09-09)
+
+### Bug Fixes
+
+- **pylon**: Align weight reveals with stateful chain epochs
+  ([#1756](https://github.com/ditto-assistant/ditto-subnet/pull/1756),
+  [`35c7148`](https://github.com/ditto-assistant/ditto-subnet/commit/35c714866e479c095186178fc95d70af4f8e556e))
+
+
 ## v0.246.0 (2026-09-09)
 
 ### Bug Fixes
