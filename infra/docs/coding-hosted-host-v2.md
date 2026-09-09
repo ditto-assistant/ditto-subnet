@@ -1,10 +1,17 @@
 # Platform-owned native-v2 qualification host
 
-This is a dormant host foundation, not a deployed worker or an approved private
-execution environment. `enable_coding_hosted_host = false` in both the variable
-default and reviewed production intent creates no native-v2 VM, network, NAT,
-service account, or operator grant. The legacy `coding_executor_host_count = 0`
-and all existing Coding gates remain unchanged.
+This is a qualification-host foundation, not a deployed worker or an approved
+private execution environment. The reusable variable default remains
+`enable_coding_hosted_host = false`, which creates no native-v2 VM, network, NAT,
+service account, or operator grant. Production intent proposes one host with
+`coding_hosted_operators = ["user:brian@omniaura.ai"]`; this is not evidence that
+the protected apply has run. The legacy `coding_executor_host_count = 0`, native
+`enable_coding_hosted_postgres = false`, and all execution gates remain unchanged.
+
+Brian (`brian@omniaura.ai`) is also the user-designated artifact/key approver.
+This records role designation only, not approval of any artifact, key operation,
+infrastructure plan or private execution. Artifact approval must independently
+review the builder's exact source/provenance and hashes before installation.
 
 The [native-v2 trust decision](../../docs/coding-platform-private-execution-v2.md)
 places private execution under Platform custody. The old k=3 executor cohort
@@ -42,8 +49,8 @@ by this module.
 
 ## Activation and retention
 
-Prepare a separate reviewed change to production intent with the enable flag
-and exact approved custodian set. Use the existing protected `gcp-platform`
+Review the production-intent change and its exact nominated custodian before
+merging. Then use the existing protected `gcp-platform`
 plan/apply workflow and review the saved plan for unrelated drift, replacements,
 IAM, network changes and cost. Do not use an out-of-band CLI create, a targeted
 apply that omits safeguards, or a new workflow bypass. This PR does not dispatch

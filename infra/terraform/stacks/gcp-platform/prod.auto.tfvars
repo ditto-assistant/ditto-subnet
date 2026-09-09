@@ -11,9 +11,10 @@ enable_validator_prod = true
 # apply creates the complete three-host executor cohort. No worker, daemon, or
 # provider route is activated by this default.
 coding_executor_host_count = 0
-# Native v2 has an independent Platform-owned host and no inherited operators.
-# Keep absent until a reviewed host plan and explicit custodian set are approved.
-enable_coding_hosted_host     = false
+# Native v2 qualification foundation only, with the explicitly nominated custodian.
+# Requires a reviewed protected plan/apply; no runtime or private-data authority.
+enable_coding_hosted_host     = true
+coding_hosted_operators       = ["user:brian@omniaura.ai"]
 enable_coding_hosted_postgres = false
 # The generator VM must never become persistent production intent. The
 # protected plan workflow overrides this only for a supervised bootstrap/armed
