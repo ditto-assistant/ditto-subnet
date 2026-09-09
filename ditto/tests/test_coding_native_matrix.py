@@ -363,8 +363,9 @@ def test_local_mode_cannot_select_native_or_remote_engine(monkeypatch, tmp_path)
             RUNNER.local_engine_policy(info)
 
 
+@pytest.mark.parametrize("batch_failure", [False, True])
 def test_native_runner_wiring_retains_manifest_authority_without_real_docker(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, batch_failure
 ):
     corpus = tmp_path / "corpus"
     corpus.mkdir(mode=0o700)
@@ -484,6 +485,40 @@ def test_native_runner_wiring_retains_manifest_authority_without_real_docker(
         )
 
     monkeypatch.setattr(RUNNER.subprocess, "run", run)
+    submitted = []
+    if batch_failure:
+        # Both controls have finished when wait returns: inspect the successful
+        # one first to reproduce replenishment before the second one's failure.
+        class ImmediatePool:
+            def __init__(self, *, max_workers):
+                assert max_workers == 2
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def submit(self, function, item):
+                future = RUNNER.concurrent.futures.Future()
+                submitted.append(future)
+                if len(submitted) == 2:
+                    future.set_exception(RuntimeError("synthetic control failure"))
+                else:
+                    future.set_result(function(item))
+                return future
+
+        monkeypatch.setattr(
+            RUNNER.concurrent.futures, "ThreadPoolExecutor", ImmediatePool
+        )
+        monkeypatch.setattr(
+            RUNNER.concurrent.futures,
+            "wait",
+            lambda pending, **_kwargs: (
+                sorted(pending, key=submitted.index),
+                set(),
+            ),
+        )
     destination = tmp_path / "result"
     monkeypatch.setattr(
         RUNNER.sys,
@@ -503,7 +538,7 @@ def test_native_runner_wiring_retains_manifest_authority_without_real_docker(
             "--output",
             str(destination),
             "--jobs",
-            "1",
+            "2" if batch_failure else "1",
             "--private-native-controls-once",
             "--native-approval",
             "/unused/approval",
@@ -515,7 +550,15 @@ def test_native_runner_wiring_retains_manifest_authority_without_real_docker(
     )
     previous = os.umask(0o077)
     try:
-        RUNNER.main()
+        if batch_failure:
+            with pytest.raises(RuntimeError, match="synthetic control failure"):
+                RUNNER.main()
+            assert len(submitted) == 2, "failure must prevent replacement controls"
+            assert not (destination / "summary.json").exists()
+            assert (destination / "case-0000-1.json").exists()
+            return
+        else:
+            RUNNER.main()
     finally:
         os.umask(previous)
     summary = json.loads((destination / "summary.json").read_bytes())

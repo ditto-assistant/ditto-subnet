@@ -521,8 +521,12 @@ def main():
             done, pending = concurrent.futures.wait(
                 pending, return_when=concurrent.futures.FIRST_COMPLETED
             )
-            for future in done:
-                records.append(future.result())
+            # Observe every completed failure before replenishing any slot.
+            # Set iteration order must not admit a new private control after a
+            # failure is already available in this same completion batch.
+            completed = [future.result() for future in done]
+            for record in completed:
+                records.append(record)
                 if len(records) % 20 == 0:
                     print(
                         f"Private controls completed: {len(records)}/{len(tasks)}",
