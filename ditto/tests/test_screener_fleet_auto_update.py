@@ -304,7 +304,11 @@ def test_self_updater_provisions_worker_state_before_scale_up() -> None:
 def test_release_workflow_signs_before_advancing_discovery_channel() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text())
     job = workflow["jobs"]["assemble-screener-fleet-release"]
-    script = job["steps"][-1]["run"]
+    script = next(
+        step["run"]
+        for step in job["steps"]
+        if step.get("name") == "Authenticate and promote the exact fleet descriptor"
+    )
 
     assert job["permissions"] == {
         "contents": "read",
@@ -316,3 +320,34 @@ def test_release_workflow_signs_before_advancing_discovery_channel() -> None:
     )
     assert "screener-fleet-stable-$SCREENER_FLEET_UPDATE_PROTOCOL" in script
     assert "HETZNER_SSH" not in WORKFLOW.read_text()
+
+
+def test_gce_overflow_workers_pull_the_same_authenticated_release() -> None:
+    updater = (ROOT / "workers/screener/scripts/pull-screener-release.sh").read_text()
+    bootstrap = (ROOT / "workers/screener/scripts/bootstrap-screener.sh").read_text()
+    service = (
+        ROOT / "workers/screener/deploy/ditto-screener-release-update.service"
+    ).read_text()
+    timer = (
+        ROOT / "workers/screener/deploy/ditto-screener-release-update.timer"
+    ).read_text()
+
+    verify = updater.index("cosign verify \\")
+    resolve = updater.index('revision="$(manifest_value')
+    activate = updater.index('SCREENER_EXPECTED_SHA="$revision"')
+    assert verify < resolve < activate
+    assert "screener-fleet-stable-1" in updater
+    assert "ditto-subnet/.github/workflows/release.yml@refs/heads/main" in updater
+    assert "release manifest failed its closed schema" in updater
+    assert "failed-descriptor" in updater
+    assert "managed-descriptor" in updater
+    assert "gcloud compute ssh" not in updater
+    assert "github_token" not in updater.casefold()
+
+    assert "cosign-linux-amd64" in bootstrap
+    assert (
+        "c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74" in bootstrap
+    )
+    assert "ditto-screener-release-update.timer" in bootstrap
+    assert "ExecStart=/opt/ditto/screener/src/" in service
+    assert "OnUnitActiveSec=10min" in timer

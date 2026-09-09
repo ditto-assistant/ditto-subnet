@@ -21,11 +21,9 @@
 #                   and hands off to scripts/bootstrap-screener.sh in that repo
 #                   (which installs Docker/uv, renders screener.env from Secret
 #                   Manager, and runs the repo's exact-commit updater)
-#   deploys         the ditto-subnet screener deploy workflow targets instances by
-#                   label (env=prod, role in screener|screener-fleet), so fleet
-#                   instances receive the same exact-commit updates as the pet
-#                   VM; a freshly booted instance starts from origin/main and
-#                   is converged by the next scheduled deploy run
+#   releases        release.yml publishes a keyless-signed stable descriptor;
+#                   each live GCE worker authenticates and pulls it on its own
+#                   timer, while a fleet at size zero naturally does no work
 #
 # All instances share the single prod screener identity (hotkey + bearer token
 # + sr25519 key): the platform authenticates ONE screener principal today. The
