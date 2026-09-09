@@ -70,4 +70,16 @@ postgres_tuning:
   log_filename: "'postgresql-%Y-%m-%d.log'"
   log_rotation_age: "1d"
   log_rotation_size: "100MB"
+  # Bind parameters in DETAIL lines are capped so one slow statement cannot
+  # write kilobytes of payload per execution (PostgreSQL 15+). The statement
+  # text itself is still logged whole.
+  log_parameter_max_length: 1024
   shared_preload_libraries: "'pg_stat_statements'"
+
+# Collector-log retention. The 2026-09-08 outage was the 30 GB boot disk
+# filling with 12 GB of daily slow-query logs that nothing pruned (about
+# 600 MB/day at log_min_duration_statement=500). A daily timer gzips finished
+# day files and deletes anything older than the retention window.
+postgres_log_retention_days: 7
+postgres_log_compress_after_days: 1
+postgres_log_prune_on_calendar: "*-*-* 01:15:00"
