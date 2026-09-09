@@ -4620,9 +4620,14 @@ class TestRetryBackoff:
 
 
 class TestChainCadenceFloor:
-    def _worker(self, chain: MagicMock) -> ValidatorWorker:
+    def _worker(
+        self, chain: MagicMock, *, commit_offset_blocks: int | None = None
+    ) -> ValidatorWorker:
+        config = _config()
+        if commit_offset_blocks is not None:
+            config.weight_commit_offset_blocks = commit_offset_blocks
         return ValidatorWorker(
-            config=_config(),
+            config=config,
             platform=MagicMock(),
             dittobench=MagicMock(),
             chain=chain,
@@ -4709,15 +4714,13 @@ class TestChainCadenceFloor:
         # A late previous-epoch commit at 9032380 forbids another before
         # 9032480; with offset 0 the anchor 9032389 alone would be too fast.
         chain = self._anchored_chain(last_update=9_032_380, head=9_032_400)
-        worker = self._worker(chain)
-        worker._config.weight_commit_offset_blocks = 0
+        worker = self._worker(chain, commit_offset_blocks=0)
         assert await worker._seconds_until_weight_window(4320.0) == (
             (9_032_380 + 100 + 1 - 9_032_400) * 12.0
         )
         # A hotkey that never set weights has LastUpdate 0 and no rate floor.
         chain = self._anchored_chain(last_update=0, head=9_032_400)
-        worker = self._worker(chain)
-        worker._config.weight_commit_offset_blocks = 0
+        worker = self._worker(chain, commit_offset_blocks=0)
         assert await worker._seconds_until_weight_window(4320.0) == 0.0
 
     async def test_unusable_anchor_or_offset_keeps_the_last_update_cadence(
@@ -4741,8 +4744,7 @@ class TestChainCadenceFloor:
         # honoured inside one epoch.
         chain = self._anchored_chain(last_update=1_000, head=1_300)
         chain.get_last_epoch_block = AsyncMock(return_value=1_000)
-        worker = self._worker(chain)
-        worker._config.weight_commit_offset_blocks = 354
+        worker = self._worker(chain, commit_offset_blocks=354)
         assert await worker._seconds_until_weight_window(4320.0) == 732.0
 
     async def test_local_resubmit_guard_uses_rate_limit_only_when_anchored(
