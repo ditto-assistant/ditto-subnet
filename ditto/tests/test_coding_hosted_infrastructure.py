@@ -93,12 +93,13 @@ def test_vm_uses_existing_protected_compute_module() -> None:
         assert f"google_compute_firewall.{rule}," in SOURCE
 
 
-def test_operators_are_explicit_and_instance_scoped() -> None:
+def test_operators_are_explicit_and_host_scoped() -> None:
     assert "!var.enabled || length(var.operators) > 0" in VARIABLES
     assert 'variable "operators"' in VARIABLES and "default     = []" in VARIABLES
-    assert 'resource "google_iap_tunnel_instance_iam_member" "ssh"' in SOURCE
-    assert 'expression  = "destination.port == 22"' in SOURCE
-    assert 'resource "google_project_iam_member" "ssh"' not in SOURCE
+    assert 'resource "google_project_iam_member" "ssh"' in SOURCE
+    assert "resource.name.extract('/instances/{name}') == '${local.name}'" in SOURCE
+    assert "destination.port == 22" in SOURCE
+    assert 'resource "google_iap_tunnel_instance_iam_member" "ssh"' not in SOURCE
     assert "roles/compute.viewer" not in SOURCE
 
 
