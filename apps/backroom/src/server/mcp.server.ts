@@ -207,6 +207,7 @@ import {
   setQueuePolicySettings,
   fetchValidatorSlotSettings,
   fetchValidatorFleetObservability,
+  fetchValidatorWeightDiagnostics,
   fetchValidatorAssignments,
   setValidatorSlotSettings,
   fetchBurnSettings,
@@ -483,6 +484,8 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 // Keep the catalog decision-grade; the original, detailed operation notes stay
 // available on demand through `get_backroom_tool_help`.
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
+  get_validator_weight_diagnostics:
+    'Read block-bound vTrust, revealed weights, and pending timelock rounds; never submits weights.',
   agent_scoring_readiness:
     'Read one submission\'s scoring blockers: dataset, screened image, policy version, status, and lease eligibility.',
   get_agent_coding_certifications:
@@ -2034,6 +2037,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         ),
       )
     },
+  )
+
+  registerTool(
+    'get_validator_weight_diagnostics',
+    {
+      title: 'Get validator weight and vTrust evidence',
+      description:
+        'Read revealed weights, raw and normalized validator trust, last weight-update blocks, consensus, stateful epoch counters, and pending commitment blocks/reveal rounds at one exact chain block/hash. Optional validatorUid filters the revealed rows and pending commitments; consensus remains subnet-wide. Ciphertext and signing material are never returned. vTrust is the last Yuma result; current weights can already include later reveals, so one snapshot does not prove historical clipping or recovery. Requires backroom:read. A failed chain read is an error, never an empty healthy result. This tool does not submit weights or alter burn policy.',
+      inputSchema: { validatorUid: z.number().int().min(0).max(65535).optional() },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchValidatorWeightDiagnostics(input)),
   )
 
   registerTool(

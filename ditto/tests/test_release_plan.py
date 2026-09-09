@@ -651,6 +651,9 @@ def test_non_runtime_changes_do_not_release(
             {"validator", "validator_stack"},
         ),
         ("Dockerfile.pylon", {"validator_stack"}),
+        ("services/pylon/ditto_pylon_epoch.py", {"validator_stack"}),
+        ("scripts/test-pylon-epoch-schedule.sh", {"validator_stack"}),
+        (".github/workflows/pylon-epoch-schedule.yml", {"validator_stack"}),
         (".dockerignore", {"validator_stack"}),
         (
             "scripts/run-coding-executor-connectivity-canary.py",

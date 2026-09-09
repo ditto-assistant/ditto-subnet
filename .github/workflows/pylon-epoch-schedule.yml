@@ -1,0 +1,34 @@
+name: Pylon stateful epoch integration
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile.pylon
+      - services/pylon/**
+      - scripts/test-pylon-epoch-schedule.sh
+      - ditto/tests/test_pylon_epoch_schedule.py
+      - .github/workflows/pylon-epoch-schedule.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Check epoch inputs and pinned-source refusals
+        run: uv run --frozen pytest -q ditto/tests/test_pylon_epoch_schedule.py
+      - name: Build the exact Pylon adapter
+        run: >-
+          docker buildx build --load --platform linux/amd64 -f Dockerfile.pylon
+          --build-context 'turbobt=https://github.com/ditto-assistant/turbobt.git?ref=refs/heads/ditto/subscription-id-str&checksum=d36d1a28e761ff9d743bbcc83d091309c4d3599e'
+          -t ditto-pylon:epoch-test .
+      - name: Exercise encryption and persisted tasks without chain access
+        run: bash scripts/test-pylon-epoch-schedule.sh ditto-pylon:epoch-test

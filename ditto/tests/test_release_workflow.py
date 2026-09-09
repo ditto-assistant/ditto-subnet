@@ -1214,6 +1214,10 @@ def test_release_builds_validator_on_native_standard_runners() -> None:
 
 def test_release_builds_pylon_from_the_reviewed_turbobt_fix() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    assert workflow["env"]["PYLON_BASE_IMAGE"] == (
+        "docker.io/backenddevelopersltd/bittensor-pylon@sha256:"
+        "d7389e6132dac49cb1acad68184fd6c3759592e2e494afdb732fd8f7a3f6349a"
+    )
     revision = workflow["env"]["PYLON_TURBOBT_REVISION"]
     assert len(revision) == 40
     assert all(character in "0123456789abcdef" for character in revision)
@@ -1232,8 +1236,12 @@ def test_release_builds_pylon_from_the_reviewed_turbobt_fix() -> None:
     assert verify["env"]["PYLON_DIGEST"] == "${{ steps.pylon.outputs.digest }}"
     assert "isinstance(subscription_id_raw, str)" in verify["run"]
     assert 'version("bittensor-wallet")=="4.1.1"' in verify["run"]
+    assert "io.heyditto.validator.pylon-base-version" in verify["run"]
+    assert "io.heyditto.validator.epoch-schedule" in verify["run"]
+    assert '"subtensor-stateful-epochs-v1"' in verify["run"]
     assert '{"cryptoType":1,"ss58Address":address}' in verify["run"]
     assert "deserialize_keypair_from_keyfile_data(payload)" in verify["run"]
+    assert 'bash scripts/test-pylon-epoch-schedule.sh "$exact"' in verify["run"]
     assembly = workflow["jobs"]["assemble-stack"]
     assert all(
         step.get("name") != "Verify the patched Pylon artifact"

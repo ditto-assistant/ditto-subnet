@@ -107,6 +107,9 @@ from ditto.api_server.endpoints.admin_validation_retry import (
 from ditto.api_server.endpoints.admin_validator_slot_settings import (
     router as admin_validator_slot_settings_router,
 )
+from ditto.api_server.endpoints.admin_validator_weights import (
+    router as admin_validator_weights_router,
+)
 from ditto.api_server.endpoints.attestation import router as attestation_router
 from ditto.api_server.endpoints.health import router as health_router
 from ditto.api_server.endpoints.inference import router as inference_router
@@ -168,6 +171,7 @@ __all__ = [
     "admin_inference_routes_router",
     "admin_hotkey_bans_router",
     "admin_leaderboard_router",
+    "admin_validator_weights_router",
     "admin_lease_revocations_router",
     "admin_copy_review_router",
     "admin_coding_certifications_router",

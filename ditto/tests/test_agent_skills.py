@@ -21,6 +21,14 @@ lookup_context = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(lookup_context)
 
 
+def test_vtrust_routes_to_stateful_pylon_and_chain_evidence() -> None:
+    topic = lookup("vTrust")[0]
+    assert topic["id"] == "pylon-epoch-schedule"
+    read = topic["read"]
+    assert isinstance(read, list)
+    assert "services/pylon/README.md" in read
+
+
 def lookup(query: str, maximum: int = 3) -> list[dict[str, object]]:
     completed = subprocess.run(
         [

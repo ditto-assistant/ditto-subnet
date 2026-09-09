@@ -1,5 +1,14 @@
 # SN118 Backroom MCP
 
+`get_validator_weight_diagnostics` reads revealed weights, last Yuma vTrust,
+consensus, epoch counters, and pending timelock rounds at one chain block/hash.
+It requires `backroom:read`, accepts an optional `validatorUid`, and never submits
+weights or returns ciphertext. Current revealed rows can postdate the last Yuma
+calculation; historical clipping and sustained recovery require multiple
+epoch-bound observations. Chain read failures are errors, not healthy empty rows.
+Stored weights are max-scaled u16 values; divide by each row's sum when comparing
+allocation shares, rather than dividing each weight by 65535.
+
 `https://backroom.dittobench.ai/mcp` is an OAuth-protected Streamable HTTP MCP
 server exposing the same operations as the console: screening quarantines and
 disputes, validator queue/slot/inference policy, benchmark rollouts, scoring

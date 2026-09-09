@@ -61,6 +61,43 @@ afterEach(() => {
 })
 
 describe('Backroom MCP tools', () => {
+  it('reads block-bound vTrust and pending rounds without exposing ciphertext', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const payload = {
+      netuid: 118, block: 9029509, block_hash: `0x${'a'.repeat(64)}`,
+      last_epoch_block: 9029509, pending_epoch_at: 0, subnet_epoch_index: 25017,
+      epoch: null,
+      validators: [{ validator_uid: 139, validator_hotkey: '5WSL',
+        validator_trust_u16: 60947, validator_trust: 60947 / 65535,
+        last_update_block: 9029448,
+        weights: [{ uid: 43, hotkey: '5Miner', value: 65535 }] }],
+      consensus: [{ uid: 43, value: 42597 }],
+      pending_commits: [{ validator_hotkey: '5WSL', commit_epoch: 25016,
+        commit_block: 9029448, reveal_round: 32049696, ciphertext: 'must-not-escape' }],
+      historical_clipping_verified: false, weights_submitted: false,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_validator_weight_diagnostics', arguments: { validatorUid: 139 } })
+      expect(response.isError).not.toBe(true)
+      const body = readJsonResult(response) as typeof payload
+      expect(body.block).toBe(9029509)
+      expect(body.validators[0].validator_trust_u16).toBe(60947)
+      expect(body.pending_commits[0].reveal_round).toBe(32049696)
+      expect(JSON.stringify(body)).not.toContain('must-not-escape')
+      expect(body.historical_clipping_verified).toBe(false)
+      expect(body.weights_submitted).toBe(false)
+      expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/admin/validator-weight-diagnostics?validator_uid=139')
+      fetchMock.mockResolvedValue(Response.json({ detail: 'unavailable' }, { status: 503 }))
+      expect((await client.callTool({ name: 'get_validator_weight_diagnostics', arguments: {} })).isError).toBe(true)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('publishes every Backroom operation with MCP safety annotations', async () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     const response = await client.listTools()
@@ -138,6 +175,7 @@ describe('Backroom MCP tools', () => {
         'get_agent_coding_shadow_evaluations',
         'get_coding_catalog_releases',
         'get_coding_private_v2_releases',
+        'get_validator_weight_diagnostics',
         'get_agent_core_qualification',
         'get_agent_scores',
         'get_leaderboard',
@@ -219,7 +257,9 @@ describe('Backroom MCP tools', () => {
     // policy-rescreen checkpoint controls. Keep modest headroom for schema
     // evolution; tighten the description budgets, not this whole-payload
     // backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(115_000)
+    // The block-bound weight diagnostic adds one tool and its bounded UID input.
+    // Keep the separate description budget below unchanged.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(116_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. 23_500 admits the screener

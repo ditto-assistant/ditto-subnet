@@ -2660,6 +2660,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/validator-weight-diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Validator Weight Diagnostics */
+        get: operations["validator_weight_diagnostics_api_v1_admin_validator_weight_diagnostics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/attestations/owner-link": {
         parameters: {
             query?: never;
@@ -16835,6 +16852,17 @@ export interface components {
              */
             scope: "plagiarism-screening-only";
         };
+        /** PendingWeightObservation */
+        PendingWeightObservation: {
+            /** Commit Block */
+            commit_block: number;
+            /** Commit Epoch */
+            commit_epoch: number;
+            /** Reveal Round */
+            reveal_round: number;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
         /**
          * PrevGenCarryoverSettings
          * @description When to admit previous-generation submissions that can never finalize.
@@ -25769,6 +25797,62 @@ export interface components {
             /** Transaction Phase */
             transaction_phase?: ("prepared" | "drained" | "old_stopped" | "candidate_started" | "committed" | "rollback_pending" | "rollback_ready") | null;
         };
+        /** ValidatorWeightDiagnosticsResponse */
+        ValidatorWeightDiagnosticsResponse: {
+            /** Block */
+            block: number;
+            /** Block Hash */
+            block_hash: string;
+            /** Consensus */
+            consensus: components["schemas"]["WeightConsensusObservation"][];
+            epoch: components["schemas"]["PublicChainEpoch"] | null;
+            /**
+             * Historical Clipping Verified
+             * @default false
+             * @constant
+             */
+            historical_clipping_verified: false;
+            /** Last Epoch Block */
+            last_epoch_block: number;
+            /** Netuid */
+            netuid: number;
+            /** Pending Commits */
+            pending_commits: components["schemas"]["PendingWeightObservation"][];
+            /** Pending Epoch At */
+            pending_epoch_at: number;
+            /** Subnet Epoch Index */
+            subnet_epoch_index: number;
+            /** Validators */
+            validators: components["schemas"]["ValidatorWeightObservation"][];
+            /**
+             * Weights Submitted
+             * @default false
+             * @constant
+             */
+            weights_submitted: false;
+        };
+        /** ValidatorWeightObservation */
+        ValidatorWeightObservation: {
+            /** Last Update Block */
+            last_update_block: number;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /** Validator Trust */
+            validator_trust: number;
+            /** Validator Trust U16 */
+            validator_trust_u16: number;
+            /** Validator Uid */
+            validator_uid: number;
+            /** Weights */
+            weights?: components["schemas"]["PublicChainWeight"][];
+        };
+        /** WeightConsensusObservation */
+        WeightConsensusObservation: {
+            /** Uid */
+            uid: number;
+            /** Value */
+            value: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -30796,6 +30880,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidatorSlotSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validator_weight_diagnostics_api_v1_admin_validator_weight_diagnostics_get: {
+        parameters: {
+            query?: {
+                validator_uid?: number | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidatorWeightDiagnosticsResponse"];
                 };
             };
             /** @description Validation Error */
