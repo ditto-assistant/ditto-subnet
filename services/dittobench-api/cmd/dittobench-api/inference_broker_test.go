@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -2133,6 +2134,198 @@ func TestV7InferenceBrokerLeavesStructuredOutputRepairToMiner(t *testing.T) {
 	}
 	if err := requireCompleteV7Usage(protocol.BenchVersionV8, usage, execution); err != nil {
 		t.Fatalf("successful miner repair was not scoreable: %v", err)
+	}
+}
+
+func TestV7InferenceBrokerPausesAndResumesReceiptFreeGatewayFailure(t *testing.T) {
+	const profile = "openrouter-route-0123456789abcdef-v1"
+	var calls atomic.Int64
+	var nonces []string
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nonces = append(nonces, r.Header.Get("X-Ditto-Nonce"))
+		if calls.Add(1) < 3 {
+			w.Header().Set(minerRecoverableFailureHeader, relayRecoverableGateway)
+			w.Header().Set("Retry-After", "5")
+			http.Error(w, "inference provider unavailable", http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":2,"completion_tokens":1},"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	var waitEvents []bool
+	broker.relayWait = func(_ string, waiting bool) { waitEvents = append(waitEvents, waiting) }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "groq", profile, llm.V7HarnessModel)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.31", protocol.BenchVersionV8)
+	start, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+	request.RemoteAddr = "192.0.2.31:4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("request status=%d want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if calls.Load() != 3 || len(nonces) != 3 || nonces[0] == nonces[1] || nonces[1] == nonces[2] {
+		t.Fatalf("signed gateway deliveries calls=%d nonces=%v", calls.Load(), nonces)
+	}
+	if fmt.Sprint(waitEvents) != "[true false]" {
+		t.Fatalf("relay wait events=%v", waitEvents)
+	}
+
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, err := relayExecutionSince(start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.Requests != 1 || execution.Successes != 1 || execution.UpstreamAttempts != 3 ||
+		execution.Retries != 2 || execution.RecoveryWaits != 1 || execution.RecoveryExhaustions != 0 ||
+		execution.InfrastructureFailures != 0 || execution.MinerRecoverableFailures != 0 {
+		t.Fatalf("gateway recovery accounting=%+v", execution)
+	}
+}
+
+func TestV7InferenceBrokerBoundsReceiptFreeGatewayRecovery(t *testing.T) {
+	const profile = "openrouter-route-0123456789abcdef-v1"
+	var calls atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set(minerRecoverableFailureHeader, relayRecoverableGateway)
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "inference provider unavailable", http.StatusBadGateway)
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "groq", profile, llm.V7HarnessModel)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.31", protocol.BenchVersionV8)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+	request.RemoteAddr = "192.0.2.31:4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusBadGateway || calls.Load() != ticketGatewayMaxAttempts {
+		t.Fatalf("bounded gateway result status=%d calls=%d", recorder.Code, calls.Load())
+	}
+	snapshot, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.InfrastructureFailures != 1 || snapshot.RecoveryWaits != 1 || snapshot.RecoveryExhaustions != 1 ||
+		snapshot.MinerRecoverableFailures != 0 {
+		t.Fatalf("gateway exhaustion accounting=%+v", snapshot)
+	}
+}
+
+func TestV7InferenceBrokerSerializesGatewayRecoveryCanaries(t *testing.T) {
+	const profile = "openrouter-route-0123456789abcdef-v1"
+	var calls atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) <= 2 {
+			w.Header().Set(minerRecoverableFailureHeader, relayRecoverableGateway)
+			http.Error(w, "inference provider unavailable", http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":2,"completion_tokens":1},"choices":[{"message":{"content":"OK"}}]}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	sleepStarted := make(chan struct{}, 2)
+	releaseSleep := make(chan struct{}, 2)
+	broker.sleep = func(ctx context.Context, _ time.Duration) error {
+		sleepStarted <- struct{}{}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-releaseSleep:
+			return nil
+		}
+	}
+	proxyURL := configureBrokerUpstream(broker, upstream)
+
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "groq", profile, llm.V7HarnessModel)
+	const sourceIP = "192.0.2.41"
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
+
+	call := func(done chan<- *httptest.ResponseRecorder) {
+		request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+		request.RemoteAddr = sourceIP + ":4321"
+		request.SetPathValue("rest", "v1/chat/completions")
+		recorder := httptest.NewRecorder()
+		broker.handle(recorder, request)
+		done <- recorder
+	}
+	done := make(chan *httptest.ResponseRecorder, 2)
+	go call(done)
+	<-sleepStarted
+	go call(done)
+
+	deadline := time.Now().Add(time.Second)
+	for calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("second initial delivery did not reach relay: calls=%d", calls.Load())
+	}
+	select {
+	case <-sleepStarted:
+		t.Fatal("two gateway recovery canaries ran concurrently")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	releaseSleep <- struct{}{}
+	first := <-done
+	if first.Code != http.StatusOK {
+		t.Fatalf("first canary status=%d", first.Code)
+	}
+	<-sleepStarted
+	releaseSleep <- struct{}{}
+	second := <-done
+	if second.Code != http.StatusOK || calls.Load() != 4 {
+		t.Fatalf("serialized recovery status=%d calls=%d", second.Code, calls.Load())
+	}
+}
+
+func TestV7InferenceBrokerDoesNotRetryUntypedGatewayFailure(t *testing.T) {
+	const profile = "openrouter-route-0123456789abcdef-v1"
+	var calls atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		http.Error(w, "ambiguous gateway", http.StatusBadGateway)
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "groq", profile, llm.V7HarnessModel)
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.31", protocol.BenchVersionV8)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+	request.RemoteAddr = "192.0.2.31:4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusBadGateway || calls.Load() != 1 {
+		t.Fatalf("ambiguous gateway status=%d calls=%d", recorder.Code, calls.Load())
 	}
 }
 
