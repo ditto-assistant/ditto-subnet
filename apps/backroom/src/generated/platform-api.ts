@@ -16024,6 +16024,13 @@ export interface components {
              */
             tie_weighting_mode?: "pool" | null;
             /**
+             * Track Shares Bps
+             * @description Optional per-track emission share in basis points (0-10000), keyed by track id (``memory``/``coding``/``router``). The operator-owned governance knob for the multi-competition split, resolved here and served already-decided like ``burn_share`` so the whole fleet folds one allocation. Empty (the default, and what an older platform's omission means) leaves the validator on its compiled ``TRACK_SHARES_BPS`` single-pool split, so a validator that ignores this field folds exactly as it did.
+             */
+            track_shares_bps?: {
+                [key: string]: number;
+            };
+            /**
              * V9 Confirmation Mode
              * @description Fail-closed marker: every Bench v9 entry must carry a valid full-confirmation receipt while present.
              */
