@@ -6004,6 +6004,9 @@ class InferenceGrant(Base):
             "active_requests >= 0", name="inference_grants_active_requests"
         ),
         Index("inference_grants_expiry_idx", "expires_at"),
+        # Lookup by validator alone (per-validator RPM rail); the lease key
+        # carries validator_hotkey only as its third column.
+        Index("inference_grants_validator_hotkey_idx", "validator_hotkey"),
     )
 
 
@@ -6315,6 +6318,14 @@ class InferenceRequest(Base):
             name="inference_requests_fallback_phase",
         ),
         Index("inference_requests_started_idx", "started_at"),
+        # Per-grant RPM rail (CountRecentTicketRequests) and the grant-first
+        # plan for the per-validator rail; see the 2026_09_08 migration.
+        Index(
+            "inference_requests_grant_kind_started_idx",
+            "grant_id",
+            "request_kind",
+            "started_at",
+        ),
         # In-flight rows only: the runtime-metrics stale count and the
         # admission path's live-request counts test ``status = 'started'``
         # against a ledger of tens of millions of settled rows. See the

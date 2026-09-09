@@ -45,7 +45,7 @@ func finishInferenceRequest(ctx context.Context, q *postgres.Queries, p finishPa
 		return false, err
 	}
 	var ticket *postgres.ValidatorTicket
-	ticketRow, err := q.GetValidatorTicketForUpdate(ctx, postgres.GetValidatorTicketForUpdateParams{
+	ticketRow, err := q.GetValidatorTicketForShare(ctx, postgres.GetValidatorTicketForShareParams{
 		AgentID:         snapshot.AgentID,
 		BenchVersion:    snapshot.BenchVersion,
 		ValidatorHotkey: snapshot.ValidatorHotkey,
@@ -191,46 +191,14 @@ func recordRouteObservation(ctx context.Context, q *postgres.Queries, grant *pos
 	if len(models) == 0 {
 		return nil
 	}
-	route, err := q.GetInferenceProviderRouteForUpdate(ctx, postgres.GetInferenceProviderRouteForUpdateParams{
-		Model:           models[0],
-		Provider:        grant.RouteProvider.String,
-		ProfileRevision: grant.RouteProfile.String,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		return err
-	}
-	policy, err := q.GetInferenceRoutingPolicy(ctx, models[0])
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		return err
-	}
-	alpha := policy.EwmaAlpha
-	ewma := func(previous pgtype.Float8, observed float64) float64 {
-		if !previous.Valid {
-			return observed
-		}
-		return alpha*observed + (1-alpha)*previous.Float64
-	}
-	ewmaPlain := func(previous float64, observed float64) float64 {
-		return alpha*observed + (1-alpha)*previous
-	}
-
 	latency := latencyMs
 	if latency < 0 {
 		latency = 0
 	}
-	newLatency := pgtype.Float8{Float64: ewma(route.EwmaLatencyMs, latency), Valid: true}
-	newTokensPerSecond := route.EwmaTokensPerSecond
-	if success && latencyMs > 0 && completionTokens > 0 {
-		newTokensPerSecond = pgtype.Float8{
-			Float64: ewma(route.EwmaTokensPerSecond, float64(completionTokens)/(latencyMs/1000)),
-			Valid:   true,
-		}
+	tokensPerSecondObserved := success && latencyMs > 0 && completionTokens > 0
+	tokensPerSecond := 0.0
+	if tokensPerSecondObserved {
+		tokensPerSecond = float64(completionTokens) / (latencyMs / 1000)
 	}
 	errObserved := 1.0
 	if success {
@@ -240,32 +208,26 @@ func recordRouteObservation(ctx context.Context, q *postgres.Queries, grant *pos
 	if timedOut {
 		timeoutObserved = 1.0
 	}
-	newCost := route.EwmaCostMicrousd
-	if costMicrousd >= 0 {
-		newCost = pgtype.Float8{Float64: ewma(route.EwmaCostMicrousd, float64(costMicrousd)), Valid: true}
-	}
-	status := "degraded"
-	cooldown := pgtype.Timestamptz{}
-	if success {
-		status = "healthy"
-	} else {
-		cooldown = pgTime(now.Add(time.Duration(policy.CooldownSeconds) * time.Second))
-	}
-	return q.UpdateInferenceProviderRouteObservation(ctx, postgres.UpdateInferenceProviderRouteObservationParams{
-		SampleCount:         route.SampleCount + 1,
-		EwmaLatencyMs:       newLatency,
-		EwmaTokensPerSecond: newTokensPerSecond,
-		EwmaErrorRate:       ewmaPlain(route.EwmaErrorRate, errObserved),
-		EwmaTimeoutRate:     ewmaPlain(route.EwmaTimeoutRate, timeoutObserved),
-		EwmaCostMicrousd:    newCost,
-		Status:              status,
-		CooldownUntil:       cooldown,
-		LastObservedAt:      pgTime(now),
-		Now:                 pgTime(now),
-		Model:               models[0],
-		Provider:            grant.RouteProvider.String,
-		ProfileRevision:     grant.RouteProfile.String,
+	// One statement: the EWMA folds, status, and cooldown are computed in SQL
+	// from the current row and the model's routing policy, so the route row is
+	// locked only for the UPDATE itself instead of across a SELECT ... FOR
+	// UPDATE, a policy read, and a write-back. A missing route or policy row
+	// folds nothing (0 rows), which is the same no-op as before.
+	_, err := q.ObserveInferenceProviderRoute(ctx, postgres.ObserveInferenceProviderRouteParams{
+		LatencyMs:               latency,
+		TokensPerSecondObserved: tokensPerSecondObserved,
+		TokensPerSecond:         tokensPerSecond,
+		ErrorObserved:           errObserved,
+		TimeoutObserved:         timeoutObserved,
+		CostObserved:            costMicrousd >= 0,
+		CostMicrousd:            float64(max64(costMicrousd, 0)),
+		Success:                 success,
+		Now:                     pgTime(now),
+		Model:                   models[0],
+		Provider:                grant.RouteProvider.String,
+		ProfileRevision:         grant.RouteProfile.String,
 	})
+	return err
 }
 
 func max64(a, b int64) int64 {
