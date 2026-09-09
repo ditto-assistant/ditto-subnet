@@ -1,4 +1,33 @@
 ---
+# A member listed in base_team_members but absent from base_team_ssh_keys would
+# get an account, sudo, and an sshd AllowUsers entry with no way to log in. That
+# is the failure this role exists to prevent, so refuse the converge before the
+# accounts are created rather than skipping the key task silently.
+- name: Collect team members with no SSH key declared
+  ansible.builtin.set_fact:
+    base_team_members_without_keys: >-
+      {{ base_team_members
+         | difference(base_team_ssh_keys | dict2items
+                      | selectattr('value')
+                      | map(attribute='key') | list) | sort }}
+
+- name: Require an SSH key for every managed team member
+  ansible.builtin.assert:
+    that:
+      - base_team_members_without_keys | length == 0
+    quiet: true
+    fail_msg: >-
+      No SSH key declared for: {{ base_team_members_without_keys | join(', ') }}.
+      This role would create those accounts with sudo and an sshd AllowUsers
+      entry but no authorized key, leaving them unreachable. The keys come from
+      team_ssh_keys in group_vars/all.yml, which Ansible resolves relative to
+      the INVENTORY file rather than the playbook -- so an inventory kept
+      outside infra/ansible/inventory/ (whose group_vars symlink makes this
+      work) yields an empty map and no error. Either run with an inventory
+      under that directory, or pass
+      -e @<repo>/infra/ansible/group_vars/all.yml. Hosts that manage no team
+      accounts set base_team_members: [] and skip this check.
+
 - name: Ensure 'ditto' group exists
   ansible.builtin.group:
     name: "{{ deploy_group | default('ditto') }}"
