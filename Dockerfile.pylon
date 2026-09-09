@@ -23,7 +23,8 @@ ADD --checksum=sha256:443b1fd0f497331719f23d854362ad7573314aae9fc955f1371bdafc66
 # time times drand ingestion lag exceeds it, an early-phase committer's pulse
 # is on-chain by boundary(N+1) and its weights enter fold N+1 while later
 # committers enter N+2. The validator therefore commits at one fixed late
-# phase (VALIDATOR_WEIGHT_COMMIT_OFFSET_BLOCKS), and post-deploy verification
+# phase (ditto/validator/worker.py _WEIGHT_COMMIT_OFFSET_BLOCKS, a fleet
+# constant rather than an operator setting), and post-deploy verification
 # must confirm through get_validator_weight_diagnostics that each managed
 # validator's implied_reveal_block equals next_epoch_block + 3, not the
 # boundary itself.

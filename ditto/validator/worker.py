@@ -208,6 +208,22 @@ _BLOCK_SECONDS = 12.0
 # far side of it, where it belongs to the next epoch and the current epoch's
 # Pylon task is expired. Defer such a commit to the next anchored window.
 _BOUNDARY_INCLUSION_MARGIN_BLOCKS = 6
+# Blocks after the chain's LastEpochBlock at which weights are committed, fixed
+# for the whole managed fleet on purpose: it is not an operator setting.
+#
+# Under commit-reveal every commit made in epoch N reveals at the boundary that
+# ends N (plus drand's three-block security offset), so *when* inside the epoch
+# a validator commits does not change which fold its weights enter. It does
+# change which ledger it reads, and because Subtensor stores the commit block
+# as LastUpdate, a cadence anchored on LastUpdate plus the tempo drifts a block
+# or two later every epoch until it crosses the boundary and skips a fold.
+# Anchoring on the boundary gives every managed validator one shared, stable
+# phase, so they all sample the ledger at the same point of the epoch. Late in
+# the epoch is safer than early: less wall-clock drift accumulates between the
+# commit and the boundary pulse, while 90 blocks still leave far more than the
+# 100-block rate-limit window for inclusion. Any host-specific value would
+# reintroduce exactly the ledger-read skew this exists to remove.
+_WEIGHT_COMMIT_OFFSET_BLOCKS = 270
 
 # Substrings that identify a chain rate-limit rejection across the surfaces we
 # submit through (subtensor's ``SettingWeightsTooFast`` error, SDK / Pylon
@@ -4114,7 +4130,7 @@ class ValidatorWorker:
     async def _seconds_until_anchored_window(
         self, last_update: int, observed_block: int
     ) -> float | None:
-        """Delay until ``LastEpochBlock + weight_commit_offset_blocks``, or ``None``.
+        """Delay until ``LastEpochBlock + _WEIGHT_COMMIT_OFFSET_BLOCKS``, or ``None``.
 
         Subtensor stores the *commit* block as ``LastUpdate`` and every commit
         made in an epoch reveals at the boundary that ends it, so the phase at
@@ -4129,8 +4145,9 @@ class ValidatorWorker:
           epoch's anchor;
         * the chain's own ``WeightsSetRateLimit`` is never undercut.
 
-        ``None`` means the anchor, tempo, or configured offset is unusable and
-        the caller must keep the ``LastUpdate`` cadence instead.
+        ``None`` means the anchor or tempo is unusable (or the tempo is too
+        short for the fixed offset) and the caller must keep the ``LastUpdate``
+        cadence instead.
         """
         last_epoch_block = await self._read_chain_blocks("get_last_epoch_block")
         tempo = await self._read_chain_blocks("get_tempo")
@@ -4141,11 +4158,11 @@ class ValidatorWorker:
             or last_epoch_block > observed_block
         ):
             return None
-        offset = int(self._config.weight_commit_offset_blocks)
+        offset = _WEIGHT_COMMIT_OFFSET_BLOCKS
         latest_phase = tempo - _BOUNDARY_INCLUSION_MARGIN_BLOCKS
         if not 0 <= offset < latest_phase:
             logger.warning(
-                "weight_commit_offset_blocks=%d is outside [0, %d) for tempo %d; "
+                "fixed weight commit offset %d is outside [0, %d) for tempo %d; "
                 "keeping the LastUpdate cadence",
                 offset,
                 latest_phase,

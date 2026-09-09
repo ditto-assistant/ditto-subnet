@@ -115,9 +115,11 @@ survives two folds. The stateful expiry above would additionally expire a task
 created at phase 358 before it commits.
 
 The worker now anchors on `LastEpochBlock`: it commits once per chain epoch at
-`LastEpochBlock + VALIDATOR_WEIGHT_COMMIT_OFFSET_BLOCKS` (default 270 of 360),
-never inside the last six blocks of an epoch, and never below the chain's
-`WeightsSetRateLimit` (100 blocks on SN118). A late phase is deliberate: the
+`LastEpochBlock + 270` (of a 360-block tempo), never inside the last six blocks
+of an epoch, and never below the chain's `WeightsSetRateLimit` (100 blocks on
+SN118). The offset is a fleet constant in `ditto/validator/worker.py`, not an
+operator setting: a per-host value would reintroduce exactly the ledger-read
+skew the shared phase exists to remove. A late phase is deliberate: the
 commit-to-boundary span is where wall-clock drift against `block_time=12`
 accumulates, and a span above about 36 s of drift would pull a commit's pulse on
 chain before the boundary and reveal it one fold early. When the anchor is

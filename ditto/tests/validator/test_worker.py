@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast, get_args
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -820,7 +820,6 @@ def _config() -> MagicMock:
     cfg.min_stake_tao = 0.0
     cfg.sweep_seconds = 120
     cfg.epoch_seconds = 3600
-    cfg.weight_commit_offset_blocks = 270
     cfg.queue_limit = 16
     cfg.dittobench_mock = True
     return cfg
@@ -4620,14 +4619,9 @@ class TestRetryBackoff:
 
 
 class TestChainCadenceFloor:
-    def _worker(
-        self, chain: MagicMock, *, commit_offset_blocks: int | None = None
-    ) -> ValidatorWorker:
-        config = _config()
-        if commit_offset_blocks is not None:
-            config.weight_commit_offset_blocks = commit_offset_blocks
+    def _worker(self, chain: MagicMock) -> ValidatorWorker:
         return ValidatorWorker(
-            config=config,
+            config=_config(),
             platform=MagicMock(),
             dittobench=MagicMock(),
             chain=chain,
@@ -4713,15 +4707,16 @@ class TestChainCadenceFloor:
     async def test_anchored_window_never_undercuts_the_chain_rate_limit(self) -> None:
         # A late previous-epoch commit at 9032380 forbids another before
         # 9032480; with offset 0 the anchor 9032389 alone would be too fast.
-        chain = self._anchored_chain(last_update=9_032_380, head=9_032_400)
-        worker = self._worker(chain, commit_offset_blocks=0)
-        assert await worker._seconds_until_weight_window(4320.0) == (
-            (9_032_380 + 100 + 1 - 9_032_400) * 12.0
-        )
-        # A hotkey that never set weights has LastUpdate 0 and no rate floor.
-        chain = self._anchored_chain(last_update=0, head=9_032_400)
-        worker = self._worker(chain, commit_offset_blocks=0)
-        assert await worker._seconds_until_weight_window(4320.0) == 0.0
+        # The offset is a fleet constant, so the test pins it rather than
+        # configuring it.
+        with patch.object(worker_mod, "_WEIGHT_COMMIT_OFFSET_BLOCKS", 0):
+            chain = self._anchored_chain(last_update=9_032_380, head=9_032_400)
+            assert await self._worker(chain)._seconds_until_weight_window(4320.0) == (
+                (9_032_380 + 100 + 1 - 9_032_400) * 12.0
+            )
+            # A hotkey that never set weights has LastUpdate 0 and no rate floor.
+            chain = self._anchored_chain(last_update=0, head=9_032_400)
+            assert await self._worker(chain)._seconds_until_weight_window(4320.0) == 0.0
 
     async def test_unusable_anchor_or_offset_keeps_the_last_update_cadence(
         self,
@@ -4740,12 +4735,12 @@ class TestChainCadenceFloor:
         chain = self._anchored_chain(last_update=1_000, head=1_300)
         chain.get_last_epoch_block = AsyncMock(return_value=1_301)
         assert await self._worker(chain)._seconds_until_weight_window(4320.0) == 732.0
-        # An offset at or past tempo minus the inclusion margin cannot be
-        # honoured inside one epoch.
+        # A tempo so short that the fixed offset lands inside the inclusion
+        # margin cannot be honoured inside one epoch.
         chain = self._anchored_chain(last_update=1_000, head=1_300)
         chain.get_last_epoch_block = AsyncMock(return_value=1_000)
-        worker = self._worker(chain, commit_offset_blocks=354)
-        assert await worker._seconds_until_weight_window(4320.0) == 732.0
+        chain.get_tempo = AsyncMock(return_value=276)
+        assert await self._worker(chain)._seconds_until_weight_window(4320.0) == 732.0
 
     async def test_local_resubmit_guard_uses_rate_limit_only_when_anchored(
         self,
