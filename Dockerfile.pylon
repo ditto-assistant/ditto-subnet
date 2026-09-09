@@ -1,27 +1,62 @@
 # syntax=docker/dockerfile:1
 
-ARG PYLON_BASE_IMAGE=docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
+ARG PYLON_BASE_IMAGE=docker.io/backenddevelopersltd/bittensor-pylon@sha256:d7389e6132dac49cb1acad68184fd6c3759592e2e494afdb732fd8f7a3f6349a
 FROM ${PYLON_BASE_IMAGE}
 
-# Pylon 2.3.0 pins bittensor-wallet 4.0.1, whose Rust keyfile parser rejects
+# Pylon 2.3.2 pins bittensor-wallet 4.0.1, whose Rust keyfile parser rejects
 # legacy-valid hotkeys where cryptoType is a JSON integer. Install the reviewed
 # upstream release whose value-based parser accepts that numeric field.
 ADD --checksum=sha256:443b1fd0f497331719f23d854362ad7573314aae9fc955f1371bdafc66286875 \
   https://files.pythonhosted.org/packages/38/94/06fad3225a24c4c3aff3e059353f17928c384fb5802612ddbfef108fd886/bittensor_wallet-4.1.1-cp313-cp313-manylinux_2_28_x86_64.whl \
   /tmp/bittensor_wallet-4.1.1-cp313-cp313-manylinux_2_28_x86_64.whl
 
+# v1.0.1 predicts reveal epochs with the retired tempo+1/netuid formula.
+# Pin the stateful implementation and adapt both TurboBT's call and Pylon's
+# persisted-task expiry; merely upgrading the wheel leaves an incompatible API.
+#
+# Reveal timing that this pin produces, and what to verify after a rollout:
+# TurboBT still passes block_time=12 and drand v2 adds SECURITY_BLOCK_OFFSET=3,
+# so every commit made in epoch N encrypts for a pulse at boundary(N+1) + 3.
+# That deliberately misses Subtensor's lookahead reveal at the boundary block
+# itself and lands the vector in fold N+2, uniformly for every committer. The
+# margin is 36 s of wall clock over the commit-to-boundary span: if real block
+# time times drand ingestion lag exceeds it, an early-phase committer's pulse
+# is on-chain by boundary(N+1) and its weights enter fold N+1 while later
+# committers enter N+2. The validator therefore commits at one fixed late
+# phase (ditto/validator/worker.py _WEIGHT_COMMIT_OFFSET_BLOCKS, a fleet
+# constant rather than an operator setting), and post-deploy verification
+# must confirm through get_validator_weight_diagnostics that each managed
+# validator's implied_reveal_block equals next_epoch_block + 3, not the
+# boundary itself.
+ADD --checksum=sha256:3d1c96a56bfedd7ce534414761b6067a3ee41c317b7034f3ee24c753170bed10 \
+  https://files.pythonhosted.org/packages/de/e6/cfd0a3d0a8d78f9355af6d28125406f42e7ccd25ffebcc3c71e6321be9d0/bittensor_drand-2.0.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
+  /tmp/bittensor_drand-2.0.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+COPY services/pylon/ditto_pylon_epoch.py services/pylon/patch_epoch_schedule.py /tmp/pylon-epoch/
+
 # TurboBT is supplied as an immutable named Git context by the release
 # workflow. Installing it into Pylon's existing virtualenv preserves the
 # reviewed Pylon service image while replacing only the faulty RPC adapter.
 COPY --from=turbobt . /tmp/turbobt
-RUN uv pip install \
+RUN /app/pylon_service/.venv/bin/python /tmp/pylon-epoch/patch_epoch_schedule.py --dependencies /tmp/turbobt/pyproject.toml \
+    && uv pip install \
       --python /app/pylon_service/.venv/bin/python \
       --no-deps \
       /tmp/bittensor_wallet-4.1.1-cp313-cp313-manylinux_2_28_x86_64.whl \
-    && PDM_BUILD_SCM_VERSION=1.3.0 uv pip install \
+    && PDM_BUILD_SCM_VERSION=1.3.1 uv pip install \
       --python /app/pylon_service/.venv/bin/python \
       --no-deps \
       /tmp/turbobt \
+    && uv pip install \
+      --python /app/pylon_service/.venv/bin/python \
+      --no-deps \
+      /tmp/bittensor_drand-2.0.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
+    && /app/pylon_service/.venv/bin/python /tmp/pylon-epoch/patch_epoch_schedule.py \
+    && uv pip check --python /app/pylon_service/.venv/bin/python \
     && rm -rf \
       /tmp/bittensor_wallet-4.1.1-cp313-cp313-manylinux_2_28_x86_64.whl \
+      /tmp/bittensor_drand-2.0.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
+      /tmp/pylon-epoch \
       /tmp/turbobt
+
+LABEL io.heyditto.validator.pylon-base-version="2.3.2" \
+      io.heyditto.validator.epoch-schedule="subtensor-stateful-epochs-v1"

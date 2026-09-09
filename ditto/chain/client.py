@@ -47,6 +47,7 @@ _TEMPO_STORAGE = "Tempo"
 _WEIGHTS_RATE_LIMIT_STORAGE = "WeightsSetRateLimit"
 _COMMIT_REVEAL_ENABLED_STORAGE = "CommitRevealWeightsEnabled"
 _REVEAL_PERIOD_STORAGE = "RevealPeriodEpochs"
+_LAST_EPOCH_BLOCK_STORAGE = "LastEpochBlock"
 
 
 class ChainClient:
@@ -256,6 +257,23 @@ class ChainClient:
             ChainTimeoutError: When the query exceeds its timeout.
         """
         raw = await self._query_subtensor_storage(_WEIGHTS_RATE_LIMIT_STORAGE, netuid)
+        return None if raw is None else int(raw)
+
+    async def get_last_epoch_block(self, netuid: int) -> int | None:
+        """Read the block at which the subnet's epoch last stepped.
+
+        ``SubtensorModule.LastEpochBlock(netuid)`` is the anchor of the chain's
+        stateful epoch schedule (the same storage drand 2.0 and the patched
+        Pylon image read). The weight loop commits at a fixed offset after it,
+        so every managed validator samples the ledger and commits in the same
+        part of the epoch instead of drifting on its own ``LastUpdate``.
+        ``None`` when the storage entry is empty (unknown netuid).
+
+        Raises:
+            ChainConnectionError: When the substrate node is unreachable.
+            ChainTimeoutError: When the query exceeds its timeout.
+        """
+        raw = await self._query_subtensor_storage(_LAST_EPOCH_BLOCK_STORAGE, netuid)
         return None if raw is None else int(raw)
 
     async def get_commit_reveal_enabled(self, netuid: int) -> bool | None:

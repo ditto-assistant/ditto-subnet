@@ -204,6 +204,26 @@ _WEIGHT_SET_RATE_LIMIT_RETRY_SECONDS = 12.0
 # Substrate block time; converts the chain's block-denominated
 # ``weights_rate_limit`` into the loop's seconds-denominated cadence.
 _BLOCK_SECONDS = 12.0
+# A commit submitted this close to the epoch boundary can be included on the
+# far side of it, where it belongs to the next epoch and the current epoch's
+# Pylon task is expired. Defer such a commit to the next anchored window.
+_BOUNDARY_INCLUSION_MARGIN_BLOCKS = 6
+# Blocks after the chain's LastEpochBlock at which weights are committed, fixed
+# for the whole managed fleet on purpose: it is not an operator setting.
+#
+# Under commit-reveal every commit made in epoch N reveals at the boundary that
+# ends N (plus drand's three-block security offset), so *when* inside the epoch
+# a validator commits does not change which fold its weights enter. It does
+# change which ledger it reads, and because Subtensor stores the commit block
+# as LastUpdate, a cadence anchored on LastUpdate plus the tempo drifts a block
+# or two later every epoch until it crosses the boundary and skips a fold.
+# Anchoring on the boundary gives every managed validator one shared, stable
+# phase, so they all sample the ledger at the same point of the epoch. Late in
+# the epoch is safer than early: less wall-clock drift accumulates between the
+# commit and the boundary pulse, while 90 blocks still leave far more than the
+# 100-block rate-limit window for inclusion. Any host-specific value would
+# reintroduce exactly the ledger-read skew this exists to remove.
+_WEIGHT_COMMIT_OFFSET_BLOCKS = 270
 
 # Substrings that identify a chain rate-limit rejection across the surfaces we
 # submit through (subtensor's ``SettingWeightsTooFast`` error, SDK / Pylon
@@ -3885,7 +3905,9 @@ class ValidatorWorker:
         # A successful local submission is authoritative even if the RPC has
         # not indexed LastUpdate yet. Never let a temporarily stale chain read
         # collapse this guard to zero and create SettingWeightsTooFast churn.
-        local_not_before = time.monotonic() + epoch_seconds
+        local_not_before = time.monotonic() + await self._local_resubmit_guard_seconds(
+            epoch_seconds
+        )
         while not stop.is_set():
             if drain_requested is not None and drain_requested.is_set():
                 return
@@ -4077,13 +4099,23 @@ class ValidatorWorker:
         Pylon acknowledges ``put_weights`` before its background task reaches
         Subtensor. On process restart, blindly submitting immediately can race
         the previous successful commit and create a task that only fails later.
-        ``LastUpdate`` plus the observed head lets the worker wait out the
-        configured/chain cadence first. Evidence reads remain fail-open so a
-        temporary Pylon read outage cannot permanently wedge weight liveness.
+        Evidence reads remain fail-open so a temporary Pylon read outage cannot
+        permanently wedge weight liveness.
+
+        Preferred schedule: one commit per chain epoch at a fixed offset after
+        ``LastEpochBlock`` (:meth:`_seconds_until_anchored_window`). Fallback
+        when the anchor is unreadable: ``LastUpdate`` plus the observed head
+        waits out the configured/chain cadence, which is what every validator
+        did before and which precesses a block or two later every epoch.
         """
         last_update, observed_block = await self._observe_onchain_weight_state()
         if last_update is None or observed_block is None:
             return 0.0
+        anchored = await self._seconds_until_anchored_window(
+            last_update, observed_block
+        )
+        if anchored is not None:
+            return anchored
         elapsed_blocks = observed_block - last_update
         if elapsed_blocks < 0:
             return 0.0
@@ -4094,6 +4126,88 @@ class ValidatorWorker:
         # One extra block protects against Pylon's cached head being just behind
         # the node used for the subsequent commit attempt.
         return float(remaining_blocks + 1) * _BLOCK_SECONDS
+
+    async def _seconds_until_anchored_window(
+        self, last_update: int, observed_block: int
+    ) -> float | None:
+        """Delay until ``LastEpochBlock + _WEIGHT_COMMIT_OFFSET_BLOCKS``, or ``None``.
+
+        Subtensor stores the *commit* block as ``LastUpdate`` and every commit
+        made in an epoch reveals at the boundary that ends it, so the phase at
+        which a validator commits only decides which ledger it reads. Anchoring
+        that phase on the chain's own epoch boundary keeps every managed
+        validator on one shared, non-drifting schedule:
+
+        * no commit yet in the current epoch: the window is this epoch's
+          anchor, immediately if it has already passed, unless the head is
+          within the boundary inclusion margin, in which case the next epoch's;
+        * a commit already recorded at or after ``LastEpochBlock``: the next
+          epoch's anchor;
+        * the chain's own ``WeightsSetRateLimit`` is never undercut.
+
+        ``None`` means the anchor or tempo is unusable (or the tempo is too
+        short for the fixed offset) and the caller must keep the ``LastUpdate``
+        cadence instead.
+        """
+        last_epoch_block = await self._read_chain_blocks("get_last_epoch_block")
+        tempo = await self._read_chain_blocks("get_tempo")
+        if (
+            last_epoch_block is None
+            or tempo is None
+            or tempo <= 0
+            or last_epoch_block > observed_block
+        ):
+            return None
+        offset = _WEIGHT_COMMIT_OFFSET_BLOCKS
+        latest_phase = tempo - _BOUNDARY_INCLUSION_MARGIN_BLOCKS
+        if not 0 <= offset < latest_phase:
+            logger.warning(
+                "fixed weight commit offset %d is outside [0, %d) for tempo %d; "
+                "keeping the LastUpdate cadence",
+                offset,
+                latest_phase,
+                tempo,
+            )
+            return None
+        committed_this_epoch = last_update >= last_epoch_block
+        if committed_this_epoch or observed_block >= last_epoch_block + latest_phase:
+            target = last_epoch_block + tempo + offset
+        else:
+            target = last_epoch_block + offset
+        rate_limit = await self._read_chain_blocks("get_weights_rate_limit")
+        if rate_limit is not None and last_update > 0:
+            # One extra block protects against Pylon's cached head being just
+            # behind the node used for the subsequent commit attempt.
+            target = max(target, last_update + rate_limit + 1)
+        remaining_blocks = target - observed_block
+        if remaining_blocks <= 0:
+            return 0.0
+        logger.info(
+            "weight commit anchored at block %d (LastEpochBlock %d + %d, tempo %d); "
+            "head %d, LastUpdate %d",
+            target,
+            last_epoch_block,
+            offset,
+            tempo,
+            observed_block,
+            last_update,
+        )
+        return float(remaining_blocks) * _BLOCK_SECONDS
+
+    async def _local_resubmit_guard_seconds(self, epoch_seconds: float) -> float:
+        """Local floor after a submission before the chain window is trusted again.
+
+        Pylon acknowledges before the commit lands, so ``LastUpdate`` can still
+        show the previous epoch for a few blocks and the anchored window would
+        read as due. Under the anchored schedule the chain's rate limit is the
+        right floor: a commit that has not landed within it may legally be
+        repeated. Without a readable anchor the full cadence is kept.
+        """
+        anchor = await self._read_chain_blocks("get_last_epoch_block")
+        rate_limit = await self._read_chain_blocks("get_weights_rate_limit")
+        if anchor is None or rate_limit is None or rate_limit <= 0:
+            return epoch_seconds
+        return min(epoch_seconds, float(rate_limit + 1) * _BLOCK_SECONDS)
 
     async def _read_chain_blocks(self, method_name: str) -> int | None:
         """Call an optional block-count read on the weight sink, fail-open."""

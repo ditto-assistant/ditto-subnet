@@ -3,6 +3,10 @@ import '@tanstack/react-start/server-only'
 import type { operations as PlatformOperations } from '../generated/platform-api'
 
 import {
+  validatorWeightDiagnosticsInputSchema,
+  validatorWeightDiagnosticsSchema,
+} from '../lib/validator-weight.schemas'
+import {
   athReviewAuditSchema,
   athReviewQueueInputSchema,
   copyReviewConsoleListSchema,
@@ -1371,6 +1375,16 @@ export async function fetchValidatorFleetObservability() {
     retries: 1,
   })
   return validatorFleetObservabilitySchema.parse(payload)
+}
+
+export async function fetchValidatorWeightDiagnostics(rawInput: unknown) {
+  const input = validatorWeightDiagnosticsInputSchema.parse(rawInput)
+  const suffix = input.validatorUid === undefined ? '' : `?validator_uid=${input.validatorUid}`
+  const payload = await platformAdminRequest(`/api/v1/admin/validator-weight-diagnostics${suffix}`, {
+    timeoutMs: 60_000,
+    retries: 0,
+  })
+  return validatorWeightDiagnosticsSchema.parse(payload) satisfies PlatformOperations['validator_weight_diagnostics_api_v1_admin_validator_weight_diagnostics_get']['responses'][200]['content']['application/json']
 }
 
 export async function fetchScreeningQuarantines(

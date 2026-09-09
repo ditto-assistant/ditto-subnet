@@ -2660,6 +2660,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/validator-weight-diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Validator Weight Diagnostics */
+        get: operations["validator_weight_diagnostics_api_v1_admin_validator_weight_diagnostics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/attestations/owner-link": {
         parameters: {
             query?: never;
@@ -16835,6 +16852,32 @@ export interface components {
              */
             scope: "plagiarism-screening-only";
         };
+        /** PendingWeightObservation */
+        PendingWeightObservation: {
+            /** Commit Block */
+            commit_block: number;
+            /**
+             * Commit Block Timestamp
+             * @description Unix seconds of `Timestamp.Now` at the commit block, or null when that block's state was unreadable.
+             */
+            commit_block_timestamp: number | null;
+            /** Commit Epoch */
+            commit_epoch: number;
+            /**
+             * Implied Reveal Block
+             * @description Block the committer's drand round points at, derived as commit_block + (round time - commit block time) / 12 to about one block. A stateful drand 2.0 commit targets the boundary ending its epoch plus 3; a legacy tempo+1 commit made in the same epoch can target a block inside that epoch. Null when commit_block_timestamp is null.
+             */
+            implied_reveal_block: number | null;
+            /**
+             * Implied Reveal Offset Blocks
+             * @description implied_reveal_block minus the boundary that ends the commit's epoch: next_epoch_block for a current-epoch commit, last_epoch_block for a previous-epoch one. About +3 means the stateful schedule; a large negative value means the legacy same-epoch reveal lane. Null for older commits or when implied_reveal_block is null.
+             */
+            implied_reveal_offset_blocks: number | null;
+            /** Reveal Round */
+            reveal_round: number;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
         /**
          * PrevGenCarryoverSettings
          * @description When to admit previous-generation submissions that can never finalize.
@@ -25769,6 +25812,71 @@ export interface components {
             /** Transaction Phase */
             transaction_phase?: ("prepared" | "drained" | "old_stopped" | "candidate_started" | "committed" | "rollback_pending" | "rollback_ready") | null;
         };
+        /** ValidatorWeightDiagnosticsResponse */
+        ValidatorWeightDiagnosticsResponse: {
+            /** Block */
+            block: number;
+            /** Block Hash */
+            block_hash: string;
+            /** Blocks Since Last Step */
+            blocks_since_last_step: number;
+            /** Consensus */
+            consensus: components["schemas"]["WeightConsensusObservation"][];
+            epoch: components["schemas"]["PublicChainEpoch"] | null;
+            /**
+             * Historical Clipping Verified
+             * @default false
+             * @constant
+             */
+            historical_clipping_verified: false;
+            /** Last Epoch Block */
+            last_epoch_block: number;
+            /** Netuid */
+            netuid: number;
+            /**
+             * Next Epoch Block
+             * @description First block after `block` at which Subtensor steps this subnet's epoch, simulated from the stateful counters above exactly as drand 2.0 and the Pylon image do.
+             */
+            next_epoch_block: number;
+            /** Pending Commits */
+            pending_commits: components["schemas"]["PendingWeightObservation"][];
+            /** Pending Epoch At */
+            pending_epoch_at: number;
+            /** Subnet Epoch Index */
+            subnet_epoch_index: number;
+            /** Tempo */
+            tempo: number;
+            /** Validators */
+            validators: components["schemas"]["ValidatorWeightObservation"][];
+            /**
+             * Weights Submitted
+             * @default false
+             * @constant
+             */
+            weights_submitted: false;
+        };
+        /** ValidatorWeightObservation */
+        ValidatorWeightObservation: {
+            /** Last Update Block */
+            last_update_block: number;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /** Validator Trust */
+            validator_trust: number;
+            /** Validator Trust U16 */
+            validator_trust_u16: number;
+            /** Validator Uid */
+            validator_uid: number;
+            /** Weights */
+            weights?: components["schemas"]["PublicChainWeight"][];
+        };
+        /** WeightConsensusObservation */
+        WeightConsensusObservation: {
+            /** Uid */
+            uid: number;
+            /** Value */
+            value: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -30796,6 +30904,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidatorSlotSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validator_weight_diagnostics_api_v1_admin_validator_weight_diagnostics_get: {
+        parameters: {
+            query?: {
+                validator_uid?: number | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidatorWeightDiagnosticsResponse"];
                 };
             };
             /** @description Validation Error */

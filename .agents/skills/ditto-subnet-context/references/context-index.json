@@ -67,6 +67,19 @@
       "related": ["mine", "dittobench-scoring", "contracts", "release-delivery"]
     },
     {
+      "id": "pylon-epoch-schedule",
+      "title": "Pylon stateful epochs and validator trust diagnostics",
+      "keywords": ["vtrust", "validator trust", "drand", "stateful epoch", "timelock reveal", "commit phase", "LastEpochBlock", "implied reveal block", "weight commit offset", "ledger sampling"],
+      "summary": "Trace the exact Pylon image, stateful epoch inputs, revealed weights, pending rounds and each commit's implied reveal block before attributing consensus clipping; the validator commits at one fixed phase after LastEpochBlock.",
+      "skills": ["ditto-subnet-benchmark", "ditto-subnet-platform"],
+      "owns": ["Dockerfile.pylon", "services/pylon", "apps/platform/ditto/chain/weight_diagnostics.py", "apps/platform/ditto/api_server/endpoints/admin_validator_weights.py"],
+      "read": ["services/pylon/README.md", "apps/backroom/docs/mcp.md", "ditto/validator/worker.py"],
+      "search": ["rg -n 'epoch|drand|SOURCE_HASHES' services/pylon", "rg -n 'get_validator_weight_diagnostics' apps/backroom/src/server/mcp.server.ts", "rg -n '_seconds_until_anchored_window|_WEIGHT_COMMIT_OFFSET_BLOCKS' ditto"],
+      "validate": ["uv run pytest ditto/tests/test_pylon_epoch_schedule.py -q", "uv run pytest ditto/tests/validator/test_worker.py -q -k TestChainCadenceFloor", "bash scripts/test-pylon-epoch-schedule.sh <exact-image>"],
+      "invariants": ["Read epoch fields at one chain block hash; never fall back to tempo+1 scheduling.", "Last Yuma trust, current revealed weights, pending commitments and Pylon acceptance are different evidence.", "A uniform reveal schedule does not make validators that read different ledgers agree; the ledger-sampling gap is a Platform fix."],
+      "related": ["validator-miner", "release-delivery", "backroom"]
+    },
+    {
       "id": "mine",
       "title": "Mine on SN118: practice, score, and submit a harness",
       "keywords": ["mine", "starter kit", "practice", "cargo evaluate", "ditto practice", "run-size", "run size full", "upload", "submit agent", "local score", "onchain score", "tool_mean", "openrouter", "rehearsal", "served path", "pre-submit review"],

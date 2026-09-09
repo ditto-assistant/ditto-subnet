@@ -32,7 +32,7 @@ env:
   MODEL_RELAY_COMPAT_REVISION: c0cac04970523326738cc704aa1bd60cd2623b22
   MODEL_RELAY_COMPAT_DIR: services/dittobench-api/compat/model-relay
   STACK_REPOSITORY: ghcr.io/ditto-assistant/ditto-subnet-stack
-  PYLON_BASE_IMAGE: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
+  PYLON_BASE_IMAGE: docker.io/backenddevelopersltd/bittensor-pylon@sha256:d7389e6132dac49cb1acad68184fd6c3759592e2e494afdb732fd8f7a3f6349a
   PYLON_TURBOBT_REVISION: d36d1a28e761ff9d743bbcc83d091309c4d3599e
   SCREENER_REPOSITORY: us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-runtime/screener
   SUBMISSION_BUILDER_REPOSITORY: us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/submission-builder
@@ -1524,10 +1524,13 @@ jobs:
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$exact")" = "$VERSION"
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")" = "$REVISION"
           test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.turbobt-revision" }}' "$exact")" = "$PYLON_TURBOBT_REVISION"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.pylon-base-version" }}' "$exact")" = "2.3.2"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.epoch-schedule" }}' "$exact")" = "subtensor-stateful-epochs-v1"
           docker run --rm --platform linux/amd64 --entrypoint /app/pylon_service/.venv/bin/python "$exact" -c \
             'from pathlib import Path; p=Path("/app/pylon_service/.venv/lib/python3.13/site-packages/turbobt/substrate/pallets/author.py"); s=p.read_text(); assert "isinstance(subscription_id_raw, str)" in s'
           docker run --rm --platform linux/amd64 --entrypoint /app/pylon_service/.venv/bin/python "$exact" -c \
             'import importlib.metadata,json; from bittensor_wallet.keyfile import deserialize_keypair_from_keyfile_data; address="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"; payload=json.dumps({"cryptoType":1,"ss58Address":address}).encode(); assert importlib.metadata.version("bittensor-wallet")=="4.1.1"; assert deserialize_keypair_from_keyfile_data(payload).ss58_address==address'
+          bash scripts/test-pylon-epoch-schedule.sh "$exact"
 
   prepare-dittobench:
     needs: [plan, release]

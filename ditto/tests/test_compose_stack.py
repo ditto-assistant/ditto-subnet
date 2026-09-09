@@ -676,10 +676,20 @@ def test_source_stack_builds_pylon_with_the_reviewed_turbobt_fix() -> None:
     )
     revision = context.rsplit("checksum=", 1)[1]
     assert len(revision) == 40
-    assert pylon["build"]["args"]["PYLON_BASE_IMAGE"].startswith(
+    assert pylon["build"]["args"]["PYLON_BASE_IMAGE"] == (
         "docker.io/backenddevelopersltd/bittensor-pylon@sha256:"
+        "d7389e6132dac49cb1acad68184fd6c3759592e2e494afdb732fd8f7a3f6349a"
     )
     assert "bittensor_wallet-4.1.1-cp313-cp313-manylinux_2_28_x86_64.whl" in dockerfile
+    assert "bittensor_drand-2.0.0-cp313-cp313" in dockerfile
+    assert "patch_epoch_schedule.py" in dockerfile
+    assert "PDM_BUILD_SCM_VERSION=1.3.1" in dockerfile
+    assert "uv pip check" in dockerfile
+    assert 'io.heyditto.validator.pylon-base-version="2.3.2"' in dockerfile
+    assert (
+        'io.heyditto.validator.epoch-schedule="subtensor-stateful-epochs-v1"'
+        in dockerfile
+    )
     assert (
         "--checksum=sha256:"
         "443b1fd0f497331719f23d854362ad7573314aae9fc955f1371bdafc66286875" in dockerfile
