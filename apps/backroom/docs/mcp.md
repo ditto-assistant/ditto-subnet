@@ -9,6 +9,18 @@ epoch-bound observations. Chain read failures are errors, not healthy empty rows
 Stored weights are max-scaled u16 values; divide by each row's sum when comparing
 allocation shares, rather than dividing each weight by 65535.
 
+`next_epoch_block` is simulated from `LastEpochBlock`, `PendingEpochAt`, `Tempo`,
+and `BlocksSinceLastStep` with the same `should_run_epoch` port drand 2.0 and the
+Pylon image use. Each pending commit carries `implied_reveal_block`, recovered
+from its drand round and the commit block's `Timestamp.Now` to about one block,
+and `implied_reveal_offset_blocks` relative to the boundary that ends the
+commit's epoch. About `+3` is the stateful schedule; a large negative offset is
+the legacy `tempo+1` same-epoch lane. This is how the reveal schedule of every
+validator, including those not on our stack, is compared, and the post-rollout
+check that each managed validator lands at boundary `+3` rather than at the
+boundary itself. A null implied block means the commit block's timestamp state
+was unreadable on the node, not a healthy result.
+
 `https://backroom.dittobench.ai/mcp` is an OAuth-protected Streamable HTTP MCP
 server exposing the same operations as the console: screening quarantines and
 disputes, validator queue/slot/inference policy, benchmark rollouts, scoring

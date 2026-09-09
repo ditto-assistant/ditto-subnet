@@ -16,6 +16,11 @@ export const validatorWeightDiagnosticsSchema = z.object({
   last_epoch_block: counter,
   pending_epoch_at: counter,
   subnet_epoch_index: counter,
+  tempo: counter.min(1).max(50400),
+  blocks_since_last_step: counter,
+  // The stateful boundary ending this epoch, from the same should_run_epoch
+  // simulation drand 2.0 and the Pylon image use.
+  next_epoch_block: counter,
   epoch: z.object({
     tempo_blocks: counter.positive(),
     block_seconds: z.number().positive(),
@@ -43,6 +48,12 @@ export const validatorWeightDiagnosticsSchema = z.object({
     commit_epoch: counter,
     commit_block: counter,
     reveal_round: counter,
+    commit_block_timestamp: counter.nullable(),
+    // Which block the committer's drand round targets (about one block of
+    // noise). Offset ~+3 from the boundary ending its epoch is the stateful
+    // schedule; a large negative offset is the legacy same-epoch reveal lane.
+    implied_reveal_block: counter.nullable(),
+    implied_reveal_offset_blocks: z.number().int().nullable(),
   })).max(2560),
   historical_clipping_verified: z.literal(false),
   weights_submitted: z.literal(false),

@@ -40,6 +40,9 @@ validator_subtensor_network: finney # override to the dev localnet ws:// in host
 validator_hotkey: "" # public SS58 — set in host_vars; empty = don't start the unit
 
 validator_epoch_seconds: 3600
+# Fixed commit phase after the chain's LastEpochBlock (blocks); see
+# ditto/validator/config.py weight_commit_offset_blocks.
+validator_weight_commit_offset_blocks: 270
 validator_queue_limit: 50
 validator_benchmark_capacity: 1
 validator_longmem_capacity: "{{ ((validator_benchmark_capacity | int) + 1) // 2 }}"

@@ -374,6 +374,22 @@ class ValidatorConfig:
     whichever is longer, so this value is a floor, not a promise — the loop
     never knowingly fights the chain's rate limiter."""
 
+    weight_commit_offset_blocks: int
+    """Blocks after the chain's ``LastEpochBlock`` at which weights are committed.
+
+    Under commit-reveal every commit made in epoch N reveals at the boundary
+    that ends N (plus drand's three-block security offset), so *when* inside
+    the epoch a validator commits does not change which fold its weights enter.
+    It does change which ledger it reads and, because Subtensor stores the
+    commit block as ``LastUpdate``, a cadence anchored on ``LastUpdate`` plus
+    the tempo drifts a block or two later every epoch until it crosses the
+    boundary and skips a fold. Anchoring on the boundary instead gives every
+    managed validator one shared, stable phase. Late in the epoch is safer
+    than early: less wall-clock drift accumulates between the commit and the
+    boundary pulse, while still leaving well over a rate-limit window for
+    inclusion. Must be smaller than the tempo minus a few blocks; the worker
+    falls back to the ``LastUpdate`` cadence when the anchor is unreadable."""
+
     queue_limit: int
     """Max agents to pull from ``/validator/job`` per sweep."""
 
@@ -694,6 +710,9 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         min_stake_tao=min_stake_tao,
         sweep_seconds=int(os.environ.get("VALIDATOR_SWEEP_SECONDS", "30")),
         epoch_seconds=int(os.environ.get("VALIDATOR_EPOCH_SECONDS", "3600")),
+        weight_commit_offset_blocks=int(
+            os.environ.get("VALIDATOR_WEIGHT_COMMIT_OFFSET_BLOCKS", "270")
+        ),
         queue_limit=int(os.environ.get("VALIDATOR_QUEUE_LIMIT", "50")),
         dittobench_poll_seconds=float(
             os.environ.get("VALIDATOR_DITTOBENCH_POLL_SECONDS", "10")

@@ -68,6 +68,9 @@ async def validator_weight_diagnostics(
         last_epoch_block=evidence.last_epoch_block,
         pending_epoch_at=evidence.pending_epoch_at,
         subnet_epoch_index=evidence.subnet_epoch_index,
+        tempo=evidence.tempo,
+        blocks_since_last_step=evidence.blocks_since_last_step,
+        next_epoch_block=evidence.next_epoch_block,
         epoch=_public_epoch(snapshot),
         validators=[
             ValidatorWeightObservation(
@@ -94,6 +97,9 @@ async def validator_weight_diagnostics(
                 commit_epoch=c.epoch,
                 commit_block=c.commit_block,
                 reveal_round=c.reveal_round,
+                commit_block_timestamp=c.commit_block_timestamp,
+                implied_reveal_block=c.implied_reveal_block,
+                implied_reveal_offset_blocks=evidence.reveal_offset_blocks(c),
             )
             for c in evidence.pending
             if validator_uid is None or c.hotkey in hotkeys

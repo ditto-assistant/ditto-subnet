@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import bittensor_drand
-from ditto_pylon_epoch import SCHEDULE_VERSION, EpochSchedule
+from ditto_pylon_epoch import SCHEDULE_VERSION, SECURITY_BLOCK_OFFSET, EpochSchedule
 from pylon_service.api._unstable import services, tasks
 from pylon_service.bittensor import contact as contact_module
 from pylon_service.bittensor.contact import TurboBtContact
@@ -136,7 +136,12 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
         )
         after = time.time()
         self.assertTrue(body)
-        delay = (9_029_509 + 3 - 9_029_448) * 12
+        # The Python port used for Pylon's task window predicts the same block
+        # the Rust crate encrypted for: the next boundary plus the +3 offset.
+        target = schedule().target_ingest_block(1)
+        self.assertEqual(target, 9_029_509 + SECURITY_BLOCK_OFFSET)
+        self.assertEqual(target, schedule().next_epoch_block + SECURITY_BLOCK_OFFSET)
+        delay = (target - 9_029_448) * 12
         self.assertGreaterEqual(reveal, int((before + delay - 1_692_803_367) // 3))
         self.assertLessEqual(reveal, int((after + delay - 1_692_803_367) // 3))
 
@@ -153,7 +158,37 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
         )
         after = time.time()
         # Inclusion at 9029509 belongs to epoch 25017, not 25016.
-        delay = (9_029_869 + 3 - 9_029_508) * 12
+        target = schedule(block=9_029_508).target_ingest_block(1)
+        self.assertEqual(target, 9_029_869 + SECURITY_BLOCK_OFFSET)
+        delay = (target - 9_029_508) * 12
+        self.assertGreaterEqual(reveal, int((before + delay - 1_692_803_367) // 3))
+        self.assertLessEqual(reveal, int((after + delay - 1_692_803_367) // 3))
+
+    def test_real_drand_v2_agrees_with_the_port_after_a_deferred_epoch(self):
+        # A pending epoch whose block already passed steps on the next block,
+        # so a commit included there belongs to the new epoch. The two-rule
+        # shortcut min(last + tempo, pending) cannot express this; the port and
+        # the Rust crate must agree so task expiry and reveal share one model.
+        deferred = schedule(
+            block=9_029_300,
+            pending_epoch_at=9_029_250,
+            blocks_since_last_step=151,
+        )
+        self.assertEqual(deferred.next_epoch_block, 9_029_301)
+        target = deferred.target_ingest_block(1)
+        self.assertEqual(target, 9_029_301 + 360 + SECURITY_BLOCK_OFFSET)
+        before = time.time()
+        _, reveal = bittensor_drand.get_encrypted_commit_v2(
+            uids=[43],
+            weights=[65535],
+            version_key=1,
+            **deferred.drand_arguments(),
+            subnet_reveal_period_epochs=1,
+            block_time=12.0,
+            hotkey=bytes(32),
+        )
+        after = time.time()
+        delay = (target - 9_029_300) * 12
         self.assertGreaterEqual(reveal, int((before + delay - 1_692_803_367) // 3))
         self.assertLessEqual(reveal, int((after + delay - 1_692_803_367) // 3))
 

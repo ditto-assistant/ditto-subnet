@@ -13,6 +13,20 @@ ADD --checksum=sha256:443b1fd0f497331719f23d854362ad7573314aae9fc955f1371bdafc66
 # v1.0.1 predicts reveal epochs with the retired tempo+1/netuid formula.
 # Pin the stateful implementation and adapt both TurboBT's call and Pylon's
 # persisted-task expiry; merely upgrading the wheel leaves an incompatible API.
+#
+# Reveal timing that this pin produces, and what to verify after a rollout:
+# TurboBT still passes block_time=12 and drand v2 adds SECURITY_BLOCK_OFFSET=3,
+# so every commit made in epoch N encrypts for a pulse at boundary(N+1) + 3.
+# That deliberately misses Subtensor's lookahead reveal at the boundary block
+# itself and lands the vector in fold N+2, uniformly for every committer. The
+# margin is 36 s of wall clock over the commit-to-boundary span: if real block
+# time times drand ingestion lag exceeds it, an early-phase committer's pulse
+# is on-chain by boundary(N+1) and its weights enter fold N+1 while later
+# committers enter N+2. The validator therefore commits at one fixed late
+# phase (VALIDATOR_WEIGHT_COMMIT_OFFSET_BLOCKS), and post-deploy verification
+# must confirm through get_validator_weight_diagnostics that each managed
+# validator's implied_reveal_block equals next_epoch_block + 3, not the
+# boundary itself.
 ADD --checksum=sha256:3d1c96a56bfedd7ce534414761b6067a3ee41c317b7034f3ee24c753170bed10 \
   https://files.pythonhosted.org/packages/de/e6/cfd0a3d0a8d78f9355af6d28125406f42e7ccd25ffebcc3c71e6321be9d0/bittensor_drand-2.0.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
   /tmp/bittensor_drand-2.0.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl

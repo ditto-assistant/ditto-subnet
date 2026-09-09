@@ -39,7 +39,15 @@ def fixture():
         9_029_509,
         0,
         25017,
-        (PendingWeightCommit(HOTKEY, 25016, 9_029_448, 32049696),),
+        (
+            # UID 139's legacy commit: round 32049696 is 9029577, inside its
+            # own epoch 25016, whose boundary was 9029509.
+            PendingWeightCommit(HOTKEY, 25016, 9_029_448, 32049696, 1_788_950_770),
+            PendingWeightCommit(HOTKEY, 25017, 9_029_509, 32050000),
+        ),
+        360,
+        0,
+        9_029_869,
     )
 
 
@@ -55,7 +63,18 @@ async def test_admin_read_binds_trust_and_pending_to_one_block(
     body = response.json()
     assert body["block"] == 9_029_509
     assert body["validators"][0]["validator_trust"] == pytest.approx(60947 / 65535)
-    assert body["pending_commits"][0]["reveal_round"] == 32049696
+    assert (body["tempo"], body["next_epoch_block"]) == (360, 9_029_869)
+    legacy, unknown = body["pending_commits"]
+    assert legacy["reveal_round"] == 32049696
+    assert legacy["implied_reveal_block"] == 9_029_448 + round(
+        (1_692_803_367 + 32049696 * 3 - 1_788_950_770) / 12
+    )
+    assert legacy["implied_reveal_offset_blocks"] == (
+        legacy["implied_reveal_block"] - 9_029_509
+    )
+    assert unknown["commit_block_timestamp"] is None
+    assert unknown["implied_reveal_block"] is None
+    assert unknown["implied_reveal_offset_blocks"] is None
     assert body["weights_submitted"] is body["historical_clipping_verified"] is False
     assert "ciphertext" not in response.text
 

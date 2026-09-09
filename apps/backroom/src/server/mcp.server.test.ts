@@ -66,14 +66,24 @@ describe('Backroom MCP tools', () => {
     const payload = {
       netuid: 118, block: 9029509, block_hash: `0x${'a'.repeat(64)}`,
       last_epoch_block: 9029509, pending_epoch_at: 0, subnet_epoch_index: 25017,
+      tempo: 360, blocks_since_last_step: 0, next_epoch_block: 9029869,
       epoch: null,
       validators: [{ validator_uid: 139, validator_hotkey: '5WSL',
         validator_trust_u16: 60947, validator_trust: 60947 / 65535,
         last_update_block: 9029448,
         weights: [{ uid: 43, hotkey: '5Miner', value: 65535 }] }],
       consensus: [{ uid: 43, value: 42597 }],
-      pending_commits: [{ validator_hotkey: '5WSL', commit_epoch: 25016,
-        commit_block: 9029448, reveal_round: 32049696, ciphertext: 'must-not-escape' }],
+      pending_commits: [
+        // Legacy drand 1.0.1 lane: the round points 129 blocks past the commit,
+        // inside epoch 25016 rather than at its boundary 9029509 + 3.
+        { validator_hotkey: '5WSL', commit_epoch: 25016, commit_block: 9029448,
+          reveal_round: 32049696, commit_block_timestamp: 1788950770,
+          implied_reveal_block: 9029577, implied_reveal_offset_blocks: 68,
+          ciphertext: 'must-not-escape' },
+        { validator_hotkey: '5WSL', commit_epoch: 25017, commit_block: 9029509,
+          reveal_round: 32050000, commit_block_timestamp: null,
+          implied_reveal_block: null, implied_reveal_offset_blocks: null },
+      ],
       historical_clipping_verified: false, weights_submitted: false,
     }
     const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
@@ -86,6 +96,10 @@ describe('Backroom MCP tools', () => {
       expect(body.block).toBe(9029509)
       expect(body.validators[0].validator_trust_u16).toBe(60947)
       expect(body.pending_commits[0].reveal_round).toBe(32049696)
+      expect(body.next_epoch_block).toBe(9029869)
+      expect(body.pending_commits[0].implied_reveal_block).toBe(9029577)
+      expect(body.pending_commits[0].implied_reveal_offset_blocks).toBe(68)
+      expect(body.pending_commits[1].implied_reveal_block).toBeNull()
       expect(JSON.stringify(body)).not.toContain('must-not-escape')
       expect(body.historical_clipping_verified).toBe(false)
       expect(body.weights_submitted).toBe(false)

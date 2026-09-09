@@ -56,10 +56,123 @@ def test_live_incident_early_and_late_commits_share_one_stateful_epoch():
     assert legacy(late.current_block) - late.next_epoch_block == 68
 
 
+def test_live_incident_commits_share_one_drand_v2_ingest_block():
+    # drand 2.0.0 encrypts for predict_first_reveal_block + SECURITY_BLOCK_OFFSET.
+    early, late = state(9_029_197), state(9_029_448)
+    assert early.predict_first_reveal_block(1) == late.predict_first_reveal_block(1)
+    assert early.target_ingest_block(1) == late.target_ingest_block(1) == 9_029_512
+    assert (
+        early.target_ingest_block(1)
+        == early.next_epoch_block + epoch.SECURITY_BLOCK_OFFSET
+    )
+
+
 def test_manual_epoch_and_tempo_changes_use_chain_state():
     assert state(pending_epoch_at=9_029_460).next_epoch_block == 9_029_460
     assert state(pending_epoch_at=9_030_000).next_epoch_block == 9_029_509
     assert state(tempo=720).next_epoch_block == 9_029_869
+
+
+@pytest.mark.parametrize(
+    ("name", "fields", "reveal_period", "expected"),
+    [
+        # bittensor-drand 2.0.0 src/epoch_schedule_vectors.rs predict_vectors.
+        (
+            "cycle_reset",
+            {
+                "last_epoch_block": 10,
+                "tempo": 50,
+                "blocks_since_last_step": 0,
+                "current_block": 10,
+            },
+            1,
+            60,
+        ),
+        (
+            "pending_fires_before_auto",
+            {
+                "last_epoch_block": 80,
+                "pending_epoch_at": 95,
+                "tempo": 20,
+                "blocks_since_last_step": 0,
+                "current_block": 91,
+            },
+            1,
+            95,
+        ),
+    ],
+)
+def test_reveal_prediction_matches_upstream_drand_vectors(
+    name, fields, reveal_period, expected
+):
+    vector = state(**{"subnet_epoch_index": 0, "pending_epoch_at": 0, **fields})
+    assert vector.predict_first_reveal_block(reveal_period) == expected, name
+    # The Pylon task window fires at the same block drand reveals in.
+    assert vector.next_epoch_block == expected, name
+
+
+def test_commit_epoch_is_taken_at_the_extrinsic_block():
+    # bittensor-drand 2.0.0 commit_epoch_vectors: head 120, inclusion at 121.
+    vector = state(
+        last_epoch_block=100,
+        pending_epoch_at=0,
+        subnet_epoch_index=0,
+        tempo=50,
+        blocks_since_last_step=0,
+        current_block=120,
+    )
+    assert vector.current_epoch_pre_run_coinbase(121) == 0
+    assert vector.current_epoch_pre_run_coinbase(150) == 1
+    assert vector.simulate_run_coinbase(150) == epoch.EpochSchedule(
+        last_epoch_block=150,
+        pending_epoch_at=0,
+        subnet_epoch_index=1,
+        tempo=50,
+        blocks_since_last_step=0,
+        current_block=150,
+    )
+
+
+def test_boundary_head_commit_belongs_to_the_next_epoch():
+    # A commit encrypted at head 9029508 is included on the fire block
+    # 9029509, whose pre-run_coinbase epoch is already 25017.
+    boundary = state(9_029_508)
+    assert boundary.current_epoch_pre_run_coinbase(9_029_509) == 25_017
+    assert boundary.target_ingest_block(1) == 9_029_869 + 3
+
+
+def test_simulation_and_two_rule_approximation_disagree_after_deferral():
+    # These are the cases where min(last + tempo, pending) is not what the
+    # chain does. Pylon's expiry window must follow the chain, not the shortcut.
+    def two_rule(s):
+        automatic = s.last_epoch_block + s.tempo
+        return min(automatic, s.pending_epoch_at) if s.pending_epoch_at else automatic
+
+    # BlocksSinceLastStep safety net: Subtensor steps on the very next block.
+    safety = state(
+        200, last_epoch_block=100, blocks_since_last_step=epoch.MAX_TEMPO + 1
+    )
+    assert two_rule(safety) == 460
+    assert safety.next_epoch_block == 201
+
+    # A pending epoch whose block already passed (deferred) fires next block;
+    # the shortcut would place the boundary in the past.
+    deferred = state(
+        200, last_epoch_block=100, pending_epoch_at=150, blocks_since_last_step=100
+    )
+    assert two_rule(deferred) == 150 < deferred.current_block
+    assert deferred.next_epoch_block == 201
+    # The commit is included on that fire block, so it belongs to the new
+    # epoch and reveals at the boundary after it, not at 201 + 3.
+    assert deferred.current_epoch_pre_run_coinbase(201) == 25_017
+    assert deferred.target_ingest_block(1) == 201 + 360 + 3
+
+
+def test_simulation_budget_is_bounded():
+    with pytest.raises(ValueError, match="reveal period"):
+        state().predict_first_reveal_block(-1)
+    with pytest.raises(ValueError, match="reveal period"):
+        state().predict_first_reveal_block(True)
 
 
 @pytest.mark.parametrize(

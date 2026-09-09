@@ -820,6 +820,7 @@ def _config() -> MagicMock:
     cfg.min_stake_tao = 0.0
     cfg.sweep_seconds = 120
     cfg.epoch_seconds = 3600
+    cfg.weight_commit_offset_blocks = 270
     cfg.queue_limit = 16
     cfg.dittobench_mock = True
     return cfg
@@ -4644,10 +4645,121 @@ class TestChainCadenceFloor:
         chain = MagicMock()
         chain.get_last_update_block = AsyncMock(return_value=1_000)
         chain.get_latest_block = AsyncMock(return_value=SimpleNamespace(number=1_300))
+        chain.get_last_epoch_block = AsyncMock(return_value=None)
         worker = self._worker(chain)
 
-        # A 360-block cadence has 60 blocks left; add one safety block.
+        # No epoch anchor: a 360-block cadence has 60 blocks left; add one
+        # safety block.
         assert await worker._seconds_until_weight_window(4320.0) == 732.0
+
+    @staticmethod
+    def _anchored_chain(
+        *, last_update: int, head: int, rate_limit: int | None = 100
+    ) -> MagicMock:
+        # Live SN118 shape: epoch 25025 stepped at 9032389, tempo 360, rate
+        # limit 100 blocks, so the next boundary is 9032749.
+        chain = MagicMock()
+        chain.get_last_update_block = AsyncMock(return_value=last_update)
+        chain.get_latest_block = AsyncMock(return_value=SimpleNamespace(number=head))
+        chain.get_last_epoch_block = AsyncMock(return_value=9_032_389)
+        chain.get_tempo = AsyncMock(return_value=360)
+        chain.get_weights_rate_limit = AsyncMock(return_value=rate_limit)
+        return chain
+
+    async def test_anchored_window_waits_for_the_fixed_phase_after_the_boundary(
+        self,
+    ) -> None:
+        # Last commit was in the previous epoch; this epoch's anchor is
+        # 9032389 + 270 = 9032659, 159 blocks ahead of the head.
+        chain = self._anchored_chain(last_update=9_032_100, head=9_032_500)
+        assert await self._worker(chain)._seconds_until_weight_window(4320.0) == (
+            159 * 12.0
+        )
+        # Reaching the anchor makes the window due regardless of how long ago
+        # LastUpdate was: the cadence no longer precesses on LastUpdate + tempo.
+        chain = self._anchored_chain(last_update=9_032_100, head=9_032_659)
+        assert await self._worker(chain)._seconds_until_weight_window(4320.0) == 0.0
+        chain = self._anchored_chain(last_update=9_032_100, head=9_032_700)
+        assert await self._worker(chain)._seconds_until_weight_window(4320.0) == 0.0
+
+    async def test_anchored_window_commits_once_per_epoch(self) -> None:
+        # A commit at or after LastEpochBlock already belongs to this epoch,
+        # so the next window is the next boundary plus the same offset.
+        chain = self._anchored_chain(last_update=9_032_660, head=9_032_700)
+        assert await self._worker(chain)._seconds_until_weight_window(4320.0) == (
+            (9_032_389 + 360 + 270 - 9_032_700) * 12.0
+        )
+        chain = self._anchored_chain(last_update=9_032_389, head=9_032_400)
+        assert await self._worker(chain)._seconds_until_weight_window(4320.0) == (
+            (9_032_389 + 360 + 270 - 9_032_400) * 12.0
+        )
+
+    async def test_anchored_window_defers_a_boundary_straddling_commit(self) -> None:
+        # Six blocks before the boundary a fresh commit could be included on
+        # the far side, where Pylon's task would be expired. Wait for the next
+        # anchor instead of creating a doomed task.
+        chain = self._anchored_chain(last_update=9_032_100, head=9_032_745)
+        assert await self._worker(chain)._seconds_until_weight_window(4320.0) == (
+            (9_032_389 + 360 + 270 - 9_032_745) * 12.0
+        )
+        chain = self._anchored_chain(last_update=9_032_100, head=9_032_742)
+        assert await self._worker(chain)._seconds_until_weight_window(4320.0) == 0.0
+
+    async def test_anchored_window_never_undercuts_the_chain_rate_limit(self) -> None:
+        # A late previous-epoch commit at 9032380 forbids another before
+        # 9032480; with offset 0 the anchor 9032389 alone would be too fast.
+        chain = self._anchored_chain(last_update=9_032_380, head=9_032_400)
+        worker = self._worker(chain)
+        worker._config.weight_commit_offset_blocks = 0
+        assert await worker._seconds_until_weight_window(4320.0) == (
+            (9_032_380 + 100 + 1 - 9_032_400) * 12.0
+        )
+        # A hotkey that never set weights has LastUpdate 0 and no rate floor.
+        chain = self._anchored_chain(last_update=0, head=9_032_400)
+        worker = self._worker(chain)
+        worker._config.weight_commit_offset_blocks = 0
+        assert await worker._seconds_until_weight_window(4320.0) == 0.0
+
+    async def test_unusable_anchor_or_offset_keeps_the_last_update_cadence(
+        self,
+    ) -> None:
+        # 1300 - 1000 elapsed of a 360-block cadence: 60 left plus one block.
+        chain = self._anchored_chain(last_update=1_000, head=1_300)
+        chain.get_last_epoch_block = AsyncMock(return_value=None)
+        assert await self._worker(chain)._seconds_until_weight_window(4320.0) == 732.0
+        chain = self._anchored_chain(last_update=1_000, head=1_300)
+        chain.get_last_epoch_block = AsyncMock(side_effect=ChainError("down"))
+        assert await self._worker(chain)._seconds_until_weight_window(4320.0) == 732.0
+        chain = self._anchored_chain(last_update=1_000, head=1_300)
+        chain.get_tempo = AsyncMock(return_value=None)
+        assert await self._worker(chain)._seconds_until_weight_window(4320.0) == 732.0
+        # An anchor ahead of the observed head is a stale or inconsistent read.
+        chain = self._anchored_chain(last_update=1_000, head=1_300)
+        chain.get_last_epoch_block = AsyncMock(return_value=1_301)
+        assert await self._worker(chain)._seconds_until_weight_window(4320.0) == 732.0
+        # An offset at or past tempo minus the inclusion margin cannot be
+        # honoured inside one epoch.
+        chain = self._anchored_chain(last_update=1_000, head=1_300)
+        chain.get_last_epoch_block = AsyncMock(return_value=1_000)
+        worker = self._worker(chain)
+        worker._config.weight_commit_offset_blocks = 354
+        assert await worker._seconds_until_weight_window(4320.0) == 732.0
+
+    async def test_local_resubmit_guard_uses_rate_limit_only_when_anchored(
+        self,
+    ) -> None:
+        chain = self._anchored_chain(last_update=9_032_660, head=9_032_700)
+        assert await self._worker(chain)._local_resubmit_guard_seconds(4320.0) == (
+            101 * 12.0
+        )
+        # Never longer than the cadence itself.
+        assert await self._worker(chain)._local_resubmit_guard_seconds(600.0) == 600.0
+        chain.get_last_epoch_block = AsyncMock(return_value=None)
+        assert await self._worker(chain)._local_resubmit_guard_seconds(4320.0) == 4320.0
+        chain = self._anchored_chain(
+            last_update=9_032_660, head=9_032_700, rate_limit=None
+        )
+        assert await self._worker(chain)._local_resubmit_guard_seconds(4320.0) == 4320.0
 
     async def test_due_or_unobservable_window_never_blocks_liveness(self) -> None:
         due_chain = MagicMock()
@@ -4655,6 +4767,7 @@ class TestChainCadenceFloor:
         due_chain.get_latest_block = AsyncMock(
             return_value=SimpleNamespace(number=1_360)
         )
+        due_chain.get_last_epoch_block = AsyncMock(return_value=None)
         assert await self._worker(due_chain)._seconds_until_weight_window(4320.0) == 0.0
 
         unavailable_chain = MagicMock()
