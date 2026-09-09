@@ -31,6 +31,7 @@ from ditto_screener.l2_review import (
     LayeredSourceReviewAgent,
     TerraSolSourceReviewAgent,
 )
+from ditto_screener.review_provider import default_review_base_url
 from ditto_screener.source_review import OpenRouterSourceReviewAgent
 from ditto_screening_protocol import (
     SourceReviewAdjudication,
@@ -162,13 +163,17 @@ def _build_reviewer(
     )
     workdir = Path(credential).parent
     workdir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    inference_provider = os.environ.get(
+        "SCREENER_REVIEW_INFERENCE_PROVIDER", "openrouter"
+    )
+    review_base_url = os.environ.get(
+        "SCREENER_SOURCE_REVIEW_BASE_URL"
+    ) or default_review_base_url(inference_provider)
     l1 = OpenRouterSourceReviewAgent(
         api_key_file=key_file,
         model=os.environ.get("SCREENER_SOURCE_REVIEW_MODEL", "openai/gpt-5.6-luna"),
-        base_url=os.environ.get(
-            "SCREENER_SOURCE_REVIEW_BASE_URL",
-            "https://openrouter.ai/api/v1",
-        ),
+        base_url=review_base_url,
+        inference_provider=inference_provider,
         timeout_seconds=timeout_seconds,
         max_steps=int(os.environ.get("SCREENER_SOURCE_REVIEW_MAX_STEPS", "200")),
         max_read_bytes=int(
@@ -190,10 +195,8 @@ def _build_reviewer(
     )
     l2 = TerraSolSourceReviewAgent(
         api_key_file=key_file,
-        base_url=os.environ.get(
-            "SCREENER_SOURCE_REVIEW_BASE_URL",
-            "https://openrouter.ai/api/v1",
-        ),
+        base_url=review_base_url,
+        inference_provider=inference_provider,
         harness=InProcessAnalyzerHarness(),
         cache_dir=str(workdir / "l2-cache"),
         audit_journal=L2AuditJournal(
@@ -225,7 +228,9 @@ def _build_reviewer(
         ),
         l3_enabled=_parse_bool("SCREENER_L3_REVIEW_ENABLED", "true"),
         critic_model=os.environ.get("SCREENER_L3_REVIEW_MODEL", "openai/gpt-5.6-sol"),
-        critic_provider=os.environ.get("SCREENER_L3_REVIEW_PROVIDER", "openrouter"),
+        critic_provider=os.environ.get(
+            "SCREENER_L3_REVIEW_PROVIDER", inference_provider
+        ),
     )
     adjudicator_mode = os.environ.get("SCREENER_ADJUDICATOR_MODE", "off")
     adjudicator = (
@@ -233,10 +238,8 @@ def _build_reviewer(
         if adjudicator_mode == "off"
         else SourceReviewAdjudicator(
             api_key_file=key_file,
-            base_url=os.environ.get(
-                "SCREENER_SOURCE_REVIEW_BASE_URL",
-                "https://openrouter.ai/api/v1",
-            ),
+            base_url=review_base_url,
+            inference_provider=inference_provider,
             model=os.environ.get("SCREENER_ADJUDICATOR_MODEL", "z-ai/glm-5.3-flash"),
             timeout_seconds=float(
                 os.environ.get("SCREENER_ADJUDICATOR_TIMEOUT_SECONDS", "600")

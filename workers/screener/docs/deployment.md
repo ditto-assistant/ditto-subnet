@@ -78,7 +78,22 @@ the VM:
 - `SCREENER_STATIC_PREFLIGHT_AUDIT_FILE`, when static preflight v2 runs in
   `shadow`; the service creates and repairs the journal and its parent to
   mode 0600 and 0700 respectively, and rejects symlink targets.
-- `SCREENER_SOURCE_REVIEW_API_KEY_FILE`: mode-0400 OpenRouter key file readable
+- `SCREENER_REVIEW_INFERENCE_PROVIDER`: `openrouter` (default) or `ditto`. Every
+  private review layer (L1 Luna, L2 Terra, L3 Sol, L4 GLM) calls the same
+  OpenAI-compatible gateway: `/chat/completions` for L1 and L4, `/responses`
+  for L2 and L3. `ditto` is Ditto Inference
+  (https://developer.heyditto.ai/endpoints): create one endpoint, add model
+  routes for `openai/gpt-5.6-luna`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-sol`,
+  `z-ai/glm-5.2`, and `z-ai/glm-5.3-flash` (requested ids stay as the signed
+  review evidence records them), and store its `ditto_inf_` key in the key
+  file below. `SCREENER_SOURCE_REVIEW_BASE_URL` overrides the provider default
+  (`https://inference.heyditto.ai/v1` for `ditto`, `https://openrouter.ai/api/v1` for
+  `openrouter`). Under `ditto` the worker sends only the bearer token — no
+  OpenRouter attribution or metadata headers, no `provider` routing block,
+  and no `models` failover chain; the endpoint's model routes take that role,
+  and reported cost falls back to the catalog estimate.
+- `SCREENER_SOURCE_REVIEW_API_KEY_FILE`: mode-0400 review-gateway key file
+  (OpenRouter or Ditto Inference, matching the provider above) readable
   only by the screener service user. On the Hetzner fleet the secret agent
   materializes it from Secret Manager `validator-openrouter-key`; a node moving
   its review layers to Ditto Inference points

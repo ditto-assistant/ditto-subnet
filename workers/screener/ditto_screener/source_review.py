@@ -28,6 +28,13 @@ from ditto_screener.category_guards import (
 )
 from ditto_screener.evidence_quality import citation_admissibility
 from ditto_screener.policy import SourceReviewObservation
+from ditto_screener.review_provider import (
+    DITTO_INFERENCE_BASE_URL,
+    OPENROUTER_REVIEW_BASE_URL,
+    REVIEW_INFERENCE_PROVIDERS,
+    default_review_base_url,
+    review_gateway_headers,
+)
 from ditto_screener.source_causality import analyze_static_candidates_v2
 from ditto_screener.source_reachability import analyze_reachability
 from ditto_screener.source_signals import (
@@ -411,13 +418,6 @@ def _body_signature(payload: object) -> str:
         f"keys=[{keys}] error_class={error_class!r} "
         f"choices={type(choices).__name__ if choices is not None else 'absent'}"
     )
-
-
-_OPENROUTER_ATTRIBUTION_HEADERS = {
-    # https://openrouter.ai/docs/app-attribution
-    "HTTP-Referer": "https://heyditto.ai",
-    "X-OpenRouter-Title": "Ditto",
-}
 
 
 class SourceReviewBudgetExhausted(ValueError):
@@ -3233,7 +3233,9 @@ class OpenRouterSourceReviewAgent:
         transport_retry_delays: Sequence[float] = (
             _MODEL_TRANSPORT_RETRY_DELAYS_SECONDS
         ),
+        inference_provider: str = "openrouter",
     ) -> None:
+        self._inference_provider = inference_provider
         # Gradient thresholds for a budget-terminated review: this many
         # recorded concerns hold the artifact for operator review; zero
         # concerns plus this many cleared notes admit it on positive coverage.
@@ -3698,7 +3700,7 @@ class OpenRouterSourceReviewAgent:
                 f"{self._base_url}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {api_key}",
-                    **_OPENROUTER_ATTRIBUTION_HEADERS,
+                    **review_gateway_headers(self._inference_provider),
                 },
                 json=request,
                 timeout=effective_timeout,
@@ -4369,4 +4371,12 @@ _TOOLS: list[dict[str, object]] = [
 _FINAL_REVIEW_TOOLS: tuple[dict[str, object], ...] = (_TOOLS[-1],)
 
 
-__all__ = ["OpenRouterSourceReviewAgent", "TarSourceRepository"]
+__all__ = [
+    "DITTO_INFERENCE_BASE_URL",
+    "OPENROUTER_REVIEW_BASE_URL",
+    "REVIEW_INFERENCE_PROVIDERS",
+    "OpenRouterSourceReviewAgent",
+    "TarSourceRepository",
+    "default_review_base_url",
+    "review_gateway_headers",
+]

@@ -68,6 +68,13 @@ screener_fleet_source_review_key_file: >-
   {{ screener_fleet_secrets_dir + '/source-review-api-key'
      if screener_fleet_x509_enabled
      else screener_fleet_config_dir + '/source-review-api-key' }}
+# Which OpenAI-compatible gateway the private review layers (L1-L4) call with
+# the source-review key: openrouter (historical) or ditto (Ditto Inference,
+# https://developer.heyditto.ai/endpoints). The key file content must match:
+# an OpenRouter key or a ditto_inf_ endpoint key. Leave the base URL empty to
+# use the provider's default root.
+screener_fleet_review_inference_provider: openrouter
+screener_fleet_review_inference_base_url: ""
 screener_fleet_env_file: "{{ screener_fleet_config_dir }}/fleet.env"
 screener_fleet_release_env_file: "{{ screener_fleet_config_dir }}/release.env"
 screener_fleet_update_state_dir: "{{ screener_fleet_state_dir }}/updater"

@@ -33,13 +33,13 @@ from ditto_screener.source_review import (
     _ADVISORY_CATEGORIES,
     _ALLOWED_CATEGORIES,
     _MULTI_LOCATION_CATEGORIES,
-    _OPENROUTER_ATTRIBUTION_HEADERS,
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
     _body_signature,
     _retryable_model_error_type,
     ledger_disposition,
     policy_v10_static_assessment,
+    review_gateway_headers,
 )
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
@@ -1989,9 +1989,11 @@ class TerraSolSourceReviewAgent:
         transport: httpx.AsyncBaseTransport | None = None,
         local_address: str | None = None,
         workspace_root: str | None = None,
+        inference_provider: str = "openrouter",
     ) -> None:
         self._api_key_file = api_key_file
         self._base_url = base_url.rstrip("/")
+        self._inference_provider = inference_provider
         self._harness = harness
         self._workspace_root = Path(workspace_root) if workspace_root else None
         self._cache_dir = Path(cache_dir)
@@ -3570,7 +3572,7 @@ class TerraSolSourceReviewAgent:
         deadline: float | None,
         policy_version: int = SCREENING_POLICY_VERSION,
     ) -> httpx.Response:
-        request = {
+        request: dict[str, object] = {
             "model": model,
             "instructions": _l2_review_system_prompt(policy_version),
             "input": items,
@@ -3579,8 +3581,14 @@ class TerraSolSourceReviewAgent:
             "max_output_tokens": self._max_completion_tokens,
             "store": False,
             "prompt_cache_key": l2_prompt_cache_key(policy_version),
-            "session_id": f"ditto-l2-{artifact_sha256[:32]}",
-            "provider": {
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            **review_gateway_headers(self._inference_provider),
+        }
+        if self._inference_provider == "openrouter":
+            request["session_id"] = f"ditto-l2-{artifact_sha256[:32]}"
+            request["provider"] = {
                 # Every reviewer has more than one compatible route in the
                 # current OpenRouter directory. Prefer the fastest healthy
                 # endpoint and permit the router to move to the next one on an
@@ -3590,16 +3598,20 @@ class TerraSolSourceReviewAgent:
                 "require_parameters": provider is not None,
                 "zdr": True,
                 "data_collection": "deny",
-            },
-        }
-        if fallback_models:
-            # The Responses API accepts an ordered model chain. The router
-            # advances only when the prior model returns a retryable routing
-            # failure; it does not run multiple successful completions.
-            request.pop("model")
-            request["models"] = [model, *fallback_models]
-        if provider is not None:
-            request["provider"]["only"] = [provider]  # type: ignore[index]
+            }
+            if fallback_models:
+                # The Responses API accepts an ordered model chain. The router
+                # advances only when the prior model returns a retryable routing
+                # failure; it does not run multiple successful completions.
+                request.pop("model")
+                request["models"] = [model, *fallback_models]
+            if provider is not None:
+                request["provider"]["only"] = [provider]  # type: ignore[index]
+            # OpenRouter returns the metered cost only when asked for metadata.
+            headers["X-OpenRouter-Metadata"] = "enabled"
+        # Ditto Inference resolves the requested model id through the endpoint's
+        # own model routes and has no router-side provider block, failover chain,
+        # or session field; a plain Responses request is the whole contract.
         if reasoning_effort != "model_default":
             request["reasoning"] = {"effort": reasoning_effort}
         # HTTPX's read timeout is an inactivity timeout, not a wall-clock cap.
@@ -3611,11 +3623,7 @@ class TerraSolSourceReviewAgent:
                 async with asyncio.timeout(timeout):
                     response = await client.post(
                         f"{self._base_url}/responses",
-                        headers={
-                            "Authorization": f"Bearer {api_key}",
-                            "X-OpenRouter-Metadata": "enabled",
-                            **_OPENROUTER_ATTRIBUTION_HEADERS,
-                        },
+                        headers=headers,
                         json=request,
                         timeout=timeout,
                     )

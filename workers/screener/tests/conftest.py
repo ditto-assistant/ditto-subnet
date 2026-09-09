@@ -82,6 +82,7 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "l2_audit_retention_days": 30,
         "review_settings_cache_file": "/tmp/ditto-screener-test/review-settings.json",
         "review_settings_max_stale_seconds": 900,
+        "review_inference_provider": "openrouter",
     }
     base.update(overrides)
     return ScreenerConfig(**base)
