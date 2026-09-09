@@ -168,18 +168,18 @@ resource "google_compute_instance_iam_member" "osadmin" {
   member        = each.value
 }
 
-# Bind the IAP instance itself, not a project-wide name-pattern approximation.
-resource "google_iap_tunnel_instance_iam_member" "ssh" {
+# The stack apply service account cannot administer instance-level IAP IAM.
+# Keep this project-level binding scoped to this exact host and SSH port.
+resource "google_project_iam_member" "ssh" {
   for_each = local.operators
   project  = var.project
-  zone     = var.zone
-  instance = module.host[0].hostname
   role     = "roles/iap.tunnelResourceAccessor"
   member   = each.value
+
   condition {
-    title       = "ssh_only"
-    description = "Only SSH to this Platform-owned qualification host."
-    expression  = "destination.port == 22"
+    title       = "only_${replace(local.name, "-", "_")}_ssh"
+    description = "IAP SSH access only to this Platform-owned qualification host."
+    expression  = "resource.name.extract('/instances/{name}') == '${local.name}' && destination.port == 22"
   }
 }
 

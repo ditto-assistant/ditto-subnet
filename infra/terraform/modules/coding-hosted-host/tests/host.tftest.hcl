@@ -23,7 +23,7 @@ run "absent_by_default" {
       length(google_service_account.host) == 0,
       length(google_project_iam_member.telemetry) == 0,
       length(google_compute_instance_iam_member.osadmin) == 0,
-      length(google_iap_tunnel_instance_iam_member.ssh) == 0,
+      length(google_project_iam_member.ssh) == 0,
       length(google_service_account_iam_member.actas) == 0,
       output.host == null,
     ])
@@ -39,7 +39,7 @@ run "disabled_operators_grant_nothing" {
   assert {
     condition = (
       length(google_compute_instance_iam_member.osadmin) == 0 &&
-      length(google_iap_tunnel_instance_iam_member.ssh) == 0 &&
+      length(google_project_iam_member.ssh) == 0 &&
       length(google_service_account_iam_member.actas) == 0
     )
     error_message = "Listing custodians must not activate IAM."
@@ -123,8 +123,8 @@ run "enabled_foundation" {
     condition = (
       toset(keys(google_project_iam_member.telemetry)) == toset(["roles/logging.logWriter", "roles/monitoring.metricWriter"]) &&
       google_compute_instance_iam_member.osadmin["user:owner@example.com"].role == "roles/compute.osAdminLogin" &&
-      google_iap_tunnel_instance_iam_member.ssh["user:owner@example.com"].condition[0].expression == "destination.port == 22" &&
-      google_iap_tunnel_instance_iam_member.ssh["user:owner@example.com"].instance == "ditto-coding-hosted-v2" &&
+      google_project_iam_member.ssh["user:owner@example.com"].condition[0].expression == "resource.name.extract('/instances/{name}') == 'ditto-coding-hosted-v2' && destination.port == 22" &&
+      google_project_iam_member.ssh["user:owner@example.com"].role == "roles/iap.tunnelResourceAccessor" &&
       length(google_service_account_iam_member.actas) == 1
     )
     error_message = "Runtime IAM must be telemetry-only, with explicit instance-scoped SSH custodians."

@@ -469,6 +469,16 @@ resource "google_secret_manager_secret" "coding_evidence_secret_key" {
   }
 }
 
+import {
+  to = google_secret_manager_secret.coding_evidence_access_key
+  id = "projects/${var.project}/secrets/platform-coding-hippius-evidence-access-key"
+}
+
+import {
+  to = google_secret_manager_secret.coding_evidence_secret_key
+  id = "projects/${var.project}/secrets/platform-coding-hippius-evidence-secret-key"
+}
+
 # Operators may create these containers out of band when adding the first
 # version. Adopt them on the next gcp-platform apply.
 import {
