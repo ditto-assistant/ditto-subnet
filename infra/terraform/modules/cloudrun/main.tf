@@ -14,7 +14,7 @@ resource "google_cloud_run_v2_service" "this" {
   # zero manual count even in AUTOMATIC mode, so ignore only that inapplicable
   # API default while retaining ownership of the automatic mode and minimum.
   scaling {
-    scaling_mode      = "AUTOMATIC"
+    scaling_mode       = "AUTOMATIC"
     min_instance_count = 0
   }
 
