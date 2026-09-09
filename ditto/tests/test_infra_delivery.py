@@ -121,6 +121,13 @@ def test_controller_deploy_identity_has_no_gce_worker_access() -> None:
     assert 'resource "google_compute_instance_iam_member"' in terraform
     assert 'resource "google_iap_tunnel_instance_iam_member"' in terraform
     assert "module.screener_capacity_controller_vm[0].hostname" in terraform
+    assert '"iap.tunnelInstances.getIamPolicy"' in terraform
+    assert '"iap.tunnelInstances.setIamPolicy"' in terraform
+    assert (
+        "github-actions-terraform-apply@${var.project}.iam.gserviceaccount.com"
+        in terraform
+    )
+    assert "google_project_iam_member.terraform_screener_iap_policy_admin" in terraform
 
 
 def test_controller_deploy_releases_only_the_stopped_writer_epoch() -> None:

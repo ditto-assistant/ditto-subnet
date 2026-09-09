@@ -29,14 +29,34 @@ resource "google_compute_instance_iam_member" "screener_deploy_controller_osadmi
   member        = "serviceAccount:${google_service_account.screener_deploy.email}"
 }
 
+resource "google_project_iam_custom_role" "terraform_screener_iap_policy_admin" {
+  project     = var.project
+  role_id     = "terraformScreenerIapPolicyAdmin"
+  title       = "Terraform Screener IAP Policy Admin"
+  description = "Manage the IAP policy on the screener capacity controller instance."
+  permissions = [
+    "iap.tunnelInstances.getIamPolicy",
+    "iap.tunnelInstances.setIamPolicy",
+  ]
+}
+
+resource "google_project_iam_member" "terraform_screener_iap_policy_admin" {
+  project = var.project
+  role    = google_project_iam_custom_role.terraform_screener_iap_policy_admin.id
+  member  = "serviceAccount:github-actions-terraform-apply@${var.project}.iam.gserviceaccount.com"
+}
+
 resource "google_iap_tunnel_instance_iam_member" "screener_deploy_controller_iap" {
-  count      = local.screener_capacity_controller_count
-  project    = var.project
-  zone       = var.zone
-  instance   = module.screener_capacity_controller_vm[0].hostname
-  role       = "roles/iap.tunnelResourceAccessor"
-  member     = "serviceAccount:${google_service_account.screener_deploy.email}"
-  depends_on = [google_project_service.iap]
+  count    = local.screener_capacity_controller_count
+  project  = var.project
+  zone     = var.zone
+  instance = module.screener_capacity_controller_vm[0].hostname
+  role     = "roles/iap.tunnelResourceAccessor"
+  member   = "serviceAccount:${google_service_account.screener_deploy.email}"
+  depends_on = [
+    google_project_service.iap,
+    google_project_iam_member.terraform_screener_iap_policy_admin,
+  ]
 }
 
 resource "google_service_account_iam_member" "screener_deploy_wif" {
