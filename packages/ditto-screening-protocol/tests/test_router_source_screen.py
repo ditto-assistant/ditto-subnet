@@ -12,6 +12,7 @@ from ditto_screening_protocol.router_source_screen import (
     evaluate_router_generalization,
     router_source_screen_digest,
     router_source_screen_signing_message,
+    screen_router_submission,
 )
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
@@ -208,3 +209,59 @@ def test_sample_rejects_incoherent_counts() -> None:
             canary_tasks_total=1,
             canary_tasks_failed=4,
         )
+
+
+# --- screen_router_submission: the opt-in ("yes-and") entry point -------------
+
+
+def test_screen_router_submission_no_project_is_benign_infrastructure() -> None:
+    # A submission that advertised no router project (sample is None): a benign
+    # INFRASTRUCTURE outcome with no findings — never a DENY, never a reward.
+    # This is the "scored exactly as before; router is purely additive" contract.
+    evidence = screen_router_submission(
+        agent_artifact_sha256="a" * 64,
+        screened_image_sha256="b" * 64,
+        analyzer_version="router-source-v1",
+        policy_version=1,
+        sample=None,
+    )
+    assert evidence.outcome is RouterSourceScreenOutcome.INFRASTRUCTURE
+    assert evidence.findings == ()
+    assert evidence.weight_eligible is False
+    # Self-consistent, content-addressed, and signable like any other evidence.
+    assert evidence.evidence_sha256 == router_source_screen_digest(evidence)
+    router_source_screen_signing_message(screener_hotkey=_HOTKEY, evidence=evidence)
+
+
+def test_screen_router_submission_included_matches_evaluate() -> None:
+    # An included submission is graded exactly as the direct evaluate + build
+    # path would (this is the one non-test caller wiring the two together).
+    sample = _generalising()
+    evidence = screen_router_submission(
+        agent_artifact_sha256="a" * 64,
+        screened_image_sha256="b" * 64,
+        analyzer_version="router-source-v1",
+        policy_version=1,
+        sample=sample,
+    )
+    assert evidence.outcome is RouterSourceScreenOutcome.PASS
+    assert evidence == _evidence(_generalising())
+
+
+def test_screen_router_submission_included_can_deny() -> None:
+    # A bench-tuned public-only router is still denied through the entry point;
+    # "included" does not mean "trusted", only "there is something to grade".
+    bench_tuned = RouterGeneralizationSample(
+        public_score_bps=9000,
+        heldout_score_bps=1000,
+        heldout_cases=20,
+        distinct_heldout_routes=6,
+    )
+    evidence = screen_router_submission(
+        agent_artifact_sha256="a" * 64,
+        screened_image_sha256="b" * 64,
+        analyzer_version="router-source-v1",
+        policy_version=1,
+        sample=bench_tuned,
+    )
+    assert evidence.outcome is RouterSourceScreenOutcome.DENY
