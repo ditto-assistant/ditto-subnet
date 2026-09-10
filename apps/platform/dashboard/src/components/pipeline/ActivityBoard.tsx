@@ -3,7 +3,7 @@
 // setActivityPagerVisible 8110–8112 + the row/filter/pager wiring
 // 6490–6538): server-backed quick filters, two pagers, and the five-column
 // table whose rows open the agent evidence drawer.
-import { For, Show } from "solid-js";
+import { For, Show, createSignal, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
 import {
@@ -56,7 +56,65 @@ function openRow(e: ActivityRow): void {
 
 function interactiveTarget(ev: Event): boolean {
   const target = ev.target as HTMLElement | null;
-  return Boolean(target && target.closest(".copy, a"));
+  return Boolean(target && target.closest(".copy, a, button"));
+}
+
+/**
+ * Above this many characters an evidence reason cannot fit the collapsed
+ * clamp at any supported column width, so the toggle is offered without
+ * waiting on a measurement. Below it the rendered overflow decides —
+ * live reasons run from 150 to 7,000+ characters and both ends are common.
+ */
+const EVIDENCE_CLAMP_CHARS = 190;
+
+/**
+ * One labeled evidence reason, collapsed to a few lines with an in-place
+ * expander. Screening and review reasons are operator prose measured in
+ * thousands of characters (#622 keeps the initial hold beside the current
+ * reason, so a held row carries two of them); rendered whole they buried
+ * the row's identity, stage, and validation state under a full viewport of
+ * text. The text always stays in the DOM — the clamp is visual only, so
+ * assistive technology and in-page find still reach it.
+ */
+function EvidenceNote(props: { label: string; text: string; lines?: number }): JSX.Element {
+  const [expanded, setExpanded] = createSignal(false);
+  const [overflowing, setOverflowing] = createSignal(false);
+  const clampable = (): boolean => overflowing() || props.text.length > EVIDENCE_CLAMP_CHARS;
+  let body: HTMLElement | undefined;
+  // Measured while collapsed (the body renders clamped), so this is the
+  // real question: does the reason exceed its own clamp in this column?
+  onMount(() => {
+    if (body) setOverflowing(body.scrollHeight - body.clientHeight > 2);
+  });
+  return (
+    <span class="stage-note">
+      <span
+        class={"stage-note-body" + (expanded() ? " expanded" : "")}
+        style={props.lines ? { "--stage-note-lines": String(props.lines) } : undefined}
+        ref={(el) => (body = el)}
+      >
+        <b>{props.label}:</b> {props.text}
+      </span>
+      <Show when={clampable()}>
+        {/* A held row stacks two of these (current reason, initial hold), so
+            the short visible label is disambiguated by name for anyone who
+            reads the controls out of their visual context. */}
+        <button
+          class="stage-note-toggle"
+          type="button"
+          aria-expanded={expanded() ? "true" : "false"}
+          aria-label={
+            (expanded() ? "Show less of the " : "Read the full ") +
+            props.label.toLowerCase() +
+            " reason"
+          }
+          onClick={() => setExpanded((open) => !open)}
+        >
+          {expanded() ? "Show less" : "Read full reason"}
+        </button>
+      </Show>
+    </span>
+  );
 }
 
 function StageCell(props: { entry: ActivityRow }): JSX.Element {
@@ -69,16 +127,18 @@ function StageCell(props: { entry: ActivityRow }): JSX.Element {
       {/* #622: the CURRENT review reason leads under its event label; the
           initial hold reason stays visible as history when it differs. */}
       <For each={reviewEvidenceNotes(e())}>
-        {(evidenceNote) => (
-          <span class="stage-note">
-            <b>{evidenceNote.label}:</b> {evidenceNote.text}
-          </span>
+        {(evidenceNote, i) => (
+          // The current reason leads with three lines; the initial hold
+          // below it is history and opens on demand from two.
+          <EvidenceNote
+            label={evidenceNote.label}
+            text={evidenceNote.text}
+            lines={i() === 0 ? 3 : 2}
+          />
         )}
       </For>
       <Show when={!e().review_reason && e().screening_reason}>
-        <span class="stage-note">
-          <b>Screening:</b> {e().screening_reason}
-        </span>
+        {(reason) => <EvidenceNote label="Screening" text={reason()} lines={3} />}
       </Show>
       {/* #636: past the opening event, the mechanical duplicate claim reads
           as the initial comparison, not the live review reason. */}
@@ -245,17 +305,30 @@ export function ActivityBoard(props: { store: ActivityStore }): JSX.Element {
                         }
                       }}
                     >
-                      <td>
-                        <span class="agent-name">
-                          <MinerAvatar url={e.avatar_url} />
-                          {agentName(e.name)}
-                          <HandleBadge handle={e.name_handle} />
-                        </span>
-                        <span class="submission-version">{agentVersionLabel(e.version)}</span>
-                        <span class="agent-id copyable" title={id}>
-                          <span>{id.slice(0, 8)}</span>
-                          <CopyButton value={id} label="agent ID" />
-                        </span>
+                      <td class="submission-identity-cell">
+                        <div class="submission-identity">
+                          {/* The avatar is the row's anchor, so its slot is
+                              held even when the miner never set one — the
+                              agent names stay on one left edge down the
+                              page. */}
+                          <Show
+                            when={e.avatar_url}
+                            fallback={<span class="submission-avatar-blank" aria-hidden="true" />}
+                          >
+                            {(url) => <MinerAvatar url={url()} />}
+                          </Show>
+                          <div class="submission-identity-main">
+                            <span class="agent-name">
+                              {agentName(e.name)}
+                              <HandleBadge handle={e.name_handle} />
+                            </span>
+                            <span class="submission-version">{agentVersionLabel(e.version)}</span>
+                            <span class="agent-id copyable" title={id}>
+                              <span>{id.slice(0, 8)}</span>
+                              <CopyButton value={id} label="agent ID" />
+                            </span>
+                          </div>
+                        </div>
                       </td>
                       <td class="hide-sm miner-cell">
                         <span class="hotkey copyable" title={e.miner_hotkey}>

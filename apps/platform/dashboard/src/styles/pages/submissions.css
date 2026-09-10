@@ -11,6 +11,44 @@
 .activity tbody tr {
   cursor: pointer;
 }
+/* Every cell reads from the top of the row: the stage column carries an
+   expandable reason, so a middle-aligned row floated its own identity,
+   validation, and timestamp somewhere down the middle of the evidence. */
+.activity tbody td {
+  vertical-align: top;
+}
+.submission-identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.submission-identity-main {
+  min-width: 0;
+}
+/* The avatar carries miner identity at a glance, so the submissions board
+   sizes it up from the shared 26px and tints its ring with the accent. */
+.submission-identity .miner-avatar {
+  width: 34px;
+  height: 34px;
+  --avatar-ring: color-mix(in oklab, var(--accent) 42%, var(--border-strong));
+}
+.activity tbody tr:hover .submission-identity .miner-avatar,
+.activity tbody tr:focus-visible .submission-identity .miner-avatar {
+  transform: translateY(-1px);
+  --avatar-ring: color-mix(in oklab, var(--accent) 78%, var(--border-strong));
+  --avatar-glow: color-mix(in oklab, var(--accent) 24%, transparent);
+}
+/* Held slot for a miner with no picture — a quarter of the board — so the
+   agent names keep one left edge down the page. It stays a whisper of a
+   ring: filled, it read as an avatar that had failed to load. */
+.submission-avatar-blank {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--border-strong) 16%, transparent);
+}
 .agent-name {
   display: flex;
   flex-wrap: wrap;
@@ -44,6 +82,66 @@
 .stage-note b {
   color: var(--text);
   font-weight: 600;
+}
+/* Review and screening reasons are operator prose that runs to thousands of
+   characters. Collapsed, a reason shows its opening lines with the clamp's
+   own ellipsis; the toggle beside it opens the rest in place. The text is
+   never removed from the DOM, so find-in-page and screen readers keep it. */
+.stage-note-body {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--stage-note-lines, 3);
+  line-clamp: var(--stage-note-lines, 3);
+}
+/* Expanded, the reason is bounded by the viewport rather than the row: a
+   7,000-character hold would otherwise scroll the board out from under the
+   reader who opened it. */
+.stage-note-body.expanded {
+  display: block;
+  max-height: 46vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+/* The expander repeats on most rows of the page, so it carries the board's
+   quiet meta voice and takes its frame only on hover — as a filled chip it
+   competed with the stage pill it sits under. */
+.stage-note-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  margin-top: 3px;
+  /* Negative inset keeps the label optically flush with the reason text
+     above it while the hover frame still has room to breathe. */
+  margin-left: -7px;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-faint);
+  font: 700 9.5px/1.2 var(--mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.stage-note-toggle::after {
+  content: "▾";
+  font-size: 9px;
+  line-height: 1;
+}
+.stage-note-toggle[aria-expanded="true"]::after {
+  content: "▴";
+}
+.stage-note-toggle:hover {
+  border-color: color-mix(in oklab, var(--accent) 42%, var(--border));
+  color: var(--accent);
+}
+.stage-note-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .validation-progress {
   font-variant-numeric: tabular-nums;
@@ -104,7 +202,7 @@
     border: 0;
     text-align: left;
   }
-  .activity td:first-child,
+  .activity td.submission-identity-cell,
   .activity td.miner-cell,
   .activity td.stage-cell {
     grid-column: 1 / -1;
@@ -115,6 +213,16 @@
   }
   .activity .stage-cell {
     min-width: 0;
+  }
+  .activity .stage-note {
+    max-width: none;
+  }
+  /* A finger-sized target inside an already-tappable card, still flush
+     with the reason text. */
+  .activity .stage-note-toggle {
+    min-height: 34px;
+    margin-left: -11px;
+    padding: 8px 11px;
   }
   .activity td.empty {
     grid-column: 1 / -1;
