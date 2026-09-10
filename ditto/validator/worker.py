@@ -557,9 +557,7 @@ class PlatformRouterLedgerSource:
     destination pluggable.
     """
 
-    def __init__(
-        self, read: Callable[[], Awaitable[RouterLedgerResponse]]
-    ) -> None:
+    def __init__(self, read: Callable[[], Awaitable[RouterLedgerResponse]]) -> None:
         self._read = read
 
     async def fetch(self) -> RouterLedgerResponse:

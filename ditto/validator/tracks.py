@@ -242,7 +242,11 @@ def _build_registry(
 # The compiled safe split: memory owns the whole pool, coding and router earn
 # nothing. Identical in spirit to ``resolve_track_shares``'s fallback — the fold
 # must always produce a registry, never crash the consensus ``put_weights`` path.
-_SAFE_TRACK_SHARES_BPS = {TRACK_MEMORY: BASIS_POINT_SCALE, TRACK_CODING: 0, TRACK_ROUTER: 0}
+_SAFE_TRACK_SHARES_BPS = {
+    TRACK_MEMORY: BASIS_POINT_SCALE,
+    TRACK_CODING: 0,
+    TRACK_ROUTER: 0,
+}
 
 
 def build_default_registry(

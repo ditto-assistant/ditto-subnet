@@ -143,7 +143,9 @@ def test_default_registry_degrades_on_over_cap_partial_map() -> None:
     # put_weights fold path; it degrades to the memory-only safe split so the fold
     # keeps producing today's memory vector rather than crashing.
     registry = build_default_registry(
-        track_shares_bps={TRACK_ROUTER: 2000},  # memory omitted -> defaults to full pool
+        track_shares_bps={
+            TRACK_ROUTER: 2000
+        },  # memory omitted -> defaults to full pool
         router_state=TrackState.ACTIVE,
         router_weight_eligible=True,
     )
