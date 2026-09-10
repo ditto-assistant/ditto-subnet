@@ -1,0 +1,7 @@
+---
+- name: Bootstrap approved native Coding RSA key custody without starting a service
+  hosts: role_coding_hosted
+  become: true
+  gather_facts: true
+  roles:
+    - coding_hosted_custody_key
