@@ -1597,13 +1597,19 @@ describe('continual retest administration', () => {
   // wave_membership predates #489 and is folding `strict`.
   const readDefaults = {
     tie_weighting_mode: 'disabled' as const,
+    ledger_pin_mode: 'epoch' as const,
+    crown_incumbent_mode: 'disabled' as const,
     wave_membership: 'participants',
     retest_cohort_size: 5,
     retest_eligibility_mode: 'fixed',
     retest_eligibility_z: 1.64,
     retest_cohort_max_size: 25,
   }
-  const legacyEquivalent = { ...readDefaults, wave_membership: 'strict' }
+  const legacyEquivalent = {
+    ...readDefaults,
+    wave_membership: 'strict',
+    ledger_pin_mode: 'live' as const,
+  }
   const settings = {
     aggregate_mode: 'fleet_ready',
     idle_retests_enabled: false,
@@ -1624,6 +1630,10 @@ describe('continual retest administration', () => {
       aggregate_active: false,
       tie_weighting_fleet_ready: false,
       tie_weighting_active: false,
+      crown_incumbent_fleet_ready: false,
+      crown_incumbent_active: false,
+      crown_incumbent_required_protocol: 27,
+      ledger_pin: null,
       max_age_seconds: 5,
       open_rollout_desired_version: null,
       rollout_standdown_active: false,
@@ -1636,6 +1646,8 @@ describe('continual retest administration', () => {
   }
   const supportFor = (carried: boolean) => ({
     tie_weighting_mode: carried,
+    ledger_pin_mode: carried,
+    crown_incumbent_mode: carried,
     retest_cohort_size: carried,
     wave_membership: carried,
     retest_eligibility_mode: carried,
@@ -1654,6 +1666,8 @@ describe('continual retest administration', () => {
     const nextSettings = {
       aggregate_mode: 'enabled',
       tie_weighting_mode: 'disabled' as const,
+      ledger_pin_mode: 'epoch' as const,
+      crown_incumbent_mode: 'disabled' as const,
       idle_retests_enabled: true,
       rollout_standdown: 'all',
       wave_membership: 'participants',

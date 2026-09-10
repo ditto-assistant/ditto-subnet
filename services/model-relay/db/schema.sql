@@ -2899,6 +2899,32 @@ CREATE TABLE public.inference_routing_policies (
 
 
 --
+-- Name: ledger_epoch_snapshots; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ledger_epoch_snapshots (
+    snapshot_id uuid NOT NULL,
+    netuid integer NOT NULL,
+    epoch_index bigint NOT NULL,
+    last_epoch_block bigint NOT NULL,
+    pinned_block bigint NOT NULL,
+    pinned_block_hash text NOT NULL,
+    pinned_at timestamp with time zone NOT NULL,
+    bench_version integer NOT NULL,
+    entries jsonb NOT NULL,
+    context jsonb NOT NULL,
+    champion_agent_id uuid,
+    champion_owner_root text,
+    incumbent_agent_id uuid,
+    ledger_digest text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_ledger_epoch_snapshots_ledger_epoch_snapshots_digest_check CHECK ((length(ledger_digest) = 64)),
+    CONSTRAINT ck_ledger_epoch_snapshots_ledger_epoch_snapshots_epoch__f05e CHECK ((epoch_index >= 0)),
+    CONSTRAINT ck_ledger_epoch_snapshots_ledger_epoch_snapshots_pinned_2bb4 CHECK ((pinned_block >= last_epoch_block))
+);
+
+
+--
 -- Name: miner_avatar_nonces; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5320,6 +5346,14 @@ ALTER TABLE ONLY public.inference_provider_routes
 
 
 --
+-- Name: ledger_epoch_snapshots ledger_epoch_snapshots_epoch_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ledger_epoch_snapshots
+    ADD CONSTRAINT ledger_epoch_snapshots_epoch_key UNIQUE (netuid, epoch_index);
+
+
+--
 -- Name: miner_avatar_nonces miner_avatar_nonces_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5829,6 +5863,14 @@ ALTER TABLE ONLY public.inference_routing_audit
 
 ALTER TABLE ONLY public.inference_routing_policies
     ADD CONSTRAINT pk_inference_routing_policies PRIMARY KEY (model);
+
+
+--
+-- Name: ledger_epoch_snapshots pk_ledger_epoch_snapshots; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ledger_epoch_snapshots
+    ADD CONSTRAINT pk_ledger_epoch_snapshots PRIMARY KEY (snapshot_id);
 
 
 --
@@ -6974,6 +7016,13 @@ CREATE INDEX inference_requests_started_idx ON public.inference_requests USING b
 --
 
 CREATE INDEX inference_routing_audit_history_idx ON public.inference_routing_audit USING btree (recorded_at);
+
+
+--
+-- Name: ledger_epoch_snapshots_recent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ledger_epoch_snapshots_recent_idx ON public.ledger_epoch_snapshots USING btree (netuid, epoch_index DESC);
 
 
 --

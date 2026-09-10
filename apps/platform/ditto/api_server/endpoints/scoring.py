@@ -27,15 +27,19 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import ConfirmationScoreRecord, LedgerEntry, LedgerResponse
 from ditto.api_models.burn_settings import BurnSettings
-from ditto.api_models.continual_retest_settings import ContinualRetestSettings
+from ditto.api_models.continual_retest_settings import (
+    CROWN_INCUMBENT_PROTOCOL,
+    ContinualRetestSettings,
+)
 from ditto.api_models.upload import _SS58_PATTERN
 from ditto.api_models.validator import (
     LedgerScoreProof,
@@ -45,6 +49,7 @@ from ditto.api_models.validator import (
 from ditto.api_server.config import EfficiencyBonusConfig
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
+    crown_incumbent_is_active,
     tie_weighting_is_active,
 )
 from ditto.api_server.efficiency import ensure_current_efficiency_state
@@ -116,6 +121,11 @@ _UNBOUNDED_EFFICIENCY_FACTOR_PROTOCOL = 25
 # marker and would keep defending the crown with the uncapped decayed band, so a
 # mixed fleet would fold two different champions and submit two weight vectors.
 _DETHRONE_BAND_CLAMP_PROTOCOL = 24
+# The first validator protocol whose fold reads ``crown_mode: incumbent`` and
+# defends the crown from the served incumbent instead of re-deriving it from
+# the earliest lineage on every read. Withheld until the whole live
+# weight-setting fleet reports it, or a mixed fleet folds two champions.
+_CROWN_INCUMBENT_PROTOCOL = CROWN_INCUMBENT_PROTOCOL
 
 
 def _fleet_safe_efficiency_adjustments(
@@ -157,6 +167,13 @@ class _LedgerSnapshot:
     continual_retest_cohort_size: int = 5
     requesting_validator_hotkey: str | None = None
     context: _LedgerContext | None = None
+    crown_mode: Literal["incumbent"] | None = None
+    """Whether the fleet may defend the crown from a served incumbent. Only the
+    epoch pin carries the incumbent itself; a live read never does."""
+    owner_roots: dict[UUID, str | None] | None = None
+    """Internal owner family per entry, for carrying the crown across pins.
+    Never serialized onto any wire."""
+    fleet_readiness: dict[str, bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +196,7 @@ class _LedgerContext:
     factor_fleet_ready: bool
     unbounded_factor_fleet_ready: bool = False
     dethrone_band_clamp_fleet_ready: bool = False
+    crown_incumbent_fleet_ready: bool = False
 
 
 def _composite_stderr(details: dict | None) -> float | None:
@@ -307,14 +325,12 @@ def _store_snapshot(request: Request, snapshot: _LedgerSnapshot) -> None:
     request.app.state.ledger_snapshot = snapshot
 
 
-async def _resolve_ledger_policy(request: Request) -> _LedgerPolicy:
+async def _resolve_ledger_policy(app_state: Any) -> _LedgerPolicy:
     """Resolve the short-TTL operator policy before considering snapshot reuse."""
-    session_maker = getattr(request.app.state, "session_maker", None)
-    efficiency = await request.app.state.efficiency_settings.resolve(session_maker)
-    continual_retest = await request.app.state.continual_retest_settings.resolve(
-        session_maker
-    )
-    burn = await request.app.state.burn_settings.resolve(session_maker)
+    session_maker = getattr(app_state, "session_maker", None)
+    efficiency = await app_state.efficiency_settings.resolve(session_maker)
+    continual_retest = await app_state.continual_retest_settings.resolve(session_maker)
+    burn = await app_state.burn_settings.resolve(session_maker)
     return _LedgerPolicy(
         efficiency=efficiency,
         continual_retest=continual_retest,
@@ -322,14 +338,18 @@ async def _resolve_ledger_policy(request: Request) -> _LedgerPolicy:
     )
 
 
-async def _resolve_ledger_context(
-    request: Request,
-    session: SessionDep,
+async def resolve_ledger_context(
+    app_state: Any,
+    session: AsyncSession,
     *,
     now: datetime,
 ) -> _LedgerContext:
-    """Read the small policy/fleet keys that guard bounded snapshot reuse."""
-    policy = await _resolve_ledger_policy(request)
+    """Read the small policy/fleet keys that guard bounded snapshot reuse.
+
+    Shared with the epoch pin builder (:mod:`ditto.api_server.ledger_pin`), so
+    a pin freezes exactly the context a live read at that instant would have.
+    """
+    policy = await _resolve_ledger_policy(app_state)
     bench_version = await active_bench_version(session)
     continual_fleet_ready = await live_validator_fleet_supports_protocol(
         session,
@@ -361,6 +381,12 @@ async def _resolve_ledger_context(
         bench_version=bench_version,
         now=now,
     )
+    crown_incumbent_fleet_ready = await live_validator_fleet_supports_protocol(
+        session,
+        minimum_protocol=_CROWN_INCUMBENT_PROTOCOL,
+        bench_version=bench_version,
+        now=now,
+    )
     return _LedgerContext(
         policy=policy,
         active_bench_version=bench_version,
@@ -369,6 +395,7 @@ async def _resolve_ledger_context(
         factor_fleet_ready=factor_fleet_ready,
         unbounded_factor_fleet_ready=unbounded_factor_fleet_ready,
         dethrone_band_clamp_fleet_ready=dethrone_band_clamp_fleet_ready,
+        crown_incumbent_fleet_ready=crown_incumbent_fleet_ready,
     )
 
 
@@ -454,6 +481,9 @@ def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
         ),
         continual_retest_cohort_size=snapshot.continual_retest_cohort_size,
         burn_share=snapshot.burn_share,
+        # A live read carries the fleet's crown mode so the marker's readiness
+        # is visible, but never an incumbent: only a pin has a previous epoch.
+        crown_mode=None,
     )
 
 
@@ -527,6 +557,287 @@ def _finish_ledger_materialization_when_done(
 ) -> None:
     """Fail-safe release if materialization exits through an unexpected error."""
     _finish_ledger_materialization(request, owned)
+
+
+async def materialize_ledger_snapshot(
+    app_state: Any,
+    session: AsyncSession,
+    *,
+    context: _LedgerContext,
+    now: datetime,
+    requesting_validator_hotkey: str | None,
+) -> _LedgerSnapshot:
+    """Build the ledger the validator fold consumes, at this instant.
+
+    Shared by the live route and the epoch pin builder so a pin is exactly what
+    a live read at that moment would have served. ``requesting_validator_hotkey``
+    is ``None`` for a pin: factors then ride purely on fleet readiness and are
+    identical for every validator that reads the pin. Raises
+    :class:`EfficiencyFactorRequesterNotReady` and ``SQLAlchemyError`` to the
+    caller, which owns the HTTP or retry semantics.
+    """
+    ledger_context = context
+    if session.in_transaction():
+        await session.rollback()
+    # The validator ledger is an authority path, not a dependent of the
+    # public leaderboard. Materialize this epoch before reading either the
+    # ledger or its adjustment rows so a quiet dashboard cannot leave every
+    # validator folding an old/missing efficiency epoch. The resolver uses
+    # its independent session and the nonce transaction above is complete,
+    # leaving this session clean for ensure_efficiency_state's transaction.
+    efficiency_config = ledger_context.policy.efficiency
+    if efficiency_config.enabled:
+        await ensure_current_efficiency_state(
+            app_state, session, efficiency_config, now=now
+        )
+    rows = await list_eligible_ledger(
+        session,
+        include_fingerprints=False,
+        details_keys=(
+            "composite_stderr",
+            "confirmation_composites",
+            "confirmation_seeds",
+        ),
+        dedupe_owners=False,
+    )
+    v9_confirmation_mode: Literal["enforce"] | None = (
+        "enforce" if await v9_confirmation_enforcement_active(session) else None
+    )
+    # The k=3 quorum spread per agent -> composite_stderr when the run itself
+    # did not stash one, so the KOTH z-band is noise-aware with no re-score.
+    quorum = await quorum_composites(
+        session,
+        [r.agent_id for r in rows],
+        bench_versions={r.agent_id: r.bench_version for r in rows},
+    )
+    canonical_version = ledger_context.active_bench_version
+    history = await confirmation_history_by_agent(
+        session,
+        agent_ids=[r.agent_id for r in rows],
+        bench_version=canonical_version,
+    )
+    confirmation_by_seed = await confirmation_composites_by_seed(
+        session,
+        agent_ids=[r.agent_id for r in rows],
+        bench_version=canonical_version,
+    )
+    _, active_confirmation_by_seed, _ = completed_wave_data(
+        rows,
+        stderrs={},
+        confirmation_by_seed=confirmation_by_seed,
+    )
+    proof_rows = await quorum_ledger_proof_rows(
+        session,
+        [r.agent_id for r in rows],
+        bench_versions={r.agent_id: r.bench_version for r in rows},
+    )
+    fleet_protocol_ready = ledger_context.continual_fleet_ready
+    continual_settings = ledger_context.policy.continual_retest
+    burn_settings = ledger_context.policy.burn
+    continual_mean_active = aggregate_is_active(
+        continual_settings, fleet_protocol_ready=fleet_protocol_ready
+    )
+    tie_weighting_fleet_ready = ledger_context.tie_weighting_fleet_ready
+    tie_weighting_active = tie_weighting_is_active(
+        continual_settings, fleet_protocol_ready=tie_weighting_fleet_ready
+    )
+    # The ceiling-aware dethrone band needs no operator switch: it only ever
+    # narrows a band that the benchmark has already made unwinnable, and
+    # leaving it off is the state miners are complaining about. Fleet
+    # readiness is the whole gate, exactly as it is for curve-v3 factors.
+    dethrone_band_clamp_active = ledger_context.dethrone_band_clamp_fleet_ready
+    # Frozen relative token-efficiency bonuses (bench_version >= 7) are
+    # surfaced to validators only behind the fold flag; with it off the
+    # ledger is byte-identical to the pre-bonus wire shape, and the
+    # subnet's weight fold must ship its own consensus change before any
+    # validator may consume these advisory fields. The enabled/fold state is
+    # read at compute time from the hot-swappable policy (latest revision,
+    # short TTL) so a backroom flip lands here with no restart; the
+    # `fold requires enabled` invariant is enforced by the resolver.
+    (
+        efficiency_bonuses,
+        efficiency_factors,
+        efficiency_curve_versions,
+    ) = await resolve_efficiency_adjustments(
+        session,
+        rows=rows,
+        efficiency_config=efficiency_config,
+        now=now,
+        requesting_validator_hotkey=requesting_validator_hotkey,
+    )
+    ranking_scores = official_composites(
+        rows,
+        quorum=quorum,
+        completed_waves=active_confirmation_by_seed,
+        continual_mean_active=continual_mean_active,
+        efficiency_bonuses=efficiency_bonuses,
+        efficiency_factors=efficiency_factors,
+        efficiency_curve_versions=efficiency_curve_versions,
+        efficiency_fold_active=bool(efficiency_bonuses or efficiency_factors),
+    )
+    efficiency_tiebreaks = efficiency_tiebreak_composites(
+        rows,
+        official=ranking_scores,
+        efficiency_factors=efficiency_factors,
+        efficiency_curve_versions=efficiency_curve_versions,
+    )
+    rows = dedupe_owner_rows(
+        rows,
+        scores=ranking_scores,
+        secondary_scores=efficiency_tiebreaks,
+    )
+    generated_at = datetime.now(UTC)
+    entries = [
+        LedgerEntry(
+            miner_hotkey=r.miner_hotkey,
+            agent_id=r.agent_id,
+            composite=r.composite,
+            n=r.n,
+            # The fold anchor, not this tarball's upload time: the wire field is
+            # read by exactly one thing, the validator's champion fold, and that
+            # fold must anchor on the lineage. See LedgerRow.crown_first_seen.
+            first_seen=r.fold_first_seen,
+            sha256=r.sha256,
+            size_bytes=r.size_bytes,
+            run_id=r.run_id,
+            seed=r.seed,
+            validator_hotkey=r.validator_hotkey,
+            bench_version=r.bench_version,
+            signature=r.signature,
+            score_proofs=[_score_proof(s) for s in proof_rows.get(r.agent_id, [])],
+            composite_stderr=(
+                r.v9_confirmation["full_stderr_micros"] / 1_000_000
+                if r.v9_confirmation is not None
+                else _ledger_stderr(r.details, quorum.get(r.agent_id, []))
+            ),
+            confirmation_composites=(
+                _confirmation_composites(r.details)
+                if continual_mean_active and r.v9_confirmation is None
+                else None
+            ),
+            confirmation_seeds=(
+                _confirmation_seeds(r.details)
+                if continual_mean_active and r.v9_confirmation is None
+                else None
+            ),
+            confirmation_history=(
+                [
+                    ConfirmationScoreRecord(
+                        seed=row.seed,
+                        composite=row.composite,
+                        validator_hotkey=row.validator_hotkey,
+                        bench_version=row.bench_version,
+                        signature=row.signature,
+                    )
+                    for row in history[r.agent_id]
+                    if row.seed in active_confirmation_by_seed.get(r.agent_id, {})
+                ]
+                if continual_mean_active
+                and r.v9_confirmation is None
+                and r.agent_id in history
+                else None
+            ),
+            continual_aggregate_method=(
+                "mean_after_quorum"
+                if continual_mean_active and r.v9_confirmation is None
+                else None
+            ),
+            efficiency_bonus=(efficiency_bonuses.get(r.agent_id)),
+            efficiency_factor=efficiency_factors.get(r.agent_id),
+            efficiency_curve_version=efficiency_curve_versions.get(r.agent_id),
+            effective_composite=(
+                efficiency_tiebreaks[r.agent_id]
+                if r.agent_id in efficiency_factors
+                else ranking_scores[r.agent_id]
+                if r.agent_id in efficiency_bonuses
+                else None
+            ),
+            v9_confirmation=(
+                V9ConfirmationReceipt.model_validate(r.v9_confirmation)
+                if r.v9_confirmation is not None
+                else None
+            ),
+            status=r.status,
+        )
+        for r in rows
+    ]
+    return _LedgerSnapshot(
+        entries=entries,
+        generated_at=generated_at,
+        active_bench_version=canonical_version,
+        burn_share=burn_settings.burn_share,
+        v9_confirmation_mode=v9_confirmation_mode,
+        tie_weighting_mode="pool" if tie_weighting_active else None,
+        dethrone_band_mode=("headroom_capped" if dethrone_band_clamp_active else None),
+        continual_retest_cohort_size=continual_settings.retest_cohort_size,
+        requesting_validator_hotkey=requesting_validator_hotkey,
+        context=ledger_context,
+        crown_mode=(
+            "incumbent"
+            if crown_incumbent_is_active(
+                continual_settings,
+                fleet_protocol_ready=ledger_context.crown_incumbent_fleet_ready,
+            )
+            else None
+        ),
+        owner_roots={r.agent_id: r.emission_owner_root for r in rows},
+        fleet_readiness={
+            "continual_mean": ledger_context.continual_fleet_ready,
+            "tie_weighting": ledger_context.tie_weighting_fleet_ready,
+            "bounded_factor": ledger_context.factor_fleet_ready,
+            "unbounded_factor": ledger_context.unbounded_factor_fleet_ready,
+            "dethrone_band_clamp": ledger_context.dethrone_band_clamp_fleet_ready,
+            "crown_incumbent": ledger_context.crown_incumbent_fleet_ready,
+        },
+    )
+
+
+async def _serve_epoch_pin(
+    request: Request,
+    session: AsyncSession,
+    validator_hotkey: str,
+    *,
+    context: _LedgerContext,
+    now: datetime,
+) -> LedgerResponse | None:
+    """Serve the current epoch's pin, or the previous one flagged stale.
+
+    Returns ``None`` only when pinning is switched off or no pin has ever been
+    taken (bootstrap), in which case the caller falls through to the live
+    time-based read. Within one epoch every validator receives the same answer:
+    the pin, or the same stale predecessor. Live and pinned are never mixed.
+    """
+    if context.policy.continual_retest.ledger_pin_mode != "epoch":
+        return None
+    materializer = getattr(request.app.state, "ledger_pin_materializer", None)
+    session_maker = getattr(request.app.state, "session_maker", None)
+    if materializer is None or session_maker is None:
+        return None
+    # Imported here: ledger_pin imports this module's materializer.
+    from ditto.api_server.ledger_pin import response_from_pin
+
+    if session.in_transaction():
+        await session.rollback()
+    pin = await materializer.ensure(request.app.state, session_maker, now=now)
+    if pin is not None:
+        logger.info(
+            "validator=%s read pinned scoring ledger: epoch %d, %d miner(s)",
+            validator_hotkey,
+            pin.epoch_index,
+            len(pin.entries),
+        )
+        return response_from_pin(pin, stale=False, now=now)
+    netuid = request.app.state.config.chain.netuid
+    previous = await materializer.latest(session_maker, netuid=netuid)
+    if previous is None:
+        return None
+    logger.warning(
+        "validator=%s: current epoch pin unavailable; serving pin for epoch %d "
+        "flagged stale",
+        validator_hotkey,
+        previous.epoch_index,
+    )
+    return response_from_pin(previous, stale=True, now=now)
 
 
 @router.get(
@@ -608,9 +919,16 @@ async def scores(
                 detail="scoring ledger authorization temporarily unavailable",
             ) from exc
     try:
-        ledger_context = await _resolve_ledger_context(request, session, now=auth_now)
+        ledger_context = await resolve_ledger_context(
+            request.app.state, session, now=auth_now
+        )
     except SQLAlchemyError as exc:
         return _serve_last_known(request, x_validator_hotkey, exc)
+    pinned = await _serve_epoch_pin(
+        request, session, x_validator_hotkey, context=ledger_context, now=auth_now
+    )
+    if pinned is not None:
+        return pinned
     joined_snapshot, materialization = await _join_ledger_materialization(
         request, x_validator_hotkey, context=ledger_context
     )
@@ -622,119 +940,13 @@ async def scores(
         )
         return _fresh_response_from_snapshot(joined_snapshot)
     assert materialization is not None
-    # The cheap context reads above autobegin a read transaction on lightweight
-    # test apps (and any deployment without app.state.session_maker). End it
-    # before ensure_efficiency_state opens its explicit materialization
-    # transaction. The nonce transaction has already committed independently.
-    if session.in_transaction():
-        await session.rollback()
     try:
-        # The validator ledger is an authority path, not a dependent of the
-        # public leaderboard. Materialize this epoch before reading either the
-        # ledger or its adjustment rows so a quiet dashboard cannot leave every
-        # validator folding an old/missing efficiency epoch. The resolver uses
-        # its independent session and the nonce transaction above is complete,
-        # leaving this session clean for ensure_efficiency_state's transaction.
-        efficiency_config = ledger_context.policy.efficiency
-        if efficiency_config.enabled:
-            await ensure_current_efficiency_state(
-                request.app.state, session, efficiency_config, now=auth_now
-            )
-        rows = await list_eligible_ledger(
+        snapshot = await materialize_ledger_snapshot(
+            request.app.state,
             session,
-            include_fingerprints=False,
-            details_keys=(
-                "composite_stderr",
-                "confirmation_composites",
-                "confirmation_seeds",
-            ),
-            dedupe_owners=False,
-        )
-        v9_confirmation_mode: Literal["enforce"] | None = (
-            "enforce" if await v9_confirmation_enforcement_active(session) else None
-        )
-        # The k=3 quorum spread per agent -> composite_stderr when the run itself
-        # did not stash one, so the KOTH z-band is noise-aware with no re-score.
-        quorum = await quorum_composites(
-            session,
-            [r.agent_id for r in rows],
-            bench_versions={r.agent_id: r.bench_version for r in rows},
-        )
-        canonical_version = ledger_context.active_bench_version
-        history = await confirmation_history_by_agent(
-            session,
-            agent_ids=[r.agent_id for r in rows],
-            bench_version=canonical_version,
-        )
-        confirmation_by_seed = await confirmation_composites_by_seed(
-            session,
-            agent_ids=[r.agent_id for r in rows],
-            bench_version=canonical_version,
-        )
-        _, active_confirmation_by_seed, _ = completed_wave_data(
-            rows,
-            stderrs={},
-            confirmation_by_seed=confirmation_by_seed,
-        )
-        proof_rows = await quorum_ledger_proof_rows(
-            session,
-            [r.agent_id for r in rows],
-            bench_versions={r.agent_id: r.bench_version for r in rows},
-        )
-        fleet_protocol_ready = ledger_context.continual_fleet_ready
-        continual_settings = ledger_context.policy.continual_retest
-        burn_settings = ledger_context.policy.burn
-        continual_mean_active = aggregate_is_active(
-            continual_settings, fleet_protocol_ready=fleet_protocol_ready
-        )
-        tie_weighting_fleet_ready = ledger_context.tie_weighting_fleet_ready
-        tie_weighting_active = tie_weighting_is_active(
-            continual_settings, fleet_protocol_ready=tie_weighting_fleet_ready
-        )
-        # The ceiling-aware dethrone band needs no operator switch: it only ever
-        # narrows a band that the benchmark has already made unwinnable, and
-        # leaving it off is the state miners are complaining about. Fleet
-        # readiness is the whole gate, exactly as it is for curve-v3 factors.
-        dethrone_band_clamp_active = ledger_context.dethrone_band_clamp_fleet_ready
-        # Frozen relative token-efficiency bonuses (bench_version >= 7) are
-        # surfaced to validators only behind the fold flag; with it off the
-        # ledger is byte-identical to the pre-bonus wire shape, and the
-        # subnet's weight fold must ship its own consensus change before any
-        # validator may consume these advisory fields. The enabled/fold state is
-        # read at compute time from the hot-swappable policy (latest revision,
-        # short TTL) so a backroom flip lands here with no restart; the
-        # `fold requires enabled` invariant is enforced by the resolver.
-        (
-            efficiency_bonuses,
-            efficiency_factors,
-            efficiency_curve_versions,
-        ) = await resolve_efficiency_adjustments(
-            session,
-            rows=rows,
-            efficiency_config=efficiency_config,
+            context=ledger_context,
             now=auth_now,
             requesting_validator_hotkey=x_validator_hotkey,
-        )
-        ranking_scores = official_composites(
-            rows,
-            quorum=quorum,
-            completed_waves=active_confirmation_by_seed,
-            continual_mean_active=continual_mean_active,
-            efficiency_bonuses=efficiency_bonuses,
-            efficiency_factors=efficiency_factors,
-            efficiency_curve_versions=efficiency_curve_versions,
-            efficiency_fold_active=bool(efficiency_bonuses or efficiency_factors),
-        )
-        efficiency_tiebreaks = efficiency_tiebreak_composites(
-            rows,
-            official=ranking_scores,
-            efficiency_factors=efficiency_factors,
-            efficiency_curve_versions=efficiency_curve_versions,
-        )
-        rows = dedupe_owner_rows(
-            rows,
-            scores=ranking_scores,
-            secondary_scores=efficiency_tiebreaks,
         )
     except EfficiencyFactorRequesterNotReady as exc:
         _finish_ledger_materialization(request, materialization)
@@ -742,124 +954,13 @@ async def scores(
     except SQLAlchemyError as e:
         _finish_ledger_materialization(request, materialization)
         return _serve_last_known(request, x_validator_hotkey, e)
-
-    generated_at = datetime.now(UTC)
-    entries = [
-        LedgerEntry(
-            miner_hotkey=r.miner_hotkey,
-            agent_id=r.agent_id,
-            composite=r.composite,
-            n=r.n,
-            # The fold anchor, not this tarball's upload time: the wire field is
-            # read by exactly one thing, the validator's champion fold, and that
-            # fold must anchor on the lineage. See LedgerRow.crown_first_seen.
-            first_seen=r.fold_first_seen,
-            sha256=r.sha256,
-            size_bytes=r.size_bytes,
-            run_id=r.run_id,
-            seed=r.seed,
-            validator_hotkey=r.validator_hotkey,
-            bench_version=r.bench_version,
-            signature=r.signature,
-            score_proofs=[_score_proof(s) for s in proof_rows.get(r.agent_id, [])],
-            composite_stderr=(
-                r.v9_confirmation["full_stderr_micros"] / 1_000_000
-                if r.v9_confirmation is not None
-                else _ledger_stderr(r.details, quorum.get(r.agent_id, []))
-            ),
-            confirmation_composites=(
-                _confirmation_composites(r.details)
-                if continual_mean_active and r.v9_confirmation is None
-                else None
-            ),
-            confirmation_seeds=(
-                _confirmation_seeds(r.details)
-                if continual_mean_active and r.v9_confirmation is None
-                else None
-            ),
-            confirmation_history=(
-                [
-                    ConfirmationScoreRecord(
-                        seed=row.seed,
-                        composite=row.composite,
-                        validator_hotkey=row.validator_hotkey,
-                        bench_version=row.bench_version,
-                        signature=row.signature,
-                    )
-                    for row in history[r.agent_id]
-                    if row.seed in active_confirmation_by_seed.get(r.agent_id, {})
-                ]
-                if continual_mean_active
-                and r.v9_confirmation is None
-                and r.agent_id in history
-                else None
-            ),
-            continual_aggregate_method=(
-                "mean_after_quorum"
-                if continual_mean_active and r.v9_confirmation is None
-                else None
-            ),
-            efficiency_bonus=(efficiency_bonuses.get(r.agent_id)),
-            efficiency_factor=efficiency_factors.get(r.agent_id),
-            efficiency_curve_version=efficiency_curve_versions.get(r.agent_id),
-            effective_composite=(
-                efficiency_tiebreaks[r.agent_id]
-                if r.agent_id in efficiency_factors
-                else ranking_scores[r.agent_id]
-                if r.agent_id in efficiency_bonuses
-                else None
-            ),
-            v9_confirmation=(
-                V9ConfirmationReceipt.model_validate(r.v9_confirmation)
-                if r.v9_confirmation is not None
-                else None
-            ),
-            status=r.status,
-        )
-        for r in rows
-    ]
-    _store_snapshot(
-        request,
-        _LedgerSnapshot(
-            entries=entries,
-            generated_at=generated_at,
-            active_bench_version=canonical_version,
-            burn_share=burn_settings.burn_share,
-            v9_confirmation_mode=v9_confirmation_mode,
-            tie_weighting_mode="pool" if tie_weighting_active else None,
-            dethrone_band_mode=(
-                "headroom_capped" if dethrone_band_clamp_active else None
-            ),
-            continual_retest_cohort_size=continual_settings.retest_cohort_size,
-            requesting_validator_hotkey=x_validator_hotkey,
-            context=ledger_context,
-        ),
-    )
+    _store_snapshot(request, snapshot)
     logger.info(
         "validator=%s read scoring ledger: %d miner(s)",
         x_validator_hotkey,
-        len(entries),
+        len(snapshot.entries),
     )
-    ledger_response = LedgerResponse(
-        entries=entries,
-        active_bench_version=canonical_version,
-        v9_confirmation_mode=v9_confirmation_mode,
-        tie_weighting_mode="pool" if tie_weighting_active else None,
-        dethrone_band_mode="headroom_capped" if dethrone_band_clamp_active else None,
-        count=len(entries),
-        generated_at=generated_at,
-        stale=False,
-        age_seconds=0,
-        # Advisory: how wide the operator currently wants the shared-seed round
-        # planned. Read from the same short-TTL policy the lease path enforces,
-        # so a Backroom change reaches every validator on its next ledger poll
-        # rather than on a redeploy.
-        continual_retest_cohort_size=continual_settings.retest_cohort_size,
-        # Consensus-relevant, unlike the cohort size: this is the miner/burn
-        # split the fold applies. Resolved here so every validator reads one
-        # decided scalar instead of evaluating a schedule against its own clock.
-        burn_share=burn_settings.burn_share,
-    )
+    ledger_response = _fresh_response_from_snapshot(snapshot)
     _finish_ledger_materialization(request, materialization)
     return ledger_response
 

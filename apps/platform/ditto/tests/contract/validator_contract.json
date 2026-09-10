@@ -4349,6 +4349,30 @@
         "minimum": 0,
         "type": "integer"
       },
+      "crown_incumbent_agent_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "crown_mode": {
+        "anyOf": [
+          {
+            "const": "incumbent",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "dethrone_band_mode": {
         "anyOf": [
           {
@@ -4367,11 +4391,59 @@
         },
         "type": "array"
       },
+      "epoch_index": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "generated_at": {
         "anyOf": [
           {
             "format": "date-time",
             "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "ledger_digest": {
+        "anyOf": [
+          {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "pinned_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "pinned_block": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
           },
           {
             "type": "null"
