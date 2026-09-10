@@ -20,6 +20,11 @@ single-link files:
 The first run refuses any existing key or marker state. A completed rerun
 validates the key and requires the receipt to match exactly. Partial state is
 retained for explicit reconciliation and is never overwritten or deleted.
+The initial production bootstrap exposed a receipt-only encoding defect: the
+otherwise correct JSON ended with the two literal bytes `\\n`. A later role may
+replace only that exact redacted legacy receipt, only with confirmation
+`REPAIR NATIVE CODING RSA RECEIPT`. It verifies the private/public identity
+first and never regenerates, rewrites, exports or deletes key material.
 The private key is unencrypted because the separately owned custody service
 must read it without receiving a passphrase; confidentiality is the trusted
 host, dedicated UID, owner-only path and host-root boundary documented in
@@ -33,7 +38,8 @@ ansible-playbook -i infra/ansible/inventory/gcp.yml \
   --limit ditto-coding-hosted-v2 \
   -e '{"coding_hosted_custody_key_enabled":true,
        "coding_hosted_custody_source_revision":"<merged-source-sha>",
-       "coding_hosted_custody_key_confirmation":"BOOTSTRAP NATIVE CODING RSA CUSTODY"}'
+       "coding_hosted_custody_key_confirmation":"BOOTSTRAP NATIVE CODING RSA CUSTODY",
+       "coding_hosted_custody_receipt_repair_confirmation":""}'
 ```
 
 Export only the public PEM and redacted receipt through the custodian's reviewed
