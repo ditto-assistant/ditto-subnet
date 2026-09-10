@@ -115,6 +115,10 @@ from ditto.api_models.validator_updater import (
     ValidatorUpdaterStatus,
     validator_updater_status_signing_token,
 )
+from ditto.api_models.validator_weights_fold import (
+    WeightsFold,
+    weights_fold_signing_token,
+)
 from ditto.api_server.anti_copy_comparison import ANTI_COPY_ALGORITHM_VERSION
 from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.attestation import expected_netuid
@@ -2225,8 +2229,11 @@ def _heartbeat_signing_message(
     benchmark_capacity: BenchmarkCapacity | None = None,
     confirmation_progress: list[ConfirmationProgress] | None = None,
     updater_status: ValidatorUpdaterStatus | None = None,
+    weights_fold: WeightsFold | None = None,
 ) -> bytes:
     """Canonical heartbeat payload, mirrored by ``ditto-subnet``."""
+    if weights_fold is not None and protocol_version < 27:
+        raise ValueError("weights fold requires heartbeat protocol v27")
     if stack_health is not None and protocol_version < 9:
         raise ValueError("per-component stack health requires heartbeat protocol v9")
     if benchmark_capacity is not None and protocol_version < 10:
@@ -2248,6 +2255,23 @@ def _heartbeat_signing_message(
             if updater_status is None:
                 raise ValueError("heartbeat protocol v23 requires updater status")
             active = str(active_agent_id) if active_agent_id is not None else ""
+            # Mirrors the validator: the fold report changes the signed bytes
+            # only when present, so a fold-less v27 heartbeat stays on v23.
+            if weights_fold is not None:
+                return (
+                    "ditto-validator-heartbeat:v27:"
+                    f"{validator_hotkey}:{software_version}:{protocol_version}:"
+                    f"{code_digest}:{state}:{active}:"
+                    f"{system_metrics_signing_token(system_metrics)}:"
+                    f"{benchmark_progress_signing_token(benchmark_progress)}:"
+                    f"{validator_identity_signing_token(capabilities, stack)}:"
+                    f"{validator_stack_health_signing_token(stack_health)}:"
+                    f"{benchmark_capacity_signing_token(benchmark_capacity)}:"
+                    f"{confirmation_progress_signing_token(confirmation_progress)}:"
+                    f"{validator_updater_status_signing_token(updater_status)}:"
+                    f"{weights_fold_signing_token(weights_fold)}:"
+                    f"{timestamp}"
+                ).encode()
             return (
                 "ditto-validator-heartbeat:v23:"
                 f"{validator_hotkey}:{software_version}:{protocol_version}:"
@@ -2819,6 +2843,7 @@ async def heartbeat(
         benchmark_capacity=request_body.benchmark_capacity,
         confirmation_progress=request_body.confirmation_progress,
         updater_status=request_body.updater_status,
+        weights_fold=request_body.weights_fold,
     )
     if not _verify_signature(validator_hotkey, payload, request_body.signature):
         raise ValidatorAuthError("heartbeat signature verification failed")
@@ -2902,6 +2927,11 @@ async def heartbeat(
             updater_status=(
                 request_body.updater_status.model_dump(mode="json", exclude_none=True)
                 if request_body.updater_status is not None
+                else None
+            ),
+            weights_fold=(
+                request_body.weights_fold.model_dump(mode="json", exclude_none=True)
+                if request_body.weights_fold is not None
                 else None
             ),
             benchmark_capacity=(

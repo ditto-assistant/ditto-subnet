@@ -18379,6 +18379,8 @@ export interface components {
             netuid: number;
             /** Owner Hotkey */
             owner_hotkey?: string | null;
+            /** @description Count of revealed vectors matching the current pin's fold, or null when no pin exists to compare against. */
+            pin_agreement?: components["schemas"]["PublicPinAgreement"] | null;
             /**
              * Stale
              * @description True when the most recent attempt to re-read the matrix failed and this is the last known good one. The block it pins is real chain state, just older than a normal response; a reader should label it rather than treat the matrix as absent.
@@ -20043,6 +20045,20 @@ export interface components {
             state: "still_running" | "indeterminate";
         };
         /**
+         * PublicPinAgreement
+         * @description How many revealed vectors match the fold the current pin prescribes.
+         */
+        PublicPinAgreement: {
+            /** Epoch Index */
+            epoch_index: number;
+            /** Matching */
+            matching: number;
+            /** Previous Epoch Index */
+            previous_epoch_index?: number | null;
+            /** Total */
+            total: number;
+        };
+        /**
          * PublicProvisionalScore
          * @description One score the platform accepted toward a submission's quorum.
          *
@@ -21173,6 +21189,8 @@ export interface components {
              * @description Validator's public hotkey.
              */
             validator_hotkey: string;
+            /** @description Which pinned ledger this validator last folded and the digest of the vector it committed. Null before the first fold or for validators older than heartbeat protocol v27. */
+            weights_fold?: components["schemas"]["PublicWeightsFold"] | null;
         };
         /**
          * PublicValidatorHeartbeatsResponse
@@ -21369,12 +21387,37 @@ export interface components {
          * @description One validator's latest publicly revealed on-chain weights.
          */
         PublicValidatorWeightVector: {
+            /** @description The pinned ledger this validator reported folding on its latest heartbeat; null for validators that do not heartbeat to the Platform or predate heartbeat protocol v27. */
+            fold?: components["schemas"]["PublicWeightsFold"] | null;
+            /**
+             * Matches Pin
+             * @description Whether this revealed vector's recipients and shares match the fold prescribed by the current epoch pin (current), the previous pin (previous: one epoch behind, the normal reveal lag), neither (diverged), or could not be compared (unknown: no pin yet or an empty vector).
+             * @default unknown
+             * @enum {string}
+             */
+            matches_pin: "current" | "previous" | "diverged" | "unknown";
             /** Validator Hotkey */
             validator_hotkey: string;
             /** Validator Uid */
             validator_uid: number;
             /** Weights */
             weights?: components["schemas"]["PublicChainWeight"][];
+        };
+        /**
+         * PublicWeightsFold
+         * @description What a validator reported folding, from its latest signed heartbeat.
+         */
+        PublicWeightsFold: {
+            /** Champion Agent Id */
+            champion_agent_id?: string | null;
+            /** Epoch Index */
+            epoch_index?: number | null;
+            /** Folded At */
+            folded_at: number;
+            /** Ledger Digest */
+            ledger_digest?: string | null;
+            /** Vector Digest */
+            vector_digest: string;
         };
         /**
          * QueuePolicySettings
@@ -25915,6 +25958,8 @@ export interface components {
              * @description Reporting validator hotkey.
              */
             validator_hotkey: string;
+            /** @description Which pinned ledger this validator last folded and the digest of the weight vector it committed, under heartbeat protocol v27. Null before the first fold of the process or on older validators. */
+            weights_fold?: components["schemas"]["WeightsFold"] | null;
         };
         /**
          * ValidatorHeartbeatResponse
@@ -26164,8 +26209,17 @@ export interface components {
         };
         /** ValidatorWeightObservation */
         ValidatorWeightObservation: {
+            /** @description The pinned ledger this validator reported folding on its latest heartbeat; null for validators that do not heartbeat to the Platform or predate heartbeat protocol v27. */
+            fold?: components["schemas"]["PublicWeightsFold"] | null;
             /** Last Update Block */
             last_update_block: number;
+            /**
+             * Matches Pin
+             * @description Whether this revealed vector's recipients and shares match the fold prescribed by the current epoch pin (current), the previous pin (previous: one epoch behind, the normal reveal lag), neither (diverged), or could not be compared (unknown: no pin yet or an empty vector).
+             * @default unknown
+             * @enum {string}
+             */
+            matches_pin: "current" | "previous" | "diverged" | "unknown";
             /** Validator Hotkey */
             validator_hotkey: string;
             /** Validator Trust */
@@ -26183,6 +26237,37 @@ export interface components {
             uid: number;
             /** Value */
             value: number;
+        };
+        /**
+         * WeightsFold
+         * @description Signed summary of one validator weight fold, under heartbeat protocol v27.
+         */
+        WeightsFold: {
+            /**
+             * Champion Agent Id
+             * @description The champion this fold derived, if any.
+             */
+            champion_agent_id?: string | null;
+            /**
+             * Epoch Index
+             * @description Chain SubnetEpochIndex of the pinned ledger that was folded; null when the ledger served was a live (unpinned) read.
+             */
+            epoch_index?: number | null;
+            /**
+             * Folded At
+             * @description Unix timestamp (UTC) the fold was submitted.
+             */
+            folded_at: number;
+            /**
+             * Ledger Digest
+             * @description The served ledger_digest, replayed verbatim.
+             */
+            ledger_digest?: string | null;
+            /**
+             * Vector Digest
+             * @description SHA-256 of the canonical JSON of the [hotkey, weight] pairs handed to Pylon, sorted by hotkey.
+             */
+            vector_digest: string;
         };
     };
     responses: never;

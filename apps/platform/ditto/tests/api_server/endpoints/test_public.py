@@ -1809,6 +1809,106 @@ class TestPublicNextPinProjection:
         assert projection["changes_crown"] is True
 
 
+class TestPublicWeightsPinAgreement:
+    async def test_vectors_are_classified_against_the_current_pin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.session_maker = session_maker
+        a, b = uuid4(), uuid4()
+        # Pin 25_028 folds to A 65 / B 14; pin 25_027 was the other way around.
+        await _seed_pin(
+            session_maker,
+            epoch_index=25_027,
+            champion=(b, _MINER_B),
+            tail=(a, _MINER_A),
+        )
+        await _seed_pin(
+            session_maker,
+            epoch_index=25_028,
+            champion=(a, _MINER_A),
+            tail=(b, _MINER_B),
+        )
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_C,
+                    software_version="0.250.0",
+                    protocol_version=27,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    weights_fold={
+                        "epoch_index": 25_028,
+                        "ledger_digest": f"{25_028:064x}",
+                        "vector_digest": "ef" * 32,
+                        "folded_at": int(now.timestamp()),
+                    },
+                )
+            )
+        snapshot = ChainWeightsSnapshot(
+            netuid=118,
+            block=9_033_500,
+            block_hash="0x" + "ab" * 32,
+            owner_hotkey=None,
+            vectors=(
+                ChainWeightVector(
+                    validator_uid=25,
+                    validator_hotkey=_VALIDATOR_C,
+                    weights=(
+                        ChainWeight(uid=1, hotkey=_MINER_A, value=42598),
+                        ChainWeight(uid=2, hotkey=_MINER_B, value=9175),
+                    ),
+                ),
+                ChainWeightVector(
+                    validator_uid=26,
+                    validator_hotkey="5" + "D" * 47,
+                    weights=(
+                        ChainWeight(uid=2, hotkey=_MINER_B, value=42598),
+                        ChainWeight(uid=1, hotkey=_MINER_A, value=9175),
+                    ),
+                ),
+                ChainWeightVector(
+                    validator_uid=27,
+                    validator_hotkey="5" + "E" * 47,
+                    weights=(ChainWeight(uid=1, hotkey=_MINER_A, value=65535),),
+                ),
+            ),
+        )
+        app.state.chain = SimpleNamespace(get_weights=AsyncMock(return_value=snapshot))
+
+        body = (await client.get("/api/v1/public/weights")).json()
+        by_uid = {vector["validator_uid"]: vector for vector in body["vectors"]}
+        assert by_uid[25]["matches_pin"] == "current"
+        assert by_uid[25]["fold"]["epoch_index"] == 25_028
+        assert by_uid[26]["matches_pin"] == "previous"
+        assert by_uid[26]["fold"] is None
+        assert by_uid[27]["matches_pin"] == "diverged"
+        assert body["pin_agreement"] == {
+            "epoch_index": 25_028,
+            "previous_epoch_index": 25_027,
+            "matching": 1,
+            "total": 3,
+        }
+
+    async def test_without_a_pin_agreement_is_unknown(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        app.state.chain = SimpleNamespace(
+            get_weights=AsyncMock(return_value=_weights_snapshot())
+        )
+        body = (await client.get("/api/v1/public/weights")).json()
+        assert body["pin_agreement"] is None
+        assert body["vectors"][0]["matches_pin"] == "unknown"
+        assert body["vectors"][0]["fold"] is None
+
+
 class TestPublicValidationFailureCode:
     def test_exact_agent_and_infra_codes(self) -> None:
         assert (
@@ -1872,6 +1972,9 @@ class TestPublicChainWeights:
                 "validator_uid": 25,
                 "validator_hotkey": _VALIDATOR_C,
                 "weights": [{"uid": 169, "hotkey": _MINER_A, "value": 14745}],
+                # No pin and no heartbeat fold: stated absence, never a guess.
+                "fold": None,
+                "matches_pin": "unknown",
             }
         ]
         app.state.chain.get_weights.assert_awaited_once_with(118)

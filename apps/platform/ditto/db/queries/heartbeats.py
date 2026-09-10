@@ -249,6 +249,7 @@ async def upsert_validator_heartbeat(
     benchmark_capacity: dict | None = None,
     confirmation_progress: list[dict] | None = None,
     claimed_slots: list[dict] | None = None,
+    weights_fold: dict | None = None,
 ) -> tuple[ValidatorHeartbeat, bool]:
     """Persist only a strictly newer heartbeat; return ``(row, accepted)``."""
     row = await session.scalar(
@@ -276,6 +277,7 @@ async def upsert_validator_heartbeat(
             "stack": stack,
             "stack_health": stack_health,
             "updater_status": updater_status,
+            "weights_fold": weights_fold,
             "benchmark_capacity": benchmark_capacity,
             "confirmation_progress": confirmation_progress,
             "claimed_slots": claimed_slots,
@@ -359,6 +361,7 @@ async def upsert_validator_heartbeat(
     row.stack_health = stack_health
     row.confirmation_progress = confirmation_progress
     row.updater_status = updater_status
+    row.weights_fold = weights_fold
     try:
         row.benchmark_capacity = _reconcile_capacity_progress(
             row.benchmark_capacity if not is_new else None, benchmark_capacity

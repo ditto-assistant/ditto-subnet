@@ -21,6 +21,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ditto.api_models.validator_weights_fold import WeightsFold
+
 if TYPE_CHECKING:
     from ditto.api_models.validator import ScoreReport
 
@@ -136,6 +138,8 @@ class SweepStats:
     onchain_last_update_block: int | None = None
     onchain_observed_block: int | None = None
     scoring_sweep: bool = True
+    weights_fold: WeightsFold | None = None
+    """The pin identity and vector digest this sweep's fold produced."""
 
 
 def per_category_means(report: ScoreReport) -> dict[str, float]:
@@ -337,6 +341,15 @@ class ValidatorTelemetry:
                 )
             if stats.onchain_observed_block is not None:
                 payload["weights/onchain_observed_block"] = stats.onchain_observed_block
+            if stats.weights_fold is not None:
+                fold = stats.weights_fold
+                payload["weights/vector_digest"] = fold.vector_digest
+                if fold.epoch_index is not None:
+                    payload["weights/epoch_index"] = fold.epoch_index
+                if fold.ledger_digest is not None:
+                    payload["weights/ledger_digest"] = fold.ledger_digest
+                if fold.champion_agent_id is not None:
+                    payload["weights/champion_agent_id"] = str(fold.champion_agent_id)
             if (
                 stats.onchain_last_update_block is not None
                 and stats.onchain_observed_block is not None
