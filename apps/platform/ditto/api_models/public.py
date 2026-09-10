@@ -1502,6 +1502,47 @@ class PublicKothEmissions(BaseModel):
         ),
     ] = None
     recipients: list[PublicEmissionRecipient] = Field(default_factory=list)
+    crown_incumbent_active: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Whether the displayed fold defends the crown from the previous "
+                "pin's champion (crown_mode incumbent) instead of re-deriving it "
+                "from the earliest lineage on every read."
+            ),
+        ),
+    ] = False
+    crown_incumbent_required_protocol: Annotated[
+        int,
+        Field(
+            default=27,
+            ge=1,
+            description="Minimum fleet heartbeat protocol for crown incumbency.",
+        ),
+    ] = 27
+    crown_incumbent_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description=(
+                "The incumbent the live fold defended, when incumbency is active "
+                "and the current pin named one. Null otherwise."
+            ),
+        ),
+    ] = None
+    next_pin_projection: Annotated[
+        PublicNextPinProjection | None,
+        Field(
+            default=None,
+            description=(
+                "What the next epoch pin would record if it were taken from the "
+                "live board right now: the fold over the current rows with the "
+                "current pin's champion as incumbent. Read changes_crown to know "
+                "whether weights will move at the next pin."
+            ),
+        ),
+    ] = None
     ledger_pin: Annotated[
         PublicLedgerPin | None,
         Field(
@@ -1512,6 +1553,39 @@ class PublicKothEmissions(BaseModel):
                 "move at the next pin, so this is the snapshot any on-chain "
                 "vector should be read against. Null while pinning is switched "
                 "off or before the first pin was taken."
+            ),
+        ),
+    ] = None
+
+
+class PublicNextPinProjection(BaseModel):
+    """The crown the next epoch pin would record from the live board."""
+
+    champion_agent_id: UUID
+    champion_miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    incumbent_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description="The current pin's champion the projection defended from.",
+        ),
+    ] = None
+    changes_crown: Annotated[
+        bool,
+        Field(
+            description=(
+                "True when the projected champion differs from the current pin's "
+                "champion, i.e. the 65% slot moves at the next pin."
+            )
+        ),
+    ]
+    decision: Annotated[
+        PublicDethroneDecision | None,
+        Field(
+            default=None,
+            description=(
+                "The dethrone decision for the strongest rival against the "
+                "projected champion; null when there is no rival."
             ),
         ),
     ] = None
