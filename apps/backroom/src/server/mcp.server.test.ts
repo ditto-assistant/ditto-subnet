@@ -191,6 +191,7 @@ describe('Backroom MCP tools', () => {
         'get_agent_coding_certifications',
         'get_agent_coding_shadow_evaluations',
         'get_coding_catalog_releases',
+        'get_coding_control_plane',
         'get_coding_private_v2_releases',
         'issue_coding_shadow_ticket_set',
         'get_validator_weight_diagnostics',
@@ -7149,6 +7150,43 @@ describe('Backroom MCP tools', () => {
       expect(unavailable.isError).toBe(true)
       expect(fetchMock).toHaveBeenCalledTimes(2)
       expect(fetchMock.mock.calls.every(([url]) => String(url).includes('/coding-private-v2-releases?'))).toBe(true)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('reads the unified Coding control plane without conflating v1 and v2 releases', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const catalog = { total: 0, releases: [], shadow_only: true }
+    const privateV2 = {
+      total: 0,
+      releases: [],
+      shadow_only: true,
+      selectable: false,
+      weight_eligible: false,
+    }
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => Response.json(
+      url.includes('/coding-catalog/releases') ? catalog : privateV2,
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_coding_control_plane',
+        arguments: { limit: 25 },
+      })
+      expect(response.isError, readTextResult(response)).not.toBe(true)
+      expect(readJsonResult(response)).toEqual({
+        catalog,
+        private_v2: privateV2,
+        shadow_only: true,
+        weight_eligible: false,
+      })
+      expect(fetchMock.mock.calls.map(([url]) => String(url)).sort()).toEqual([
+        'https://platform-api.heyditto.ai/api/v1/admin/coding-catalog/releases?limit=25',
+        'https://platform-api.heyditto.ai/api/v1/admin/coding-private-v2-releases?limit=25',
+      ])
     } finally {
       await client.close()
       await server.close()

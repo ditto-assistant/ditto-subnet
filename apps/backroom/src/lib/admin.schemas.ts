@@ -5305,6 +5305,10 @@ export function codingShadowTicketSetConfirmation(input: {
   return `ISSUE SHADOW CODING TICKET SET ${input.runRowId} ${input.ticketSetId} ${input.validatorHotkeys.join(',')}`
 }
 
+export function coreQualificationConfirmation(benchVersion: number) {
+  return `APPLY SHADOW CORE QUALIFICATION V${benchVersion}`
+}
+
 export const registerCodingCatalogInputSchema = z.object({
   commitment: codingCatalogCommitmentSchema,
   signature: z.string().regex(/^[0-9a-fA-F]{128}$/),
@@ -6728,6 +6732,10 @@ export type CodingShadowReconciliationResponse = z.infer<
 >
 export type CodingShadowTicketSetResponse = z.infer<
   typeof codingShadowTicketSetResponseSchema
+>
+export type CoreQualificationPolicy = z.infer<typeof coreQualificationPolicySchema>
+export type CoreQualificationPolicyControl = z.infer<
+  typeof coreQualificationPolicyControlSchema
 >
 export type BenchmarkContractRefreshDetail = z.infer<
   typeof benchmarkContractRefreshDetailSchema

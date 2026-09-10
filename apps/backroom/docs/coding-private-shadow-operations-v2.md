@@ -24,6 +24,7 @@ signed native private-v2 registration, quarantine and retirement
 exact contract-v1 artifact reconciliation into a future-height run
 fixed, sorted, unique k=3 contract-v1 validator ticket issuance
 exact artifact-bound assignment, run, ticket and result inspection
+append-only shadow qualification entry and exit score gates
 ```
 
 Private-v2 registration stays `selectable=false`; it is not a contract-v2
@@ -31,6 +32,10 @@ launch switch. Contract-v1 reconciliation does not issue tickets. Ticket
 issuance does not execute a container: each validator still claims and runs
 under the existing certification, lease and evidence boundaries. These are
 separate UI sections and separate MCP tools with exact confirmation phrases.
+Source review, inference admission, validator capacity and benchmark contracts
+remain shared Platform policies linked from the Coding page; the control plane
+does not fork their semantics. Qualification thresholds decide admission from
+existing scores and never edit those scores.
 
 It MUST NOT expose task IDs, source repositories, issue text, memory records,
 condition labels, hidden tests, patches, object keys, bucket names, endpoint

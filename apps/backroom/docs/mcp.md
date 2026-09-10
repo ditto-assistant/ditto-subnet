@@ -49,6 +49,15 @@ commitments, not fresh connectivity or custody checks. Registration remains
 non-selectable and weight-ineligible; it does not approve native execution, a
 canary or a rollout.
 
+`get_coding_control_plane` reads the contract-v1 catalog and native private-v2
+registry together while preserving them as separate nested authorities. It is a
+bounded convenience read, not a new source of truth or an activation check.
+
+`get_coding_control_plane` reads that registry together with the distinct
+contract-v1 catalog in one bounded response. It keeps the two collections
+separate and does not infer provider, host, canary or rollout readiness from a
+stored registration.
+
 Write-scoped operators can use three exact private-v2 lifecycle tools:
 
 - `register_coding_private_v2_release` forwards a complete publication receipt,
@@ -73,6 +82,12 @@ Both launch tools retain Platform's default-off feature gates, exact confirmatio
 phrases, idempotent database authority and permanent `weight_eligible=false`.
 The MCP calls carry the signed-in operator email in `X-Admin-Actor`; no shared
 operator identity is used.
+
+Shadow admission score floors remain the existing append-only
+`get_core_qualification_policy` / `set_core_qualification_policy` controls.
+They determine qualification only; they never rewrite validator scores. Coding
+also reuses the existing screener-review, inference-admission, validator-slot and
+benchmark-rollout authorities instead of creating divergent copies.
 
 The MCP endpoint is a full OAuth 2.1 resource. `@cloudflare/workers-oauth-provider`
 owns `/authorize`, `/token`, and `/register`; discovery lives at

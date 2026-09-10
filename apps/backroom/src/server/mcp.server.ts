@@ -153,6 +153,7 @@ import {
   fetchAgentCodingCertifications,
   fetchCodingCatalogReleases,
   fetchCodingPrivateV2Releases,
+  fetchCodingControlPlane,
   registerCodingPrivateV2Release,
   quarantineCodingPrivateV2Release,
   retireCodingPrivateV2Release,
@@ -519,7 +520,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_coding_catalog_releases:
     'Read signed shadow catalog commitments, retirement, and exposure counts.',
   get_coding_private_v2_releases:
-    'Read native private-v2 registration digests and lifecycle state; never enables execution.',
+    'Read native v2 registrations; never launches.',
+  get_coding_control_plane:
+    'Read unified Coding authority state.',
   register_coding_private_v2_release:
     'Register signed, non-selectable native v2.',
   quarantine_coding_private_v2_release:
@@ -1406,6 +1409,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchCodingPrivateV2Releases(input)),
+  )
+
+  registerTool(
+    'get_coding_control_plane',
+    {
+      title: 'Get unified Coding control-plane state',
+      description:
+        'Read the contract-v1 catalog and distinct native private-v2 registry in one bounded snapshot. Reports permanent shadow and weight-zero flags. It does not establish fresh provider access, key custody, host qualification, canary completion or rollout approval and performs no mutation.',
+      inputSchema: getCodingCatalogInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchCodingControlPlane(input)),
   )
 
   registerTool(

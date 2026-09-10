@@ -65,6 +65,9 @@ import {
   reconcileCodingShadowInputSchema,
   issueCodingShadowTicketSetInputSchema,
   agentCodingShadowEvaluationInputSchema,
+  getCoreQualificationPolicyInputSchema,
+  setCoreQualificationPolicyInputSchema,
+  agentCodingCertificationInputSchema,
 } from '../lib/admin.schemas'
 import {
   startBenchmarkRollout as startBenchmarkRolloutService,
@@ -143,14 +146,16 @@ import {
   authorizeConfirmationBundleRetest as authorizeConfirmationBundleRetestService,
   batchRetryValidation as batchRetryValidationService,
   fetchStuckSubmissions,
-  fetchCodingCatalogReleases,
-  fetchCodingPrivateV2Releases,
+  fetchCodingControlPlane,
   registerCodingPrivateV2Release as registerCodingPrivateV2ReleaseService,
   quarantineCodingPrivateV2Release as quarantineCodingPrivateV2ReleaseService,
   retireCodingPrivateV2Release as retireCodingPrivateV2ReleaseService,
   reconcileCodingShadowArtifact as reconcileCodingShadowArtifactService,
   issueCodingShadowTicketSet as issueCodingShadowTicketSetService,
   fetchAgentCodingShadowEvaluations,
+  fetchCoreQualificationPolicy,
+  setCoreQualificationPolicy as setCoreQualificationPolicyService,
+  fetchAgentCodingCertifications,
 } from './admin.service'
 import { updateSubmissionDepositAddressInputSchema } from '../lib/submission-deposit-address'
 import { authMiddleware, sameOriginMiddleware, writeAuthMiddleware } from './auth.functions'
@@ -231,11 +236,8 @@ export const getCodingControlPlane = createServerFn({ method: 'GET' })
   .handler(async ({ data }) => {
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
-    const [catalog, privateV2] = await Promise.all([
-      fetchCodingCatalogReleases(data),
-      fetchCodingPrivateV2Releases(data),
-    ])
-    return { catalog, privateV2 }
+    const control = await fetchCodingControlPlane(data)
+    return { catalog: control.catalog, privateV2: control.private_v2 }
   })
 
 export const registerCodingPrivateV2Release = createServerFn({ method: 'POST' })
@@ -290,6 +292,33 @@ export const getAgentCodingShadowEvaluations = createServerFn({ method: 'GET' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return fetchAgentCodingShadowEvaluations(data)
+  })
+
+export const getCodingCoreQualificationPolicy = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .validator(getCoreQualificationPolicyInputSchema)
+  .handler(({ data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchCoreQualificationPolicy(data)
+  })
+
+export const updateCodingCoreQualificationPolicy = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(setCoreQualificationPolicyInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return setCoreQualificationPolicyService(data, context.session.email)
+  })
+
+export const getAgentCodingCertifications = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .validator(agentCodingCertificationInputSchema)
+  .handler(({ data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchAgentCodingCertifications(data)
   })
 
 export const getMinerFeeSummary = createServerFn({ method: 'GET' })

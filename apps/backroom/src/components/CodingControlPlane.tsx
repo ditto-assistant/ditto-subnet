@@ -1,4 +1,5 @@
 import { useServerFn } from '@tanstack/react-start'
+import { Link } from '@tanstack/react-router'
 import { AlertTriangle, CheckCircle2, Code2, RefreshCw, Rocket, ShieldCheck } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import {
@@ -8,20 +9,27 @@ import {
   codingPrivateV2TransitionConfirmation,
   codingShadowReconciliationConfirmation,
   codingShadowTicketSetConfirmation,
+  coreQualificationConfirmation,
   type AgentCodingShadowEvaluationStatus,
+  type AgentCodingCertificationStatus,
   type CodingCatalogControl,
   type CodingPrivateV2Releases,
   type CodingShadowReconciliationResponse,
   type CodingShadowTicketSetResponse,
+  type CoreQualificationPolicy,
+  type CoreQualificationPolicyControl,
 } from '../lib/admin.schemas'
 import {
   getAgentCodingShadowEvaluations,
+  getAgentCodingCertifications,
+  getCodingCoreQualificationPolicy,
   getCodingControlPlane,
   issueCodingShadowTicketSet,
   quarantineCodingPrivateV2Release,
   reconcileCodingShadowArtifact,
   registerCodingPrivateV2Release,
   retireCodingPrivateV2Release,
+  updateCodingCoreQualificationPolicy,
 } from '../server/admin.functions'
 
 export type CodingControlPlaneState = {
@@ -111,6 +119,24 @@ function ActionButton({ children, disabled, onClick, tone = 'cyan' }: {
   )
 }
 
+function PolicyNumberField({ label, value, onChange, min, max, step }: {
+  label: string
+  value: number
+  onChange: (value: number) => void
+  min: number
+  max: number
+  step: number
+}) {
+  return (
+    <label className="block text-xs text-[var(--muted-strong)]">
+      {label}
+      <input type="number" value={value} min={min} max={max} step={step}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 font-mono text-xs text-[var(--fg)] outline-none focus:border-[var(--cyan)]" />
+    </label>
+  )
+}
+
 export function CodingControlPlane({ initialState, readOnly }: {
   initialState: CodingControlPlaneState
   readOnly: boolean
@@ -122,6 +148,9 @@ export function CodingControlPlane({ initialState, readOnly }: {
   const reconcile = useServerFn(reconcileCodingShadowArtifact)
   const issueTickets = useServerFn(issueCodingShadowTicketSet)
   const fetchEvaluations = useServerFn(getAgentCodingShadowEvaluations)
+  const fetchCertifications = useServerFn(getAgentCodingCertifications)
+  const fetchQualificationPolicy = useServerFn(getCodingCoreQualificationPolicy)
+  const updateQualificationPolicy = useServerFn(updateCodingCoreQualificationPolicy)
   const [state, setState] = useState(initialState)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -155,6 +184,12 @@ export function CodingControlPlane({ initialState, readOnly }: {
   const [ticketSet, setTicketSet] = useState<CodingShadowTicketSetResponse | null>(null)
   const [evaluationAgentId, setEvaluationAgentId] = useState('')
   const [evaluations, setEvaluations] = useState<AgentCodingShadowEvaluationStatus | null>(null)
+  const [certifications, setCertifications] = useState<AgentCodingCertificationStatus | null>(null)
+  const [policyBenchVersion, setPolicyBenchVersion] = useState('12')
+  const [policyState, setPolicyState] = useState<CoreQualificationPolicyControl | null>(null)
+  const [policyDraft, setPolicyDraft] = useState<CoreQualificationPolicy | null>(null)
+  const [policyReason, setPolicyReason] = useState('')
+  const [policyConfirmation, setPolicyConfirmation] = useState('')
 
   const activeCatalogs = state.catalog.releases.filter((release) => !release.retired)
   const registrationPreview = useMemo(() => {
@@ -186,6 +221,9 @@ export function CodingControlPlane({ initialState, readOnly }: {
   const validators = validatorText.split('\n').map((value) => value.trim()).filter(Boolean).sort()
   const expectedTicketConfirmation = runRowId && ticketSetId && validators.length === 3
     ? codingShadowTicketSetConfirmation({ runRowId, ticketSetId, validatorHotkeys: validators })
+    : ''
+  const expectedPolicyConfirmation = policyDraft
+    ? coreQualificationConfirmation(policyDraft.bench_version)
     : ''
 
   const execute = async (operation: () => Promise<void>) => {
@@ -258,8 +296,48 @@ export function CodingControlPlane({ initialState, readOnly }: {
   })
 
   const inspectEvaluations = () => execute(async () => {
-    setEvaluations(await fetchEvaluations({ data: { agentId: evaluationAgentId, limit: 25 } }))
+    const [nextEvaluations, nextCertifications] = await Promise.all([
+      fetchEvaluations({ data: { agentId: evaluationAgentId, limit: 25 } }),
+      fetchCertifications({ data: { agentId: evaluationAgentId, limit: 25 } }),
+    ])
+    setEvaluations(nextEvaluations)
+    setCertifications(nextCertifications)
     setSuccess('Loaded the exact artifact-bound Coding ledger.')
+  })
+
+  const loadQualificationPolicy = () => execute(async () => {
+    const version = Number(policyBenchVersion)
+    const next = await fetchQualificationPolicy({ data: { benchVersion: version, historyLimit: 10 } })
+    setPolicyState(next)
+    setPolicyDraft(next.current?.policy ?? {
+      schema: 'ditto-core-qualification-policy-v1',
+      weight_eligible: false,
+      bench_version: version,
+      enter_composite: 0.8,
+      enter_tool_mean: 0.8,
+      enter_memory_mean: 0.8,
+      exit_composite: 0.7,
+      exit_tool_mean: 0.7,
+      exit_memory_mean: 0.7,
+      enter_observations: 2,
+      exit_observations: 2,
+    })
+    setPolicyConfirmation('')
+    setSuccess(`Loaded shadow qualification policy for benchmark v${version}.`)
+  })
+
+  const submitQualificationPolicy = () => execute(async () => {
+    if (!policyState || !policyDraft) throw new Error('Load the current policy first')
+    const next = await updateQualificationPolicy({ data: {
+      expectedRevision: policyState.current?.revision ?? 0,
+      policy: policyDraft,
+      reason: policyReason,
+      confirmation: policyConfirmation,
+    } })
+    setPolicyState(next)
+    setPolicyDraft(next.current?.policy ?? null)
+    setPolicyConfirmation('')
+    setSuccess(`Applied shadow qualification revision ${next.current?.revision ?? 'unknown'}; weights remain disabled.`)
   })
 
   return (
@@ -283,6 +361,58 @@ export function CodingControlPlane({ initialState, readOnly }: {
 
       {error ? <Notice tone="red"><AlertTriangle className="mr-2 inline h-4 w-4" />{error}</Notice> : null}
       {success ? <Notice tone="acid"><CheckCircle2 className="mr-2 inline h-4 w-4" />{success}</Notice> : null}
+
+      <section className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-5">
+        <h2 className="text-sm font-semibold">Shared operational controls</h2>
+        <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Coding uses the same reviewed Platform authorities for source screening, inference admission, validator capacity, and benchmark contracts. These links do not create alternate policy implementations.</p>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            ['/screener-review-settings', 'Review controls', 'L1/L2/L3 review mode and budgets'],
+            ['/inference-concurrency', 'Inference budgets', 'Relay budgets and live admission'],
+            ['/validator-slots', 'Validator slots', 'Fleet pause and capacity ceilings'],
+            ['/benchmark-rollout', 'Benchmark contract', 'Version rollout and qualification'],
+          ].map(([to, label, detail]) => (
+            <Link key={to} to={to}
+              className="rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 py-3 text-xs transition-colors hover:border-[var(--cyan)]/40">
+              <span className="font-semibold">{label}</span>
+              <span className="mt-1 block leading-5 text-[var(--muted)]">{detail}</span>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-5">
+        <h2 className="text-sm font-semibold">Shadow qualification score gates</h2>
+        <p className="mt-1 text-xs leading-5 text-[var(--muted)]">These thresholds decide whether a scored artifact qualifies for Coding admission. They never rewrite a validator score, select private tasks, rank a miner, or enable weights.</p>
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="w-full sm:max-w-52"><Field label="Benchmark version" type="number" value={policyBenchVersion} onChange={(value) => {
+            setPolicyBenchVersion(value)
+            setPolicyState(null)
+            setPolicyDraft(null)
+            setPolicyConfirmation('')
+          }} /></div>
+          <ActionButton disabled={busy || !Number.isInteger(Number(policyBenchVersion))} onClick={() => void loadQualificationPolicy()}>Load current policy</ActionButton>
+        </div>
+        {policyState && policyDraft ? (
+          <div className="mt-5 grid gap-4">
+            <div className="grid gap-4 sm:grid-cols-3">
+              <PolicyNumberField label="Enter composite" value={policyDraft.enter_composite} min={0} max={1} step={0.01} onChange={(value) => setPolicyDraft({ ...policyDraft, enter_composite: value })} />
+              <PolicyNumberField label="Enter tool mean" value={policyDraft.enter_tool_mean} min={0} max={1} step={0.01} onChange={(value) => setPolicyDraft({ ...policyDraft, enter_tool_mean: value })} />
+              <PolicyNumberField label="Enter memory mean" value={policyDraft.enter_memory_mean} min={0} max={1} step={0.01} onChange={(value) => setPolicyDraft({ ...policyDraft, enter_memory_mean: value })} />
+              <PolicyNumberField label="Exit composite" value={policyDraft.exit_composite} min={0} max={1} step={0.01} onChange={(value) => setPolicyDraft({ ...policyDraft, exit_composite: value })} />
+              <PolicyNumberField label="Exit tool mean" value={policyDraft.exit_tool_mean} min={0} max={1} step={0.01} onChange={(value) => setPolicyDraft({ ...policyDraft, exit_tool_mean: value })} />
+              <PolicyNumberField label="Exit memory mean" value={policyDraft.exit_memory_mean} min={0} max={1} step={0.01} onChange={(value) => setPolicyDraft({ ...policyDraft, exit_memory_mean: value })} />
+              <PolicyNumberField label="Entry observations" value={policyDraft.enter_observations} min={1} max={20} step={1} onChange={(value) => setPolicyDraft({ ...policyDraft, enter_observations: value })} />
+              <PolicyNumberField label="Exit observations" value={policyDraft.exit_observations} min={1} max={20} step={1} onChange={(value) => setPolicyDraft({ ...policyDraft, exit_observations: value })} />
+            </div>
+            <Notice>Revision {policyState.current?.revision ?? 0}. Exit thresholds cannot exceed entry thresholds. This append-only policy remains `weight_eligible=false`.</Notice>
+            <Field label="Audit reason" value={policyReason} onChange={setPolicyReason} />
+            <p className="break-all rounded-lg border border-[var(--line)] p-3 font-mono text-[10px] text-[var(--muted-strong)]">{expectedPolicyConfirmation}</p>
+            <Field label="Exact confirmation" value={policyConfirmation} onChange={setPolicyConfirmation} />
+            <ActionButton disabled={readOnly || busy || policyReason.trim().length < 8 || policyConfirmation !== expectedPolicyConfirmation} onClick={() => void submitQualificationPolicy()}>Apply qualification policy</ActionButton>
+          </div>
+        ) : null}
+      </section>
 
       <section className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-5">
         <div className="flex items-start gap-3"><ShieldCheck className="mt-0.5 h-4 w-4 text-[var(--acid)]" /><div><h2 className="text-sm font-semibold">Native private-v2 custody registry</h2><p className="mt-1 text-xs leading-5 text-[var(--muted)]">Register only after external signing and complete Hippius readback. Platform re-verifies every digest and Ed25519 signature.</p></div></div>
@@ -360,7 +490,7 @@ export function CodingControlPlane({ initialState, readOnly }: {
       <section className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-5">
         <h2 className="text-sm font-semibold">Exact artifact run ledger</h2>
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end"><div className="flex-1"><Field label="Agent UUID" value={evaluationAgentId} onChange={setEvaluationAgentId} /></div><ActionButton disabled={busy || !evaluationAgentId} onClick={() => void inspectEvaluations()}>Inspect ledger</ActionButton></div>
-        {evaluations ? <dl className="mt-4 grid gap-3 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4 text-xs sm:grid-cols-4"><div><dt className="text-[var(--muted)]">Agent</dt><dd className="mt-1 font-semibold">{evaluations.agent_name}</dd></div><div><dt className="text-[var(--muted)]">Artifact</dt><dd className="mt-1 font-mono">{shortDigest(evaluations.artifact_sha256)}</dd></div><div><dt className="text-[var(--muted)]">Assignments</dt><dd className="mt-1 font-semibold">{evaluations.total_assignments}</dd></div><div><dt className="text-[var(--muted)]">Runs</dt><dd className="mt-1 font-semibold">{evaluations.total_runs}</dd></div></dl> : null}
+        {evaluations ? <dl className="mt-4 grid gap-3 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4 text-xs sm:grid-cols-5"><div><dt className="text-[var(--muted)]">Agent</dt><dd className="mt-1 font-semibold">{evaluations.agent_name}</dd></div><div><dt className="text-[var(--muted)]">Artifact</dt><dd className="mt-1 font-mono">{shortDigest(evaluations.artifact_sha256)}</dd></div><div><dt className="text-[var(--muted)]">Active certifications</dt><dd className="mt-1 font-semibold">{certifications?.active_certification_count ?? '—'}</dd></div><div><dt className="text-[var(--muted)]">Assignments</dt><dd className="mt-1 font-semibold">{evaluations.total_assignments}</dd></div><div><dt className="text-[var(--muted)]">Runs</dt><dd className="mt-1 font-semibold">{evaluations.total_runs}</dd></div></dl> : null}
       </section>
     </div>
   )

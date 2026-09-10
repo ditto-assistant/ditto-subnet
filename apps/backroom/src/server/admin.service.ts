@@ -2131,6 +2131,20 @@ export async function fetchCodingPrivateV2Releases(rawInput: unknown) {
   return codingPrivateV2ReleasesSchema.parse(payload) satisfies NativeResponse
 }
 
+export async function fetchCodingControlPlane(rawInput: unknown) {
+  const input = getCodingCatalogInputSchema.parse(rawInput)
+  const [catalog, privateV2] = await Promise.all([
+    fetchCodingCatalogReleases(input),
+    fetchCodingPrivateV2Releases(input),
+  ])
+  return {
+    catalog,
+    private_v2: privateV2,
+    shadow_only: true as const,
+    weight_eligible: false as const,
+  }
+}
+
 export async function registerCodingPrivateV2Release(rawInput: unknown, actor: string) {
   const input = registerCodingPrivateV2ReleaseInputSchema.parse(rawInput)
   const payload = await platformAdminRequest('/api/v1/admin/coding-private-v2-releases/register', {
