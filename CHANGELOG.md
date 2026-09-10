@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.253.0 (2026-09-10)
+
+### Features
+
+- **backroom**: Add apply_copy_court_settings MCP tool
+  ([#1784](https://github.com/ditto-assistant/ditto-subnet/pull/1784),
+  [`0cb9f36`](https://github.com/ditto-assistant/ditto-subnet/commit/0cb9f363188212ff42f81ad5542839d2857605cf))
+
+
 ## v0.252.0 (2026-09-10)
 
 ### Features
