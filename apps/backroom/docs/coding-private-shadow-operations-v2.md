@@ -25,6 +25,7 @@ exact contract-v1 artifact reconciliation into a future-height run
 fixed, sorted, unique k=3 contract-v1 validator ticket issuance
 exact artifact-bound assignment, run, ticket and result inspection
 append-only shadow qualification entry and exit score gates
+redacted native-v2 pending, admitted, running and terminal operation status
 ```
 
 Private-v2 registration stays `selectable=false`; it is not a contract-v2
@@ -48,3 +49,9 @@ Every write requires a live write-level Backroom account, OAuth
 `backroom:write` for MCP, same-origin protection for the browser, and forwards
 the signed-in operator email to Platform. No private signing key or provider
 credential is accepted by any control.
+
+Native status comes from Platform's append-only hosted-assignment and private
+task ledgers. It deliberately omits the catalog index, selection authority,
+grant IDs, private task bytes, patches, object locations and provider details.
+`running` describes durable start state, not verified process liveness; terminal
+success still requires the separately verified evidence and readback receipts.

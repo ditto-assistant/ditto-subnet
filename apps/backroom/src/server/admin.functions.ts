@@ -237,7 +237,11 @@ export const getCodingControlPlane = createServerFn({ method: 'GET' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     const control = await fetchCodingControlPlane(data)
-    return { catalog: control.catalog, privateV2: control.private_v2 }
+    return {
+      catalog: control.catalog,
+      privateV2: control.private_v2,
+      native: control.native,
+    }
   })
 
 export const registerCodingPrivateV2Release = createServerFn({ method: 'POST' })

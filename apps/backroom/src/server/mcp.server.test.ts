@@ -7166,8 +7166,23 @@ describe('Backroom MCP tools', () => {
       selectable: false,
       weight_eligible: false,
     }
+    const native = {
+      total_native_operations: 0,
+      native_operations: [],
+      hosted_control_configured: false,
+      contract_v1_reconciliation_enabled: false,
+      contract_v1_ticket_set_enabled: false,
+      contract_v1_ticket_lease_seconds: 3600,
+      native_v2_selectable: false,
+      shadow_only: true,
+      weight_eligible: false,
+    }
     const fetchMock = vi.fn().mockImplementation(async (url: string) => Response.json(
-      url.includes('/coding-catalog/releases') ? catalog : privateV2,
+      url.includes('/coding-catalog/releases')
+        ? catalog
+        : url.includes('/coding-private-v2-releases')
+          ? privateV2
+          : native,
     ))
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
@@ -7180,11 +7195,13 @@ describe('Backroom MCP tools', () => {
       expect(readJsonResult(response)).toEqual({
         catalog,
         private_v2: privateV2,
+        native,
         shadow_only: true,
         weight_eligible: false,
       })
       expect(fetchMock.mock.calls.map(([url]) => String(url)).sort()).toEqual([
         'https://platform-api.heyditto.ai/api/v1/admin/coding-catalog/releases?limit=25',
+        'https://platform-api.heyditto.ai/api/v1/admin/coding-control-plane?limit=25',
         'https://platform-api.heyditto.ai/api/v1/admin/coding-private-v2-releases?limit=25',
       ])
     } finally {

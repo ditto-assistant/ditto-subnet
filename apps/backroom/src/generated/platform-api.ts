@@ -413,6 +413,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/coding-control-plane": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Coding Control Plane
+         * @description Return bounded native progress and safe feature-gate visibility.
+         */
+        get: operations["get_coding_control_plane_api_v1_admin_coding_control_plane_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/coding-private-v2-releases": {
         parameters: {
             query?: never;
@@ -6505,6 +6525,39 @@ export interface components {
             shadow_only: true;
             /** Total */
             total: number;
+        };
+        /** AdminCodingControlPlaneResponse */
+        AdminCodingControlPlaneResponse: {
+            /** Contract V1 Reconciliation Enabled */
+            contract_v1_reconciliation_enabled: boolean;
+            /** Contract V1 Ticket Lease Seconds */
+            contract_v1_ticket_lease_seconds: number;
+            /** Contract V1 Ticket Set Enabled */
+            contract_v1_ticket_set_enabled: boolean;
+            /** Hosted Control Configured */
+            hosted_control_configured: boolean;
+            /** Native Operations */
+            native_operations: components["schemas"]["CodingHostedOperationRecord"][];
+            /**
+             * Native V2 Selectable
+             * @default false
+             * @constant
+             */
+            native_v2_selectable: false;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /** Total Native Operations */
+            total_native_operations: number;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
         };
         /** AdminCodingPrivateV2ReleaseResponse */
         AdminCodingPrivateV2ReleaseResponse: {
@@ -12672,6 +12725,80 @@ export interface components {
             ticket_id: string;
             /**
              * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** CodingHostedOperationRecord */
+        CodingHostedOperationRecord: {
+            /** Admitted At */
+            admitted_at: string | null;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Assignment Sha256 */
+            assignment_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Close Reason */
+            close_reason: ("completed" | "failed" | "aborted") | null;
+            /** Closed At */
+            closed_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Evaluation Id
+             * Format: uuid
+             */
+            evaluation_id: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Frozen */
+            frozen: boolean;
+            /** Registered Actor */
+            registered_actor: string;
+            /** Registered Reason */
+            registered_reason: string;
+            /** Registration Sha256 */
+            registration_sha256: string;
+            /**
+             * Release Row Id
+             * Format: uuid
+             */
+            release_row_id: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /** Started At */
+            started_at: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending_admission" | "admitted" | "running" | "completed" | "failed" | "aborted" | "expired";
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /**
+             * Weight Eligible
+             * @default false
              * @constant
              */
             weight_eligible: false;
@@ -26845,6 +26972,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminCodingCatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_coding_control_plane_api_v1_admin_coding_control_plane_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingControlPlaneResponse"];
                 };
             };
             /** @description Validation Error */

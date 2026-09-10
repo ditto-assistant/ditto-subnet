@@ -13,6 +13,7 @@ import {
   type AgentCodingShadowEvaluationStatus,
   type AgentCodingCertificationStatus,
   type CodingCatalogControl,
+  type CodingNativeControlStatus,
   type CodingPrivateV2Releases,
   type CodingShadowReconciliationResponse,
   type CodingShadowTicketSetResponse,
@@ -35,6 +36,7 @@ import {
 export type CodingControlPlaneState = {
   catalog: CodingCatalogControl
   privateV2: CodingPrivateV2Releases
+  native: CodingNativeControlStatus
 }
 
 function shortDigest(value: string) {
@@ -350,10 +352,11 @@ export function CodingControlPlane({ initialState, readOnly }: {
           </div>
           <ActionButton disabled={busy} onClick={() => void refresh()}><span className="inline-flex items-center gap-2"><RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />Refresh</span></ActionButton>
         </div>
-        <dl className="mt-5 grid gap-3 text-xs sm:grid-cols-4">
+        <dl className="mt-5 grid gap-3 text-xs sm:grid-cols-5">
           <div><dt className="text-[var(--muted)]">Contract-v1 catalogs</dt><dd className="mt-1 text-lg font-semibold">{state.catalog.total}</dd></div>
           <div><dt className="text-[var(--muted)]">Active v1 catalogs</dt><dd className="mt-1 text-lg font-semibold">{activeCatalogs.length}</dd></div>
           <div><dt className="text-[var(--muted)]">Native v2 registrations</dt><dd className="mt-1 text-lg font-semibold">{state.privateV2.total}</dd></div>
+          <div><dt className="text-[var(--muted)]">Native operations</dt><dd className="mt-1 text-lg font-semibold">{state.native.total_native_operations}</dd></div>
           <div><dt className="text-[var(--muted)]">Reward eligibility</dt><dd className="mt-1 text-lg font-semibold text-[var(--acid)]">Always zero</dd></div>
         </dl>
         <div className="mt-4"><Notice>Backroom never receives an Ed25519 private key, RSA private key, Hippius credential, private task body, grader, patch, or object coordinate.</Notice></div>
@@ -378,6 +381,28 @@ export function CodingControlPlane({ initialState, readOnly }: {
               <span className="mt-1 block leading-5 text-[var(--muted)]">{detail}</span>
             </Link>
           ))}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-5">
+        <h2 className="text-sm font-semibold">Native private-v2 operation status</h2>
+        <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Redacted Platform ledger state only. A stored assignment does not prove host process liveness, successful evidence readback, or rollout acceptance.</p>
+        <div className="mt-4 grid gap-2 text-xs sm:grid-cols-4">
+          <Notice tone={state.native.hosted_control_configured ? 'acid' : 'amber'}>Hosted control: {state.native.hosted_control_configured ? 'configured' : 'not configured'}</Notice>
+          <Notice tone={state.native.contract_v1_reconciliation_enabled ? 'acid' : 'amber'}>V1 reconciliation: {state.native.contract_v1_reconciliation_enabled ? 'enabled' : 'disabled'}</Notice>
+          <Notice tone={state.native.contract_v1_ticket_set_enabled ? 'acid' : 'amber'}>V1 ticket sets: {state.native.contract_v1_ticket_set_enabled ? 'enabled' : 'disabled'}</Notice>
+          <Notice>V2 selectable: never</Notice>
+        </div>
+        <div className="mt-4 space-y-2">
+          {state.native.native_operations.length ? state.native.native_operations.map((operation) => (
+            <div key={operation.evaluation_id} className="grid gap-2 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 py-3 text-xs sm:grid-cols-[1fr_auto]">
+              <div>
+                <p className="font-semibold">{operation.state} · agent {shortDigest(operation.agent_id)}</p>
+                <p className="mt-1 font-mono text-[10px] text-[var(--muted)]">evaluation {shortDigest(operation.evaluation_id)} · assignment {shortDigest(operation.assignment_sha256)} · registration {shortDigest(operation.registration_sha256)}</p>
+              </div>
+              <div className="text-[var(--muted-strong)]">{operation.frozen ? 'frozen' : 'not frozen'} · expires {new Date(operation.expires_at).toLocaleString()}</div>
+            </div>
+          )) : <p className="rounded-lg border border-dashed border-[var(--line)] p-4 text-xs text-[var(--muted)]">No native private-v2 operation has been registered.</p>}
         </div>
       </section>
 

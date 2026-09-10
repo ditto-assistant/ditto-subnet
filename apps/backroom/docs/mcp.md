@@ -49,9 +49,11 @@ commitments, not fresh connectivity or custody checks. Registration remains
 non-selectable and weight-ineligible; it does not approve native execution, a
 canary or a rollout.
 
-`get_coding_control_plane` reads the contract-v1 catalog and native private-v2
-registry together while preserving them as separate nested authorities. It is a
-bounded convenience read, not a new source of truth or an activation check.
+`get_coding_control_plane` reads the contract-v1 catalog, native private-v2
+registry, safe feature-gate posture, and redacted native assignment progress
+together while preserving them as separate nested authorities. It is a bounded
+convenience read, not a new source of truth, process-liveness proof, or
+activation check.
 
 `get_coding_control_plane` reads that registry together with the distinct
 contract-v1 catalog in one bounded response. It keeps the two collections

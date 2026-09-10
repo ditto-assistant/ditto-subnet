@@ -107,6 +107,7 @@ import {
   agentCodingCertificationStatusSchema,
   codingCatalogControlSchema,
   codingPrivateV2ReleasesSchema,
+  codingNativeControlStatusSchema,
   getCodingCatalogInputSchema,
   registerCodingPrivateV2ReleaseInputSchema,
   transitionCodingPrivateV2ReleaseInputSchema,
@@ -2133,13 +2134,17 @@ export async function fetchCodingPrivateV2Releases(rawInput: unknown) {
 
 export async function fetchCodingControlPlane(rawInput: unknown) {
   const input = getCodingCatalogInputSchema.parse(rawInput)
-  const [catalog, privateV2] = await Promise.all([
+  type NativeControl = PlatformOperations['get_coding_control_plane_api_v1_admin_coding_control_plane_get']['responses'][200]['content']['application/json']
+  const [catalog, privateV2, native] = await Promise.all([
     fetchCodingCatalogReleases(input),
     fetchCodingPrivateV2Releases(input),
+    platformAdminRequest(`/api/v1/admin/coding-control-plane?limit=${input.limit}`)
+      .then((payload) => codingNativeControlStatusSchema.parse(payload) satisfies NativeControl),
   ])
   return {
     catalog,
     private_v2: privateV2,
+    native,
     shadow_only: true as const,
     weight_eligible: false as const,
   }

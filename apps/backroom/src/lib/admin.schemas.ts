@@ -5154,6 +5154,48 @@ export const codingPrivateV2ReleasesSchema = z.object({
   weight_eligible: z.literal(false),
 })
 
+export const codingNativeControlStatusSchema = z.object({
+  total_native_operations: z.number().int().nonnegative(),
+  native_operations: z.array(z.object({
+    evaluation_id: z.string().uuid(),
+    attempt_id: z.string().uuid(),
+    release_row_id: z.string().uuid(),
+    registration_sha256: codingPrivateV2Digest,
+    agent_id: z.string().uuid(),
+    validator_hotkey: z.string().regex(SS58_HOTKEY_PATTERN),
+    artifact_sha256: codingPrivateV2Digest,
+    screened_image_sha256: codingPrivateV2Digest,
+    assignment_sha256: codingPrivateV2Digest,
+    state: z.enum([
+      'pending_admission',
+      'admitted',
+      'running',
+      'completed',
+      'failed',
+      'aborted',
+      'expired',
+    ]),
+    expires_at: z.string(),
+    created_at: z.string(),
+    admitted_at: z.string().nullable(),
+    started_at: z.string().nullable(),
+    frozen: z.boolean(),
+    closed_at: z.string().nullable(),
+    close_reason: z.enum(['completed', 'failed', 'aborted']).nullable(),
+    registered_actor: z.string(),
+    registered_reason: z.string(),
+    shadow_only: z.literal(true),
+    weight_eligible: z.literal(false),
+  })).max(100),
+  hosted_control_configured: z.boolean(),
+  contract_v1_reconciliation_enabled: z.boolean(),
+  contract_v1_ticket_set_enabled: z.boolean(),
+  contract_v1_ticket_lease_seconds: z.number().int().min(60).max(7200),
+  native_v2_selectable: z.literal(false),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+})
+
 export const codingPrivateV2PublicationObjectSchema = z.object({
   object_index: z.number().int().min(0).max(999_999),
   remote_object_key_sha256: codingPrivateV2Digest,
@@ -6718,6 +6760,7 @@ export type AgentCodingCertificationStatus = z.infer<
 >
 export type CodingCatalogControl = z.infer<typeof codingCatalogControlSchema>
 export type CodingPrivateV2Releases = z.infer<typeof codingPrivateV2ReleasesSchema>
+export type CodingNativeControlStatus = z.infer<typeof codingNativeControlStatusSchema>
 export type CodingPrivateV2Registration = z.infer<
   typeof codingPrivateV2RegistrationSchema
 >
