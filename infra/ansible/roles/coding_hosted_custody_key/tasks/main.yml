@@ -273,7 +273,7 @@
               'schema': 'dittobench-coding-private-v2-custody-key-v1',
               'shadow_only': true,
               'source_revision': coding_hosted_custody_source_revision,
-              'weight_eligible': false} | to_json(sort_keys=true, separators=[',', ':']) ~ '\n' }}
+              'weight_eligible': false} | to_json(sort_keys=true, separators=[',', ':']) }}
 
     - name: Read an existing redacted key receipt
       ansible.builtin.slurp:
@@ -282,13 +282,34 @@
       register: coding_hosted_custody_existing_receipt
       when: coding_hosted_custody_key_files.results[3].stat.exists
 
-    - name: Refuse drift in an existing key receipt
+    - name: Define the exact legacy literal newline receipt bytes
+      ansible.builtin.set_fact:
+        coding_hosted_custody_key_legacy_receipt: >-
+          {{ coding_hosted_custody_key_receipt ~ ('XG4=' | b64decode) }}
+      when: coding_hosted_custody_key_files.results[3].stat.exists
+
+    - name: Require a current receipt or the exact repairable legacy suffix
       ansible.builtin.assert:
         that:
-          - coding_hosted_custody_existing_receipt.content | b64decode == coding_hosted_custody_key_receipt
+          - >-
+            coding_hosted_custody_existing_receipt.content | b64decode == coding_hosted_custody_key_receipt or
+            (coding_hosted_custody_existing_receipt.content | b64decode == coding_hosted_custody_key_legacy_receipt and
+             coding_hosted_custody_receipt_repair_confirmation == 'REPAIR NATIVE CODING RSA RECEIPT')
         fail_msg: Existing native Coding key receipt does not match the approved source and public identity.
         quiet: true
       when: coding_hosted_custody_key_files.results[3].stat.exists
+
+    - name: Repair only the exact legacy literal newline suffix
+      ansible.builtin.copy:
+        dest: /var/lib/ditto-coding-custody/keys/private-input-rsa-receipt.json
+        content: "{{ coding_hosted_custody_key_receipt }}"
+        owner: ditto-coding-custody
+        group: ditto-coding-custody
+        mode: "0600"
+        force: true
+      when:
+        - coding_hosted_custody_key_files.results[3].stat.exists
+        - coding_hosted_custody_existing_receipt.content | b64decode == coding_hosted_custody_key_legacy_receipt
 
     - name: Write the redacted key receipt last
       ansible.builtin.copy:
@@ -326,6 +347,20 @@
       loop: "{{ coding_hosted_custody_final_files.results }}"
       loop_control:
         label: "{{ item.item }}"
+
+    - name: Read the final redacted key receipt
+      ansible.builtin.slurp:
+        src: /var/lib/ditto-coding-custody/keys/private-input-rsa-receipt.json
+      become_user: ditto-coding-custody
+      register: coding_hosted_custody_final_receipt
+
+    - name: Require canonical parseable final receipt bytes
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_custody_final_receipt.content | b64decode == coding_hosted_custody_key_receipt
+          - coding_hosted_custody_key_receipt | from_json is mapping
+        fail_msg: Native Coding custody receipt remains noncanonical.
+        quiet: true
 
     - name: Report only the approved public custody identity
       ansible.builtin.debug:

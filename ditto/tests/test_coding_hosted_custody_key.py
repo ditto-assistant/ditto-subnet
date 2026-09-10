@@ -13,6 +13,7 @@ def test_custody_key_bootstrap_is_default_off_and_confirmation_gated() -> None:
         "coding_hosted_custody_key_enabled": False,
         "coding_hosted_custody_key_confirmation": "",
         "coding_hosted_custody_source_revision": "",
+        "coding_hosted_custody_receipt_repair_confirmation": "",
     }
     assert "BOOTSTRAP NATIVE CODING RSA CUSTODY" in tasks
     assert "ditto-coding-hosted-v2" in tasks
@@ -56,6 +57,20 @@ def test_partial_state_is_refused_and_receipt_is_written_last() -> None:
     assert tasks.index("Compute the public SPKI identity") < tasks.index(
         "Write the redacted key receipt last"
     )
+
+
+def test_receipt_repair_is_exact_confirmation_gated_and_key_preserving() -> None:
+    tasks = (ROLE / "tasks/main.yml").read_text()
+    assert "REPAIR NATIVE CODING RSA RECEIPT" in tasks
+    assert "Repair only the exact legacy literal newline suffix" in tasks
+    assert "coding_hosted_custody_key_receipt ~ ('XG4=' | b64decode)" in tasks
+    repair = tasks[tasks.index("Repair only the exact legacy literal newline suffix") :]
+    repair = repair[: repair.index("Write the redacted key receipt last")]
+    assert "private-input-rsa-receipt.json" in repair
+    assert "private-input-rsa.pem" not in repair
+    assert "private-input-rsa-public.pem" not in repair
+    assert "force: true" in repair
+    assert "from_json is mapping" in tasks
 
 
 def test_account_discovery_is_one_complete_passwd_snapshot() -> None:
