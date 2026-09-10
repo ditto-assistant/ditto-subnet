@@ -34,18 +34,21 @@ _VALIDATOR = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 def _entry(
     hotkey: str, composite: float, *, first_seen: datetime, agent_id: UUID | None = None
 ) -> LedgerEntry:
-    return LedgerEntry(
-        miner_hotkey=hotkey,
-        agent_id=agent_id or uuid4(),
-        composite=composite,
-        n=120,
-        first_seen=first_seen,
-        sha256="ab" * 32,
-        run_id="run",
-        seed=1,
-        validator_hotkey=_VALIDATOR,
-        status=AgentStatus.SCORED,
-        bench_version=12,
+    # Built through the wire parser, exactly as a pin is rehydrated from JSON.
+    return LedgerEntry.model_validate(
+        {
+            "miner_hotkey": hotkey,
+            "agent_id": str(agent_id or uuid4()),
+            "composite": composite,
+            "n": 120,
+            "first_seen": first_seen.isoformat(),
+            "sha256": "ab" * 32,
+            "run_id": "run",
+            "seed": 1,
+            "validator_hotkey": _VALIDATOR,
+            "status": AgentStatus.SCORED.value,
+            "bench_version": 12,
+        }
     )
 
 
