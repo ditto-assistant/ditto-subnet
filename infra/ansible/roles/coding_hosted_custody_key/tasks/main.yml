@@ -1,0 +1,335 @@
+---
+- name: Explain dormant native private-key custody bootstrap
+  ansible.builtin.debug:
+    msg: Native Coding RSA custody bootstrap is disabled; no identity or key is changed.
+  when: not (coding_hosted_custody_key_enabled | bool)
+
+- name: Bootstrap the approved native RSA unwrap identity
+  when: coding_hosted_custody_key_enabled | bool
+  block:
+    - name: Require the exact host, source and operator confirmation
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in groups.get('role_coding_hosted', [])
+          - ansible_facts['hostname'] == 'ditto-coding-hosted-v2'
+          - ansible_facts['architecture'] == 'x86_64'
+          - ansible_facts['distribution'] == 'Debian'
+          - ansible_facts['distribution_major_version'] == '13'
+          - coding_hosted_custody_source_revision is match('^[0-9a-f]{40}$')
+          - coding_hosted_custody_key_confirmation == 'BOOTSTRAP NATIVE CODING RSA CUSTODY'
+        fail_msg: Require the reviewed source, dedicated host and exact custody confirmation.
+        quiet: true
+
+    - name: Inspect the protected OpenSSL executable
+      ansible.builtin.stat:
+        path: /usr/bin/openssl
+        follow: true
+      register: coding_hosted_custody_openssl
+
+    - name: Require the protected host OpenSSL executable
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_custody_openssl.stat.exists
+          - coding_hosted_custody_openssl.stat.isreg
+          - coding_hosted_custody_openssl.stat.uid == 0
+          - not coding_hosted_custody_openssl.stat.wgrp
+          - not coding_hosted_custody_openssl.stat.woth
+        fail_msg: Native Coding custody requires the protected host OpenSSL executable.
+        quiet: true
+
+    - name: Inspect existing worker and custodian accounts
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ item }}"
+        fail_key: false
+      loop: [ditto-coding-hosted, ditto-coding-custody]
+
+    - name: Require the qualified worker and refuse an unexpected custodian
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.getent_passwd['ditto-coding-hosted'] is not none
+          - >-
+            ansible_facts.getent_passwd['ditto-coding-custody'] is none or
+            (ansible_facts.getent_passwd['ditto-coding-custody'][0] == 'x' and
+             ansible_facts.getent_passwd['ditto-coding-custody'][4] == '/var/lib/ditto-coding-custody' and
+             ansible_facts.getent_passwd['ditto-coding-custody'][5] == '/usr/sbin/nologin')
+        fail_msg: Existing native Coding custody identity is unexpected.
+        quiet: true
+
+    - name: Inspect custody directories without following links
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - /var/lib/ditto-coding-custody
+        - /var/lib/ditto-coding-custody/keys
+      register: coding_hosted_custody_directories
+
+    - name: Refuse unsafe existing custody directories
+      ansible.builtin.assert:
+        that:
+          - >-
+            not item.stat.exists or
+            (item.stat.isdir and not item.stat.islnk and
+             item.stat.pw_name == 'ditto-coding-custody' and
+             item.stat.gr_name == 'ditto-coding-custody' and
+             item.stat.mode == '0700')
+        fail_msg: Existing native Coding custody directory requires reconciliation.
+        quiet: true
+      loop: "{{ coding_hosted_custody_directories.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Create the dedicated empty custodian group
+      ansible.builtin.group:
+        name: ditto-coding-custody
+        state: present
+      when: ansible_facts.getent_passwd['ditto-coding-custody'] is none
+
+    - name: Create the dedicated locked custodian account
+      ansible.builtin.user:
+        name: ditto-coding-custody
+        group: ditto-coding-custody
+        groups: ""
+        append: false
+        create_home: false
+        home: /var/lib/ditto-coding-custody
+        shell: /usr/sbin/nologin
+        password_lock: true
+        state: present
+      when: ansible_facts.getent_passwd['ditto-coding-custody'] is none
+
+    - name: Refresh custodian account and group identity
+      ansible.builtin.getent:
+        database: "{{ item }}"
+        key: ditto-coding-custody
+      loop: [passwd, group]
+
+    - name: Require the distinct unprivileged custodian identity
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.getent_passwd['ditto-coding-custody'][0] == 'x'
+          - ansible_facts.getent_passwd['ditto-coding-custody'][1] | int >= 1000
+          - ansible_facts.getent_passwd['ditto-coding-custody'][1] != ansible_facts.getent_passwd['ditto-coding-hosted'][1]
+          - ansible_facts.getent_passwd['ditto-coding-custody'][2] == ansible_facts.getent_group['ditto-coding-custody'][1]
+          - ansible_facts.getent_passwd['ditto-coding-custody'][4] == '/var/lib/ditto-coding-custody'
+          - ansible_facts.getent_passwd['ditto-coding-custody'][5] == '/usr/sbin/nologin'
+          - ansible_facts.getent_group['ditto-coding-custody'][2] | default([]) | length == 0
+        fail_msg: Custodian must be a distinct empty non-root identity.
+        quiet: true
+
+    - name: Create the owner-only custody directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: ditto-coding-custody
+        group: ditto-coding-custody
+        mode: "0700"
+      loop:
+        - /var/lib/ditto-coding-custody
+        - /var/lib/ditto-coding-custody/keys
+
+    - name: Inspect retained key material without following links
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - /var/lib/ditto-coding-custody/keys/bootstrap-consumed
+        - /var/lib/ditto-coding-custody/keys/private-input-rsa.pem
+        - /var/lib/ditto-coding-custody/keys/private-input-rsa-public.pem
+        - /var/lib/ditto-coding-custody/keys/private-input-rsa-receipt.json
+      register: coding_hosted_custody_key_files
+
+    - name: Require either a complete receipt or a completely fresh key slot
+      ansible.builtin.assert:
+        that:
+          - >-
+            (coding_hosted_custody_key_files.results[3].stat.exists and
+             coding_hosted_custody_key_files.results[0].stat.exists and
+             coding_hosted_custody_key_files.results[1].stat.exists and
+             coding_hosted_custody_key_files.results[2].stat.exists) or
+            (not coding_hosted_custody_key_files.results[3].stat.exists and
+             not coding_hosted_custody_key_files.results[0].stat.exists and
+             not coding_hosted_custody_key_files.results[1].stat.exists and
+             not coding_hosted_custody_key_files.results[2].stat.exists)
+        fail_msg: Partial native Coding key state is retained for explicit reconciliation.
+        quiet: true
+
+    - name: Consume the one-shot custody bootstrap before key generation
+      ansible.builtin.shell: |
+        set -euo pipefail
+        set -o noclobber
+        umask 077
+        : > /var/lib/ditto-coding-custody/keys/bootstrap-consumed
+      args:
+        executable: /bin/bash
+      become_user: ditto-coding-custody
+      when: not coding_hosted_custody_key_files.results[3].stat.exists
+      changed_when: true
+
+    - name: Generate the RSA-3072 private key only on the trusted host
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/openssl
+          - genpkey
+          - -algorithm
+          - RSA
+          - -pkeyopt
+          - rsa_keygen_bits:3072
+          - -pkeyopt
+          - rsa_keygen_pubexp:65537
+          - -out
+          - /var/lib/ditto-coding-custody/keys/private-input-rsa.pem
+      become_user: ditto-coding-custody
+      environment:
+        HOME: /var/lib/ditto-coding-custody
+        PATH: /usr/bin:/bin
+      when: not coding_hosted_custody_key_files.results[3].stat.exists
+      changed_when: true
+      no_log: true
+
+    - name: Seal the private key mode
+      ansible.builtin.file:
+        path: /var/lib/ditto-coding-custody/keys/private-input-rsa.pem
+        owner: ditto-coding-custody
+        group: ditto-coding-custody
+        mode: "0600"
+      when: not coding_hosted_custody_key_files.results[3].stat.exists
+
+    - name: Export only the matching public key on the trusted host
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/openssl
+          - pkey
+          - -in
+          - /var/lib/ditto-coding-custody/keys/private-input-rsa.pem
+          - -pubout
+          - -out
+          - /var/lib/ditto-coding-custody/keys/private-input-rsa-public.pem
+      become_user: ditto-coding-custody
+      environment:
+        HOME: /var/lib/ditto-coding-custody
+        PATH: /usr/bin:/bin
+      when: not coding_hosted_custody_key_files.results[3].stat.exists
+      changed_when: true
+      no_log: true
+
+    - name: Seal the public key mode
+      ansible.builtin.file:
+        path: /var/lib/ditto-coding-custody/keys/private-input-rsa-public.pem
+        owner: ditto-coding-custody
+        group: ditto-coding-custody
+        mode: "0600"
+      when: not coding_hosted_custody_key_files.results[3].stat.exists
+
+    - name: Verify the private key without emitting key material
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/openssl
+          - pkey
+          - -in
+          - /var/lib/ditto-coding-custody/keys/private-input-rsa.pem
+          - -check
+          - -noout
+      become_user: ditto-coding-custody
+      changed_when: false
+      no_log: true
+
+    - name: Verify RSA size and exponent without retaining public components
+      ansible.builtin.shell: |
+        set -euo pipefail
+        output="$(/usr/bin/openssl pkey -in /var/lib/ditto-coding-custody/keys/private-input-rsa.pem -pubout | /usr/bin/openssl pkey -pubin -text -noout)"
+        grep -Fq 'Public-Key: (3072 bit)' <<<"$output"
+        grep -Fq 'Exponent: 65537' <<<"$output"
+      args:
+        executable: /bin/bash
+      become_user: ditto-coding-custody
+      changed_when: false
+      no_log: true
+
+    - name: Compute the public SPKI identity without emitting key material
+      ansible.builtin.shell: >-
+        set -euo pipefail;
+        /usr/bin/openssl pkey
+        -pubin
+        -in /var/lib/ditto-coding-custody/keys/private-input-rsa-public.pem
+        -outform DER |
+        /usr/bin/sha256sum |
+        /usr/bin/cut -d' ' -f1
+      args:
+        executable: /bin/bash
+      become_user: ditto-coding-custody
+      changed_when: false
+      register: coding_hosted_custody_spki
+      failed_when: coding_hosted_custody_spki.stdout is not match('^[0-9a-f]{64}$')
+
+    - name: Define the immutable redacted key receipt
+      ansible.builtin.set_fact:
+        coding_hosted_custody_key_receipt: >-
+          {{ {'algorithm': 'RSA-OAEP-SHA256',
+              'host': 'ditto-coding-hosted-v2',
+              'key_size_bits': 3072,
+              'public_spki_sha256': coding_hosted_custody_spki.stdout,
+              'schema': 'dittobench-coding-private-v2-custody-key-v1',
+              'shadow_only': true,
+              'source_revision': coding_hosted_custody_source_revision,
+              'weight_eligible': false} | to_json(sort_keys=true, separators=[',', ':']) ~ '\n' }}
+
+    - name: Read an existing redacted key receipt
+      ansible.builtin.slurp:
+        src: /var/lib/ditto-coding-custody/keys/private-input-rsa-receipt.json
+      become_user: ditto-coding-custody
+      register: coding_hosted_custody_existing_receipt
+      when: coding_hosted_custody_key_files.results[3].stat.exists
+
+    - name: Refuse drift in an existing key receipt
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_custody_existing_receipt.content | b64decode == coding_hosted_custody_key_receipt
+        fail_msg: Existing native Coding key receipt does not match the approved source and public identity.
+        quiet: true
+      when: coding_hosted_custody_key_files.results[3].stat.exists
+
+    - name: Write the redacted key receipt last
+      ansible.builtin.copy:
+        dest: /var/lib/ditto-coding-custody/keys/private-input-rsa-receipt.json
+        content: "{{ coding_hosted_custody_key_receipt }}"
+        owner: ditto-coding-custody
+        group: ditto-coding-custody
+        mode: "0600"
+        force: false
+      when: not coding_hosted_custody_key_files.results[3].stat.exists
+
+    - name: Reinspect all custody files without following links
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - /var/lib/ditto-coding-custody/keys/bootstrap-consumed
+        - /var/lib/ditto-coding-custody/keys/private-input-rsa.pem
+        - /var/lib/ditto-coding-custody/keys/private-input-rsa-public.pem
+        - /var/lib/ditto-coding-custody/keys/private-input-rsa-receipt.json
+      register: coding_hosted_custody_final_files
+
+    - name: Require owner-only regular single-link custody files
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - not item.stat.islnk
+          - item.stat.pw_name == 'ditto-coding-custody'
+          - item.stat.gr_name == 'ditto-coding-custody'
+          - item.stat.mode == '0600'
+          - item.stat.nlink == 1
+        fail_msg: Native Coding custody files are not sealed.
+        quiet: true
+      loop: "{{ coding_hosted_custody_final_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Report only the approved public custody identity
+      ansible.builtin.debug:
+        msg: >-
+          Native Coding RSA custody ready;
+          public_spki_sha256={{ coding_hosted_custody_spki.stdout }};
+          shadow_only=true; weight_eligible=false; service_started=false.
