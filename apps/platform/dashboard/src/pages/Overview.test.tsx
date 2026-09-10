@@ -826,4 +826,14 @@ describe("dethrone floor source of truth", () => {
       ),
     );
   });
+
+  it("tells the champion box which pin weights follow and what the next pin does", async () => {
+    renderOverview();
+    await waitForBoard();
+    await waitFor(() => expect(el("champion-pin").textContent).toContain("pin #24,281"));
+    expect(el("champion-next-pin").textContent).toContain("keeps the crown");
+    // The compact history mounts under the board with the newest pin first.
+    await waitFor(() => expect(el("crown-history").textContent).toContain("pin #24,281"));
+    expect(document.querySelectorAll("#crown-history tbody tr").length).toBeLessThanOrEqual(6);
+  });
 });

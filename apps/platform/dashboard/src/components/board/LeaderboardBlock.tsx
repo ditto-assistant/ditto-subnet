@@ -25,11 +25,12 @@ import {
   shortKey,
 } from "../../lib/format";
 import {
-  crownChampionScoreLabel,
   crownChallengerScoreLabel,
+  crownChampionScoreLabel,
   crownComparisonNote,
   crownContest,
   crownDifferenceText,
+  crownHysteresisState,
   crownScaleNote,
   crownSeedDiffsText,
   crownThresholdLabel,
@@ -40,6 +41,9 @@ import {
   efficiencyBoardStatus,
   isEligible,
   isFinalized,
+  nextPinVerdict,
+  pinAgreementLabel,
+  pinLabel,
   rolloutQuorum,
   signedScore,
 } from "../../lib/scoring";
@@ -632,6 +636,33 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
     );
   };
 
+  // The pin line: which frozen ledger the fleet folds, whether the next pin
+  // moves the crown (the platform's own projection, never re-derived here),
+  // and whether the fold defends the crown from the incumbent. Every number
+  // and protocol floor comes off the fold.
+  const pinShown = (): boolean => Boolean(emissions()?.ledger_pin) && !store.unavailable();
+  const nextPin = createMemo(() => nextPinVerdict(emissions()));
+  const nameOf = (agentId: string | null): string => {
+    if (!agentId) return "an unidentified agent";
+    const entry = entriesByAgent().get(String(agentId));
+    return entry ? agentName(entry.agent_name) : shortKey(agentId);
+  };
+  const hysteresisText = (): string => {
+    const e = emissions();
+    switch (crownHysteresisState(e)) {
+      case "active":
+        return "The crown is defended from the previous pin's champion: a senior lineage inside the band does not retake it, a challenger must clear the band.";
+      case "fleet_not_ready":
+        return (
+          "Crown incumbency waits for every live weight setter to report protocol " +
+          (e?.crown_incumbent_required_protocol ?? "—") +
+          "; until then the fold re-derives the champion from the earliest lineage on every read."
+        );
+      default:
+        return "";
+    }
+  };
+
   // "Beat this to contend." Published as a floor, explicitly, and never as a
   // sufficient number: only the margin term is knowable before a challenger
   // is scored (lib/scoring.dethroneFloor — never inline math).
@@ -773,6 +804,33 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
         {/* The dethrone-math explainer collapses behind a disclosure so the
             table stays near the top; it only exists when there is a fold to
             explain. */}
+        <div class="emissions-next-pin" id="emissions-next-pin" classList={{ show: pinShown() }}>
+          <Show when={emissions()?.ledger_pin}>
+            {(pin) => (
+              <>
+                <span class="emission-badge pin">Pinned</span>
+                {" Validators are folding " + pinLabel(pin()) + "."}
+                <Show when={nextPin()}>
+                  {(verdict) => (
+                    <>
+                      {" Next pin: "}
+                      <Show
+                        when={verdict().changes}
+                        fallback={<b>crown holds</b>}
+                      >
+                        <b class="beat">
+                          {"crown moves to " + nameOf(verdict().championId)}
+                        </b>
+                      </Show>
+                      {"."}
+                    </>
+                  )}
+                </Show>
+                {" " + hysteresisText()}
+              </>
+            )}
+          </Show>
+        </div>
         <details class="emissions-why" id="emissions-why" hidden={!emissions()}>
           <summary>How the crown is decided</summary>
           <div class="emissions-reason" id="emissions-reason">
@@ -836,6 +894,13 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
       <div class="chain-observation" id="chain-observation" classList={{ show: chainShown() }}>
         <span class="chain-badge">On chain</span>
         <span id="chain-observation-copy">{chainCopy()}</span>
+        <Show when={store.chainWeights()?.pin_agreement}>
+          {(agreement) => (
+            <span class="chain-weights-agreement" id="chain-pin-agreement">
+              {pinAgreementLabel(agreement()) + "."}
+            </span>
+          )}
+        </Show>
       </div>
     </div>
   );

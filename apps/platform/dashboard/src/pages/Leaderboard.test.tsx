@@ -1456,4 +1456,49 @@ describe("tooltip description ids", () => {
     expect(referenced.size).toBeGreaterThan(20);
     expect(ambiguous).toEqual([]);
   });
+
+  it("names the pinned ledger, the next-pin verdict, and fleet agreement from the fold", async () => {
+    renderPage();
+    await waitForBoard();
+    await waitFor(() => expect(el("emissions-next-pin").classList.contains("show")).toBe(true));
+    const line = el("emissions-next-pin").textContent ?? "";
+    // Identity comes off emissions.ledger_pin; the verdict off next_pin_projection.
+    expect(line).toContain("Validators are folding pin #24,281 · block 8,741,511.");
+    expect(line).toContain("crown holds");
+    expect(line).toContain("defended from the previous pin");
+    await waitFor(() =>
+      expect(el("chain-pin-agreement").textContent).toContain(
+        "8 of 12 validator vectors match pin #24,281",
+      ),
+    );
+    // The per-epoch record renders under the board on this page.
+    await waitFor(() => expect(el("crown-history").textContent).toContain("pin #24,281"));
+  });
+
+  it("says nothing about pins on a board that predates them", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name === "leaderboard") {
+          const payload = body as { emissions?: Record<string, unknown> };
+          if (payload.emissions) {
+            delete payload.emissions.ledger_pin;
+            delete payload.emissions.next_pin_projection;
+            delete payload.emissions.crown_incumbent_active;
+          }
+        }
+        if (name === "weights") {
+          const payload = body as { pin_agreement?: unknown };
+          delete payload.pin_agreement;
+        }
+        return body;
+      },
+    });
+    await waitForBoard();
+    // The store is module-scoped, so the previous case's payload may still be
+    // on screen until this case's fetch lands; wait for the new board.
+    await waitFor(() =>
+      expect(el("emissions-next-pin").classList.contains("show")).toBe(false),
+    );
+    await waitFor(() => expect(document.getElementById("chain-pin-agreement")).toBeNull());
+  });
 });

@@ -10,16 +10,18 @@
 
 import { fx, fxScore, num } from "./format";
 import type {
+  ChainEpoch,
   ChainWeight,
   ChainWeightInfo,
-  ChainEpoch,
   ChainWeightsSnapshot,
   CompositeBreakdown,
   EmissionsFold,
   LeaderboardPayload,
+  PinAgreement,
   RawLeaderDecision,
   RolloutState,
   TokenEfficiency,
+  WeightsFold,
 } from "../types";
 
 // ── Display composite (monolith 3448–3473) ───────────────────
@@ -1170,6 +1172,85 @@ export function countdownClock(seconds: number): string {
 
 // ── Per-validator revealed weight views (fleet + raw-matrix panel) ──
 
+// ── Epoch pin and crown incumbency ───────────────────────────
+
+export type CrownHysteresisState = "active" | "fleet_not_ready" | "disabled" | "unknown";
+
+/**
+ * Whether the fold defends the crown from the served incumbent. `active` is
+ * the platform's own marker; `fleet_not_ready` is the platform reporting the
+ * policy's protocol floor while the marker is off (the operator may have
+ * asked, the fleet has not caught up); `unknown` is a board that predates the
+ * field and says nothing either way.
+ */
+export function crownHysteresisState(
+  emissions: EmissionsFold | null | undefined,
+): CrownHysteresisState {
+  if (!emissions || emissions.crown_incumbent_active == null) return "unknown";
+  if (emissions.crown_incumbent_active) return "active";
+  return emissions.ledger_pin?.crown_mode === "incumbent" ? "active" : "fleet_not_ready";
+}
+
+export interface NextPinVerdict {
+  /** True when the 65% slot moves at the next pin. */
+  changes: boolean;
+  /** Agent id of the crown the next pin would record. */
+  championId: string | null;
+  /** Agent id of the crown the current pin records (what weights follow now). */
+  pinnedChampionId: string | null;
+}
+
+/** What the next pin does to the crown, from the platform's own projection. */
+export function nextPinVerdict(
+  emissions: EmissionsFold | null | undefined,
+): NextPinVerdict | null {
+  const projection = emissions?.next_pin_projection;
+  if (!projection || projection.changes_crown == null) return null;
+  return {
+    changes: Boolean(projection.changes_crown),
+    championId: projection.champion_agent_id ?? null,
+    pinnedChampionId: emissions?.ledger_pin?.champion_agent_id ?? null,
+  };
+}
+
+/** "pin #25,028 · block 9,033,471" — the identity a reader can match against
+ * `/public/ledger-epochs` and a validator's reported fold. */
+export function pinLabel(
+  pin: { epoch_index?: number | null; pinned_block?: number | null } | null | undefined,
+): string {
+  if (!pin || pin.epoch_index == null) return "";
+  const block =
+    pin.pinned_block == null ? "" : " · block " + Number(pin.pinned_block).toLocaleString();
+  return "pin #" + Number(pin.epoch_index).toLocaleString() + block;
+}
+
+/** "9 of 11 validator vectors match pin #25,028" — the fleet-agreement reading. */
+export function pinAgreementLabel(
+  agreement: { epoch_index: number; matching: number; total: number } | null | undefined,
+): string {
+  if (!agreement) return "";
+  return (
+    agreement.matching +
+    " of " +
+    agreement.total +
+    " validator vectors match pin #" +
+    Number(agreement.epoch_index).toLocaleString()
+  );
+}
+
+export function matchesPinLabel(verdict: PinAgreement | null | undefined): string {
+  switch (verdict) {
+    case "current":
+      return "matches current pin";
+    case "previous":
+      return "one pin behind";
+    case "diverged":
+      return "diverged from pin";
+    default:
+      return "";
+  }
+}
+
 export interface ValidatorWeightEntry {
   uid: number;
   hotkey: string;
@@ -1182,6 +1263,9 @@ export interface ValidatorWeightEntry {
 }
 
 export interface ValidatorWeightView {
+  /** Protocol 27 fold report and pin agreement, when the API carries them. */
+  fold?: WeightsFold | null;
+  matchesPin?: PinAgreement;
   validatorUid: number | null;
   validatorHotkey: string;
   /** Positive non-owner destinations, heaviest first (chainChampionCompare). */
@@ -1211,6 +1295,8 @@ export function validatorWeightViews(
     views.push({
       validatorUid: vector.validator_uid ?? null,
       validatorHotkey: vector.validator_hotkey || "",
+      fold: vector.fold ?? null,
+      matchesPin: vector.matches_pin,
       entries: ordered.map((weight, index) => ({
         uid: weight.uid,
         hotkey: weight.hotkey,

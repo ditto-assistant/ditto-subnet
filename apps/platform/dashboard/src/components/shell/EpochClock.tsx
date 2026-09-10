@@ -13,7 +13,8 @@ import type { JSX } from "solid-js";
 
 import { countdownClock, epochCountdown } from "../../lib/scoring";
 import type { EpochCountdown } from "../../lib/scoring";
-import type { ChainEpoch } from "../../types/leaderboard";
+import type { ChainEpoch, PinAgreementSummary } from "../../types/leaderboard";
+import { pinAgreementLabel } from "../../lib/scoring";
 
 /** Gauge segments. A read of epoch position, deliberately NOT one per block —
  * 360 ticks in a 208px rail would be a texture, and claiming a block each
@@ -38,6 +39,10 @@ function spokenLabel(countdown: EpochCountdown): string {
 
 export function EpochClock(props: {
   epoch: () => ChainEpoch | null | undefined;
+  /** `/public/weights` `pin_agreement`: which pinned ledger the fleet is
+   * folding and how many revealed vectors match it. Optional decoration —
+   * a board that predates the pin renders the clock exactly as before. */
+  pin?: () => PinAgreementSummary | null | undefined;
   /** DOM id; the rail owns the default, a second mount (the overview
    * masthead) names its own so the page never carries two `#epoch-clock`. */
   id?: string;
@@ -114,6 +119,16 @@ export function EpochClock(props: {
                 <span class="epoch-clock-flag">projected</span>
               </Show>
             </div>
+            <Show when={props.pin?.()}>
+              {(pin) => (
+                <div
+                  class="epoch-clock-pin"
+                  title="The frozen ledger every validator folds this epoch, and how many revealed on-chain vectors already match it. Weights move only at the next pin."
+                >
+                  {pinAgreementLabel(pin())}
+                </div>
+              )}
+            </Show>
           </>
         )}
       </Show>

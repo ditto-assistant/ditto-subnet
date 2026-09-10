@@ -6,13 +6,15 @@
 import { Show } from "solid-js";
 import type { JSX } from "solid-js";
 
-import { fx, pct, publicDisplayName, relTime, shortKey } from "../../lib/format";
+import { agentName, fx, pct, publicDisplayName, relTime, shortKey } from "../../lib/format";
 import {
   crownComparisonNote,
   crownContest,
   crownWhyHigh,
   displayComposite,
   foldArrival,
+  nextPinVerdict,
+  pinLabel,
   signedScore,
 } from "../../lib/scoring";
 import { TipTarget } from "../ui/Tooltip";
@@ -162,6 +164,42 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
               <span>
                 Bench <b>{"v" + championEntry()?.bench_version}</b>
               </span>
+            </Show>
+            {/* Which frozen ledger the fleet is folding and whether the next
+                pin moves the crown — the platform's own projection, so this
+                box never re-derives a fold. */}
+            <Show when={emissions()?.ledger_pin}>
+              {(pin) => (
+                <span
+                  id="champion-pin"
+                  title="Validators fold one frozen ledger per chain epoch; weights move only at the next pin."
+                >
+                  Weights follow <b>{pinLabel(pin())}</b>
+                </span>
+              )}
+            </Show>
+            <Show when={nextPinVerdict(emissions())}>
+              {(verdict) => (
+                <span id="champion-next-pin">
+                  Next pin{" "}
+                  <b>
+                    {verdict().changes
+                      ? "moves the crown to " +
+                        (store
+                          .entries()
+                          .find((entry) => String(entry.agent_id) === verdict().championId)
+                          ?.agent_name
+                          ? agentName(
+                              store
+                                .entries()
+                                .find((entry) => String(entry.agent_id) === verdict().championId)
+                                ?.agent_name,
+                            )
+                          : shortKey(verdict().championId))
+                      : "keeps the crown"}
+                  </b>
+                </span>
+              )}
             </Show>
           </div>
           {/* The held-crown note: the champion sitting below raw #1 is the

@@ -64,6 +64,11 @@ import {
   unrankedKind,
   validatorWeightViews,
   vectorChampion,
+  crownHysteresisState,
+  matchesPinLabel,
+  nextPinVerdict,
+  pinAgreementLabel,
+  pinLabel,
 } from "./scoring";
 import type { CompositeBreakdown } from "../types";
 
@@ -1225,5 +1230,59 @@ describe("countdownClock", () => {
     expect(countdownClock(180)).toBe("3:00");
     expect(countdownClock(4200)).toBe("1:10:00");
     expect(countdownClock(-5)).toBe("0:00");
+  });
+});
+
+
+describe("epoch pin helpers", () => {
+  it("reads the incumbency state off the fold, never inferring it", () => {
+    expect(crownHysteresisState(null)).toBe("unknown");
+    expect(crownHysteresisState({})).toBe("unknown");
+    expect(crownHysteresisState({ crown_incumbent_active: true })).toBe("active");
+    expect(
+      crownHysteresisState({
+        crown_incumbent_active: false,
+        crown_incumbent_required_protocol: 27,
+      }),
+    ).toBe("fleet_not_ready");
+  });
+
+  it("reports the next pin verdict from the platform projection", () => {
+    expect(nextPinVerdict({})).toBeNull();
+    expect(
+      nextPinVerdict({
+        ledger_pin: { epoch_index: 1, champion_agent_id: "a" },
+        next_pin_projection: { champion_agent_id: "b", changes_crown: true },
+      }),
+    ).toEqual({ changes: true, championId: "b", pinnedChampionId: "a" });
+  });
+
+  it("formats pin identity and agreement with grouped numbers", () => {
+    expect(pinLabel({ epoch_index: 25028, pinned_block: 9033471 })).toBe(
+      "pin #25,028 · block 9,033,471",
+    );
+    expect(pinLabel(null)).toBe("");
+    expect(pinAgreementLabel({ epoch_index: 25028, matching: 9, total: 11 })).toBe(
+      "9 of 11 validator vectors match pin #25,028",
+    );
+    expect(matchesPinLabel("previous")).toBe("one pin behind");
+    expect(matchesPinLabel("unknown")).toBe("");
+  });
+
+  it("carries the fold report and agreement onto validator weight views", () => {
+    const views = validatorWeightViews({
+      owner_hotkey: null,
+      vectors: [
+        {
+          validator_uid: 1,
+          validator_hotkey: "5" + "A".repeat(47),
+          weights: [{ uid: 9, hotkey: "5" + "B".repeat(47), value: 100 }],
+          matches_pin: "current",
+          fold: { epoch_index: 25028, vector_digest: "ab".repeat(32), folded_at: 1 },
+        },
+      ],
+    });
+    expect(views?.[0]?.matchesPin).toBe("current");
+    expect(views?.[0]?.fold?.epoch_index).toBe(25028);
   });
 });

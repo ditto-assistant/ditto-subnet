@@ -15,6 +15,7 @@ every other payload is verbatim.
 | `leaderboard.json` | `/public/leaderboard` (v7 current; entries[:12]) |
 | `leaderboard-v6.json` | `/public/leaderboard?bench_version=6` (entries[:12]) |
 | `weights.json` | `/public/weights` |
+| `ledger-epochs.json` | `/public/ledger-epochs?limit=24` (pin history; synthetic-shaped until the endpoint ships, keyed to the leaderboard fixture's champion and raw leader) |
 | `validator-names.json` | `/public/validator-names` |
 | `screeners.json` | `/public/screeners` |
 | `bench-glossary.json` | `/public/bench/glossary` |
@@ -34,3 +35,8 @@ every other payload is verbatim.
 Refresh by re-running the same GETs (see `src/test-fixtures.ts` for the two
 recorded agent ids) and re-applying the entries[:12] trim to both leaderboard
 files.
+
+`leaderboard.json` `emissions.ledger_pin` / `next_pin_projection` / `crown_incumbent_*` and
+`weights.json` `pin_agreement` / per-vector `fold` + `matches_pin` were added by hand for the
+epoch-pin surfaces (#1766, #1767, #1775) and should be replaced by a fresh capture once the
+endpoints are live.
