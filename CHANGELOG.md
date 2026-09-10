@@ -2,6 +2,31 @@
 
 <!-- version list -->
 
+## v0.250.0 (2026-09-10)
+
+### Bug Fixes
+
+- **ansible**: Fail the converge when a team member has no SSH key
+  ([#1761](https://github.com/ditto-assistant/ditto-subnet/pull/1761),
+  [`354e4d5`](https://github.com/ditto-assistant/ditto-subnet/commit/354e4d5b6b29bfbfb309290a07601cfce5b6707d))
+
+- **preview**: Dispatch stack previews by hand and stop the slot leak
+  ([#1772](https://github.com/ditto-assistant/ditto-subnet/pull/1772),
+  [`2e8b37c`](https://github.com/ditto-assistant/ditto-subnet/commit/2e8b37c0331ce30c5c147d6981562d3d7fc33751))
+
+### Chores
+
+- **deps**: Bump six pinned GitHub Actions to verified upstream tags
+  ([#1749](https://github.com/ditto-assistant/ditto-subnet/pull/1749),
+  [`ccb0395`](https://github.com/ditto-assistant/ditto-subnet/commit/ccb0395e81185e2f08ba48123fd88044abf017ff))
+
+### Features
+
+- **coding**: Add protected Hippius capability probe
+  ([#1771](https://github.com/ditto-assistant/ditto-subnet/pull/1771),
+  [`f430c20`](https://github.com/ditto-assistant/ditto-subnet/commit/f430c20850f54029ceaf2e3466370f36904ec9d6))
+
+
 ## v0.249.0 (2026-09-10)
 
 ### Features
