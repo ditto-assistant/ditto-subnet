@@ -49,6 +49,22 @@ def test_admission_guard_precedes_base_role_and_has_role_level_backstop():
         "coding-hosted-access.yml"
         in play["pre_tasks"][0]["ansible.builtin.import_tasks"]
     )
+    password_stat = play["pre_tasks"][1]
+    assert password_stat["ansible.builtin.stat"]["path"] == (
+        "/opt/ditto/secrets/postgres-ditto.password"
+    )
+    assert password_stat["ansible.builtin.stat"]["follow"] is False
+    assert password_stat["ansible.builtin.stat"]["get_checksum"] is False
+    password_guard = play["pre_tasks"][2]["ansible.builtin.assert"]
+    password_condition = "\n".join(password_guard["that"])
+    assert "DITTO_PG_PASSWORD" in password_condition
+    assert "platform_pg_password_file.stat.isreg" in password_condition
+    assert "platform_pg_password_file.stat.pw_name" in password_condition
+    assert "platform_pg_password_file.stat.gr_name" in password_condition
+    assert "platform_pg_password_file.stat.mode" in password_condition
+    assert "platform_pg_password_file.stat.nlink" in password_condition
+    assert "platform_pg_password_file.stat.size" in password_condition
+    assert "slurp" not in str(play["pre_tasks"])
     tasks = yaml.safe_load(read("infra/ansible/roles/postgres/tasks/main.yml"))
     assert tasks[0]["ansible.builtin.import_tasks"] == "coding-hosted-access.yml"
     guard = yaml.safe_load(
