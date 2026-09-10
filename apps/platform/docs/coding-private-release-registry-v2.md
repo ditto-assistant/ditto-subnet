@@ -86,3 +86,14 @@ replays return the original row; identity or audit drift fails closed.
 The response omits the publication receipt, per-object evidence, curator public
 key, signature, provider coordinates, and storage keys. It reports only safe
 registration digests, lifecycle status, and audit metadata.
+
+## Redacted control-plane status
+
+`GET /api/v1/admin/coding-control-plane` returns bounded native hosted-assignment
+progress plus safe feature-gate posture. It joins only the assignment and private
+task lifecycle rows and reports pending admission, admitted, running, completed,
+failed, aborted, or expired. It never returns catalog indices, selection
+authorities, grant IDs, task material, patches, object locations, credentials,
+or provider receipts. A durable `running` state is not process-liveness proof.
+The endpoint is read-only, `Cache-Control: no-store`, shadow-only, permanently
+weight-ineligible, and always reports native v2 as non-selectable.

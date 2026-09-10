@@ -5,6 +5,7 @@ import {
   Activity,
   Bot,
   CircleDollarSign,
+  Code2,
   Copy,
   Flame,
   FlaskConical,
@@ -27,6 +28,12 @@ import { logout } from '../server/auth.functions'
 import { CommandPalette } from './CommandPalette'
 
 const navigation = [
+  {
+    to: '/coding-control' as const,
+    label: 'Coding Bench',
+    description: 'Private release & shadow launch',
+    icon: Code2,
+  },
   {
     to: '/miner-fees' as const,
     label: 'Miner fees',

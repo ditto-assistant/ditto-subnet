@@ -107,7 +107,14 @@ import {
   agentCodingCertificationStatusSchema,
   codingCatalogControlSchema,
   codingPrivateV2ReleasesSchema,
+  codingNativeControlStatusSchema,
   getCodingCatalogInputSchema,
+  registerCodingPrivateV2ReleaseInputSchema,
+  transitionCodingPrivateV2ReleaseInputSchema,
+  reconcileCodingShadowInputSchema,
+  codingShadowReconciliationResponseSchema,
+  issueCodingShadowTicketSetInputSchema,
+  codingShadowTicketSetResponseSchema,
   registerCodingCatalogInputSchema,
   retireCodingCatalogInputSchema,
   supersedeCodingCatalogInputSchema,
@@ -2123,6 +2130,105 @@ export async function fetchCodingPrivateV2Releases(rawInput: unknown) {
   )
   type NativeResponse = PlatformOperations['get_private_v2_releases_api_v1_admin_coding_private_v2_releases_get']['responses'][200]['content']['application/json']
   return codingPrivateV2ReleasesSchema.parse(payload) satisfies NativeResponse
+}
+
+export async function fetchCodingControlPlane(rawInput: unknown) {
+  const input = getCodingCatalogInputSchema.parse(rawInput)
+  type NativeControl = PlatformOperations['get_coding_control_plane_api_v1_admin_coding_control_plane_get']['responses'][200]['content']['application/json']
+  const [catalog, privateV2, native] = await Promise.all([
+    fetchCodingCatalogReleases(input),
+    fetchCodingPrivateV2Releases(input),
+    platformAdminRequest(`/api/v1/admin/coding-control-plane?limit=${input.limit}`)
+      .then((payload) => codingNativeControlStatusSchema.parse(payload) satisfies NativeControl),
+  ])
+  return {
+    catalog,
+    private_v2: privateV2,
+    native,
+    shadow_only: true as const,
+    weight_eligible: false as const,
+  }
+}
+
+export async function registerCodingPrivateV2Release(rawInput: unknown, actor: string) {
+  const input = registerCodingPrivateV2ReleaseInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/coding-private-v2-releases/register', {
+    method: 'POST',
+    actor,
+    body: {
+      registration: input.registration,
+      publication_receipt: input.publicationReceipt,
+      curator_public_key_pem: input.curatorPublicKeyPem,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return codingPrivateV2ReleasesSchema.parse(payload)
+}
+
+async function transitionCodingPrivateV2Release(
+  action: 'quarantine' | 'retire',
+  rawInput: unknown,
+  actor: string,
+) {
+  const input = transitionCodingPrivateV2ReleaseInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/coding-private-v2-releases/${action}`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        corpus_release_id: input.corpusReleaseId,
+        expected_registration_sha256: input.expectedRegistrationSha256,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    },
+  )
+  return codingPrivateV2ReleasesSchema.parse(payload)
+}
+
+export function quarantineCodingPrivateV2Release(rawInput: unknown, actor: string) {
+  return transitionCodingPrivateV2Release('quarantine', rawInput, actor)
+}
+
+export function retireCodingPrivateV2Release(rawInput: unknown, actor: string) {
+  return transitionCodingPrivateV2Release('retire', rawInput, actor)
+}
+
+export async function reconcileCodingShadowArtifact(rawInput: unknown, actor: string) {
+  const input = reconcileCodingShadowInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/coding-shadow/reconcile', {
+    method: 'POST',
+    actor,
+    body: {
+      agent_id: input.agentId,
+      bench_version: input.benchVersion,
+      coding_run_id: input.codingRunId,
+      corpus_release_id: input.corpusReleaseId,
+      reason: input.reason,
+      confirmation: input.confirmation,
+    },
+  })
+  return codingShadowReconciliationResponseSchema.parse(payload)
+}
+
+export async function issueCodingShadowTicketSet(rawInput: unknown, actor: string) {
+  const input = issueCodingShadowTicketSetInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/coding-shadow/ticket-sets', {
+    method: 'POST',
+    actor,
+    body: {
+      run_row_id: input.runRowId,
+      ticket_set_id: input.ticketSetId,
+      validator_hotkeys: input.validatorHotkeys,
+      reason: input.reason,
+      confirmation: input.confirmation,
+    },
+  })
+  return codingShadowTicketSetResponseSchema.parse(payload)
 }
 
 export async function registerCodingCatalogRelease(rawInput: unknown, actor: string) {

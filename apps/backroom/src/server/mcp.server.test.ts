@@ -191,7 +191,9 @@ describe('Backroom MCP tools', () => {
         'get_agent_coding_certifications',
         'get_agent_coding_shadow_evaluations',
         'get_coding_catalog_releases',
+        'get_coding_control_plane',
         'get_coding_private_v2_releases',
+        'issue_coding_shadow_ticket_set',
         'get_validator_weight_diagnostics',
         'get_agent_core_qualification',
         'get_agent_scores',
@@ -237,8 +239,12 @@ describe('Backroom MCP tools', () => {
         'set_submission_cooldown',
         'unban_hotkey',
         'register_coding_catalog_release',
+        'register_coding_private_v2_release',
         'supersede_coding_catalog_release',
         'retire_coding_catalog_release',
+        'quarantine_coding_private_v2_release',
+        'reconcile_coding_shadow_artifact',
+        'retire_coding_private_v2_release',
       ].sort(),
     )
     expect(response.tools.map((tool) => tool.name)).not.toContain(
@@ -277,8 +283,11 @@ describe('Backroom MCP tools', () => {
     // The block-bound weight diagnostic adds one tool and its bounded UID input.
     // Keep the separate description budget below unchanged.
     // The copy-court pair adds two read tools with a small input schema;
-    // apply_copy_court_settings reuses the existing settings schema.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(118_600)
+    // apply_copy_court_settings reuses the existing settings schema. The five
+    // Coding control tools add bounded release, exact-run, and fixed-k=3 input
+    // schemas; the large private receipt remains a record in the MCP catalog
+    // and is parsed exactly by the service before forwarding.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(125_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. 24_000 admits the screener
@@ -7141,6 +7150,238 @@ describe('Backroom MCP tools', () => {
       expect(unavailable.isError).toBe(true)
       expect(fetchMock).toHaveBeenCalledTimes(2)
       expect(fetchMock.mock.calls.every(([url]) => String(url).includes('/coding-private-v2-releases?'))).toBe(true)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('reads the unified Coding control plane without conflating v1 and v2 releases', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const catalog = { total: 0, releases: [], shadow_only: true }
+    const privateV2 = {
+      total: 0,
+      releases: [],
+      shadow_only: true,
+      selectable: false,
+      weight_eligible: false,
+    }
+    const native = {
+      total_native_operations: 0,
+      native_operations: [],
+      hosted_control_configured: false,
+      contract_v1_reconciliation_enabled: false,
+      contract_v1_ticket_set_enabled: false,
+      contract_v1_ticket_lease_seconds: 3600,
+      native_v2_selectable: false,
+      shadow_only: true,
+      weight_eligible: false,
+    }
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => Response.json(
+      url.includes('/coding-catalog/releases')
+        ? catalog
+        : url.includes('/coding-private-v2-releases')
+          ? privateV2
+          : native,
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_coding_control_plane',
+        arguments: { limit: 25 },
+      })
+      expect(response.isError, readTextResult(response)).not.toBe(true)
+      expect(readJsonResult(response)).toEqual({
+        catalog,
+        private_v2: privateV2,
+        native,
+        shadow_only: true,
+        weight_eligible: false,
+      })
+      expect(fetchMock.mock.calls.map(([url]) => String(url)).sort()).toEqual([
+        'https://platform-api.heyditto.ai/api/v1/admin/coding-catalog/releases?limit=25',
+        'https://platform-api.heyditto.ai/api/v1/admin/coding-control-plane?limit=25',
+        'https://platform-api.heyditto.ai/api/v1/admin/coding-private-v2-releases?limit=25',
+      ])
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('controls signed private-v2 custody and fixed k=3 shadow launch with exact guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const registration = {
+      schema: 'dittobench-coding-private-v2-registration-v1',
+      coding_contract_version: 2,
+      shadow_only: true,
+      weight_eligible: false,
+      corpus_release_id: 'native-v2-release',
+      private_release_sha256: 'a'.repeat(64),
+      catalog_sha256: 'b'.repeat(64),
+      catalog_merkle_root: 'c'.repeat(64),
+      payload_sha256: 'd'.repeat(64),
+      transport_sha256: 'e'.repeat(64),
+      wrapping_key_sha256: 'f'.repeat(64),
+      publication_receipt_sha256: '1'.repeat(64),
+      previous_registration_sha256: null,
+      registration_sha256: '2'.repeat(64),
+    }
+    const publicationReceipt = {
+      schema: 'dittobench-coding-private-v2-publication-v1',
+      source_sha: 'a'.repeat(40),
+      checked_at: '2026-09-10T12:40:00Z',
+      provider: 'hippius',
+      probe_receipt_payload_sha256: '3'.repeat(64),
+      private_input_authority_sha256: '4'.repeat(64),
+      transport_sha256: registration.transport_sha256,
+      payload_sha256: registration.payload_sha256,
+      catalog_sha256: registration.catalog_sha256,
+      catalog_merkle_root: registration.catalog_merkle_root,
+      wrapping_key_sha256: registration.wrapping_key_sha256,
+      curator_signing_key_sha256: '5'.repeat(64),
+      curator_signature_b64: `${'A'.repeat(86)}==`,
+      object_count: 1,
+      objects: [{
+        object_index: 0,
+        remote_object_key_sha256: '6'.repeat(64),
+        delighted: 'strip-me',
+        ciphertext_sha256: '7'.repeat(64),
+        ciphertext_size_bytes: 128,
+        status: 'uploaded',
+      }],
+      ready: true,
+      shadow_only: true,
+      weight_eligible: false,
+      receipt_payload_sha256: '8'.repeat(64),
+    }
+    const curatorDigest = '5'.repeat(64)
+    const receipt = publicationReceipt
+    const control = {
+      total: 1,
+      releases: [{
+        release_row_id: '11111111-1111-4111-8111-111111111111',
+        registration,
+        publication_source_sha: 'a'.repeat(40),
+        provider_probe_receipt_sha256: '3'.repeat(64),
+        private_input_authority_sha256: '4'.repeat(64),
+        curator_signing_key_sha256: curatorDigest,
+        publication_object_count: 1,
+        status: 'registered',
+        registered_reason: 'register signed native release',
+        registered_actor: 'brian@omniaura.ai',
+        registered_at: '2026-09-10T12:45:00Z',
+        lifecycle_event_count: 0,
+        latest_event_reason: null,
+        latest_event_actor: null,
+        latest_event_at: null,
+        shadow_only: true,
+        selectable: false,
+        weight_eligible: false,
+      }],
+      shadow_only: true,
+      selectable: false,
+      weight_eligible: false,
+    }
+    const reconciliation = {
+      state: 'issued',
+      assignment_row_id: '22222222-2222-4222-8222-222222222222',
+      selection_block_number: 9_100_000,
+      run_row_id: '33333333-3333-4333-8333-333333333333',
+      assignment_idempotent: false,
+      issuance_idempotent: false,
+      weight_eligible: false,
+    }
+    const validators = [
+      `5${'A'.repeat(47)}`,
+      `5${'B'.repeat(47)}`,
+      `5${'C'.repeat(47)}`,
+    ]
+    const ticketSet = {
+      run_row_id: reconciliation.run_row_id,
+      ticket_set_id: '44444444-4444-4444-8444-444444444444',
+      tickets: validators.map((validator_hotkey, index) => ({
+        ticket_id: `${index + 5}5555555-5555-4555-8555-555555555555`,
+        validator_hotkey,
+        issued_at: '2026-09-10T13:00:00Z',
+        deadline: '2026-09-10T14:00:00Z',
+      })),
+      idempotent: false,
+      weight_eligible: false,
+    }
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/coding-shadow/reconcile')) return Response.json(reconciliation)
+      if (url.endsWith('/coding-shadow/ticket-sets')) return Response.json(ticketSet)
+      return Response.json(control)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const registered = await client.callTool({
+        name: 'register_coding_private_v2_release',
+        arguments: {
+          registration,
+          publicationReceipt: receipt,
+          curatorPublicKeyPem: '-----BEGIN PUBLIC KEY-----\npublic\n-----END PUBLIC KEY-----\n',
+          reason: 'register signed native release',
+          confirmation: `REGISTER SHADOW CODING PRIVATE V2 RELEASE native-v2-release ${registration.registration_sha256} ${curatorDigest}`,
+        },
+      })
+      expect(registered.isError, readTextResult(registered)).not.toBe(true)
+
+      for (const [name, verb] of [
+        ['quarantine_coding_private_v2_release', 'QUARANTINE'],
+        ['retire_coding_private_v2_release', 'RETIRE'],
+      ] as const) {
+        const response = await client.callTool({
+          name,
+          arguments: {
+            corpusReleaseId: registration.corpus_release_id,
+            expectedRegistrationSha256: registration.registration_sha256,
+            reason: `${verb.toLowerCase()} exact native release`,
+            confirmation: `${verb} SHADOW CODING PRIVATE V2 RELEASE ${registration.corpus_release_id} ${registration.registration_sha256}`,
+          },
+        })
+        expect(response.isError, readTextResult(response)).not.toBe(true)
+      }
+
+      const runId = 'coding-shadow-run-1'
+      const reconciled = await client.callTool({
+        name: 'reconcile_coding_shadow_artifact',
+        arguments: {
+          agentId: '66666666-6666-4666-8666-666666666666',
+          benchVersion: 12,
+          corpusReleaseId: 'contract-v1-release',
+          codingRunId: runId,
+          reason: 'prepare exact qualified artifact',
+          confirmation: `RECONCILE SHADOW CODING 66666666-6666-4666-8666-666666666666 12 contract-v1-release ${runId}`,
+        },
+      })
+      expect(reconciled.isError, readTextResult(reconciled)).not.toBe(true)
+
+      const issued = await client.callTool({
+        name: 'issue_coding_shadow_ticket_set',
+        arguments: {
+          runRowId: reconciliation.run_row_id,
+          ticketSetId: ticketSet.ticket_set_id,
+          validatorHotkeys: validators,
+          reason: 'launch fixed certified validator set',
+          confirmation: `ISSUE SHADOW CODING TICKET SET ${reconciliation.run_row_id} ${ticketSet.ticket_set_id} ${validators.join(',')}`,
+        },
+      })
+      expect(issued.isError, readTextResult(issued)).not.toBe(true)
+
+      const calls = fetchMock.mock.calls.map(([url, options]) => ({
+        url: String(url),
+        body: options?.body ? JSON.parse(String(options.body)) : null,
+      }))
+      expect(calls.find(({ url }) => url.endsWith('/coding-private-v2-releases/register'))?.body)
+        .toMatchObject({ actor: 'peyton@omniaura.ai', publication_receipt: { object_count: 1 } })
+      expect(calls.find(({ url }) => url.endsWith('/coding-shadow/reconcile'))?.body)
+        .toMatchObject({ agent_id: '66666666-6666-4666-8666-666666666666', reason: 'prepare exact qualified artifact' })
+      expect(calls.find(({ url }) => url.endsWith('/coding-shadow/ticket-sets'))?.body)
+        .toMatchObject({ validator_hotkeys: validators, reason: 'launch fixed certified validator set' })
     } finally {
       await client.close()
       await server.close()

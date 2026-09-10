@@ -65,6 +65,10 @@ import {
   agentScoringReadinessInputSchema,
   agentCodingCertificationInputSchema,
   getCodingCatalogInputSchema,
+  registerCodingPrivateV2ReleaseMcpInputSchema,
+  transitionCodingPrivateV2ReleaseInputSchema,
+  reconcileCodingShadowInputSchema,
+  issueCodingShadowTicketSetInputSchema,
   registerCodingCatalogMcpInputSchema,
   retireCodingCatalogInputSchema,
   supersedeCodingCatalogInputSchema,
@@ -149,6 +153,12 @@ import {
   fetchAgentCodingCertifications,
   fetchCodingCatalogReleases,
   fetchCodingPrivateV2Releases,
+  fetchCodingControlPlane,
+  registerCodingPrivateV2Release,
+  quarantineCodingPrivateV2Release,
+  retireCodingPrivateV2Release,
+  reconcileCodingShadowArtifact,
+  issueCodingShadowTicketSet,
   registerCodingCatalogRelease,
   retireCodingCatalogRelease,
   supersedeCodingCatalogRelease,
@@ -256,6 +266,11 @@ export const WRITE_TOOL_NAMES = new Set([
   'register_coding_catalog_release',
   'supersede_coding_catalog_release',
   'retire_coding_catalog_release',
+  'register_coding_private_v2_release',
+  'quarantine_coding_private_v2_release',
+  'retire_coding_private_v2_release',
+  'reconcile_coding_shadow_artifact',
+  'issue_coding_shadow_ticket_set',
   'resolve_screening_quarantine',
   'resolve_screening_dispute',
   'rescreen_rejected_submission',
@@ -505,7 +520,19 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_coding_catalog_releases:
     'Read signed shadow catalog commitments, retirement, and exposure counts.',
   get_coding_private_v2_releases:
-    'Read native private-v2 registration digests and lifecycle state; never enables execution.',
+    'Read native v2 registrations; never launches.',
+  get_coding_control_plane:
+    'Read unified Coding authority state.',
+  register_coding_private_v2_release:
+    'Register signed, non-selectable native v2.',
+  quarantine_coding_private_v2_release:
+    'Quarantine exact native v2.',
+  retire_coding_private_v2_release:
+    'Retire one exact native v2 release.',
+  reconcile_coding_shadow_artifact:
+    'Prepare one exact weight-zero Coding run.',
+  issue_coding_shadow_ticket_set:
+    'Issue fixed k=3 weight-zero Coding tickets.',
   register_coding_catalog_release:
     'Register one curator-signed, weight-zero catalog commitment.',
   supersede_coding_catalog_release:
@@ -1382,6 +1409,83 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchCodingPrivateV2Releases(input)),
+  )
+
+  registerTool(
+    'get_coding_control_plane',
+    {
+      title: 'Get unified Coding control-plane state',
+      description:
+        'Read the contract-v1 catalog and distinct native private-v2 registry in one bounded snapshot. Reports permanent shadow and weight-zero flags. It does not establish fresh provider access, key custody, host qualification, canary completion or rollout approval and performs no mutation.',
+      inputSchema: getCodingCatalogInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchCodingControlPlane(input)),
+  )
+
+  registerTool(
+    'register_coding_private_v2_release',
+    {
+      title: 'Register native private Coding v2 release',
+      description:
+        'Verify and append one native private-v2 registration from a complete Hippius receipt and external Ed25519 public key. Confirm the exact release, registration and curator-key digests. Never accepts private keys or credentials; remains non-selectable and weight-zero.',
+      inputSchema: registerCodingPrivateV2ReleaseMcpInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => registerCodingPrivateV2Release(input, props.session.email)),
+  )
+
+  registerTool(
+    'quarantine_coding_private_v2_release',
+    {
+      title: 'Quarantine native private Coding v2 release',
+      description:
+        'Append a quarantine event to one exact private-v2 registration. Confirm its release ID and current registration digest; immutable publication evidence remains retained.',
+      inputSchema: transitionCodingPrivateV2ReleaseInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => quarantineCodingPrivateV2Release(input, props.session.email)),
+  )
+
+  registerTool(
+    'retire_coding_private_v2_release',
+    {
+      title: 'Retire native private Coding v2 release',
+      description:
+        'Append terminal retirement to one exact private-v2 registration. Confirm its release ID and current registration digest; no stored evidence is deleted.',
+      inputSchema: transitionCodingPrivateV2ReleaseInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => retireCodingPrivateV2Release(input, props.session.email)),
+  )
+
+  registerTool(
+    'reconcile_coding_shadow_artifact',
+    {
+      title: 'Prepare exact artifact for shadow Coding',
+      description:
+        'Create or recover one future-height contract-v1 assignment for the exact agent, benchmark, active release and run ID. Performs no ticket issuance, container launch, score or weight change. Requires the exact RECONCILE SHADOW CODING confirmation.',
+      inputSchema: reconcileCodingShadowInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => reconcileCodingShadowArtifact(input, props.session.email)),
+  )
+
+  registerTool(
+    'issue_coding_shadow_ticket_set',
+    {
+      title: 'Launch fixed k=3 shadow Coding ticket set',
+      description:
+        'Issue one sorted, unique k=3 validator ticket set for an existing contract-v1 shadow run. Validators remain certified and claim independently; this does not execute a container. Requires the exact ISSUE SHADOW CODING TICKET SET confirmation and remains weight-zero.',
+      inputSchema: issueCodingShadowTicketSetInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => issueCodingShadowTicketSet(input, props.session.email)),
   )
 
   registerTool(

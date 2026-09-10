@@ -5104,7 +5104,13 @@ export const getCodingCatalogInputSchema = z.object({
 // Explicit projections strip unknown fields at every level: no future object
 // coordinates, publication receipts or key material may leak through this read.
 const codingPrivateV2Digest = z.string().regex(/^[0-9a-f]{64}$/)
-const codingPrivateV2RegistrationSchema = z.object({
+const codingOpaqueIdSchema = z
+  .string()
+  .min(1)
+  .max(256)
+  .regex(/^[^\s\x00-\x1f\x7f]+$/)
+
+export const codingPrivateV2RegistrationSchema = z.object({
   schema: z.literal('dittobench-coding-private-v2-registration-v1'),
   coding_contract_version: z.literal(2),
   shadow_only: z.literal(true),
@@ -5147,6 +5153,203 @@ export const codingPrivateV2ReleasesSchema = z.object({
   selectable: z.literal(false),
   weight_eligible: z.literal(false),
 })
+
+export const codingNativeControlStatusSchema = z.object({
+  total_native_operations: z.number().int().nonnegative(),
+  native_operations: z.array(z.object({
+    evaluation_id: z.string().uuid(),
+    attempt_id: z.string().uuid(),
+    release_row_id: z.string().uuid(),
+    registration_sha256: codingPrivateV2Digest,
+    agent_id: z.string().uuid(),
+    validator_hotkey: z.string().regex(SS58_HOTKEY_PATTERN),
+    artifact_sha256: codingPrivateV2Digest,
+    screened_image_sha256: codingPrivateV2Digest,
+    assignment_sha256: codingPrivateV2Digest,
+    state: z.enum([
+      'pending_admission',
+      'admitted',
+      'running',
+      'completed',
+      'failed',
+      'aborted',
+      'expired',
+    ]),
+    expires_at: z.string(),
+    created_at: z.string(),
+    admitted_at: z.string().nullable(),
+    started_at: z.string().nullable(),
+    frozen: z.boolean(),
+    closed_at: z.string().nullable(),
+    close_reason: z.enum(['completed', 'failed', 'aborted']).nullable(),
+    registered_actor: z.string(),
+    registered_reason: z.string(),
+    shadow_only: z.literal(true),
+    weight_eligible: z.literal(false),
+  })).max(100),
+  hosted_control_configured: z.boolean(),
+  contract_v1_reconciliation_enabled: z.boolean(),
+  contract_v1_ticket_set_enabled: z.boolean(),
+  contract_v1_ticket_lease_seconds: z.number().int().min(60).max(7200),
+  native_v2_selectable: z.literal(false),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+})
+
+export const codingPrivateV2PublicationObjectSchema = z.object({
+  object_index: z.number().int().min(0).max(999_999),
+  remote_object_key_sha256: codingPrivateV2Digest,
+  ciphertext_sha256: codingPrivateV2Digest,
+  ciphertext_size_bytes: z.number().int().min(17).max((2 << 20) + 16),
+  status: z.enum(['uploaded', 'reused']),
+})
+
+export const codingPrivateV2PublicationReceiptSchema = z.object({
+  schema: z.literal('dittobench-coding-private-v2-publication-v1'),
+  source_sha: z.string().regex(/^[0-9a-f]{40}$/),
+  checked_at: z.string().min(20).max(40).endsWith('Z'),
+  provider: z.literal('hippius'),
+  probe_receipt_payload_sha256: codingPrivateV2Digest,
+  private_input_authority_sha256: codingPrivateV2Digest,
+  transport_sha256: codingPrivateV2Digest,
+  payload_sha256: codingPrivateV2Digest,
+  catalog_sha256: codingPrivateV2Digest,
+  catalog_merkle_root: codingPrivateV2Digest,
+  wrapping_key_sha256: codingPrivateV2Digest,
+  curator_signing_key_sha256: codingPrivateV2Digest,
+  curator_signature_b64: z.string().regex(/^[A-Za-z0-9+/]{86}==$/),
+  object_count: z.number().int().min(1).max(10_000),
+  objects: z.array(codingPrivateV2PublicationObjectSchema).min(1).max(10_000),
+  ready: z.literal(true),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+  receipt_payload_sha256: codingPrivateV2Digest,
+}).superRefine((value, context) => {
+  if (value.object_count !== value.objects.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['object_count'],
+      message: 'object_count must match objects length',
+    })
+  }
+  value.objects.forEach((item, index) => {
+    if (item.object_index !== index) {
+      context.addIssue({
+        code: 'custom',
+        path: ['objects', index, 'object_index'],
+        message: 'publication objects must be ordered from zero',
+      })
+    }
+  })
+})
+
+export const registerCodingPrivateV2ReleaseInputSchema = z.object({
+  registration: codingPrivateV2RegistrationSchema,
+  publicationReceipt: codingPrivateV2PublicationReceiptSchema,
+  curatorPublicKeyPem: z.string().min(1).max(65_536),
+  reason: auditReasonSchema(8),
+  confirmation: z.string().min(1).max(1024),
+})
+
+// Keep the MCP catalog bounded. The service parses these records through the
+// exact schemas above before any request reaches Platform.
+export const registerCodingPrivateV2ReleaseMcpInputSchema = z.object({
+  registration: z.record(z.string(), z.unknown()),
+  publicationReceipt: z.record(z.string(), z.unknown()),
+  curatorPublicKeyPem: z.string().min(1).max(65_536),
+  reason: auditReasonSchema(8),
+  confirmation: z.string().min(1).max(1024),
+})
+
+export const transitionCodingPrivateV2ReleaseInputSchema = z.object({
+  corpusReleaseId: codingOpaqueIdSchema,
+  expectedRegistrationSha256: codingPrivateV2Digest,
+  reason: auditReasonSchema(8),
+  confirmation: z.string().min(1).max(1024),
+})
+
+export const reconcileCodingShadowInputSchema = z.object({
+  agentId: z.string().uuid(),
+  benchVersion: z.number().int().min(7),
+  codingRunId: codingOpaqueIdSchema,
+  corpusReleaseId: codingOpaqueIdSchema,
+  reason: auditReasonSchema(8),
+  confirmation: z.string().min(1).max(1024),
+})
+
+export const codingShadowReconciliationResponseSchema = z.object({
+  state: z.enum(['waiting_finality', 'issued', 'already_issued']),
+  assignment_row_id: z.string().uuid(),
+  selection_block_number: z.number().int().min(1),
+  run_row_id: z.string().uuid().nullable(),
+  assignment_idempotent: z.boolean(),
+  issuance_idempotent: z.boolean().nullable(),
+  weight_eligible: z.literal(false),
+})
+
+export const issueCodingShadowTicketSetInputSchema = z.object({
+  runRowId: z.string().uuid(),
+  ticketSetId: z.string().uuid(),
+  validatorHotkeys: z
+    .array(z.string().regex(SS58_HOTKEY_PATTERN))
+    .length(3)
+    .refine(
+      (values) => new Set(values).size === 3 && values.join() === [...values].sort().join(),
+      'validator hotkeys must be unique and sorted',
+    ),
+  reason: auditReasonSchema(8),
+  confirmation: z.string().min(1).max(1024),
+})
+
+export const codingShadowTicketSetResponseSchema = z.object({
+  run_row_id: z.string().uuid(),
+  ticket_set_id: z.string().uuid(),
+  tickets: z.array(z.object({
+    ticket_id: z.string().uuid(),
+    validator_hotkey: z.string().regex(SS58_HOTKEY_PATTERN),
+    issued_at: z.string(),
+    deadline: z.string(),
+  })).length(3),
+  idempotent: z.boolean(),
+  weight_eligible: z.literal(false),
+})
+
+export function codingPrivateV2RegistrationConfirmation(
+  corpusReleaseId: string,
+  registrationSha256: string,
+  curatorSigningKeySha256: string,
+) {
+  return `REGISTER SHADOW CODING PRIVATE V2 RELEASE ${corpusReleaseId} ${registrationSha256} ${curatorSigningKeySha256}`
+}
+
+export function codingPrivateV2TransitionConfirmation(
+  action: 'QUARANTINE' | 'RETIRE',
+  corpusReleaseId: string,
+  registrationSha256: string,
+) {
+  return `${action} SHADOW CODING PRIVATE V2 RELEASE ${corpusReleaseId} ${registrationSha256}`
+}
+
+export function codingShadowReconciliationConfirmation(input: {
+  agentId: string
+  benchVersion: number
+  corpusReleaseId: string
+  codingRunId: string
+}) {
+  return `RECONCILE SHADOW CODING ${input.agentId} ${input.benchVersion} ${input.corpusReleaseId} ${input.codingRunId}`
+}
+
+export function codingShadowTicketSetConfirmation(input: {
+  runRowId: string
+  ticketSetId: string
+  validatorHotkeys: Array<string>
+}) {
+  return `ISSUE SHADOW CODING TICKET SET ${input.runRowId} ${input.ticketSetId} ${input.validatorHotkeys.join(',')}`
+}
+
+export function coreQualificationConfirmation(benchVersion: number) {
+  return `APPLY SHADOW CORE QUALIFICATION V${benchVersion}`
+}
 
 export const registerCodingCatalogInputSchema = z.object({
   commitment: codingCatalogCommitmentSchema,
@@ -6554,6 +6757,28 @@ export type BatchRetryValidationResponse = z.infer<
 export type AgentScoringReadiness = z.infer<typeof agentScoringReadinessSchema>
 export type AgentCodingCertificationStatus = z.infer<
   typeof agentCodingCertificationStatusSchema
+>
+export type CodingCatalogControl = z.infer<typeof codingCatalogControlSchema>
+export type CodingPrivateV2Releases = z.infer<typeof codingPrivateV2ReleasesSchema>
+export type CodingNativeControlStatus = z.infer<typeof codingNativeControlStatusSchema>
+export type CodingPrivateV2Registration = z.infer<
+  typeof codingPrivateV2RegistrationSchema
+>
+export type CodingPrivateV2PublicationReceipt = z.infer<
+  typeof codingPrivateV2PublicationReceiptSchema
+>
+export type AgentCodingShadowEvaluationStatus = z.infer<
+  typeof agentCodingShadowEvaluationStatusSchema
+>
+export type CodingShadowReconciliationResponse = z.infer<
+  typeof codingShadowReconciliationResponseSchema
+>
+export type CodingShadowTicketSetResponse = z.infer<
+  typeof codingShadowTicketSetResponseSchema
+>
+export type CoreQualificationPolicy = z.infer<typeof coreQualificationPolicySchema>
+export type CoreQualificationPolicyControl = z.infer<
+  typeof coreQualificationPolicyControlSchema
 >
 export type BenchmarkContractRefreshDetail = z.infer<
   typeof benchmarkContractRefreshDetailSchema

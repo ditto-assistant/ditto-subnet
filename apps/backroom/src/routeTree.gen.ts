@@ -26,6 +26,7 @@ import { Route as AuthenticatedInferenceConcurrencyRouteImport } from './routes/
 import { Route as AuthenticatedCopyReviewRouteImport } from './routes/_authenticated/copy-review'
 import { Route as AuthenticatedContinualRetestsRouteImport } from './routes/_authenticated/continual-retests'
 import { Route as AuthenticatedConfirmationBundlesRouteImport } from './routes/_authenticated/confirmation-bundles'
+import { Route as AuthenticatedCodingControlRouteImport } from './routes/_authenticated/coding-control'
 import { Route as AuthenticatedBurnRouteImport } from './routes/_authenticated/burn'
 import { Route as AuthenticatedBenchmarkRolloutRouteImport } from './routes/_authenticated/benchmark-rollout'
 import { Route as AuthenticatedArtifactReleaseRouteImport } from './routes/_authenticated/artifact-release'
@@ -128,6 +129,12 @@ const AuthenticatedConfirmationBundlesRoute =
     path: '/confirmation-bundles',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedCodingControlRoute =
+  AuthenticatedCodingControlRouteImport.update({
+    id: '/coding-control',
+    path: '/coding-control',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedBurnRoute = AuthenticatedBurnRouteImport.update({
   id: '/burn',
   path: '/burn',
@@ -177,6 +184,7 @@ export interface FileRoutesByFullPath {
   '/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
   '/burn': typeof AuthenticatedBurnRoute
+  '/coding-control': typeof AuthenticatedCodingControlRoute
   '/confirmation-bundles': typeof AuthenticatedConfirmationBundlesRoute
   '/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/copy-review': typeof AuthenticatedCopyReviewRoute
@@ -202,6 +210,7 @@ export interface FileRoutesByTo {
   '/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
   '/burn': typeof AuthenticatedBurnRoute
+  '/coding-control': typeof AuthenticatedCodingControlRoute
   '/confirmation-bundles': typeof AuthenticatedConfirmationBundlesRoute
   '/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/copy-review': typeof AuthenticatedCopyReviewRoute
@@ -228,6 +237,7 @@ export interface FileRoutesById {
   '/_authenticated/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/_authenticated/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
   '/_authenticated/burn': typeof AuthenticatedBurnRoute
+  '/_authenticated/coding-control': typeof AuthenticatedCodingControlRoute
   '/_authenticated/confirmation-bundles': typeof AuthenticatedConfirmationBundlesRoute
   '/_authenticated/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/_authenticated/copy-review': typeof AuthenticatedCopyReviewRoute
@@ -255,6 +265,7 @@ export interface FileRouteTypes {
     | '/artifact-release'
     | '/benchmark-rollout'
     | '/burn'
+    | '/coding-control'
     | '/confirmation-bundles'
     | '/continual-retests'
     | '/copy-review'
@@ -280,6 +291,7 @@ export interface FileRouteTypes {
     | '/artifact-release'
     | '/benchmark-rollout'
     | '/burn'
+    | '/coding-control'
     | '/confirmation-bundles'
     | '/continual-retests'
     | '/copy-review'
@@ -305,6 +317,7 @@ export interface FileRouteTypes {
     | '/_authenticated/artifact-release'
     | '/_authenticated/benchmark-rollout'
     | '/_authenticated/burn'
+    | '/_authenticated/coding-control'
     | '/_authenticated/confirmation-bundles'
     | '/_authenticated/continual-retests'
     | '/_authenticated/copy-review'
@@ -453,6 +466,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedConfirmationBundlesRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/coding-control': {
+      id: '/_authenticated/coding-control'
+      path: '/coding-control'
+      fullPath: '/coding-control'
+      preLoaderRoute: typeof AuthenticatedCodingControlRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/burn': {
       id: '/_authenticated/burn'
       path: '/burn'
@@ -531,6 +551,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedArtifactReleaseRoute: typeof AuthenticatedArtifactReleaseRoute
   AuthenticatedBenchmarkRolloutRoute: typeof AuthenticatedBenchmarkRolloutRoute
   AuthenticatedBurnRoute: typeof AuthenticatedBurnRoute
+  AuthenticatedCodingControlRoute: typeof AuthenticatedCodingControlRoute
   AuthenticatedConfirmationBundlesRoute: typeof AuthenticatedConfirmationBundlesRoute
   AuthenticatedContinualRetestsRoute: typeof AuthenticatedContinualRetestsRoute
   AuthenticatedCopyReviewRoute: typeof AuthenticatedCopyReviewRoute
@@ -550,6 +571,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedArtifactReleaseRoute: AuthenticatedArtifactReleaseRoute,
   AuthenticatedBenchmarkRolloutRoute: AuthenticatedBenchmarkRolloutRoute,
   AuthenticatedBurnRoute: AuthenticatedBurnRoute,
+  AuthenticatedCodingControlRoute: AuthenticatedCodingControlRoute,
   AuthenticatedConfirmationBundlesRoute: AuthenticatedConfirmationBundlesRoute,
   AuthenticatedContinualRetestsRoute: AuthenticatedContinualRetestsRoute,
   AuthenticatedCopyReviewRoute: AuthenticatedCopyReviewRoute,
