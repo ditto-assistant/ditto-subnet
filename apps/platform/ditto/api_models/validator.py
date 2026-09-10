@@ -63,6 +63,7 @@ from ditto.api_models.validator_capabilities import (
     ValidatorStackIdentity,
 )
 from ditto.api_models.validator_updater import ValidatorUpdaterStatus
+from ditto.api_models.validator_weights_fold import WeightsFold
 from ditto_screening_protocol.bench_v9 import (
     V9AuthoritativeToolGate as V9AuthoritativeToolGate,
 )
@@ -676,6 +677,17 @@ class ValidatorHeartbeatRequest(BaseModel):
             description="Signed sanitized managed-updater state under protocol v23.",
         ),
     ] = None
+    weights_fold: Annotated[
+        WeightsFold | None,
+        Field(
+            default=None,
+            description=(
+                "Which pinned ledger this validator last folded and the digest of "
+                "the weight vector it committed, under heartbeat protocol v27. "
+                "Null before the first fold of the process or on older validators."
+            ),
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -686,6 +698,12 @@ class ValidatorHeartbeatRequest(BaseModel):
             description=("sr25519 signature over the canonical v1 heartbeat payload."),
         ),
     ]
+
+    @model_validator(mode="after")
+    def weights_fold_requires_v27(self) -> ValidatorHeartbeatRequest:
+        if self.weights_fold is not None and self.protocol_version < 27:
+            raise ValueError("weights fold requires heartbeat protocol v27")
+        return self
 
     @model_validator(mode="after")
     def validate_protocol_fields(self) -> ValidatorHeartbeatRequest:

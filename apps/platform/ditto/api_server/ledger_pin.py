@@ -155,6 +155,91 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
     )
 
 
+# Revealed weights are u16-quantized (value / sum), so two folds of the same
+# recipients agree to well under a thousandth; a real tail swap moves 3% or more.
+PIN_SHARE_TOLERANCE = 0.002
+
+
+def pin_expected_shares(pin: Any) -> dict[str, float] | None:
+    """The miner shares the pin's fold prescribes, keyed by hotkey.
+
+    Re-runs the Platform fold over the pin's stored entries under the pin's
+    frozen markers -- the same projection the validator fold produces -- and
+    returns each recipient's share of the miner pool. ``None`` when the pin
+    carries no positive pool.
+    """
+    from ditto.api_server.koth import emission_allocation
+
+    entries = [LedgerEntry.model_validate(item) for item in (pin.entries or [])]
+    context = pin.context if isinstance(pin.context, dict) else {}
+    served = (
+        context.get("served", {}) if isinstance(context.get("served"), dict) else {}
+    )
+    fold_entries = koth_entries_from_ledger(entries)
+    tie_pooling = served.get("tie_weighting_mode") == "pool"
+    clamp = served.get("dethrone_band_mode") == "headroom_capped"
+    projection = project_koth(
+        fold_entries,
+        distinct_hotkeys=tie_pooling,
+        ceiling_band_clamp=clamp,
+        incumbent_agent_id=(
+            pin.incumbent_agent_id if served.get("crown_mode") == "incumbent" else None
+        ),
+    )
+    if projection is None:
+        return None
+    allocation = emission_allocation(
+        fold_entries, projection, tie_pooling=tie_pooling, ceiling_band_clamp=clamp
+    )
+    total = sum(allocation.shares)
+    if total <= 0.0:
+        return None
+    shares: dict[str, float] = {}
+    for member, share in zip(allocation.members, allocation.shares, strict=True):
+        shares[member.miner_hotkey] = (
+            shares.get(member.miner_hotkey, 0.0) + share / total
+        )
+    return shares
+
+
+def classify_vector_against_pins(
+    revealed: dict[str, int | float],
+    *,
+    expected_current: dict[str, float] | None,
+    expected_previous: dict[str, float] | None,
+    burn_hotkey: str | None,
+    tolerance: float = PIN_SHARE_TOLERANCE,
+) -> str:
+    """Whether a revealed on-chain vector matches the current or previous pin.
+
+    The burn destination (the subnet owner hotkey) is removed before comparing,
+    because the burn share is operator policy rather than a fold decision and a
+    validator on an older burn setting would otherwise read as diverged on
+    every miner. Remaining shares are renormalized and compared recipient by
+    recipient within ``tolerance``.
+    """
+    miners = {
+        hotkey: float(value)
+        for hotkey, value in revealed.items()
+        if value > 0 and hotkey != burn_hotkey
+    }
+    total = sum(miners.values())
+    if expected_current is None or total <= 0.0:
+        return "unknown"
+    actual = {hotkey: value / total for hotkey, value in miners.items()}
+
+    def matches(expected: dict[str, float]) -> bool:
+        if set(expected) != set(actual):
+            return False
+        return all(abs(actual[h] - expected[h]) <= tolerance for h in expected)
+
+    if matches(expected_current):
+        return "current"
+    if expected_previous is not None and matches(expected_previous):
+        return "previous"
+    return "diverged"
+
+
 class LedgerPinMaterializer:
     """Single-flight producer of the pin for the chain's current epoch.
 
@@ -479,6 +564,7 @@ class LedgerPinLoop:
 
 
 __all__ = [
+    "PIN_SHARE_TOLERANCE",
     "DEFAULT_LEDGER_PIN_LOOP_INTERVAL_SECONDS",
     "DEFAULT_SCHEDULE_TIMEOUT_SECONDS",
     "LedgerPin",
@@ -486,6 +572,8 @@ __all__ = [
     "LedgerPinMaterializer",
     "build_pin_draft",
     "canonical_entries",
+    "classify_vector_against_pins",
+    "pin_expected_shares",
     "ledger_digest",
     "response_from_pin",
 ]

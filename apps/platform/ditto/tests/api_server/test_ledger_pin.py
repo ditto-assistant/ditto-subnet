@@ -19,7 +19,9 @@ from ditto.api_server.ledger_pin import (
     LedgerPinMaterializer,
     build_pin_draft,
     canonical_entries,
+    classify_vector_against_pins,
     ledger_digest,
+    pin_expected_shares,
     response_from_pin,
 )
 from ditto.chain.errors import ChainConnectionError
@@ -313,3 +315,60 @@ class TestMaterializer:
         )
         assert counted == ["error"]
         assert materializer.newest_known is None
+
+
+class TestPinAgreement:
+    def _pin(self, entries: list[LedgerEntry]) -> SimpleNamespace:
+        return SimpleNamespace(
+            entries=canonical_entries(entries),
+            context={"served": {"crown_mode": None}},
+            incumbent_agent_id=None,
+        )
+
+    def test_expected_shares_follow_the_rank_schedule(self) -> None:
+        champion = _entry(_HOTKEY_A, 0.80, first_seen=_NOW - timedelta(days=2))
+        tail = _entry(_HOTKEY_B, 0.79, first_seen=_NOW - timedelta(days=1))
+        shares = pin_expected_shares(self._pin([champion, tail]))
+        assert shares is not None
+        assert shares[_HOTKEY_A] == pytest.approx(0.65 / 0.79)
+        assert shares[_HOTKEY_B] == pytest.approx(0.14 / 0.79)
+        assert pin_expected_shares(self._pin([])) is None
+
+    def test_classifies_current_previous_and_diverged(self) -> None:
+        current = {_HOTKEY_A: 0.65 / 0.79, _HOTKEY_B: 0.14 / 0.79}
+        previous = {_HOTKEY_B: 0.65 / 0.79, _HOTKEY_A: 0.14 / 0.79}
+        burn = "5" + "Z" * 47
+        # u16-quantized on-chain values, with a burn destination to ignore.
+        revealed: dict[str, int | float] = {
+            _HOTKEY_A: 42598,
+            _HOTKEY_B: 9175,
+            burn: 6553,
+        }
+        kwargs: dict[str, Any] = {
+            "expected_current": current,
+            "expected_previous": previous,
+            "burn_hotkey": burn,
+        }
+        assert classify_vector_against_pins(revealed, **kwargs) == "current"
+        assert (
+            classify_vector_against_pins({_HOTKEY_B: 42598, _HOTKEY_A: 9175}, **kwargs)
+            == "previous"
+        )
+        assert (
+            classify_vector_against_pins({_HOTKEY_A: 30000, _HOTKEY_B: 30000}, **kwargs)
+            == "diverged"
+        )
+        assert (
+            classify_vector_against_pins({_HOTKEY_A: 1, "5" + "C" * 47: 1}, **kwargs)
+            == "diverged"
+        )
+        assert classify_vector_against_pins({}, **kwargs) == "unknown"
+        assert (
+            classify_vector_against_pins(
+                revealed,
+                expected_current=None,
+                expected_previous=None,
+                burn_hotkey=burn,
+            )
+            == "unknown"
+        )

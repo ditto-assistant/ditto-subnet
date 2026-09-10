@@ -41,6 +41,19 @@ export const validatorWeightDiagnosticsSchema = z.object({
     validator_trust: z.number().min(0).max(1),
     last_update_block: counter,
     weights: z.array(z.object({ uid: u16, hotkey, value: u16.positive() })).max(65536),
+    // Epoch-pin agreement decoration shared with /public/weights; defaulted so
+    // a platform that predates the pin still parses.
+    fold: z
+      .object({
+        epoch_index: counter.nullable().default(null),
+        ledger_digest: z.string().regex(/^[0-9a-f]{64}$/).nullable().default(null),
+        vector_digest: z.string().regex(/^[0-9a-f]{64}$/),
+        champion_agent_id: z.string().uuid().nullable().default(null),
+        folded_at: counter,
+      })
+      .nullable()
+      .default(null),
+    matches_pin: z.enum(['current', 'previous', 'diverged', 'unknown']).default('unknown'),
   })).max(256),
   consensus: z.array(z.object({ uid: u16, value: u16 })).max(65536),
   pending_commits: z.array(z.object({

@@ -180,6 +180,7 @@ from ditto.api_models.public import (
     PublicNextPinProjection,
     PublicOperationsResponse,
     PublicOrphanedSlot,
+    PublicPinAgreement,
     PublicProvisionalScore,
     PublicRolloutQueueEntry,
     PublicRunModels,
@@ -216,6 +217,7 @@ from ditto.api_models.public import (
     PublicValidatorScore,
     PublicValidatorSlotPolicy,
     PublicValidatorWeightVector,
+    PublicWeightsFold,
     public_validation_failure_code,
 )
 from ditto.api_models.retrieval import AgentResponse, AgentStatusResponse
@@ -420,6 +422,8 @@ __all__ = [
     "PublicKothEmissions",
     "PublicLedgerPin",
     "PublicNextPinProjection",
+    "PublicWeightsFold",
+    "PublicPinAgreement",
     "PublicLedgerEpochsResponse",
     "PublicLedgerEpochRecipient",
     "PublicLedgerEpoch",
