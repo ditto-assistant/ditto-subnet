@@ -32,6 +32,12 @@ type GeneratedAdminHotkeyUnbanResponse =
   PlatformComponents['schemas']['AdminHotkeyUnbanResponse']
 type GeneratedScoredPolicyRescreenView =
   PlatformComponents['schemas']['ScoredPolicyRescreenView']
+type GeneratedCopyCourtSettingsResponse =
+  PlatformComponents['schemas']['AdminCopyCourtSettingsResponse']
+type GeneratedCopyCourtRecommendation =
+  PlatformComponents['schemas']['AdminCopyCourtRecommendation']
+type GeneratedCopyCourtRecommendationList =
+  PlatformComponents['schemas']['AdminCopyCourtRecommendationList']
 
 // Every bench epoch that carries the signed confirmation evidence stack. One
 // definition, derived from the generated contract -- restating it per schema is
@@ -7206,3 +7212,77 @@ export const advanceScoredPolicyRescreenInputSchema = z.object({
 })
 
 export type ScreenerPolicyActivationView = z.infer<typeof screenerPolicyActivationViewSchema>
+
+// Copy-hold triage court: settings control and shadow recommendation feed.
+
+export const copyCourtModeSchema = z.enum(['off', 'shadow', 'enforce'])
+export type CopyCourtMode = z.infer<typeof copyCourtModeSchema>
+
+export const copyCourtSettingsSchema = z.strictObject({
+  mode: copyCourtModeSchema,
+  byte_identical_resubmission_mode: copyCourtModeSchema,
+  repack_resubmission_mode: copyCourtModeSchema,
+  cross_miner_resubmission_mode: copyCourtModeSchema,
+  near_duplicate_mode: copyCourtModeSchema,
+  interval_seconds: z.number().int().min(60).max(3600),
+  max_recommendations_per_tick: z.number().int().min(1).max(50),
+  model: z.string().nullable(),
+  prompt_revision: z.string().nullable(),
+})
+
+export const copyCourtRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  settings: copyCourtSettingsSchema,
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string(),
+  checksum: z.string().regex(/^[0-9a-f]{64}$/),
+})
+
+export const copyCourtControlSchema: z.ZodType<GeneratedCopyCourtSettingsResponse> =
+  z.object({
+    current: copyCourtRevisionSchema.nullable(),
+    history: z.array(copyCourtRevisionSchema),
+  })
+
+export const copyCourtRecommendationSchema: z.ZodType<GeneratedCopyCourtRecommendation> =
+  z.object({
+    recommendation_id: z.string().uuid(),
+    review_id: z.string().uuid(),
+    agent_id: z.string().uuid(),
+    verdict: z.enum(['clear', 'reject', 'escalate']),
+    hold_class: z.enum([
+      'near_duplicate',
+      'rejected_resubmission_byte_identical',
+      'rejected_resubmission_repack',
+      'rejected_resubmission_cross_miner',
+      'unknown',
+    ]),
+    reason: z.string(),
+    citations: z.array(z.unknown()),
+    evidence: z.record(z.string(), z.unknown()),
+    settings_revision: z.number().int().nonnegative(),
+    model: z.string().nullable(),
+    prompt_revision: z.string().nullable(),
+    created_at: z.string(),
+  })
+
+export const copyCourtRecommendationListSchema: z.ZodType<GeneratedCopyCourtRecommendationList> =
+  z.object({
+    items: z.array(copyCourtRecommendationSchema),
+    count: z.number().int().nonnegative(),
+    limit: z.number().int().positive(),
+    offset: z.number().int().nonnegative(),
+  })
+
+export const copyCourtRecommendationsInputSchema = z.object({
+  pendingOnly: z.boolean().default(true),
+  limit: z.number().int().min(1).max(200).default(50),
+  offset: z.number().int().min(0).default(0),
+})
+
+export type CopyCourtControl = z.infer<typeof copyCourtControlSchema>
+export type CopyCourtRecommendationList = z.infer<
+  typeof copyCourtRecommendationListSchema
+>

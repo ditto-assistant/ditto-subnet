@@ -41,6 +41,7 @@ from ditto.api_server.confirmation_profile_installation import (
     installed_confirmation_verification_profiles,
 )
 from ditto.api_server.continual_retest_settings import ContinualRetestSettingsResolver
+from ditto.api_server.copy_hold_court import CopyHoldCourt
 from ditto.api_server.dashboard_seo import (
     CRAWLABLE_PAGE_PATHS,
     DOC_CACHE_CONTROL,
@@ -74,6 +75,7 @@ from ditto.api_server.endpoints import (
     admin_coding_ticket_sets_router,
     admin_confirmation_bundles_router,
     admin_continual_retest_settings_router,
+    admin_copy_court_router,
     admin_copy_review_router,
     admin_core_qualification_router,
     admin_efficiency_bonus_settings_router,
@@ -373,6 +375,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await nonce_janitor.start()
             app.state.validator_nonce_janitor = nonce_janitor
 
+            # Copy-hold triage court. Settings-gated: with no revision (or
+            # mode off) each tick is a cheap no-op, so the loop runs on the
+            # platform role unconditionally like the nonce janitor.
+            copy_court = CopyHoldCourt(session_maker=app.state.session_maker)
+            stack.push_async_callback(copy_court.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await copy_court.start()
+            app.state.copy_hold_court = copy_court
+
             validator_names = app.state.validator_names
             stack.push_async_callback(validator_names.aclose)
             if _process_role() == PLATFORM_ROLE:
@@ -634,6 +645,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_submission_settings_router, prefix="/api/v1")
     app.include_router(admin_submission_deposit_address_router, prefix="/api/v1")
     app.include_router(admin_copy_review_router, prefix="/api/v1")
+    app.include_router(admin_copy_court_router, prefix="/api/v1")
     app.include_router(admin_coding_certifications_router, prefix="/api/v1")
     app.include_router(admin_coding_catalog_router, prefix="/api/v1")
     app.include_router(admin_coding_private_v2_releases_router, prefix="/api/v1")

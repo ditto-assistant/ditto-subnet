@@ -101,7 +101,49 @@ WHERE r.status = 'pending' AND a.status <> 'ath_pending_review';
 
 Reconciling them is deliberately not automated. Winner-take-all makes a
 false-positive hold expensive for an honest miner and a false clear expensive
-for the subnet, so the exit from a hold stays an operator decision.
+for the subnet, so the exit from a hold stays an operator decision. The
+**copy-hold triage court** (below) is the scoped exception: it triages, and
+only an operator resolution changes state.
+
+## The copy-hold triage court
+
+`CopyHoldCourt` (`ditto/api_server/copy_hold_court.py`) is an in-process
+platform loop that periodically triages every pending copy-kind hold and
+records one **non-authoritative recommendation** per (review, settings
+revision) in `ath_copy_court_recommendations`: a verdict (`clear` / `reject` /
+`escalate`), a hold class, the miner-visible reason, citations, and evidence.
+A recommendation never changes `agents.status` or the review's resolution.
+
+Classification is data-verified, not reason-string regex. The court loads the
+matched reference (`AthReview.original_duplicate_of`) and re-checks sha256 /
+normalized-source identity before any mechanical verdict:
+
+- `rejected_resubmission_byte_identical` — the upload's sha256 equals the
+  rejected ancestor's. "Check whether the cited behavior was removed" is false
+  by construction; the recommendation cites the ancestor's own resolved reject
+  reason. Mechanically decidable.
+- `rejected_resubmission_repack` — normalized-source identity. Same rule.
+- `near_duplicate` and `rejected_resubmission_cross_miner` — not mechanically
+  decidable; the court records an `escalate` with the hold evidence. The
+  escalation itself is always recorded whenever the court runs, because it is
+  operator evidence rather than a resolution.
+- Any evidence-gathering failure escalates. Fail closed.
+
+Posture lives in `copy_court_settings_revisions`, written through
+`POST /admin/copy-court/settings` with the confirmation
+`APPLY COPY COURT {MODE}` and an `expected_revision` guard. The master
+`mode` caps every per-class mode; classes start `off` and move
+`off → shadow → enforce` one at a time after shadow-vs-operator calibration.
+In enforce mode the court resolves through the same guarded callable an
+operator uses, with actor `platform:copy-hold-court` and the recommendation
+id cited in the resolution reason so the append-only `AthReviewAction`
+chain shows the court basis. Enforce is never bulk and never touches
+stranded holds.
+
+Reads: `GET /admin/copy-court/recommendations` (Backroom MCP
+`list_copy_court_recommendations`) pages the shadow feed, newest first,
+`pending_only` by default; `GET /admin/copy-court/settings` is the posture
+and its history (Backroom MCP `get_copy_court_settings`).
 
 ## Generation is not a queue filter
 

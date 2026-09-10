@@ -86,6 +86,7 @@ import {
   traceDownloadUrlInputSchema,
   peekInferenceTraceInputSchema,
   applyScreenerReviewSettingsInputSchema,
+  copyCourtRecommendationsInputSchema,
   rotateScreenerPolicyManifestInputSchema,
   setQueuePolicySettingsInputSchema,
   scheduleScreenerPolicyActivationInputSchema,
@@ -200,6 +201,8 @@ import {
   updateScreenerProviderSettings,
   updateScreenerNodeChannelSettings,
   fetchScreenerReviewControl,
+  fetchCopyCourtControl,
+  fetchCopyCourtRecommendations,
   applyScreenerReviewSettings,
   fetchScreenerPolicyManifestControl,
   rotateScreenerPolicyManifest,
@@ -520,6 +523,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Idempotently observe one current score snapshot. No scoring effect.',
   get_screener_review_settings:
     'Read L1/L2/L3 review settings and worker adoption; bypass is in queue policy.',
+  get_copy_court_settings:
+    'Read the copy-hold triage court posture and revision history.',
+  list_copy_court_recommendations:
+    'Page the shadow court\'s non-authoritative verdicts for pending copy holds.',
   apply_screener_review_settings:
     'Write one L1/L2/L3 source-review revision. Confirmation: APPLY SCREENER REVIEW {scope} {MODE}.',
   set_queue_policy_settings:
@@ -1761,6 +1768,29 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerReviewControl()),
+  )
+
+  registerTool(
+    'get_copy_court_settings',
+    {
+      title: 'Get copy court settings',
+      description:
+        'Read the copy-hold triage court posture: master mode and per-class modes (off | shadow | enforce), the tick budget, and the append-only revision history (newest first, opt-in historyLimit). The master mode caps every class; enforce is designed but not yet wired and resolves through resolve_ath_review. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchCopyCourtControl()),
+  )
+
+  registerTool(
+    'list_copy_court_recommendations',
+    {
+      title: 'List copy court recommendations',
+      description:
+        'Page the copy-hold triage court\'s shadow recommendations, newest first: one non-authoritative verdict (clear | reject | escalate) per pending copy-kind ATH hold, with hold_class, the miner-visible reason, citations, and evidence. pendingOnly=true (default) keeps only recommendations whose review is still pending and whose agent is still held; set false to page the full calibration record including holds an operator has since resolved. Recommendations never changed agent state — resolve_ath_review stays the only resolution path. Pair with get_screening_review_queue reviewKind=copy. Requires backroom:read.',
+      inputSchema: copyCourtRecommendationsInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchCopyCourtRecommendations(input)),
   )
 
   registerTool(
