@@ -2,10 +2,10 @@
 
 This directory provides two related surfaces. Local `preview up` remains a
 loopback-only mock control and inference fault proxy; it does **not** launch
-Platform, dashboard, Backroom, a chain, scorer, or validator. Pull requests can
-also receive bounded cloud `stack` and `stack-copy` deployments through the
-trusted controller in `.github/workflows/preview-stack.yml`. Neither surface
-publishes a release or `compat-2`.
+Platform, dashboard, Backroom, a chain, scorer, or validator. A maintainer can
+also **dispatch** a bounded cloud `stack` or `stack-copy` deployment for an open
+pull request through `.github/workflows/preview-stack.yml`; nothing provisions a
+VM automatically. Neither surface publishes a release or `compat-2`.
 
 ## Profiles
 
@@ -15,11 +15,31 @@ publishes a release or `compat-2`.
 | `stack` | Isolated-stack requirements, including one localnet validator |
 | `stack-copy` | `stack` requirements plus a sanitized Postgres snapshot |
 
-Cloud stack previews run on credential-empty ephemeral GCE VMs. Eight atomic
-lease objects are the global admission limit: an update reuses its PR's slot, a
-ninth distinct PR fails closed, and close/TTL reconciliation deletes the VM.
-The controller comments dashboard, Platform, and isolated Backroom URLs only
-after readiness succeeds.
+Cloud stack previews run on credential-empty ephemeral GCE VMs, each currently
+an `e2-standard-8` costing roughly $0.28/hour. Eight atomic lease objects are
+the global admission limit: a re-dispatch reuses the slot its PR already holds,
+a ninth distinct PR fails closed. Reconciliation keeps a preview while its PR is
+open, up to an absolute 24-hour lease cap, and deletes it four hours after the
+PR closes or merges. The controller comments dashboard, Platform, and isolated
+Backroom URLs only after readiness succeeds.
+
+### Dispatching a stack preview
+
+Run **Publish stack preview** from the Actions tab on `main`, or:
+
+```bash
+gh workflow run preview-stack.yml -f pr=<number>                 # provision
+gh workflow run preview-stack.yml -f pr=<number> -f action=retire
+```
+
+`profile` defaults to `auto`, which picks `stack-copy` when the PR touches
+`apps/platform/alembic/` and `stack` otherwise; pass it explicitly to override.
+A push does not refresh a running preview -- dispatch again for a newer commit.
+These optional repository variables on the `preview-stack` environment tune the
+fleet without a code change: `GCP_PREVIEW_MACHINE_TYPE` (default
+`e2-standard-8`), `GCP_PREVIEW_DISK_SIZE` (`100GB`), `PREVIEW_LEASE_TTL_SECONDS`
+(`86400`), and `PREVIEW_CLOSED_GRACE_SECONDS` (`14400`; set `0` to retire the
+moment a PR closes).
 
 Backroom is an authenticated write control plane. It is only part of an
 isolated `stack` plan and must never receive production OAuth, session, MCP, or
@@ -98,13 +118,16 @@ API-reported immutable `pages.dev` deployment URL on the PR. The stable Pages
 branch is `pr-<number>`; each update replaces its branch alias while preserving
 exact-SHA deployment metadata. Fork PRs never enter the publisher.
 
-Same-repository PRs selected as `stack` or `stack-copy` use the narrowly
-allowlisted `pull_request_target` controller. It checks out only the default
-branch, re-reads the current PR head, acquires one of eight slots, then starts
-the exact SHA on a separate VM. PR code never runs on the privileged runner.
-The VM identity has no project roles and RFC1918 egress is denied. Close,
-profile changes, failed readiness, and the 24-hour TTL all tear down the VM and
-release its slot.
+Same-repository PRs get `stack` or `stack-copy` only from a dispatched run of
+the controller. Dispatching requires repository write access; the workflow runs
+on the default branch, refuses any other ref, and no workflow in this repository
+uses `pull_request_target`. The operator supplies only a PR number -- the head
+commit is resolved from the API, so it cannot be pointed at arbitrary code. The
+controller checks out only the default branch, acquires one of eight slots, then
+starts the exact SHA on a separate VM. PR code never runs on the privileged
+runner. The VM identity has no project roles and RFC1918 egress is denied. An
+explicit `action: retire` dispatch, failed readiness, the post-close grace, and
+the 24-hour lease cap all tear down the VM and release its slot.
 
 The preview proxy permits only `GET`/`HEAD` under `/api/v1/public/` and strips
 cookies and authorization. Trusted response headers restrict connections,

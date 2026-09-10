@@ -1,12 +1,30 @@
 name: Publish stack preview
 
-# This is the sole, narrowly reviewed exception to the repository's general
-# pull_request_target ban. GitHub loads it from the default branch. The
-# privileged runner checks out only that default branch and never executes PR
-# code; the exact PR SHA runs later on a credential-empty isolated VM.
+# Manual controller for the bounded SN118 cloud preview fleet. Nothing here runs
+# automatically: an 8-vCPU VM only ever exists because a maintainer asked for
+# one. Dispatching requires repository write access, the protected preview-stack
+# environment pins this workflow to the default branch, and the privileged
+# runner never executes PR code -- the exact PR commit runs later on a
+# credential-empty isolated VM.
 on:
-  pull_request_target:
-    types: [opened, reopened, synchronize, closed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number in this repository
+        required: true
+        type: string
+      action:
+        description: Create a preview, or free the slot this PR holds
+        required: false
+        type: choice
+        default: provision
+        options: [provision, retire]
+      profile:
+        description: auto picks stack-copy when the PR touches alembic, else stack
+        required: false
+        type: choice
+        default: auto
+        options: [auto, stack, stack-copy]
 
 permissions:
   contents: read
@@ -14,20 +32,25 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: stack-preview-${{ github.event.pull_request.number }}
+  group: stack-preview-${{ inputs.pr }}
   cancel-in-progress: false
 
 jobs:
   control:
-    if: github.repository == 'ditto-assistant/ditto-subnet'
+    # The OIDC subject in infra/terraform/stacks/gcp-preview is scoped to this
+    # environment, not to a ref, so a dispatch from a feature branch would run
+    # modified controller code with the cloud identity. The environment's
+    # deployment-branch policy is the binding control; this is its in-repo twin.
+    if: >-
+      github.repository == 'ditto-assistant/ditto-subnet' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: preview-stack
     env:
       GH_TOKEN: ${{ github.token }}
       GITHUB_REPOSITORY: ${{ github.repository }}
-      PREVIEW_PR: ${{ github.event.pull_request.number }}
-      PREVIEW_SHA: ${{ github.event.pull_request.head.sha }}
+      PREVIEW_PR: ${{ inputs.pr }}
       GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT: ${{ vars.GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT }}
       GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
       GCP_PREVIEW_LEASE_BUCKET: ${{ vars.GCP_PREVIEW_LEASE_BUCKET }}
@@ -36,6 +59,13 @@ jobs:
       GCP_PREVIEW_SUBNETWORK: ${{ vars.GCP_PREVIEW_SUBNETWORK }}
       GCP_PREVIEW_RUNTIME_SERVICE_ACCOUNT: ${{ vars.GCP_PREVIEW_RUNTIME_SERVICE_ACCOUNT }}
       GCP_PREVIEW_ZONE: ${{ vars.GCP_PREVIEW_ZONE }}
+      # Optional sizing and lifetime knobs. Every consumer reads them as
+      # ${VAR:-default}, so an unset repository variable arrives as "" and the
+      # built-in default still wins. They must stay out of the activation gate
+      # below for the same reason.
+      GCP_PREVIEW_MACHINE_TYPE: ${{ vars.GCP_PREVIEW_MACHINE_TYPE }}
+      GCP_PREVIEW_DISK_SIZE: ${{ vars.GCP_PREVIEW_DISK_SIZE }}
+      PREVIEW_LEASE_TTL_SECONDS: ${{ vars.PREVIEW_LEASE_TTL_SECONDS }}
     steps:
       - name: Check out trusted controller from the default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -62,7 +92,7 @@ jobs:
           done
           echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
           if [ "$enabled" != true ]; then
-            echo "Stack previews are not activated; skipping this event."
+            echo "Stack previews are not activated; skipping this dispatch."
           fi
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -74,28 +104,55 @@ jobs:
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         if: steps.activation.outputs.enabled == 'true'
 
-      - name: Resolve trusted action and profile
+      - name: Resolve the requested PR, head commit, action, and profile
         id: resolve
         if: steps.activation.outputs.enabled == 'true'
+        env:
+          INPUT_PR: ${{ inputs.pr }}
+          INPUT_ACTION: ${{ inputs.action }}
+          INPUT_PROFILE: ${{ inputs.profile }}
         run: |
           set -euo pipefail
-          action=retire
-          profile=none
-          if [ "${{ github.event.action }}" != closed ] && \
-             [ "${{ github.event.pull_request.head.repo.full_name }}" = "$GITHUB_REPOSITORY" ]; then
-            files="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PREVIEW_PR}/files" --jq '.[].filename')"
+          [[ "$INPUT_PR" =~ ^[1-9][0-9]*$ ]] || { echo "pr must be a positive integer" >&2; exit 2; }
+
+          action="${INPUT_ACTION:-provision}"
+          case "$action" in provision|retire) ;; *) echo "invalid action" >&2; exit 2 ;; esac
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          if [ "$action" = retire ]; then
+            echo "profile=none" >> "$GITHUB_OUTPUT"
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The head commit is read from the API and never accepted from the
+          # operator, so provision.sh's stale-head assertion still means
+          # something rather than comparing an input against itself.
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${INPUT_PR}")"
+          state="$(jq -r .state <<<"$pr_json")"
+          head_repo="$(jq -r .head.repo.full_name <<<"$pr_json")"
+          sha="$(jq -r .head.sha <<<"$pr_json")"
+          [ "$state" = open ] || { echo "PR #${INPUT_PR} is not open" >&2; exit 2; }
+          [ "$head_repo" = "$GITHUB_REPOSITORY" ] || { echo "fork previews are not allowed" >&2; exit 2; }
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "could not resolve an exact head commit" >&2; exit 2; }
+
+          # A maintainer who dispatched this workflow has already decided the PR
+          # deserves a preview, so auto only chooses which profile to run. The
+          # changed-file eligibility filter this replaced existed solely to stop
+          # an automatic trigger from spending money unattended.
+          profile="${INPUT_PROFILE:-auto}"
+          if [ "$profile" = auto ]; then
+            files="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${INPUT_PR}/files" --jq '.[].filename')"
             if printf '%s\n' "$files" | grep -q '^apps/platform/alembic/'; then
-              action=provision
               profile=stack-copy
-            elif printf '%s\n' "$files" | grep -Evq '^(apps/platform/dashboard/|docs/|\.agents/|\.claude/)'; then
-              action=provision
+            else
               profile=stack
             fi
           fi
-          echo "action=$action" >> "$GITHUB_OUTPUT"
+          case "$profile" in stack|stack-copy) ;; *) echo "invalid profile" >&2; exit 2 ;; esac
           echo "profile=$profile" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-      - name: Retire an old or ineligible preview
+      - name: Retire the preview this PR holds
         if: steps.activation.outputs.enabled == 'true' && steps.resolve.outputs.action == 'retire'
         run: preview/cloud/retire.sh
 
@@ -104,6 +161,7 @@ jobs:
         if: steps.activation.outputs.enabled == 'true' && steps.resolve.outputs.action == 'provision'
         env:
           PREVIEW_PROFILE: ${{ steps.resolve.outputs.profile }}
+          PREVIEW_SHA: ${{ steps.resolve.outputs.sha }}
         run: |
           set -euo pipefail
           preview/cloud/provision.sh > "${RUNNER_TEMP}/preview.json"
@@ -116,6 +174,7 @@ jobs:
         if: steps.provision.outcome == 'success'
         env:
           PROFILE: ${{ steps.resolve.outputs.profile }}
+          PREVIEW_SHA: ${{ steps.resolve.outputs.sha }}
           DASHBOARD_URL: ${{ steps.provision.outputs.dashboard_url }}
           PLATFORM_URL: ${{ steps.provision.outputs.platform_url }}
           BACKROOM_URL: ${{ steps.provision.outputs.backroom_url }}
@@ -131,7 +190,7 @@ jobs:
             echo "- Platform API: $PLATFORM_URL"
             echo "- Backroom: $BACKROOM_URL"
             echo
-            echo "This is isolated, disposable PR code. It has no production credentials. The lease expires within 24 hours and is replaced on the next push."
+            echo "This is isolated, disposable PR code. It has no production credentials. It stays up while this PR is open, for at most 24 hours, and is torn down 4 hours after the PR closes. Pushes do not refresh it -- dispatch \"Publish stack preview\" again for a newer commit."
           } > "$body_file"
           jq -n --rawfile body "$body_file" '{body:$body}' > "${RUNNER_TEMP}/comment.json"
           comment_id="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PREVIEW_PR}/comments" \

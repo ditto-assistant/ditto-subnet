@@ -77,22 +77,37 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     assert "inherit" not in publish["secrets"]
 
 
-def test_stack_preview_controller_caps_slots_and_never_runs_pr_code() -> None:
+def test_stack_preview_controller_is_dispatch_only_and_caps_slots() -> None:
     text = (ROOT / ".github/workflows/preview-stack.yml").read_text()
     workflow = yaml.safe_load(text)
     triggers = workflow.get("on", workflow[True])
-    assert triggers["pull_request_target"]["types"] == [
-        "opened",
-        "reopened",
-        "synchronize",
-        "closed",
-    ]
+    # An 8-vCPU VM costs about $0.28/hour and eight slots about $54/day, so a
+    # preview exists only because a maintainer asked for one.
+    assert set(triggers) == {"workflow_dispatch"}
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert set(inputs) == {"pr", "action", "profile"}
+    assert inputs["pr"]["required"] is True
+    assert inputs["action"]["options"] == ["provision", "retire"]
+    assert inputs["action"]["default"] == "provision"
+    assert inputs["profile"]["options"] == ["auto", "stack", "stack-copy"]
+    assert inputs["profile"]["default"] == "auto"
+    assert "sha" not in inputs
+    assert workflow["concurrency"]["group"] == "stack-preview-${{ inputs.pr }}"
+    assert workflow["concurrency"]["cancel-in-progress"] is False
+
     control = workflow["jobs"]["control"]
     assert control["environment"] == "preview-stack"
+    assert "github.ref == 'refs/heads/main'" in control["if"]
     assert control["steps"][0]["with"]["ref"] == (
         "${{ github.event.repository.default_branch }}"
     )
     assert "ref: ${{ github.event.pull_request.head.sha }}" not in text
+
+    # Nothing an operator types reaches a shell word; it all arrives via env.
+    for step in control["steps"]:
+        assert "${{ inputs." not in step.get("run", "")
+        assert "${{ github.event." not in step.get("run", "")
+
     activation = next(
         step
         for step in control["steps"]
@@ -101,8 +116,38 @@ def test_stack_preview_controller_caps_slots_and_never_runs_pr_code() -> None:
     assert "GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT" in activation["run"]
     assert "GCP_PREVIEW_RUNTIME_SERVICE_ACCOUNT" in activation["run"]
     assert "enabled=$enabled" in activation["run"]
+    # The tuning knobs are optional, so gating activation on them would turn
+    # every unconfigured repository off.
+    for name in (
+        "GCP_PREVIEW_MACHINE_TYPE",
+        "GCP_PREVIEW_DISK_SIZE",
+        "PREVIEW_LEASE_TTL_SECONDS",
+    ):
+        assert name in control["env"]
+        assert name not in activation["run"]
+
+    resolve = next(step for step in control["steps"] if step.get("id") == "resolve")
+    assert '[[ "$INPUT_PR" =~ ^[1-9][0-9]*$ ]]' in resolve["run"]
+    assert 'sha="$(jq -r .head.sha <<<"$pr_json")"' in resolve["run"]
+    assert "fork previews are not allowed" in resolve["run"]
+
     provision = (ROOT / "preview/cloud/provision.sh").read_text()
-    assert "for candidate in {0..7}" in provision
+    # Slot selection is two-pass. A single fused loop claims the first free low
+    # slot before it reaches the higher slot this PR already holds, which hands
+    # one PR two VMs; reconcile.sh iterates leases, not instances, so it cannot
+    # see the orphan and it bills for the full TTL.
+    passes = provision.split("for candidate in {0..7}")
+    assert len(passes) == 3
+    assert "--if-generation-match=0" not in passes[1]
+    assert "instances delete" not in passes[1]
+    assert "--if-generation-match=0" in passes[2]
+    # A failed boot surfaces in about a minute rather than after 35 silent ones.
+    assert "get-serial-port-output" in provision
+    startup = (ROOT / "preview/cloud/startup.sh").read_text()
+    assert 'Acquire::ForceIPv4 "true"' in startup
+    assert "for attempt in 1 2 3 4 5" in startup
+    assert "sn118-preview: startup failed" in startup
+    assert "docker.io docker-compose-v2" in startup
     assert "all 8 preview slots are active" in provision
     assert "--if-generation-match=0" in provision
     assert '"$uri" >/dev/null 2>&1' in provision
@@ -312,3 +357,26 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     assert sanitized_upload["overwrite"] is True
     assert "pull-requests: write" in text
     assert "environment: prod" not in text
+
+
+def test_reconcile_enforces_a_capped_two_tier_preview_lifetime() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/preview-reconcile.yml").read_text()
+    )
+    triggers = workflow.get("on", workflow[True])
+    # Dispatch-only provisioning leaves this as the only thing that notices a
+    # PR closing, so it has to tick faster than once an hour.
+    assert triggers["schedule"] == [{"cron": "8,23,38,53 * * * *"}]
+    job = workflow["jobs"]["reconcile"]
+    assert job["environment"] == "preview-stack"
+    assert "github.ref == 'refs/heads/main'" in job["if"]
+    assert "PREVIEW_CLOSED_GRACE_SECONDS" in job["env"]
+
+    script = (ROOT / "preview/cloud/reconcile.sh").read_text()
+    assert "${PREVIEW_CLOSED_GRACE_SECONDS:-14400}" in script
+    assert "closed_epoch + grace_seconds" in script
+    # The absolute lease cap is checked before any grace is granted.
+    assert script.index('"$expires" -lt "$now"') < script.index("grace_seconds ))")
+    # Fail closed: an unreadable or missing PR earns no grace.
+    assert "state=missing" in script
+    assert "'.closed_at // empty'" in script

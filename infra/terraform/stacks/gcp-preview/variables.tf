@@ -36,6 +36,9 @@ variable "snapshot_writer_service_account" {
   default     = "github-actions-platform-deploy@ditto-app-dev.iam.gserviceaccount.com"
 }
 
+# Documentation only: nothing consumes this but outputs.tf. The operative knob
+# is the PREVIEW_LEASE_TTL_SECONDS environment variable on the preview-stack
+# GitHub environment, which provision.sh reads.
 variable "lease_ttl_hours" {
   type    = number
   default = 24
