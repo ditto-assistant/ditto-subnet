@@ -1,0 +1,185 @@
+name: Probe Hippius Coding storage
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type PROBE HIPPIUS CODING STORAGE
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coding-hippius-live-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      inputs.confirmation == 'PROBE HIPPIUS CODING STORAGE'
+    environment: infra-apply
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_TF_APPLY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Run the exact-source protected capability probe
+        shell: bash
+        env:
+          DITTO_CODING_HIPPIUS_ENDPOINT_URL: https://s3.hippius.com
+          DITTO_CODING_HIPPIUS_REGION: decentralized
+          DITTO_CODING_HIPPIUS_PRIVATE_INPUT_BUCKET: ditto-subnet-coding-private-input
+          DITTO_CODING_HIPPIUS_SEALED_EVIDENCE_BUCKET: ditto-subnet-coding-sealed-evidence
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+
+          receipt="$RUNNER_TEMP/hippius-coding-probe.json"
+          profile="$RUNNER_TEMP/hippius-coding-provider-profile.json"
+          metadata="$RUNNER_TEMP/hippius-coding-secret-metadata.tsv"
+          printf 'SECRET\tVERSION\tCREATED_UTC\tSTATE\n' > "$metadata"
+
+          load_secret() {
+            local variable="$1" secret="$2" version_json version created state value
+            version_json="$(
+              gcloud secrets versions list "$secret" \
+                --project=ditto-app-dev \
+                --filter='state=ENABLED' \
+                --sort-by='~createTime' \
+                --limit=1 \
+                --format=json
+            )"
+            read -r version created state < <(
+              python3 - "$version_json" <<'PY'
+          import json
+          import sys
+
+          rows = json.loads(sys.argv[1])
+          if len(rows) != 1:
+              raise SystemExit("one enabled secret version is required")
+          row = rows[0]
+          version = str(row["name"]).rsplit("/", 1)[-1]
+          created = str(row["createTime"])
+          state = str(row["state"])
+          if not version.isdigit() or state != "ENABLED":
+              raise SystemExit("enabled secret version metadata is invalid")
+          print(version, created, state)
+          PY
+            )
+            printf '%s\t%s\t%s\t%s\n' "$secret" "$version" "$created" "$state" >> "$metadata"
+            value="$(
+              gcloud secrets versions access "$version" \
+                --secret="$secret" --project=ditto-app-dev
+            )"
+            test -n "$value"
+            declare -gx "$variable=$value"
+            unset value version_json
+          }
+
+          load_secret DITTO_CODING_HIPPIUS_PRIVATE_INPUT_READER_ACCESS_KEY \
+            platform-coding-catalog-access-key
+          load_secret DITTO_CODING_HIPPIUS_PRIVATE_INPUT_READER_SECRET_KEY \
+            platform-coding-catalog-secret-key
+          load_secret DITTO_CODING_HIPPIUS_PRIVATE_INPUT_CURATOR_ACCESS_KEY \
+            platform-coding-catalog-curator-access-key
+          load_secret DITTO_CODING_HIPPIUS_PRIVATE_INPUT_CURATOR_SECRET_KEY \
+            platform-coding-catalog-curator-secret-key
+          load_secret DITTO_CODING_HIPPIUS_EVIDENCE_MEDIATOR_ACCESS_KEY \
+            platform-coding-hippius-evidence-access-key
+          load_secret DITTO_CODING_HIPPIUS_EVIDENCE_MEDIATOR_SECRET_KEY \
+            platform-coding-hippius-evidence-secret-key
+
+          uv run --project apps/platform --frozen python \
+            apps/platform/scripts/probe_hippius_coding_storage.py \
+            --confirm 'PROBE HIPPIUS CODING STORAGE' --output "$receipt"
+          uv run --project apps/platform --frozen python \
+            apps/platform/scripts/profile_hippius_coding_storage.py \
+            --probe-receipt "$receipt" --output "$profile" \
+            --confirm 'PROFILE HIPPIUS CODING STORAGE'
+
+          python3 - "$receipt" "$profile" <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          receipt_path, profile_path = map(pathlib.Path, sys.argv[1:])
+          receipt = receipt_path.read_bytes()
+          profile = profile_path.read_bytes()
+          secret_names = (
+              "DITTO_CODING_HIPPIUS_PRIVATE_INPUT_READER_ACCESS_KEY",
+              "DITTO_CODING_HIPPIUS_PRIVATE_INPUT_READER_SECRET_KEY",
+              "DITTO_CODING_HIPPIUS_PRIVATE_INPUT_CURATOR_ACCESS_KEY",
+              "DITTO_CODING_HIPPIUS_PRIVATE_INPUT_CURATOR_SECRET_KEY",
+              "DITTO_CODING_HIPPIUS_EVIDENCE_MEDIATOR_ACCESS_KEY",
+              "DITTO_CODING_HIPPIUS_EVIDENCE_MEDIATOR_SECRET_KEY",
+          )
+          forbidden = [os.environ[name].encode() for name in secret_names]
+          forbidden += [
+              os.environ["DITTO_CODING_HIPPIUS_ENDPOINT_URL"].encode(),
+              os.environ["DITTO_CODING_HIPPIUS_PRIVATE_INPUT_BUCKET"].encode(),
+              os.environ["DITTO_CODING_HIPPIUS_SEALED_EVIDENCE_BUCKET"].encode(),
+          ]
+          if any(value in receipt or value in profile for value in forbidden):
+              raise SystemExit("redacted probe output contains forbidden authority")
+          receipt_json = json.loads(receipt)
+          profile_json = json.loads(profile)
+          if receipt_json.get("ready") is not True:
+              raise SystemExit("probe receipt is not ready")
+          if receipt_json.get("weight_eligible") is not False:
+              raise SystemExit("probe receipt changed weight eligibility")
+          if profile_json.get("weight_eligible") is not False:
+              raise SystemExit("provider profile changed weight eligibility")
+          PY
+
+          chmod 0600 "$metadata" "$receipt" "$profile"
+          receipt_sha="$(sha256sum "$receipt" | awk '{print $1}')"
+          profile_sha="$(sha256sum "$profile" | awk '{print $1}')"
+          {
+            echo '### Hippius Coding capability probe'
+            echo
+            echo "- Source: \`$GITHUB_SHA\`"
+            echo "- Receipt file SHA-256: \`$receipt_sha\`"
+            echo "- Provider profile file SHA-256: \`$profile_sha\`"
+            echo '- Result: ready, synthetic-only, weight-ineligible'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          unset \
+            DITTO_CODING_HIPPIUS_PRIVATE_INPUT_READER_ACCESS_KEY \
+            DITTO_CODING_HIPPIUS_PRIVATE_INPUT_READER_SECRET_KEY \
+            DITTO_CODING_HIPPIUS_PRIVATE_INPUT_CURATOR_ACCESS_KEY \
+            DITTO_CODING_HIPPIUS_PRIVATE_INPUT_CURATOR_SECRET_KEY \
+            DITTO_CODING_HIPPIUS_EVIDENCE_MEDIATOR_ACCESS_KEY \
+            DITTO_CODING_HIPPIUS_EVIDENCE_MEDIATOR_SECRET_KEY
+
+      - name: Retain only redacted probe evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hippius-coding-probe-${{ github.sha }}-${{ github.run_id }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/hippius-coding-probe.json
+            ${{ runner.temp }}/hippius-coding-provider-profile.json
+            ${{ runner.temp }}/hippius-coding-secret-metadata.tsv
