@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v0.251.0 (2026-09-10)
+
+### Bug Fixes
+
+- **coding**: Tolerate protected probe credentials
+  ([#1774](https://github.com/ditto-assistant/ditto-subnet/pull/1774),
+  [`ccc925c`](https://github.com/ditto-assistant/ditto-subnet/commit/ccc925ccf8f26b2bb91e1f487ebdc8e2cc1fae60))
+
+- **dashboard**: Keep board avatars on their agent's name line
+  ([#1782](https://github.com/ditto-assistant/ditto-subnet/pull/1782),
+  [`278a380`](https://github.com/ditto-assistant/ditto-subnet/commit/278a38004f170d7c943826fb7d291c55749db438))
+
+- **infra**: Canonicalize native custody receipt
+  ([#1781](https://github.com/ditto-assistant/ditto-subnet/pull/1781),
+  [`ddabc80`](https://github.com/ditto-assistant/ditto-subnet/commit/ddabc804d1c7e35d20b4417d324c773968a74747))
+
+- **infra**: Retain full custody account facts
+  ([#1778](https://github.com/ditto-assistant/ditto-subnet/pull/1778),
+  [`c0ea2a1`](https://github.com/ditto-assistant/ditto-subnet/commit/c0ea2a14f65f230490a142ace2306ed60da2cb4f))
+
+### Features
+
+- **infra**: Bootstrap native coding RSA custody
+  ([#1776](https://github.com/ditto-assistant/ditto-subnet/pull/1776),
+  [`be14c6e`](https://github.com/ditto-assistant/ditto-subnet/commit/be14c6e4b3c333a2e98367bec3a949109506c58c))
+
+
 ## v0.250.0 (2026-09-10)
 
 ### Bug Fixes
