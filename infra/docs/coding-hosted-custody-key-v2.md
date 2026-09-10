@@ -31,9 +31,9 @@ Run from the exact reviewed source only after explicit key-operation approval:
 ansible-playbook -i infra/ansible/inventory/gcp.yml \
   infra/ansible/playbooks/gcp-coding-hosted-custody-key.yml \
   --limit ditto-coding-hosted-v2 \
-  -e coding_hosted_custody_key_enabled=true \
-  -e coding_hosted_custody_source_revision=<merged-source-sha> \
-  -e 'coding_hosted_custody_key_confirmation=BOOTSTRAP NATIVE CODING RSA CUSTODY'
+  -e '{"coding_hosted_custody_key_enabled":true,
+       "coding_hosted_custody_source_revision":"<merged-source-sha>",
+       "coding_hosted_custody_key_confirmation":"BOOTSTRAP NATIVE CODING RSA CUSTODY"}'
 ```
 
 Export only the public PEM and redacted receipt through the custodian's reviewed

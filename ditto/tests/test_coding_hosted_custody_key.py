@@ -58,6 +58,16 @@ def test_partial_state_is_refused_and_receipt_is_written_last() -> None:
     )
 
 
+def test_account_discovery_is_one_complete_passwd_snapshot() -> None:
+    tasks = (ROLE / "tasks/main.yml").read_text()
+    assert "Inspect existing host accounts once" in tasks
+    assert "Refresh all host accounts after custodian creation" in tasks
+    assert tasks.count("database: passwd") == 2
+    assert "Inspect existing worker and custodian accounts" not in tasks
+    assert "getent_passwd.get('ditto-coding-hosted')" in tasks
+    assert "getent_passwd.get('ditto-coding-custody')" in tasks
+
+
 def test_custody_playbook_and_ci_never_enable_the_role() -> None:
     playbook = yaml.safe_load(
         (ROOT / "infra/ansible/playbooks/gcp-coding-hosted-custody-key.yml").read_text()
