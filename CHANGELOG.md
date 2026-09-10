@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.247.0 (2026-09-10)
+
+### Bug Fixes
+
+- **infra**: Default the Hetzner screener fleet to Ditto Inference
+  ([#1764](https://github.com/ditto-assistant/ditto-subnet/pull/1764),
+  [`a58d044`](https://github.com/ditto-assistant/ditto-subnet/commit/a58d044b5b90c6fac9b6238e51f7c514423510d4))
+
+### Features
+
+- **dashboard**: Apply the Ditto brand kit and typography kit
+  ([#1765](https://github.com/ditto-assistant/ditto-subnet/pull/1765),
+  [`0a70c31`](https://github.com/ditto-assistant/ditto-subnet/commit/0a70c314f38ce2c198ebc5bfa547f60772700b84))
+
+
 ## v0.246.1 (2026-09-09)
 
 ### Bug Fixes
