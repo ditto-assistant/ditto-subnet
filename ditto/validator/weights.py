@@ -322,6 +322,7 @@ def compute_weights(
     dethrone_z: float = 0.0,
     tie_pooling: bool = False,
     ceiling_band_clamp: bool = False,
+    incumbent_agent_id: UUID | None = None,
 ) -> dict[str, float]:
     """Return ``{miner_hotkey: weight}`` for the KOTH+ATH mechanism.
 
@@ -386,7 +387,11 @@ def compute_weights(
     # Order-independent of when each agent happened to be scored — only creation
     # order matters.
     champion = _champion(
-        scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+        scored,
+        margin,
+        dethrone_z,
+        ceiling_band_clamp=ceiling_band_clamp,
+        incumbent_agent_id=incumbent_agent_id,
     )
     if len(rank_shares) != tail_size + 1:
         raise ValueError("rank_shares must contain champion plus tail_size entries")
@@ -544,11 +549,18 @@ def select_champion(
     margin: float,
     dethrone_z: float = 0.0,
     ceiling_band_clamp: bool = False,
+    incumbent_agent_id: UUID | None = None,
 ) -> LedgerEntry | None:
     """Return the deterministic KOTH champion, or ``None`` for an empty pool."""
     scored = [e for e in filter_eligible(entries) if _effective_composite(e) > 0.0]
     return (
-        _champion(scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp)
+        _champion(
+            scored,
+            margin,
+            dethrone_z,
+            ceiling_band_clamp=ceiling_band_clamp,
+            incumbent_agent_id=incumbent_agent_id,
+        )
         if scored
         else None
     )
@@ -1214,6 +1226,7 @@ def _champion(
     dethrone_z: float = 0.0,
     *,
     ceiling_band_clamp: bool = False,
+    incumbent_agent_id: UUID | None = None,
 ) -> LedgerEntry:
     """The KOTH champion of a positive-composite entry set: fold in first-seen
     order, dethroning only when a later entry clears the indifference band
@@ -1232,8 +1245,25 @@ def _champion(
     0.001 official lead is not a dethrone.
     """
     ordered = sorted(entries, key=lambda e: (e.first_seen, e.agent_id))
-    champ = ordered[0]
-    for e in ordered[1:]:
+    # Crown incumbency (``LedgerResponse.crown_mode == "incumbent"``): the
+    # previous epoch pin's champion, resolved into this pool by the platform,
+    # opens the walk instead of the earliest lineage. Without it a senior
+    # claimant sitting inside the band retakes the crown on every read as the
+    # continual mean wobbles by a score quantum -- and clips every validator
+    # that read the other side of the flip. Every other entry still has to
+    # clear the band over the running champion, in the same first-seen order,
+    # so ``first_seen`` keeps breaking ties among non-incumbents. An incumbent
+    # that is not in the pool (bootstrap, lineage gone) is simply absent and
+    # the classic walk runs; the platform never serves the id without the
+    # marker, and the worker never passes it without the marker.
+    incumbent = next((e for e in entries if e.agent_id == incumbent_agent_id), None)
+    if incumbent is not None:
+        champ = incumbent
+        challengers = [e for e in ordered if e.agent_id != incumbent.agent_id]
+    else:
+        champ = ordered[0]
+        challengers = ordered[1:]
+    for e in challengers:
         if _beats(e, champ, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp):
             champ = e
     return champ
@@ -1282,6 +1312,7 @@ def agents_needing_rescore(
     tail_size: int,
     dethrone_z: float = 0.0,
     ceiling_band_clamp: bool = False,
+    incumbent_agent_id: UUID | None = None,
 ) -> list[LedgerEntry]:
     """The champion + participation-tail entries scored under an **older**
     bench_version than ``current_version`` — they must be re-evaluated before the
@@ -1298,7 +1329,11 @@ def agents_needing_rescore(
     if not scored:
         return []
     champion = _champion(
-        scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+        scored,
+        margin,
+        dethrone_z,
+        ceiling_band_clamp=ceiling_band_clamp,
+        incumbent_agent_id=incumbent_agent_id,
     )
     rewarded = [champion, *_tail(scored, champion, tail_size)]
     return [e for e in rewarded if _entry_version(e) < current_version]
@@ -1374,6 +1409,7 @@ def contested_confirmation_set(
     margin: float,
     dethrone_z: float = 0.0,
     ceiling_band_clamp: bool = False,
+    incumbent_agent_id: UUID | None = None,
 ) -> list[LedgerEntry]:
     """The champion plus the current-version challengers whose crown decision
     sits INSIDE the unpaired indifference band (the seed-luck zone) and cannot
@@ -1413,7 +1449,11 @@ def contested_confirmation_set(
     if len(scored) < 2:
         return []
     champion = _champion(
-        scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+        scored,
+        margin,
+        dethrone_z,
+        ceiling_band_clamp=ceiling_band_clamp,
+        incumbent_agent_id=incumbent_agent_id,
     )
     if _entry_version(champion) != current_version:
         return []

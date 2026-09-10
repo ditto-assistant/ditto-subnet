@@ -111,6 +111,7 @@ from ditto.api_models import (
     PublicMetricDoc,
     PublicModelUse,
     PublicNameHandle,
+    PublicNextPinProjection,
     PublicOperationsResponse,
     PublicOrphanedSlot,
     PublicProvisionalScore,
@@ -156,7 +157,12 @@ from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
 from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import ConfirmationProgress
-from ditto.api_models.continual_retest_settings import ContinualRetestSettings
+from ditto.api_models.continual_retest_settings import (
+    CROWN_INCUMBENT_PROTOCOL as _CROWN_INCUMBENT_PROTOCOL,
+)
+from ditto.api_models.continual_retest_settings import (
+    ContinualRetestSettings,
+)
 from ditto.api_models.model_use import ModelUseVerdict
 from ditto.api_models.public import (
     BenchServiceability,
@@ -194,6 +200,7 @@ from ditto.api_server.bench import CURRENT_BENCH_VERSION, is_bench_version_retir
 from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
+    crown_incumbent_is_active,
     tie_weighting_is_active,
 )
 from ditto.api_server.datapipeline import DataPipelineError
@@ -2369,8 +2376,15 @@ def _public_koth_emissions(
     tie_weighting_active: bool = False,
     ceiling_band_clamp: bool = False,
     ledger_pin: PublicLedgerPin | None = None,
+    crown_incumbent_active: bool = False,
 ) -> PublicKothEmissions | None:
-    """Project the caller's finalized, registration-eligible score pool."""
+    """Project the caller's finalized, registration-eligible score pool.
+
+    With incumbency active the live fold opens from the current pin's champion,
+    exactly as the next pin will, so ``champion_agent_id`` is also the crown the
+    fleet will fold at the next boundary and ``next_pin_projection`` says
+    whether that moves the 65% slot.
+    """
     quorum_values = quorum_by_agent or {}
     bonus_values = efficiency_bonuses or {}
     factor_values = efficiency_factors or {}
@@ -2450,10 +2464,16 @@ def _public_koth_emissions(
             )
         )
 
+    incumbent_id = (
+        ledger_pin.champion_agent_id
+        if crown_incumbent_active and ledger_pin is not None
+        else None
+    )
     projection = project_koth(
         fold_entries,
         distinct_hotkeys=tie_weighting_active,
         ceiling_band_clamp=ceiling_band_clamp,
+        incumbent_agent_id=incumbent_id,
     )
     if projection is None:
         return None
@@ -2546,6 +2566,43 @@ def _public_koth_emissions(
         ),
         recipients=recipients,
         ledger_pin=ledger_pin,
+        crown_incumbent_active=crown_incumbent_active,
+        crown_incumbent_required_protocol=_CROWN_INCUMBENT_PROTOCOL,
+        crown_incumbent_agent_id=(
+            incumbent_id
+            if any(entry.agent_id == incumbent_id for entry in fold_entries)
+            else None
+        ),
+        next_pin_projection=(
+            PublicNextPinProjection(
+                champion_agent_id=projection.champion.agent_id,
+                champion_miner_hotkey=projection.champion.miner_hotkey,
+                incumbent_agent_id=ledger_pin.champion_agent_id,
+                changes_crown=(
+                    projection.champion.agent_id != ledger_pin.champion_agent_id
+                ),
+                decision=(
+                    PublicDethroneDecision(
+                        challenger_lead=defense.challenger_lead,
+                        required_lead=defense.required_lead,
+                        margin_lead=defense.margin_lead,
+                        statistical_lead=defense.statistical_lead,
+                        method=defense.method,
+                        dethrones=defense.dethrones,
+                        required_score=defense.required_score,
+                        score_ceiling=defense.score_ceiling,
+                        ceiling_deadlocked=defense.ceiling_deadlocked,
+                        paired_standard_error=defense.paired_standard_error,
+                        shared_seed_count=defense.shared_seed_count,
+                        seed_differences=defense.seed_differences,
+                    )
+                    if defense is not None
+                    else None
+                ),
+            )
+            if ledger_pin is not None
+            else None
+        ),
     )
 
 
@@ -2888,6 +2945,16 @@ async def build_public_leaderboard(
             now=now,
             freshness=_VALIDATOR_STALE_WINDOW,
         )
+    )
+    crown_incumbent_fleet_ready = await live_validator_fleet_supports_protocol(
+        session,
+        minimum_protocol=_CROWN_INCUMBENT_PROTOCOL,
+        bench_version=active_version,
+        now=now,
+        freshness=_VALIDATOR_STALE_WINDOW,
+    )
+    crown_incumbent_active = bench_version is None and crown_incumbent_is_active(
+        continual_settings, fleet_protocol_ready=crown_incumbent_fleet_ready
     )
     efficiency_view: EfficiencyBoardView | None = None
     if finalized_rows:
@@ -3455,6 +3522,7 @@ async def build_public_leaderboard(
                 ledger_pin=await _current_ledger_pin(
                     request, session, continual_settings
                 ),
+                crown_incumbent_active=crown_incumbent_active,
             )
         ),
         efficiency=_efficiency_status(efficiency_view),

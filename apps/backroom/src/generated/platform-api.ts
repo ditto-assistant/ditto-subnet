@@ -19081,6 +19081,23 @@ export interface components {
             champion_miner_hotkey: string;
             /** Champion Share */
             champion_share: number;
+            /**
+             * Crown Incumbent Active
+             * @description Whether the displayed fold defends the crown from the previous pin's champion (crown_mode incumbent) instead of re-deriving it from the earliest lineage on every read.
+             * @default false
+             */
+            crown_incumbent_active: boolean;
+            /**
+             * Crown Incumbent Agent Id
+             * @description The incumbent the live fold defended, when incumbency is active and the current pin named one. Null otherwise.
+             */
+            crown_incumbent_agent_id?: string | null;
+            /**
+             * Crown Incumbent Required Protocol
+             * @description Minimum fleet heartbeat protocol for crown incumbency.
+             * @default 27
+             */
+            crown_incumbent_required_protocol: number;
             /** Dethrone Z */
             dethrone_z: number;
             /** @description The epoch-pinned ledger validators are folding right now. The board above is live and can move within an epoch; weights only move at the next pin, so this is the snapshot any on-chain vector should be read against. Null while pinning is switched off or before the first pin was taken. */
@@ -19090,6 +19107,8 @@ export interface components {
              * @description Base composite-point lead before versioned high-score band scaling.
              */
             margin: number;
+            /** @description What the next epoch pin would record if it were taken from the live board right now: the fold over the current rows with the current pin's champion as incumbent. Read changes_crown to know whether weights will move at the next pin. */
+            next_pin_projection?: components["schemas"]["PublicNextPinProjection"] | null;
             /** Rank Shares */
             rank_shares: number[];
             /**
@@ -19909,6 +19928,31 @@ export interface components {
             status: "reserved" | "disputed" | "pending";
             /** Stem */
             stem: string;
+        };
+        /**
+         * PublicNextPinProjection
+         * @description The crown the next epoch pin would record from the live board.
+         */
+        PublicNextPinProjection: {
+            /**
+             * Champion Agent Id
+             * Format: uuid
+             */
+            champion_agent_id: string;
+            /** Champion Miner Hotkey */
+            champion_miner_hotkey: string;
+            /**
+             * Changes Crown
+             * @description True when the projected champion differs from the current pin's champion, i.e. the 65% slot moves at the next pin.
+             */
+            changes_crown: boolean;
+            /** @description The dethrone decision for the strongest rival against the projected champion; null when there is no rival. */
+            decision?: components["schemas"]["PublicDethroneDecision"] | null;
+            /**
+             * Incumbent Agent Id
+             * @description The current pin's champion the projection defended from.
+             */
+            incumbent_agent_id?: string | null;
         };
         /**
          * PublicOperationsResponse

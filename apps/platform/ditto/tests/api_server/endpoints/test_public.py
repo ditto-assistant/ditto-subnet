@@ -1756,6 +1756,59 @@ class TestPublicLedgerEpochs:
         assert pin["crown_mode"] is None
 
 
+class TestPublicNextPinProjection:
+    async def test_projection_names_the_crown_the_next_pin_will_record(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        holder = await _seed_k3(
+            session_maker, miner=_MINER_A, composites=[0.8, 0.8, 0.8]
+        )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+        app.state.session_maker = session_maker
+        await _seed_pin(
+            session_maker,
+            epoch_index=25_028,
+            champion=(UUID(str(holder)), _MINER_A),
+            tail=(uuid4(), _MINER_B),
+        )
+        body = (await client.get("/api/v1/public/leaderboard")).json()
+        emissions = body["emissions"]
+        assert emissions["crown_incumbent_active"] is False
+        assert emissions["crown_incumbent_required_protocol"] == 27
+        assert emissions["crown_incumbent_agent_id"] is None
+        projection = emissions["next_pin_projection"]
+        assert projection["champion_agent_id"] == str(holder)
+        assert projection["incumbent_agent_id"] == str(holder)
+        assert projection["changes_crown"] is False
+
+    async def test_projection_flags_a_crown_move_against_the_pin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        live = await _seed_k3(session_maker, miner=_MINER_A, composites=[0.8, 0.8, 0.8])
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+        app.state.session_maker = session_maker
+        departed = uuid4()
+        await _seed_pin(
+            session_maker,
+            epoch_index=25_028,
+            champion=(departed, _MINER_B),
+            tail=(UUID(str(live)), _MINER_A),
+        )
+        body = (await client.get("/api/v1/public/leaderboard")).json()
+        projection = body["emissions"]["next_pin_projection"]
+        assert projection["champion_agent_id"] == str(live)
+        assert projection["incumbent_agent_id"] == str(departed)
+        assert projection["changes_crown"] is True
+
+
 class TestPublicValidationFailureCode:
     def test_exact_agent_and_infra_codes(self) -> None:
         assert (
