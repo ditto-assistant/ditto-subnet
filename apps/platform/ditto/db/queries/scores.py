@@ -339,6 +339,17 @@ class LedgerRow:
     profile) or a full run that scored 0.000; both are surfaced for transparency
     but never ranked or folded into weights, matching the validator's two-gate
     fold — see :data:`MIN_ELIGIBLE_CASES`."""
+    shadow: bool = False
+    """Whether the owner submitted this in *shadow mode* (``agents.shadow``).
+
+    A shadow submission is graded and screened normally and keeps its composite,
+    but is forced ``eligible = False`` regardless of how it scores, so the
+    submitter still sees real feedback while the run never ranks, never earns
+    weight, and never counts toward a bench-version quorum. This lets a caller
+    tell ``eligible = False`` because *shadow* apart from ``eligible = False``
+    because sub-floor (a partial profile or a 0.000 composite). Populated by
+    :func:`list_provisional_ledger`; the finalized ledger demotes shadow rows via
+    ``eligible`` and leaves this at its default."""
     details: dict | None = None
     """The winning run's opaque telemetry blob (``scores.details``): models used,
     bench_version, dataset_sha256, per-category means, token spend, and the
@@ -1377,6 +1388,11 @@ async def ranked_quorum_agent_ids(
         .join(Agent, Agent.agent_id == per_version.c.agent_id)
         .where(
             Agent.status == AgentStatus.SCORED,
+            # Shadow submissions are graded but never authoritative: they must
+            # not count toward a bench-version quorum any more than they rank or
+            # earn weight. Excluding them here keeps the authority switch and the
+            # ledger's eligibility in agreement.
+            Agent.shadow.is_(False),
             per_version.c.cnt >= SCORING_QUORUM,
             per_version.c.eligible,
             or_(
@@ -1888,7 +1904,11 @@ async def list_eligible_ledger(
             agent_best.c.composite,
             agent_best.c.ranking_composite,
             agent_best.c.n,
-            agent_best.c.eligible,
+            # A shadow submission is graded and keeps its composite, but is
+            # forced ineligible: score_order sorts ``eligible`` first, so this
+            # demotes it below every ranked peer and drops it from the weight
+            # fold and the crown lineage without discarding its feedback.
+            and_(agent_best.c.eligible, Agent.shadow.is_(False)).label("eligible"),
             agent_best.c.validator_hotkey,
             agent_best.c.bench_version,
             agent_best.c.cnt,
@@ -2779,7 +2799,10 @@ async def list_provisional_ledger(
                     bench_version=representative.bench_version,
                     median_ms=median_ms,
                     n=n,
-                    eligible=n >= MIN_ELIGIBLE_CASES and composite > 0.0,
+                    eligible=(
+                        n >= MIN_ELIGIBLE_CASES and composite > 0.0 and not agent.shadow
+                    ),
+                    shadow=agent.shadow,
                     details=None,
                 ),
                 len(scores),

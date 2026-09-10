@@ -1141,6 +1141,21 @@ class PublicLeaderboardEntry(BaseModel):
             ),
         ),
     ]
+    shadow: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Whether the owner submitted this run in shadow mode. A shadow "
+                "run is graded and screened normally and keeps its composite, "
+                "but is forced ineligible regardless of how it scores, so it is "
+                "never ranked, never earns weight, and never counts toward a "
+                "quorum. Lets a viewer tell 'eligible=false because shadow' "
+                "(deliberate, still improving) apart from 'eligible=false "
+                "because sub-floor' (a partial profile or a 0.000 composite)."
+            ),
+        ),
+    ]
     bench_version: Annotated[
         int | None, Field(default=None, description="Benchmark scoring version.")
     ]

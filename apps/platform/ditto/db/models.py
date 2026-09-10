@@ -256,6 +256,25 @@ class Agent(Base):
     )
     """When the platform streamed and verified the complete archive bytes."""
 
+    shadow: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    )
+    """Whether this submission runs in *shadow mode*.
+
+    A shadow submission is scored and screened exactly like any other -- the
+    miner gets a real composite and per-category feedback -- but it is never
+    ranked on the public leaderboard, never folded into validator weights, and
+    never counts toward a bench-version authority quorum. Shadow is the
+    per-submission dial that lets an unproven or opt-in router be graded without
+    displacing proven work; the ranking machinery reads it as ``eligible =
+    False`` (see :func:`ditto.db.queries.scores._is_ranked` consumers). This is
+    distinct from the contract-dimension ``weight_eligible`` flag (a property of
+    an entire competition dimension) and from the per-run ``eligible`` computed
+    from case count and composite: shadow is an owner-set property of one
+    submission that *forces* ``eligible`` low regardless of how well it scores."""
+
     status: Mapped[AgentStatus] = mapped_column(
         Enum(
             AgentStatus,

@@ -19367,6 +19367,12 @@ export interface components {
              * @description The agent's finalized median on the settled (active) benchmark version. Only populated in authoritative mode while a rollout is collecting the next version; null when there is no open rollout or the agent never reached quorum on the active version. This is the comparable baseline the dashboard ranks by mid-rollout, even for agents whose headline composite already flipped to the desired version.
              */
             settled_composite?: number | null;
+            /**
+             * Shadow
+             * @description Whether the owner submitted this run in shadow mode. A shadow run is graded and screened normally and keeps its composite, but is forced ineligible regardless of how it scores, so it is never ranked, never earns weight, and never counts toward a quorum. Lets a viewer tell 'eligible=false because shadow' (deliberate, still improving) apart from 'eligible=false because sub-floor' (a partial profile or a 0.000 composite).
+             * @default false
+             */
+            shadow: boolean;
             /** @description Compact finalized children sharing this entry's owner slot. Only identity/version and canonical score are included; full family evidence is loaded from the agent detail endpoint. */
             submission_family?: components["schemas"]["PublicLeaderboardFamily"] | null;
             /** @description Benchmark-v5 efficiency adjustment. */
