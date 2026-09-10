@@ -13,6 +13,7 @@
 // not through disclosure.
 import type { JSX } from "solid-js";
 
+import { CrownHistory } from "../components/board/CrownHistory";
 import { LeaderboardBlock } from "../components/board/LeaderboardBlock";
 import { leaderboardStore } from "../components/board/leaderboard-data";
 import { ChampionBox } from "../components/overview/ChampionBox";
@@ -22,12 +23,23 @@ import { EpochClock } from "../components/shell/EpochClock";
 import type { ResourceState } from "../data/useEndpoint";
 import { weightsResource } from "../data/weights";
 import type { OperationsPayload } from "../types/fleet";
-import type { ChainEpoch } from "../types/leaderboard";
+import type { ChainEpoch, PinAgreementSummary } from "../types/leaderboard";
 
 function latestEpoch(resource: ResourceState<{ epoch?: ChainEpoch | null }>): ChainEpoch | null {
   if (resource.error()) return null;
   try {
     return resource.data()?.epoch ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function latestPin(
+  resource: ResourceState<{ pin_agreement?: PinAgreementSummary | null }>,
+): PinAgreementSummary | null {
+  if (resource.error()) return null;
+  try {
+    return resource.data()?.pin_agreement ?? null;
   } catch {
     return null;
   }
@@ -54,7 +66,11 @@ export function OverviewPage(
             widths (shell.css), so the reading appears once. On the phone the
             sticky top bar keeps its compact clock and this one steps aside. */}
         <div class="overview-clock">
-          <EpochClock epoch={epoch} id="overview-epoch-clock" />
+          <EpochClock
+            epoch={epoch}
+            pin={() => (weights ? latestPin(weights) : null)}
+            id="overview-epoch-clock"
+          />
         </div>
       </div>
       <div class="overview-split">
@@ -73,6 +89,7 @@ export function OverviewPage(
           aria-label="Leaderboard column, scrolls separately from the timeline rail"
         >
           <LeaderboardBlock mode="overview" />
+          <CrownHistory mode="overview" />
         </div>
       </div>
     </section>

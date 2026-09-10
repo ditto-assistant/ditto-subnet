@@ -193,6 +193,8 @@ export interface FleetEntry {
   assigned_agent_id?: string | null;
   assigned_agent_name?: string | null;
   reported_agent_id?: string | null;
+  /** Protocol 27: the pinned ledger this validator last folded. */
+  weights_fold?: import("./leaderboard").WeightsFold | null;
   active_agent_id?: string | null;
   active_agent_name?: string | null;
   screening_progress?: ScreeningProgress | null;

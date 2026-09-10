@@ -1664,3 +1664,96 @@ tbody tr.champion:focus-visible .miner-avatar {
     padding: 28px 16px;
   }
 }
+
+/* ── Epoch pin: which frozen ledger the fleet folds, and the crown history ── */
+.emissions-next-pin {
+  display: none;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.emissions-next-pin.show {
+  display: block;
+}
+.emissions-next-pin b {
+  color: var(--text);
+}
+.emission-badge.pin {
+  background: color-mix(in oklab, var(--tool) 18%, transparent);
+  color: var(--tool);
+}
+.pin-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+.pin-badge.current,
+.pin-badge.held {
+  color: var(--good, #2f9e6a);
+  border-color: color-mix(in oklab, var(--good, #2f9e6a) 45%, transparent);
+}
+.pin-badge.previous {
+  color: var(--warn);
+  border-color: color-mix(in oklab, var(--warn) 45%, transparent);
+}
+.pin-badge.diverged,
+.pin-badge.changed {
+  color: var(--bad, #d64545);
+  border-color: color-mix(in oklab, var(--bad, #d64545) 45%, transparent);
+}
+.chain-vector-pin {
+  margin-left: 6px;
+}
+.chain-weights-agreement {
+  margin-left: 8px;
+  color: var(--text-dim);
+}
+.crown-history {
+  margin-top: 18px;
+}
+.crown-history-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-bottom: 8px;
+}
+.crown-history-head h3 {
+  margin: 0;
+  font-size: 13px;
+}
+.crown-history-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.crown-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.crown-history-table th,
+.crown-history-table td {
+  padding: 5px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.crown-history-table th {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.crown-history-table tr.crown-changed td {
+  background: color-mix(in oklab, var(--bad, #d64545) 7%, transparent);
+}
+.crown-history-table td.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}

@@ -71,6 +71,77 @@ export interface EmissionsFold {
   allocation_mode?: "ranked" | "score_ceiling_pool";
   score_ceiling_pool_size?: number;
   recipients?: EmissionRecipient[];
+  /** Protocol 27: whether the fold defends the crown from the previous pin's
+   * champion instead of re-deriving it from the earliest lineage each read. */
+  crown_incumbent_active?: boolean;
+  crown_incumbent_required_protocol?: number;
+  crown_incumbent_agent_id?: string | null;
+  /** The crown the next epoch pin would record from the live board. */
+  next_pin_projection?: NextPinProjection | null;
+  /** The epoch-pinned ledger validators are folding right now. */
+  ledger_pin?: LedgerPin | null;
+}
+
+/** `emissions.ledger_pin`: identity of the frozen ledger the fleet folds this
+ * chain epoch. The board above it is live and can move within the epoch;
+ * weights only move at the next pin. */
+export interface LedgerPin {
+  mode?: "epoch" | "live";
+  epoch_index?: number;
+  last_epoch_block?: number;
+  pinned_block?: number;
+  pinned_at?: string;
+  next_epoch_block?: number | null;
+  bench_version?: number;
+  entry_count?: number;
+  ledger_digest?: string;
+  champion_agent_id?: string | null;
+  incumbent_agent_id?: string | null;
+  crown_mode?: "incumbent" | null;
+}
+
+export interface NextPinProjection {
+  champion_agent_id?: string;
+  champion_miner_hotkey?: string;
+  incumbent_agent_id?: string | null;
+  changes_crown?: boolean;
+  decision?: RawLeaderDecision | null;
+}
+
+// ── Pinned ledger history (/public/ledger-epochs) ────────────
+
+export interface LedgerEpochActor {
+  agent_id: string;
+  miner_hotkey: string;
+  agent_name?: string | null;
+  agent_version?: number | null;
+}
+
+export interface LedgerEpochRecipient extends LedgerEpochActor {
+  role: "champion" | "joint_champion" | "tail";
+  share_of_miner_pool: number;
+}
+
+export interface LedgerEpoch {
+  epoch_index: number;
+  last_epoch_block?: number;
+  pinned_block?: number;
+  pinned_at?: string;
+  bench_version?: number;
+  entry_count?: number;
+  ledger_digest?: string;
+  crown_mode?: "incumbent" | null;
+  champion?: LedgerEpochActor | null;
+  incumbent?: LedgerEpochActor | null;
+  crown_changed?: boolean;
+  recipients?: LedgerEpochRecipient[];
+}
+
+export interface LedgerEpochsPayload {
+  generated_at?: string;
+  mode?: "epoch" | "live";
+  count?: number;
+  epochs?: LedgerEpoch[];
 }
 
 export interface PerCategoryScore {
@@ -355,10 +426,33 @@ export interface ChainWeight {
   uid: number;
 }
 
+/** Whether a revealed vector matches the fold the current pin prescribes. */
+export type PinAgreement = "current" | "previous" | "diverged" | "unknown";
+
+/** What a validator reported folding on its latest signed heartbeat. */
+export interface WeightsFold {
+  epoch_index?: number | null;
+  ledger_digest?: string | null;
+  vector_digest?: string;
+  champion_agent_id?: string | null;
+  folded_at?: number;
+}
+
 export interface ChainWeightVector {
   validator_uid?: number;
   validator_hotkey?: string;
   weights?: ChainWeight[];
+  fold?: WeightsFold | null;
+  matches_pin?: PinAgreement;
+}
+
+/** `/public/weights` `pin_agreement`: how many revealed vectors match the
+ * current pin's fold. Null until a pin exists. */
+export interface PinAgreementSummary {
+  epoch_index: number;
+  previous_epoch_index?: number | null;
+  matching: number;
+  total: number;
 }
 
 /** /public/weights `epoch` — the subnet's position in its tempo cycle.
@@ -391,6 +485,7 @@ export interface ChainWeightsSnapshot {
   vectors?: ChainWeightVector[];
   owner_hotkey?: string | null;
   block?: number;
+  pin_agreement?: PinAgreementSummary | null;
   /** Absent when the hyperparameter reads failed; the matrix is the endpoint's
    * contract and this decorates it, so its absence hides only the countdown. */
   epoch?: ChainEpoch | null;
