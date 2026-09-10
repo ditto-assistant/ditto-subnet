@@ -111,6 +111,18 @@ main-only sanitizer workflow. Applying `infra/terraform/stacks/gcp-preview`
 and configuring the protected `preview-stack` and `prod` environments are
 separate activation steps.
 
+`.github/workflows/preview-base-bake.yml` bakes the `sn118-preview-base` GCE
+image family nightly so a preview boot skips apt and hits a warm Docker cache.
+It runs on the default branch under its own main-only `preview-bake`
+environment, and its one throwaway VM has no service account and no scopes, so
+the credential-empty property of the preview subnet holds for the bake too. The
+bake VM runs the same `preview/cloud/startup.sh` a preview does, so the image
+cannot drift from what a preview expects. Previews use it only when
+`GCP_PREVIEW_IMAGE_FAMILY`/`GCP_PREVIEW_IMAGE_PROJECT` are set; unset means
+stock Ubuntu. A baked image sets a floor on `GCP_PREVIEW_DISK_SIZE` equal to the
+bake disk, because a custom image's `diskSizeGb` is inherited and a smaller
+`--boot-disk-size` is a hard error.
+
 ## Invariants
 
 - Engine and control server accept only loopback chain endpoints and binds

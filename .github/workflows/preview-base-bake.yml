@@ -1,0 +1,107 @@
+name: Bake preview base image
+
+# Rebuilds the sn118-preview-base GCE image family. Every stack preview boots
+# from it, so this is the one place where the toolchain install and the expensive
+# Docker layers are paid for -- once a night on a throwaway VM instead of on
+# every dispatched preview.
+#
+# Nightly rather than weekly: a release commit rewrites version in the root
+# pyproject.toml and uv.lock (10 of the last 50 commits did), which invalidates
+# the validator and platform dependency layers even when the resolved dependency
+# set is byte-identical. A week-old image would spend most of its life missing
+# the layer that costs the most to rebuild.
+on:
+  schedule:
+    # 08:20 UTC, off the hour because GitHub delays crons scheduled at :00.
+    - cron: "20 8 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: preview-base-bake
+  cancel-in-progress: false
+
+jobs:
+  bake:
+    # Same reasoning as the stack controller: the OIDC subject is scoped to this
+    # environment rather than to a ref, so a dispatch from a feature branch would
+    # run modified bake code with an identity that can create images and VMs. The
+    # preview-bake environment's deployment-branch policy is the binding control;
+    # this is its in-repo twin.
+    if: >-
+      github.repository == 'ditto-assistant/ditto-subnet' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # bake-image.sh gives the guest 60 minutes to finish, then captures and
+    # prunes. This bounds the whole job including a stuck gcloud call.
+    timeout-minutes: 90
+    environment: preview-bake
+    env:
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      PREVIEW_BAKE_SHA: ${{ github.sha }}
+      GCP_PREVIEW_BAKE_SERVICE_ACCOUNT: ${{ vars.GCP_PREVIEW_BAKE_SERVICE_ACCOUNT }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_PREVIEW_NETWORK: ${{ vars.GCP_PREVIEW_NETWORK }}
+      GCP_PREVIEW_SUBNETWORK: ${{ vars.GCP_PREVIEW_SUBNETWORK }}
+      GCP_PREVIEW_ZONE: ${{ vars.GCP_PREVIEW_ZONE }}
+      # Optional knobs, read as ${VAR:-default} by bake-image.sh, so an unset
+      # repository variable arrives as "" and the built-in default still wins.
+      # They must stay out of the activation gate below for the same reason.
+      GCP_PREVIEW_IMAGE_FAMILY: ${{ vars.GCP_PREVIEW_IMAGE_FAMILY }}
+      PREVIEW_BAKE_DISK_SIZE: ${{ vars.PREVIEW_BAKE_DISK_SIZE }}
+      PREVIEW_BAKE_MACHINE_TYPE: ${{ vars.PREVIEW_BAKE_MACHINE_TYPE }}
+      PREVIEW_BAKE_KEEP_IMAGES: ${{ vars.PREVIEW_BAKE_KEEP_IMAGES }}
+    steps:
+      - name: Check out trusted controller from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Check whether the preview base bake is activated
+        id: activation
+        run: |
+          enabled=true
+          for name in \
+            GCP_PREVIEW_BAKE_SERVICE_ACCOUNT \
+            GCP_WORKLOAD_IDENTITY_PROVIDER \
+            GCP_PREVIEW_NETWORK \
+            GCP_PREVIEW_SUBNETWORK \
+            GCP_PREVIEW_ZONE; do
+            if [ -z "${!name}" ]; then
+              enabled=false
+            fi
+          done
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          if [ "$enabled" != true ]; then
+            echo "The preview base bake is not activated; skipping this run."
+          fi
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: steps.activation.outputs.enabled == 'true'
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_PREVIEW_BAKE_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        if: steps.activation.outputs.enabled == 'true'
+
+      - name: Bake the image from the default-branch commit
+        id: bake
+        if: steps.activation.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          preview/cloud/bake-image.sh > "${RUNNER_TEMP}/bake.json"
+          jq -e '.image != ""' "${RUNNER_TEMP}/bake.json" >/dev/null
+          {
+            echo "### Preview base image"
+            echo
+            echo "- Image: \`$(jq -r .image "${RUNNER_TEMP}/bake.json")\`"
+            echo "- Family: \`$(jq -r .family "${RUNNER_TEMP}/bake.json")\`"
+            echo "- Commit: \`$(jq -r .sha "${RUNNER_TEMP}/bake.json")\`"
+            echo
+            echo "Set the repository variable \`GCP_PREVIEW_IMAGE_FAMILY\` to this family (and \`GCP_PREVIEW_IMAGE_PROJECT\` to the preview project) for stack previews to boot from it."
+          } >> "$GITHUB_STEP_SUMMARY"

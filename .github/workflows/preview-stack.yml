@@ -66,6 +66,14 @@ jobs:
       GCP_PREVIEW_MACHINE_TYPE: ${{ vars.GCP_PREVIEW_MACHINE_TYPE }}
       GCP_PREVIEW_DISK_SIZE: ${{ vars.GCP_PREVIEW_DISK_SIZE }}
       PREVIEW_LEASE_TTL_SECONDS: ${{ vars.PREVIEW_LEASE_TTL_SECONDS }}
+      # Point these at the family produced by preview-base-bake.yml to boot from
+      # the pre-baked image. Unset means stock Ubuntu, which still works -- the
+      # only difference is that the boot pays for apt and a cold Docker cache.
+      # Note that a baked image sets a floor on GCP_PREVIEW_DISK_SIZE equal to
+      # the bake disk (32GB by default); a smaller value is rejected outright by
+      # instances create.
+      GCP_PREVIEW_IMAGE_FAMILY: ${{ vars.GCP_PREVIEW_IMAGE_FAMILY }}
+      GCP_PREVIEW_IMAGE_PROJECT: ${{ vars.GCP_PREVIEW_IMAGE_PROJECT }}
     steps:
       - name: Check out trusted controller from the default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

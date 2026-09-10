@@ -122,6 +122,8 @@ def test_stack_preview_controller_is_dispatch_only_and_caps_slots() -> None:
         "GCP_PREVIEW_MACHINE_TYPE",
         "GCP_PREVIEW_DISK_SIZE",
         "PREVIEW_LEASE_TTL_SECONDS",
+        "GCP_PREVIEW_IMAGE_FAMILY",
+        "GCP_PREVIEW_IMAGE_PROJECT",
     ):
         assert name in control["env"]
         assert name not in activation["run"]
@@ -148,6 +150,10 @@ def test_stack_preview_controller_is_dispatch_only_and_caps_slots() -> None:
     assert "for attempt in 1 2 3 4 5" in startup
     assert "sn118-preview: startup failed" in startup
     assert "docker.io docker-compose-v2" in startup
+    # A stock-Ubuntu boot must still take the apt path; the guard only skips it
+    # on a baked image where the toolchain is already installed.
+    assert "preview_toolchain_present" in startup
+    assert "if preview_toolchain_present; then" in startup
     assert "all 8 preview slots are active" in provision
     assert "--if-generation-match=0" in provision
     assert '"$uri" >/dev/null 2>&1' in provision
@@ -168,6 +174,91 @@ def test_stack_preview_controller_is_dispatch_only_and_caps_slots() -> None:
     assert '--env-file "$env_file"' in backroom_entrypoint
     assert "DITTO_ADMIN_API_TOKEN=%s" in backroom_entrypoint
     assert "SESSION_SECRET=%s" in backroom_entrypoint
+
+
+def test_preview_base_bake_is_scheduled_credential_empty_and_prunes() -> None:
+    text = (ROOT / ".github/workflows/preview-base-bake.yml").read_text()
+    workflow = yaml.safe_load(text)
+    triggers = workflow.get("on", workflow[True])
+    # Nightly, because a release commit rewrites the root pyproject/uv.lock and
+    # invalidates the dependency layer that costs the most to rebuild.
+    assert triggers["schedule"] == [{"cron": "20 8 * * *"}]
+    assert set(triggers) == {"schedule", "workflow_dispatch"}
+    assert "pull_request" not in triggers
+    assert workflow["concurrency"]["group"] == "preview-base-bake"
+    assert workflow["concurrency"]["cancel-in-progress"] is False
+    assert workflow["permissions"] == {"contents": "read", "id-token": "write"}
+
+    bake = workflow["jobs"]["bake"]
+    # A separate environment from preview-stack, so the bake identity is
+    # unreachable from a preview dispatch. Both must stay pinned to main: the
+    # OIDC subject is environment-scoped, not ref-scoped.
+    assert bake["environment"] == "preview-bake"
+    assert "github.ref == 'refs/heads/main'" in bake["if"]
+    assert bake["steps"][0]["with"]["ref"] == (
+        "${{ github.event.repository.default_branch }}"
+    )
+    assert bake["steps"][0]["with"]["persist-credentials"] is False
+    assert bake["env"]["PREVIEW_BAKE_SHA"] == "${{ github.sha }}"
+    for step in bake["steps"]:
+        assert "${{ inputs." not in step.get("run", "")
+        assert "${{ github.event." not in step.get("run", "")
+
+    activation = next(step for step in bake["steps"] if step.get("id") == "activation")
+    assert "GCP_PREVIEW_BAKE_SERVICE_ACCOUNT" in activation["run"]
+    assert "enabled=$enabled" in activation["run"]
+    for name in (
+        "PREVIEW_BAKE_DISK_SIZE",
+        "PREVIEW_BAKE_MACHINE_TYPE",
+        "PREVIEW_BAKE_KEEP_IMAGES",
+        "GCP_PREVIEW_IMAGE_FAMILY",
+    ):
+        assert name in bake["env"]
+        assert name not in activation["run"]
+
+    controller = (ROOT / "preview/cloud/bake-image.sh").read_text()
+    # The bake VM runs default-branch build code with no identity at all, which
+    # is what keeps the preview subnet's credential-empty property intact and
+    # means this identity needs no actAs grant.
+    assert "--no-service-account" in controller
+    assert "--no-scopes" in controller
+    assert "--service-account" not in controller
+    # Same sentinel provision.sh watches for, so a broken build fails fast.
+    assert "sn118-preview: bake complete" in controller
+    assert "sn118-preview: startup failed" in controller
+    assert "get-serial-port-output" in controller
+    # An 8-vCPU VM must not survive the run, on any exit path.
+    assert "trap cleanup EXIT" in controller
+    assert "instances delete" in controller
+    assert "instances stop" in controller
+    # Shielded VM needs UEFI_COMPATIBLE, and guest OS features are not inherited
+    # from the source disk's image.
+    assert "UEFI_COMPATIBLE" in controller
+    assert "--family " in controller
+    assert "${PREVIEW_BAKE_KEEP_IMAGES:-3}" in controller
+    assert "images delete" in controller
+    # The bake disk is the floor on every preview's --boot-disk-size.
+    assert "${PREVIEW_BAKE_DISK_SIZE:-32GB}" in controller
+    # The prune deletes every image in the family past the retention count, so
+    # the family name cannot be able to name a public one.
+    assert "image family must be sn118-*" in controller
+    assert "--no-standard-images" in controller
+
+    guest = (ROOT / "preview/cloud/bake.sh").read_text()
+    assert "sn118-preview: bake complete" in guest
+    assert "sn118-preview: startup failed" in guest
+    # Warm the pulled images and the built layers, and start nothing.
+    assert "compose pull --quiet postgres minio minio-init gateway" in guest
+    assert "compose build" in guest
+    assert "compose up" not in guest
+    # startup.sh reaches this only through the bake metadata key.
+    startup = (ROOT / "preview/cloud/startup.sh").read_text()
+    assert "preview-bake-sha" in startup
+    assert "exec preview/cloud/bake.sh" in startup
+    assert "preview-bake-sha" in controller
+    # A baked image already carries the default-branch tree, so the PR tarball
+    # must not be unpacked on top of it.
+    assert "rm -rf /opt/sn118-preview" in startup
 
 
 def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
