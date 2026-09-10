@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.253.1 (2026-09-10)
+
+### Bug Fixes
+
+- **dashboard**: Clamp submission evidence and anchor rows on the miner
+  ([#1780](https://github.com/ditto-assistant/ditto-subnet/pull/1780),
+  [`2e33064`](https://github.com/ditto-assistant/ditto-subnet/commit/2e330644c77d4194f1cf106cef960592664af1c1))
+
+
 ## v0.253.0 (2026-09-10)
 
 ### Features
