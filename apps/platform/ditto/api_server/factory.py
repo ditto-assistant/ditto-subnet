@@ -136,6 +136,7 @@ from ditto.api_server.inference_concurrency_settings import (
     InferenceConcurrencySettingsResolver,
 )
 from ditto.api_server.inference_routing import ProviderRouteRefresher
+from ditto.api_server.ledger_pin import LedgerPinLoop, LedgerPinMaterializer
 from ditto.api_server.middleware import (
     AuthPassThroughMiddleware,
     PublicCacheMiddleware,
@@ -373,6 +374,20 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await nonce_janitor.start()
             app.state.validator_nonce_janitor = nonce_janitor
 
+            # The epoch pin must land at the chain boundary even when no
+            # validator is reading; the request path pins on demand as well and
+            # the table's unique key makes the race harmless. Singleton for the
+            # same reason as the janitor: one loop per deployment is enough.
+            ledger_pin_loop = LedgerPinLoop(
+                app_state=app.state,
+                session_maker=app.state.session_maker,
+                materializer=app.state.ledger_pin_materializer,
+            )
+            stack.push_async_callback(ledger_pin_loop.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await ledger_pin_loop.start()
+            app.state.ledger_pin_loop = ledger_pin_loop
+
             validator_names = app.state.validator_names
             stack.push_async_callback(validator_names.aclose)
             if _process_role() == PLATFORM_ROLE:
@@ -530,6 +545,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
         ttl_seconds=_efficiency_settings_ttl_seconds(),
     )
     app.state.efficiency_materializer = EfficiencyStateMaterializer()
+    # Epoch-pinned validator ledger: one immutable fold input per chain epoch.
+    app.state.ledger_pin_materializer = LedgerPinMaterializer()
     # Operator-owned share of miner emission routed to the owner burn hotkey.
     # Served on the scoring ledger, so a change reaches the fleet on its next
     # poll instead of on a validator release.

@@ -1222,6 +1222,15 @@ const checkCohortCeiling = (
 const continualRetestSettingsBaseSchema = z.object({
   aggregate_mode: z.enum(['disabled', 'fleet_ready', 'enabled']),
   tie_weighting_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
+  // Serving change only: one frozen ledger per chain epoch so every validator
+  // folds identical bytes. Like wave_membership, the read default mirrors the
+  // platform's shipped default (`epoch`); a build old enough to omit the field
+  // is the time-based read, which CONTINUAL_RETEST_EXTENDED_FIELDS carries as
+  // the `live` legacy value, and `field_support` tells the two apart.
+  ledger_pin_mode: z.enum(['live', 'epoch']).default('epoch'),
+  // Fold change behind fleet protocol 27: defend the crown from the served
+  // incumbent instead of re-deriving it from the earliest lineage every read.
+  crown_incumbent_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
   idle_retests_enabled: z.boolean(),
   rollout_standdown: z
     .enum(['off', 'capable_validators', 'all'])
@@ -1275,6 +1284,8 @@ export const continualRetestSettingsSchema =
 export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSchema
   .extend({
     tie_weighting_mode: z.enum(['disabled', 'fleet_ready']),
+    ledger_pin_mode: z.enum(['live', 'epoch']),
+    crown_incumbent_mode: z.enum(['disabled', 'fleet_ready']),
     wave_membership: z.enum(['strict', 'participants', 'per_agent']),
     retest_cohort_size: z.number().int().min(EMISSION_SET_SIZE).max(MAX_RETEST_COHORT_SIZE),
     retest_eligibility_mode: z.enum(['fixed', 'statistical']),
@@ -1298,6 +1309,52 @@ export const continualRetestSettingsRevisionSchema = z.object({
   checksum: z.string().regex(/^[0-9a-f]{64}$/),
 })
 
+export const ledgerPinStatusSchema = z.object({
+  epoch_index: z.number().int().nonnegative(),
+  last_epoch_block: z.number().int().nonnegative(),
+  pinned_block: z.number().int().nonnegative(),
+  pinned_at: z.string(),
+  bench_version: z.number().int().positive(),
+  ledger_digest: z.string().regex(/^[0-9a-f]{64}$/),
+  entry_count: z.number().int().nonnegative(),
+  champion_agent_id: z.string().uuid().nullable().default(null),
+  incumbent_agent_id: z.string().uuid().nullable().default(null),
+})
+
+const ledgerActorSchema = z.object({
+  agent_id: z.string().uuid(),
+  miner_hotkey: z.string().min(1).max(64),
+  agent_name: z.string().nullable().default(null),
+  agent_version: z.number().int().positive().nullable().default(null),
+})
+
+export const ledgerEpochSnapshotsSchema = z.object({
+  generated_at: z.string(),
+  mode: z.enum(['epoch', 'live']),
+  count: z.number().int().nonnegative(),
+  epochs: z.array(
+    z.object({
+      epoch_index: z.number().int().nonnegative(),
+      last_epoch_block: z.number().int().nonnegative(),
+      pinned_block: z.number().int().nonnegative(),
+      pinned_at: z.string(),
+      bench_version: z.number().int().positive(),
+      entry_count: z.number().int().nonnegative(),
+      ledger_digest: z.string().regex(/^[0-9a-f]{64}$/),
+      crown_mode: z.literal('incumbent').nullable().default(null),
+      champion: ledgerActorSchema.nullable().default(null),
+      incumbent: ledgerActorSchema.nullable().default(null),
+      crown_changed: z.boolean().default(false),
+      recipients: z.array(
+        ledgerActorSchema.extend({
+          role: z.enum(['champion', 'joint_champion', 'tail']),
+          share_of_miner_pool: z.number().positive().max(1),
+        }),
+      ),
+    }),
+  ),
+})
+
 export const effectiveContinualRetestSettingsSchema = z.object({
   revision: z.number().int().nonnegative(),
   scope: z.string(),
@@ -1308,6 +1365,10 @@ export const effectiveContinualRetestSettingsSchema = z.object({
   aggregate_active: z.boolean(),
   tie_weighting_fleet_ready: z.boolean().default(false),
   tie_weighting_active: z.boolean().default(false),
+  crown_incumbent_fleet_ready: z.boolean().default(false),
+  crown_incumbent_active: z.boolean().default(false),
+  crown_incumbent_required_protocol: z.number().int().positive().default(27),
+  ledger_pin: ledgerPinStatusSchema.nullable().default(null),
   max_age_seconds: z.number().nonnegative(),
   open_rollout_desired_version: z.number().int().positive().nullable().default(null),
   rollout_standdown_active: z.boolean().default(false),
@@ -1369,6 +1430,21 @@ export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExte
     label: 'a tie-aware weight policy',
     legacyValue: () => 'disabled',
     legacyBehaviour: () => 'fixed KOTH rank shares remain in effect',
+  },
+  {
+    field: 'ledger_pin_mode',
+    label: 'an epoch-pinned ledger mode',
+    // A build without the field serves the time-based read on every poll.
+    legacyValue: () => 'live',
+    legacyBehaviour: () =>
+      'validators keep folding a live time-based ledger read, so a ledger change can split the fleet',
+  },
+  {
+    field: 'crown_incumbent_mode',
+    label: 'a crown incumbency policy',
+    legacyValue: () => 'disabled',
+    legacyBehaviour: () =>
+      'the fold re-derives the champion from the earliest lineage on every read',
   },
   {
     field: 'retest_cohort_size',

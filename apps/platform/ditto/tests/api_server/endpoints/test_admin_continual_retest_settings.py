@@ -79,6 +79,8 @@ async def test_defaults_are_safe_and_revision_is_audited(
     assert initial.json()["effective"]["settings"] == {
         "aggregate_mode": "fleet_ready",
         "tie_weighting_mode": "disabled",
+        "ledger_pin_mode": "epoch",
+        "crown_incumbent_mode": "disabled",
         "idle_retests_enabled": False,
         "rollout_standdown": "capable_validators",
         "retest_cohort_size": 5,
@@ -476,3 +478,31 @@ async def test_rollout_standdown_modes_are_explicit() -> None:
         )
         is None
     )
+
+
+async def test_stored_revisions_predating_the_epoch_pin_still_load() -> None:
+    """A revision written before the pin and incumbency fields exists resolves to
+    the shipped pin default and the historical fold, exactly like a fresh board."""
+    from ditto.api_server.continual_retest_settings import (
+        crown_incumbent_is_active,
+        settings_from_row,
+    )
+
+    class _Row:
+        revision = 6
+        settings = {
+            "aggregate_mode": "enabled",
+            "tie_weighting_mode": "fleet_ready",
+            "idle_retests_enabled": True,
+            "rollout_standdown": "all",
+            "retest_cohort_size": 25,
+        }
+
+    resolved = settings_from_row(_Row())  # type: ignore[arg-type]
+    assert resolved.ledger_pin_mode == "epoch"
+    assert resolved.crown_incumbent_mode == "disabled"
+    # Policy alone never activates the fold change; fleet readiness is required.
+    assert crown_incumbent_is_active(resolved, fleet_protocol_ready=True) is False
+    enabled = resolved.model_copy(update={"crown_incumbent_mode": "fleet_ready"})
+    assert crown_incumbent_is_active(enabled, fleet_protocol_ready=False) is False
+    assert crown_incumbent_is_active(enabled, fleet_protocol_ready=True) is True

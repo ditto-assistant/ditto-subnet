@@ -3575,6 +3575,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/ledger-epochs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ledger Epochs
+         * @description Per-epoch history of the pinned ledger and the crown it produced.
+         *
+         *     Newest first. Each row is one immutable pin: the fold input every validator
+         *     received for that chain epoch, the champion the fold derived from it under
+         *     its frozen markers, the incumbent it was handed, and the recipient shares.
+         *     ``crown_changed`` compares consecutive pins, so a quiet column across
+         *     retest waves is the stability the pin exists to produce. Live mode still
+         *     lists historical pins but reports ``mode: live``.
+         */
+        get: operations["ledger_epochs_api_v1_public_ledger_epochs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/miners/{hotkey}/avatar": {
         parameters: {
             query?: never;
@@ -14179,10 +14206,22 @@ export interface components {
              */
             aggregate_mode: "disabled" | "fleet_ready" | "enabled";
             /**
+             * Crown Incumbent Mode
+             * @default disabled
+             * @enum {string}
+             */
+            crown_incumbent_mode: "disabled" | "fleet_ready";
+            /**
              * Idle Retests Enabled
              * @default false
              */
             idle_retests_enabled: boolean;
+            /**
+             * Ledger Pin Mode
+             * @default epoch
+             * @enum {string}
+             */
+            ledger_pin_mode: "live" | "epoch";
             /**
              * Retest Cohort Max Size
              * @default 25
@@ -14552,6 +14591,21 @@ export interface components {
             aggregate_active: boolean;
             /** Checksum */
             checksum: string;
+            /**
+             * Crown Incumbent Active
+             * @default false
+             */
+            crown_incumbent_active: boolean;
+            /**
+             * Crown Incumbent Fleet Ready
+             * @default false
+             */
+            crown_incumbent_fleet_ready: boolean;
+            /**
+             * Crown Incumbent Required Protocol
+             * @default 27
+             */
+            crown_incumbent_required_protocol: number;
             /** Eligible Agent Count */
             eligible_agent_count?: number | null;
             /**
@@ -14561,6 +14615,7 @@ export interface components {
             emission_set_size: number;
             /** Fleet Protocol Ready */
             fleet_protocol_ready: boolean;
+            ledger_pin?: components["schemas"]["LedgerPinStatus"] | null;
             /** Max Age Seconds */
             max_age_seconds: number;
             /**
@@ -15937,6 +15992,33 @@ export interface components {
             validator_hotkey: string;
         };
         /**
+         * LedgerPinStatus
+         * @description Identity of the epoch-pinned ledger currently served to validators.
+         */
+        LedgerPinStatus: {
+            /** Bench Version */
+            bench_version: number;
+            /** Champion Agent Id */
+            champion_agent_id?: string | null;
+            /** Entry Count */
+            entry_count: number;
+            /** Epoch Index */
+            epoch_index: number;
+            /** Incumbent Agent Id */
+            incumbent_agent_id?: string | null;
+            /** Last Epoch Block */
+            last_epoch_block: number;
+            /** Ledger Digest */
+            ledger_digest: string;
+            /**
+             * Pinned At
+             * Format: date-time
+             */
+            pinned_at: string;
+            /** Pinned Block */
+            pinned_block: number;
+        };
+        /**
          * LedgerResponse
          * @description Returned by ``GET /scoring/scores``.
          *
@@ -15998,6 +16080,16 @@ export interface components {
              */
             count: number;
             /**
+             * Crown Incumbent Agent Id
+             * @description The incumbent the fold defends when crown_mode is incumbent; always one of entries. Absent whenever crown_mode is absent.
+             */
+            crown_incumbent_agent_id?: string | null;
+            /**
+             * Crown Mode
+             * @description Consensus activation marker for crown incumbency. When set to incumbent, the fold starts its champion walk from crown_incumbent_agent_id (the previous epoch's champion, resolved through its owner family) and moves the crown only when a challenger clears the dethrone band over it. Absent keeps the historical earliest-lineage walk, in which a senior claimant inside the band retakes the crown on every read.
+             */
+            crown_mode?: "incumbent" | null;
+            /**
              * Dethrone Band Mode
              * @description Consensus activation marker for the ceiling-aware dethrone band. When set to headroom_capped, the KOTH indifference band is capped at a fixed share of the score the challenger can still gain, so a near-perfect incumbent can never require more than the benchmark can deliver. Absent keeps the uncapped decayed band.
              */
@@ -16008,10 +16100,30 @@ export interface components {
              */
             entries: components["schemas"]["LedgerEntry"][];
             /**
+             * Epoch Index
+             * @description Chain SubnetEpochIndex this ledger was pinned for. Present only when the platform served an epoch-pinned ledger: every validator reading during that epoch receives byte-identical entries and markers, so a ledger change lands for the whole fleet at the next pin instead of splitting it on who read first. Absent on a live (unpinned) read.
+             */
+            epoch_index?: number | null;
+            /**
              * Generated At
              * @description When these entries were read from the DB (UTC). On a served last-known-good snapshot this is the age of the cached read, not 'now'.
              */
             generated_at?: string | null;
+            /**
+             * Ledger Digest
+             * @description SHA-256 over the canonical JSON of entries plus the served fold markers. Two validators folding the same pin hold the same digest; it is what a validator echoes back so the platform can show which snapshot each weight vector came from.
+             */
+            ledger_digest?: string | null;
+            /**
+             * Pinned At
+             * @description When the pin was taken (UTC); equals generated_at on a pin.
+             */
+            pinned_at?: string | null;
+            /**
+             * Pinned Block
+             * @description Head block the pin's epoch schedule was read at.
+             */
+            pinned_block?: number | null;
             /**
              * Stale
              * @description True when the live DB read failed and this is a served last-known-good snapshot. A fold may still use it (the ledger is durable and slow-moving) but should treat it as advisory.
@@ -18971,6 +19083,8 @@ export interface components {
             champion_share: number;
             /** Dethrone Z */
             dethrone_z: number;
+            /** @description The epoch-pinned ledger validators are folding right now. The board above is live and can move within an epoch; weights only move at the next pin, so this is the snapshot any on-chain vector should be read against. Null while pinning is switched off or before the first pin was taken. */
+            ledger_pin?: components["schemas"]["PublicLedgerPin"] | null;
             /**
              * Margin
              * @description Base composite-point lead before versioned high-score band scaling.
@@ -19523,6 +19637,155 @@ export interface components {
              * @description Active Bench v9 confirmation policy. Shadow publishes measured LongMemEval and ablation evidence without changing ranking or emissions. Enforce makes full confirmation authoritative and suppresses base-only or provisional rows. Null means off.
              */
             v9_confirmation_mode?: ("shadow" | "enforce") | null;
+        };
+        /**
+         * PublicLedgerActor
+         * @description One agent named by a pin: the champion, the incumbent, or a recipient.
+         */
+        PublicLedgerActor: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Agent Version */
+            agent_version?: number | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+        };
+        /**
+         * PublicLedgerEpoch
+         * @description One pinned epoch and the crown decision the fold derived from it.
+         */
+        PublicLedgerEpoch: {
+            /** Bench Version */
+            bench_version: number;
+            champion?: components["schemas"]["PublicLedgerActor"] | null;
+            /**
+             * Crown Changed
+             * @description True when this pin's champion differs from the previous pin's. A run of false across retest waves is the stability the pin and the incumbency mode exist to produce.
+             * @default false
+             */
+            crown_changed: boolean;
+            /** Crown Mode */
+            crown_mode?: "incumbent" | null;
+            /** Entry Count */
+            entry_count: number;
+            /** Epoch Index */
+            epoch_index: number;
+            incumbent?: components["schemas"]["PublicLedgerActor"] | null;
+            /** Last Epoch Block */
+            last_epoch_block: number;
+            /** Ledger Digest */
+            ledger_digest: string;
+            /**
+             * Pinned At
+             * Format: date-time
+             */
+            pinned_at: string;
+            /** Pinned Block */
+            pinned_block: number;
+            /** Recipients */
+            recipients?: components["schemas"]["PublicLedgerEpochRecipient"][];
+        };
+        /** PublicLedgerEpochRecipient */
+        PublicLedgerEpochRecipient: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Agent Version */
+            agent_version?: number | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "champion" | "joint_champion" | "tail";
+            /** Share Of Miner Pool */
+            share_of_miner_pool: number;
+        };
+        /**
+         * PublicLedgerEpochsResponse
+         * @description Newest-first history of epoch pins: what the fleet folded, epoch by epoch.
+         */
+        PublicLedgerEpochsResponse: {
+            /** Count */
+            count: number;
+            /** Epochs */
+            epochs?: components["schemas"]["PublicLedgerEpoch"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "epoch" | "live";
+        };
+        /**
+         * PublicLedgerPin
+         * @description Identity of one epoch-pinned validator ledger.
+         */
+        PublicLedgerPin: {
+            /** Bench Version */
+            bench_version: number;
+            /** Champion Agent Id */
+            champion_agent_id?: string | null;
+            /**
+             * Crown Mode
+             * @description Fold marker frozen into the pin; null means the classic walk.
+             */
+            crown_mode?: "incumbent" | null;
+            /** Entry Count */
+            entry_count: number;
+            /**
+             * Epoch Index
+             * @description Chain SubnetEpochIndex the pin belongs to.
+             */
+            epoch_index: number;
+            /**
+             * Incumbent Agent Id
+             * @description The previous pin's champion resolved into this pool, which the incumbency fold defends when crown_mode is incumbent.
+             */
+            incumbent_agent_id?: string | null;
+            /** Last Epoch Block */
+            last_epoch_block: number;
+            /**
+             * Ledger Digest
+             * @description SHA-256 of the pinned entries plus fold markers; every validator folding this pin holds this digest.
+             */
+            ledger_digest: string;
+            /**
+             * Mode
+             * @description epoch: validators fold one frozen ledger per chain epoch; live: the historical time-based read (the rollback).
+             * @enum {string}
+             */
+            mode: "epoch" | "live";
+            /**
+             * Next Epoch Block
+             * @description Boundary that ends the pinned epoch, when it was known.
+             */
+            next_epoch_block?: number | null;
+            /**
+             * Pinned At
+             * Format: date-time
+             * @description When the pin was taken (UTC).
+             */
+            pinned_at: string;
+            /**
+             * Pinned Block
+             * @description Head block the pin's schedule was read at.
+             */
+            pinned_block: number;
         };
         /**
          * PublicMetricDoc
@@ -32291,6 +32554,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicLeaderboardResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ledger_epochs_api_v1_public_ledger_epochs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicLedgerEpochsResponse"];
                 };
             };
             /** @description Validation Error */

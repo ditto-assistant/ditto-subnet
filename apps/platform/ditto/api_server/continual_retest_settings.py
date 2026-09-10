@@ -60,6 +60,18 @@ def tie_weighting_is_active(
     return settings.tie_weighting_mode == "fleet_ready" and fleet_protocol_ready
 
 
+def crown_incumbent_is_active(
+    settings: ContinualRetestSettings, *, fleet_protocol_ready: bool
+) -> bool:
+    """Resolve the consensus-safe crown-incumbency marker.
+
+    Same rule as tie weighting: policy cannot override fleet readiness, because
+    a fold-changing ledger field visible to only part of the fleet makes
+    validators submit two different champions for identical evidence.
+    """
+    return settings.crown_incumbent_mode == "fleet_ready" and fleet_protocol_ready
+
+
 def rollout_standdown_reason(
     settings: ContinualRetestSettings,
     *,

@@ -1502,6 +1502,129 @@ class PublicKothEmissions(BaseModel):
         ),
     ] = None
     recipients: list[PublicEmissionRecipient] = Field(default_factory=list)
+    ledger_pin: Annotated[
+        PublicLedgerPin | None,
+        Field(
+            default=None,
+            description=(
+                "The epoch-pinned ledger validators are folding right now. The "
+                "board above is live and can move within an epoch; weights only "
+                "move at the next pin, so this is the snapshot any on-chain "
+                "vector should be read against. Null while pinning is switched "
+                "off or before the first pin was taken."
+            ),
+        ),
+    ] = None
+
+
+class PublicLedgerPin(BaseModel):
+    """Identity of one epoch-pinned validator ledger."""
+
+    mode: Annotated[
+        Literal["epoch", "live"],
+        Field(
+            description=(
+                "epoch: validators fold one frozen ledger per chain epoch; live: "
+                "the historical time-based read (the rollback)."
+            )
+        ),
+    ]
+    epoch_index: Annotated[
+        int, Field(ge=0, description="Chain SubnetEpochIndex the pin belongs to.")
+    ]
+    last_epoch_block: Annotated[int, Field(ge=0)]
+    pinned_block: Annotated[
+        int, Field(ge=0, description="Head block the pin's schedule was read at.")
+    ]
+    pinned_at: Annotated[datetime, Field(description="When the pin was taken (UTC).")]
+    next_epoch_block: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description="Boundary that ends the pinned epoch, when it was known.",
+        ),
+    ] = None
+    bench_version: Annotated[int, Field(ge=1)]
+    entry_count: Annotated[int, Field(ge=0)]
+    ledger_digest: Annotated[
+        str,
+        Field(
+            pattern=r"^[0-9a-f]{64}$",
+            description=(
+                "SHA-256 of the pinned entries plus fold markers; every validator "
+                "folding this pin holds this digest."
+            ),
+        ),
+    ]
+    champion_agent_id: UUID | None = None
+    incumbent_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description=(
+                "The previous pin's champion resolved into this pool, which the "
+                "incumbency fold defends when crown_mode is incumbent."
+            ),
+        ),
+    ] = None
+    crown_mode: Annotated[
+        Literal["incumbent"] | None,
+        Field(
+            default=None,
+            description="Fold marker frozen into the pin; null means the classic walk.",
+        ),
+    ] = None
+
+
+class PublicLedgerActor(BaseModel):
+    """One agent named by a pin: the champion, the incumbent, or a recipient."""
+
+    agent_id: UUID
+    miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    agent_name: str | None = None
+    agent_version: Annotated[int | None, Field(default=None, ge=1)] = None
+
+
+class PublicLedgerEpochRecipient(PublicLedgerActor):
+    role: Literal["champion", "joint_champion", "tail"]
+    share_of_miner_pool: Annotated[float, Field(gt=0.0, le=1.0)]
+
+
+class PublicLedgerEpoch(BaseModel):
+    """One pinned epoch and the crown decision the fold derived from it."""
+
+    epoch_index: Annotated[int, Field(ge=0)]
+    last_epoch_block: Annotated[int, Field(ge=0)]
+    pinned_block: Annotated[int, Field(ge=0)]
+    pinned_at: datetime
+    bench_version: Annotated[int, Field(ge=1)]
+    entry_count: Annotated[int, Field(ge=0)]
+    ledger_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    crown_mode: Literal["incumbent"] | None = None
+    champion: PublicLedgerActor | None = None
+    incumbent: PublicLedgerActor | None = None
+    crown_changed: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "True when this pin's champion differs from the previous pin's. "
+                "A run of false across retest waves is the stability the pin "
+                "and the incumbency mode exist to produce."
+            ),
+        ),
+    ] = False
+    recipients: list[PublicLedgerEpochRecipient] = Field(default_factory=list)
+
+
+class PublicLedgerEpochsResponse(BaseModel):
+    """Newest-first history of epoch pins: what the fleet folded, epoch by epoch."""
+
+    generated_at: datetime
+    mode: Literal["epoch", "live"]
+    count: Annotated[int, Field(ge=0)]
+    epochs: list[PublicLedgerEpoch] = Field(default_factory=list)
 
 
 class PublicEfficiencyStatus(BaseModel):

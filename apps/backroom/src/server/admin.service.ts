@@ -149,6 +149,7 @@ import {
   burnSettingsRevisionSchema,
   setBurnSettingsInputSchema,
   continualRetestSettingsForPlatform,
+  ledgerEpochSnapshotsSchema,
   parseContinualRetestSettingsControl,
   setContinualRetestSettingsInputSchema,
   inferenceConcurrencySettingsControlSchema,
@@ -1375,6 +1376,15 @@ export async function fetchValidatorFleetObservability() {
     retries: 1,
   })
   return validatorFleetObservabilitySchema.parse(payload)
+}
+
+export async function fetchLedgerEpochSnapshots(limit = 24) {
+  const bounded = Math.min(100, Math.max(1, Math.trunc(limit)))
+  const payload = await platformAdminRequest(`/api/v1/public/ledger-epochs?limit=${bounded}`, {
+    timeoutMs: 15_000,
+    retries: 1,
+  })
+  return ledgerEpochSnapshotsSchema.parse(payload)
 }
 
 export async function fetchValidatorWeightDiagnostics(rawInput: unknown) {

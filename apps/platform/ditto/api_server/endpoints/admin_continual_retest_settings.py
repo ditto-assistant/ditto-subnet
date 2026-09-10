@@ -13,16 +13,19 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.continual_retest_settings import (
+    CROWN_INCUMBENT_PROTOCOL,
     AdminContinualRetestSettingsRequest,
     AdminContinualRetestSettingsResponse,
     ContinualRetestSettings,
     ContinualRetestSettingsRevision,
     EffectiveContinualRetestSettings,
+    LedgerPinStatus,
 )
 from ditto.api_server.continual_retest_settings import (
     DEFAULT_SETTINGS,
     ContinualRetestSettingsResolver,
     aggregate_is_active,
+    crown_incumbent_is_active,
     rollout_standdown_reason,
     settings_from_row,
     tie_weighting_is_active,
@@ -38,6 +41,7 @@ from ditto.db.queries.continual_retest_settings import (
     list_continual_retest_settings_revisions,
 )
 from ditto.db.queries.heartbeats import live_validator_fleet_supports_protocol
+from ditto.db.queries.ledger_epochs import latest_pin
 from ditto.db.queries.scores import list_eligible_ledger
 
 logger = logging.getLogger(__name__)
@@ -101,6 +105,40 @@ async def _tie_weighting_fleet_ready(session: AsyncSession) -> bool:
     )
 
 
+async def _crown_incumbent_fleet_ready(session: AsyncSession) -> bool:
+    bench_version = await active_bench_version(session)
+    return await live_validator_fleet_supports_protocol(
+        session,
+        minimum_protocol=CROWN_INCUMBENT_PROTOCOL,
+        bench_version=bench_version,
+        now=datetime.now(UTC),
+        freshness=_FRESHNESS,
+    )
+
+
+async def _ledger_pin_status(
+    request: Request, session: AsyncSession, settings: ContinualRetestSettings
+) -> LedgerPinStatus | None:
+    """The pin validators fold right now; ``None`` in live mode or at bootstrap."""
+    if settings.ledger_pin_mode != "epoch":
+        return None
+    netuid = request.app.state.config.chain.netuid
+    row = await latest_pin(session, netuid=netuid)
+    if row is None:
+        return None
+    return LedgerPinStatus(
+        epoch_index=row.epoch_index,
+        last_epoch_block=row.last_epoch_block,
+        pinned_block=row.pinned_block,
+        pinned_at=row.pinned_at,
+        bench_version=row.bench_version,
+        ledger_digest=row.ledger_digest,
+        entry_count=len(row.entries),
+        champion_agent_id=row.champion_agent_id,
+        incumbent_agent_id=row.incumbent_agent_id,
+    )
+
+
 async def _eligible_agent_count(session: AsyncSession) -> int:
     """Ranked agents the cohort could draw from on the active generation.
 
@@ -155,6 +193,7 @@ async def get_settings(
     settings = settings_from_row(latest)
     fleet_ready = await _fleet_ready(session)
     tie_fleet_ready = await _tie_weighting_fleet_ready(session)
+    crown_fleet_ready = await _crown_incumbent_fleet_ready(session)
     rollout = await open_rollout(session)
     desired_version = rollout.desired_version if rollout is not None else None
     authority_version = await active_bench_version(session, open_transition=rollout)
@@ -189,6 +228,12 @@ async def get_settings(
             tie_weighting_active=tie_weighting_is_active(
                 settings, fleet_protocol_ready=tie_fleet_ready
             ),
+            crown_incumbent_fleet_ready=crown_fleet_ready,
+            crown_incumbent_active=crown_incumbent_is_active(
+                settings, fleet_protocol_ready=crown_fleet_ready
+            ),
+            crown_incumbent_required_protocol=CROWN_INCUMBENT_PROTOCOL,
+            ledger_pin=await _ledger_pin_status(request, session, settings),
             max_age_seconds=resolver.ttl_seconds,
             open_rollout_desired_version=desired_version,
             rollout_standdown_active=standdown_active,
