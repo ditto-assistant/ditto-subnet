@@ -20,10 +20,10 @@ import inspect
 import logging
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 from ditto.api_models.benchmark_capacity import (
@@ -39,6 +39,7 @@ from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
     ConfirmationProgressStage,
 )
+from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.validator import (
     ConfirmationDatasetPin,
@@ -102,6 +103,14 @@ from ditto.validator.telemetry import (
     ValidatorTelemetry,
     scored_agent_stat,
 )
+from ditto.validator.tracks import (
+    TRACK_MEMORY,
+    MemoryFoldParams,
+    TrackFoldInputs,
+    TrackRegistry,
+    TrackState,
+    build_default_registry,
+)
 from ditto.validator.transform_audit import (
     ALPHA,
     brittleness_pvalue,
@@ -115,11 +124,13 @@ from ditto.validator.weights import (
     _entry_has_seeds,
     agents_needing_rescore,
     apply_miner_emission_cap,
-    compute_weights,
+    blend_track_weights,
     contested_confirmation_set,
     filter_weight_confirmed,
     resolve_miner_emission_share,
+    resolve_track_shares,
     select_champion,
+    track_allocated_share,
 )
 from ditto_screening_protocol.bench_v9 import supports_confirmation
 from ditto_screening_protocol.confirmation import CAPABILITY_ORDER
@@ -507,6 +518,59 @@ def _stack_can_self_resume(
     )
 
 
+@runtime_checkable
+class RouterLedgerSource(Protocol):
+    """The compute-destination seam for the router ledger the validator folds.
+
+    The validator is never locked to one place the router eval runs: it only
+    reads a published ledger and folds it (creds-free, preserving the
+    tap->router->relay trust boundary). ``fetch`` returns the router ledger for
+    this epoch's fold; an empty ledger contributes zero router emission and is
+    exactly the shadow state.
+    """
+
+    async def fetch(self) -> RouterLedgerResponse: ...
+
+
+class EmptyRouterLedgerSource:
+    """v1 shadow default: always the empty ledger (zero router emission).
+
+    Keeps the fold pipeline, logging, and tests exercising the router path every
+    cycle without any cross-component dependency, and makes v1 behavior
+    byte-identical to folding no router track at all.
+    """
+
+    async def fetch(self) -> RouterLedgerResponse:
+        return RouterLedgerResponse()
+
+
+class PlatformRouterLedgerSource:
+    """Promotion seam: the offloaded scorer publishes, the validator reads+folds.
+
+    The heavy router eval runs on one trusted, offloaded ``dittobench-api``
+    scorer that publishes a ledger; this source performs the best-effort read.
+    It is fail-closed: any error degrades to an **empty** ledger (zero router
+    emission) so a scorer outage or a malformed publish can never crash or
+    distort the consensus ``put_weights`` fold. Not wired in v1 (the worker
+    defaults to :class:`EmptyRouterLedgerSource`); this is the documented
+    implementation the validator swaps in at promotion, keeping the compute
+    destination pluggable.
+    """
+
+    def __init__(self, read: Callable[[], Awaitable[RouterLedgerResponse]]) -> None:
+        self._read = read
+
+    async def fetch(self) -> RouterLedgerResponse:
+        try:
+            return await self._read()
+        except Exception:
+            logger.warning(
+                "router ledger read failed; folding an empty ledger for this epoch",
+                exc_info=True,
+            )
+            return RouterLedgerResponse()
+
+
 class ValidatorWorker:
     """Owns one scoring sweep and the long-lived loop around it."""
 
@@ -523,6 +587,7 @@ class ValidatorWorker:
         stack_health: StackHealthCollector | None = None,
         heartbeat_clock: _HeartbeatClock | None = None,
         after_score: Callable[[UUID, int], None] | None = None,
+        router_ledger_source: RouterLedgerSource | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -547,6 +612,12 @@ class ValidatorWorker:
         self._coalesced_heartbeat_task: asyncio.Task[bool] | None = None
         self._background_heartbeat_tasks: set[asyncio.Task[bool]] = set()
         self._after_score = after_score
+        # The router ledger's compute-destination seam. v1 defaults to the empty
+        # (shadow) source; a promotion swaps in a PlatformRouterLedgerSource that
+        # reads the offloaded scorer's published ledger. See RouterLedgerSource.
+        self._router_ledger_source: RouterLedgerSource = (
+            router_ledger_source or EmptyRouterLedgerSource()
+        )
         self._platform_accepted = False
         self._bootstrap_resume_ready = False
         # Cooperative updater drains are acknowledged only after both the
@@ -1797,15 +1868,45 @@ class ValidatorWorker:
         # Version-rollout re-scores are ordinary platform-leased jobs. The fold
         # reads every cryptographically verified contract it supports and skips
         # unconfirmed future contracts per entry during gradual rollout.
-        miner_weights = compute_weights(
-            registered_entries,
-            margin=self._config.koth_margin,
-            tail_size=self._config.koth_tail_size,
-            rank_shares=self._config.koth_rank_shares,
-            dethrone_z=self._config.koth_dethrone_z,
-            tie_pooling=ledger.tie_weighting_mode == "pool",
-            ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+        # Fold each competition track independently, then blend by per-track
+        # emission share into the single vector the chain accepts. Memory is the
+        # only weight-eligible track in v1 (coding/router are shadow), so the
+        # blend is a byte-for-byte passthrough of the memory fold — the
+        # single-track regression guard in test_track_blend.py. Shadow tracks are
+        # still folded and logged so a new track is observable before it pays.
+        track_shares_bps = resolve_track_shares(
+            ledger, default=self._config.track_shares_bps
         )
+        registry = build_default_registry(
+            track_shares_bps=track_shares_bps,
+            router_state=TrackState(self._config.router_track_state),
+            router_weight_eligible=self._config.router_weight_eligible,
+        )
+        router_ledger = await self._get_router_ledger()
+        fold_inputs = TrackFoldInputs(
+            memory_entries=registered_entries,
+            memory_params=MemoryFoldParams(
+                margin=self._config.koth_margin,
+                tail_size=self._config.koth_tail_size,
+                rank_shares=self._config.koth_rank_shares,
+                dethrone_z=self._config.koth_dethrone_z,
+                tie_pooling=ledger.tie_weighting_mode == "pool",
+                ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+            ),
+            router_entries=tuple(router_ledger.entries),
+            router_rank_shares=self._config.router_rank_shares,
+        )
+        track_vectors = {
+            track.track_id: track.fold(fold_inputs) for track in registry.tracks
+        }
+        paying_shares_bps = registry.shares_bps()
+        eligible_vectors = {
+            track_id: vector
+            for track_id, vector in track_vectors.items()
+            if track_id in paying_shares_bps
+        }
+        miner_weights = blend_track_weights(eligible_vectors, paying_shares_bps)
+        self._log_shadow_tracks(registry, track_vectors, router_ledger)
         # The burn is operator policy served on the ledger, not a compiled-in
         # constant; the config value is the fallback for a platform that does not
         # carry the field and for anything that fails validation.
@@ -1819,9 +1920,25 @@ class ValidatorWorker:
                 (1.0 - miner_share) * 100.0,
                 (1.0 - self._config.miner_emission_share) * 100.0,
             )
+        # An eligible track that folded no miners leaves its bps unclaimed; scale
+        # miner_share by the allocated fraction so that shortfall burns through
+        # the unchanged cap rather than being renormalized back to the other
+        # miners. With only memory eligible and non-empty this is exactly 1.0, so
+        # the cap input is byte-identical to the pre-track pipeline.
+        allocated = track_allocated_share(paying_shares_bps, eligible_vectors)
+        empty_eligible = sorted(
+            track_id
+            for track_id in paying_shares_bps
+            if not eligible_vectors.get(track_id)
+        )
+        if empty_eligible:
+            logger.info(
+                "eligible tracks with no folded miners; their emission burns: %s",
+                empty_eligible,
+            )
         weights = apply_miner_emission_cap(
             miner_weights,
-            miner_share=miner_share,
+            miner_share=miner_share * allocated,
             burn_hotkey=self._config.burn_hotkey,
         )
         champion = select_champion(
@@ -1865,6 +1982,61 @@ class ValidatorWorker:
             champion.composite,
             champion.bench_version,
         )
+
+    async def _get_router_ledger(self) -> RouterLedgerResponse:
+        """The centralized router scorer's ledger for this epoch's router fold.
+
+        Delegates to the injected :class:`RouterLedgerSource` — the
+        compute-destination seam. v1 is shadow-only: the default
+        :class:`EmptyRouterLedgerSource` folds an **empty** router ledger (zero
+        router emission, identical to the shadow state) and never disturbs the
+        memory fold. At promotion a :class:`PlatformRouterLedgerSource` is
+        injected so the validator reads the offloaded scorer's published ledger
+        (best-effort, degrading to empty on failure) without this worker being
+        locked to any one compute destination.
+        """
+        return await self._router_ledger_source.fetch()
+
+    def _log_shadow_tracks(
+        self,
+        registry: TrackRegistry,
+        track_vectors: dict[str, dict[str, float]],
+        router_ledger: RouterLedgerResponse,
+    ) -> None:
+        """Log every non-memory track's folded vector for shadow observability.
+
+        The memory track is the existing, weight-eligible competition and is
+        already reflected in the submitted vector; every other track is folded so
+        it can be watched before it pays. This makes a ``SHADOW`` router track
+        visible (how many floor-clearing miners it would rank, and who) without
+        touching emissions.
+        """
+        if getattr(router_ledger, "stale", False):
+            logger.warning(
+                "router ledger is STALE (scorer served a last-known-good "
+                "snapshot); folding it for shadow observation only"
+            )
+        for track in registry.tracks:
+            if track.track_id == TRACK_MEMORY:
+                continue
+            vector = track_vectors.get(track.track_id, {})
+            paying = track.draws_emission()
+            logger.info(
+                "track %s [%s]: folded %d miners, %d bps%s",
+                track.track_id,
+                track.state.value,
+                len(vector),
+                track.effective_bps(),
+                "" if paying else " (shadow/not paying — 0 emission this epoch)",
+            )
+            if vector:
+                leader = max(vector.items(), key=lambda item: item[1])
+                logger.info(
+                    "track %s shadow leader: %s (%.6f)",
+                    track.track_id,
+                    leader[0],
+                    leader[1],
+                )
 
     async def _observe_platform_king(
         self,

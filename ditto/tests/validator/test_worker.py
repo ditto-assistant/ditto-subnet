@@ -817,6 +817,10 @@ def _config() -> MagicMock:
     cfg.top5_max_cohort_size = 25
     cfg.miner_emission_share = 1.0
     cfg.burn_hotkey = _BURN_HOTKEY
+    cfg.track_shares_bps = {"memory": 10000, "coding": 0, "router": 0}
+    cfg.router_track_state = "shadow"
+    cfg.router_weight_eligible = False
+    cfg.router_rank_shares = (0.65, 0.14, 0.10, 0.07, 0.04)
     cfg.min_stake_tao = 0.0
     cfg.sweep_seconds = 120
     cfg.epoch_seconds = 3600

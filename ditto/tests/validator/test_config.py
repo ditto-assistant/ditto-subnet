@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import UUID
 
 import pytest
@@ -418,3 +419,36 @@ class TestCompatibilityEpoch:
         monkeypatch.setenv("VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH", value)
         with pytest.raises(ValidatorConfigError, match="compatibility epoch mismatch"):
             parse_validator_config_from_env()
+
+
+class TestRouterRankSharesValidation:
+    """``__post_init__`` fails loud at boot on a misconfigured router split.
+
+    ``router_rank_shares`` is compiled-only, so we exercise the validation by
+    ``dataclasses.replace``-ing a parsed config (which re-runs ``__post_init__``)
+    rather than via env. The default parsed config must pass."""
+
+    def test_default_router_rank_shares_are_valid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        cfg = parse_validator_config_from_env()
+        assert cfg.router_rank_shares == (0.65, 0.14, 0.10, 0.07, 0.04)
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            (),  # empty
+            (0.6, 0.0),  # zero share
+            (0.6, -0.1),  # negative share
+            (0.6, float("nan")),  # non-finite
+            (float("inf"), 0.4),  # non-finite
+        ],
+    )
+    def test_bad_router_rank_shares_fail_at_boot(
+        self, monkeypatch: pytest.MonkeyPatch, bad: tuple[float, ...]
+    ) -> None:
+        _base_env(monkeypatch)
+        cfg = parse_validator_config_from_env()
+        with pytest.raises(ValidatorConfigError, match="router_rank_shares"):
+            replace(cfg, router_rank_shares=bad)

@@ -28,6 +28,7 @@ from ditto_screening_protocol.router_source_screen import (
     evaluate_router_generalization,
     router_source_screen_digest,
     router_source_screen_signing_message,
+    screen_router_submission,
 )
 from ditto_screening_protocol.models import (
     SCREENING_FLOOR_POLICY_VERSION,
@@ -101,6 +102,7 @@ __all__ = [
     "evaluate_router_generalization",
     "router_source_screen_digest",
     "router_source_screen_signing_message",
+    "screen_router_submission",
     "AgentStatus",
     "ArtifactResponse",
     "ConfirmationProgress",

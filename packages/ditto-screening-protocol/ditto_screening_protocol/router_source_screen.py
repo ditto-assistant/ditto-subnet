@@ -363,3 +363,45 @@ def build_router_source_screen_evidence(
     provisional = RouterSourceScreenEvidence.model_construct(**raw)
     raw["evidence_sha256"] = router_source_screen_digest(provisional)
     return RouterSourceScreenEvidence.model_validate(raw)
+
+
+def screen_router_submission(
+    *,
+    agent_artifact_sha256: str,
+    screened_image_sha256: str,
+    analyzer_version: str,
+    policy_version: int,
+    sample: RouterGeneralizationSample | None,
+) -> RouterSourceScreenEvidence:
+    """Screen one submission's router dimension end to end.
+
+    The single non-test entry point that ties
+    :func:`evaluate_router_generalization` to
+    :func:`build_router_source_screen_evidence`, so the screener worker has one
+    pure call to produce signed, content-addressed evidence for a submission.
+
+    ``sample is None`` is the **opt-in / yes-and** case: the submission advertised
+    no router project (the ``/router/health`` probe returned ``unsupported``), so
+    there is nothing to grade. That maps to a benign ``INFRASTRUCTURE`` outcome
+    with **no findings** -- never a ``DENY`` and never a reward -- exactly like the
+    coding track's ``UNSUPPORTED`` status: a submission that omits the router
+    project is scored on the memory contract exactly as before, and including one
+    is purely additive. An included submission is graded normally by
+    :func:`evaluate_router_generalization`.
+
+    Pure and total: no I/O, no scoring, no ``ditto`` imports; the compute
+    destination (in-process screener, offloaded worker) calls this identically.
+    """
+    if sample is None:
+        outcome: RouterSourceScreenOutcome = RouterSourceScreenOutcome.INFRASTRUCTURE
+        findings: tuple[RouterSourceScreenFinding, ...] = ()
+    else:
+        outcome, findings = evaluate_router_generalization(sample)
+    return build_router_source_screen_evidence(
+        agent_artifact_sha256=agent_artifact_sha256,
+        screened_image_sha256=screened_image_sha256,
+        analyzer_version=analyzer_version,
+        policy_version=policy_version,
+        outcome=outcome,
+        findings=findings,
+    )

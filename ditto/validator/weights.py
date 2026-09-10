@@ -20,11 +20,13 @@ change, mirroring the platform's ledger read.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from ditto.validator.config import (
+    BASIS_POINT_SCALE,
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
     KOTH_BAND_DECAY_START_COMPOSITE,
@@ -38,6 +40,7 @@ from ditto.validator.crn import confirmation_seeds
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from ditto.api_models.router_ledger import RouterLedgerEntry
     from ditto.api_models.validator import LedgerEntry, LedgerResponse
 
 # ``bench_version`` is retained for telemetry and re-score scheduling. The
@@ -136,6 +139,179 @@ def apply_miner_emission_cap(
     if burn_share > 0.0:
         capped[burn_hotkey] = burn_share
     return capped
+
+
+def resolve_track_shares(
+    ledger: LedgerResponse, *, default: Mapping[str, int]
+) -> dict[str, int]:
+    """The per-track basis-point split this epoch, from the platform ledger.
+
+    Mirrors :func:`resolve_miner_emission_share`: the platform *may* serve a
+    ``track_shares_bps`` governance field, but this fold refuses to trust
+    anything that is not a coherent ``{track_id: bps}`` map. A missing field, a
+    non-``str`` id, a non-``int`` (or ``bool``) bps, a value outside
+    ``[0, BASIS_POINT_SCALE]``, or an eligible sum exceeding
+    ``BASIS_POINT_SCALE`` all fall back to the compiled ``default`` — so a
+    malformed or truncated ledger degrades to the shipped split rather than an
+    arbitrary one, and every validator folds the same integer bps with no
+    rounding disagreement. v1 ships on the compiled default only (no platform
+    dependency); older platforms omit the field and fold byte-identically.
+    """
+    raw = getattr(ledger, "track_shares_bps", None)
+    if not isinstance(raw, Mapping) or not raw:
+        return dict(default)
+    resolved: dict[str, int] = {}
+    for track_id, bps in raw.items():
+        if (
+            not isinstance(track_id, str)
+            or not track_id
+            or isinstance(bps, bool)
+            or not isinstance(bps, int)
+            or not 0 <= bps <= BASIS_POINT_SCALE
+        ):
+            return dict(default)
+        resolved[track_id] = bps
+    if sum(resolved.values()) > BASIS_POINT_SCALE:
+        return dict(default)
+    return resolved
+
+
+def compute_router_weights(
+    entries: Sequence[RouterLedgerEntry], *, rank_shares: Sequence[float]
+) -> dict[str, float]:
+    """Rank floor-clearing router miners by the scorer's ``combined_score``.
+
+    The centralized router scorer has already gated on the correctness floor and
+    folded token-dominant efficiency into ``combined_score`` (see
+    :mod:`ditto.api_models.router_ledger`); this validator-side fold only ranks
+    the published pool and assigns the frozen ``rank_shares`` by position, using
+    the same ``first_seen`` then ``agent_id`` tie-break as the memory fold so
+    every validator folds identical bytes off the identical ledger. Only entries
+    the scorer marked ``weight_eligible`` with a positive ``combined_score`` earn
+    anything; an empty pool folds to ``{}`` (zero router emission — exactly the
+    shadow state). The returned vector is a *relative* allocation;
+    :func:`blend_track_weights` normalizes it to the track's basis-point share,
+    so ``rank_shares`` need only be finite and positive, not sum to one.
+
+    This runs inside ``Track.fold`` on the consensus ``put_weights`` path, so it
+    must never raise: malformed ``rank_shares`` (empty, non-finite, or ≤ 0)
+    **degrade to ``{}``** (router earns nothing → its bps burn) rather than
+    crashing the whole fold. A genuine misconfiguration is caught loudly at boot
+    by :meth:`ditto.validator.config.ValidatorConfig.__post_init__`; this is the
+    fail-closed runtime backstop.
+    """
+    if not rank_shares:
+        return {}
+    if any(not math.isfinite(share) or share <= 0.0 for share in rank_shares):
+        return {}
+    scored = [
+        entry
+        for entry in entries
+        if entry.weight_eligible and entry.combined_score > 0.0
+    ]
+    if not scored:
+        return {}
+    ranked = sorted(
+        scored,
+        key=lambda entry: (-entry.combined_score, entry.first_seen, entry.agent_id),
+    )
+    distinct: list[RouterLedgerEntry] = []
+    seen_hotkeys: set[str] = set()
+    for entry in ranked:
+        if entry.miner_hotkey in seen_hotkeys:
+            continue
+        seen_hotkeys.add(entry.miner_hotkey)
+        distinct.append(entry)
+    recipients = distinct[: len(rank_shares)]
+    return {
+        entry.miner_hotkey: rank_shares[index] for index, entry in enumerate(recipients)
+    }
+
+
+def _has_positive_weight(vector: Mapping[str, float]) -> bool:
+    """Whether a track vector carries any payable (strictly positive) weight.
+
+    The single predicate shared by :func:`blend_track_weights` (what actually
+    contributes to the fold) and :func:`track_allocated_share` (what counts as
+    allocated so its bps are *not* burned). A ``{hotkey: 0.0}`` vector is truthy
+    yet pays nobody; folding it as "allocated" would leak its share onto other
+    tracks' miners instead of burning it, so both call sites must agree here.
+    """
+    return any(weight > 0.0 for weight in vector.values())
+
+
+def blend_track_weights(
+    vectors: Mapping[str, Mapping[str, float]],
+    shares_bps: Mapping[str, int],
+) -> dict[str, float]:
+    """Blend independent per-track weight vectors into one by emission share.
+
+    Each track folds its own vector, but the chain accepts exactly one vector per
+    validator, so tracks are combined here by their configured basis-point share.
+
+    A single fully-allocated track (``BASIS_POINT_SCALE`` bps) passes through
+    byte-for-byte: this is the regression guard that a one-track memory registry
+    reproduces today's fold exactly (the vector then meets the unchanged
+    :func:`apply_miner_emission_cap` just as before). Otherwise each track's
+    positive weights are normalized within the track and scaled by
+    ``bps / BASIS_POINT_SCALE``, so a hotkey ranked in two tracks accrues both
+    slices. A track with an empty vector or a non-positive share contributes
+    nothing; its share becomes a shortfall that :func:`track_allocated_share`
+    routes to burn. All-empty folds to ``{}`` (the caller then routes the whole
+    vector to burn).
+    """
+    contributing = {
+        track_id: vector
+        for track_id, vector in vectors.items()
+        if _has_positive_weight(vector) and shares_bps.get(track_id, 0) > 0
+    }
+    if not contributing:
+        return {}
+    if len(contributing) == 1:
+        ((only_id, only_vector),) = contributing.items()
+        if shares_bps.get(only_id, 0) == BASIS_POINT_SCALE:
+            return {
+                hotkey: weight for hotkey, weight in only_vector.items() if weight > 0.0
+            }
+    combined: dict[str, float] = {}
+    for track_id, vector in contributing.items():
+        positives = {
+            hotkey: weight for hotkey, weight in vector.items() if weight > 0.0
+        }
+        total = math.fsum(positives.values())
+        if total <= 0.0:
+            continue
+        scale = (shares_bps[track_id] / BASIS_POINT_SCALE) / total
+        for hotkey, weight in positives.items():
+            combined[hotkey] = combined.get(hotkey, 0.0) + weight * scale
+    return combined
+
+
+def track_allocated_share(
+    shares_bps: Mapping[str, int],
+    vectors: Mapping[str, Mapping[str, float]],
+) -> float:
+    """Fraction of the miner pool actually claimed by non-empty tracks.
+
+    :func:`apply_miner_emission_cap` renormalizes the blended miner vector to
+    ``miner_share``, so an empty track's basis points do **not** burn on their
+    own. To make a track's shortfall burn while leaving the cap untouched, the
+    caller passes ``miner_share * track_allocated_share(...)`` — the summed bps of
+    every track that produced a positive-weight vector (the same
+    :func:`_has_positive_weight` predicate the blend uses), over
+    ``BASIS_POINT_SCALE``. A zero-only vector counts as unallocated, so its share
+    burns instead of leaking onto other tracks.
+    With a single fully-allocated non-empty track the result is exactly ``1.0``,
+    so ``miner_share`` is unchanged and the fold stays byte-identical to the
+    pre-track pipeline; the multi-track shortfall-to-burn only bites once a
+    second track is eligible.
+    """
+    allocated = sum(
+        bps
+        for track_id, bps in shares_bps.items()
+        if bps > 0 and _has_positive_weight(vectors.get(track_id, {}))
+    )
+    return allocated / BASIS_POINT_SCALE
 
 
 def _entry_version(entry: LedgerEntry) -> int:

@@ -4395,6 +4395,12 @@
         ],
         "default": null
       },
+      "track_shares_bps": {
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "type": "object"
+      },
       "v9_confirmation_mode": {
         "anyOf": [
           {

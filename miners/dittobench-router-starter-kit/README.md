@@ -65,7 +65,18 @@ POST /router/seed                validator-supplied task memory records (may be 
 ```
 
 A `404` at `/router/health` means "no router project": no penalty, no router
-score. The four provider routes are faithful pass-throughs — streaming SSE is
+score. The router track is **opt-in and purely additive** ("yes-and"), modeled
+on the coding track: a submission that does *not* serve `/router/health` is
+scored on the memory contract exactly as it is today — omitting the router
+project costs nothing. Serving a valid advertisement (HTTP 200, contract
+version 1, non-empty `wires`) is the *only* signal that opts a submission into
+the additive router run; anything else the scorer sees — 404, an unreachable
+port, a malformed body, or an unsupported contract — is a benign skip, never a
+denial. And because the whole dimension is permanently `weight_eligible=false`
+(shadow), opting in can never lower your emissions; it only makes your router
+observable.
+
+The four provider routes are faithful pass-throughs — streaming SSE is
 relayed event-for-event, and the provider `usage` (including the final
 streamed chunk) is passed back untouched. Without a configured relay the
 provider routes return `503`; `/router/health` and `/router/seed` still work,
