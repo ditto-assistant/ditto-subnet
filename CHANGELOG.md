@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.249.0 (2026-09-10)
+
+### Features
+
+- **coding-datagen**: Wire open datasets with rotating held-out sets
+  ([#1709](https://github.com/ditto-assistant/ditto-subnet/pull/1709),
+  [`064e8db`](https://github.com/ditto-assistant/ditto-subnet/commit/064e8db073159e259d9bf890b45216985806ae91))
+
+- **platform**: Grade router submissions in shadow mode without ranking them
+  ([#1707](https://github.com/ditto-assistant/ditto-subnet/pull/1707),
+  [`8683b32`](https://github.com/ditto-assistant/ditto-subnet/commit/8683b322342efe0be0c4efa5545eb1b851da093f))
+
+- **screening-protocol**: Screen shadow routers for held-out generalization
+  ([#1708](https://github.com/ditto-assistant/ditto-subnet/pull/1708),
+  [`18ed41d`](https://github.com/ditto-assistant/ditto-subnet/commit/18ed41d43597b716d5db6fb38f678d794e3d3f05))
+
+- **validator**: Shadow router track for SN118 DittoBench (model-unlocked, big-four harnesses)
+  ([#1730](https://github.com/ditto-assistant/ditto-subnet/pull/1730),
+  [`4e38897`](https://github.com/ditto-assistant/ditto-subnet/commit/4e3889738a6888ccf4ed2d93012068350791b12b))
+
+
 ## v0.248.0 (2026-09-10)
 
 ### Bug Fixes
