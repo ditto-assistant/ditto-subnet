@@ -847,6 +847,7 @@ CREATE TABLE public.agents (
     screened_image_ref text,
     screened_image_upload_id uuid,
     screened_image_verified_at timestamp with time zone,
+    shadow boolean DEFAULT false NOT NULL,
     CONSTRAINT agents_version_positive_check CHECK (((version IS NULL) OR (version > 0))),
     CONSTRAINT ck_agents_agents_screened_image_fields_check CHECK ((((screened_image_sha256 IS NULL) AND (screened_image_size_bytes IS NULL) AND (screened_image_id IS NULL) AND (screened_image_ref IS NULL) AND (screened_image_upload_id IS NULL) AND (screened_image_verified_at IS NULL)) OR ((length(screened_image_sha256) = 64) AND (screened_image_size_bytes > 0) AND (length(screened_image_id) = 71) AND (length(screened_image_ref) > 0) AND (screened_image_upload_id IS NOT NULL) AND (screened_image_verified_at IS NOT NULL))))
 );
