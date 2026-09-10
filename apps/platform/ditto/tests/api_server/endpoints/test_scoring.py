@@ -954,6 +954,101 @@ class TestEpochPinnedLedger:
         assert pin.champion_agent_id is not None
 
 
+class TestCrownIncumbencyMarker:
+    """The marker rides the pin and is withheld until protocol 27 is fleet-wide."""
+
+    async def _enable(
+        self,
+        app: FastAPI,
+        session_maker: async_sessionmaker[AsyncSession],
+        *,
+        protocol_version: int,
+    ) -> None:
+        now = datetime.now(UTC)
+        settings = ContinualRetestSettings(
+            crown_incumbent_mode="fleet_ready"
+        ).model_dump(mode="json")
+        async with session_maker() as session, session.begin():
+            session.add(
+                ContinualRetestSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings=settings,
+                    checksum="ab" * 32,
+                    reason="defend the crown from the served incumbent",
+                    actor="operator@example.com",
+                )
+            )
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.250.0",
+                    protocol_version=protocol_version,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        app.state.continual_retest_settings.invalidate()
+
+    async def test_marker_requires_protocol_27_fleet_and_a_previous_pin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        await self._enable(app, session_maker, protocol_version=26)
+        read = _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200, mixed.text
+        assert mixed.json().get("crown_mode") is None
+        assert "crown_incumbent_agent_id" not in mixed.json()
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 27
+        app.state.continual_retest_settings.invalidate()
+        # The pin already taken this epoch stays as frozen: no marker mid-epoch.
+        same_epoch = await client.get(
+            "/api/v1/scoring/scores", headers=_ledger_headers()
+        )
+        assert same_epoch.json().get("crown_mode") is None
+
+        read.return_value = _schedule(25_029, block=9_033_831)
+        armed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        body = armed.json()
+        assert body["epoch_index"] == 25_029
+        assert body["crown_mode"] == "incumbent"
+        # The previous pin's champion, resolved into this pool, is the incumbent.
+        assert body["crown_incumbent_agent_id"] == body["entries"][0]["agent_id"]
+
+    async def test_first_pin_under_the_marker_has_no_incumbent_to_serve(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        await self._enable(app, session_maker, protocol_version=27)
+        _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+        first = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        body = first.json()
+        assert body["epoch_index"] == 25_028
+        # Bootstrap: the fleet is ready but no previous pin exists, so the fold
+        # runs the classic walk this epoch. The id is never served alone.
+        assert body["crown_mode"] == "incumbent"
+        assert "crown_incumbent_agent_id" not in body
+
+
 class TestScoringLiveness:
     """Serve-last-known + staleness policy on a transient DB failure."""
 

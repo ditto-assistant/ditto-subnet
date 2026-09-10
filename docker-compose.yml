@@ -265,7 +265,7 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "26"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "27"
     restart: unless-stopped
     # Longest live ticket plus five minutes for a signed final report:
     # 4h confirmation outlives the 180-minute canonical lease. This must
