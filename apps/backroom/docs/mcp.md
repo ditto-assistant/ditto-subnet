@@ -42,12 +42,37 @@ from one cannot establish the state of the other. Its bounded `limit` defaults
 to 50 (maximum 100); `total` remains the full registry count, so an omitted row
 outside the returned window is not evidence of absence.
 
-This is a `backroom:read` tool only. It strips unknown response fields, including
-nested ones, and exposes no full publication receipts, private source, storage
-coordinates, wrapped keys or credentials. The registered publication/probe/key
-digests are historical commitments, not fresh connectivity or custody checks.
-Registration remains non-selectable and weight-ineligible; it does not approve
-native execution, a canary or a rollout. No private-v2 mutation tool is added.
+The read tool strips unknown response fields, including nested ones, and exposes
+no full publication receipts, private source, storage coordinates, wrapped keys
+or credentials. The registered publication/probe/key digests are historical
+commitments, not fresh connectivity or custody checks. Registration remains
+non-selectable and weight-ineligible; it does not approve native execution, a
+canary or a rollout.
+
+Write-scoped operators can use three exact private-v2 lifecycle tools:
+
+- `register_coding_private_v2_release` forwards a complete publication receipt,
+  registration authority, curator public key and confirmation to Platform for
+  full digest and Ed25519 verification. It never accepts a private key or
+  provider credential.
+- `quarantine_coding_private_v2_release` appends a quarantine event bound to the
+  exact registration digest.
+- `retire_coding_private_v2_release` appends the terminal retirement event while
+  preserving the registration and publication audit.
+
+The same control surface exposes the already implemented contract-v1 shadow
+launch boundary without pretending it activates private v2:
+
+- `reconcile_coding_shadow_artifact` prepares one exact qualified artifact and
+  future-height run. It does not issue tickets or execute work.
+- `issue_coding_shadow_ticket_set` issues one sorted, unique, fixed k=3 validator
+  set for an already-issued run. Validators still claim and execute their own
+  tickets.
+
+Both launch tools retain Platform's default-off feature gates, exact confirmation
+phrases, idempotent database authority and permanent `weight_eligible=false`.
+The MCP calls carry the signed-in operator email in `X-Admin-Actor`; no shared
+operator identity is used.
 
 The MCP endpoint is a full OAuth 2.1 resource. `@cloudflare/workers-oauth-provider`
 owns `/authorize`, `/token`, and `/register`; discovery lives at
