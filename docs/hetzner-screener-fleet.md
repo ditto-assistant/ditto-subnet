@@ -293,8 +293,8 @@ sudo sed -n 's/^\(DESCRIPTOR\|REVISION\|VERSION\|UPDATED_AT\)=/\1=/p' \
 ### Review gateway
 
 `screener_fleet_review_inference_provider` selects which OpenAI-compatible
-gateway carries private source review: `openrouter` or `ditto` (Ditto
-Inference). The source-review secret in Secret Manager must hold the matching
+gateway carries private source review: `ditto` (Ditto Inference, the default
+and the live state of subnet-screener-1 since 2026-09-10) or `openrouter`. The source-review secret in Secret Manager must hold the matching
 key (`ditto_inf_…` for `ditto`). Set `screener_fleet_review_inference_base_url`
 only to override the provider default. Roll the provider one node at a time:
 re-run Ansible with the node `draining`, confirm the first L1 note lands in the

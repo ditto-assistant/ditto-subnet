@@ -175,3 +175,35 @@ def test_ditto_inference_review_key_is_a_separate_secret_with_its_own_grant() ->
     )
     assert x509.count('secret_id = "screener-review-ditto-inference-key"') == 1
     assert "google_secret_manager_secret.screener_review_ditto_inference_key" in x509
+
+
+def test_hetzner_fleet_defaults_match_the_live_ditto_router_flip() -> None:
+    """subnet-screener-1 was moved to Ditto Inference by a host edit on 2026-09-10;
+    the checked-in defaults must render the same values or the next converge
+    silently reverts the node to OpenRouter with a key that no longer matches."""
+    import yaml
+
+    role = ROOT / "infra/ansible/roles/hetzner_screener_fleet"
+    defaults = yaml.safe_load((role / "defaults/main.yml").read_text())
+    assert defaults["screener_fleet_review_inference_provider"] == "ditto"
+    assert (
+        defaults["screener_fleet_source_review_secret_id"]
+        == "screener-review-ditto-inference-key"
+    )
+    example = yaml.safe_load(
+        (ROOT / "infra/ansible/inventory/hetzner-screener.example.yml").read_text()
+    )
+    host = example["all"]["children"]["role_hetzner_screener"]["hosts"][
+        "subnet-screener-1"
+    ]
+    assert host["screener_fleet_review_inference_provider"] == "ditto"
+    assert host["screener_fleet_source_review_secret_id"] == (
+        "screener-review-ditto-inference-key"
+    )
+    # The fleet env template must still carry the provider to the worker.
+    env = (role / "templates/fleet.env.j2").read_text()
+    provider_line = (
+        "SCREENER_REVIEW_INFERENCE_PROVIDER="
+        "{{ screener_fleet_review_inference_provider }}"
+    )
+    assert provider_line in env
