@@ -34,6 +34,45 @@ _CONDITIONS: tuple[PublicCondition, ...] = (
     "v4_current_override",
 )
 
+# Registry of reputable open coding datasets accepted as public problem sources.
+# Every kind is an OSI/CC open licence so the shadow router pack can be
+# redistributed. ``licence_spdx`` on a task must match the allow-list for its
+# kind exactly; this is the load-bearing guard against relicensed or
+# unattributed intake. SWE-bench (Verified/Lite/Multilingual) and HumanEval are
+# MIT; MBPP ships under CC-BY-4.0. ``public_maintainer`` remains the escape hatch
+# for hand-authored public tasks and accepts a small permissive licence set.
+PublicSourceKind = Literal[
+    "swe_bench_verified",
+    "swe_bench_lite",
+    "swe_bench_multilingual",
+    "humaneval",
+    "mbpp",
+    "public_maintainer",
+]
+_SOURCE_KIND_LICENCES: dict[str, frozenset[str]] = {
+    "swe_bench_verified": frozenset({"MIT"}),
+    "swe_bench_lite": frozenset({"MIT"}),
+    "swe_bench_multilingual": frozenset({"MIT"}),
+    "humaneval": frozenset({"MIT"}),
+    "mbpp": frozenset({"CC-BY-4.0"}),
+    "public_maintainer": frozenset(
+        {"MIT", "Apache-2.0", "BSD-3-Clause", "BSD-2-Clause", "CC-BY-4.0", "ISC"}
+    ),
+}
+# Repository-scoped kinds carry a whole-repo snapshot and honour the SWE-bench
+# release profile (four repository families, the 3/3/2/2 language split).
+# Function-scoped kinds (HumanEval, MBPP) are single-function Python problems and
+# use a relaxed, Python-only release profile.
+_REPOSITORY_SCOPED_KINDS: frozenset[str] = frozenset(
+    {
+        "swe_bench_verified",
+        "swe_bench_lite",
+        "swe_bench_multilingual",
+        "public_maintainer",
+    }
+)
+_FUNCTION_SCOPED_KINDS: frozenset[str] = frozenset({"humaneval", "mbpp"})
+
 
 @dataclass(frozen=True)
 class PublicTaskSource:
@@ -41,9 +80,7 @@ class PublicTaskSource:
     repository_family: str
     language: PublicLanguage
     licence_spdx: str
-    source_kind: Literal[
-        "swe_bench_verified", "swe_bench_multilingual", "public_maintainer"
-    ]
+    source_kind: PublicSourceKind
     public_issue_url: str
     source_snapshot_manifest_sha256: str
     source_snapshot_archive_sha256: str
@@ -136,8 +173,7 @@ def _parse_task(raw: object) -> PublicTaskSource:
         raise CorpusError("public source task authority is invalid") from error
     if (
         values["language"] not in _LANGUAGE_COUNTS
-        or values["source_kind"]
-        not in {"swe_bench_verified", "swe_bench_multilingual", "public_maintainer"}
+        or values["source_kind"] not in _SOURCE_KIND_LICENCES
         or values["condition"] not in _CONDITIONS
         or not _public_https_url(values["public_issue_url"])
         or any(
@@ -150,20 +186,48 @@ def _parse_task(raw: object) -> PublicTaskSource:
         )
     ):
         raise CorpusError("public source task authority is invalid")
+    if values["licence_spdx"] not in _SOURCE_KIND_LICENCES[values["source_kind"]]:
+        raise CorpusError(
+            f"licence {values['licence_spdx']!r} is not permitted for source kind "
+            f"{values['source_kind']!r}"
+        )
     return PublicTaskSource(**values)
 
 
 def _validate_release(tasks: tuple[PublicTaskSource, ...]) -> None:
     if len(tasks) != 10 or len({task.task_id for task in tasks}) != 10:
         raise CorpusError("public source intake must contain ten unique tasks")
+    kinds = {task.source_kind for task in tasks}
+    repository_scoped = kinds <= _REPOSITORY_SCOPED_KINDS
+    function_scoped = kinds <= _FUNCTION_SCOPED_KINDS
+    if repository_scoped == function_scoped:
+        raise CorpusError(
+            "public source intake must be uniformly repository-scoped or "
+            "function-scoped, not a mix"
+        )
+    for condition in _CONDITIONS:
+        if sum(task.condition == condition for task in tasks) != 2:
+            raise CorpusError("public source intake condition split is invalid")
+    if function_scoped:
+        _validate_function_release(tasks)
+    else:
+        _validate_repository_release(tasks)
+
+
+def _validate_repository_release(tasks: tuple[PublicTaskSource, ...]) -> None:
     if len({task.repository_family for task in tasks}) != 4:
         raise CorpusError("public source intake must contain four repository families")
     for language, expected in _LANGUAGE_COUNTS.items():
         if sum(task.language == language for task in tasks) != expected:
             raise CorpusError("public source intake language split is invalid")
-    for condition in _CONDITIONS:
-        if sum(task.condition == condition for task in tasks) != 2:
-            raise CorpusError("public source intake condition split is invalid")
+
+
+def _validate_function_release(tasks: tuple[PublicTaskSource, ...]) -> None:
+    # HumanEval and MBPP are single-function Python problems, so the multi-repo,
+    # multi-language SWE-bench split does not apply; the memory-condition split
+    # still holds because this remains a memory benchmark.
+    if any(task.language != "python" for task in tasks):
+        raise CorpusError("function-scoped public intake must be all Python")
 
 
 def _sha256(value: object) -> bool:
@@ -187,4 +251,9 @@ def _public_https_url(value: object) -> bool:
     )
 
 
-__all__ = ["PublicSourceIntake", "PublicTaskSource", "load_public_source_intake"]
+__all__ = [
+    "PublicSourceIntake",
+    "PublicSourceKind",
+    "PublicTaskSource",
+    "load_public_source_intake",
+]
