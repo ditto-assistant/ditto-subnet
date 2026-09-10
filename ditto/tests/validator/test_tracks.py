@@ -136,6 +136,27 @@ def test_default_registry_router_promotion_shape() -> None:
     assert registry.shares_bps() == {TRACK_MEMORY: 8000, TRACK_ROUTER: 2000}
 
 
+def test_default_registry_degrades_on_over_cap_partial_map() -> None:
+    # A well-formed PARTIAL governance map: router is promoted eligible but memory
+    # is left at the default full pool, so the eligible sum (10000 + 2000) blows
+    # past the cap. build_default_registry must NOT let that raise escape onto the
+    # put_weights fold path; it degrades to the memory-only safe split so the fold
+    # keeps producing today's memory vector rather than crashing.
+    registry = build_default_registry(
+        track_shares_bps={TRACK_ROUTER: 2000},  # memory omitted -> defaults to full pool
+        router_state=TrackState.ACTIVE,
+        router_weight_eligible=True,
+    )
+    # Safe split: memory owns the whole eligible pool; router is left eligible
+    # (the promotion flags are honored) but earns 0 bps, so it pays nothing.
+    assert registry.total_active_bps() == BASIS_POINT_SCALE
+    memory = registry.get(TRACK_MEMORY)
+    assert memory is not None and memory.effective_bps() == BASIS_POINT_SCALE
+    router = registry.get(TRACK_ROUTER)
+    assert router is not None and router.effective_bps() == 0
+    assert memory.weight_eligible is True
+
+
 def test_reserved_and_folds_are_pure_on_empty_inputs() -> None:
     empty = TrackFoldInputs()
     assert reserved_fold(empty) == {}

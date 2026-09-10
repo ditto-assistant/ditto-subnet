@@ -26,6 +26,7 @@ Lifecycle (mirrors the ``RolloutMode`` ladder in ``internal/scoregates`` and the
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -37,6 +38,8 @@ from ditto.validator.weights import compute_router_weights, compute_weights
 if TYPE_CHECKING:
     from ditto.api_models.router_ledger import RouterLedgerEntry
     from ditto.api_models.validator import LedgerEntry
+
+logger = logging.getLogger(__name__)
 
 # ``BASIS_POINT_SCALE`` (10000) lives in ``config`` as the single source shared
 # with ``weights.blend_track_weights``; re-exported here for the registry API and
@@ -196,21 +199,14 @@ class TrackRegistry:
         }
 
 
-def build_default_registry(
+def _build_registry(
     *,
     track_shares_bps: Mapping[str, int],
-    router_state: TrackState = TrackState.SHADOW,
-    router_weight_eligible: bool = False,
-    coding_state: TrackState = TrackState.SHADOW,
-    coding_weight_eligible: bool = False,
+    router_state: TrackState,
+    router_weight_eligible: bool,
+    coding_state: TrackState,
+    coding_weight_eligible: bool,
 ) -> TrackRegistry:
-    """The shipped three-track registry.
-
-    Memory is ``ACTIVE`` and eligible (the existing competition); coding and
-    router default to ``SHADOW`` / not-eligible so v1 touches no emissions. The
-    per-track bps come from the resolved ``track_shares_bps`` (compiled fallback
-    or, later, the platform governance field).
-    """
     return TrackRegistry(
         (
             Track(
@@ -241,6 +237,60 @@ def build_default_registry(
             ),
         )
     )
+
+
+# The compiled safe split: memory owns the whole pool, coding and router earn
+# nothing. Identical in spirit to ``resolve_track_shares``'s fallback — the fold
+# must always produce a registry, never crash the consensus ``put_weights`` path.
+_SAFE_TRACK_SHARES_BPS = {TRACK_MEMORY: BASIS_POINT_SCALE, TRACK_CODING: 0, TRACK_ROUTER: 0}
+
+
+def build_default_registry(
+    *,
+    track_shares_bps: Mapping[str, int],
+    router_state: TrackState = TrackState.SHADOW,
+    router_weight_eligible: bool = False,
+    coding_state: TrackState = TrackState.SHADOW,
+    coding_weight_eligible: bool = False,
+) -> TrackRegistry:
+    """The shipped three-track registry.
+
+    Memory is ``ACTIVE`` and eligible (the existing competition); coding and
+    router default to ``SHADOW`` / not-eligible so v1 touches no emissions. The
+    per-track bps come from the resolved ``track_shares_bps`` (compiled fallback
+    or, later, the platform governance field).
+
+    ``resolve_track_shares`` already rejects a malformed whole map, but a
+    *well-formed partial* map (e.g. governance sets ``router`` eligible without
+    lowering ``memory`` from the default ``BASIS_POINT_SCALE``) can still push the
+    eligible sum over the cap and make :meth:`TrackRegistry.__post_init__` raise.
+    That raise is on the consensus ``put_weights`` path, so it must never escape:
+    on a cap violation we log and rebuild with the compiled safe split (memory
+    100%, coding/router 0) so the fold degrades to today's memory-only behavior
+    rather than dying (memory included).
+    """
+    try:
+        return _build_registry(
+            track_shares_bps=track_shares_bps,
+            router_state=router_state,
+            router_weight_eligible=router_weight_eligible,
+            coding_state=coding_state,
+            coding_weight_eligible=coding_weight_eligible,
+        )
+    except ValueError:
+        logger.warning(
+            "track_shares_bps %r yields an over-cap eligible split; "
+            "falling back to the memory-only safe split",
+            dict(track_shares_bps),
+            exc_info=True,
+        )
+        return _build_registry(
+            track_shares_bps=_SAFE_TRACK_SHARES_BPS,
+            router_state=router_state,
+            router_weight_eligible=router_weight_eligible,
+            coding_state=coding_state,
+            coding_weight_eligible=coding_weight_eligible,
+        )
 
 
 __all__ = [

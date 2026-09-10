@@ -58,6 +58,7 @@ def _router(
     *,
     minutes: int = 0,
     agent_id: UUID | None = None,
+    weight_eligible: bool = True,
 ) -> RouterLedgerEntry:
     harnesses = tuple(
         RouterHarnessResult(
@@ -73,7 +74,7 @@ def _router(
         miner_hotkey=miner,
         agent_id=agent_id or uuid4(),
         router_contract_version=1,
-        weight_eligible=False,
+        weight_eligible=weight_eligible,
         combined_score=combined,
         harnesses=harnesses,
         first_seen=_T0 + timedelta(minutes=minutes),
@@ -167,6 +168,20 @@ def test_empty_track_share_becomes_shortfall_to_burn() -> None:
     assert track_allocated_share(shares, vectors) == pytest.approx(0.8)
 
 
+def test_zero_only_track_burns_its_share_not_leaks() -> None:
+    # A {hotkey: 0.0} vector is truthy but pays nobody. It must count as
+    # UNallocated (its bps burn) rather than truthy-allocated (its bps would
+    # renormalize onto other tracks' miners). blend and allocated_share share the
+    # one _has_positive_weight predicate, so both agree it contributes nothing.
+    shares = {TRACK_MEMORY: 8000, TRACK_ROUTER: 2000}
+    vectors = {TRACK_MEMORY: {"alpha": 1.0}, TRACK_ROUTER: {"zero": 0.0}}
+    blended = blend_track_weights(vectors, shares)
+    assert blended == {"alpha": pytest.approx(0.8)}
+    assert "zero" not in blended
+    # Same result as the empty-vector case: the zero-only router share burns.
+    assert track_allocated_share(shares, vectors) == pytest.approx(0.8)
+
+
 # --- router fold ranking -------------------------------------------------------
 
 
@@ -204,9 +219,27 @@ def test_router_fold_matches_compute_router_weights() -> None:
     assert folded == compute_router_weights(entries, rank_shares=shares)
 
 
-def test_compute_router_weights_rejects_nonpositive_rank_shares() -> None:
-    with pytest.raises(ValueError, match="finite positive"):
-        compute_router_weights([_router("a", 0.5)], rank_shares=(0.6, 0.0))
+def test_compute_router_weights_degrades_on_nonpositive_rank_shares() -> None:
+    # On the consensus fold path a malformed share set must never raise (that
+    # would kill the whole put_weights fold); it degrades to {} so the router
+    # earns nothing and its bps burn. A genuine misconfig is caught at boot by
+    # ValidatorConfig.__post_init__, not here.
+    assert compute_router_weights([_router("a", 0.5)], rank_shares=(0.6, 0.0)) == {}
+    assert (
+        compute_router_weights([_router("a", 0.5)], rank_shares=(float("nan"),)) == {}
+    )
+    assert compute_router_weights([_router("a", 0.5)], rank_shares=()) == {}
+
+
+def test_compute_router_weights_excludes_not_weight_eligible() -> None:
+    # The scorer's per-entry weight_eligible echo is authoritative: an entry the
+    # scorer flagged not-payable earns nothing even with a positive score.
+    entries = [
+        _router("payable", 0.80, minutes=0, weight_eligible=True),
+        _router("flagged", 0.95, minutes=1, weight_eligible=False),
+    ]
+    weights = compute_router_weights(entries, rank_shares=(0.65, 0.14))
+    assert weights == {"payable": 0.65}
 
 
 # --- resolve_track_shares fallback ---------------------------------------------

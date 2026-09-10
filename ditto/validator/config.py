@@ -499,6 +499,26 @@ class ValidatorConfig:
     track's bps share — so these need not sum to one. Inert while the router
     track is shadow / not eligible."""
 
+    def __post_init__(self) -> None:
+        """Fail loud at boot on a genuinely misconfigured router split.
+
+        ``compute_router_weights`` degrades malformed ``router_rank_shares`` to an
+        empty vector at fold time (fail-closed on the consensus path, never a
+        crash), which would silently zero the router track. To keep a real
+        misconfiguration from hiding behind that runtime backstop, reject an
+        empty or non-finite/≤0 share here — a boot-time ``ValidatorConfigError``
+        is visible, a silently-inert track is not."""
+        if not self.router_rank_shares:
+            raise ValidatorConfigError("router_rank_shares must be non-empty")
+        if any(
+            not math.isfinite(share) or share <= 0.0
+            for share in self.router_rank_shares
+        ):
+            raise ValidatorConfigError(
+                "router_rank_shares must contain only finite positive values, got "
+                f"{self.router_rank_shares!r}"
+            )
+
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured (wallet files)."""
         return bool(self.wallet_name and self.wallet_hotkey)
