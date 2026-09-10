@@ -1638,3 +1638,58 @@ def test_legacy_unsigned_ledger_entry_remains_valid() -> None:
 def test_v7_ledger_entry_requires_signed_quorum() -> None:
     entry = _signed_ledger_entry().model_copy(update={"score_proofs": []})
     assert not verify_ledger_entry(entry)
+
+
+def test_protocol_v27_heartbeat_binds_the_weights_fold_only_when_present() -> None:
+    from ditto.api_models.validator_weights_fold import (
+        WeightsFold,
+        weights_vector_digest,
+    )
+
+    vectors = json.loads(_V9_VECTOR.read_text())
+    request, capabilities, stack, stack_health = _v9_request(vectors["managed"])
+    request["protocol_version"] = 27
+    capacity = BenchmarkCapacity(configured_slots=2, healthy_slots=["slot-0", "slot-1"])
+    updater = ValidatorUpdaterStatus(
+        enabled=True,
+        channel="compat-2",
+        state="idle",
+        current_descriptor=(
+            "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "a" * 64
+        ),
+        observed_at=1_784_020_800,
+    )
+    common = dict(
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+        benchmark_capacity=capacity,
+        confirmation_progress=[],
+        updater_status=updater,
+    )
+    # No fold yet: byte-identical to the v23 domain, so a v27 validator and a
+    # Platform that still verifies v23 agree until the first fold lands.
+    assert heartbeat_signing_message(**common).startswith(
+        b"ditto-validator-heartbeat:v23:"
+    )
+
+    weights = {"5" + "b" * 47: 0.35, "5" + "a" * 47: 0.65}
+    fold = WeightsFold(
+        epoch_index=25_028,
+        ledger_digest="cd" * 32,
+        vector_digest=weights_vector_digest(weights),
+        folded_at=1_784_020_790,
+    )
+    message = heartbeat_signing_message(**common, weights_fold=fold)
+    assert message.startswith(b"ditto-validator-heartbeat:v27:")
+    tampered = fold.model_copy(update={"epoch_index": 25_029})
+    assert message != heartbeat_signing_message(**common, weights_fold=tampered)
+    # The vector digest is order-independent over the hotkeys.
+    assert weights_vector_digest(dict(reversed(list(weights.items())))) == (
+        fold.vector_digest
+    )
+    with pytest.raises(ValueError, match="requires heartbeat protocol v27"):
+        heartbeat_signing_message(
+            **{**common, "protocol_version": 26}, weights_fold=fold
+        )

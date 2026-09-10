@@ -94,6 +94,10 @@ from ditto.api_models.validator_updater import (
     ValidatorUpdaterStatus,
     validator_updater_status_signing_token,
 )
+from ditto.api_models.validator_weights_fold import (
+    WeightsFold,
+    weights_fold_signing_token,
+)
 from ditto.api_server.config import ValidatorCompatibilityConfig
 from ditto.api_server.dependencies import (
     get_chain_client,
@@ -617,6 +621,7 @@ def _heartbeat_payload(
     benchmark_capacity: dict[str, object] | None = None,
     confirmation_progress: list[dict[str, object]] | None = None,
     updater_status: dict[str, object] | None = None,
+    weights_fold: dict[str, object] | None = None,
 ) -> dict[str, object]:
     ts = timestamp if timestamp is not None else int(datetime.now(UTC).timestamp())
     hotkey = keypair.ss58_address
@@ -654,8 +659,14 @@ def _heartbeat_payload(
                     typed_updater = ValidatorUpdaterStatus.model_validate(
                         updater_status
                     )
+                    domain = "v27" if weights_fold is not None else "v23"
+                    fold_token = (
+                        f"{weights_fold_signing_token(WeightsFold.model_validate(weights_fold))}:"
+                        if weights_fold is not None
+                        else ""
+                    )
                     message = (
-                        f"ditto-validator-heartbeat:v23:{hotkey}:0.1.0:"
+                        f"ditto-validator-heartbeat:{domain}:{hotkey}:0.1.0:"
                         f"{protocol_version}:{code_digest}:{state}:"
                         f"{active_agent_id or ''}:"
                         f"{system_metrics_signing_token(metrics)}:"
@@ -664,7 +675,8 @@ def _heartbeat_payload(
                         f"{validator_stack_health_signing_token(typed_health)}:"
                         f"{benchmark_capacity_signing_token(typed_capacity)}:"
                         f"{confirmation_progress_signing_token(typed_confirmation)}:"
-                        f"{validator_updater_status_signing_token(typed_updater)}:{ts}"
+                        f"{validator_updater_status_signing_token(typed_updater)}:"
+                        f"{fold_token}{ts}"
                     )
                 else:
                     message = (
@@ -775,6 +787,8 @@ def _heartbeat_payload(
         payload["benchmark_capacity"] = benchmark_capacity
     if confirmation_progress is not None:
         payload["confirmation_progress"] = confirmation_progress
+    if weights_fold is not None:
+        payload["weights_fold"] = weights_fold
     if updater_status is not None:
         payload["updater_status"] = updater_status
     return payload
@@ -1925,6 +1939,100 @@ class TestHeartbeat:
             row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
             assert row is not None
             assert row.updater_status == updater
+
+    async def test_v27_persists_and_publishes_the_weights_fold(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        _install_chain(app)
+        timestamp = int(datetime.now(UTC).timestamp())
+        updater = {
+            "enabled": True,
+            "channel": "compat-2",
+            "state": "idle",
+            "current_descriptor": (
+                "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "a" * 64
+            ),
+            "current_version": "0.250.0",
+            "candidate_descriptor": None,
+            "candidate_version": None,
+            "failed_candidate_count": 0,
+            "retry_after": None,
+            "suppressed": False,
+            "last_failure_at": None,
+            "last_failure_reason": None,
+            "observed_at": timestamp,
+            "self_refresh_installed": False,
+        }
+        fold = {
+            "epoch_index": 25_028,
+            "ledger_digest": "cd" * 32,
+            "vector_digest": "ef" * 32,
+            "champion_agent_id": str(UUID(int=43)),
+            "folded_at": timestamp - 5,
+        }
+        common: dict[str, Any] = {
+            "timestamp": timestamp,
+            "protocol_version": 27,
+            "capabilities": _quorum_capabilities(),
+            "stack": _V7_STACK,
+            "stack_health": _V9_STACK_HEALTH,
+            "benchmark_capacity": _IDLE_CAPACITY,
+            "confirmation_progress": [],
+            "updater_status": updater,
+        }
+        # A v27 validator that has not folded yet signs on the v23 domain.
+        without = await client.post(
+            "/api/v1/validator/heartbeat",
+            headers=_AUTH_HEADER,
+            json=_heartbeat_payload(**common),
+        )
+        assert without.status_code == 200, without.text
+
+        with_fold = await client.post(
+            "/api/v1/validator/heartbeat",
+            headers=_AUTH_HEADER,
+            json=_heartbeat_payload(
+                **{**common, "timestamp": timestamp + 1}, weights_fold=fold
+            ),
+        )
+        assert with_fold.status_code == 200, with_fold.text
+        async with session_maker() as session:
+            row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert row is not None
+            assert row.weights_fold == fold
+
+        fleet = (await client.get("/api/v1/public/validators")).json()
+        member = next(
+            item
+            for item in fleet["validators"]
+            if item["validator_hotkey"] == _VALIDATOR_HOTKEY
+        )
+        assert member["weights_fold"] == fold
+
+        # The fold is signed: a tampered digest fails verification.
+        tampered = _heartbeat_payload(
+            **{**common, "timestamp": timestamp + 2}, weights_fold=fold
+        )
+        tampered["weights_fold"] = {**fold, "vector_digest": "00" * 32}
+        rejected = await client.post(
+            "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=tampered
+        )
+        assert rejected.status_code == 401
+
+        # A fold on a pre-v27 protocol is a contract violation, not a heartbeat.
+        old = _heartbeat_payload(
+            **{**common, "protocol_version": 26, "timestamp": timestamp + 3},
+            weights_fold=fold,
+        )
+        assert (
+            await client.post(
+                "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=old
+            )
+        ).status_code in (401, 422)
 
     async def test_pre_v23_heartbeat_remains_valid_without_updater_state(
         self,
