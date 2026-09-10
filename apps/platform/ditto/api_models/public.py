@@ -2116,12 +2116,60 @@ class PublicChainWeight(BaseModel):
     value: Annotated[int, Field(gt=0, le=65535)]
 
 
+PinAgreement = Literal["current", "previous", "diverged", "unknown"]
+
+
+class PublicWeightsFold(BaseModel):
+    """What a validator reported folding, from its latest signed heartbeat."""
+
+    epoch_index: Annotated[int | None, Field(default=None, ge=0)] = None
+    ledger_digest: Annotated[
+        str | None, Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    ] = None
+    vector_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    champion_agent_id: UUID | None = None
+    folded_at: Annotated[int, Field(ge=0)]
+
+
+class PublicPinAgreement(BaseModel):
+    """How many revealed vectors match the fold the current pin prescribes."""
+
+    epoch_index: Annotated[int, Field(ge=0)]
+    previous_epoch_index: Annotated[int | None, Field(default=None, ge=0)] = None
+    matching: Annotated[int, Field(ge=0)]
+    total: Annotated[int, Field(ge=0)]
+
+
 class PublicValidatorWeightVector(BaseModel):
     """One validator's latest publicly revealed on-chain weights."""
 
     validator_uid: Annotated[int, Field(ge=0)]
     validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     weights: list[PublicChainWeight] = Field(default_factory=list)
+    fold: Annotated[
+        PublicWeightsFold | None,
+        Field(
+            default=None,
+            description=(
+                "The pinned ledger this validator reported folding on its latest "
+                "heartbeat; null for validators that do not heartbeat to the "
+                "Platform or predate heartbeat protocol v27."
+            ),
+        ),
+    ] = None
+    matches_pin: Annotated[
+        PinAgreement,
+        Field(
+            default="unknown",
+            description=(
+                "Whether this revealed vector's recipients and shares match the "
+                "fold prescribed by the current epoch pin (current), the previous "
+                "pin (previous: one epoch behind, the normal reveal lag), neither "
+                "(diverged), or could not be compared (unknown: no pin yet or an "
+                "empty vector)."
+            ),
+        ),
+    ] = "unknown"
 
 
 class PublicChainEpoch(BaseModel):
@@ -2259,6 +2307,16 @@ class PublicChainWeightsResponse(BaseModel):
     block_hash: Annotated[str, Field(pattern=r"^0x[0-9a-fA-F]{64}$")]
     owner_hotkey: Annotated[str | None, Field(default=None, pattern=_SS58_PATTERN)]
     vectors: list[PublicValidatorWeightVector] = Field(default_factory=list)
+    pin_agreement: Annotated[
+        PublicPinAgreement | None,
+        Field(
+            default=None,
+            description=(
+                "Count of revealed vectors matching the current pin's fold, or "
+                "null when no pin exists to compare against."
+            ),
+        ),
+    ] = None
     stale: Annotated[
         bool,
         Field(
@@ -4112,6 +4170,17 @@ class PublicValidatorHeartbeat(BaseModel):
             description=(
                 "Signed sanitized managed-updater state. Null for validators "
                 "older than heartbeat protocol v23."
+            ),
+        ),
+    ] = None
+    weights_fold: Annotated[
+        PublicWeightsFold | None,
+        Field(
+            default=None,
+            description=(
+                "Which pinned ledger this validator last folded and the digest of "
+                "the vector it committed. Null before the first fold or for "
+                "validators older than heartbeat protocol v27."
             ),
         ),
     ] = None

@@ -55,6 +55,10 @@ from ditto.api_models.validator_confirmation import (
     V9ConfirmationJobResponse,
     V9ConfirmationScorerReadiness,
 )
+from ditto.api_models.validator_weights_fold import (
+    WeightsFold,
+    weights_vector_digest,
+)
 from ditto.chain import ChainError
 from ditto.validator.build_info import validator_build_info
 from ditto.validator.config import lease_budget_seconds
@@ -464,6 +468,8 @@ class _WeightOutcome:
     weights: dict[str, float] = field(default_factory=dict)
     submitted: bool = False
     king_fingerprint: tuple[str, UUID, float, int | None] | None = None
+    fold: WeightsFold | None = None
+    """What this fold consumed and produced, echoed on the heartbeat."""
 
 
 @dataclass(frozen=True)
@@ -570,6 +576,7 @@ class ValidatorWorker:
         # so their check/set transitions are atomic within this event loop.
         self._scoring_active = False
         self._weights_active = False
+        self._last_weights_fold: WeightsFold | None = None
         self._longmem_active = False
         # A failed ticket hand-back is an ambiguous lease transition: local
         # execution is over, but Platform may still own the exact deadline.
@@ -1128,6 +1135,7 @@ class ValidatorWorker:
                 leaderboard=outcome.leaderboard,
                 weights=outcome.weights,
                 weights_submitted=outcome.submitted,
+                weights_fold=outcome.fold,
                 weights_due=set_weights,
                 burn_hotkey=self._config.burn_hotkey,
                 onchain_last_update_block=onchain_last_update_block,
@@ -1374,6 +1382,7 @@ class ValidatorWorker:
                 benchmark_capacity=capacity,
                 confirmation_progress=self._confirmation_progress_snapshot(),
                 updater_status=updater_status,
+                weights_fold=self._last_weights_fold,
                 timestamp=timestamp,
             )
             request = ValidatorHeartbeatRequest(
@@ -1391,6 +1400,7 @@ class ValidatorWorker:
                 benchmark_capacity=capacity,
                 confirmation_progress=self._confirmation_progress_snapshot(),
                 updater_status=updater_status,
+                weights_fold=self._last_weights_fold,
                 timestamp=timestamp,
                 signature=signature,
             )
@@ -1863,11 +1873,25 @@ class ValidatorWorker:
             )
         await self._log_commit_reveal_mode()
         submitted = await self._put_weights_with_retry(weights)
+        # The proof of what was folded: the pin identity the ledger carried, the
+        # digest of the exact vector handed to Pylon, and the crown derived.
+        # Echoed on every heartbeat until the next accepted fold replaces it, so
+        # the Platform can show which snapshot each validator's vector came from.
+        fold = WeightsFold(
+            epoch_index=getattr(ledger, "epoch_index", None),
+            ledger_digest=getattr(ledger, "ledger_digest", None),
+            vector_digest=weights_vector_digest(weights),
+            champion_agent_id=champion.agent_id if champion is not None else None,
+            folded_at=int(time.time()),
+        )
+        if submitted:
+            self._last_weights_fold = fold
         return _WeightOutcome(
             leaderboard=leaderboard,
             weights=weights,
             submitted=submitted,
             king_fingerprint=king_fingerprint,
+            fold=fold,
         )
 
     @staticmethod
@@ -3878,6 +3902,7 @@ class ValidatorWorker:
                     leaderboard=outcome.leaderboard,
                     weights=outcome.weights,
                     weights_submitted=outcome.submitted,
+                    weights_fold=outcome.fold,
                     weights_due=True,
                     burn_hotkey=self._config.burn_hotkey,
                     onchain_last_update_block=last_update,

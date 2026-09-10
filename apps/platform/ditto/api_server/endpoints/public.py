@@ -114,6 +114,7 @@ from ditto.api_models import (
     PublicNextPinProjection,
     PublicOperationsResponse,
     PublicOrphanedSlot,
+    PublicPinAgreement,
     PublicProvisionalScore,
     PublicRolloutQueueEntry,
     PublicRunModels,
@@ -149,6 +150,7 @@ from ditto.api_models import (
     PublicValidatorScore,
     PublicValidatorSlotPolicy,
     PublicValidatorWeightVector,
+    PublicWeightsFold,
     public_validation_failure_code,
 )
 from ditto.api_models import bench_glossary as bench_glossary_data
@@ -237,6 +239,10 @@ from ditto.api_server.koth import (
     emission_allocation,
     koth_entries_from_ledger,
     project_koth,
+)
+from ditto.api_server.ledger_pin import (
+    classify_vector_against_pins,
+    pin_expected_shares,
 )
 from ditto.api_server.miner_avatar import public_avatar_path
 from ditto.api_server.model_use import model_use_factor, model_use_policy
@@ -679,6 +685,86 @@ def _public_epoch(snapshot: ChainWeightsSnapshot) -> PublicChainEpoch | None:
     )
 
 
+def _public_weights_fold(row: ValidatorHeartbeat) -> PublicWeightsFold | None:
+    """The closed fold report off one heartbeat row, or ``None`` if absent/invalid."""
+    if row.protocol_version < 27 or not isinstance(row.weights_fold, dict):
+        return None
+    try:
+        return PublicWeightsFold.model_validate(row.weights_fold)
+    except ValidationError:
+        return None
+
+
+async def _pin_decorations(
+    request: Request,
+) -> tuple[list[LedgerEpochSnapshot], dict[str, PublicWeightsFold]]:
+    """The two newest pins and every validator's reported fold, fail-soft.
+
+    Decoration on the matrix: a database problem here degrades the agreement
+    column to ``unknown`` and the fold to null rather than taking the matrix
+    down with it.
+    """
+    session_maker = getattr(request.app.state, "session_maker", None)
+    config = getattr(request.app.state, "config", None)
+    if session_maker is None or config is None:
+        return [], {}
+    try:
+        async with session_maker() as session:
+            pins = list(await list_pins(session, netuid=config.chain.netuid, limit=2))
+            rows = (await session.scalars(select(ValidatorHeartbeat))).all()
+    except SQLAlchemyError:
+        logger.warning("pin agreement decoration unavailable", exc_info=True)
+        return [], {}
+    folds = {}
+    for row in rows:
+        fold = _public_weights_fold(row)
+        if fold is not None:
+            folds[row.validator_hotkey] = fold
+    return pins, folds
+
+
+def _decorate_vectors_with_pins(
+    vectors: list[PublicValidatorWeightVector],
+    *,
+    pins: list[LedgerEpochSnapshot],
+    folds: dict[str, PublicWeightsFold],
+    burn_hotkey: str | None,
+) -> tuple[list[PublicValidatorWeightVector], PublicPinAgreement | None]:
+    current = pins[0] if pins else None
+    previous = pins[1] if len(pins) > 1 else None
+    expected_current = pin_expected_shares(current) if current is not None else None
+    expected_previous = pin_expected_shares(previous) if previous is not None else None
+    decorated: list[PublicValidatorWeightVector] = []
+    matching = 0
+    for vector in vectors:
+        verdict = classify_vector_against_pins(
+            {weight.hotkey: weight.value for weight in vector.weights},
+            expected_current=expected_current,
+            expected_previous=expected_previous,
+            burn_hotkey=burn_hotkey,
+        )
+        matching += verdict == "current"
+        decorated.append(
+            vector.model_copy(
+                update={
+                    "fold": folds.get(vector.validator_hotkey),
+                    "matches_pin": verdict,
+                }
+            )
+        )
+    agreement = (
+        PublicPinAgreement(
+            epoch_index=current.epoch_index,
+            previous_epoch_index=previous.epoch_index if previous else None,
+            matching=matching,
+            total=len(decorated),
+        )
+        if current is not None
+        else None
+    )
+    return decorated, agreement
+
+
 async def _refresh_chain_weights(request: Request) -> _ChainWeightsSnapshot | None:
     """Read the matrix from chain and cache it, or return ``None`` on failure.
 
@@ -702,6 +788,25 @@ async def _refresh_chain_weights(request: Request) -> _ChainWeightsSnapshot | No
             _error_detail(error),
         )
         return None
+    pins, folds = await _pin_decorations(request)
+    vectors, agreement = _decorate_vectors_with_pins(
+        [
+            PublicValidatorWeightVector(
+                validator_uid=vector.validator_uid,
+                validator_hotkey=vector.validator_hotkey,
+                weights=[
+                    PublicChainWeight(
+                        uid=weight.uid, hotkey=weight.hotkey, value=weight.value
+                    )
+                    for weight in vector.weights
+                ],
+            )
+            for vector in snapshot.vectors
+        ],
+        pins=pins,
+        folds=folds,
+        burn_hotkey=snapshot.owner_hotkey,
+    )
     refreshed = _ChainWeightsSnapshot(
         payload=PublicChainWeightsResponse(
             generated_at=datetime.now(UTC),
@@ -710,19 +815,8 @@ async def _refresh_chain_weights(request: Request) -> _ChainWeightsSnapshot | No
             block=snapshot.block,
             block_hash=snapshot.block_hash,
             owner_hotkey=snapshot.owner_hotkey,
-            vectors=[
-                PublicValidatorWeightVector(
-                    validator_uid=vector.validator_uid,
-                    validator_hotkey=vector.validator_hotkey,
-                    weights=[
-                        PublicChainWeight(
-                            uid=weight.uid, hotkey=weight.hotkey, value=weight.value
-                        )
-                        for weight in vector.weights
-                    ],
-                )
-                for vector in snapshot.vectors
-            ],
+            vectors=vectors,
+            pin_agreement=agreement,
         ),
         read_at=time.monotonic(),
     )
@@ -4194,6 +4288,7 @@ def _validator_heartbeats_response(
                 updater_status = ValidatorUpdaterStatus.model_validate(
                     row.updater_status
                 )
+        weights_fold = _public_weights_fold(row)
         assignment_state: ValidatorAssignmentState
         if assignment is None:
             # No live lease. Reporting an agent with no assignment is a genuine
@@ -4378,6 +4473,7 @@ def _validator_heartbeats_response(
                 stack=stack,
                 stack_health=stack_health,
                 updater_status=updater_status,
+                weights_fold=weights_fold,
             )
         )
     return PublicValidatorHeartbeatsResponse(
