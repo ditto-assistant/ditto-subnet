@@ -176,6 +176,12 @@ paths = [
   "packages/dittobench-coding-contract/**",
 ]
 
+[components.dittobench_router_starter_kit]
+description = "Shadow-only router reference harness and local practice client"
+paths = [
+  "miners/dittobench-router-starter-kit/**",
+]
+
 [components.platform_api]
 description = "Subnet API, database migrations, relays, and control plane"
 depends_on = ["screening_protocol"]

@@ -1,0 +1,31 @@
+[package]
+name = "dittobench-router-starter-kit"
+version = "0.1.0"
+edition = "2021"
+description = "Shadow-only DittoBench router reference miner (contract v1)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "dittobench-router-miner"
+path = "src/bin/dittobench-router-miner.rs"
+
+[dependencies]
+anyhow = "1"
+axum = "0.7"
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+thiserror = "2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
