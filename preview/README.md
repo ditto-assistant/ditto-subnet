@@ -41,6 +41,28 @@ fleet without a code change: `GCP_PREVIEW_MACHINE_TYPE` (default
 (`86400`), and `PREVIEW_CLOSED_GRACE_SECONDS` (`14400`; set `0` to retire the
 moment a PR closes).
 
+### The baked base image
+
+A cold VM spends most of its boot installing the Docker toolchain, pulling four
+compose images, and building five more from scratch, so
+`.github/workflows/preview-base-bake.yml` does that work nightly on one
+throwaway VM and captures the result as the `sn118-preview-base` GCE image
+family. Setting `GCP_PREVIEW_IMAGE_FAMILY` and `GCP_PREVIEW_IMAGE_PROJECT` puts
+previews on it; leaving them unset boots stock Ubuntu and is otherwise
+identical, which is what makes the bake optional rather than load-bearing.
+
+The bake VM boots the same `preview/cloud/startup.sh` a preview does -- its
+toolchain guard is exactly what lets a baked image skip apt -- and runs with no
+service account and no scopes, so default-branch build code on that VM has no
+more authority than PR code does on a preview. `preview/cloud/bake.sh` pulls and
+builds; it never starts a container.
+
+One constraint comes with it: a custom image reports `diskSizeGb` equal to the
+disk it was captured from, and a smaller `--boot-disk-size` is rejected
+outright. Keep `GCP_PREVIEW_DISK_SIZE` at or above `PREVIEW_BAKE_DISK_SIZE`
+(default `32GB`). Activation and the remaining knobs are in
+[`infra/terraform/stacks/gcp-preview/README.md`](../infra/terraform/stacks/gcp-preview/README.md).
+
 Backroom is an authenticated write control plane. It is only part of an
 isolated `stack` plan and must never receive production OAuth, session, MCP, or
 Platform admin credentials from preview code.
@@ -128,6 +150,11 @@ starts the exact SHA on a separate VM. PR code never runs on the privileged
 runner. The VM identity has no project roles and RFC1918 egress is denied. An
 explicit `action: retire` dispatch, failed readiness, the post-close grace, and
 the 24-hour lease cap all tear down the VM and release its slot.
+
+`.github/workflows/preview-base-bake.yml` is the only other privileged preview
+workflow. It is scheduled and dispatch-only, runs on the default branch under
+its own `preview-bake` environment, touches no PR and no PR code, and creates
+one credential-less VM that it deletes on every exit path.
 
 The preview proxy permits only `GET`/`HEAD` under `/api/v1/public/` and strips
 cookies and authorization. Trusted response headers restrict connections,

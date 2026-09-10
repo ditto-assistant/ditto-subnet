@@ -30,6 +30,12 @@ variable "preview_environment" {
   default     = "preview-stack"
 }
 
+variable "bake_environment" {
+  description = "Protected GitHub environment used only by the scheduled preview base image bake."
+  type        = string
+  default     = "preview-bake"
+}
+
 variable "snapshot_writer_service_account" {
   description = "Existing main-only deploy identity used by the scheduled sanitizer."
   type        = string

@@ -4,6 +4,7 @@ data "google_project" "this" {
 
 locals {
   preview_subject = "repo:${var.repository}:environment:${var.preview_environment}"
+  bake_subject    = "repo:${var.repository}:environment:${var.bake_environment}"
   labels = {
     managed_by = "terraform"
     system     = "sn118-preview"
@@ -50,6 +51,11 @@ resource "google_service_account" "runtime" {
   display_name = "Credential-empty SN118 preview VM runtime"
 }
 
+resource "google_service_account" "bake" {
+  account_id   = "sn118-preview-bake"
+  display_name = "GitHub SN118 preview base image bake"
+}
+
 # The trusted default-branch controller creates and deletes bounded preview VMs.
 # It never checks out or executes PR code. The runtime identity deliberately has
 # no project IAM roles and receives cloud-platform scope only so its lack of
@@ -94,6 +100,33 @@ resource "google_service_account_iam_member" "controller_signs_urls" {
   service_account_id = google_service_account.controller.name
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${google_service_account.controller.email}"
+}
+
+# The nightly bake creates one throwaway VM, captures its boot disk into the
+# sn118-preview-base family, and prunes older images. instanceAdmin.v1 already
+# covers compute.images create/delete/list/useReadOnly and setting an image
+# family, so no second role is needed -- the same shape as
+# github-actions-screener-bake in the gcp-platform stack.
+#
+# There is deliberately no serviceAccountUser grant here. bake-image.sh creates
+# the VM with --no-service-account --no-scopes, so the guest that runs
+# default-branch build code has no identity to attach at all, and this bake
+# identity cannot confer one.
+resource "google_project_iam_member" "bake_compute" {
+  project = var.project
+  role    = "roles/compute.instanceAdmin.v1"
+  member  = "serviceAccount:${google_service_account.bake.email}"
+}
+
+# Scoped to its own environment rather than to the controller's, so the bake
+# identity is unreachable from a preview-stack dispatch and vice versa. Like
+# preview-stack, this environment's deployment-branch policy must permit only
+# the default branch: the subject is environment-scoped, not ref-scoped, so a
+# wider policy would let any branch run modified bake code with this identity.
+resource "google_service_account_iam_member" "bake_wif" {
+  service_account_id = google_service_account.bake.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/subject/${local.bake_subject}"
 }
 
 resource "google_compute_network" "preview" {

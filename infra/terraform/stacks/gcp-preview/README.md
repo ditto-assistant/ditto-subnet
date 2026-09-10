@@ -46,8 +46,51 @@ falls back to the default when the variable is absent or empty:
 - `PREVIEW_LEASE_TTL_SECONDS` (default `86400`, the absolute lease cap)
 - `PREVIEW_CLOSED_GRACE_SECONDS` (default `14400`, how long a preview outlives
   its PR closing; `0` restores immediate retirement)
+- `GCP_PREVIEW_IMAGE_FAMILY` and `GCP_PREVIEW_IMAGE_PROJECT` (default stock
+  `ubuntu-2404-lts-amd64` from `ubuntu-os-cloud`); see below
 
 The `prod` environment also needs `GCP_PREVIEW_SNAPSHOT_BUCKET` for the
 scheduled sanitizer. Infrastructure application and the first production
 snapshot remain explicit protected operations; application workflows never
 run Terraform.
+
+## The `sn118-preview-base` image
+
+**Bake preview base image** (`.github/workflows/preview-base-bake.yml`) runs
+nightly and on dispatch. It boots one throwaway VM on stock Ubuntu, lets
+`preview/cloud/startup.sh` install the toolchain and hand off to
+`preview/cloud/bake.sh`, then captures the boot disk as a custom image in the
+`sn118-preview-base` family and prunes all but the newest three.
+
+Two properties are deliberate and should not be "simplified":
+
+- The bake VM runs the **same** `startup.sh` a preview does. There is no second
+  install path to keep in sync, so the image cannot drift from what a preview
+  boot expects, and `startup.sh`'s own toolchain guard is what makes the baked
+  image skip apt on the next boot.
+- The bake VM runs with `--no-service-account --no-scopes`. The image is
+  captured from outside by the workflow's identity, so nothing on the guest
+  needs cloud access; the bake identity therefore needs no `actAs` grant and the
+  preview subnet stays credential-empty.
+
+After apply, create a second protected environment named `preview-bake`, also
+scoped to **only `main`**, for exactly the reason given above -- its OIDC
+subject is `repo:<repo>:environment:preview-bake`, so a wider policy would let
+any branch run modified bake code with an identity that can create VMs and
+images. Set `GCP_PREVIEW_BAKE_SERVICE_ACCOUNT` from the `bake_service_account`
+output, plus `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_PREVIEW_NETWORK`,
+`GCP_PREVIEW_SUBNETWORK`, and `GCP_PREVIEW_ZONE`.
+
+To put previews on the baked image, set `GCP_PREVIEW_IMAGE_FAMILY` to
+`sn118-preview-base` and `GCP_PREVIEW_IMAGE_PROJECT` to this project on the
+`preview-stack` environment. Unsetting them reverts to stock Ubuntu with no
+other change.
+
+**A baked image raises the floor on `GCP_PREVIEW_DISK_SIZE`.** A custom image
+reports `diskSizeGb` equal to the disk it was captured from, and
+`gcloud compute instances create --boot-disk-size` below that is a hard error,
+not the informational warning stock Ubuntu's 10GB image produces. The bake disk
+defaults to 32GB (`PREVIEW_BAKE_DISK_SIZE` on the `preview-bake` environment),
+so keep `GCP_PREVIEW_DISK_SIZE` at or above it. The other bake knobs are
+`PREVIEW_BAKE_MACHINE_TYPE` (default `e2-standard-8`) and
+`PREVIEW_BAKE_KEEP_IMAGES` (default `3`).
