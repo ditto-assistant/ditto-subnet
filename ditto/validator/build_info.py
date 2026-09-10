@@ -98,7 +98,19 @@ from ditto import __version__
 # refreshed canonical revision when available. Older updater-status payloads
 # remain valid and signature-compatible because the additive fields are
 # nullable and omitted from their canonical JSON.
-HEARTBEAT_PROTOCOL_VERSION = 26
+#
+# v27 consumes ``LedgerResponse.crown_mode=incumbent`` and
+# ``crown_incumbent_agent_id``: the KOTH fold opens its champion walk from the
+# previous epoch pin's champion (resolved through its owner family) instead of
+# the earliest lineage anchor, so a senior claimant sitting inside the dethrone
+# band no longer retakes the crown on every read. Every other entry still has
+# to clear the band over the running champion. The heartbeat request and
+# signing bytes are unchanged; this is a capability-negotiation bump. Platform
+# must not expose the marker until every recently-live weight setter reports
+# v27+, because a v26 validator ignores the additive fields and would keep the
+# earliest-lineage walk -- a different champion, and so a different weight
+# vector, on exactly the epochs the marker exists to stabilize.
+HEARTBEAT_PROTOCOL_VERSION = 27
 
 
 @dataclass(frozen=True)

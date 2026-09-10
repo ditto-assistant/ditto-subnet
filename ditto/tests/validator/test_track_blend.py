@@ -130,6 +130,56 @@ def test_single_memory_track_is_byte_identical_to_compute_weights() -> None:
     )
 
 
+def _flap_entries() -> tuple[Any, Any]:
+    """The 2026-09-09 flap: a senior lineage trailing the holder inside the band."""
+    senior = _mem("5A" + "a" * 44, 0.7981, minutes=0)
+    holder = _mem("5B" + "b" * 44, 0.8010, minutes=60)
+    for entry in (senior, holder):
+        entry.bench_version = 12
+    return senior, holder
+
+
+def _flap_params(
+    *, incumbent: UUID | None = None, clamp: bool = False
+) -> MemoryFoldParams:
+    return MemoryFoldParams(
+        margin=0.007,
+        tail_size=4,
+        rank_shares=(0.65, 0.14, 0.10, 0.07, 0.04),
+        dethrone_z=1.64,
+        ceiling_band_clamp=clamp,
+        incumbent_agent_id=incumbent,
+    )
+
+
+def test_memory_fold_threads_the_crown_incumbent_into_the_fold() -> None:
+    """The served incumbent must survive the ``MemoryFoldParams`` hop.
+
+    The worker no longer calls ``compute_weights`` directly -- it fills
+    ``MemoryFoldParams`` and the registry folds it. If ``memory_fold`` stops
+    forwarding ``incumbent_agent_id`` the crown silently reverts to the classic
+    walk while every other suite stays green, so the outcome is asserted
+    through the track fold itself. Both expectations mirror
+    ``test_dethrone_band.TestCrownIncumbency`` at the ``compute_weights`` layer.
+    """
+    senior, holder = _flap_entries()
+    entries = [holder, senior]
+
+    classic = memory_fold(
+        TrackFoldInputs(memory_entries=entries, memory_params=_flap_params())
+    )
+    assert classic[senior.miner_hotkey] == pytest.approx(0.65)
+
+    defended = memory_fold(
+        TrackFoldInputs(
+            memory_entries=entries,
+            memory_params=_flap_params(incumbent=holder.agent_id, clamp=True),
+        )
+    )
+    assert defended[holder.miner_hotkey] == pytest.approx(0.65)
+    assert defended[senior.miner_hotkey] == pytest.approx(0.14)
+
+
 def test_all_empty_tracks_blend_to_empty() -> None:
     assert (
         blend_track_weights({TRACK_MEMORY: {}}, {TRACK_MEMORY: BASIS_POINT_SCALE}) == {}

@@ -330,7 +330,13 @@ result.
   new version that
   improves on your current best by less than that 0.007 gate keeps the
   incumbency clock you already earned; a later rival with a lower score cannot
-  take the crown just because your newer tarball arrived after theirs. From
+  take the crown just because your newer tarball arrived after theirs. Once
+  the fleet runs crown incumbency (`crown_mode: incumbent` on the pinned
+  ledger), the crown is also defended from whoever held it at the previous
+  epoch pin: a senior lineage whose official score sits inside the band no
+  longer retakes it just because its lineage is older, and a challenger still
+  has to clear the band over the holder. Ties among non-holders are still
+  broken by who arrived first. From
   Bench v6 onward, that whole band shrinks smoothly once the incumbent exceeds
   0.60, keeping the crown contestable as scores approach the benchmark ceiling.
   That smooth decay is measured against a perfect score rather than against

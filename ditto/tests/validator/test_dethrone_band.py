@@ -1472,3 +1472,119 @@ class TestCeilingCappedBand:
             ceiling_band_clamp=True,
         )
         assert moved[perfect.miner_hotkey] == pytest.approx(0.65)
+
+
+class TestCrownIncumbency:
+    """``crown_mode: incumbent`` defends the crown from the served incumbent.
+
+    The 2026-09-09 flap: UID 104's lineage anchor was older than UID 43's, so
+    the classic walk made 104 the provisional champion on every read and 43 held
+    the crown only while its official lead exceeded the (clamped) band. As the
+    continual mean wobbled by a quantum the crown flipped 43 -> 104 -> 43 and
+    eight validators took 0.42 vTrust twice. With the incumbent served, 43 opens
+    the walk and 104 has to *clear* the band to take it back.
+    """
+
+    _SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
+
+    def _flap(self) -> tuple[Any, Any]:
+        # Senior lineage (older first_seen) trailing the holder by less than
+        # the decayed 0.007 band at 0.80 -- exactly the shape of the live flap.
+        senior = _e("5A" + "a" * 44, 0.7981, bench_version=12, minutes=0)
+        holder = _e("5B" + "b" * 44, 0.8010, bench_version=12, minutes=60)
+        return senior, holder
+
+    def test_classic_walk_hands_the_crown_to_the_senior_lineage(self) -> None:
+        senior, holder = self._flap()
+        champion = select_champion([holder, senior], margin=0.007, dethrone_z=1.64)
+        assert champion is not None and champion.agent_id == senior.agent_id
+
+    def test_incumbent_keeps_the_crown_inside_the_band(self) -> None:
+        senior, holder = self._flap()
+        champion = select_champion(
+            [holder, senior],
+            margin=0.007,
+            dethrone_z=1.64,
+            ceiling_band_clamp=True,
+            incumbent_agent_id=holder.agent_id,
+        )
+        assert champion is not None and champion.agent_id == holder.agent_id
+        weights = compute_weights(
+            [holder, senior],
+            margin=0.007,
+            tail_size=4,
+            rank_shares=self._SHARES,
+            dethrone_z=1.64,
+            ceiling_band_clamp=True,
+            incumbent_agent_id=holder.agent_id,
+        )
+        assert weights[holder.miner_hotkey] == pytest.approx(0.65)
+        assert weights[senior.miner_hotkey] == pytest.approx(0.14)
+
+    def test_senior_lineage_retakes_only_by_clearing_the_band(self) -> None:
+        holder = _e("5B" + "b" * 44, 0.8010, bench_version=12, minutes=60)
+        senior = _e("5A" + "a" * 44, 0.8300, bench_version=12, minutes=0)
+        champion = select_champion(
+            [holder, senior],
+            margin=0.007,
+            dethrone_z=1.64,
+            incumbent_agent_id=holder.agent_id,
+        )
+        assert champion is not None and champion.agent_id == senior.agent_id
+
+    def test_later_challengers_still_walk_in_first_seen_order(self) -> None:
+        incumbent = _e("5A" + "a" * 44, 0.80, bench_version=12, minutes=0)
+        first = _e("5B" + "b" * 44, 0.90, bench_version=12, minutes=10)
+        second = _e("5C" + "c" * 44, 0.9005, bench_version=12, minutes=20)
+        # Both clear the incumbent; the second is inside the band of the first,
+        # so the earlier arrival keeps the crown among non-incumbents.
+        champion = select_champion(
+            [second, first, incumbent],
+            margin=0.007,
+            dethrone_z=1.64,
+            incumbent_agent_id=incumbent.agent_id,
+        )
+        assert champion is not None and champion.agent_id == first.agent_id
+
+    def test_absent_incumbent_falls_back_to_the_classic_walk(self) -> None:
+        senior, holder = self._flap()
+        classic = select_champion([holder, senior], margin=0.007, dethrone_z=1.64)
+        gone = select_champion(
+            [holder, senior],
+            margin=0.007,
+            dethrone_z=1.64,
+            incumbent_agent_id=uuid4(),
+        )
+        assert classic is not None and gone is not None
+        assert gone.agent_id == classic.agent_id == senior.agent_id
+
+    def test_incumbency_is_off_by_default_everywhere(self) -> None:
+        senior, holder = self._flap()
+        entries = [holder, senior]
+        assert (
+            select_champion(entries, margin=0.007, dethrone_z=1.64).agent_id  # type: ignore[union-attr]
+            == senior.agent_id
+        )
+        assert compute_weights(
+            entries,
+            margin=0.007,
+            tail_size=4,
+            rank_shares=self._SHARES,
+            dethrone_z=1.64,
+        )[senior.miner_hotkey] == pytest.approx(0.65)
+        assert (
+            contested_confirmation_set(
+                entries, current_version=12, margin=0.007, dethrone_z=1.64
+            )[0].agent_id
+            == senior.agent_id
+        )
+        assert (
+            contested_confirmation_set(
+                entries,
+                current_version=12,
+                margin=0.007,
+                dethrone_z=1.64,
+                incumbent_agent_id=holder.agent_id,
+            )[0].agent_id
+            == holder.agent_id
+        )

@@ -31,6 +31,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from ditto.validator.config import BASIS_POINT_SCALE
 from ditto.validator.weights import compute_router_weights, compute_weights
@@ -78,6 +79,7 @@ class MemoryFoldParams:
     dethrone_z: float = 0.0
     tie_pooling: bool = False
     ceiling_band_clamp: bool = False
+    incumbent_agent_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,7 @@ def memory_fold(inputs: TrackFoldInputs) -> dict[str, float]:
         dethrone_z=params.dethrone_z,
         tie_pooling=params.tie_pooling,
         ceiling_band_clamp=params.ceiling_band_clamp,
+        incumbent_agent_id=params.incumbent_agent_id,
     )
 
 
