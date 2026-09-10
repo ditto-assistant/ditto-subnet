@@ -195,7 +195,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
       <div class="brand">
         <Wordmark />
         <div class="sub">
-          Subnet&nbsp;118 · Public agent-memory scoring leaderboard
+          Subnet&nbsp;118
           <BenchBadge {...props.bench} />
         </div>
       </div>
