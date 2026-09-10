@@ -32,12 +32,12 @@ def _state(
     if task is not None and task.closed_at is not None:
         assert task.close_reason in {"completed", "failed", "aborted"}
         return cast(CodingHostedOperationState, task.close_reason)
+    if assignment.expires_at <= now:
+        return "expired"
     if assignment.started_at is not None:
         return "running"
     if assignment.admitted_at is not None:
         return "admitted"
-    if assignment.expires_at <= now:
-        return "expired"
     return "pending_admission"
 
 

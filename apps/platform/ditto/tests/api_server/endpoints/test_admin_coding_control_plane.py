@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import cast
 
 import httpx
 import pytest
@@ -11,10 +14,31 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.endpoints.admin_coding_control_plane import _state
+from ditto.db.models import CodingHostedAssignment, CodingHostedPrivateTask
 from ditto.tests.db.queries.test_coding_hosted_admission import _admit, _request, _seed
 
 _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
 _HEADERS = {"Authorization": f"Bearer {_ADMIN_TOKEN}"}
+
+
+def test_control_plane_expiry_precedes_nonterminal_durable_markers() -> None:
+    now = datetime.now(UTC)
+    expired = cast(
+        CodingHostedAssignment,
+        SimpleNamespace(
+            expires_at=now - timedelta(seconds=1),
+            admitted_at=now - timedelta(minutes=2),
+            started_at=now - timedelta(minutes=1),
+        ),
+    )
+    assert _state(expired, None, now=now) == "expired"
+
+    closed = cast(
+        CodingHostedPrivateTask,
+        SimpleNamespace(closed_at=now, close_reason="completed"),
+    )
+    assert _state(expired, closed, now=now) == "completed"
 
 
 def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> None:
