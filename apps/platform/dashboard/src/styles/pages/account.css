@@ -14,8 +14,9 @@
 .account-head h2 {
   margin: 4px 0 8px;
   font-family: var(--display);
+  letter-spacing: -0.025em;
   font-size: 28px;
-  font-weight: 400;
+  font-weight: 800;
 }
 .account-grid {
   display: grid;

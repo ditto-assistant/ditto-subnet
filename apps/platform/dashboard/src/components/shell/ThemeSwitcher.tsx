@@ -1,23 +1,32 @@
-// Four-mode theme switcher (system | light | dark | time), the port of the
-// sidebar switcher IIFE (monolith 3044–3084). The pre-paint bootstrap in
-// index.html owns first paint and exposes its contract as
-// window.__dittoDashboardTheme (storage key "ditto:dashboard-theme", the
-// fromHour time phases, apply() stamping data-theme / data-system-theme /
-// data-time-phase on <html>); this component drives that same contract and
-// installs an identical fallback when the bootstrap is absent (tests).
-import { createSignal, onCleanup, onMount } from "solid-js";
+// Theme controls for the rail: the four-mode switcher (system | light | dark
+// | time), the port of the sidebar switcher IIFE (monolith 3044–3084), plus
+// the brand-kit palette picker (Carbon, Parchment, Signal, Vermilion, Tide).
+// The pre-paint bootstrap in index.html owns first paint and exposes its
+// contract as window.__dittoDashboardTheme (storage keys
+// "ditto:dashboard-theme" and "ditto:dashboard-palette", the fromHour time
+// phases, apply() stamping data-theme / data-system-theme / data-time-phase
+// and the resolved kit attributes data-ditto-theme / data-ditto-mode on
+// <html>); this component drives that same contract and installs an
+// identical fallback when the bootstrap is absent (tests).
+import { For, createSignal, onCleanup, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
 export type ThemeMode = "system" | "light" | "dark" | "time";
 export type TimePhase = "dawn" | "morning" | "afternoon" | "dusk" | "night";
+export type Palette = "carbon" | "parchment" | "signal" | "vermilion" | "tide";
 
 export const THEME_STORAGE_KEY = "ditto:dashboard-theme";
+export const PALETTE_STORAGE_KEY = "ditto:dashboard-palette";
+export const DEFAULT_PALETTE: Palette = "carbon";
 
 export interface ThemeBootstrap {
   storageKey: string;
+  paletteStorageKey: string;
   fromHour: (hour: number) => string;
   readMode: () => string;
+  readPalette: () => string;
   apply: (mode: string) => string;
+  applyPalette: (palette: string) => string;
 }
 
 declare global {
@@ -27,6 +36,22 @@ declare global {
 }
 
 const MODES: Record<string, true> = { system: true, light: true, dark: true, time: true };
+const PALETTES: Record<string, true> = {
+  carbon: true,
+  parchment: true,
+  signal: true,
+  vermilion: true,
+  tide: true,
+};
+
+/** The five kit palettes, in the kit's own order, with their picker labels. */
+export const PALETTE_OPTIONS: ReadonlyArray<{ id: Palette; label: string; title: string }> = [
+  { id: "carbon", label: "Carbon", title: "Carbon: graphite and off-white" },
+  { id: "parchment", label: "Parchment", title: "Parchment: warm paper and sepia" },
+  { id: "signal", label: "Signal", title: "Signal: green on graphite" },
+  { id: "vermilion", label: "Vermilion", title: "Vermilion: red-orange on slate" },
+  { id: "tide", label: "Tide", title: "Tide: cyan and ink" },
+];
 
 export function fromHour(hour: number): TimePhase {
   if (hour >= 5 && hour < 8) return "dawn";
@@ -45,15 +70,36 @@ function readMode(): ThemeMode {
   }
 }
 
+function readPalette(): Palette {
+  try {
+    const saved = localStorage.getItem(PALETTE_STORAGE_KEY);
+    return saved !== null && PALETTES[saved] ? (saved as Palette) : DEFAULT_PALETTE;
+  } catch {
+    return DEFAULT_PALETTE;
+  }
+}
+
 function applyTheme(mode: string): string {
   const next = MODES[mode] ? mode : "system";
   const root = document.documentElement;
+  const systemDark = Boolean(
+    window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
+  const phase = fromHour(new Date().getHours());
   root.dataset.theme = next;
-  root.dataset.systemTheme =
-    window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
-      ? "dark"
-      : "light";
-  root.dataset.timePhase = fromHour(new Date().getHours());
+  root.dataset.systemTheme = systemDark ? "dark" : "light";
+  root.dataset.timePhase = phase;
+  // The kit scopes its palettes on the resolved mode, never on "system".
+  const dark =
+    next === "dark" || (next === "system" && systemDark) || (next === "time" && phase === "night");
+  root.dataset.dittoMode = dark ? "dark" : "light";
+  if (!root.dataset.dittoTheme) root.dataset.dittoTheme = readPalette();
+  return next;
+}
+
+function applyPalette(palette: string): string {
+  const next = PALETTES[palette] ? palette : DEFAULT_PALETTE;
+  document.documentElement.dataset.dittoTheme = next;
   return next;
 }
 
@@ -62,10 +108,14 @@ export function themeBootstrap(): ThemeBootstrap {
   if (!window.__dittoDashboardTheme) {
     window.__dittoDashboardTheme = {
       storageKey: THEME_STORAGE_KEY,
+      paletteStorageKey: PALETTE_STORAGE_KEY,
       fromHour,
       readMode,
+      readPalette,
       apply: applyTheme,
+      applyPalette,
     };
+    window.__dittoDashboardTheme.applyPalette(readPalette());
     window.__dittoDashboardTheme.apply(readMode());
   }
   return window.__dittoDashboardTheme;
@@ -73,12 +123,17 @@ export function themeBootstrap(): ThemeBootstrap {
 
 export function ThemeSwitcher(): JSX.Element {
   const theme = themeBootstrap();
-  const [mode, setMode] = createSignal(document.documentElement.dataset.theme || "system");
-  const [phase, setPhase] = createSignal(document.documentElement.dataset.timePhase || "afternoon");
+  const root = document.documentElement;
+  const [mode, setMode] = createSignal(root.dataset.theme || "system");
+  const [phase, setPhase] = createSignal(root.dataset.timePhase || "afternoon");
+  const [palette, setPalette] = createSignal(root.dataset.dittoTheme || DEFAULT_PALETTE);
+  const [resolved, setResolved] = createSignal(root.dataset.dittoMode || "light");
 
   function sync(): void {
-    setMode(document.documentElement.dataset.theme || "system");
-    setPhase(document.documentElement.dataset.timePhase || "afternoon");
+    setMode(root.dataset.theme || "system");
+    setPhase(root.dataset.timePhase || "afternoon");
+    setPalette(root.dataset.dittoTheme || DEFAULT_PALETTE);
+    setResolved(root.dataset.dittoMode || "light");
   }
 
   function choose(choice: ThemeMode): void {
@@ -87,6 +142,16 @@ export function ThemeSwitcher(): JSX.Element {
       localStorage.setItem(theme.storageKey, next);
     } catch {
       // Storage is optional; the mode still applies for this page view.
+    }
+    sync();
+  }
+
+  function choosePalette(choice: Palette): void {
+    const next = theme.applyPalette(choice);
+    try {
+      localStorage.setItem(theme.paletteStorageKey, next);
+    } catch {
+      // Storage is optional; the palette still applies for this page view.
     }
     sync();
   }
@@ -149,7 +214,7 @@ export function ThemeSwitcher(): JSX.Element {
           type="button"
           data-theme-choice="light"
           aria-pressed={pressed("light")}
-          title="Always use the light paper theme"
+          title="Always use the light mode of the chosen palette"
           onClick={() => choose("light")}
         >
           <svg
@@ -169,7 +234,7 @@ export function ThemeSwitcher(): JSX.Element {
           type="button"
           data-theme-choice="dark"
           aria-pressed={pressed("dark")}
-          title="Always use the dark ink-blue theme"
+          title="Always use the dark mode of the chosen palette"
           onClick={() => choose("dark")}
         >
           <svg
@@ -188,7 +253,7 @@ export function ThemeSwitcher(): JSX.Element {
           type="button"
           data-theme-choice="time"
           aria-pressed={pressed("time")}
-          title="Follow the landing page theme for the current time of day"
+          title="Follow the time of day: warm at dawn and dusk, dark at night"
           onClick={() => choose("time")}
         >
           <svg
@@ -203,6 +268,30 @@ export function ThemeSwitcher(): JSX.Element {
           </svg>
           <span id="theme-time-label">{timeLabel()}</span>
         </button>
+      </div>
+      <div class="palette-switch" role="group" aria-label="Color palette">
+        <For each={PALETTE_OPTIONS}>
+          {(option) => (
+            <button
+              class="palette-option"
+              type="button"
+              data-palette-choice={option.id}
+              aria-pressed={palette() === option.id ? "true" : "false"}
+              aria-label={option.label}
+              title={option.title}
+              onClick={() => choosePalette(option.id)}
+            >
+              {/* The swatch previews the palette in the currently resolved
+                  mode, so the row reads as five variants of one appearance. */}
+              <span
+                class="palette-swatch"
+                data-ditto-theme={option.id}
+                data-ditto-mode={resolved()}
+                aria-hidden="true"
+              />
+            </button>
+          )}
+        </For>
       </div>
     </div>
   );

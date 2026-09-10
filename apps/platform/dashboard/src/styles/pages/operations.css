@@ -30,7 +30,7 @@
 .pipeline-column h3 {
   margin: 0;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 800;
   color: var(--text);
 }
 .pipeline-count {
@@ -40,7 +40,7 @@
   background: var(--bg-elev-2);
   color: var(--text-dim);
   font-size: 11px;
-  font-weight: 750;
+  font-weight: 600;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
@@ -79,7 +79,7 @@
   overflow: hidden;
   color: var(--text);
   font-size: 12.5px;
-  font-weight: 650;
+  font-weight: 600;
 }
 .pipeline-item-heading {
   display: flex;
@@ -153,9 +153,7 @@
   margin-top: 5px;
   padding: 1px 6px;
   border-radius: 5px;
-  font: 750 9.5px/1.5 var(--sans);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font: 600 9.5px/1.5 var(--sans);
   white-space: nowrap;
 }
 .retry-chip.exhausted {
@@ -176,7 +174,7 @@
   border-radius: 999px;
   color: var(--danger);
   background: color-mix(in oklab, var(--danger) 14%, transparent);
-  font: 750 10px/1.6 var(--sans);
+  font: 600 10px/1.6 var(--sans);
   cursor: pointer;
 }
 .pipeline-stuck-count:hover,
@@ -223,7 +221,7 @@
 }
 .pipeline-more {
   color: var(--text-dim);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 /* ── Operational fleet base (798–863) ── */
@@ -246,7 +244,7 @@
   padding: 6px 9px;
   color: var(--text-dim);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -283,7 +281,7 @@
 .fleet-node-name {
   overflow: hidden;
   color: var(--text);
-  font: 650 12px/1.2 var(--sans);
+  font: 600 12px/1.2 var(--sans);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -347,9 +345,7 @@
   display: block;
   color: var(--text-faint);
   font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.25px;
-  text-transform: uppercase;
+  font-weight: 600;
 }
 .fleet-metric .v {
   display: block;
@@ -386,7 +382,7 @@
   display: block;
   color: var(--text);
   font-size: 11.5px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.35;
 }
 .screener-progress-time {
@@ -411,7 +407,7 @@
   min-width: 0;
   color: var(--text);
   font-size: 11.5px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.35;
 }
 .benchmark-version-chip {
@@ -716,7 +712,7 @@
 }
 .rescreen-facts b {
   color: var(--text);
-  font-weight: 750;
+  font-weight: 600;
 }
 /* Unscoped re-spec of the base pipeline cards above — the atlas turns the
    boxed grid into an open five-node map. Wins purely by source order +
@@ -805,7 +801,7 @@
   border-radius: 0;
   background: transparent;
   color: var(--text);
-  font: 400 18px/1 var(--display);
+  font: 600 18px/1 var(--display);
 }
 .pipeline-items {
   gap: 6px;
@@ -1008,7 +1004,7 @@
 .fleet-ledger-row strong {
   font-family: var(--display);
   font-size: 18px;
-  font-weight: 400;
+  font-weight: 600;
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -1151,7 +1147,7 @@
   display: -webkit-box;
   overflow: hidden;
   color: var(--text);
-  font: 700 14px/1.25 var(--sans);
+  font: 600 14px/1.25 var(--sans);
   overflow-wrap: anywhere;
   white-space: normal;
   -webkit-box-orient: vertical;
@@ -1241,7 +1237,7 @@
 }
 .assignment-detail b {
   color: var(--text);
-  font-weight: 650;
+  font-weight: 600;
 }
 .stage.paused {
   color: var(--accent-2);
@@ -1321,7 +1317,7 @@
   display: block;
   overflow: hidden;
   color: var(--text);
-  font: 700 14px/1.25 var(--sans);
+  font: 600 14px/1.25 var(--sans);
   overflow-wrap: anywhere;
 }
 .screener-host-state {
@@ -1657,7 +1653,7 @@
 }
 .fleet-slot-pct {
   color: var(--text);
-  font-weight: 650;
+  font-weight: 600;
 }
 .fleet-slot-line.warn .fleet-slot-note,
 .fleet-slot-line.warn .fleet-slot-pct {
@@ -1843,13 +1839,13 @@
 }
 .submission-builds-ledger strong {
   color: var(--text);
-  font: 400 19px/1 var(--display);
+  font: 600 19px/1 var(--display);
   font-variant-numeric: tabular-nums;
 }
 .submission-builds-ledger span {
   color: var(--text-dim);
   font-size: 10px;
-  font-weight: 650;
+  font-weight: 600;
 }
 .submission-builds-table-wrap {
   overflow-x: auto;
@@ -1887,7 +1883,7 @@
   overflow: hidden;
   color: var(--text);
   font-size: 11.5px;
-  font-weight: 700;
+  font-weight: 600;
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2101,7 +2097,7 @@
 .pipeline-review-count {
   align-self: start;
   color: var(--text);
-  font: 400 18px/1 var(--display);
+  font: 600 18px/1 var(--display);
 }
 .pipeline-review-items {
   display: grid;

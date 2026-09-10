@@ -184,8 +184,10 @@ _ENTITY_PATH = re.compile(
     r"/(?P<ident>[^/]+)/?$"
 )
 
-_DEFAULT_OG_IMAGE = "/assets/paperditto-512.png"
-_DEFAULT_OG_ALT = "Ditto paper mascot"
+# The brand-kit social card (1200x630): wordmark on the Carbon canvas.
+_DEFAULT_OG_IMAGE = "/assets/dittobench-og.png"
+_DEFAULT_OG_ALT = "Ditto Subnet 118 leaderboard"
+_ORGANIZATION_LOGO = "/assets/icons/app-icon-512.png"
 
 
 @dataclass(frozen=True)
@@ -637,7 +639,7 @@ def _og_image(
     """Return ``(url, alt, is_default_logo)``.
 
     Miner / handle / agent pages use the public avatar when the board has
-    one. Board pages and miners without a picture keep the paper mascot.
+    one. Board pages and miners without a picture keep the brand card.
     """
     miner = _entity_miner(path, snapshot)
     if miner is not None and miner.avatar_url:
@@ -715,8 +717,8 @@ def _render_head(
     if is_logo:
         image_extras = (
             '    <meta property="og:image:type" content="image/png" />\n'
-            '    <meta property="og:image:width" content="512" />\n'
-            '    <meta property="og:image:height" content="512" />\n'
+            '    <meta property="og:image:width" content="1200" />\n'
+            '    <meta property="og:image:height" content="630" />\n'
         )
     else:
         image_extras = ""
@@ -821,7 +823,7 @@ def _organization_schema(origin: str) -> dict[str, Any]:
         "@type": "Organization",
         "name": "Ditto",
         "url": "https://heyditto.ai",
-        "logo": origin + "/assets/paperditto-512.png",
+        "logo": origin + _ORGANIZATION_LOGO,
         "description": (
             "Ditto is the smart home for your agents. SN118 is the public "
             "Bittensor subnet that scores miner-submitted memory agents "

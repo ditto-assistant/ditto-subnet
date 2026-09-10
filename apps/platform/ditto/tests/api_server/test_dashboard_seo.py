@@ -247,18 +247,18 @@ class TestInjectLiveSeo:
         assert f'name="twitter:image" content="{avatar}"' in html
         assert 'property="og:image:alt" content="jupiter"' in html
         og_image = html.split('property="og:image"')[1].split(">")[0]
-        assert "paperditto-512.png" not in og_image
+        assert "dittobench-og.png" not in og_image
         assert "og:image:width" not in html
 
-    def test_home_opengraph_keeps_the_mascot_even_if_champion_has_an_avatar(
+    def test_home_opengraph_keeps_the_brand_card_even_if_champion_has_an_avatar(
         self,
     ) -> None:
         html = inject_live_seo(
             _MARKED_HTML, origin=_ORIGIN, path="/", snapshot=_snapshot()
         )
-        mascot = "https://platform-api.heyditto.ai/assets/paperditto-512.png"
-        assert f'property="og:image" content="{mascot}"' in html
-        assert f'name="twitter:image" content="{mascot}"' in html
+        card = "https://platform-api.heyditto.ai/assets/dittobench-og.png"
+        assert f'property="og:image" content="{card}"' in html
+        assert f'name="twitter:image" content="{card}"' in html
 
     def test_agent_path_uses_the_owning_miner_avatar(self) -> None:
         html = inject_live_seo(
@@ -272,14 +272,14 @@ class TestInjectLiveSeo:
             in html.split('property="og:image"')[1].split(">")[0]
         )
 
-    def test_miner_without_avatar_falls_back_to_the_mascot(self) -> None:
+    def test_miner_without_avatar_falls_back_to_the_brand_card(self) -> None:
         html = inject_live_seo(
             _MARKED_HTML,
             origin=_ORIGIN,
             path="/miner/5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
             snapshot=_snapshot(),
         )
-        assert "paperditto-512.png" in html
+        assert "dittobench-og.png" in html
         assert "og:image:width" in html
 
     def test_reviews_is_noindex(self) -> None:
@@ -375,7 +375,7 @@ def seo_dist(tmp_path, monkeypatch: pytest.MonkeyPatch):
     (assets / "index-Ab12Cd34.js").write_text(
         'console.log("ditto dashboard bundle");\n', encoding="utf-8"
     )
-    (assets / "paperditto-512.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+    (assets / "dittobench-og.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
     monkeypatch.setattr(factory, "_DASHBOARD_DIST", dist)
     monkeypatch.setattr(factory, "_DASHBOARD_FILE", dist / "index.html")
     monkeypatch.setattr(factory, "_DASHBOARD_ASSETS", assets)

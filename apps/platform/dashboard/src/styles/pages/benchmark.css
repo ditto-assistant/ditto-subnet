@@ -45,9 +45,7 @@
 }
 .ver-now {
   font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
+  font-weight: 600;
   color: var(--good);
   border: 1px solid color-mix(in oklab, var(--good) 45%, transparent);
   border-radius: 4px;
@@ -55,9 +53,7 @@
 }
 .ver-next {
   font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
+  font-weight: 600;
   color: var(--warn);
   border: 1px solid color-mix(in oklab, var(--warn) 45%, transparent);
   border-radius: 4px;
@@ -105,9 +101,7 @@
 }
 .about .pillar h2 .tag {
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
+  font-weight: 800;
   padding: 2px 7px;
   border-radius: 999px;
 }
@@ -163,8 +157,9 @@
 }
 .about .pillar h2 {
   font-family: var(--display);
+  letter-spacing: -0.025em;
   font-size: 17px;
-  font-weight: 400;
+  font-weight: 800;
 }
 .about .pillar p {
   color: var(--text-dim);

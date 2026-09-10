@@ -1,7 +1,14 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { THEME_STORAGE_KEY, ThemeSwitcher, fromHour, themeBootstrap } from "./ThemeSwitcher";
+import {
+  DEFAULT_PALETTE,
+  PALETTE_STORAGE_KEY,
+  THEME_STORAGE_KEY,
+  ThemeSwitcher,
+  fromHour,
+  themeBootstrap,
+} from "./ThemeSwitcher";
 
 beforeEach(() => {
   localStorage.clear();
@@ -10,6 +17,8 @@ beforeEach(() => {
   delete root.dataset.theme;
   delete root.dataset.systemTheme;
   delete root.dataset.timePhase;
+  delete root.dataset.dittoTheme;
+  delete root.dataset.dittoMode;
 });
 
 afterEach(() => {
@@ -21,6 +30,12 @@ afterEach(() => {
 function choice(mode: string): HTMLButtonElement {
   const el = document.querySelector<HTMLButtonElement>(`[data-theme-choice="${mode}"]`);
   if (!el) throw new Error("missing theme choice " + mode);
+  return el;
+}
+
+function paletteChoice(palette: string): HTMLButtonElement {
+  const el = document.querySelector<HTMLButtonElement>(`[data-palette-choice="${palette}"]`);
+  if (!el) throw new Error("missing palette choice " + palette);
   return el;
 }
 
@@ -49,6 +64,10 @@ describe("ThemeSwitcher (row 27)", () => {
     // data-system-theme tracks prefers-color-scheme; without matchMedia
     // support (jsdom) it resolves light.
     expect(document.documentElement.dataset.systemTheme).toBe("light");
+    // The kit palettes scope on the resolved mode, never on "system".
+    expect(document.documentElement.dataset.dittoMode).toBe("dark");
+    fireEvent.click(choice("system"));
+    expect(document.documentElement.dataset.dittoMode).toBe("light");
   });
 
   it("falls back to system for junk in storage (and for storage throws)", () => {
@@ -104,7 +123,67 @@ describe("ThemeSwitcher (row 27)", () => {
     const theme = window.__dittoDashboardTheme;
     expect(theme).toBeTruthy();
     expect(theme?.storageKey).toBe("ditto:dashboard-theme");
+    expect(theme?.paletteStorageKey).toBe("ditto:dashboard-palette");
     expect(theme?.apply("dark")).toBe("dark");
     expect(theme?.apply("nonsense")).toBe("system");
+    expect(theme?.applyPalette("tide")).toBe("tide");
+    expect(theme?.applyPalette("nonsense")).toBe(DEFAULT_PALETTE);
+  });
+});
+
+describe("brand-kit palette picker", () => {
+  it("offers the five kit palettes and defaults to Carbon", () => {
+    render(() => <ThemeSwitcher />);
+    const group = document.querySelector('.palette-switch[role="group"]');
+    expect(group).toHaveAttribute("aria-label", "Color palette");
+    ["carbon", "parchment", "signal", "vermilion", "tide"].forEach((palette) =>
+      expect(paletteChoice(palette)).toBeTruthy(),
+    );
+    expect(paletteChoice("carbon")).toHaveAttribute("aria-pressed", "true");
+    expect(document.documentElement.dataset.dittoTheme).toBe("carbon");
+    expect(document.documentElement.dataset.dittoMode).toBe("light");
+  });
+
+  it("persists a chosen palette and stamps data-ditto-theme on the root", () => {
+    render(() => <ThemeSwitcher />);
+    fireEvent.click(paletteChoice("tide"));
+    expect(localStorage.getItem(PALETTE_STORAGE_KEY)).toBe("tide");
+    expect(document.documentElement.dataset.dittoTheme).toBe("tide");
+    expect(paletteChoice("tide")).toHaveAttribute("aria-pressed", "true");
+    expect(paletteChoice("carbon")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("previews each swatch in the currently resolved mode", () => {
+    render(() => <ThemeSwitcher />);
+    const swatch = () => paletteChoice("signal").querySelector(".palette-swatch");
+    expect(swatch()).toHaveAttribute("data-ditto-theme", "signal");
+    expect(swatch()).toHaveAttribute("data-ditto-mode", "light");
+    fireEvent.click(choice("dark"));
+    expect(swatch()).toHaveAttribute("data-ditto-mode", "dark");
+  });
+
+  it("restores a saved palette and falls back to Carbon for junk", () => {
+    localStorage.setItem(PALETTE_STORAGE_KEY, "vermilion");
+    render(() => <ThemeSwitcher />);
+    expect(document.documentElement.dataset.dittoTheme).toBe("vermilion");
+    cleanup();
+    delete window.__dittoDashboardTheme;
+    delete document.documentElement.dataset.dittoTheme;
+    localStorage.setItem(PALETTE_STORAGE_KEY, "sparkle");
+    render(() => <ThemeSwitcher />);
+    expect(document.documentElement.dataset.dittoTheme).toBe("carbon");
+  });
+
+  it("resolves the night phase of time mode to the dark kit mode", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 31, 22, 0, 0));
+    render(() => <ThemeSwitcher />);
+    fireEvent.click(choice("time"));
+    expect(document.documentElement.dataset.timePhase).toBe("night");
+    expect(document.documentElement.dataset.dittoMode).toBe("dark");
+    vi.setSystemTime(new Date(2026, 7, 1, 9, 0, 0));
+    vi.advanceTimersByTime(60_000);
+    expect(document.documentElement.dataset.timePhase).toBe("morning");
+    expect(document.documentElement.dataset.dittoMode).toBe("light");
   });
 });
