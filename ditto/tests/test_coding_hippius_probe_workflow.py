@@ -30,6 +30,18 @@ def test_live_probe_uses_exact_source_and_fixed_hippius_authorities() -> None:
         "ref": "${{ github.sha }}",
         "persist-credentials": False,
     }
+    clean = next(
+        step
+        for step in steps
+        if step.get("name") == "Verify exact clean source before authentication"
+    )
+    auth = next(
+        step
+        for step in steps
+        if step.get("uses", "").startswith("google-github-actions/auth@")
+    )
+    assert steps.index(clean) < steps.index(auth)
+    assert 'test -z "$(git status --porcelain)"' in clean["run"]
     probe = next(
         step
         for step in steps
@@ -47,6 +59,9 @@ def test_live_probe_uses_exact_source_and_fixed_hippius_authorities() -> None:
     }
     command = probe["run"]
     assert 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' in command
+    assert "git diff --quiet" in command
+    assert "git diff --cached --quiet" in command
+    assert "git status --porcelain" not in command
     assert "--confirm 'PROBE HIPPIUS CODING STORAGE'" in command
     assert "--confirm 'PROFILE HIPPIUS CODING STORAGE'" in command
     assert "weight_eligible" in command
@@ -55,7 +70,11 @@ def test_live_probe_uses_exact_source_and_fixed_hippius_authorities() -> None:
 def test_live_probe_binds_exact_secret_versions_without_logging_values() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text())
     steps = workflow["jobs"]["probe"]["steps"]
-    auth = steps[1]
+    auth = next(
+        step
+        for step in steps
+        if step.get("uses", "").startswith("google-github-actions/auth@")
+    )
     assert auth["with"]["service_account"] == "${{ secrets.GCP_TF_APPLY_SA }}"
     command = next(
         step
