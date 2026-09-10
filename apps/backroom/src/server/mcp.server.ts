@@ -86,6 +86,7 @@ import {
   traceDownloadUrlInputSchema,
   peekInferenceTraceInputSchema,
   applyScreenerReviewSettingsInputSchema,
+  applyCopyCourtSettingsInputSchema,
   copyCourtRecommendationsInputSchema,
   rotateScreenerPolicyManifestInputSchema,
   setQueuePolicySettingsInputSchema,
@@ -203,6 +204,7 @@ import {
   fetchScreenerReviewControl,
   fetchCopyCourtControl,
   fetchCopyCourtRecommendations,
+  applyCopyCourtSettings,
   applyScreenerReviewSettings,
   fetchScreenerPolicyManifestControl,
   rotateScreenerPolicyManifest,
@@ -287,6 +289,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'schedule_screener_policy_activation',
   'restore_scored_screening_snapshot',
   'set_validator_slot_settings',
+  'apply_copy_court_settings',
   'set_inference_concurrency_settings',
   'start_runtime_profile',
   'set_submission_cooldown',
@@ -1791,6 +1794,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchCopyCourtRecommendations(input)),
+  )
+
+  registerTool(
+    'apply_copy_court_settings',
+    {
+      title: 'Apply copy court settings',
+      description:
+        'Write one copy-hold triage court posture revision. Settings must be complete (master mode plus all four per-class modes and the tick budget knobs); classes move off → shadow → enforce one at a time after shadow-vs-operator calibration, and the master mode caps every class. Confirmation is APPLY COPY COURT {MODE} with the master mode. In enforce mode the court itself resolves holds with actor platform:copy-hold-court; shadow only records recommendations. Requires backroom:write.',
+      inputSchema: applyCopyCourtSettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => applyCopyCourtSettings(props.session.email, input)),
   )
 
   registerTool(

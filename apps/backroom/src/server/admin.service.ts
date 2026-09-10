@@ -184,6 +184,8 @@ import {
   screenerReviewRevisionSchema,
   screenerPolicyManifestControlSchema,
   copyCourtControlSchema,
+  applyCopyCourtSettingsInputSchema,
+  copyCourtRevisionSchema,
   copyCourtRecommendationListSchema,
   copyCourtRecommendationsInputSchema,
   screenerCapacityViewSchema,
@@ -487,6 +489,22 @@ export async function fetchCopyCourtRecommendations(rawInput: unknown) {
     `/api/v1/admin/copy-court/recommendations?${params.toString()}`,
   )
   return copyCourtRecommendationListSchema.parse(payload)
+}
+
+export async function applyCopyCourtSettings(actor: string, rawInput: unknown) {
+  const input = applyCopyCourtSettingsInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/copy-court/settings', {
+    method: 'POST',
+    actor,
+    body: {
+      expected_revision: input.expectedRevision,
+      settings: input.settings,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return copyCourtRevisionSchema.parse(payload)
 }
 
 export async function fetchScreenerPolicyManifestControl() {
