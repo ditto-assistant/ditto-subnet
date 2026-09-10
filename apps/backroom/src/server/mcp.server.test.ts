@@ -184,6 +184,7 @@ describe('Backroom MCP tools', () => {
         'list_stuck_submissions',
         'list_lease_revocations',
         'list_copy_court_recommendations',
+        'apply_copy_court_settings',
         'list_hotkey_bans',
         'batch_retry_validator_evaluation',
         'agent_scoring_readiness',
@@ -275,17 +276,18 @@ describe('Backroom MCP tools', () => {
     // backstop, to push back on tutorials.
     // The block-bound weight diagnostic adds one tool and its bounded UID input.
     // Keep the separate description budget below unchanged.
-    // The copy-court pair adds two read tools with a small input schema.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(116_600)
+    // The copy-court pair adds two read tools with a small input schema;
+    // apply_copy_court_settings reuses the existing settings schema.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(118_600)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
-    // in get_backroom_tool_help, not here. 23_500 admits the screener
+    // in get_backroom_tool_help, not here. 24_000 admits the screener
     // policy-activation pair, four short shadow qualification catalog lines,
     // the coding-evaluation ledger read, the bootstrap-grant line, and three
     // short catalog-release lines; operational tutorials stay in
     // get_backroom_tool_help.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      23_500,
+      24_000,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

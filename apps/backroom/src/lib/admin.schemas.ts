@@ -7282,6 +7282,13 @@ export const copyCourtRecommendationsInputSchema = z.object({
   offset: z.number().int().min(0).default(0),
 })
 
+export const applyCopyCourtSettingsInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  settings: copyCourtSettingsSchema,
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
 export type CopyCourtControl = z.infer<typeof copyCourtControlSchema>
 export type CopyCourtRecommendationList = z.infer<
   typeof copyCourtRecommendationListSchema
