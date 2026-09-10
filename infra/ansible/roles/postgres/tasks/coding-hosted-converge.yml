@@ -1,0 +1,97 @@
+---
+- name: Require exact reviewed native Coding database admission
+  ansible.builtin.import_tasks: coding-hosted-access.yml
+
+- name: Require the qualified PostgreSQL 17 host
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == 'ditto-pg-platform'
+      - coding_hosted_postgres_enabled is boolean
+      - coding_hosted_postgres_enabled
+      - coding_hosted_postgres_client_ip == '10.33.0.2'
+    fail_msg: Refusing native Coding admission outside the qualified PostgreSQL 17 host.
+    quiet: true
+
+- name: Inspect the managed PostgreSQL HBA file
+  ansible.builtin.stat:
+    path: /etc/postgresql/17/main/pg_hba.conf
+    follow: false
+    get_checksum: false
+    get_mime: false
+  register: coding_postgres_hba_file
+
+- name: Require the protected managed PostgreSQL HBA file
+  ansible.builtin.assert:
+    that:
+      - coding_postgres_hba_file.stat.exists | default(false)
+      - coding_postgres_hba_file.stat.isreg | default(false)
+      - coding_postgres_hba_file.stat.pw_name | default('') == 'postgres'
+      - coding_postgres_hba_file.stat.gr_name | default('') == 'postgres'
+      - coding_postgres_hba_file.stat.mode | default('') == '0640'
+      - coding_postgres_hba_file.stat.nlink | default(0) == 1
+    fail_msg: Refusing to replace an unexpected PostgreSQL HBA path.
+    quiet: true
+
+- name: Admit only the native Coding host through UFW
+  community.general.ufw:
+    rule: allow
+    direction: in
+    port: "5432"
+    proto: tcp
+    src: "{{ coding_hosted_postgres_client_ip }}/32"
+    comment: Postgres from exact native Coding host
+
+- name: Render the reviewed PostgreSQL HBA authority
+  ansible.builtin.template:
+    src: pg_hba.conf.j2
+    dest: /etc/postgresql/17/main/pg_hba.conf
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  notify: reload postgresql
+
+- name: Apply the HBA reload before verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Check PostgreSQL readiness after admission
+  ansible.builtin.command:
+    argv: [/usr/bin/pg_isready, --quiet]
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Count invalid PostgreSQL HBA rules
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/psql
+      - --no-psqlrc
+      - --tuples-only
+      - --no-align
+      - --dbname=postgres
+      - --command=SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL;
+  become_user: postgres
+  changed_when: false
+  register: coding_postgres_hba_errors
+  when: not ansible_check_mode
+
+- name: Count the exact native Coding PostgreSQL admission
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/psql
+      - --no-psqlrc
+      - --tuples-only
+      - --no-align
+      - --dbname=postgres
+      - --command=SELECT count(*) FROM pg_hba_file_rules WHERE database @> ARRAY['ditto_platform_prod'] AND user_name @> ARRAY['ditto'] AND address = '10.33.0.2' AND netmask = '255.255.255.255' AND auth_method = 'scram-sha-256' AND error IS NULL;
+  become_user: postgres
+  changed_when: false
+  register: coding_postgres_hba_exact
+  when: not ansible_check_mode
+
+- name: Require one valid exact native Coding PostgreSQL admission
+  ansible.builtin.assert:
+    that:
+      - coding_postgres_hba_errors.stdout | trim == '0'
+      - coding_postgres_hba_exact.stdout | trim == '1'
+    fail_msg: PostgreSQL did not load exactly one valid native Coding HBA rule.
+    quiet: true
+  when: not ansible_check_mode

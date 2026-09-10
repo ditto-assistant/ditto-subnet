@@ -91,6 +91,47 @@ def test_hba_changes_reload_while_restart_only_settings_keep_restart():
     assert handlers[0]["ansible.builtin.systemd"]["state"] == "reloaded"
 
 
+def test_narrow_guest_admission_changes_only_ufw_hba_and_reload():
+    play = yaml.safe_load(
+        read("infra/ansible/playbooks/gcp-coding-hosted-postgres-admission.yml")
+    )[0]
+    assert play["hosts"] == "role_platform_postgres"
+    assert play["become"] is True and play["gather_facts"] is False
+    assert "roles" not in play
+    include = play["tasks"][0]["ansible.builtin.include_role"]
+    assert include == {
+        "name": "postgres",
+        "tasks_from": "coding-hosted-converge.yml",
+    }
+    tasks = yaml.safe_load(
+        read("infra/ansible/roles/postgres/tasks/coding-hosted-converge.yml")
+    )
+    rendered = str(tasks)
+    assert tasks[0]["ansible.builtin.import_tasks"] == "coding-hosted-access.yml"
+    assert "community.general.ufw" in rendered
+    assert "10.33.0.2" in rendered and "ditto_platform_prod" in rendered
+    assert "pg_hba_file_rules" in rendered and "scram-sha-256" in rendered
+    assert "flush_handlers" in rendered and "pg_isready" in rendered
+    assert rendered.count("not ansible_check_mode") == 4
+    for forbidden in (
+        "postgres_app_password",
+        "ansible.builtin.slurp",
+        "ansible.builtin.apt",
+        "roles/base",
+    ):
+        assert forbidden not in rendered
+
+
+def test_full_and_narrow_convergence_share_one_hba_template():
+    tasks = yaml.safe_load(read("infra/ansible/roles/postgres/tasks/main.yml"))
+    by_name = {task["name"]: task for task in tasks}
+    render = by_name["Render pg_hba.conf"]["ansible.builtin.template"]
+    assert render["src"] == "pg_hba.conf.j2"
+    template = read("infra/ansible/roles/postgres/templates/pg_hba.conf.j2")
+    assert "postgres_hba_hosts" in template
+    assert "scram-sha-256" in template
+
+
 def test_real_ansible_fixture_is_check_only_and_never_converges_roles():
     play = yaml.safe_load(read("infra/ansible/tests/coding-hosted-postgres.yml"))[0]
     assert play["connection"] == "local" and play["become"] is False
@@ -98,3 +139,4 @@ def test_real_ansible_fixture_is_check_only_and_never_converges_roles():
     workflow = read(".github/workflows/infra-ci.yml")
     assert "ansible-playbook --check" in workflow
     assert "tests/coding-hosted-postgres-inventory.yml" in workflow
+    assert "playbooks/gcp-coding-hosted-postgres-admission.yml" in workflow
