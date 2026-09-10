@@ -70,6 +70,17 @@ VALIDATOR_NONCE_JANITOR_DELETED = Counter(
     "ditto_validator_nonce_janitor_deleted_total",
     "Expired validator replay guards deleted by the periodic janitor.",
 )
+LEDGER_PIN_MATERIALIZATIONS = Counter(
+    "ditto_ledger_pin_materializations_total",
+    "Epoch-pinned validator ledger builds, by outcome "
+    "(pinned, loaded, raced, db_error, error).",
+    ("outcome",),
+)
+LEDGER_PIN_LOOP_RUNS = Counter(
+    "ditto_ledger_pin_loop_runs_total",
+    "Background ledger pin sweeps, by outcome (pinned, unavailable, disabled).",
+    ("outcome",),
+)
 VALIDATOR_NONCE_JANITOR_DURATION_SECONDS = Histogram(
     "ditto_validator_nonce_janitor_duration_seconds",
     "Duration of bounded validator nonce janitor sweeps.",

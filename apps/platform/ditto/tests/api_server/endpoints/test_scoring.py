@@ -32,7 +32,8 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_VALIDATOR_AUTH
-from ditto.chain.models import NeuronInfo
+from ditto.chain.errors import ChainConnectionError
+from ditto.chain.models import EpochSchedule, NeuronInfo
 from ditto.db.models import (
     Agent,
     BenchmarkRollout,
@@ -764,6 +765,193 @@ class TestScoringLedger:
         resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert resp.status_code == 401
         assert resp.json()["error_code"] == ERROR_CODE_VALIDATOR_AUTH
+
+
+def _schedule(epoch_index: int, *, block: int) -> EpochSchedule:
+    """SN118's real shape: tempo 360, boundary two blocks before ``block``."""
+    return EpochSchedule(
+        netuid=118,
+        subnet_epoch_index=epoch_index,
+        last_epoch_block=block - 2,
+        pending_epoch_at=0,
+        tempo=360,
+        blocks_since_last_step=2,
+        block=block,
+        block_hash="0x" + "ab" * 32,
+        block_timestamp=1_789_000_000,
+        next_epoch_block=block - 2 + 360,
+    )
+
+
+def _install_epoch_chain(app: FastAPI, schedule: EpochSchedule | None) -> AsyncMock:
+    """The pin reads the chain through app.state, not the request dependency."""
+    read = (
+        AsyncMock(return_value=schedule)
+        if schedule is not None
+        else AsyncMock(side_effect=ChainConnectionError("archive node down"))
+    )
+    app.state.chain = SimpleNamespace(read_epoch_schedule=read)
+    return read
+
+
+class TestEpochPinnedLedger:
+    """One frozen ledger per chain epoch; every validator gets the same bytes."""
+
+    async def test_two_validators_in_one_epoch_receive_identical_pinned_bytes(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        read = _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+
+        first = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert first.status_code == 200, first.text
+        body = first.json()
+        assert body["epoch_index"] == 25_028
+        assert body["pinned_block"] == 9_033_471
+        assert body["stale"] is False
+        assert len(body["ledger_digest"]) == 64
+        assert body.get("crown_mode") is None
+        assert "crown_incumbent_agent_id" not in body
+        assert [entry["miner_hotkey"] for entry in body["entries"]] == [_MINER]
+
+        # A ledger change inside the epoch is invisible until the next pin ...
+        await _seed_scored(
+            session_maker,
+            miner="5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+            composite=0.95,
+        )
+        second = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert second.status_code == 200
+        assert second.json()["entries"] == body["entries"]
+        assert second.json()["ledger_digest"] == body["ledger_digest"]
+        # ... and the cached pin is served without another chain read per call.
+        assert read.await_count == 2  # one schedule read per request, no rebuild
+
+        # The next chain epoch takes a fresh pin that carries the change.
+        read.return_value = _schedule(25_029, block=9_033_831)
+        third = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert third.status_code == 200
+        assert third.json()["epoch_index"] == 25_029
+        assert len(third.json()["entries"]) == 2
+        assert third.json()["ledger_digest"] != body["ledger_digest"]
+
+    async def test_unreadable_chain_serves_the_previous_pin_flagged_stale(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+        pinned = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert pinned.status_code == 200 and pinned.json()["epoch_index"] == 25_028
+
+        _install_epoch_chain(app, None)
+        fallback = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert fallback.status_code == 200
+        body = fallback.json()
+        assert body["epoch_index"] == 25_028
+        assert body["stale"] is True
+        assert body["ledger_digest"] == pinned.json()["ledger_digest"]
+        # Every validator gets that same answer, never a live read for some.
+        again = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert again.json()["ledger_digest"] == body["ledger_digest"]
+
+    async def test_no_pin_yet_falls_through_to_the_live_read(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        _install_epoch_chain(app, None)
+        live = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert live.status_code == 200
+        body = live.json()
+        assert "epoch_index" not in body
+        assert "ledger_digest" not in body
+        assert body["stale"] is False
+        assert [entry["miner_hotkey"] for entry in body["entries"]] == [_MINER]
+
+    async def test_live_mode_bypasses_the_pin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        settings = ContinualRetestSettings(ledger_pin_mode="live").model_dump(
+            mode="json"
+        )
+        async with session_maker() as session, session.begin():
+            session.add(
+                ContinualRetestSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings=settings,
+                    checksum="ab" * 32,
+                    reason="roll the ledger back to the live read",
+                    actor="operator@example.com",
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        app.state.continual_retest_settings.invalidate()
+        read = _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+        live = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert live.status_code == 200
+        assert "epoch_index" not in live.json()
+        read.assert_not_awaited()
+
+    async def test_policy_flip_lands_at_the_next_pin_not_mid_epoch(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        read = _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+        initial = app.state.config.efficiency_bonus
+        resolve = AsyncMock(return_value=initial)
+        monkeypatch.setattr(app.state.efficiency_settings, "resolve", resolve)
+
+        first = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert first.status_code == 200
+        resolve.return_value = replace(initial, cap=initial.cap + 0.01)
+        same_epoch = await client.get(
+            "/api/v1/scoring/scores", headers=_ledger_headers()
+        )
+        assert same_epoch.json()["ledger_digest"] == first.json()["ledger_digest"]
+
+        read.return_value = _schedule(25_029, block=9_033_831)
+        next_epoch = await client.get(
+            "/api/v1/scoring/scores", headers=_ledger_headers()
+        )
+        assert next_epoch.json()["epoch_index"] == 25_029
+        # The context stored on the new pin reflects the flipped policy.
+        async with session_maker() as session:
+            from ditto.db.queries.ledger_epochs import get_pin
+
+            pin = await get_pin(session, netuid=118, epoch_index=25_029)
+        assert pin is not None
+        assert pin.champion_agent_id is not None
 
 
 class TestScoringLiveness:

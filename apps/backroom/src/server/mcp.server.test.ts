@@ -198,6 +198,7 @@ describe('Backroom MCP tools', () => {
         'get_agent_core_qualification',
         'get_agent_scores',
         'get_leaderboard',
+        'get_ledger_epoch_snapshots',
         'get_miner_owner_footprint',
         'get_score_history',
         'get_scored_policy_rescreen',
@@ -280,23 +281,25 @@ describe('Backroom MCP tools', () => {
     // policy-rescreen checkpoint controls. Keep modest headroom for schema
     // evolution; tighten the description budgets, not this whole-payload
     // backstop, to push back on tutorials.
-    // The block-bound weight diagnostic adds one tool and its bounded UID input.
-    // Keep the separate description budget below unchanged.
+    // The block-bound weight diagnostic adds one tool and its bounded UID input;
     // The copy-court pair adds two read tools with a small input schema;
     // apply_copy_court_settings reuses the existing settings schema. The five
     // Coding control tools add bounded release, exact-run, and fixed-k=3 input
     // schemas; the large private receipt remains a record in the MCP catalog
-    // and is parsed exactly by the service before forwarding.
+    // and is parsed exactly by the service before forwarding. The epoch-pin
+    // history read tool adds one more small input schema.
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(125_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
-    // in get_backroom_tool_help, not here. 24_000 admits the screener
+    // in get_backroom_tool_help, not here. 24_500 admits the screener
     // policy-activation pair, four short shadow qualification catalog lines,
     // the coding-evaluation ledger read, the bootstrap-grant line, and three
     // short catalog-release lines; operational tutorials stay in
-    // get_backroom_tool_help.
+    // get_backroom_tool_help. Raised from 24_000 for the epoch-pin history
+    // line: its catalog entry is already the concise 157-char form, and the
+    // catalog had no headroom left under 24_000.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      24_000,
+      24_500,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

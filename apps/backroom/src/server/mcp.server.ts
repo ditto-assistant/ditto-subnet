@@ -223,6 +223,7 @@ import {
   fetchValidatorSlotSettings,
   fetchValidatorFleetObservability,
   fetchValidatorWeightDiagnostics,
+  fetchLedgerEpochSnapshots,
   fetchValidatorAssignments,
   setValidatorSlotSettings,
   fetchBurnSettings,
@@ -505,6 +506,8 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 // Keep the catalog decision-grade; the original, detailed operation notes stay
 // available on demand through `get_backroom_tool_help`.
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
+  get_ledger_epoch_snapshots:
+    'Read the epoch-pinned validator ledger history: per chain epoch, the frozen fold input digest, champion, incumbent, recipients, and whether the crown changed.',
   get_validator_weight_diagnostics:
     'Read block-bound vTrust, revealed weights, pending timelock rounds, and each commit\'s implied reveal block; never submits weights.',
   agent_scoring_readiness:
@@ -2187,6 +2190,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         ),
       )
     },
+  )
+
+  registerTool(
+    'get_ledger_epoch_snapshots',
+    {
+      title: 'Get epoch-pinned ledger history',
+      description:
+        'Read the epoch-pinned validator ledger, newest chain epoch first: per SubnetEpochIndex the pin block, entry count, SHA-256 digest of the exact ledger every validator folded, the champion derived under the frozen markers, the incumbent handed to the fold, recipient shares, and crown_changed against the previous pin. mode says whether pins (epoch) or the live read (live) are being served. Requires backroom:read and changes nothing.',
+      inputSchema: { limit: z.number().int().min(1).max(100).optional() },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ limit }) => result(await fetchLedgerEpochSnapshots(limit ?? 24)),
   )
 
   registerTool(
