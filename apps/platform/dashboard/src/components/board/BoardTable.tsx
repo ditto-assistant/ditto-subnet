@@ -543,13 +543,19 @@ function BoardRow(props: {
             </div>
             <span class="winner-identity">
               <span class="winner-name">
-                <MinerAvatar url={e().avatar_url} />
-                <EntityButton
-                  kind="agent"
-                  id={e().agent_id}
-                  label={displayName()}
-                  title="Open this submission"
-                />
+                {/* Picture and name wrap as one unit: the identity line wraps
+                    its chips in a narrow pane (the overview's compact board),
+                    and a bare avatar stranded above its own name reads as a
+                    different row. */}
+                <span class="winner-name-lead">
+                  <MinerAvatar url={e().avatar_url} />
+                  <EntityButton
+                    kind="agent"
+                    id={e().agent_id}
+                    label={displayName()}
+                    title="Open this submission"
+                  />
+                </span>
                 <HandleBadge handle={e().name_handle} />
                 <Show when={kind() === "zero"}>
                   <TipTarget
