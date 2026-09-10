@@ -3873,6 +3873,86 @@ class ConfirmationScore(Base):
     )
 
 
+class LedgerEpochSnapshot(Base):
+    """One epoch-pinned validator ledger: the fold input for a chain epoch.
+
+    ``GET /scoring/scores`` used to be a time-based read, so two validators
+    polling one epoch apart -- or one ledger change apart -- folded different
+    pools and Yuma clipped whichever side lost the stake vote. A pin freezes the
+    exact ``LedgerEntry`` wire list, the fleet-synchronized mode markers and
+    the burn share once per ``SubnetEpochIndex``; every validator that reads
+    during that epoch receives the identical bytes (``ledger_digest``).
+
+    Rows are **append-only and immutable**: a new epoch inserts a new row and
+    nothing ever UPDATEs or deletes one, so a served pin can always be
+    reproduced from stored data alone. ``champion_agent_id`` is the crown the
+    Platform fold derived from this pin under its frozen modes;
+    ``incumbent_agent_id`` is the previous pin's champion resolved into this
+    pool through the owner family, which is what the incumbency mode hands the
+    validator fold. ``champion_owner_root`` is internal (never on any wire) and
+    exists only to resolve the next pin's incumbent.
+    """
+
+    __tablename__ = "ledger_epoch_snapshots"
+
+    snapshot_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    epoch_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    """Chain ``SubnetEpochIndex`` the pin belongs to; unique per netuid."""
+
+    last_epoch_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    pinned_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    """Head block the schedule was read at when the pin was taken."""
+
+    pinned_block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    pinned_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    """When the pin was taken (UTC); the served ``generated_at``."""
+
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    entries: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    """The exact ``LedgerEntry`` wire list, JSON-serialized."""
+
+    context: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    """Frozen mode markers, burn share and the policy/fleet keys behind them."""
+
+    champion_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    champion_owner_root: Mapped[str | None] = mapped_column(Text, nullable=True)
+    incumbent_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    ledger_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    """SHA-256 over the canonical JSON of ``entries`` plus the served markers."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "netuid", "epoch_index", name="ledger_epoch_snapshots_epoch_key"
+        ),
+        CheckConstraint(
+            "epoch_index >= 0", name="ledger_epoch_snapshots_epoch_index_check"
+        ),
+        CheckConstraint(
+            "pinned_block >= last_epoch_block",
+            name="ledger_epoch_snapshots_pinned_block_check",
+        ),
+        CheckConstraint(
+            "length(ledger_digest) = 64", name="ledger_epoch_snapshots_digest_check"
+        ),
+        Index(
+            "ledger_epoch_snapshots_recent_idx",
+            "netuid",
+            text("epoch_index DESC"),
+        ),
+    )
+
+
 class EfficiencyCohortSnapshot(Base):
     """One frozen relative token-efficiency cohort (bench_version >= 7).
 

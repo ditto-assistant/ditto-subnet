@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
+from ditto.api_models.validator import LedgerEntry
 from ditto.api_server.efficiency import (
     CURVE_VERSION_BOUNDED_FACTOR,
     CURVE_VERSION_UNBOUNDED_FACTOR,
@@ -73,6 +74,70 @@ class KothEntry:
     efficiency_bonus: float | None = None
     efficiency_factor: float | None = None
     efficiency_curve_version: int | None = None
+
+
+def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
+    """Lift validator-wire ledger entries into the fold's public-safe shape.
+
+    The epoch pin stores the exact ``LedgerEntry`` list validators fold, so
+    the Platform's own projection of that pin -- the recorded champion, the
+    incumbent handed to the next pin, the per-epoch history -- must be built
+    from the same bytes rather than from a fresh database read that may
+    already have moved. ``raw_rank`` is the finalized canonical-median order,
+    matching :func:`_public_koth_emissions`; quorum composites come from the
+    signed score proofs and completed-wave composites from the continual
+    aggregate the entry carries.
+    """
+    by_median = sorted(
+        entries, key=lambda entry: (-entry.composite, entry.first_seen, entry.agent_id)
+    )
+    raw_ranks = {entry.agent_id: rank for rank, entry in enumerate(by_median, start=1)}
+    lifted: list[KothEntry] = []
+    for entry in entries:
+        receipt = entry.v9_confirmation
+        confirmations = entry.confirmation_composites
+        seeds = entry.confirmation_seeds
+        paired_composites: tuple[float, ...] | None = None
+        paired_seeds: tuple[int, ...] | None = None
+        if (
+            confirmations is not None
+            and seeds is not None
+            and len(confirmations) == len(seeds)
+            and len(confirmations) >= 2
+        ):
+            paired_composites = tuple(confirmations)
+            paired_seeds = tuple(seeds)
+        lifted.append(
+            KothEntry(
+                miner_hotkey=entry.miner_hotkey,
+                agent_id=entry.agent_id,
+                composite=(
+                    receipt.full_effective_micros / 1_000_000
+                    if receipt is not None
+                    else entry.composite
+                ),
+                first_seen=entry.first_seen,
+                raw_rank=raw_ranks[entry.agent_id],
+                bench_version=entry.bench_version or 1,
+                composite_stderr=entry.composite_stderr,
+                quorum_composites=(
+                    ()
+                    if receipt is not None
+                    else tuple(proof.composite for proof in entry.score_proofs)
+                ),
+                completed_wave_composites=(
+                    ()
+                    if receipt is not None or confirmations is None
+                    else tuple(confirmations)
+                ),
+                confirmation_composites=paired_composites,
+                confirmation_seeds=paired_seeds,
+                efficiency_bonus=entry.efficiency_bonus,
+                efficiency_factor=entry.efficiency_factor,
+                efficiency_curve_version=entry.efficiency_curve_version,
+            )
+        )
+    return lifted
 
 
 @dataclass(frozen=True)
@@ -529,6 +594,7 @@ def project_koth(
     *,
     distinct_hotkeys: bool = False,
     ceiling_band_clamp: bool = False,
+    incumbent_agent_id: UUID | None = None,
 ) -> KothProjection | None:
     """Return the champion and participation tail for an eligible score pool.
 
@@ -551,8 +617,24 @@ def project_koth(
 
     ranked = _ranked_entries(scored)
     ordered = sorted(scored, key=lambda entry: (entry.first_seen, entry.agent_id))
-    champion = ordered[0]
-    for challenger in ordered[1:]:
+    # Crown incumbency (``crown_mode: incumbent``): the previous epoch's
+    # champion, resolved into this pool, opens the walk instead of the earliest
+    # lineage, so a senior claimant inside the band no longer retakes the crown
+    # on every read. Every other entry still has to clear the band over the
+    # running champion, in the same first-seen order. An incumbent that is not
+    # in the pool (bootstrap, lineage gone) falls back to the classic walk.
+    incumbent = next(
+        (entry for entry in scored if entry.agent_id == incumbent_agent_id), None
+    )
+    if incumbent is not None:
+        champion = incumbent
+        challengers = [
+            entry for entry in ordered if entry.agent_id != incumbent.agent_id
+        ]
+    else:
+        champion = ordered[0]
+        challengers = ordered[1:]
+    for challenger in challengers:
         if _dethrone_decision(
             challenger, champion, ceiling_band_clamp=ceiling_band_clamp
         ).dethrones:

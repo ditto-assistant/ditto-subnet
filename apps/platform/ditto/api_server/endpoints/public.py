@@ -103,6 +103,11 @@ from ditto.api_models import (
     PublicLeaderboardFamily,
     PublicLeaderboardFamilyMember,
     PublicLeaderboardResponse,
+    PublicLedgerActor,
+    PublicLedgerEpoch,
+    PublicLedgerEpochRecipient,
+    PublicLedgerEpochsResponse,
+    PublicLedgerPin,
     PublicMetricDoc,
     PublicModelUse,
     PublicNameHandle,
@@ -151,6 +156,7 @@ from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
 from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import ConfirmationProgress
+from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.model_use import ModelUseVerdict
 from ditto.api_models.public import (
     BenchServiceability,
@@ -172,6 +178,7 @@ from ditto.api_models.system_health import (
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator import (
+    LedgerEntry,
     V9BaseEvidence,
     V9ConfirmationReceipt,
     ValidatorRuntimeState,
@@ -221,6 +228,7 @@ from ditto.api_server.koth import (
     bounded_efficiency_adjusted_quality,
     champion_defense,
     emission_allocation,
+    koth_entries_from_ledger,
     project_koth,
 )
 from ditto.api_server.miner_avatar import public_avatar_path
@@ -243,6 +251,7 @@ from ditto.db.models import (
     ConfirmationScore,
     EvaluationPayment,
     InferenceGrant,
+    LedgerEpochSnapshot,
     Score,
     ScreenerCapacitySnapshot,
     ScreenerNode,
@@ -305,6 +314,7 @@ from ditto.db.queries.heartbeats import (
 )
 from ditto.db.queries.inference import USAGE_ACCOUNTING_VERSION
 from ditto.db.queries.king_reign import KingReveal, get_king_reveal
+from ditto.db.queries.ledger_epochs import latest_pin, list_pins
 from ditto.db.queries.miner_avatars import get_miner_avatar, list_miner_avatars
 from ditto.db.queries.orphaned_leases import OrphanedLease, list_orphaned_leases
 from ditto.db.queries.queue_order import (
@@ -2358,6 +2368,7 @@ def _public_koth_emissions(
     efficiency_curve_versions: dict[UUID, int] | None = None,
     tie_weighting_active: bool = False,
     ceiling_band_clamp: bool = False,
+    ledger_pin: PublicLedgerPin | None = None,
 ) -> PublicKothEmissions | None:
     """Project the caller's finalized, registration-eligible score pool."""
     quorum_values = quorum_by_agent or {}
@@ -2534,6 +2545,7 @@ def _public_koth_emissions(
             else None
         ),
         recipients=recipients,
+        ledger_pin=ledger_pin,
     )
 
 
@@ -3440,9 +3452,223 @@ async def build_public_leaderboard(
                 efficiency_curve_versions=board_curve_versions,
                 tie_weighting_active=tie_weighting_active,
                 ceiling_band_clamp=ceiling_band_clamp_active,
+                ledger_pin=await _current_ledger_pin(
+                    request, session, continual_settings
+                ),
             )
         ),
         efficiency=_efficiency_status(efficiency_view),
+    )
+
+
+def _ledger_pin_model(
+    row: LedgerEpochSnapshot, *, mode: Literal["epoch", "live"]
+) -> PublicLedgerPin:
+    served = (
+        (row.context or {}).get("served", {}) if isinstance(row.context, dict) else {}
+    )
+    schedule = (
+        (row.context or {}).get("schedule", {}) if isinstance(row.context, dict) else {}
+    )
+    next_epoch = (
+        schedule.get("next_epoch_block") if isinstance(schedule, dict) else None
+    )
+    return PublicLedgerPin(
+        mode=mode,
+        epoch_index=row.epoch_index,
+        last_epoch_block=row.last_epoch_block,
+        pinned_block=row.pinned_block,
+        pinned_at=row.pinned_at,
+        next_epoch_block=next_epoch if isinstance(next_epoch, int) else None,
+        bench_version=row.bench_version,
+        entry_count=len(row.entries or []),
+        ledger_digest=row.ledger_digest,
+        champion_agent_id=row.champion_agent_id,
+        incumbent_agent_id=row.incumbent_agent_id,
+        crown_mode=served.get("crown_mode") if isinstance(served, dict) else None,
+    )
+
+
+async def _current_ledger_pin(
+    request: Request, session: AsyncSession, settings: ContinualRetestSettings
+) -> PublicLedgerPin | None:
+    """The pin validators fold now; ``None`` in live mode or before the first pin."""
+    if settings.ledger_pin_mode != "epoch":
+        return None
+    try:
+        row = await latest_pin(session, netuid=request.app.state.config.chain.netuid)
+    except SQLAlchemyError:
+        logger.warning(
+            "ledger pin read failed; board renders without it", exc_info=True
+        )
+        return None
+    return None if row is None else _ledger_pin_model(row, mode="epoch")
+
+
+async def _ledger_actor_names(
+    session: AsyncSession, agent_ids: set[UUID]
+) -> dict[UUID, tuple[str | None, int | None]]:
+    if not agent_ids:
+        return {}
+    from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
+    from ditto.db.queries.name_claims import active_handle_claims
+
+    rows = (
+        (
+            await session.execute(
+                select(Agent.agent_id, Agent.name, Agent.version).where(
+                    Agent.agent_id.in_(list(agent_ids))
+                )
+            )
+        )
+        .tuples()
+        .all()
+    )
+    claims = await active_handle_claims(session, netuid=_name_claim_netuid())
+    return {
+        agent_id: (_public_named(name, None, claims)[0], version)
+        for agent_id, name, version in rows
+    }
+
+
+@router.get("/ledger-epochs", response_model=PublicLedgerEpochsResponse)
+async def ledger_epochs(
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 24,
+) -> PublicLedgerEpochsResponse:
+    """Per-epoch history of the pinned ledger and the crown it produced.
+
+    Newest first. Each row is one immutable pin: the fold input every validator
+    received for that chain epoch, the champion the fold derived from it under
+    its frozen markers, the incumbent it was handed, and the recipient shares.
+    ``crown_changed`` compares consecutive pins, so a quiet column across
+    retest waves is the stability the pin exists to produce. Live mode still
+    lists historical pins but reports ``mode: live``.
+    """
+    response.headers["Cache-Control"] = _CACHE_CONTROL
+    settings = await request.app.state.continual_retest_settings.resolve(
+        getattr(request.app.state, "session_maker", None)
+    )
+    mode: Literal["epoch", "live"] = (
+        "epoch" if settings.ledger_pin_mode == "epoch" else "live"
+    )
+    netuid = request.app.state.config.chain.netuid
+    # One extra row so the oldest returned pin can still report crown_changed.
+    rows = list(await list_pins(session, netuid=netuid, limit=limit + 1))
+    shown = rows[:limit]
+    actor_ids: set[UUID] = set()
+    projections: list[tuple[LedgerEpochSnapshot, Any, Any]] = []
+    for row in shown:
+        entries = [LedgerEntry.model_validate(item) for item in (row.entries or [])]
+        served = (
+            (row.context or {}).get("served", {})
+            if isinstance(row.context, dict)
+            else {}
+        )
+        fold_entries = koth_entries_from_ledger(entries)
+        projection = project_koth(
+            fold_entries,
+            distinct_hotkeys=served.get("tie_weighting_mode") == "pool",
+            ceiling_band_clamp=served.get("dethrone_band_mode") == "headroom_capped",
+            incumbent_agent_id=(
+                row.incumbent_agent_id
+                if served.get("crown_mode") == "incumbent"
+                else None
+            ),
+        )
+        allocation = (
+            emission_allocation(
+                fold_entries,
+                projection,
+                tie_pooling=served.get("tie_weighting_mode") == "pool",
+                ceiling_band_clamp=served.get("dethrone_band_mode")
+                == "headroom_capped",
+            )
+            if projection is not None
+            else None
+        )
+        projections.append((row, projection, allocation))
+        for candidate in (row.champion_agent_id, row.incumbent_agent_id):
+            if candidate is not None:
+                actor_ids.add(candidate)
+        if allocation is not None:
+            actor_ids.update(member.agent_id for member in allocation.members)
+    names = await _ledger_actor_names(session, actor_ids)
+    hotkeys: dict[UUID, str] = {}
+    for row in shown:
+        for item in row.entries or []:
+            try:
+                hotkeys[UUID(str(item["agent_id"]))] = str(item["miner_hotkey"])
+            except (KeyError, ValueError, TypeError):
+                continue
+
+    def actor(agent_id: UUID | None) -> PublicLedgerActor | None:
+        if agent_id is None or agent_id not in hotkeys:
+            return None
+        name, version = names.get(agent_id, (None, None))
+        return PublicLedgerActor(
+            agent_id=agent_id,
+            miner_hotkey=hotkeys[agent_id],
+            agent_name=name,
+            agent_version=version,
+        )
+
+    epochs: list[PublicLedgerEpoch] = []
+    for index, (row, _projection, allocation) in enumerate(projections):
+        previous = rows[index + 1] if index + 1 < len(rows) else None
+        recipients: list[PublicLedgerEpochRecipient] = []
+        if allocation is not None:
+            total = sum(allocation.shares) or 1.0
+            for position, member in enumerate(allocation.members):
+                base = actor(member.agent_id)
+                if base is None:
+                    continue
+                recipients.append(
+                    PublicLedgerEpochRecipient(
+                        **base.model_dump(),
+                        role=(
+                            "joint_champion"
+                            if allocation.mode == "score_ceiling_pool"
+                            else "champion"
+                            if position == 0
+                            else "tail"
+                        ),
+                        share_of_miner_pool=allocation.shares[position] / total,
+                    )
+                )
+        served = (
+            (row.context or {}).get("served", {})
+            if isinstance(row.context, dict)
+            else {}
+        )
+        epochs.append(
+            PublicLedgerEpoch(
+                epoch_index=row.epoch_index,
+                last_epoch_block=row.last_epoch_block,
+                pinned_block=row.pinned_block,
+                pinned_at=row.pinned_at,
+                bench_version=row.bench_version,
+                entry_count=len(row.entries or []),
+                ledger_digest=row.ledger_digest,
+                crown_mode=served.get("crown_mode")
+                if isinstance(served, dict)
+                else None,
+                champion=actor(row.champion_agent_id),
+                incumbent=actor(row.incumbent_agent_id),
+                crown_changed=(
+                    previous is not None
+                    and previous.champion_agent_id != row.champion_agent_id
+                ),
+                recipients=recipients,
+            )
+        )
+    return PublicLedgerEpochsResponse(
+        generated_at=datetime.now(UTC),
+        mode=mode,
+        count=len(epochs),
+        epochs=epochs,
     )
 
 

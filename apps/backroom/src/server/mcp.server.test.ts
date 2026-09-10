@@ -193,6 +193,7 @@ describe('Backroom MCP tools', () => {
         'get_agent_core_qualification',
         'get_agent_scores',
         'get_leaderboard',
+        'get_ledger_epoch_snapshots',
         'get_miner_owner_footprint',
         'get_score_history',
         'get_scored_policy_rescreen',
@@ -271,9 +272,10 @@ describe('Backroom MCP tools', () => {
     // policy-rescreen checkpoint controls. Keep modest headroom for schema
     // evolution; tighten the description budgets, not this whole-payload
     // backstop, to push back on tutorials.
-    // The block-bound weight diagnostic adds one tool and its bounded UID input.
+    // The block-bound weight diagnostic adds one tool and its bounded UID input;
+    // the epoch-pinned ledger history adds one read tool with a bounded limit.
     // Keep the separate description budget below unchanged.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(116_000)
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(116_500)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. 23_500 admits the screener
