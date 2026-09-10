@@ -20,10 +20,10 @@ import inspect
 import logging
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 from ditto.api_models.benchmark_capacity import (
@@ -518,6 +518,61 @@ def _stack_can_self_resume(
     )
 
 
+@runtime_checkable
+class RouterLedgerSource(Protocol):
+    """The compute-destination seam for the router ledger the validator folds.
+
+    The validator is never locked to one place the router eval runs: it only
+    reads a published ledger and folds it (creds-free, preserving the
+    tap->router->relay trust boundary). ``fetch`` returns the router ledger for
+    this epoch's fold; an empty ledger contributes zero router emission and is
+    exactly the shadow state.
+    """
+
+    async def fetch(self) -> RouterLedgerResponse: ...
+
+
+class EmptyRouterLedgerSource:
+    """v1 shadow default: always the empty ledger (zero router emission).
+
+    Keeps the fold pipeline, logging, and tests exercising the router path every
+    cycle without any cross-component dependency, and makes v1 behavior
+    byte-identical to folding no router track at all.
+    """
+
+    async def fetch(self) -> RouterLedgerResponse:
+        return RouterLedgerResponse()
+
+
+class PlatformRouterLedgerSource:
+    """Promotion seam: the offloaded scorer publishes, the validator reads+folds.
+
+    The heavy router eval runs on one trusted, offloaded ``dittobench-api``
+    scorer that publishes a ledger; this source performs the best-effort read.
+    It is fail-closed: any error degrades to an **empty** ledger (zero router
+    emission) so a scorer outage or a malformed publish can never crash or
+    distort the consensus ``put_weights`` fold. Not wired in v1 (the worker
+    defaults to :class:`EmptyRouterLedgerSource`); this is the documented
+    implementation the validator swaps in at promotion, keeping the compute
+    destination pluggable.
+    """
+
+    def __init__(
+        self, read: Callable[[], Awaitable[RouterLedgerResponse]]
+    ) -> None:
+        self._read = read
+
+    async def fetch(self) -> RouterLedgerResponse:
+        try:
+            return await self._read()
+        except Exception:
+            logger.warning(
+                "router ledger read failed; folding an empty ledger for this epoch",
+                exc_info=True,
+            )
+            return RouterLedgerResponse()
+
+
 class ValidatorWorker:
     """Owns one scoring sweep and the long-lived loop around it."""
 
@@ -534,6 +589,7 @@ class ValidatorWorker:
         stack_health: StackHealthCollector | None = None,
         heartbeat_clock: _HeartbeatClock | None = None,
         after_score: Callable[[UUID, int], None] | None = None,
+        router_ledger_source: RouterLedgerSource | None = None,
     ) -> None:
         self._config = config
         self._platform = platform
@@ -558,6 +614,12 @@ class ValidatorWorker:
         self._coalesced_heartbeat_task: asyncio.Task[bool] | None = None
         self._background_heartbeat_tasks: set[asyncio.Task[bool]] = set()
         self._after_score = after_score
+        # The router ledger's compute-destination seam. v1 defaults to the empty
+        # (shadow) source; a promotion swaps in a PlatformRouterLedgerSource that
+        # reads the offloaded scorer's published ledger. See RouterLedgerSource.
+        self._router_ledger_source: RouterLedgerSource = (
+            router_ledger_source or EmptyRouterLedgerSource()
+        )
         self._platform_accepted = False
         self._bootstrap_resume_ready = False
         # Cooperative updater drains are acknowledged only after both the
@@ -1926,16 +1988,16 @@ class ValidatorWorker:
     async def _get_router_ledger(self) -> RouterLedgerResponse:
         """The centralized router scorer's ledger for this epoch's router fold.
 
-        v1 is shadow-only: the router track is not weight-eligible, so it folds an
-        **empty** router ledger — zero router emission, identical to the shadow
-        state — and never disturbs the memory fold. The router eval runs on one
-        trusted ``dittobench-api`` scorer that will publish this ledger; at
-        promotion this method becomes a best-effort platform read (degrading to
-        an empty ledger on failure). Keeping it a seam now means the fold
-        pipeline, logging, and tests already exercise the router path every cycle
-        without a cross-component dependency.
+        Delegates to the injected :class:`RouterLedgerSource` — the
+        compute-destination seam. v1 is shadow-only: the default
+        :class:`EmptyRouterLedgerSource` folds an **empty** router ledger (zero
+        router emission, identical to the shadow state) and never disturbs the
+        memory fold. At promotion a :class:`PlatformRouterLedgerSource` is
+        injected so the validator reads the offloaded scorer's published ledger
+        (best-effort, degrading to empty on failure) without this worker being
+        locked to any one compute destination.
         """
-        return RouterLedgerResponse()
+        return await self._router_ledger_source.fetch()
 
     def _log_shadow_tracks(
         self,
