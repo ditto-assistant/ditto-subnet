@@ -93,9 +93,7 @@ details.cases {
 details.cases summary {
   cursor: pointer;
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+  font-weight: 600;
   color: var(--text-dim);
   padding: 6px 0;
   list-style: none;
@@ -117,9 +115,7 @@ details.gloss {
 details.gloss summary {
   cursor: pointer;
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+  font-weight: 600;
   color: var(--text-dim);
   padding: 6px 0;
   list-style: none;
@@ -143,7 +139,7 @@ details.gloss[open] summary::before {
 }
 .gterm {
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text);
 }
 .gdesc {
@@ -164,9 +160,7 @@ details.gloss[open] summary::before {
 }
 .gex-tag {
   font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
+  font-weight: 600;
   color: var(--text-faint);
   margin-right: 6px;
 }
@@ -185,9 +179,7 @@ details.gloss[open] summary::before {
 }
 .gcat-head {
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+  font-weight: 600;
   color: var(--text-faint);
   margin: 12px 0 2px;
 }
@@ -216,9 +208,7 @@ details.gloss[open] summary::before {
 }
 .ckind {
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
+  font-weight: 600;
   border-radius: 4px;
   padding: 1px 5px;
 }
@@ -237,11 +227,11 @@ details.gloss[open] summary::before {
 }
 .crow .pass {
   color: var(--good);
-  font-weight: 700;
+  font-weight: 600;
 }
 .crow .fail {
   color: var(--danger);
-  font-weight: 700;
+  font-weight: 600;
 }
 .cmeta {
   color: var(--text-dim);
@@ -275,11 +265,11 @@ details.gloss[open] summary::before {
 }
 .coverview .good {
   color: var(--good);
-  font-weight: 700;
+  font-weight: 600;
 }
 .coverview .danger {
   color: var(--danger);
-  font-weight: 700;
+  font-weight: 600;
 }
 .cgroup {
   border-bottom: 1px solid color-mix(in oklab, var(--border) 55%, transparent);
@@ -320,7 +310,7 @@ details.gloss[open] summary::before {
 }
 .tb {
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -334,7 +324,7 @@ details.gloss[open] summary::before {
   color: var(--text-faint);
 }
 .cgmean {
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   min-width: 36px;
   text-align: right;
@@ -470,7 +460,7 @@ body:not(.entity-page) .modal-actions .back-dashboard {
   color: var(--text-faint);
   font-family: var(--sans);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
 }
 .modal #d-hotkey {
   min-width: 0;
@@ -486,9 +476,7 @@ body:not(.entity-page) .modal-actions .back-dashboard {
 #d-bench {
   font-family: var(--sans);
   font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
+  font-weight: 600;
   border-radius: 6px;
   padding: 2px 8px;
   color: var(--accent-2);
@@ -568,9 +556,8 @@ body:not(.entity-page) .modal-actions .back-dashboard {
 .vdetail .subhead {
   margin: 10px 0 2px;
   font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   color: var(--text-dim);
+  font-weight: 600;
 }
 .vdetail .identity-note {
   display: block;
@@ -647,9 +634,9 @@ body:not(.entity-page) .modal-actions .back-dashboard {
 .modal h3,
 .stat-head {
   font-family: var(--display);
-  font-weight: 400;
+  font-weight: 800;
   text-transform: none;
-  letter-spacing: 0;
+  letter-spacing: -0.025em;
 }
 .modal h3 {
   font-size: 21px;

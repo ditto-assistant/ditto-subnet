@@ -1,7 +1,8 @@
 /* Shared CSS ported from the monolith <style> block (lines 94-2530),
- * split by owner. Import order preserves the monolith cascade: tokens,
- * then reset/ground, shell chrome, shared widgets, modal, search. */
+ * split by owner. Import order preserves the monolith cascade: fonts and
+ * tokens, then reset/ground, shell chrome, shared widgets, modal, search. */
 
+@import "./fonts.css";
 @import "./tokens.css";
 @import "./base.css";
 @import "./shell.css";

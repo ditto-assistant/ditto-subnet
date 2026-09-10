@@ -18,10 +18,11 @@
     <meta name="twitter:site" content="@heydittoai" />
     <meta name="twitter:creator" content="@heydittoai" />
 
-    <link
-      rel="apple-touch-icon"
-      href="https://dittobench.ai/assets/paperditto-512.png"
-    />
+    <link rel="icon" href="/assets/favicon.ico" sizes="32x32" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/assets/icons/app-icon-16.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/assets/icons/app-icon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/assets/icons/app-icon-180.png" />
+    <link rel="manifest" href="/assets/manifest.webmanifest" />
     <link
       rel="alternate"
       type="text/plain"
@@ -99,17 +100,18 @@
     <meta name="ditto:api-base" content="" />
     <meta name="ditto:wandb-url" content="https://wandb.ai/" />
 
-    <link
-      rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%94%B7%3C/text%3E%3C/svg%3E"
-    />
 
     <script>
-      // Apply the saved theme before CSS paints to avoid a light/dark flash.
+      // Apply the saved appearance before CSS paints to avoid a flash: the
+      // four-mode preference (system/light/dark/time) and the brand-kit
+      // palette. Keep in sync with src/components/shell/ThemeSwitcher.tsx.
       (function () {
         "use strict";
         var STORAGE_KEY = "ditto:dashboard-theme";
+        var PALETTE_KEY = "ditto:dashboard-palette";
+        var DEFAULT_PALETTE = "carbon";
         var MODES = { system: true, light: true, dark: true, time: true };
+        var PALETTES = { carbon: true, parchment: true, signal: true, vermilion: true, tide: true };
 
         function fromHour(hour) {
           if (hour >= 5 && hour < 8) return "dawn";
@@ -128,24 +130,50 @@
           }
         }
 
+        function readPalette() {
+          try {
+            var saved = localStorage.getItem(PALETTE_KEY);
+            return PALETTES[saved] ? saved : DEFAULT_PALETTE;
+          } catch (e) {
+            return DEFAULT_PALETTE;
+          }
+        }
+
         function apply(mode) {
           var next = MODES[mode] ? mode : "system";
           var root = document.documentElement;
+          var systemDark =
+            window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var phase = fromHour(new Date().getHours());
           root.dataset.theme = next;
-          root.dataset.systemTheme =
-            window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
-              ? "dark"
-              : "light";
-          root.dataset.timePhase = fromHour(new Date().getHours());
+          root.dataset.systemTheme = systemDark ? "dark" : "light";
+          root.dataset.timePhase = phase;
+          // The kit scopes its palettes on the resolved mode, never on "system".
+          var dark =
+            next === "dark" ||
+            (next === "system" && systemDark) ||
+            (next === "time" && phase === "night");
+          root.dataset.dittoMode = dark ? "dark" : "light";
+          if (!root.dataset.dittoTheme) root.dataset.dittoTheme = readPalette();
+          return next;
+        }
+
+        function applyPalette(palette) {
+          var next = PALETTES[palette] ? palette : DEFAULT_PALETTE;
+          document.documentElement.dataset.dittoTheme = next;
           return next;
         }
 
         window.__dittoDashboardTheme = {
           storageKey: STORAGE_KEY,
+          paletteStorageKey: PALETTE_KEY,
           fromHour: fromHour,
           readMode: readMode,
+          readPalette: readPalette,
           apply: apply,
+          applyPalette: applyPalette,
         };
+        applyPalette(readPalette());
         apply(readMode());
       })();
     </script>

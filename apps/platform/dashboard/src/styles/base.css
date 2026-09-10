@@ -147,6 +147,8 @@ body {
   font-family: var(--sans);
   font-size: 15px;
   line-height: 1.55;
+  /* Ditto Display ships 400/600/800 upright only; never fake a face. */
+  font-synthesis: none;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
 }

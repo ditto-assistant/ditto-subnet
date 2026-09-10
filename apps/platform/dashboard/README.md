@@ -87,6 +87,14 @@ API and links out to wandb for the per-epoch deep dive. This is Surface 3 in
   `/miner/{hotkey}` pages. Direct visits and browser back/forward navigation
   restore the same state; older hash-route forms (`#/operations?validator=…`,
   `#/agents/{id}`, plural pathnames) are recognized and normalized.
+- **Appearance** — the Ditto brand kit. Five palettes (Carbon, Parchment,
+  Signal, Vermilion, Tide; Carbon by default) times the four-mode switcher
+  (system, light, dark, time of day), both remembered per browser under
+  `ditto:dashboard-theme` and `ditto:dashboard-palette`. Ditto Display 3.1 is
+  the one type family (400/600/800, no synthesized faces); figures, ids and
+  code use the OS monospace stack. Data encodings (tool gold, memory plum,
+  status greens/ambers/reds, the benchmark-era ramp) are fixed per light/dark
+  mode and do not follow the palette, so their meaning never changes.
 - **Anti-overfit assurance** — explains that seeds are fixed only after the
   submission is committed, rotate per submission, and can reproduce a completed
   evaluation without changing the already-submitted artifact.
