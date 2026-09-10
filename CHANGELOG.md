@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.252.0 (2026-09-10)
+
+### Features
+
+- **platform**: Triage copy holds with a shadow court
+  ([#1779](https://github.com/ditto-assistant/ditto-subnet/pull/1779),
+  [`3b57085`](https://github.com/ditto-assistant/ditto-subnet/commit/3b57085f20413b5f51f7ac5f653b72cf5161933c))
+
+
 ## v0.251.0 (2026-09-10)
 
 ### Bug Fixes
