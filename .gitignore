@@ -44,5 +44,6 @@ wandb/
 
 # Local agent worktrees and night-shift scratch
 worktrees/
+.worktrees/
 .claude/night-shift/
 infra/ansible/inventory/hetzner-screener.yml

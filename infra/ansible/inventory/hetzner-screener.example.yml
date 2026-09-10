@@ -12,6 +12,9 @@ all:
           screener_fleet_bootstrap_public_keys:
             - ssh-ed25519 AAAA_REPLACE_ME peyton
           screener_fleet_provider_resource_id: robot-server-id
+          # Review gateway. Both values must move together (see role defaults).
+          screener_fleet_review_inference_provider: ditto
+          screener_fleet_source_review_secret_id: screener-review-ditto-inference-key
           screener_fleet_release_sha: REPLACE_WITH_40_CHARACTER_RELEASE_COMMIT
           # Keep local pollers aligned with the approved Backroom canary.
           screener_fleet_worker_processes: 1

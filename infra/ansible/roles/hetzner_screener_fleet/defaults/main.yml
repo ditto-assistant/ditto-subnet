@@ -40,12 +40,12 @@ screener_fleet_x509_credential_file: "{{ screener_fleet_x509_identity_dir }}/cre
 screener_fleet_x509_cloudsdk_config: "{{ screener_fleet_x509_identity_dir }}/gcloud"
 screener_fleet_secrets_dir: "{{ screener_fleet_state_dir }}/secrets"
 screener_fleet_gcp_project: ditto-app-dev
-# Secret Manager id the secret agent materializes as the review key. Keep
-# validator-openrouter-key while the review gateway is OpenRouter; set
-# screener-review-ditto-inference-key (Terraform: screener.tf) when moving a
-# node to Ditto Inference, so validators and the platform relay never see a
-# ditto_inf_ key in their shared OpenRouter secret.
-screener_fleet_source_review_secret_id: validator-openrouter-key
+# Secret Manager id the secret agent materializes as the review key.
+# screener-review-ditto-inference-key (Terraform: screener.tf, x509 grant in
+# screener-fleet-x509.tf) holds the Ditto Inference endpoint key; the
+# validators' shared validator-openrouter-key is only for an OpenRouter
+# fallback, so a ditto_inf_ key never lands in it.
+screener_fleet_source_review_secret_id: screener-review-ditto-inference-key
 screener_fleet_jobs_dir: "{{ screener_fleet_state_dir }}/jobs"
 screener_fleet_images_dir: "{{ screener_fleet_state_dir }}/images"
 screener_fleet_logs_dir: /var/log/ditto-screener-fleet
@@ -73,7 +73,12 @@ screener_fleet_source_review_key_file: >-
 # https://developer.heyditto.ai/endpoints). The key file content must match:
 # an OpenRouter key or a ditto_inf_ endpoint key. Leave the base URL empty to
 # use the provider's default root.
-screener_fleet_review_inference_provider: openrouter
+# subnet-screener-1 moved to Ditto Inference on 2026-09-10 (host flip mirroring
+# these templates); the defaults now describe that live state so a converge is a
+# no-op. To fall back to OpenRouter set the provider to openrouter AND the secret
+# id above to validator-openrouter-key together — the key file must match the
+# gateway or every review fails with 401 and lands as an operator hold.
+screener_fleet_review_inference_provider: ditto
 screener_fleet_review_inference_base_url: ""
 screener_fleet_env_file: "{{ screener_fleet_config_dir }}/fleet.env"
 screener_fleet_release_env_file: "{{ screener_fleet_config_dir }}/release.env"
