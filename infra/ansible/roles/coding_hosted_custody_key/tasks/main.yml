@@ -37,19 +37,16 @@
         fail_msg: Native Coding custody requires the protected host OpenSSL executable.
         quiet: true
 
-    - name: Inspect existing worker and custodian accounts
+    - name: Inspect existing host accounts once
       ansible.builtin.getent:
         database: passwd
-        key: "{{ item }}"
-        fail_key: false
-      loop: [ditto-coding-hosted, ditto-coding-custody]
 
     - name: Require the qualified worker and refuse an unexpected custodian
       ansible.builtin.assert:
         that:
-          - ansible_facts.getent_passwd['ditto-coding-hosted'] is not none
+          - ansible_facts.getent_passwd.get('ditto-coding-hosted') is not none
           - >-
-            ansible_facts.getent_passwd['ditto-coding-custody'] is none or
+            ansible_facts.getent_passwd.get('ditto-coding-custody') is none or
             (ansible_facts.getent_passwd['ditto-coding-custody'][0] == 'x' and
              ansible_facts.getent_passwd['ditto-coding-custody'][4] == '/var/lib/ditto-coding-custody' and
              ansible_facts.getent_passwd['ditto-coding-custody'][5] == '/usr/sbin/nologin')
@@ -84,7 +81,7 @@
       ansible.builtin.group:
         name: ditto-coding-custody
         state: present
-      when: ansible_facts.getent_passwd['ditto-coding-custody'] is none
+      when: ansible_facts.getent_passwd.get('ditto-coding-custody') is none
 
     - name: Create the dedicated locked custodian account
       ansible.builtin.user:
@@ -97,13 +94,16 @@
         shell: /usr/sbin/nologin
         password_lock: true
         state: present
-      when: ansible_facts.getent_passwd['ditto-coding-custody'] is none
+      when: ansible_facts.getent_passwd.get('ditto-coding-custody') is none
 
-    - name: Refresh custodian account and group identity
+    - name: Refresh all host accounts after custodian creation
       ansible.builtin.getent:
-        database: "{{ item }}"
+        database: passwd
+
+    - name: Refresh the custodian primary group
+      ansible.builtin.getent:
+        database: group
         key: ditto-coding-custody
-      loop: [passwd, group]
 
     - name: Require the distinct unprivileged custodian identity
       ansible.builtin.assert:
