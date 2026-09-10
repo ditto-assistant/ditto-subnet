@@ -102,7 +102,7 @@ def fake_dist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (assets / "index-Ab12Cd34.js").write_text(
         'console.log("ditto dashboard bundle");\n', encoding="utf-8"
     )
-    (assets / "paperditto-512.png").write_bytes(_FAKE_PNG)
+    (assets / "dittobench-og.png").write_bytes(_FAKE_PNG)
     monkeypatch.setattr(factory, "_DASHBOARD_DIST", dist)
     monkeypatch.setattr(factory, "_DASHBOARD_FILE", dist / "index.html")
     monkeypatch.setattr(factory, "_DASHBOARD_ASSETS", assets)
@@ -277,7 +277,7 @@ class TestDashboardAssets:
         # public/ passthrough files (the og:image PNG) keep their names, so
         # they only get a day.
         app = create_api_server(make_api_server_config(dashboard_enabled=True))
-        resp = await _get(app, "/assets/paperditto-512.png")
+        resp = await _get(app, "/assets/dittobench-og.png")
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "image/png"
         assert resp.headers["Cache-Control"] == "public, max-age=86400"

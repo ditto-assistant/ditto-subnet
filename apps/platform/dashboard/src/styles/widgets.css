@@ -93,20 +93,18 @@
 .card .label {
   color: var(--text-dim);
   font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
   font-weight: 600;
 }
 .card .value {
   font-size: 27px;
-  font-weight: 700;
+  font-weight: 600;
   margin-top: 6px;
   font-variant-numeric: tabular-nums;
 }
 .card .value small {
   font-size: 14px;
   color: var(--text-dim);
-  font-weight: 500;
+  font-weight: 600;
 }
 .card .glow {
   position: absolute;
@@ -159,15 +157,13 @@
   margin-left: 10px;
   font-family: var(--sans);
   font-size: 11.5px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
+  font-weight: 600;
   color: var(--accent-2);
   background: color-mix(in oklab, var(--accent-2) 12%, transparent);
   border: 1px solid color-mix(in oklab, var(--accent-2) 42%, transparent);
   border-radius: 6px;
   padding: 2px 8px;
   vertical-align: middle;
-  text-transform: uppercase;
 }
 .bench-badge.show {
   display: inline-block;
@@ -179,8 +175,6 @@
   margin: 0 0 8px;
   font-size: 14px;
   font-weight: 800;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
   color: var(--accent);
 }
 /* Two-column flow for the modal's row-based sections, so the wide modal uses
@@ -253,9 +247,7 @@
   display: block;
   color: var(--text-dim);
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
+  font-weight: 600;
   margin-bottom: 6px;
 }
 .sha-row code {
@@ -307,9 +299,8 @@
   justify-content: space-between;
   margin-top: 6px;
   font-size: 11px;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
   color: var(--text-dim);
+  font-weight: 600;
 }
 .stat-row .v.up {
   color: var(--good);
@@ -390,7 +381,7 @@ tr:hover .copy,
   background: var(--bg-elev-2);
   color: var(--text);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.2;
 }
 .review-copy:hover,
@@ -506,7 +497,7 @@ tr:hover .copy,
   display: inline-block;
   margin-left: 6px;
   font-size: 11.5px;
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   vertical-align: middle;
 }
@@ -565,7 +556,7 @@ tr:hover .copy,
   border-radius: 999px;
   padding: 4px 9px;
   font-size: 11px;
-  font-weight: 750;
+  font-weight: 600;
   letter-spacing: 0.2px;
   white-space: nowrap;
   border: 1px solid var(--border);
@@ -669,7 +660,7 @@ tr:hover .copy,
   border-radius: 999px;
   background: var(--bg-elev);
   color: var(--text-dim);
-  font: 650 11px/1.2 var(--sans);
+  font: 600 11px/1.2 var(--sans);
   cursor: pointer;
   transition:
     background 140ms ease,
@@ -714,7 +705,7 @@ tr:hover .copy,
   border: 0;
   background: transparent;
   color: var(--accent);
-  font: 650 11px/1.2 var(--sans);
+  font: 600 11px/1.2 var(--sans);
   cursor: pointer;
 }
 .activity-clear[hidden] {
@@ -784,9 +775,7 @@ tr:hover .copy,
   flex: none;
   font-family: var(--sans);
   font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.25px;
-  text-transform: uppercase;
+  font-weight: 600;
   border-radius: 5px;
   padding: 1px 6px;
   vertical-align: middle;
@@ -820,7 +809,7 @@ tr:hover .copy,
   background: var(--text);
   box-shadow: 0 4px 8px color-mix(in oklch, var(--bg) 45%, transparent);
   color: var(--bg-elev);
-  font: 500 11.5px/1.45 var(--sans);
+  font: 600 11.5px/1.45 var(--sans);
   letter-spacing: 0;
   pointer-events: none;
   text-align: left;
@@ -922,10 +911,11 @@ tr:hover .copy,
 .card .value {
   margin-top: 8px;
   font-family: var(--display);
+  font-variant-numeric: tabular-nums;
   font-size: 29px;
-  font-weight: 400;
+  font-weight: 600;
   line-height: 1;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
 }
 .card.primary .label {
   color: var(--accent);
@@ -950,9 +940,9 @@ tr:hover .copy,
 .section-head h2 {
   font-family: var(--display);
   font-size: 21px;
-  font-weight: 400;
+  font-weight: 800;
   line-height: 1.1;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.025em;
 }
 .section-head .hint {
   color: var(--text-dim);

@@ -1,0 +1,27 @@
+/* Ditto Display 3.1 is the one page-and-interface family (Ditto typography
+   kit, September 2026): three upright faces mapped Regular → 400,
+   Medium → 600, Bold → 800. No italic exists and synthesis is off, so
+   emphasis is weight, never slant. Code and figures use the operating-system
+   monospace stack; the kit bundles no mono. SIL OFL in
+   ./fonts/DITTO-DISPLAY-OFL.txt. */
+@font-face {
+  font-family: "Ditto Display 3.1";
+  src: url("./fonts/DittoDisplay31-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Ditto Display 3.1";
+  src: url("./fonts/DittoDisplay31-Medium.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Ditto Display 3.1";
+  src: url("./fonts/DittoDisplay31-Bold.woff2") format("woff2");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}

@@ -19,8 +19,9 @@
 .ath-intro h2 {
   margin: 3px 0 8px;
   font-family: var(--display);
+  letter-spacing: -0.025em;
   font-size: 22px;
-  font-weight: 400;
+  font-weight: 800;
 }
 .ath-intro p {
   margin: 0;
@@ -81,8 +82,9 @@
   margin-top: 4px;
   color: var(--text);
   font-family: var(--display);
+  font-variant-numeric: tabular-nums;
   font-size: 22px;
-  font-weight: 400;
+  font-weight: 600;
 }
 .ath-review-head {
   display: flex;
@@ -137,7 +139,7 @@
   gap: 7px;
   margin-bottom: 5px;
   font-size: 15px;
-  font-weight: 650;
+  font-weight: 600;
 }
 .ath-id-line,
 .ath-hotkey {

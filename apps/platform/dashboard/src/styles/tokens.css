@@ -1,23 +1,316 @@
-/* Ported verbatim from the monolith <style> block, lines 1233-1353:
-   base (warm-paper light) tokens, time-of-day overlays, and the dark
-   re-palette. Theme switching is attribute-driven on <html> (data-theme /
-   data-system-theme / data-time-phase, stamped by the theme bootstrap).
+/* Ditto brand kit palette for the SN118 dashboard.
+
+   Two attribute dimensions on <html>, both stamped by the pre-paint bootstrap
+   in index.html and by ThemeSwitcher:
+     data-ditto-theme  carbon | parchment | signal | vermilion | tide
+     data-ditto-mode   light | dark          (resolved; never "system")
+   plus the dashboard's own mode preference, kept for the four-mode switcher:
+     data-theme        system | light | dark | time
+     data-system-theme light | dark
+     data-time-phase   dawn | morning | afternoon | dusk | night
+
+   The kit's 170 OKLCH values are verbatim below and scoped exactly as the kit
+   scopes them. The dashboard's role names (--bg, --text, --border, --accent…)
+   then resolve through the kit roles, so every ported page style recolours
+   without edits. Data-encoding colours (tool gold, memory plum, good/warn/
+   danger, the benchmark-era ramp) are not brand roles; they stay as one
+   validated light pair and one dark pair so their meaning never depends on
+   the chosen palette. Carbon is the default: an achromatic ground keeps those
+   encodings unambiguous on a data-dense board.
+
    Note: the monolith references var(--bad) and var(--shadow) without ever
    defining them; they are intentionally left undefined here for parity. */
 
-/* ── Ditto paper product system ───────────────────────────
-   Shared with landing-astro and ditto-app: warm paper surfaces, sepia ink,
-   brass/plum data accents, editorial headings, and compact app controls. */
+/* ── Kit palettes (verbatim) ────────────────────────────── */
+[data-ditto-theme="carbon"][data-ditto-mode="light"] {
+  --ditto-canvas: oklch(96% 0.004 270);
+  --ditto-surface: oklch(99% 0.002 270);
+  --ditto-raised: oklch(90% 0.006 270);
+  --ditto-ink: oklch(17% 0.006 270);
+  --ditto-muted: oklch(40% 0.008 270);
+  --ditto-rule: oklch(79% 0.007 270);
+  --ditto-island: oklch(14% 0.006 270);
+  --ditto-island-raised: oklch(23% 0.008 270);
+  --ditto-island-ink: oklch(96% 0.004 270);
+  --ditto-island-muted: oklch(78% 0.006 270);
+  --ditto-action: oklch(20% 0.008 270);
+  --ditto-action-ink: oklch(97% 0.003 270);
+  --ditto-selection: oklch(86% 0.007 270);
+  --ditto-paper: oklch(99% 0.002 85);
+  --ditto-paper-raised: oklch(93% 0.004 85);
+  --ditto-paper-ink: oklch(18% 0.008 60);
+  --ditto-paper-muted: oklch(42% 0.008 60);
+}
+
+[data-ditto-theme="carbon"][data-ditto-mode="dark"] {
+  --ditto-canvas: oklch(14% 0.006 270);
+  --ditto-surface: oklch(19% 0.007 270);
+  --ditto-raised: oklch(24% 0.008 270);
+  --ditto-ink: oklch(96% 0.004 270);
+  --ditto-muted: oklch(78% 0.008 270);
+  --ditto-rule: oklch(31% 0.008 270);
+  --ditto-island: oklch(10% 0.005 270);
+  --ditto-island-raised: oklch(21% 0.008 270);
+  --ditto-island-ink: oklch(96% 0.004 270);
+  --ditto-island-muted: oklch(78% 0.008 270);
+  --ditto-action: oklch(86% 0.006 270);
+  --ditto-action-ink: oklch(16% 0.006 270);
+  --ditto-selection: oklch(30% 0.008 270);
+  --ditto-paper: oklch(96% 0.006 85);
+  --ditto-paper-raised: oklch(90% 0.008 85);
+  --ditto-paper-ink: oklch(18% 0.008 60);
+  --ditto-paper-muted: oklch(43% 0.008 60);
+}
+
+[data-ditto-theme="parchment"][data-ditto-mode="light"] {
+  --ditto-canvas: oklch(95% 0.022 78);
+  --ditto-surface: oklch(98% 0.012 78);
+  --ditto-raised: oklch(90% 0.032 72);
+  --ditto-ink: oklch(21% 0.028 52);
+  --ditto-muted: oklch(42% 0.035 52);
+  --ditto-rule: oklch(77% 0.035 72);
+  --ditto-island: oklch(24% 0.032 52);
+  --ditto-island-raised: oklch(32% 0.034 56);
+  --ditto-island-ink: oklch(96% 0.018 78);
+  --ditto-island-muted: oklch(78% 0.028 72);
+  --ditto-action: oklch(39% 0.1 38);
+  --ditto-action-ink: oklch(97% 0.012 78);
+  --ditto-selection: oklch(86% 0.04 72);
+  --ditto-paper: oklch(99% 0.01 78);
+  --ditto-paper-raised: oklch(93% 0.024 75);
+  --ditto-paper-ink: oklch(21% 0.028 52);
+  --ditto-paper-muted: oklch(42% 0.035 52);
+}
+
+[data-ditto-theme="parchment"][data-ditto-mode="dark"] {
+  --ditto-canvas: oklch(17% 0.022 55);
+  --ditto-surface: oklch(21% 0.026 58);
+  --ditto-raised: oklch(27% 0.032 62);
+  --ditto-ink: oklch(94% 0.025 78);
+  --ditto-muted: oklch(77% 0.025 72);
+  --ditto-rule: oklch(36% 0.03 60);
+  --ditto-island: oklch(12% 0.018 52);
+  --ditto-island-raised: oklch(24% 0.03 58);
+  --ditto-island-ink: oklch(95% 0.022 78);
+  --ditto-island-muted: oklch(78% 0.024 72);
+  --ditto-action: oklch(85% 0.055 72);
+  --ditto-action-ink: oklch(20% 0.03 52);
+  --ditto-selection: oklch(31% 0.04 62);
+  --ditto-paper: oklch(91% 0.04 76);
+  --ditto-paper-raised: oklch(84% 0.05 72);
+  --ditto-paper-ink: oklch(21% 0.032 52);
+  --ditto-paper-muted: oklch(43% 0.035 55);
+}
+
+[data-ditto-theme="signal"][data-ditto-mode="light"] {
+  --ditto-canvas: oklch(94% 0.03 155);
+  --ditto-surface: oklch(98% 0.015 158);
+  --ditto-raised: oklch(87% 0.06 155);
+  --ditto-ink: oklch(18% 0.03 164);
+  --ditto-muted: oklch(39% 0.04 160);
+  --ditto-rule: oklch(76% 0.06 158);
+  --ditto-island: oklch(16% 0.03 166);
+  --ditto-island-raised: oklch(25% 0.045 164);
+  --ditto-island-ink: oklch(94% 0.055 150);
+  --ditto-island-muted: oklch(78% 0.06 153);
+  --ditto-action: oklch(36% 0.14 155);
+  --ditto-action-ink: oklch(98% 0.012 155);
+  --ditto-selection: oklch(84% 0.08 155);
+  --ditto-paper: oklch(96% 0.035 150);
+  --ditto-paper-raised: oklch(89% 0.06 153);
+  --ditto-paper-ink: oklch(18% 0.03 164);
+  --ditto-paper-muted: oklch(39% 0.04 160);
+}
+
+[data-ditto-theme="signal"][data-ditto-mode="dark"] {
+  --ditto-canvas: oklch(14% 0.008 270);
+  --ditto-surface: oklch(19% 0.009 270);
+  --ditto-raised: oklch(25% 0.011 270);
+  --ditto-ink: oklch(94% 0.006 270);
+  --ditto-muted: oklch(78% 0.008 270);
+  --ditto-rule: oklch(34% 0.01 270);
+  --ditto-island: oklch(10% 0.006 270);
+  --ditto-island-raised: oklch(22% 0.012 270);
+  --ditto-island-ink: oklch(94% 0.006 270);
+  --ditto-island-muted: oklch(78% 0.008 270);
+  --ditto-action: oklch(84% 0.14 150);
+  --ditto-action-ink: oklch(16% 0.028 165);
+  --ditto-selection: oklch(29% 0.04 160);
+  --ditto-paper: oklch(88% 0.12 150);
+  --ditto-paper-raised: oklch(81% 0.12 152);
+  --ditto-paper-ink: oklch(16% 0.028 165);
+  --ditto-paper-muted: oklch(35% 0.045 162);
+}
+
+[data-ditto-theme="vermilion"][data-ditto-mode="light"] {
+  --ditto-canvas: oklch(95% 0.008 30);
+  --ditto-surface: oklch(98% 0.004 30);
+  --ditto-raised: oklch(89% 0.016 30);
+  --ditto-ink: oklch(19% 0.012 30);
+  --ditto-muted: oklch(41% 0.018 30);
+  --ditto-rule: oklch(78% 0.018 30);
+  --ditto-island: oklch(18% 0.014 30);
+  --ditto-island-raised: oklch(27% 0.02 30);
+  --ditto-island-ink: oklch(96% 0.008 30);
+  --ditto-island-muted: oklch(78% 0.012 30);
+  --ditto-action: oklch(48% 0.16 29);
+  --ditto-action-ink: oklch(97% 0.01 78);
+  --ditto-selection: oklch(86% 0.035 30);
+  --ditto-paper: oklch(97% 0.016 76);
+  --ditto-paper-raised: oklch(91% 0.025 68);
+  --ditto-paper-ink: oklch(19% 0.012 30);
+  --ditto-paper-muted: oklch(41% 0.018 30);
+}
+
+[data-ditto-theme="vermilion"][data-ditto-mode="dark"] {
+  --ditto-canvas: oklch(16% 0.018 235);
+  --ditto-surface: oklch(20% 0.022 235);
+  --ditto-raised: oklch(27% 0.028 235);
+  --ditto-ink: oklch(94% 0.008 230);
+  --ditto-muted: oklch(77% 0.014 230);
+  --ditto-rule: oklch(35% 0.028 235);
+  --ditto-island: oklch(11% 0.02 235);
+  --ditto-island-raised: oklch(23% 0.027 235);
+  --ditto-island-ink: oklch(94% 0.008 230);
+  --ditto-island-muted: oklch(77% 0.014 230);
+  --ditto-action: oklch(69% 0.16 31);
+  --ditto-action-ink: oklch(15% 0.02 235);
+  --ditto-selection: oklch(30% 0.05 32);
+  --ditto-paper: oklch(93% 0.025 75);
+  --ditto-paper-raised: oklch(86% 0.035 70);
+  --ditto-paper-ink: oklch(18% 0.018 32);
+  --ditto-paper-muted: oklch(42% 0.025 35);
+}
+
+[data-ditto-theme="tide"][data-ditto-mode="light"] {
+  --ditto-canvas: oklch(94% 0.018 230);
+  --ditto-surface: oklch(98% 0.008 230);
+  --ditto-raised: oklch(88% 0.035 225);
+  --ditto-ink: oklch(20% 0.045 245);
+  --ditto-muted: oklch(42% 0.04 238);
+  --ditto-rule: oklch(77% 0.04 228);
+  --ditto-island: oklch(23% 0.06 244);
+  --ditto-island-raised: oklch(31% 0.073 243);
+  --ditto-island-ink: oklch(94% 0.042 88);
+  --ditto-island-muted: oklch(78% 0.045 93);
+  --ditto-action: oklch(29% 0.095 244);
+  --ditto-action-ink: oklch(97% 0.015 85);
+  --ditto-selection: oklch(85% 0.06 220);
+  --ditto-paper: oklch(97% 0.02 88);
+  --ditto-paper-raised: oklch(91% 0.032 88);
+  --ditto-paper-ink: oklch(20% 0.045 245);
+  --ditto-paper-muted: oklch(42% 0.04 238);
+}
+
+[data-ditto-theme="tide"][data-ditto-mode="dark"] {
+  --ditto-canvas: oklch(18% 0.06 244);
+  --ditto-surface: oklch(24% 0.073 243);
+  --ditto-raised: oklch(31% 0.082 238);
+  --ditto-ink: oklch(94% 0.042 88);
+  --ditto-muted: oklch(78% 0.045 93);
+  --ditto-rule: oklch(43% 0.078 238);
+  --ditto-island: oklch(13% 0.05 244);
+  --ditto-island-raised: oklch(27% 0.078 241);
+  --ditto-island-ink: oklch(94% 0.042 88);
+  --ditto-island-muted: oklch(78% 0.045 93);
+  --ditto-action: oklch(82% 0.13 210);
+  --ditto-action-ink: oklch(17% 0.06 244);
+  --ditto-selection: oklch(35% 0.08 238);
+  --ditto-paper: oklch(82% 0.13 210);
+  --ditto-paper-raised: oklch(76% 0.12 210);
+  --ditto-paper-ink: oklch(17% 0.06 244);
+  --ditto-paper-muted: oklch(37% 0.065 238);
+}
+
+/* ── Defaults so an unattributed document still renders (Carbon light) ── */
 :root {
-  --bg: #f3efe6;
-  --bg-elev: #fdfbf7;
-  --bg-elev-2: #e8e2d5;
-  --border: #d6ccb8;
-  --border-strong: #9f927e;
-  --text: #2d2822;
-  --text-dim: #625a4e;
-  --text-faint: #6b6356;
-  --accent: #5c4d3c;
+  --ditto-canvas: oklch(96% 0.004 270);
+  --ditto-surface: oklch(99% 0.002 270);
+  --ditto-raised: oklch(90% 0.006 270);
+  --ditto-ink: oklch(17% 0.006 270);
+  --ditto-muted: oklch(40% 0.008 270);
+  --ditto-rule: oklch(79% 0.007 270);
+  --ditto-island: oklch(14% 0.006 270);
+  --ditto-island-raised: oklch(23% 0.008 270);
+  --ditto-island-ink: oklch(96% 0.004 270);
+  --ditto-island-muted: oklch(78% 0.006 270);
+  --ditto-action: oklch(20% 0.008 270);
+  --ditto-action-ink: oklch(97% 0.003 270);
+  --ditto-selection: oklch(86% 0.007 270);
+  --ditto-paper: oklch(99% 0.002 85);
+  --ditto-paper-raised: oklch(93% 0.004 85);
+  --ditto-paper-ink: oklch(18% 0.008 60);
+  --ditto-paper-muted: oklch(42% 0.008 60);
+
+  /* Time-of-day tint. The "time" mode warms the kit canvas at dawn and dusk
+     and cools it slightly in the morning; afternoon is the palette as
+     supplied and night resolves to the palette's dark mode. */
+  --phase-tint: transparent;
+  --phase-mix: 0%;
+
+  /* Type (typography kit): one family, three faces — 400 body, 600 UI and
+     emphasis, 800 headlines. Figures, ids and code use the OS monospace
+     stack; nothing extra is bundled. */
+  --brand: "Ditto Display 3.1", sans-serif;
+  --display: var(--brand);
+  --sans: var(--brand);
+  --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --radius: 8px;
+  /* Ground-grid rule strength: how much of --text mixes into the body's
+     ruled lines (vertical, horizontal). Dark surfaces compress faint light
+     rules, so the dark block raises these to stay equally noticeable. */
+  --grid-rule-v: 5%;
+  --grid-rule-h: 4%;
+  /* Exponential ease-out only: decisive, no bounce. */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root[data-theme="time"][data-time-phase="dawn"] {
+  --phase-tint: oklch(78% 0.09 45);
+  --phase-mix: 7%;
+}
+:root[data-theme="time"][data-time-phase="morning"] {
+  --phase-tint: oklch(92% 0.04 95);
+  --phase-mix: 5%;
+}
+:root[data-theme="time"][data-time-phase="dusk"] {
+  --phase-tint: oklch(68% 0.13 50);
+  --phase-mix: 9%;
+}
+
+/* ── Roles. Every ported style reads these; only this block knows the kit
+   names. Scoped to :root and to the kit attributes so it wins over the
+   palette blocks above regardless of source order. ─────────────────────── */
+:root,
+[data-ditto-theme][data-ditto-mode] {
+  --bg: color-mix(in oklch, var(--ditto-canvas), var(--phase-tint) var(--phase-mix));
+  --bg-elev: color-mix(in oklch, var(--ditto-surface), var(--phase-tint) var(--phase-mix));
+  --bg-elev-2: color-mix(in oklch, var(--ditto-raised), var(--phase-tint) var(--phase-mix));
+  --border: color-mix(in oklch, var(--ditto-rule), var(--phase-tint) var(--phase-mix));
+  --border-strong: color-mix(in oklab, var(--ditto-rule) 45%, var(--ditto-ink));
+  --text: var(--ditto-ink);
+  --text-dim: var(--ditto-muted);
+  --text-faint: color-mix(in oklab, var(--ditto-muted) 80%, var(--ditto-canvas));
+  --accent: var(--ditto-action);
+  --accent-hover: color-mix(in oklab, var(--ditto-action) 82%, var(--ditto-ink));
+  --on-accent: var(--ditto-action-ink);
+  --focus: var(--ditto-action);
+  --selection: var(--ditto-selection);
+  /* Island: code, ids and dark cards. Paper: the warm callout sheet. */
+  --island: var(--ditto-island);
+  --island-raised: var(--ditto-island-raised);
+  --island-ink: var(--ditto-island-ink);
+  --island-muted: var(--ditto-island-muted);
+  --paper: var(--ditto-paper);
+  --paper-raised: var(--ditto-paper-raised);
+  --paper-ink: var(--ditto-paper-ink);
+  --paper-muted: var(--ditto-paper-muted);
+}
+
+/* ── Data encodings: one light pair, one dark pair ──────────────────────── */
+:root,
+[data-ditto-mode="light"] {
   --accent-2: #6d5873;
   --gold: #9a692c;
   --tool: #9a692c;
@@ -25,9 +318,6 @@
   --good: #356845;
   --warn: #8a5a1f;
   --danger: #a33d36;
-  --on-accent: #fdfbf7;
-  --focus: #5c4d3c;
-  --accent-hover: #433529;
   --banner-text: #684215;
   --banner-strong: #4d3010;
   --rank-one-text: #754b18;
@@ -42,71 +332,15 @@
   --era-to: oklch(36% 0.105 340);
   --ref-hermes: oklch(52% 0.17 75);
   --ref-openclaw: oklch(52% 0.17 270);
-  --radius: 8px;
-  /* Ground-grid rule strength: how much of --text mixes into the body's
-     ruled lines (vertical, horizontal). Dark surfaces compress faint light
-     rules, so the night block raises these to stay equally noticeable. */
-  --grid-rule-v: 5%;
-  --grid-rule-h: 4%;
-  /* Exponential ease-out only: decisive, no bounce. */
-  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
-  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
-  --display: Georgia, "Times New Roman", serif;
-  --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
 }
-
-:root[data-theme="time"][data-time-phase="dawn"] {
-  --bg: oklch(96% 0.015 45);
-  --bg-elev: oklch(98% 0.01 45);
-  --bg-elev-2: oklch(93% 0.02 42);
-  --border: oklch(84% 0.035 45);
-  --border-strong: oklch(67% 0.045 45);
-  --accent: oklch(43% 0.055 45);
-  --accent-hover: oklch(34% 0.05 45);
-  --focus: oklch(43% 0.055 45);
-}
-:root[data-theme="time"][data-time-phase="morning"] {
-  --bg: oklch(98% 0.006 90);
-  --bg-elev: oklch(99% 0.004 90);
-  --bg-elev-2: oklch(95% 0.01 85);
-  --border: oklch(87% 0.018 85);
-  --border-strong: oklch(69% 0.028 80);
-}
-:root[data-theme="time"][data-time-phase="dusk"] {
-  --bg: oklch(94% 0.022 45);
-  --bg-elev: oklch(97% 0.016 42);
-  --bg-elev-2: oklch(91% 0.028 40);
-  --border: oklch(80% 0.045 42);
-  --border-strong: oklch(62% 0.055 40);
-  --accent: oklch(42% 0.07 50);
-  --accent-hover: oklch(33% 0.06 48);
-  --gold: oklch(55% 0.12 65);
-  --tool: var(--gold);
-  --focus: oklch(42% 0.07 50);
-}
-:root[data-theme="dark"],
-:root[data-theme="system"][data-system-theme="dark"],
-:root[data-theme="time"][data-time-phase="night"] {
-  --bg: oklch(19% 0.025 255);
-  --bg-elev: oklch(23% 0.028 255);
-  --bg-elev-2: oklch(27% 0.03 255);
-  --border: oklch(36% 0.02 255);
-  --border-strong: oklch(48% 0.025 255);
-  --text: oklch(92% 0.006 85);
-  --text-dim: oklch(79% 0.008 85);
-  --text-faint: oklch(72% 0.01 85);
-  --accent: oklch(74% 0.12 75);
-  --accent-hover: oklch(80% 0.115 75);
+[data-ditto-mode="dark"] {
   --accent-2: oklch(75% 0.1 340);
   --gold: oklch(78% 0.12 75);
-  --tool: var(--accent);
+  --tool: var(--gold);
   --memory: var(--accent-2);
   --good: oklch(75% 0.11 145);
   --warn: oklch(76% 0.15 52);
   --danger: oklch(72% 0.13 28);
-  --on-accent: oklch(19% 0.025 255);
-  --focus: oklch(80% 0.115 75);
   --banner-text: oklch(86% 0.08 75);
   --banner-strong: oklch(92% 0.08 75);
   --rank-one-text: oklch(84% 0.1 75);
@@ -126,8 +360,6 @@ html {
   color-scheme: light;
   background: var(--bg);
 }
-html[data-theme="dark"],
-html[data-theme="system"][data-system-theme="dark"],
-html[data-theme="time"][data-time-phase="night"] {
+html[data-ditto-mode="dark"] {
   color-scheme: dark;
 }

@@ -49,28 +49,12 @@
   notify: restart postgresql
 
 - name: Render pg_hba.conf
-  ansible.builtin.copy:
+  ansible.builtin.template:
+    src: pg_hba.conf.j2
     dest: "{{ pg_hba_path }}"
     owner: postgres
     group: postgres
     mode: "0640"
-    content: |
-      # Managed by infra/ansible/roles/postgres. Edits here are wiped on next run.
-      # TYPE  DATABASE  USER       ADDRESS        METHOD
-
-      # Local connections
-      local   all       postgres                  peer
-      local   all       {{ postgres_app_user }}                     scram-sha-256
-
-      # Localhost (backend, pipelines)
-      host    all       {{ postgres_app_user }}      127.0.0.1/32   scram-sha-256
-      host    all       {{ postgres_app_user }}      ::1/128        scram-sha-256
-
-      # Extra host rules (e.g. GCP VPC subnet so Cloud Run's DIRECT URI can
-      # reach Postgres). Supplied via postgres_hba_hosts; empty on Hetzner.
-      {% for h in postgres_hba_hosts | default([]) %}
-      host    {{ h.database | default('all') }}    {{ h.user | default(postgres_app_user) }}    {{ h.address }}    {{ h.method | default('scram-sha-256') }}
-      {% endfor %}
   notify: reload postgresql
 
 - name: Ensure secrets file directory

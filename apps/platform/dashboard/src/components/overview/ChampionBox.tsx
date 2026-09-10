@@ -168,45 +168,51 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
               standing that confuses readers most, so the box says why in
               place instead of leaving it to the strip on the other page. */}
           <Show when={scoreCeilingPool()}>
-            <div class="champion-note" id="champion-note">
-              The single-winner dethrone threshold cannot be exceeded within the score range. Every
-              highest evidence-tied agent shares the full miner pool equally, including ties beyond
-              the normal tail cutoff.
-            </div>
+            <details class="fold champion-fold">
+              <summary>Why this crown</summary>
+              <div class="champion-note" id="champion-note">
+                The single-winner dethrone threshold cannot be exceeded within the score range.
+                Every highest evidence-tied agent shares the full miner pool equally, including ties
+                beyond the normal tail cutoff.
+              </div>
+            </details>
           </Show>
           <Show when={!scoreCeilingPool() && ((championEntry()?.rank as number) || 1) > 1}>
-            <div class="champion-note" id="champion-note">
-              {(() => {
-                const contest = crownContest(emissions()?.raw_leader_decision, emissions());
-                const rank = championEntry()?.rank as number;
-                const above = rank - 1;
-                const aboveText =
-                  above === 1 ? "1 agent scores higher" : above + " agents score higher";
-                if (!contest) {
+            <details class="fold champion-fold">
+              <summary>Why this crown</summary>
+              <div class="champion-note" id="champion-note">
+                {(() => {
+                  const contest = crownContest(emissions()?.raw_leader_decision, emissions());
+                  const rank = championEntry()?.rank as number;
+                  const above = rank - 1;
+                  const aboveText =
+                    above === 1 ? "1 agent scores higher" : above + " agents score higher";
+                  if (!contest) {
+                    return (
+                      "Holds the crown from raw #" +
+                      rank +
+                      ": " +
+                      aboveText +
+                      ", but none by enough on the shared-seed head-to-head. Rank is not the crown."
+                    );
+                  }
                   return (
                     "Holds the crown from raw #" +
                     rank +
-                    ": " +
+                    ". " +
                     aboveText +
-                    ", but none by enough on the shared-seed head-to-head. Rank is not the crown."
+                    ", but the head-to-head lead is " +
+                    signedScore(contest.challengerLead) +
+                    " and the crown needs " +
+                    signedScore(contest.requiredLead) +
+                    ". " +
+                    crownWhyHigh(contest) +
+                    " " +
+                    crownComparisonNote(contest.method)
                   );
-                }
-                return (
-                  "Holds the crown from raw #" +
-                  rank +
-                  ". " +
-                  aboveText +
-                  ", but the head-to-head lead is " +
-                  signedScore(contest.challengerLead) +
-                  " and the crown needs " +
-                  signedScore(contest.requiredLead) +
-                  ". " +
-                  crownWhyHigh(contest) +
-                  " " +
-                  crownComparisonNote(contest.method)
-                );
-              })()}
-            </div>
+                })()}
+              </div>
+            </details>
           </Show>
         </Show>
       </div>

@@ -457,30 +457,36 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
                                     </div>
                                   </Show>
                                 </dl>
-                                <div class="koth-standing-detail">
-                                  {crownDifferenceText(held()) + ". " + crownWhyHigh(held())}
-                                </div>
-                                <Show when={held().seedDifferences}>
-                                  {(diffs) => (
-                                    <div class="koth-standing-diffs">
-                                      {crownSeedDiffsText(diffs())}
-                                    </div>
-                                  )}
-                                </Show>
+                                <details class="fold koth-standing-fold">
+                                  <summary>How the crown is decided</summary>
+                                  <div class="koth-standing-detail">
+                                    {crownDifferenceText(held()) + ". " + crownWhyHigh(held())}
+                                  </div>
+                                  <Show when={held().seedDifferences}>
+                                    {(diffs) => (
+                                      <div class="koth-standing-diffs">
+                                        {crownSeedDiffsText(diffs())}
+                                      </div>
+                                    )}
+                                  </Show>
+                                </details>
                               </>
                             )}
                           </Show>
-                          <div class="koth-standing-detail">
-                            <Show when={heldContest()}>
-                              {(held) => (
-                                <>
-                                  {crownScaleNote(current().leader, held(), store.settledView()) +
-                                    " "}
-                                </>
-                              )}
-                            </Show>
-                            {crownComparisonNote(current().decision.method)}
-                          </div>
+                          <details class="fold koth-standing-fold">
+                            <summary>Why the Score column is not the crown test</summary>
+                            <div class="koth-standing-detail">
+                              <Show when={heldContest()}>
+                                {(held) => (
+                                  <>
+                                    {crownScaleNote(current().leader, held(), store.settledView()) +
+                                      " "}
+                                  </>
+                                )}
+                              </Show>
+                              {crownComparisonNote(current().decision.method)}
+                            </div>
+                          </details>
                         </>
                       );
                     }}

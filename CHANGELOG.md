@@ -2,6 +2,40 @@
 
 <!-- version list -->
 
+## v0.248.0 (2026-09-10)
+
+### Bug Fixes
+
+- **infra**: Preserve postgres password on day-two converge
+  ([#1769](https://github.com/ditto-assistant/ditto-subnet/pull/1769),
+  [`54802c2`](https://github.com/ditto-assistant/ditto-subnet/commit/54802c247926ddb1440917a92632a5deac67708e))
+
+### Features
+
+- **infra**: Narrow coding postgres guest admission
+  ([#1770](https://github.com/ditto-assistant/ditto-subnet/pull/1770),
+  [`5389587`](https://github.com/ditto-assistant/ditto-subnet/commit/538958712f0d2cb3d5d3290d6c3910b2bd2cd7e1))
+
+- **router**: Add shadow-only router starter kit and CI
+  ([#1705](https://github.com/ditto-assistant/ditto-subnet/pull/1705),
+  [`df9b6f4`](https://github.com/ditto-assistant/ditto-subnet/commit/df9b6f43c7294b7ce08908cb7d692db99eabef48))
+
+
+## v0.247.0 (2026-09-10)
+
+### Bug Fixes
+
+- **infra**: Default the Hetzner screener fleet to Ditto Inference
+  ([#1764](https://github.com/ditto-assistant/ditto-subnet/pull/1764),
+  [`a58d044`](https://github.com/ditto-assistant/ditto-subnet/commit/a58d044b5b90c6fac9b6238e51f7c514423510d4))
+
+### Features
+
+- **dashboard**: Apply the Ditto brand kit and typography kit
+  ([#1765](https://github.com/ditto-assistant/ditto-subnet/pull/1765),
+  [`0a70c31`](https://github.com/ditto-assistant/ditto-subnet/commit/0a70c314f38ce2c198ebc5bfa547f60772700b84))
+
+
 ## v0.246.1 (2026-09-09)
 
 ### Bug Fixes

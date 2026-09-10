@@ -21,26 +21,17 @@ header.top {
 }
 .brand {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
 }
-.brand .mark {
-  width: 46px;
-  height: 46px;
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-}
-.brand .mark img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+/* The approved hybrid wordmark (typography kit): an outlined SVG at 3077:732.
+   The site sets only its width; height follows the ratio. One per page. */
+.wordmark {
   display: block;
-}
-.brand .brand-name {
-  font-size: 20px;
-  margin: 0;
-  letter-spacing: 0.2px;
+  width: var(--wordmark-width, 108px);
+  height: auto;
+  color: var(--text);
 }
 .brand .sub {
   color: var(--text-dim);
@@ -90,12 +81,12 @@ footer a:hover {
 }
 .foot-label {
   color: var(--text);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 @media (max-width: 720px) {
-  .brand .brand-name {
-    font-size: 18px;
+  .brand {
+    --wordmark-width: 92px;
   }
 }
 
@@ -128,11 +119,6 @@ footer a:hover {
 .main {
   flex: 1 1 auto;
   min-width: 0;
-}
-.sidebar .brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
 }
 .sidebar .brand .sub {
   color: var(--text-dim);
@@ -218,7 +204,7 @@ footer a:hover {
 }
 .epoch-clock-flag {
   color: var(--warn);
-  font-weight: 700;
+  font-weight: 600;
 }
 /* The one authored moment: inside the last minute the payout stops being a
    number to read later and becomes one to watch, so the digits take the warn
@@ -350,6 +336,37 @@ a .ic.ext {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Brand-kit palette picker: five swatches, each previewing that palette's
+   canvas and action colour in the currently resolved mode. */
+.palette-switch {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.palette-option {
+  width: 24px;
+  height: 24px;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+.palette-option:hover {
+  border-color: var(--border-strong);
+}
+.palette-option[aria-pressed="true"] {
+  border-color: var(--text);
+}
+.palette-swatch {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--ditto-canvas) 0 50%, var(--ditto-action) 50% 100%);
+  box-shadow: inset 0 0 0 1px var(--ditto-rule);
+}
 .side-foot {
   margin-top: auto;
   display: flex;
@@ -375,23 +392,13 @@ a .ic.ext {
   backdrop-filter: none;
 }
 .sidebar .brand {
-  gap: 10px;
-  padding: 0 6px 8px;
-}
-.sidebar .brand .brand-name {
-  font-family: var(--display);
-  font-size: 18px;
-  font-weight: 400;
-  line-height: 1.05;
-  letter-spacing: -0.01em;
-}
-.sidebar .brand .mark {
-  width: 42px;
-  height: 42px;
+  gap: 8px;
+  padding: 2px 6px 8px;
 }
 .sidebar .brand .sub {
-  margin-top: 4px;
-  font-size: 11px;
+  margin-top: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
 }
 .sidebar .bench-badge {
   color: var(--text-dim);
@@ -437,18 +444,7 @@ header.top {
   border-bottom: 1px solid var(--border);
 }
 header.top .brand {
-  gap: 10px;
-}
-header.top .brand .mark {
-  width: 42px;
-  height: 42px;
-}
-header.top .brand h1 {
-  font-family: var(--display);
-  font-size: 22px;
-  font-weight: 400;
-  line-height: 1.05;
-  letter-spacing: -0.01em;
+  gap: 8px;
 }
 header.top .brand .sub {
   margin-top: 4px;
@@ -464,9 +460,9 @@ header.top .bench-badge {
   margin: 0;
   font-family: var(--display);
   font-size: 24px;
-  font-weight: 400;
+  font-weight: 800;
   line-height: 1.05;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.025em;
 }
 .page-title .sub {
   margin-top: 5px;
@@ -601,9 +597,9 @@ footer a {
     order: 0;
     padding: 0;
   }
-  .sidebar .brand .mark {
-    width: 34px;
-    height: 34px;
+  .sidebar .brand {
+    --wordmark-width: 84px;
+    gap: 2px;
   }
   /* Row 1, right of the brand: the rail's tall block collapses to a single
      readout so the clock survives the top-bar layout instead of eating a row
@@ -694,10 +690,20 @@ footer a {
     min-width: 0;
     margin-top: 0;
   }
+  .side-theme {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
   .side-theme .theme-switch {
+    flex: 1 1 auto;
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    width: 100%;
+    width: auto;
+  }
+  .palette-switch {
+    flex: none;
+    margin-top: 0;
   }
 }
 @media (max-width: 720px) {
@@ -716,10 +722,28 @@ footer a {
   }
 
   /* Keep the four theme options in one compact row (36px targets) rather than
-     a tall full-width 2x2 grid, and drop the long brand subtitle. */
+     a tall full-width 2x2 grid, and drop the long brand subtitle. With the
+     palette swatches sharing the row the text labels no longer fit, so the
+     options are icon-only here; the label stays in the accessibility tree and
+     each button keeps its title. */
   .side-theme .theme-option {
     min-height: 36px;
     padding: 6px;
+  }
+  .side-theme .theme-option span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .side-theme .theme-option svg {
+    width: 15px;
+    height: 15px;
   }
   .sidebar .brand .sub {
     display: none;

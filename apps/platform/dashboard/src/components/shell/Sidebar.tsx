@@ -1,11 +1,11 @@
-// The sidebar shell (monolith 2536–2605): brand + bench badge, the
+// The sidebar shell (monolith 2536–2605): wordmark + bench badge, the
 // path-routed nav with its inline SVG icons, the theme switcher, and the
 // side-foot controls (wandb telemetry link, platform source link, manual
 // refresh). SiteFooter is the open-source repository footer (2995–3007) that
 // renders on the benchmark page; it lives here because the shell owns the
 // public-source-repositories contract (platform link appears exactly twice:
 // #github-link in the sidebar and "Platform source" in the footer).
-import { For, onMount } from "solid-js";
+import { For } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { WANDB_URL } from "../../lib/config";
@@ -157,26 +157,46 @@ function onNavClick(ev: MouseEvent, page: PageName): void {
   navigateToPage(page);
 }
 
-export function Sidebar(props: SidebarProps): JSX.Element {
-  onMount(() => {
-    // Reuse the inlined brand logo as the favicon (monolith 3087–3091).
-    const logo = document.getElementById("brand-logo") as HTMLImageElement | null;
-    const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
-    if (logo && icon) icon.href = logo.src;
-  });
+/**
+ * The approved hybrid wordmark from the Ditto typography kit: an outlined
+ * vector (not typed text) kept at its 3077:732 aspect ratio, never paired
+ * with a neighbouring symbol. It is the one brand mark on the page; the fill
+ * follows `currentColor`.
+ */
+export function Wordmark(): JSX.Element {
+  return (
+    <svg class="wordmark" viewBox="0 0 3077 732" role="img" aria-label="Ditto">
+      <g fill="currentColor" fill-rule="evenodd" transform="translate(-87 718) scale(1 -1)">
+        <path d="M119 0Q91 0 91 28V672Q91 700 119 700H378Q455 700 517.5 674.5Q580 649 625.5 602.5Q671 556 695 492Q719 428 719 350Q719 273 695 208.5Q671 144 626 97.5Q581 51 518 25.5Q455 0 378 0ZM241 135H373Q418 135 454 150.5Q490 166 515.5 193.5Q541 221 554 261Q567 301 567 350Q567 399 554 438.5Q541 478 515.5 506Q490 534 454 549.5Q418 565 373 565H241Z" />
+        <path
+          transform="translate(716 0)"
+          d="M99 0H397Q423 0 423 26V106Q423 132 397 132H339Q323 132 323 148V552Q323 568 339 568H397Q423 568 423 594V674Q423 700 397 700H99Q73 700 73 674V594Q73 568 99 568H157Q173 568 173 552V148Q173 132 157 132H99Q73 132 73 106V26Q73 0 99 0Z"
+        />
+        <path
+          transform="translate(1176 0)"
+          d="M272 0H362Q394 0 394 32V545Q394 565 414 565H565Q597 565 597 597V668Q597 700 565 700H65Q33 700 33 668V597Q33 565 65 565H219Q239 565 239 545V32Q239 0 272 0Z"
+        />
+        <path
+          transform="translate(1798 0)"
+          d="M272 0H362Q394 0 394 32V545Q394 565 414 565H565Q597 565 597 597V668Q597 700 565 700H65Q33 700 33 668V597Q33 565 65 565H219Q239 565 239 545V32Q239 0 272 0Z"
+        />
+        <path
+          transform="translate(2403 0)"
+          d="M402 -10Q324 -10 259.0 17.0Q194 44 145.5 92.5Q97 141 71.0 207.5Q45 274 45 352Q45 431 71.0 497.0Q97 563 145.5 611.5Q194 660 259.0 687.0Q324 714 401 714Q479 714 543.5 687.0Q608 660 656.5 611.0Q705 562 731.0 496.0Q757 430 757 352Q757 274 731.0 208.0Q705 142 656.5 93.0Q608 44 543.5 17.0Q479 -10 402 -10ZM401 132Q446 132 483.0 148.5Q520 165 547.0 194.5Q574 224 589.5 264.0Q605 304 605 352Q605 400 589.5 440.0Q574 480 547.0 509.5Q520 539 483.0 555.5Q446 572 401 572Q357 572 320.0 555.5Q283 539 255.0 509.5Q227 480 212.5 440.0Q198 400 198 352Q198 304 212.5 264.0Q227 224 255.0 194.5Q283 165 320.0 148.5Q357 132 401 132Z"
+        />
+      </g>
+    </svg>
+  );
+}
 
+export function Sidebar(props: SidebarProps): JSX.Element {
   return (
     <aside class="sidebar" aria-label="Site sections">
       <div class="brand">
-        <div class="mark">
-          <img id="brand-logo" alt="Ditto" src="/assets/paperditto-512.png" />
-        </div>
-        <div>
-          <div class="brand-name">Ditto&nbsp;·&nbsp;Subnet&nbsp;118</div>
-          <div class="sub">
-            Public agent-memory scoring leaderboard
-            <BenchBadge {...props.bench} />
-          </div>
+        <Wordmark />
+        <div class="sub">
+          Subnet&nbsp;118
+          <BenchBadge {...props.bench} />
         </div>
       </div>
       <EpochClock epoch={props.epoch} />

@@ -1,0 +1,14 @@
+---
+# Narrow day-two convergence after the protected cloud peering/firewall apply.
+# It changes only one exact UFW rule and the managed PostgreSQL HBA authority,
+# reloads PostgreSQL, and verifies the live parsed rule. It neither reads nor
+# changes the database password and does not run the full base/Postgres roles.
+- name: Admit the qualified native Coding host to Platform PostgreSQL
+  hosts: role_platform_postgres
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Run the exact native Coding guest-admission tasks
+      ansible.builtin.include_role:
+        name: postgres
+        tasks_from: coding-hosted-converge.yml
