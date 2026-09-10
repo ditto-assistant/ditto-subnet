@@ -285,6 +285,39 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     expect(el("emissions-col-tip").closest("th")?.hasAttribute("data-sort")).toBe(false);
   });
 
+  it("keeps a miner's picture on the same line as the name it belongs to", async () => {
+    // The identity line wraps its chips, so avatar and name have to be ONE
+    // flex item: as siblings the name's 120px basis plus the picture
+    // overflowed the compact pane's narrow identity column and dropped the
+    // name to the line below, stranding the avatar above it.
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index === 0
+              ? { ...entry, avatar_url: "/api/v1/public/miners/" + entry.miner_hotkey + "/avatar" }
+              : { ...entry, avatar_url: null },
+          ),
+        };
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => expect(document.querySelector("img.miner-avatar")).toBeTruthy());
+    const lead = document.querySelector(".winner-name .winner-name-lead") as HTMLElement;
+    expect(lead.querySelector("img.miner-avatar")).toBeTruthy();
+    expect(lead.querySelector("[data-entity-link]")).toBeTruthy();
+    // A row without a picture keeps the same wrapper, so both shapes size alike.
+    const rows = [...document.querySelectorAll("#rows tr[data-i] .winner-name")];
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) expect(row.querySelector(".winner-name-lead")).toBeTruthy();
+    expect(cssNorm).toContain(
+      ".winner-name-lead { display: flex; min-width: 0; flex: 1 1 120px; align-items: center; gap: 7px; }",
+    );
+  });
+
   it("shows the fold crown clock, not this tarball's upload", async () => {
     const crown = "2026-08-19T05:31:40.678880Z";
     const upload = "2026-08-19T09:11:01.800258Z";

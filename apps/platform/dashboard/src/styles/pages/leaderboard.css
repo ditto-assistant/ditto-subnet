@@ -853,9 +853,20 @@ tbody tr:focus-visible {
   font-size: 13.5px;
   font-weight: 600;
 }
-.winner-name > .entity-link {
+/* The picture and the name are one flex item, so `.winner-name`'s wrap can
+   only move them together. As siblings the 120px name basis plus the avatar
+   overflowed a narrow identity column and the name dropped to the line
+   below, leaving the avatar alone above it. */
+.winner-name-lead {
+  display: flex;
   min-width: 0;
   flex: 1 1 120px;
+  align-items: center;
+  gap: 7px;
+}
+.winner-name .entity-link {
+  min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
