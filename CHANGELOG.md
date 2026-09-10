@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v0.254.0 (2026-09-10)
+
+### Features
+
+- **backroom**: Add coding control plane
+  ([#1785](https://github.com/ditto-assistant/ditto-subnet/pull/1785),
+  [`ee07b75`](https://github.com/ditto-assistant/ditto-subnet/commit/ee07b7539447b58317719207712f255449a4ab37))
+
+- **dashboard**: Show coding shadow scores
+  ([#1786](https://github.com/ditto-assistant/ditto-subnet/pull/1786),
+  [`37ced8d`](https://github.com/ditto-assistant/ditto-subnet/commit/37ced8d1e91b84ebca878ffb5aeab2ac81cae721))
+
+- **preview**: Bake an sn118-preview-base image so previews boot warm
+  ([#1773](https://github.com/ditto-assistant/ditto-subnet/pull/1773),
+  [`c712167`](https://github.com/ditto-assistant/ditto-subnet/commit/c712167295fd43cb0db9770a9348d681857c7e25))
+
+
 ## v0.253.1 (2026-09-10)
 
 ### Bug Fixes
