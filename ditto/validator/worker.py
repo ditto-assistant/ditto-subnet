@@ -183,6 +183,21 @@ def _ledger_ceiling_band_clamp(ledger: LedgerResponse) -> bool:
     return getattr(ledger, "dethrone_band_mode", None) == "headroom_capped"
 
 
+def _ledger_crown_incumbent(ledger: LedgerResponse) -> UUID | None:
+    """The served incumbent the fold defends, or ``None`` for the classic walk.
+
+    Present only on an epoch-pinned ledger whose ``crown_mode`` is
+    ``incumbent`` -- withheld until every recently-live weight setter reports
+    protocol 27 and the operator has enabled the policy. An id without the
+    marker, or a marker without an id, is treated as absent, so a partial or
+    older Platform response folds exactly as before.
+    """
+    if getattr(ledger, "crown_mode", None) != "incumbent":
+        return None
+    incumbent = getattr(ledger, "crown_incumbent_agent_id", None)
+    return incumbent if isinstance(incumbent, UUID) else None
+
+
 def _ledger_active_bench_version(ledger: LedgerResponse) -> int | None:
     """Return Platform's rollout authority, or fail closed for retest work.
 
@@ -1948,6 +1963,7 @@ class ValidatorWorker:
                 dethrone_z=self._config.koth_dethrone_z,
                 tie_pooling=ledger.tie_weighting_mode == "pool",
                 ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+                incumbent_agent_id=_ledger_crown_incumbent(ledger),
             ),
             router_entries=tuple(router_ledger.entries),
             router_rank_shares=self._config.router_rank_shares,
@@ -2002,6 +2018,7 @@ class ValidatorWorker:
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+            incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         king_fingerprint = self._king_fingerprint(champion)
         if not miner_weights:
@@ -2111,6 +2128,7 @@ class ValidatorWorker:
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+            incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         return True, self._king_fingerprint(champion)
 
@@ -2837,6 +2855,7 @@ class ValidatorWorker:
             tail_size=self._config.koth_tail_size,
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+            incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         if not stale:
             return ledger
@@ -2927,6 +2946,7 @@ class ValidatorWorker:
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+            incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         if not contested:
             return
