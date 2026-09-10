@@ -7,8 +7,6 @@ shadow source; a promotion swaps in the platform reader, which is fail-closed.
 
 from __future__ import annotations
 
-import pytest
-
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.validator.worker import (
     EmptyRouterLedgerSource,
