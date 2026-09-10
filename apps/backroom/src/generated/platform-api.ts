@@ -18613,6 +18613,51 @@ export interface components {
             slot_id: string;
         };
         /**
+         * PublicCodingShadowScore
+         * @description Aggregate-only Coding result; never ranking or weight authority.
+         */
+        PublicCodingShadowScore: {
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Result Count */
+            result_count: number;
+            /**
+             * Score
+             * @description Median of the current exact artifact's three validator repair means. Null until quorum or when the newest run is stale.
+             */
+            score?: number | null;
+            /**
+             * Score Quorum
+             * @default 3
+             * @constant
+             */
+            score_quorum: 3;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "scheduled" | "collecting" | "complete" | "stale";
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
          * PublicCompositeBreakdown
          * @description Public arithmetic from capability means to the final composite.
          *
@@ -19476,6 +19521,8 @@ export interface components {
              * @description Redacted per-case results for detailed analysis: each case's category / kind / score / pass / latency / mechanical notes, but never the answer key (``expected`` / ``called`` / ``case_id``). None when the run carries no per-case data.
              */
             case_results?: components["schemas"]["PublicCaseResult"][] | null;
+            /** @description Latest aggregate Coding-shadow status for this exact leaderboard artifact. Display-only; never changes rank, score, weights, or emissions. */
+            coding_shadow?: components["schemas"]["PublicCodingShadowScore"] | null;
             /** Completed Wave Composites */
             completed_wave_composites?: number[];
             /**

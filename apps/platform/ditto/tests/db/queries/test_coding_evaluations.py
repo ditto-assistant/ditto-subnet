@@ -75,6 +75,7 @@ from ditto.db.queries.coding_evaluations import (
     insert_coding_shadow_result,
     insert_coding_shadow_run,
     issue_coding_shadow_ticket,
+    latest_coding_shadow_runs,
 )
 from ditto.db.queries.coding_evidence import (
     CodingSealedEvidenceConflictError,
@@ -680,6 +681,44 @@ async def test_run_requires_core_qualification(session: AsyncSession) -> None:
             await insert_coding_shadow_run(
                 session, authority=_authority(agent.agent_id)
             )
+
+
+async def test_latest_shadow_runs_returns_only_newest_run_per_agent(
+    session: AsyncSession,
+) -> None:
+    await _seed_catalog(session)
+    agent = await _seed_qualified_agent(session)
+    first = _authority(agent.agent_id)
+    async with session.begin():
+        inserted_first = await insert_coding_shadow_run(session, authority=first)
+    second = first.model_copy(
+        update={
+            "coding_run_id": "coding-run-002",
+            "task_set_id": "task-set-002",
+            "run_manifest_sha256": "ef" * 32,
+        }
+    )
+    async with session.begin():
+        inserted_second = await insert_coding_shadow_run(session, authority=second)
+
+    latest = await latest_coding_shadow_runs(
+        session,
+        agent_ids=[agent.agent_id, agent.agent_id],
+        bench_version=_BENCH,
+    )
+    assert set(latest) == {agent.agent_id}
+    assert latest[agent.agent_id].run.run_row_id == inserted_second.row.run_row_id
+    assert latest[agent.agent_id].run.run_row_id != inserted_first.row.run_row_id
+    assert latest[agent.agent_id].tickets == []
+    assert latest[agent.agent_id].results == {}
+    assert (
+        await latest_coding_shadow_runs(
+            session,
+            agent_ids=[agent.agent_id],
+            bench_version=_BENCH - 1,
+        )
+        == {}
+    )
 
 
 async def test_run_requires_registered_active_catalog(session: AsyncSession) -> None:

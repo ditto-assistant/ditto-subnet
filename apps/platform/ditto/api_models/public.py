@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ditto.api_models.benchmark_capacity import BenchmarkAdmission
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
@@ -562,6 +562,43 @@ class PublicLeaderboardFamily(BaseModel):
     members: list[PublicLeaderboardFamilyMember] = Field(default_factory=list)
 
 
+class PublicCodingShadowScore(BaseModel):
+    """Aggregate-only Coding result; never ranking or weight authority."""
+
+    status: Literal["scheduled", "collecting", "complete", "stale"]
+    score: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Median of the current exact artifact's three validator repair "
+                "means. Null until quorum or when the newest run is stale."
+            ),
+        ),
+    ] = None
+    result_count: Annotated[int, Field(ge=0, le=3)]
+    score_quorum: Literal[3] = 3
+    bench_version: Annotated[int, Field(ge=7)]
+    coding_contract_version: Literal[1]
+    completed_at: datetime | None = None
+    shadow_only: Literal[True] = True
+    weight_eligible: Literal[False] = False
+
+    @model_validator(mode="after")
+    def completion_is_coherent(self) -> PublicCodingShadowScore:
+        complete = self.status == "complete"
+        if complete != (self.score is not None and self.completed_at is not None):
+            raise ValueError("Coding shadow completion fields differ")
+        if complete and self.result_count != self.score_quorum:
+            raise ValueError("Coding shadow completion requires quorum")
+        if self.status == "scheduled" and self.result_count != 0:
+            raise ValueError("Scheduled Coding shadow result count must be zero")
+        return self
+
+
 class PublicLeaderboardEntry(BaseModel):
     """One miner's best score, aggregate-only, for public display.
 
@@ -694,6 +731,14 @@ class PublicLeaderboardEntry(BaseModel):
             "Compact finalized children sharing this entry's owner slot. Only "
             "identity/version and canonical score are included; full family "
             "evidence is loaded from the agent detail endpoint."
+        ),
+    )
+    coding_shadow: PublicCodingShadowScore | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Latest aggregate Coding-shadow status for this exact leaderboard "
+            "artifact. Display-only; never changes rank, score, weights, or emissions."
         ),
     )
     miner_hotkey: Annotated[

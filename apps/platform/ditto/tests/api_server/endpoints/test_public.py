@@ -115,6 +115,7 @@ from ditto.db.queries.benchmark_rollout import (
     LEGACY_BENCH_VERSION,
     MIN_SCOREABLE_BENCH_VERSION,
 )
+from ditto.db.queries.coding_evaluations import CodingShadowRunBundle
 from ditto.db.queries.confirmation_bundles import (
     ActiveConfirmationWork,
     insert_confirmation_bundle_settings_revision,
@@ -448,6 +449,86 @@ def test_composite_breakdown_shows_no_token_penalty_when_within_budget() -> None
     )
     assert breakdown.token_efficiency_multiplier == 1.0
     assert breakdown.token_penalty == 0.0
+
+
+def test_public_coding_shadow_keeps_absent_pending_stale_and_zero_distinct() -> None:
+    now = datetime(2026, 9, 10, 20, 0, tzinfo=UTC)
+    run = SimpleNamespace(
+        artifact_sha256="aa" * 32,
+        screened_image_sha256="bb" * 32,
+        bench_version=12,
+    )
+
+    def bundle(
+        *, results: dict[UUID, object], tickets: list[object]
+    ) -> CodingShadowRunBundle:
+        return cast(
+            CodingShadowRunBundle,
+            SimpleNamespace(run=run, results=results, tickets=tickets),
+        )
+
+    assert (
+        public_endpoint._public_coding_shadow(
+            None,
+            artifact_sha256="aa" * 32,
+            screened_image_sha256="bb" * 32,
+            bench_version=12,
+        )
+        is None
+    )
+
+    scheduled = public_endpoint._public_coding_shadow(
+        bundle(results={}, tickets=[]),
+        artifact_sha256="aa" * 32,
+        screened_image_sha256="bb" * 32,
+        bench_version=12,
+    )
+    assert scheduled is not None
+    assert scheduled.status == "scheduled" and scheduled.score is None
+
+    collecting = public_endpoint._public_coding_shadow(
+        bundle(
+            results={
+                UUID(int=1): SimpleNamespace(repair_mean_micros=0, created_at=now)
+            },
+            tickets=[SimpleNamespace()],
+        ),
+        artifact_sha256="aa" * 32,
+        screened_image_sha256="bb" * 32,
+        bench_version=12,
+    )
+    assert collecting is not None
+    assert collecting.status == "collecting"
+    assert collecting.result_count == 1 and collecting.score is None
+
+    stale = public_endpoint._public_coding_shadow(
+        bundle(results={}, tickets=[]),
+        artifact_sha256="cc" * 32,
+        screened_image_sha256="bb" * 32,
+        bench_version=12,
+    )
+    assert stale is not None
+    assert stale.status == "stale" and stale.score is None
+
+    zero = public_endpoint._public_coding_shadow(
+        bundle(
+            results={
+                UUID(int=index): SimpleNamespace(
+                    repair_mean_micros=0,
+                    created_at=now + timedelta(seconds=index),
+                )
+                for index in range(1, 4)
+            },
+            tickets=[SimpleNamespace()] * 3,
+        ),
+        artifact_sha256="aa" * 32,
+        screened_image_sha256="bb" * 32,
+        bench_version=12,
+    )
+    assert zero is not None
+    assert zero.status == "complete"
+    assert zero.score == 0.0 and zero.result_count == 3
+    assert zero.weight_eligible is False
 
 
 @pytest.mark.parametrize(

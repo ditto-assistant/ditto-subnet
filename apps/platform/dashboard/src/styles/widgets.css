@@ -443,6 +443,9 @@ tr:hover .copy,
 .bar.longmem {
   background: var(--good);
 }
+.bar.coding {
+  background: color-mix(in oklab, var(--accent) 64%, var(--good));
+}
 .muted {
   color: var(--text-dim);
 }

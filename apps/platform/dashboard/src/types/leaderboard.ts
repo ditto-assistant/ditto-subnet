@@ -148,6 +148,18 @@ export interface NameHandle {
   claim_id: string;
 }
 
+export interface CodingShadowScore {
+  status: "scheduled" | "collecting" | "complete" | "stale";
+  score?: number | null;
+  result_count: number;
+  score_quorum: 3;
+  bench_version: number;
+  coding_contract_version: 1;
+  completed_at?: string | null;
+  shadow_only: true;
+  weight_eligible: false;
+}
+
 export interface LeaderboardEntry {
   miner_hotkey: string;
   agent_id?: string;
@@ -157,6 +169,8 @@ export interface LeaderboardEntry {
   agent_version?: number | null;
   /** Minimal children for the expandable owner-family grouping. */
   submission_family?: LeaderboardFamily | null;
+  /** Exact-artifact aggregate only; never changes rank, composite, or emissions. */
+  coding_shadow?: CodingShadowScore | null;
   /** Mean settled platform-metered validator lease cost on this score's bench version. */
   average_run_cost_microusd?: number | null;
   /** Settled leases included in average_run_cost_microusd. */

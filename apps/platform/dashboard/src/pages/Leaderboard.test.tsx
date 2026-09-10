@@ -278,11 +278,104 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     expect(document.querySelector('th[data-sort="bench"]')).toBeNull();
     expect(document.querySelector(".modelcell")).toBeNull();
     expect(document.querySelectorAll("#rows tr[data-i]:first-child .score-stack-row")).toHaveLength(
-      3,
+      4,
     );
+    expect(document.querySelector('th[data-sort="coding"]')).toBeNull();
+    const coding = document.querySelector("#rows tr[data-i]:first-child .coding-shadow-row");
+    expect(coding).toHaveTextContent("not evaluated");
+    expect(coding?.querySelector(".bar.coding")).toBeNull();
     // Emissions is present but deliberately not sortable; its tip explains
     // the KOTH role.
     expect(el("emissions-col-tip").closest("th")?.hasAttribute("data-sort")).toBe(false);
+  });
+
+  it("shows a completed Coding shadow zero as measured, never as missing", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index === 0
+              ? {
+                  ...entry,
+                  coding_shadow: {
+                    status: "complete",
+                    score: 0,
+                    result_count: 3,
+                    score_quorum: 3,
+                    bench_version: 12,
+                    coding_contract_version: 1,
+                    completed_at: "2026-09-10T20:00:00Z",
+                    shadow_only: true,
+                    weight_eligible: false,
+                  },
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => {
+      const coding = document.querySelector("#rows tr[data-i]:first-child .coding-shadow-row");
+      expect(coding?.querySelector(".mval")).toHaveTextContent("0.000");
+      expect(coding?.querySelector<HTMLElement>(".bar.coding")?.style.width).toBe("0%");
+      expect(coding?.querySelector(".coding-shadow-label")).toHaveAttribute(
+        "data-tooltip",
+        expect.stringContaining("does not affect composite, rank, weights, or emissions"),
+      );
+    });
+  });
+
+  it("keeps collecting and stale Coding states distinct from scores", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, index) => ({
+            ...entry,
+            coding_shadow:
+              index === 0
+                ? {
+                    status: "collecting",
+                    score: null,
+                    result_count: 1,
+                    score_quorum: 3,
+                    bench_version: 12,
+                    coding_contract_version: 1,
+                    completed_at: null,
+                    shadow_only: true,
+                    weight_eligible: false,
+                  }
+                : index === 1
+                  ? {
+                      status: "stale",
+                      score: null,
+                      result_count: 3,
+                      score_quorum: 3,
+                      bench_version: 11,
+                      coding_contract_version: 1,
+                      completed_at: null,
+                      shadow_only: true,
+                      weight_eligible: false,
+                    }
+                  : null,
+          })),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => {
+      const rows = document.querySelectorAll("#rows tr[data-i] .coding-shadow-row");
+      expect(rows[0]).toHaveTextContent("1/3");
+      expect(rows[0]?.querySelector(".bar.coding")).toBeNull();
+      expect(rows[1]).toHaveTextContent("stale");
+      expect(rows[1]?.querySelector(".bar.coding")).toBeNull();
+    });
   });
 
   it("keeps a miner's picture on the same line as the name it belongs to", async () => {

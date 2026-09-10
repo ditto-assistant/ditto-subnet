@@ -648,3 +648,84 @@ async def list_agent_coding_shadow_runs(
         )
         for run in runs
     ], total
+
+
+async def latest_coding_shadow_runs(
+    session: AsyncSession,
+    *,
+    agent_ids: Sequence[UUID],
+    bench_version: int,
+) -> dict[UUID, CodingShadowRunBundle]:
+    """Return one newest same-benchmark run per agent for public summaries."""
+
+    unique_ids = tuple(dict.fromkeys(agent_ids))
+    if not unique_ids or bench_version < 7:
+        return {}
+    ranked = (
+        select(
+            CodingShadowRun.run_row_id.label("run_row_id"),
+            func.row_number()
+            .over(
+                partition_by=CodingShadowRun.agent_id,
+                order_by=(
+                    CodingShadowRun.created_at.desc(),
+                    CodingShadowRun.run_row_id.desc(),
+                ),
+            )
+            .label("position"),
+        )
+        .where(
+            CodingShadowRun.agent_id.in_(unique_ids),
+            CodingShadowRun.bench_version == bench_version,
+        )
+        .subquery()
+    )
+    runs = list(
+        await session.scalars(
+            select(CodingShadowRun)
+            .join(ranked, ranked.c.run_row_id == CodingShadowRun.run_row_id)
+            .where(ranked.c.position == 1)
+        )
+    )
+    if not runs:
+        return {}
+    run_ids = [run.run_row_id for run in runs]
+    tickets = list(
+        await session.scalars(
+            select(CodingShadowTicket)
+            .where(CodingShadowTicket.run_row_id.in_(run_ids))
+            .order_by(CodingShadowTicket.validator_hotkey)
+        )
+    )
+    ticket_ids = [ticket.ticket_id for ticket in tickets]
+    results = (
+        list(
+            await session.scalars(
+                select(CodingShadowResult).where(
+                    CodingShadowResult.ticket_id.in_(ticket_ids)
+                )
+            )
+        )
+        if ticket_ids
+        else []
+    )
+    tickets_by_run: dict[UUID, list[CodingShadowTicket]] = {
+        run_id: [] for run_id in run_ids
+    }
+    for ticket in tickets:
+        tickets_by_run[ticket.run_row_id].append(ticket)
+    results_by_ticket = {result.ticket_id: result for result in results}
+    return {
+        run.agent_id: CodingShadowRunBundle(
+            run=run,
+            issuance=None,
+            tickets=tickets_by_run[run.run_row_id],
+            freezes={},
+            results={
+                ticket.ticket_id: results_by_ticket[ticket.ticket_id]
+                for ticket in tickets_by_run[run.run_row_id]
+                if ticket.ticket_id in results_by_ticket
+            },
+        )
+        for run in runs
+    }

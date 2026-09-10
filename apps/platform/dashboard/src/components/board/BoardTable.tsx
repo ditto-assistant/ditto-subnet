@@ -204,7 +204,7 @@ const HEADERS: HeaderSpec[] = [
     key: "composite",
     label: "Scores",
     width: "280px",
-    tip: "Current quality score with tool and memory subscores stacked beneath it. Quality is the primary rank key; when active, the efficiency chip shows the value used only to break exact-quality ties.",
+    tip: "Current quality score with tool and memory subscores beneath it. Coding shadow is display-only and never ranks. Quality is the primary rank key; when active, efficiency breaks only exact-quality ties.",
   },
   {
     key: "cost",
@@ -269,7 +269,10 @@ function emissionsColTip(store: LeaderboardStore): string {
   );
 }
 
-function Bar(props: { kind: "tool" | "memory" | "longmem"; value: number }): JSX.Element {
+function Bar(props: {
+  kind: "tool" | "memory" | "longmem" | "coding";
+  value: number;
+}): JSX.Element {
   return (
     <div class="metric">
       <div class="barwrap">
@@ -281,6 +284,62 @@ function Bar(props: { kind: "tool" | "memory" | "longmem"; value: number }): JSX
       <span class="mval">{fx(props.value)}</span>
     </div>
   );
+}
+
+function codingShadowCopy(entry: BoardEntry): { value: number | null; label: string; tip: string } {
+  const coding = entry.coding_shadow;
+  const boundary = " Shadow only; it does not affect composite, rank, weights, or emissions.";
+  if (!coding) {
+    return {
+      value: null,
+      label: "not evaluated",
+      tip: "No Coding shadow run exists for this agent." + boundary,
+    };
+  }
+  if (coding.status === "complete" && coding.score != null) {
+    return {
+      value: coding.score,
+      label: fx(coding.score),
+      tip:
+        "Coding shadow score " +
+        fx(coding.score) +
+        ", the median of " +
+        coding.result_count +
+        "/" +
+        coding.score_quorum +
+        " validator repair means for the exact current artifact, screened image, and benchmark v" +
+        coding.bench_version +
+        "." +
+        boundary,
+    };
+  }
+  if (coding.status === "collecting") {
+    return {
+      value: null,
+      label: coding.result_count + "/" + coding.score_quorum,
+      tip:
+        "Coding shadow validators are collecting results for the exact current artifact (" +
+        coding.result_count +
+        "/" +
+        coding.score_quorum +
+        ")." +
+        boundary,
+    };
+  }
+  if (coding.status === "scheduled") {
+    return {
+      value: null,
+      label: "scheduled",
+      tip: "A Coding shadow run is scheduled but has no validator ticket results yet." + boundary,
+    };
+  }
+  return {
+    value: null,
+    label: "stale",
+    tip:
+      "The newest Coding shadow run belongs to an older artifact, screened image, or benchmark version, so its score is not carried forward." +
+      boundary,
+  };
 }
 
 // Composite cell = bar (with a ±1-SE uncertainty band) + value, then a
@@ -302,6 +361,7 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
     }
   };
   const showsEfficiencyTieBreak = (): boolean => props.entry.efficiency_factor != null;
+  const coding = (): ReturnType<typeof codingShadowCopy> => codingShadowCopy(props.entry);
   const band = (): { lo: number; hi: number; width: number } | null =>
     showsCompositeErrBand(props.entry, props.store.settledView())
       ? errBandBounds(value(), props.entry.composite_stderr)
@@ -344,6 +404,18 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
         <div class="score-stack-row">
           <span class="score-stack-label">Memory</span>
           <Bar kind="memory" value={props.entry.memory_mean} />
+        </div>
+        <div class="score-stack-row coding-shadow-row">
+          <TipTarget class="score-stack-label coding-shadow-label" text={coding().tip}>
+            <span>Coding</span>
+            <small>Shadow</small>
+          </TipTarget>
+          <Show
+            when={coding().value != null}
+            fallback={<span class="coding-shadow-placeholder muted">{coding().label}</span>}
+          >
+            <Bar kind="coding" value={coding().value as number} />
+          </Show>
         </div>
         <Show when={longmemScore() != null || longmemPlaceholder() != null}>
           <div class="score-stack-row">

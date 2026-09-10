@@ -818,6 +818,17 @@ tbody tr:focus-visible {
   font: 650 9.5px/1.2 var(--mono);
   text-transform: uppercase;
 }
+.coding-shadow-label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+.coding-shadow-label small {
+  color: color-mix(in oklab, var(--accent) 64%, var(--good));
+  font-size: 7px;
+  letter-spacing: 0.04em;
+}
 .score-stack .metric {
   min-width: 0;
   gap: 8px;
@@ -828,6 +839,19 @@ tbody tr:focus-visible {
 }
 .score-stack-context {
   margin-left: 56px;
+}
+.coding-shadow-row {
+  border-top: 1px dashed color-mix(in oklab, var(--border) 78%, transparent);
+  padding-top: 5px;
+}
+.coding-shadow-label {
+  color: color-mix(in oklab, var(--accent) 68%, var(--text-faint));
+  cursor: help;
+}
+.coding-shadow-placeholder {
+  justify-self: end;
+  font: 600 10px/1.2 var(--mono);
+  text-transform: uppercase;
 }
 .run-cost-cell strong,
 .run-cost-cell span {

@@ -81,6 +81,16 @@ Each ticket also reports a bounded authoring-freeze summary when the validator
 has fixed its patch and transcript. Full authoring evidence and content-addressed
 object keys remain server-side.
 
+The public leaderboard carries one optional aggregate-only `coding_shadow`
+projection for the newest run on the displayed benchmark attached to each agent. A score appears
+only when that run still matches the exact current artifact, screened image and
+benchmark version and has three immutable validator results. The value is the
+median of those three integer repair means. Scheduled, collecting, stale and
+absent states remain distinct, and a measured zero stays `0.000` rather than
+becoming “not evaluated.” The projection omits run/ticket/task IDs, release and
+catalog identities, private evidence, patches and storage coordinates. It is
+display-only and cannot affect the main composite, rank, weights or emissions.
+
 ## Activation boundary
 
 This ledger is calibration infrastructure, not a second emissions authority.
