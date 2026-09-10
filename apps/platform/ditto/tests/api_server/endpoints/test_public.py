@@ -1772,7 +1772,7 @@ class TestPublicNextPinProjection:
         await _seed_pin(
             session_maker,
             epoch_index=25_028,
-            champion=(holder, _MINER_A),
+            champion=(UUID(str(holder)), _MINER_A),
             tail=(uuid4(), _MINER_B),
         )
         body = (await client.get("/api/v1/public/leaderboard")).json()
@@ -1800,7 +1800,7 @@ class TestPublicNextPinProjection:
             session_maker,
             epoch_index=25_028,
             champion=(departed, _MINER_B),
-            tail=(live, _MINER_A),
+            tail=(UUID(str(live)), _MINER_A),
         )
         body = (await client.get("/api/v1/public/leaderboard")).json()
         projection = body["emissions"]["next_pin_projection"]
