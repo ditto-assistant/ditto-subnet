@@ -130,6 +130,7 @@ describe('Backroom MCP tools', () => {
         'get_benchmark_rollout_control',
         'get_benchmark_rollout_qualification',
         'get_burn_settings',
+        'get_copy_court_settings',
         'get_copy_review_source_diff',
         'get_continual_retest_settings',
         'get_core_qualification_policy',
@@ -182,6 +183,7 @@ describe('Backroom MCP tools', () => {
         'get_validation_retry',
         'list_stuck_submissions',
         'list_lease_revocations',
+        'list_copy_court_recommendations',
         'list_hotkey_bans',
         'batch_retry_validator_evaluation',
         'agent_scoring_readiness',
@@ -273,7 +275,8 @@ describe('Backroom MCP tools', () => {
     // backstop, to push back on tutorials.
     // The block-bound weight diagnostic adds one tool and its bounded UID input.
     // Keep the separate description budget below unchanged.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(116_000)
+    // The copy-court pair adds two read tools with a small input schema.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(116_600)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. 23_500 admits the screener

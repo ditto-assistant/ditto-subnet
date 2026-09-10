@@ -38,6 +38,9 @@ from ditto.api_server.endpoints.admin_confirmation_bundles import (
 from ditto.api_server.endpoints.admin_continual_retest_settings import (
     router as admin_continual_retest_settings_router,
 )
+from ditto.api_server.endpoints.admin_copy_court import (
+    router as admin_copy_court_router,
+)
 from ditto.api_server.endpoints.admin_copy_review import (
     router as admin_copy_review_router,
 )
@@ -173,6 +176,7 @@ __all__ = [
     "admin_leaderboard_router",
     "admin_validator_weights_router",
     "admin_lease_revocations_router",
+    "admin_copy_court_router",
     "admin_copy_review_router",
     "admin_coding_certifications_router",
     "admin_coding_catalog_router",

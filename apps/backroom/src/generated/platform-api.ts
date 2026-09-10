@@ -616,6 +616,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/copy-court/recommendations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Copy Court Recommendations
+         * @description Page court recommendations; newest first.
+         *
+         *     ``pending_only`` (the default) joins to the live hold state so an
+         *     operator sees only recommendations whose review is still unresolved and
+         *     whose agent is still held. Set it false to page the full feed including
+         *     recommendations for holds an operator has since resolved — the
+         *     shadow-mode calibration record.
+         */
+        get: operations["list_copy_court_recommendations_api_v1_admin_copy_court_recommendations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/copy-court/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Copy Court Settings
+         * @description Return the current copy-court posture and its append-only history.
+         */
+        get: operations["get_copy_court_settings_api_v1_admin_copy_court_settings_get"];
+        put?: never;
+        /**
+         * Create Copy Court Settings Revision
+         * @description Append one optimistic, idempotency-safe settings revision.
+         */
+        post: operations["create_copy_court_settings_revision_api_v1_admin_copy_court_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/copy-reviews": {
         parameters: {
             query?: never;
@@ -6705,6 +6755,70 @@ export interface components {
             effective: components["schemas"]["EffectiveContinualRetestSettings"];
             /** History */
             history: components["schemas"]["ContinualRetestSettingsRevision"][];
+        };
+        /** AdminCopyCourtRecommendation */
+        AdminCopyCourtRecommendation: {
+            /** Agent Id */
+            agent_id: string;
+            /** Citations */
+            citations: unknown[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /** Hold Class */
+            hold_class: string;
+            /** Model */
+            model?: string | null;
+            /** Prompt Revision */
+            prompt_revision?: string | null;
+            /** Reason */
+            reason: string;
+            /** Recommendation Id */
+            recommendation_id: string;
+            /** Review Id */
+            review_id: string;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Verdict */
+            verdict: string;
+        };
+        /** AdminCopyCourtRecommendationList */
+        AdminCopyCourtRecommendationList: {
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["AdminCopyCourtRecommendation"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** AdminCopyCourtSettingsRequest */
+        AdminCopyCourtSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            settings: components["schemas"]["CopyCourtSettings"];
+        };
+        /** AdminCopyCourtSettingsResponse */
+        AdminCopyCourtSettingsResponse: {
+            current: components["schemas"]["CopyCourtSettingsRevision"] | null;
+            /** History */
+            history: components["schemas"]["CopyCourtSettingsRevision"][];
         };
         /** AdminCopyReviewAction */
         AdminCopyReviewAction: {
@@ -14243,6 +14357,81 @@ export interface components {
             /** Scope */
             scope: string;
             settings: components["schemas"]["ContinualRetestSettings"];
+        };
+        /**
+         * CopyCourtSettings
+         * @description Strict, secret-free triage posture for copy-kind ATH holds.
+         *
+         *     The master ``mode`` caps every per-class mode: a class never exceeds the
+         *     master posture, so enabling one class never re-enables a class an operator
+         *     left off. ``off`` collects nothing; ``shadow`` records recommendations and
+         *     keeps holding; ``enforce`` lets the court resolve through the same guarded
+         *     callable an operator uses, one class at a time.
+         */
+        CopyCourtSettings: {
+            /**
+             * Byte Identical Resubmission Mode
+             * @default off
+             * @enum {string}
+             */
+            byte_identical_resubmission_mode: "off" | "shadow" | "enforce";
+            /**
+             * Cross Miner Resubmission Mode
+             * @default off
+             * @enum {string}
+             */
+            cross_miner_resubmission_mode: "off" | "shadow" | "enforce";
+            /**
+             * Interval Seconds
+             * @default 300
+             */
+            interval_seconds: number;
+            /**
+             * Max Recommendations Per Tick
+             * @default 10
+             */
+            max_recommendations_per_tick: number;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Model */
+            model?: string | null;
+            /**
+             * Near Duplicate Mode
+             * @default off
+             * @enum {string}
+             */
+            near_duplicate_mode: "off" | "shadow" | "enforce";
+            /** Prompt Revision */
+            prompt_revision?: string | null;
+            /**
+             * Repack Resubmission Mode
+             * @default off
+             * @enum {string}
+             */
+            repack_resubmission_mode: "off" | "shadow" | "enforce";
+        };
+        /** CopyCourtSettingsRevision */
+        CopyCourtSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            settings: components["schemas"]["CopyCourtSettings"];
         };
         /** CoreQualificationObservation */
         CoreQualificationObservation: {
@@ -27144,6 +27333,109 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContinualRetestSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_copy_court_recommendations_api_v1_admin_copy_court_recommendations_get: {
+        parameters: {
+            query?: {
+                pending_only?: boolean;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCopyCourtRecommendationList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_copy_court_settings_api_v1_admin_copy_court_settings_get: {
+        parameters: {
+            query?: {
+                history_limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCopyCourtSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_copy_court_settings_revision_api_v1_admin_copy_court_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminCopyCourtSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CopyCourtSettingsRevision"];
                 };
             };
             /** @description Validation Error */

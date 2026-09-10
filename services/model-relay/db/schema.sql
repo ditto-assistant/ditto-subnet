@@ -945,6 +945,32 @@ ALTER SEQUENCE public.artifact_release_settings_revisions_revision_seq OWNED BY 
 
 
 --
+-- Name: ath_copy_court_recommendations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ath_copy_court_recommendations (
+    recommendation_id uuid NOT NULL,
+    review_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    verdict text NOT NULL,
+    hold_class text NOT NULL,
+    reason text NOT NULL,
+    citations jsonb NOT NULL,
+    evidence jsonb NOT NULL,
+    settings_revision integer NOT NULL,
+    settings_checksum text NOT NULL,
+    model text,
+    prompt_revision text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_1d59 CHECK ((length(settings_checksum) = 64)),
+    CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_23b5 CHECK ((hold_class = ANY (ARRAY['near_duplicate'::text, 'rejected_resubmission_byte_identical'::text, 'rejected_resubmission_repack'::text, 'rejected_resubmission_cross_miner'::text, 'unknown'::text]))),
+    CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_66af CHECK ((length(TRIM(BOTH FROM reason)) >= 3)),
+    CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_7daa CHECK ((((model IS NULL) AND (prompt_revision IS NULL)) OR ((model IS NOT NULL) AND (prompt_revision IS NOT NULL)))),
+    CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_fded CHECK ((verdict = ANY (ARRAY['clear'::text, 'reject'::text, 'escalate'::text])))
+);
+
+
+--
 -- Name: ath_review_actions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2328,6 +2354,44 @@ CREATE SEQUENCE public.continual_retest_settings_revisions_revision_seq
 --
 
 ALTER SEQUENCE public.continual_retest_settings_revisions_revision_seq OWNED BY public.continual_retest_settings_revisions.revision;
+
+
+--
+-- Name: copy_court_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.copy_court_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_copy_court_settings_revisions_copy_court_settings_ac_5d43 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_copy_court_settings_revisions_copy_court_settings_ch_a623 CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_copy_court_settings_revisions_copy_court_settings_re_dd01 CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
+-- Name: copy_court_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.copy_court_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: copy_court_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.copy_court_settings_revisions_revision_seq OWNED BY public.copy_court_settings_revisions.revision;
 
 
 --
@@ -4230,6 +4294,13 @@ ALTER TABLE ONLY public.continual_retest_settings_revisions ALTER COLUMN revisio
 
 
 --
+-- Name: copy_court_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.copy_court_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.copy_court_settings_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: core_qualification_policy_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -4358,6 +4429,14 @@ ALTER TABLE ONLY public.alembic_version
 
 ALTER TABLE ONLY public.artifact_release_settings_revisions
     ADD CONSTRAINT artifact_release_settings_parent_revision_key UNIQUE (parent_revision);
+
+
+--
+-- Name: ath_copy_court_recommendations ath_copy_court_recommendations_review_revision_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ath_copy_court_recommendations
+    ADD CONSTRAINT ath_copy_court_recommendations_review_revision_key UNIQUE (review_id, settings_revision);
 
 
 --
@@ -5041,6 +5120,14 @@ ALTER TABLE ONLY public.continual_retest_settings_revisions
 
 
 --
+-- Name: copy_court_settings_revisions copy_court_settings_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.copy_court_settings_revisions
+    ADD CONSTRAINT copy_court_settings_parent_key UNIQUE (parent_revision);
+
+
+--
 -- Name: core_qualification_observations core_qualification_observations_evidence_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5329,6 +5416,14 @@ ALTER TABLE ONLY public.artifact_release_settings_revisions
 
 
 --
+-- Name: ath_copy_court_recommendations pk_ath_copy_court_recommendations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ath_copy_court_recommendations
+    ADD CONSTRAINT pk_ath_copy_court_recommendations PRIMARY KEY (recommendation_id);
+
+
+--
 -- Name: benchmark_rollout_audit pk_benchmark_rollout_audit; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5550,6 +5645,14 @@ ALTER TABLE ONLY public.confirmation_retest_authorizations
 
 ALTER TABLE ONLY public.continual_retest_settings_revisions
     ADD CONSTRAINT pk_continual_retest_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: copy_court_settings_revisions pk_copy_court_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.copy_court_settings_revisions
+    ADD CONSTRAINT pk_copy_court_settings_revisions PRIMARY KEY (revision);
 
 
 --
@@ -6332,6 +6435,20 @@ CREATE INDEX artifact_fetch_audit_fetched_idx ON public.artifact_fetch_audit USI
 --
 
 CREATE INDEX artifact_fetch_audit_requester_idx ON public.artifact_fetch_audit USING btree (requester_kind, requester_id, fetched_at);
+
+
+--
+-- Name: ath_copy_court_recommendations_agent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ath_copy_court_recommendations_agent_idx ON public.ath_copy_court_recommendations USING btree (agent_id, created_at);
+
+
+--
+-- Name: ath_copy_court_recommendations_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ath_copy_court_recommendations_created_idx ON public.ath_copy_court_recommendations USING btree (created_at);
 
 
 --
@@ -7863,6 +7980,30 @@ ALTER TABLE ONLY public.evaluation_payments
 
 ALTER TABLE ONLY public.agent_kingship
     ADD CONSTRAINT fk_agent_kingship_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: ath_copy_court_recommendations fk_ath_copy_court_recommendations_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ath_copy_court_recommendations
+    ADD CONSTRAINT fk_ath_copy_court_recommendations_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: ath_copy_court_recommendations fk_ath_copy_court_recommendations_review_id_ath_reviews; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ath_copy_court_recommendations
+    ADD CONSTRAINT fk_ath_copy_court_recommendations_review_id_ath_reviews FOREIGN KEY (review_id) REFERENCES public.ath_reviews(review_id) ON DELETE CASCADE;
+
+
+--
+-- Name: ath_copy_court_recommendations fk_ath_copy_court_recommendations_settings_revision_cop_511a; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ath_copy_court_recommendations
+    ADD CONSTRAINT fk_ath_copy_court_recommendations_settings_revision_cop_511a FOREIGN KEY (settings_revision) REFERENCES public.copy_court_settings_revisions(revision) ON DELETE RESTRICT;
 
 
 --

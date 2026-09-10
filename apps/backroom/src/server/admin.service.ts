@@ -183,6 +183,9 @@ import {
   screenerReviewControlSchema,
   screenerReviewRevisionSchema,
   screenerPolicyManifestControlSchema,
+  copyCourtControlSchema,
+  copyCourtRecommendationListSchema,
+  copyCourtRecommendationsInputSchema,
   screenerCapacityViewSchema,
   createScreenerBootstrapGrantInputSchema,
   screenerBootstrapGrantResponseSchema,
@@ -467,6 +470,23 @@ export async function selectActiveBenchmark(actor: string, rawInput: unknown) {
 export async function fetchScreenerReviewControl() {
   const payload = await platformAdminRequest('/api/v1/admin/screener-review-settings')
   return screenerReviewControlSchema.parse(payload)
+}
+
+export async function fetchCopyCourtControl() {
+  const payload = await platformAdminRequest('/api/v1/admin/copy-court/settings')
+  return copyCourtControlSchema.parse(payload)
+}
+
+export async function fetchCopyCourtRecommendations(rawInput: unknown) {
+  const input = copyCourtRecommendationsInputSchema.parse(rawInput)
+  const params = new URLSearchParams()
+  params.set('pending_only', String(input.pendingOnly))
+  params.set('limit', String(input.limit))
+  params.set('offset', String(input.offset))
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/copy-court/recommendations?${params.toString()}`,
+  )
+  return copyCourtRecommendationListSchema.parse(payload)
 }
 
 export async function fetchScreenerPolicyManifestControl() {

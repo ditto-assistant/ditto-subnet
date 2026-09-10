@@ -607,6 +607,120 @@ class AthReviewAction(Base):
     )
 
 
+class CopyCourtSettingsRevision(Base):
+    """Append-only, operator-audited copy-hold triage court settings."""
+
+    __tablename__ = "copy_court_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="copy_court_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="copy_court_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="copy_court_settings_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="copy_court_settings_parent_key",
+        ),
+    )
+
+
+class AthCopyCourtRecommendation(Base):
+    """Non-authoritative triage recommendation for one copy-kind ATH hold.
+
+    Written by the platform copy-hold court while it runs in shadow mode: the
+    verdict, its class, and the evidence behind it, recorded without touching
+    agent status or the review's resolution. An operator resolution (clear or
+    reject through ``resolve_copy_review``) stays the only state change; an
+    enforce-mode court cites the recommendation id in its resolution reason so
+    the append-only ``AthReviewAction`` chain shows the court basis.
+    """
+
+    __tablename__ = "ath_copy_court_recommendations"
+
+    recommendation_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True
+    )
+    review_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    verdict: Mapped[str] = mapped_column(Text, nullable=False)
+    hold_class: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_revision: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["review_id"], ["ath_reviews.review_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["settings_revision"],
+            ["copy_court_settings_revisions.revision"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "verdict IN ('clear', 'reject', 'escalate')",
+            name="ath_copy_court_recommendations_verdict_check",
+        ),
+        CheckConstraint(
+            "hold_class IN ('near_duplicate', "
+            "'rejected_resubmission_byte_identical', "
+            "'rejected_resubmission_repack', "
+            "'rejected_resubmission_cross_miner', 'unknown')",
+            name="ath_copy_court_recommendations_hold_class_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 3",
+            name="ath_copy_court_recommendations_reason_check",
+        ),
+        CheckConstraint(
+            "length(settings_checksum) = 64",
+            name="ath_copy_court_recommendations_checksum_check",
+        ),
+        CheckConstraint(
+            "(model IS NULL AND prompt_revision IS NULL) OR "
+            "(model IS NOT NULL AND prompt_revision IS NOT NULL)",
+            name="ath_copy_court_recommendations_model_pair_check",
+        ),
+        UniqueConstraint(
+            "review_id",
+            "settings_revision",
+            name="ath_copy_court_recommendations_review_revision_key",
+        ),
+        Index(
+            "ath_copy_court_recommendations_agent_idx",
+            "agent_id",
+            "created_at",
+        ),
+        Index("ath_copy_court_recommendations_created_idx", "created_at"),
+    )
+
+
 class ScreeningRetryOverride(Base):
     """Append-only operator grant that waives one failed attempt's backoff."""
 
