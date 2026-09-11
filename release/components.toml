@@ -6,6 +6,7 @@ ignored_paths = [
   "localstack/**",
   "preview/**",
   "scripts/preview",
+  "scripts/hippius-probe/**", # Operator-only probe dependencies; no service release
   "scripts/preview-restore-snapshot.sh",
   ".env.example",
   ".agents/**",

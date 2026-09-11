@@ -79,3 +79,54 @@ the `cloudflare-dittobench` Terraform plan that creates the Pages project,
 create this environment, then open or synchronize a fresh dashboard-only PR.
 The publisher cannot prove itself from its own PR because inspect copies the
 trusted Worker from the current default branch.
+
+## `coding-hippius-probe`
+
+The manual Hippius capability probe uses its own environment and GCP identity,
+never `infra-apply` or `GCP_TF_APPLY_SA`. `ai-mountain` and Peyton can approve
+their own runs here. The environment allows only the `main` branch (not tags).
+Keep all Terraform and other protected infrastructure approvals unchanged.
+
+The `gcp-platform` root owns `hippius-probe.tf`: a separate federation pool,
+provider, service account, and a custom role bound separately to the six probe
+secrets. Its only Secret Manager permissions are `versions.list` and
+`versions.access`. The identity has no project roles, Terraform state access,
+or service-account impersonation grants. Federation requires the exact repo
+and owner IDs, workflow path, main branch, manual event, environment subject,
+and Peyton or ai-mountain's immutable actor ID.
+
+Before enabling the environment, apply the independent review ruleset in
+`infra/github/hippius-probe-ruleset.json`. It requires one approval from the
+existing `admin` team for changes to the workflow, executable probe files,
+isolated dependency lock, and delegation configuration. Admins retain emergency
+bypass; ai-mountain has no ruleset bypass. GitHub owns this configuration; the
+JSON files record the exact reproducible API payloads. Do not change the
+repository-wide CODEOWNERS or review requirements for unrelated files.
+
+Activation order:
+
+1. Merge the reviewed change and create a protected exact-current-main plan
+   for the resources in `hippius-probe.tf`. Inspect it before applying the
+   saved binary through `infra-apply`; never create this IAM out of band.
+2. Install the scoped ruleset, then create/update the environment using
+   `infra/github/hippius-probe-environment.json`; add a deployment branch
+   policy with `name=main`, `type=branch`.
+3. Set environment variables `GCP_HIPPIUS_PROBE_SA` and
+   `GCP_HIPPIUS_PROBE_WIF_PROVIDER` to the corresponding Terraform outputs.
+   These identifiers are not secrets. Do not copy infrastructure credentials.
+4. Dispatch the main workflow with its exact confirmation, approve only the
+   probe environment, and verify the synthetic-only, weight-ineligible
+   receipt and provider profile. Each successful run retains two synthetic
+   4 KiB objects. This does not activate a worker, release, or scoring.
+
+The job installs only hash-locked wheels and copies the reviewed probe module
+into a temporary package. Python isolated mode prevents checkout packages,
+package initializers, and sitecustomize from executing. The ordinary Platform
+project and its build hooks are not installed. Artifact upload requires the
+probe step to succeed, including checking all three output files for secret
+bytes. Failed probes or sanitization produce no uploaded artifact.
+
+To revoke delegated access, remove ai-mountain from the probe environment's
+reviewers and remove his actor ID from the reviewed provider condition. A
+provider disable revokes federation entirely. Neither action requires widening
+`infra-apply`.
