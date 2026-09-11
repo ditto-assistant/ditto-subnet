@@ -11,9 +11,24 @@ operator may reject a submission. Historical v9 findings retain their original
 wire identity and are not silently reinterpreted; v10 applies to new or
 explicitly rescreened attempts.
 
-## Policy v12 (in place, activation pending)
+## Policy v13 (implemented, activation pending)
 
-Policy v12 is the second scheduled activation under the bench-scaling loop. It
+Policy v13 replaces identifier-oriented review guidance with the mechanism-based
+white and black checklist in [policy-v13.md](policy-v13.md). It adds I8
+evaluation independence, explicit final-field and capability-removal rules,
+lifecycle security coverage, role-based opaque-component verification, and two
+final operator outcomes: `CLEAR` and `REJECT`. Screening outcomes such as pass,
+quarantine, retry, and inconclusive remain processing evidence rather than final
+operator dispositions.
+
+The built-in version does not activate itself. Activation requires a separately
+recorded schedule plus the readiness, transition, and emission-gate conditions
+listed in the v13 document. Historical policy-v10-v12 invariant assessments keep
+their seven-decision schema; policy v13 signs the eight-decision I1-I8 schema.
+
+## Policy v12 (activated 2026-09-06)
+
+Policy v12 was the second scheduled activation under the bench-scaling loop. It
 was triggered by the 2026-09-06 review of the aceron_v13/aceron_v14 lineage and
 the wider board: about ten of the top eighteen agents post-process the graded
 `answer` slot after the deciding model has spoken because the bench v12 money

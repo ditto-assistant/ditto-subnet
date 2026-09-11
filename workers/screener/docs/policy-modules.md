@@ -61,6 +61,10 @@ Supported module kinds are:
   independent even when a real model call occurs and the historical two limbs
   pass. Medium/high findings still select quarantine only; L2/L3 and the
   operator retain adjudication authority.
+  Policy v13 adds I8 evaluation independence using invariant-assessment schema
+  version 2; exact-version schemas keep policy-v10-v12 findings at seven
+  decisions during rollout. See `docs/policy-v13.md` and
+  `docs/policy-v13-opaque-verification.md` before scheduling activation.
 - `behavioral_challenge_pack`: runs bounded private `/run` requests only after a
   selector trips. It records response digests, elapsed time, and JSON keys, not
   private prompts or response bodies. An anomaly becomes quarantine and an

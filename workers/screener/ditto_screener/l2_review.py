@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import fcntl
 import hashlib
 import json
@@ -40,6 +41,7 @@ from ditto_screener.source_review import (
     ledger_disposition,
     policy_v10_static_assessment,
     review_gateway_headers,
+    source_review_categories_for_policy,
 )
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
@@ -57,6 +59,7 @@ from ditto_screening_protocol import (
     SourceReviewPassClause,
     SourceReviewScorerVisibleEffect,
 )
+from ditto_screening_protocol.models import source_review_invariants_for_policy
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +210,10 @@ _RESOLUTION_BASES = frozenset(
         "credential_exfiltration",
         "cross_user_data_flow",
         "duplicate_artifact",
+        "evaluation_dependence",
+        "unauthorized_execution",
+        "resource_isolation_violation",
+        "mandatory_contract_failure",
         "other_policy_violation",
         "insufficient_static_evidence",
     }
@@ -217,6 +224,22 @@ _SAFE_RESOLUTION_BASES = frozenset(
 _VIOLATION_RESOLUTION_BASES = (
     _RESOLUTION_BASES - _SAFE_RESOLUTION_BASES - {"insufficient_static_evidence"}
 )
+_POLICY_V13_ONLY_RESOLUTION_BASES = frozenset(
+    {
+        "evaluation_dependence",
+        "unauthorized_execution",
+        "resource_isolation_violation",
+        "mandatory_contract_failure",
+    }
+)
+
+
+def _resolution_bases_for_policy(policy_version: int) -> frozenset[str]:
+    if policy_version >= 13:
+        return _RESOLUTION_BASES
+    return _RESOLUTION_BASES - _POLICY_V13_ONLY_RESOLUTION_BASES
+
+
 _BASIS_CATEGORIES = {
     "benchmark_answer_replacement": frozenset(
         {
@@ -245,6 +268,12 @@ _BASIS_CATEGORIES = {
     ),
     "cross_user_data_flow": frozenset({"cross_user_access"}),
     "duplicate_artifact": frozenset({"duplicate_submission"}),
+    "evaluation_dependence": frozenset(
+        {"seed_state_shortcut", "embedded_evaluator_logic"}
+    ),
+    "unauthorized_execution": frozenset({"unauthorized_execution", "malicious_build"}),
+    "resource_isolation_violation": frozenset({"resource_isolation_violation"}),
+    "mandatory_contract_failure": frozenset({"mandatory_contract_failure"}),
 }
 _INVARIANT_BY_RESOLUTION_BASIS = {
     "benchmark_answer_replacement": SourceReviewInvariant.PRODUCTION_ENGINE,
@@ -253,6 +282,7 @@ _INVARIANT_BY_RESOLUTION_BASIS = {
     "fabricated_tool_trajectory": (SourceReviewInvariant.TOOL_EXECUTION_FIDELITY),
     "model_tool_planning_bypass": SourceReviewInvariant.MODEL_TOOL_PLANNING,
     "hidden_model_bypass": SourceReviewInvariant.MODEL_INVOCATION,
+    "evaluation_dependence": SourceReviewInvariant.EVALUATION_INDEPENDENCE,
 }
 _INVARIANT_BY_AUTHORITY_TRANSITION = {
     SourceReviewAuthorityTransition.MODEL_SKIPPED: (
@@ -281,6 +311,9 @@ _INVARIANT_BY_AUTHORITY_TRANSITION = {
     ),
     SourceReviewAuthorityTransition.TOOL_SELECTION_PREDETERMINED: (
         SourceReviewInvariant.MODEL_TOOL_PLANNING
+    ),
+    SourceReviewAuthorityTransition.EVALUATION_IDENTITY_AUTHORITATIVE: (
+        SourceReviewInvariant.EVALUATION_INDEPENDENCE
     ),
 }
 _CAUSAL_CATEGORY_FAMILIES = (
@@ -909,6 +942,42 @@ allowed remedy (I3 shape_only_validation, I4 no_derived_value).
 _L2_POLICY_TAILS[12] = _L2_POLICY_TAILS[11] + _L2_POLICY_V12_ADDENDUM
 
 
+_L2_POLICY_V13_ADDENDUM = """\
+POLICY V13: decide I1 through I8 independently and apply the mechanism-based
+policy in docs/policy-v13.md. I8 rejects evaluation identity changing
+substantive retrieval, authority, capabilities, execution, or output; use
+evaluation_identity_authoritative only for a reachable source-proven branch.
+Behavioral degradation alone is inconclusive until controlled, post-commit,
+predeclared and replicated evidence attributes it to evaluation dependence.
+
+For I2, identify the exact applicable evidence and its discard point; generic
+top-k selection or an ordinary retrieval miss is insufficient. For I3, separate
+shape repair from a genuine model critic/final selector that has necessary
+evidence and may preserve dissent. For I4, conditional deletion of unknown,
+none, n/a, or an overlength answer; prose-derived abstention; currency rescale;
+added equivalents; and grader-vocabulary mapping are scorer-field rewrites.
+For I5, conditionality is neither necessary nor sufficient: an always-on
+benchmark recipe is activated on every request. Establish the specific
+generator-, fixture-, grader-, or evaluation-dependent assumption and effect;
+common formulas, finite domain vocabulary, and prescriptive wording alone do
+not establish it. For I7, reject unjustified removal of an applicable,
+authorized and available capability, including errors caused by quoted titles,
+compound requests, negation scope, setting-and-remember requests, or duplicate
+handling that removes unrelated pending tools.
+
+A genuine authoritative model planner may author a pinned plan; an advisory
+planner must remain rejectable. A user/model-authored program may directly
+return its result only when the delegation fixed inputs, operation, scope,
+units, and representation before execution. Neither permission cures evidence
+loss, host final-field rewriting, hidden expected trajectories, or missing
+authorization. Opaque-file presence, dead code, lineage, and labels are leads.
+Trace the effective build and component role. Security findings use lifecycle
+reachability to an unauthorized data, execution, persistence, privilege, or
+material availability effect and do not require a model/scorer effect.
+"""
+_L2_POLICY_TAILS[13] = _L2_POLICY_TAILS[12] + _L2_POLICY_V13_ADDENDUM
+
+
 def _l2_review_system_prompt(policy_version: int) -> str:
     """Return the L2/L3 system prompt for one implemented policy version."""
     try:
@@ -919,7 +988,13 @@ def _l2_review_system_prompt(policy_version: int) -> str:
             f"{policy_version} is not implemented by this build "
             f"(implements {sorted(_L2_POLICY_TAILS)})"
         ) from None
-    return _L2_SYSTEM_PROMPT_HEAD + tail + _L2_SYSTEM_PROMPT_TAIL
+    prompt = _L2_SYSTEM_PROMPT_HEAD + tail + _L2_SYSTEM_PROMPT_TAIL
+    if policy_version >= 13:
+        prompt = prompt.replace(
+            "exactly one decision for I1 through I7.",
+            "exactly one decision for I1 through I8.",
+        )
+    return prompt
 
 
 def _assert_l2_policy_tails_differ() -> None:
@@ -927,6 +1002,8 @@ def _assert_l2_policy_tails_differ() -> None:
     assert _L2_POLICY_TAILS[10] != _L2_POLICY_TAILS[11]
     assert _L2_POLICY_TAILS[11] != _L2_POLICY_TAILS[12]
     assert _L2_POLICY_TAILS[12].startswith(_L2_POLICY_TAILS[11])
+    assert _L2_POLICY_TAILS[12] != _L2_POLICY_TAILS[13]
+    assert _L2_POLICY_TAILS[13].startswith(_L2_POLICY_TAILS[12])
 
 
 _VIOLATION_CAUSE_TASK = """\
@@ -1533,7 +1610,7 @@ _TOOLS: list[dict[str, object]] = [
                 "invariants": {
                     "type": "array",
                     "minItems": 7,
-                    "maxItems": 7,
+                    "maxItems": 8,
                     "items": {
                         "type": "object",
                         "properties": {
@@ -1608,6 +1685,51 @@ _TOOLS: list[dict[str, object]] = [
         },
     },
 ]
+
+
+def _l2_tools_for_policy(policy_version: int) -> list[dict[str, object]]:
+    """Return an exact-version verdict schema without mutating frozen policies."""
+
+    tools = copy.deepcopy(_TOOLS)
+    submit = tools[-1]
+    parameters = submit["parameters"]
+    assert isinstance(parameters, dict)
+    properties = parameters["properties"]
+    assert isinstance(properties, dict)
+    resolution_basis = properties["resolution_basis"]
+    assert isinstance(resolution_basis, dict)
+    resolution_basis["enum"] = sorted(_resolution_bases_for_policy(policy_version))
+    categories = source_review_categories_for_policy(policy_version)
+    category_items = properties["categories"]
+    assert isinstance(category_items, dict)
+    category_item = category_items["items"]
+    assert isinstance(category_item, dict)
+    category_item["enum"] = sorted(categories)
+    evidence = properties["evidence"]
+    assert isinstance(evidence, dict)
+    evidence_items = evidence["items"]
+    assert isinstance(evidence_items, dict)
+    evidence_properties = evidence_items["properties"]
+    assert isinstance(evidence_properties, dict)
+    evidence_category = evidence_properties["category"]
+    assert isinstance(evidence_category, dict)
+    evidence_category["enum"] = sorted(categories)
+    invariants = properties["invariants"]
+    assert isinstance(invariants, dict)
+    selected = source_review_invariants_for_policy(policy_version)
+    invariants["minItems"] = len(selected)
+    invariants["maxItems"] = len(selected)
+    items = invariants["items"]
+    assert isinstance(items, dict)
+    item_properties = items["properties"]
+    assert isinstance(item_properties, dict)
+    invariant = item_properties["invariant"]
+    assert isinstance(invariant, dict)
+    invariant["enum"] = sorted(item.value for item in selected)
+    summary = item_properties["summary"]
+    assert isinstance(summary, dict)
+    summary["maxLength"] = 210 if policy_version >= 13 else 240
+    return tools
 
 
 @dataclass(frozen=True)
@@ -2331,6 +2453,7 @@ class TerraSolSourceReviewAgent:
                     analyst=analyst,
                     dossier_tools=dossier_tools,
                     analyst_cache_hit=analyst_cache_hit,
+                    policy_version=policy_version,
                 )
                 if static_attention is None:
                     static_attention = _review_adaptation_hold(
@@ -2341,6 +2464,7 @@ class TerraSolSourceReviewAgent:
                         analyst=analyst,
                         dossier_tools=dossier_tools,
                         analyst_cache_hit=analyst_cache_hit,
+                        policy_version=policy_version,
                     )
                 # Broad lexical/static constellations are routing attention,
                 # never non-overturnable findings. A complete Terra clearance
@@ -3474,6 +3598,7 @@ class TerraSolSourceReviewAgent:
                                     if role == "adjudicator"
                                     else l2_critic_prompt_revision(policy_version)
                                 ),
+                                policy_version=policy_version,
                             )
                         )
                     except (json.JSONDecodeError, ValueError):
@@ -3576,7 +3701,7 @@ class TerraSolSourceReviewAgent:
             "model": model,
             "instructions": _l2_review_system_prompt(policy_version),
             "input": items,
-            "tools": _TOOLS,
+            "tools": _l2_tools_for_policy(policy_version),
             "tool_choice": "required",
             "max_output_tokens": self._max_completion_tokens,
             "store": False,
@@ -4510,6 +4635,7 @@ def _parse_l2_review(
     repository: TarSourceRepository,
     required_paths: tuple[str, ...] = (),
     prompt_revision: str | None = None,
+    policy_version: int = SCREENING_POLICY_VERSION,
 ) -> tuple[
     SourceReviewObservation,
     tuple[Mapping[str, object], ...],
@@ -4517,7 +4643,7 @@ def _parse_l2_review(
     str,
 ]:
     if prompt_revision is None:
-        prompt_revision = l2_prompt_revision(SCREENING_POLICY_VERSION)
+        prompt_revision = l2_prompt_revision(policy_version)
     expected = {
         "disposition",
         "risk_level",
@@ -4563,12 +4689,15 @@ def _parse_l2_review(
         or not 0 <= float(confidence) <= 1
     ):
         raise ValueError("L2 result confidence is invalid")
-    if resolution_basis not in _RESOLUTION_BASES:
+    if resolution_basis not in _resolution_bases_for_policy(policy_version):
         raise ValueError("L2 result resolution basis is invalid")
     if (
         not isinstance(categories, list)
         or not 1 <= len(categories) <= 8
-        or any(category not in _ALLOWED_CATEGORIES for category in categories)
+        or any(
+            category not in source_review_categories_for_policy(policy_version)
+            for category in categories
+        )
     ):
         raise ValueError("L2 result categories are invalid")
     if not isinstance(analyzed, list) or not 1 <= len(analyzed) <= 48:
@@ -4757,7 +4886,10 @@ def _parse_l2_review(
         for item in normalized_evidence
     ]
     invariant_assessment = SourceReviewInvariantAssessment.model_validate(
-        {"decisions": invariants}
+        {
+            "schema_version": 2 if policy_version >= 13 else 1,
+            "decisions": invariants,
+        }
     )
     if disposition == "violation":
         _validate_violation_invariant_binding(
@@ -5116,6 +5248,7 @@ def _review_adaptation_hold(
     analyst: L2RunResult,
     dossier_tools: tuple[str, ...],
     analyst_cache_hit: bool,
+    policy_version: int = 12,
 ) -> L2RunResult | None:
     """Prevent model agreement from clearing self-attested review adaptation."""
     inventory = dossier.get("bounded_source_inventory")
@@ -5203,6 +5336,7 @@ def _review_adaptation_hold(
                     if item.category == "benchmark_emulation"
                 ]
             },
+            policy_version=policy_version,
         ),
     ).require_policy_v10_invariants()
     detector_files = tuple(
@@ -5260,6 +5394,7 @@ def _served_generator_hold(
     analyst: L2RunResult,
     dossier_tools: tuple[str, ...],
     analyst_cache_hit: bool,
+    policy_version: int = 12,
 ) -> L2RunResult | None:
     """Keep a deterministic served-generator constellation from auto-clearing.
 
@@ -5350,6 +5485,7 @@ def _served_generator_hold(
                     if item.category == "benchmark_emulation"
                 ]
             },
+            policy_version=policy_version,
         ),
     ).require_policy_v10_invariants()
     detector_files = tuple(

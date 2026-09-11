@@ -46,6 +46,7 @@ _PASS_CLAUSES = {
     "i5_production_engine": "no_family_compiler",
     "i6_tool_execution_fidelity": "no_reported_tool_calls",
     "i7_model_tool_planning": "no_tool_planning",
+    "i8_evaluation_independence": "evaluation_independent_runtime",
 }
 
 
@@ -78,6 +79,7 @@ def _with_policy_v10_invariants(value: dict[str, object]) -> dict[str, object]:
         "derived_value_authoritative": "i4_derived_value_authority",
         "family_compiler_authoritative": "i5_production_engine",
         "tool_selection_predetermined": "i7_model_tool_planning",
+        "evaluation_identity_authoritative": "i8_evaluation_independence",
     }
     breaches = (
         {breach_by_transition[transition]}

@@ -16,11 +16,11 @@ from pydantic import (
     model_validator,
 )
 
-SCREENING_POLICY_VERSION = 12
+SCREENING_POLICY_VERSION = 13
 # The oldest policy version a mixed-fleet platform may require during a
-# scheduled activation window. v10 stays the floor until the v12 activation
-# has re-stamped the scored cohort; raise it in a follow-up, never alongside
-# the policy text that the activation window still has to serve.
+# scheduled activation window. v10 stays the floor while v13 is distributed
+# but not activated; raise it only after every older-policy cohort has reached
+# a terminal, recorded transition.
 SCREENING_FLOOR_POLICY_VERSION = 10
 TYPED_OUTCOME_POLICY_VERSION = 9
 
@@ -495,6 +495,7 @@ class SourceReviewAuthorityTransition(StrEnum):
     DERIVED_VALUE_AUTHORITATIVE = "derived_value_authoritative"
     FAMILY_COMPILER_AUTHORITATIVE = "family_compiler_authoritative"
     TOOL_SELECTION_PREDETERMINED = "tool_selection_predetermined"
+    EVALUATION_IDENTITY_AUTHORITATIVE = "evaluation_identity_authoritative"
 
 
 class SourceReviewScorerVisibleEffect(StrEnum):
@@ -577,11 +578,21 @@ _SCORER_VISIBLE_EFFECTS_BY_TRANSITION = {
             SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
         }
     ),
+    SourceReviewAuthorityTransition.EVALUATION_IDENTITY_AUTHORITATIVE: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.FINAL_TEXT,
+            SourceReviewScorerVisibleEffect.ANSWER,
+            SourceReviewScorerVisibleEffect.ABSTAIN,
+            SourceReviewScorerVisibleEffect.TOOL_CALLS,
+            SourceReviewScorerVisibleEffect.VALIDATOR_OBSERVED_TRAJECTORY,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
 }
 
 
 class SourceReviewInvariant(StrEnum):
-    """Policy-v10 source-review invariants, evaluated independently."""
+    """Versioned source-review invariants, evaluated independently."""
 
     MODEL_INVOCATION = "i1_model_invocation"
     EVIDENCE_RETENTION = "i2_evidence_retention"
@@ -590,6 +601,24 @@ class SourceReviewInvariant(StrEnum):
     PRODUCTION_ENGINE = "i5_production_engine"
     TOOL_EXECUTION_FIDELITY = "i6_tool_execution_fidelity"
     MODEL_TOOL_PLANNING = "i7_model_tool_planning"
+    EVALUATION_INDEPENDENCE = "i8_evaluation_independence"
+
+
+_POLICY_V10_V12_INVARIANTS = tuple(
+    invariant
+    for invariant in SourceReviewInvariant
+    if invariant != SourceReviewInvariant.EVALUATION_INDEPENDENCE
+)
+
+
+def source_review_invariants_for_policy(
+    policy_version: int,
+) -> tuple[SourceReviewInvariant, ...]:
+    """Return the invariant set signed by one screening-policy generation."""
+
+    if policy_version >= 13:
+        return tuple(SourceReviewInvariant)
+    return _POLICY_V10_V12_INVARIANTS
 
 
 class SourceReviewInvariantDisposition(StrEnum):
@@ -618,6 +647,8 @@ class SourceReviewPassClause(StrEnum):
     NO_TOOL_PLANNING = "no_tool_planning"
     POLICY_CAPABILITY_FILTER_ONLY = "policy_capability_filter_only"
     NATURAL_SINGLETON_CLASS = "natural_singleton_class"
+    EVALUATION_INDEPENDENT_RUNTIME = "evaluation_independent_runtime"
+    NO_EVALUATION_IDENTITY_BRANCH = "no_evaluation_identity_branch"
     UNREACHABLE_NONRUNTIME_CODE = "unreachable_nonruntime_code"
 
 
@@ -665,6 +696,12 @@ _PASS_CLAUSES_BY_INVARIANT = {
             SourceReviewPassClause.NATURAL_SINGLETON_CLASS,
         }
     ),
+    SourceReviewInvariant.EVALUATION_INDEPENDENCE: frozenset(
+        {
+            SourceReviewPassClause.EVALUATION_INDEPENDENT_RUNTIME,
+            SourceReviewPassClause.NO_EVALUATION_IDENTITY_BRANCH,
+        }
+    ),
 }
 for _invariant in SourceReviewInvariant:
     _PASS_CLAUSES_BY_INVARIANT[_invariant] = _PASS_CLAUSES_BY_INVARIANT[_invariant] | {
@@ -706,22 +743,49 @@ class SourceReviewInvariantDecision(BaseModel):
 
 
 class SourceReviewInvariantAssessment(BaseModel):
-    """Complete policy-v10 sweep; omission cannot silently clear an invariant."""
+    """Complete versioned sweep; omission cannot silently clear an invariant.
+
+    Schema v1 is the byte-compatible policy-v10-v12 I1-I7 assessment. Schema
+    v2 adds policy-v13 I8 without making stored historical findings invalid.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     decisions: Annotated[
-        list[SourceReviewInvariantDecision], Field(min_length=7, max_length=7)
+        list[SourceReviewInvariantDecision], Field(min_length=7, max_length=8)
     ]
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_schema_version(cls, value: object) -> object:
+        """Let current producers omit the version while preserving v1 inputs."""
+
+        if isinstance(value, dict) and "schema_version" not in value:
+            decisions = value.get("decisions")
+            if isinstance(decisions, list) and len(decisions) == 8:
+                return {**value, "schema_version": 2}
+        return value
 
     @model_validator(mode="after")
     def validate_complete_sweep(self) -> Self:
         invariants = [decision.invariant for decision in self.decisions]
         if len(invariants) != len(set(invariants)):
             raise ValueError("invariant decisions must be unique")
-        if set(invariants) != set(SourceReviewInvariant):
-            raise ValueError("source review must decide every policy-v10 invariant")
+        expected = (
+            set(_POLICY_V10_V12_INVARIANTS)
+            if self.schema_version == 1
+            else set(SourceReviewInvariant)
+        )
+        if set(invariants) != expected:
+            raise ValueError(
+                "source review must decide every invariant for its schema version"
+            )
+        if (
+            self.schema_version == 2
+            and sum(len(decision.summary) for decision in self.decisions) > 1_680
+        ):
+            raise ValueError("policy-v13 invariant summaries exceed bounded size")
         return self
 
 

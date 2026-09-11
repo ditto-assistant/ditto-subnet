@@ -317,7 +317,8 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(10) == "adjudicator-v3-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v3-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v3-policy-v12"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v3-policy-v12"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v3-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v3-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
@@ -330,7 +331,19 @@ def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
     assert "NARROWED" not in policy_v11
     assert "NARROWED" not in _system_prompt(10)
     with pytest.raises(ValueError, match="not implemented by this build"):
-        adjudicator_prompt_revision(13)
+        adjudicator_prompt_revision(14)
+
+
+def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None:
+    policy_v12 = _system_prompt(12)
+    policy_v13 = _system_prompt(13)
+
+    assert policy_v13.startswith(policy_v12)
+    assert "I8 is evaluation independence" in policy_v13
+    assert "always-on benchmark-specific recipe is activated on every request" in (
+        policy_v13
+    )
+    assert "withhold submit_adjudication" in policy_v13
 
 
 async def test_v11_court_request_and_signed_verdict_bind_policy_version(
