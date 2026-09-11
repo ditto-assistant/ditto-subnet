@@ -198,7 +198,7 @@ func TestResolvedBrokerCapabilityLeaseCannotEnterAfterRevocation(t *testing.T) {
 		"chat": func(response *httptest.ResponseRecorder) {
 			request := capabilityRequest(http.MethodPost, "http://broker/v1/inference/chat/completions", sourceIP, "broker", "")
 			request.Body = http.NoBody
-			broker.handleChat(response, request, lease)
+			broker.handleChat(response, request, lease, "")
 		},
 		"embedding": func(response *httptest.ResponseRecorder) {
 			request := capabilityRequest(http.MethodPost, "http://broker/api/embed", sourceIP, "broker", "")
@@ -292,7 +292,7 @@ func TestCompatibilityReplacementWaitsForRetiredEpochHandlers(t *testing.T) {
 	response := httptest.NewRecorder()
 	handlerDone := make(chan struct{})
 	go func() {
-		broker.handleChat(response, request, lease)
+		broker.handleChat(response, request, lease, "")
 		close(handlerDone)
 	}()
 	session := broker.sessions[sessionID]

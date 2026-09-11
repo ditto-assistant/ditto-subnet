@@ -554,3 +554,37 @@ func TestSeedForVersionWireIdentity(t *testing.T) {
 		t.Fatalf("v7 seed request bytes must be identical to the legacy path: %q vs %q", bodies[0], bodies[1])
 	}
 }
+
+func TestRunRequestCarriesCaseScopedInferenceURL(t *testing.T) {
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode run request: %v", err)
+		}
+		bodies = append(bodies, body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"final_text":"ok"}`)
+	}))
+	defer srv.Close()
+
+	if _, _, err := RunCaseWithTelemetry(sandboxContext(), srv.URL, "c1", "hi", nil,
+		CaseOptions{InferenceBaseURL: "http://host.docker.internal:11436/v1/inference/cases/tok123"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := RunCaseWithTelemetry(sandboxContext(), srv.URL, "c1", "hi", nil, CaseOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("want 2 run requests, got %d", len(bodies))
+	}
+	if got := bodies[0]["inference_base_url"]; got != "http://host.docker.internal:11436/v1/inference/cases/tok123" {
+		t.Fatalf("inference_base_url = %v", got)
+	}
+	if _, present := bodies[1]["inference_base_url"]; present {
+		t.Fatal("unset InferenceBaseURL must not appear on the wire")
+	}
+	if bodies[0]["case_id"] != "c1" {
+		t.Fatalf("wrapper must not disturb protocol fields: case_id = %v", bodies[0]["case_id"])
+	}
+}
