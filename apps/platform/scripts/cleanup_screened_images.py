@@ -20,7 +20,14 @@ async def _main() -> None:
             result = await cleanup_screened_images(
                 create_session_maker(engine), storage
             )
-            logging.info("screened image cleanup complete: %s", result)
+            if result.preservation_mode:
+                logging.warning(
+                    "screened image cleanup SKIPPED "
+                    "(M0 emergency preservation mode): %s",
+                    result,
+                )
+            else:
+                logging.info("screened image cleanup complete: %s", result)
     finally:
         await engine.dispose()
 
