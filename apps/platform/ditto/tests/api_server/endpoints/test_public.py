@@ -5611,6 +5611,86 @@ class TestPublicFleet:
 
 
 class TestPublicActivity:
+    async def test_activity_and_operations_project_only_exact_coding_aggregate(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await _activate_era(session_maker)
+        agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="coding-pipeline",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+        assert agent is not None and agent.screened_image_sha256 is not None
+        completed_at = datetime(2026, 7, 31, 14, 0, tzinfo=UTC)
+        bundle = cast(
+            CodingShadowRunBundle,
+            SimpleNamespace(
+                run=SimpleNamespace(
+                    artifact_sha256=agent.sha256,
+                    screened_image_sha256=agent.screened_image_sha256,
+                    bench_version=_ERA,
+                ),
+                tickets=[SimpleNamespace()] * 3,
+                results={
+                    UUID(int=index): SimpleNamespace(
+                        repair_mean_micros=0,
+                        created_at=completed_at + timedelta(seconds=index),
+                    )
+                    for index in range(1, 4)
+                },
+            ),
+        )
+        latest = AsyncMock(return_value={agent_id: bundle})
+        monkeypatch.setattr(public_endpoint, "latest_coding_shadow_runs", latest)
+        _install_db(app, session_maker)
+
+        activity = (await client.get("/api/v1/public/activity")).json()
+        operations = (await client.get("/api/v1/public/operations")).json()
+        expected = {
+            "status": "complete",
+            "score": 0.0,
+            "result_count": 3,
+            "score_quorum": 3,
+            "bench_version": _ERA,
+            "coding_contract_version": 1,
+            "completed_at": "2026-07-31T14:00:03Z",
+            "shadow_only": True,
+            "weight_eligible": False,
+        }
+        activity_entry = next(
+            entry for entry in activity["entries"] if entry["agent_id"] == str(agent_id)
+        )
+        operations_entry = next(
+            entry
+            for entry in operations["activity"]["entries"]
+            if entry["agent_id"] == str(agent_id)
+        )
+        assert activity_entry["coding_shadow"] == expected
+        assert operations_entry["coding_shadow"] == expected
+        encoded = json.dumps(operations_entry["coding_shadow"])
+        for forbidden in (
+            "run_row_id",
+            "ticket_id",
+            "task_id",
+            "release_id",
+            "evidence_sha256",
+            "object_key",
+            "artifact_sha256",
+            "screened_image_sha256",
+        ):
+            assert forbidden not in encoded
+        assert latest.await_count == 2
+
     async def test_agent_summary_is_a_targeted_glance_level_projection(
         self,
         app: FastAPI,
@@ -5776,8 +5856,9 @@ class TestPublicActivity:
         # Includes one bounded query for the independent live LongMem lane
         # and one for live handle-claim reservations plus attested owner roots
         # so operations badges classify family children correctly.
-        # Plus one bounded miner-avatar lookup for the page's hotkeys.
-        assert len(statements) <= 37
+        # Plus one bounded miner-avatar lookup for the page's hotkeys and one
+        # exact-agent Coding-shadow aggregate lookup for the parallel public lane.
+        assert len(statements) <= 38
         body = response.json()
         assert body["active_bench_version"] == _ERA
         assert body["desired_bench_version"] == _NEXT_ERA
@@ -8607,8 +8688,9 @@ class TestPublicActivity:
         # that a currently available validator can actually consume, plus
         # one live handle-claim reservation read and one attested-owner fold
         # so family children keep a reserved handle.
-        # Plus one bounded miner-avatar lookup for the page's hotkeys.
-        assert len(statements) <= 21
+        # Plus one bounded miner-avatar lookup for the page's hotkeys and one
+        # exact-agent Coding-shadow aggregate lookup for the parallel public lane.
+        assert len(statements) <= 22
         assert body["count"] == 1
         assert body["total"] == 2
         assert body["total_pages"] == 2

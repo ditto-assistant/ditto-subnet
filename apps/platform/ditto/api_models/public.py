@@ -2685,6 +2685,15 @@ class PublicActivityEntry(BaseModel):
         int,
         Field(ge=0, description="Independent validator scores recorded so far."),
     ]
+    coding_shadow: PublicCodingShadowScore | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Latest aggregate Coding-shadow status for this exact submission "
+            "artifact, screened image, and active benchmark. Display-only; never "
+            "changes pipeline state, rank, score, weights, or emissions."
+        ),
+    )
     provisional_composite: Annotated[
         float | None,
         Field(

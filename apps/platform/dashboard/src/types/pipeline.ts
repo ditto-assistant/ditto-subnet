@@ -3,7 +3,7 @@
 // /public/agent/{id}/pipeline, and the digest-verified transcript telemetry
 // sidecar).
 
-import type { CaseResult, NameHandle, V9BaseEvidence } from "./leaderboard";
+import type { CaseResult, CodingShadowScore, NameHandle, V9BaseEvidence } from "./leaderboard";
 
 // ── Activity / submissions (/public/activity) ────────────────
 
@@ -18,6 +18,8 @@ export interface ActivityEntry {
   status?: string;
   submitted_at?: string;
   score_count?: number | null;
+  /** Exact-artifact aggregate only; parallel shadow work never gates this lifecycle. */
+  coding_shadow?: CodingShadowScore | null;
   quorum?: number | null;
   score_floor?: number | null;
   review_reason?: string | null;

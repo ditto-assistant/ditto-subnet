@@ -17371,6 +17371,8 @@ export interface components {
              * @description Public URL for this miner's signed profile picture, if set.
              */
             avatar_url?: string | null;
+            /** @description Latest aggregate Coding-shadow status for this exact submission artifact, screened image, and active benchmark. Display-only; never changes pipeline state, rank, score, weights, or emissions. */
+            coding_shadow?: components["schemas"]["PublicCodingShadowScore"] | null;
             /**
              * Duplicate Hotkey
              * @description Hotkey of the matched submission. Equal to miner_hotkey when this hold is a same-miner rename or re-upload of that earlier row, not a comparison against someone else's agent.

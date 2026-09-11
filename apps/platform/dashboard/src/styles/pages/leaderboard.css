@@ -537,7 +537,7 @@
 }
 .coding-board-filter-label {
   align-self: center;
-  color: color-mix(in oklab, var(--accent) 70%, var(--text-faint));
+  color: color-mix(in oklab, var(--coding) 78%, var(--text-faint));
   font: 700 9.5px/1 var(--mono);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -608,9 +608,9 @@
   gap: 18px;
   margin: 0 0 10px;
   padding: 13px 15px;
-  border: 1px solid color-mix(in oklab, var(--accent) 22%, var(--border));
+  border: 1px solid color-mix(in oklab, var(--coding) 28%, var(--border));
   border-radius: 9px;
-  background: color-mix(in oklab, var(--accent) 4%, var(--bg-elev));
+  background: color-mix(in oklab, var(--coding) 4%, var(--bg-elev));
 }
 .coding-shadow-summary-heading {
   display: flex;
@@ -626,9 +626,9 @@
 }
 .coding-shadow-mode {
   padding: 3px 6px;
-  border: 1px solid color-mix(in oklab, var(--accent) 38%, var(--border));
+  border: 1px solid color-mix(in oklab, var(--coding) 42%, var(--border));
   border-radius: 999px;
-  color: color-mix(in oklab, var(--accent) 72%, var(--good));
+  color: var(--coding);
   font: 700 8.5px/1 var(--mono);
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -908,7 +908,7 @@ tbody tr:focus-visible {
   gap: 1px;
 }
 .coding-shadow-label small {
-  color: color-mix(in oklab, var(--accent) 64%, var(--good));
+  color: var(--coding);
   font-size: 7px;
   letter-spacing: 0.04em;
 }
@@ -928,7 +928,7 @@ tbody tr:focus-visible {
   padding-top: 5px;
 }
 .coding-shadow-label {
-  color: color-mix(in oklab, var(--accent) 68%, var(--text-faint));
+  color: color-mix(in oklab, var(--coding) 78%, var(--text-faint));
   cursor: help;
 }
 .coding-shadow-placeholder {
@@ -961,8 +961,8 @@ tbody tr:focus-visible {
 .coding-shadow-details-toggle:hover,
 .coding-shadow-details-toggle:focus-visible,
 .coding-shadow-details-toggle[aria-expanded="true"] {
-  border-color: color-mix(in oklab, var(--accent) 42%, var(--border));
-  color: var(--accent);
+  border-color: color-mix(in oklab, var(--coding) 42%, var(--border));
+  color: var(--coding);
 }
 .coding-shadow-details {
   display: flex;
@@ -970,9 +970,9 @@ tbody tr:focus-visible {
   gap: 5px 12px;
   margin-left: 56px;
   padding: 7px 8px;
-  border: 1px solid color-mix(in oklab, var(--accent) 18%, var(--border));
+  border: 1px solid color-mix(in oklab, var(--coding) 24%, var(--border));
   border-radius: 6px;
-  background: color-mix(in oklab, var(--accent) 3%, var(--bg-elev-2));
+  background: color-mix(in oklab, var(--coding) 3%, var(--bg-elev-2));
   color: var(--text-dim);
   font: 9.5px/1.35 var(--mono);
 }
@@ -982,7 +982,7 @@ tbody tr:focus-visible {
 }
 .coding-shadow-details-boundary {
   flex-basis: 100%;
-  color: color-mix(in oklab, var(--accent) 65%, var(--text-dim));
+  color: color-mix(in oklab, var(--coding) 72%, var(--text-dim));
 }
 .run-cost-cell strong,
 .run-cost-cell span {

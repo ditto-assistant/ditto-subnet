@@ -13,6 +13,7 @@ import { HandleBadge } from "../ui/HandleBadge";
 import { MinerAvatar } from "../ui/MinerAvatar";
 import { policyScreeningLabel } from "../pipeline/status";
 import type { FleetReport } from "../../types/fleet";
+import type { CodingShadowScore } from "../../types/leaderboard";
 import type { BenchmarkProgress } from "../../types/pipeline";
 import {
   AdmissionStepTrack,
@@ -111,6 +112,72 @@ function cardClick(ev: MouseEvent, agentId: string): void {
   pushEntityRoute("agent", agentId);
 }
 
+function codingShadowStatus(coding: CodingShadowScore): string {
+  if (coding.status === "complete" && coding.score != null) {
+    return coding.score === 0 ? "0.000 measured" : fx(coding.score);
+  }
+  if (coding.status === "collecting") {
+    return "Collecting " + coding.result_count + "/" + coding.score_quorum;
+  }
+  if (coding.status === "scheduled") return "Scheduled";
+  return "Stale";
+}
+
+function CodingShadowPipelineItem(props: { coding: CodingShadowScore }): JSX.Element {
+  const result = () => props.coding;
+  return (
+    <span class="pipeline-coding-shadow" data-coding-status={result().status}>
+      <span class="pipeline-coding-shadow-heading">
+        <strong>Coding shadow</strong>
+        <span>{codingShadowStatus(result())}</span>
+      </span>
+      <span class="pipeline-coding-shadow-detail">
+        {result().result_count}/{result().score_quorum} validators · Coding v
+        {result().coding_contract_version} · Bench v{result().bench_version}
+        {result().status === "stale" ? " · not carried forward" : ""}
+      </span>
+      <span class="pipeline-coding-shadow-boundary">
+        Parallel display only · does not delay Scored &amp; live
+      </span>
+    </span>
+  );
+}
+
+function CodingShadowLane(props: {
+  entries: PipelineEntryExt[];
+  unavailable: boolean;
+  loading: boolean;
+}): JSX.Element {
+  const results = createMemo(() =>
+    props.entries.flatMap((entry) => (entry.coding_shadow ? [entry.coding_shadow] : [])),
+  );
+  const active = createMemo(
+    () =>
+      results().filter((result) => result.status === "scheduled" || result.status === "collecting")
+        .length,
+  );
+  const complete = createMemo(
+    () => results().filter((result) => result.status === "complete").length,
+  );
+  const stale = createMemo(() => results().filter((result) => result.status === "stale").length);
+  const status = (): string => {
+    if (props.unavailable) return "Coding shadow status unavailable.";
+    if (props.loading) return "Loading Coding shadow status…";
+    if (!results().length) return "No Coding shadow evaluations in this snapshot.";
+    return active() + " active · " + complete() + " complete · " + stale() + " stale";
+  };
+  return (
+    <div class="pipeline-coding-lane" role="status" aria-live="polite">
+      <span class="pipeline-coding-lane-heading">
+        <strong>Coding shadow</strong>
+        <span>Parallel · weight zero</span>
+      </span>
+      <span class="pipeline-coding-lane-status">{status()}</span>
+      <span class="pipeline-coding-lane-boundary">Never blocks the core scoring pipeline.</span>
+    </div>
+  );
+}
+
 function PipelineCard(props: {
   item: IndexedEntry;
   column: string;
@@ -176,6 +243,13 @@ function PipelineCard(props: {
       ? "Provisional " + fx(Number(entry().provisional_composite))
       : "";
   const accessibleName = () => agentName(entry().name) + ", " + agentVersionLabel(entry().version);
+  const codingAria = () => {
+    if (props.column !== "evaluating" && props.column !== "scored") return "";
+    const coding = entry().coding_shadow;
+    return coding
+      ? ", Coding shadow " + codingShadowStatus(coding) + ", parallel display only"
+      : "";
+  };
   const ariaLabel = () =>
     "View " +
     accessibleName() +
@@ -183,7 +257,8 @@ function PipelineCard(props: {
     (isUpNext() ? ", up next for validator assignment" : "") +
     (queueGate() ? ", " + queueGate()?.aria : "") +
     (rescore()?.isQualification ? ", inherited benchmark cohort qualification in progress" : "") +
-    (admissionLabel() ? ", " + admissionLabel() : "");
+    (admissionLabel() ? ", " + admissionLabel() : "") +
+    codingAria();
   const benchmarks = (): BenchmarkProgress[] =>
     props.column === "evaluating" ? entry().active_benchmarks || [] : [];
   // Waiting vs in-progress is a state the card must wear, not just say: the
@@ -282,6 +357,13 @@ function PipelineCard(props: {
       </Show>
       <Show when={provisionalScore()}>
         <span class="pipeline-item-priority-detail">{provisionalScore()}</span>
+      </Show>
+      <Show
+        when={
+          props.column === "evaluating" || props.column === "scored" ? entry().coding_shadow : null
+        }
+      >
+        {(coding) => <CodingShadowPipelineItem coding={coding()} />}
       </Show>
       {/* One stage line per card: when a screener is reporting, the progress
           view below says the same thing plus how long it has been there, so
@@ -439,6 +521,13 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
                 </Show>
               </div>
               <div class="pipeline-items" id={column().def.bodyId}>
+                <Show when={column().def.status === "evaluating"}>
+                  <CodingShadowLane
+                    entries={props.entries}
+                    unavailable={props.unavailable}
+                    loading={props.loading}
+                  />
+                </Show>
                 <Show
                   when={!props.unavailable}
                   fallback={<div class="pipeline-empty">Queue unavailable.</div>}
