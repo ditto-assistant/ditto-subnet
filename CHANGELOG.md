@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.256.0 (2026-09-11)
+
+### Features
+
+- **dashboard**: Show coding shadow in pipeline
+  ([#1796](https://github.com/ditto-assistant/ditto-subnet/pull/1796),
+  [`94b49c5`](https://github.com/ditto-assistant/ditto-subnet/commit/94b49c53ffd9d6cb86fe57d0d13ec5a66892b6f3))
+
+
 ## v0.255.0 (2026-09-11)
 
 ### Features
