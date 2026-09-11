@@ -2,6 +2,8 @@ package traces
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -111,6 +113,58 @@ func TestShipRefusesToUploadAnUnusableArtifactItCannotRebuild(t *testing.T) {
 	}
 	if got := s3.keys(); len(got) != 0 {
 		t.Fatalf("nothing should have been stored, got %v", got)
+	}
+	if _, statErr := os.Stat(zstPath); statErr != nil {
+		t.Fatalf("the unusable artifact must be retained for diagnosis: %v", statErr)
+	}
+	if _, statErr := os.Stat(sidePath); statErr != nil {
+		t.Fatalf("its sidecar must be retained for diagnosis: %v", statErr)
+	}
+	if _, statErr := os.Stat(zstPath + rebuildExt); !os.IsNotExist(statErr) {
+		t.Fatal("a failed rebuild must not leave its temporary behind")
+	}
+}
+
+func TestShipRejectsATruncatedFrameWhoseSidecarAgrees(t *testing.T) {
+	dir := t.TempDir()
+	s3 := newFakeS3(t)
+	up := newTestUploader(t, dir, s3)
+	rf := plantReadyFile(t, dir, 40)
+
+	zstPath := rf.path + ".zst"
+	sidePath := rf.path + ".sinks.json"
+	whole := filepath.Join(dir, "whole.zst")
+	if _, _, err := compressFile(rf.path, whole); err != nil {
+		t.Fatal(err)
+	}
+	full, err := os.ReadFile(whole)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full) <= 20 {
+		t.Fatalf("fixture compressed to %d bytes, too short to truncate", len(full))
+	}
+	prefix := full[:20]
+	if err := os.WriteFile(zstPath, prefix, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(prefix)
+	if err := writeSidecar(sidePath, &sidecar{
+		Key: objectKey("traces/v1", rf), SHA256: hex.EncodeToString(sum[:]),
+		Bytes: int64(len(prefix)), Completed: map[string]string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := up.ship(context.Background(), rf); err != nil {
+		t.Fatalf("ship should rebuild the truncated frame and succeed: %v", err)
+	}
+	keys := s3.keys()
+	if len(keys) != 1 {
+		t.Fatalf("expected one stored object, got %v", keys)
+	}
+	if recs := s3.decode(t, keys[0]); len(recs) != 40 {
+		t.Fatalf("stored object should carry every source record, got %d", len(recs))
 	}
 }
 

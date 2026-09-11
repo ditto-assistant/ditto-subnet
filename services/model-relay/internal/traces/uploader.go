@@ -1,7 +1,6 @@
 package traces
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -196,19 +195,25 @@ func (u *Uploader) ship(ctx context.Context, rf *readyFile) error {
 		if verr := validCompressed(zstPath, side); verr != nil {
 			u.opts.Logger.Error("trace artifact unusable; rebuilding from the retained source",
 				slog.String("file", filepath.Base(zstPath)), slog.String("error", verr.Error()))
-			if info, serr := os.Stat(zstPath); serr == nil {
-				u.spool.releaseBytes(info.Size())
-			}
-			_ = os.Remove(zstPath)
-			_ = os.Remove(sidePath)
 			side = nil
 		}
 	}
 	if side == nil || !fileExists(zstPath) {
-		sum, size, err := compressFile(rf.path, zstPath)
+		rebuilt := zstPath + rebuildExt
+		sum, size, err := compressFile(rf.path, rebuilt)
 		if err != nil {
-			return fmt.Errorf("compress: %w", err)
+			_ = os.Remove(rebuilt)
+			return fmt.Errorf("rebuild %s: %w", filepath.Base(zstPath), err)
 		}
+		var replaced int64
+		if info, serr := os.Stat(zstPath); serr == nil {
+			replaced = info.Size()
+		}
+		if err := os.Rename(rebuilt, zstPath); err != nil {
+			_ = os.Remove(rebuilt)
+			return fmt.Errorf("replace %s: %w", filepath.Base(zstPath), err)
+		}
+		u.spool.releaseBytes(replaced)
 		u.spool.addBytes(size)
 		side = &sidecar{Key: objectKey(u.opts.KeyPrefix, rf), SHA256: sum, Bytes: size, Completed: map[string]string{}}
 		if err := writeSidecar(sidePath, side); err != nil {
@@ -268,9 +273,11 @@ func (u *Uploader) ship(ctx context.Context, rf *readyFile) error {
 //
 // dt/hour come from the FIRST record in the file, so a file never straddles
 // the partition its name claims by more than one rotation interval.
-const minZstdFrameBytes = 13
-
-var zstdFrameMagic = []byte{0x28, 0xb5, 0x2f, 0xfd}
+const (
+	minZstdFrameBytes = 13
+	rebuildExt        = ".rebuild"
+	decodeProbeMemory = 64 << 20
+)
 
 func validFrame(path string, size int64) error {
 	if size < minZstdFrameBytes {
@@ -281,12 +288,14 @@ func validFrame(path string, size int64) error {
 		return err
 	}
 	defer f.Close()
-	magic := make([]byte, len(zstdFrameMagic))
-	if _, err := io.ReadFull(f, magic); err != nil {
-		return fmt.Errorf("read frame header: %w", err)
+	dec, err := zstd.NewReader(f,
+		zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(decodeProbeMemory))
+	if err != nil {
+		return fmt.Errorf("open artifact for verification: %w", err)
 	}
-	if !bytes.Equal(magic, zstdFrameMagic) {
-		return fmt.Errorf("artifact does not start with a zstd frame header")
+	defer dec.Close()
+	if _, err := io.Copy(io.Discard, dec); err != nil {
+		return fmt.Errorf("artifact does not decode: %w", err)
 	}
 	return nil
 }
