@@ -3069,6 +3069,14 @@ def test_policy_v13_prompt_adds_mechanism_security_and_i8_rules() -> None:
         "i8_evaluation_independence"
         in current_invariants["items"]["properties"]["invariant"]["enum"]
     )
+    legacy_pass_clauses = legacy_invariants["items"]["properties"]["pass_clause"][
+        "anyOf"
+    ][1]["enum"]
+    current_pass_clauses = current_invariants["items"]["properties"]["pass_clause"][
+        "anyOf"
+    ][1]["enum"]
+    assert "evaluation_independent_runtime" not in legacy_pass_clauses
+    assert "evaluation_independent_runtime" in current_pass_clauses
 
 
 def test_source_review_prompt_rejects_unimplemented_policy_version() -> None:

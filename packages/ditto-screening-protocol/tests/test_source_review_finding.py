@@ -8,9 +8,11 @@ import pytest
 from pydantic import ValidationError
 
 from ditto_screening_protocol import (
+    SourceReviewAdjudication,
     SourceReviewAuthorityTransition,
     SourceReviewCausalEvidence,
     SourceReviewCausalRoleBinding,
+    SourceReviewCitation,
     SourceReviewEvidenceItem,
     SourceReviewEvidenceRole,
     SourceReviewFinding,
@@ -18,6 +20,7 @@ from ditto_screening_protocol import (
     SourceReviewInvariantAssessment,
     SourceReviewInvariantDecision,
     SourceReviewInvariantDisposition,
+    SourceReviewObservationPayload,
     SourceReviewPassClause,
     SourceReviewScorerVisibleEffect,
 )
@@ -720,6 +723,42 @@ def test_policy_v13_adds_i8_without_invalidating_policy_v10_assessments() -> Non
 
     with pytest.raises(ValidationError, match="every invariant"):
         SourceReviewInvariantAssessment(schema_version=1, decisions=decisions)
+
+
+def test_adjudication_reject_invariant_is_bound_to_policy_version() -> None:
+    values = {
+        "decision": "reject",
+        "reason": "A reachable evaluation-identity branch controls the answer.",
+        "reject_invariant": SourceReviewInvariant.EVALUATION_INDEPENDENCE,
+        "citations": [SourceReviewCitation(path="src/main.rs", line=7)],
+        "model": "test-court",
+        "prompt_revision": "adjudicator-v3-policy-v13",
+    }
+
+    with pytest.raises(ValidationError, match="unavailable under the applied policy"):
+        SourceReviewAdjudication(policy_version=12, **values)
+
+    current = SourceReviewAdjudication(policy_version=13, **values)
+    assert current.reject_invariant == SourceReviewInvariant.EVALUATION_INDEPENDENCE
+
+
+def test_observation_decision_fields_are_bound_to_the_finding() -> None:
+    finding = _v2_finding()
+    values = {
+        "ok": True,
+        "risk_level": finding.risk_level,
+        "categories": finding.categories,
+        "finding_digest": finding.canonical_digest(),
+        "finding": finding,
+    }
+
+    SourceReviewObservationPayload.model_validate(values)
+    with pytest.raises(ValidationError, match="risk does not match"):
+        SourceReviewObservationPayload.model_validate({**values, "risk_level": "low"})
+    with pytest.raises(ValidationError, match="categories do not match"):
+        SourceReviewObservationPayload.model_validate(
+            {**values, "categories": ["none"]}
+        )
 
 
 def test_policy_v10_pass_clause_is_invariant_specific() -> None:

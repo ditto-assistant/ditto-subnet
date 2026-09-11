@@ -33,6 +33,7 @@ visible in Backroom and resolvable in one call; a silent admission is not.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 from collections.abc import Mapping, Sequence
@@ -56,6 +57,7 @@ from ditto_screening_protocol import (
     SourceReviewCitation,
     SourceReviewInvariant,
 )
+from ditto_screening_protocol.models import source_review_invariants_for_policy
 
 logger = logging.getLogger(__name__)
 
@@ -439,6 +441,26 @@ _TOOLS: list[dict[str, object]] = [
 _DECISION_ONLY_TOOLS = [_TOOLS[-1]]
 
 
+def _adjudicator_tools_for_policy(
+    policy_version: int, *, decision_only: bool = False
+) -> list[dict[str, object]]:
+    """Return a court schema restricted to the exact policy generation."""
+
+    tools = copy.deepcopy(_DECISION_ONLY_TOOLS if decision_only else _TOOLS)
+    submit = tools[-1]["function"]
+    assert isinstance(submit, dict)
+    parameters = submit["parameters"]
+    assert isinstance(parameters, dict)
+    properties = parameters["properties"]
+    assert isinstance(properties, dict)
+    reject_invariant = properties["reject_invariant"]
+    assert isinstance(reject_invariant, dict)
+    reject_invariant["enum"] = [
+        item.value for item in source_review_invariants_for_policy(policy_version)
+    ]
+    return tools
+
+
 @dataclass(frozen=True)
 class _Verdict:
     """A model decision that has not yet been checked against the archive."""
@@ -790,6 +812,21 @@ class SourceReviewAdjudicator:
                 notes=notes,
                 policy_version=policy_version,
             )
+        permitted_invariants = {
+            item.value for item in source_review_invariants_for_policy(policy_version)
+        }
+        if (
+            verdict.reject_invariant is not None
+            and verdict.reject_invariant not in permitted_invariants
+        ):
+            return _escalate(
+                "verdict-contract-failed",
+                "Automated adjudication named an invariant outside the applied "
+                "policy; held for operator review",
+                model=self._model,
+                notes=notes,
+                policy_version=policy_version,
+            )
         try:
             return SourceReviewAdjudication(
                 decision=verdict.decision,
@@ -874,7 +911,9 @@ class SourceReviewAdjudicator:
             },
         ]
         read_locations = set(preloaded_reads or ())
-        tools = _DECISION_ONLY_TOOLS if decision_only else _TOOLS
+        tools = _adjudicator_tools_for_policy(
+            policy_version, decision_only=decision_only
+        )
         max_steps = 1 if decision_only else self._max_steps
         async with httpx.AsyncClient(
             transport=self._transport, timeout=self._timeout_seconds

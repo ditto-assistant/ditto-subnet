@@ -114,6 +114,7 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
             return Response(
                 {
                     "artifact_sha256": artifact_sha256,
+                    "policy_version": 12,
                     "source_url_b64": base64.b64encode(
                         b"https://storage.example/source.tgz"
                     ).decode(),
@@ -138,6 +139,7 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
             assert path == str(archive_path)
             assert values["artifact_sha256"] == artifact_sha256
             assert values["attempt_id"] == UUID(attempt_id)
+            assert values["policy_version"] == 12
             return SourceReviewObservation(
                 ok=True,
                 risk_level="low",
