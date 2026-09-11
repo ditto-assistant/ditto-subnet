@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.255.0 (2026-09-11)
+
+### Features
+
+- **dashboard**: Add coding shadow coverage controls
+  ([#1795](https://github.com/ditto-assistant/ditto-subnet/pull/1795),
+  [`eb73680`](https://github.com/ditto-assistant/ditto-subnet/commit/eb736805d847cf674fca2a32bf610f4e5af4a76e))
+
+
 ## v0.254.0 (2026-09-10)
 
 ### Features
