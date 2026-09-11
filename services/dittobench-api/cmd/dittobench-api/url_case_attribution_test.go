@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -51,13 +52,14 @@ type barrierRelay struct {
 	arrived chan traceContext
 	mu      sync.Mutex
 	gates   map[string]chan struct{}
+	opened  map[string]bool
 	seen    map[string]int
 	server  *httptest.Server
 }
 
 func newBarrierRelay(t *testing.T, n int) *barrierRelay {
 	t.Helper()
-	relay := &barrierRelay{arrived: make(chan traceContext, n*4), gates: map[string]chan struct{}{}, seen: map[string]int{}}
+	relay := &barrierRelay{arrived: make(chan traceContext, n*4), gates: map[string]chan struct{}{}, opened: map[string]bool{}, seen: map[string]int{}}
 	relay.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var tc traceContext
 		if err := json.Unmarshal([]byte(r.Header.Get(traceContextHeader)), &tc); err != nil {
@@ -90,7 +92,29 @@ func (b *barrierRelay) first(caseID string) bool {
 	return b.seen[caseID] == 1
 }
 
-func (b *barrierRelay) open(caseID string) { close(b.gate(caseID)) }
+func (b *barrierRelay) open(caseID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.openLocked(caseID)
+}
+
+func (b *barrierRelay) openAll() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for caseID := range b.gates {
+		b.openLocked(caseID)
+	}
+}
+
+func (b *barrierRelay) openLocked(caseID string) {
+	if b.gates[caseID] == nil {
+		b.gates[caseID] = make(chan struct{})
+	}
+	if !b.opened[caseID] {
+		close(b.gates[caseID])
+		b.opened[caseID] = true
+	}
+}
 
 func (b *barrierRelay) await(t *testing.T, n int) []traceContext {
 	t.Helper()
@@ -175,6 +199,7 @@ func TestCaseURLsAttributeGenuinelyOverlappingRuns(t *testing.T) {
 				_, _ = w.Write([]byte(`{"final_text":"ok"}`))
 			}))
 			defer harness.Close()
+			defer relay.openAll()
 
 			srv := &server{broker: broker}
 			done := make(chan error, n)
@@ -205,8 +230,8 @@ func TestCaseURLsAttributeGenuinelyOverlappingRuns(t *testing.T) {
 				if tc.CaseGeneration != 0 {
 					t.Fatalf("case %q ran at generation %d, want 0", tc.CaseID, tc.CaseGeneration)
 				}
-				if len(tc.CasesInFlight) != n {
-					t.Fatalf("case %q saw %d cases in flight, want %d", tc.CaseID, len(tc.CasesInFlight), n)
+				if !slices.Contains(tc.CasesInFlight, tc.CaseID) {
+					t.Fatalf("case %q is missing from its own in-flight set %v", tc.CaseID, tc.CasesInFlight)
 				}
 				byCase[tc.CaseID] = tc
 			}
@@ -219,7 +244,11 @@ func TestCaseURLsAttributeGenuinelyOverlappingRuns(t *testing.T) {
 			broker.mu.RUnlock()
 			session.mu.Lock()
 			generation, activeCase, snapshots := session.activeCaseGeneration, session.activeCaseID, len(session.caseSnapshots)
+			inFlight := len(session.runCases)
 			session.mu.Unlock()
+			if inFlight != n {
+				t.Fatalf("session holds %d cases in flight, want %d", inFlight, n)
+			}
 			if generation != 0 || activeCase != "" || snapshots != 0 {
 				t.Fatalf("url attribution opened an exclusive window: generation=%d case=%q snapshots=%d",
 					generation, activeCase, snapshots)
