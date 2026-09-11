@@ -261,6 +261,11 @@ func marshalSeedRequest(req protocol.SeedRequest, benchVersion int) ([]byte, err
 // non-memory tool calls through (so the validator observes the trajectory), and
 // the user_id the case's memory graph was seeded under (multi-graph isolation).
 // The zero value reproduces self-report behavior (no endpoint, default user).
+// InferenceBaseURL, when set, is a validator-minted case-scoped broker URL sent
+// as inference_base_url for this case only. A harness that uses it makes its
+// model calls attributable to the case; one that ignores it keeps the
+// process-wide URL and is attributed exactly as before. It is revoked when the
+// case ends, so it must not be cached as a shared client for another case.
 type CaseOptions struct {
 	ToolEndpoint     string
 	UserID           string

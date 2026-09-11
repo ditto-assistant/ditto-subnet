@@ -4357,7 +4357,7 @@ type traceContext struct {
 	BenchVersion   int      `json:"bench_version,omitempty"`
 	Lane           string   `json:"lane,omitempty"` // confirmation lane when applicable
 	CaseID         string   `json:"case_id,omitempty"`
-	CaseSource     string   `json:"case_source,omitempty"` // window | claim | in_flight
+	CaseSource     string   `json:"case_source,omitempty"` // window | url | claim | in_flight
 	CaseVerified   bool     `json:"case_verified"`
 	ClaimedCaseID  string   `json:"claimed_case_id,omitempty"`
 	CaseGeneration uint64   `json:"case_generation,omitempty"`
