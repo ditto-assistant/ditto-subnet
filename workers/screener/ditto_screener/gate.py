@@ -1027,6 +1027,7 @@ class BuildGate:
                     preflight = TarSourceRepository(tmp_path).malicious_preflight(
                         artifact_sha256=sha256.lower(),
                         mode=self._config.static_preflight_v2_mode,
+                        policy_version=policy_version,
                         audit_recorder=lambda payload: (
                             self._static_preflight_audit.record(
                                 agent_id=agent_id,

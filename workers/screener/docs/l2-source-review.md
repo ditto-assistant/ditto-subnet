@@ -85,6 +85,11 @@ file-digest deltas and reports the selected exact revision in the dossier; this
 keeps historical artifacts and current v3 starter submissions comparable
 without trusting submission metadata.
 
+Policy v13 retains the same layered flow and adds an eighth signed decision for
+evaluation independence. Exact-version result schemas keep v10-v12 at I1-I7;
+v13 requires I1-I8 and applies the authority, opaque-component, security, and
+verification boundaries in `docs/policy-v13.md`.
+
 Tool-fidelity review distinguishes model selection from transport. A
 request-local Tool may return the exact memoized result of its first genuine
 endpoint execution for later identical model-selected calls while the model

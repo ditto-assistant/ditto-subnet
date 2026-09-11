@@ -88,6 +88,7 @@ _PASS_CLAUSES = {
     "i5_production_engine": "no_family_compiler",
     "i6_tool_execution_fidelity": "no_reported_tool_calls",
     "i7_model_tool_planning": "no_tool_planning",
+    "i8_evaluation_independence": "evaluation_independent_runtime",
 }
 _INVARIANT_FOR_CATEGORY = {
     "benchmark_emulation": "i5_production_engine",
@@ -388,6 +389,44 @@ def test_l2_policy_v12_prompt_adds_scorer_slot_rewrite_i4() -> None:
 
     assert _L2_POLICY_TAILS[12].startswith(_L2_POLICY_TAILS[11])
     assert l2_prompt_revision(12) == "l2-terra-source-review-v37-policy-v12"
+
+
+def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
+    from ditto_screener.l2_review import _L2_POLICY_TAILS, _l2_tools_for_policy
+
+    v13 = _l2_review_system_prompt(13)
+
+    assert _L2_POLICY_TAILS[13].startswith(_L2_POLICY_TAILS[12])
+    assert "decide I1 through I8 independently" in v13
+    assert "always-on\nbenchmark recipe is activated on every request" in v13
+    assert "reject unjustified removal" in v13
+    assert "evaluation_identity_authoritative" in v13
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v37-policy-v13"
+
+    legacy = _l2_tools_for_policy(12)[-1]["parameters"]["properties"]["invariants"]
+    current = _l2_tools_for_policy(13)[-1]["parameters"]["properties"]["invariants"]
+    assert legacy["minItems"] == legacy["maxItems"] == 7
+    assert current["minItems"] == current["maxItems"] == 8
+    assert legacy["items"]["properties"]["summary"]["maxLength"] == 240
+    assert current["items"]["properties"]["summary"]["maxLength"] == 210
+    legacy_tool = _l2_tools_for_policy(12)[-1]
+    current_tool = _l2_tools_for_policy(13)[-1]
+    assert (
+        "evaluation_dependence"
+        not in legacy_tool["parameters"]["properties"]["resolution_basis"]["enum"]
+    )
+    assert (
+        "evaluation_dependence"
+        in current_tool["parameters"]["properties"]["resolution_basis"]["enum"]
+    )
+    assert (
+        "i8_evaluation_independence"
+        not in legacy["items"]["properties"]["invariant"]["enum"]
+    )
+    assert (
+        "i8_evaluation_independence"
+        in current["items"]["properties"]["invariant"]["enum"]
+    )
 
 
 def test_l2_prompt_rejects_unimplemented_policy_version() -> None:
