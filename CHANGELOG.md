@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.257.2 (2026-09-11)
+
+### Bug Fixes
+
+- **infra**: Scope delegated Hippius probe authority
+  ([#1799](https://github.com/ditto-assistant/ditto-subnet/pull/1799),
+  [`58181cc`](https://github.com/ditto-assistant/ditto-subnet/commit/58181cc4da9f750e3fbfc854172c425dcc3cf553))
+
+
 ## v0.257.1 (2026-09-11)
 
 ### Bug Fixes
