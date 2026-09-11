@@ -11,6 +11,7 @@ import { currentPageName, spaHref, spaQuery } from "../../lib/router";
 
 export type BoardTab = "all" | "scored" | "provisional";
 export type BoardSortKey = "rank" | "composite" | "cost" | "latency" | "first_seen";
+export type CodingShadowFilter = "all" | "complete" | "in_progress" | "not_evaluated" | "stale";
 
 /** The board pages 25 rows at a time (boardView.pageSize, monolith 3855). */
 export const boardPageSize = 25;
@@ -22,6 +23,7 @@ const [sort, setSort] = createSignal<BoardSortKey>("rank");
 const [dir, setDir] = createSignal<1 | -1>(1);
 const [page, setPage] = createSignal(1);
 const [query, setQuery] = createSignal("");
+const [codingFilter, setCodingFilter] = createSignal<CodingShadowFilter>("all");
 const [families, setFamilies] = createSignal<ReadonlySet<string>>(new Set<string>());
 const [versionView, setVersionView] = createSignal("current");
 
@@ -35,6 +37,8 @@ export const boardPage = page;
 export const setBoardPage = setPage;
 export const boardQuery = query;
 export const setBoardQuery = setQuery;
+export const boardCodingFilter = codingFilter;
+export const setBoardCodingFilter = setCodingFilter;
 export const expandedFamilies = families;
 /** "current" or a bench version as a string (leaderboardVersionView). */
 export const leaderboardVersionView = versionView;
@@ -57,6 +61,7 @@ export function resetBoardState(): void {
   setDir(1);
   setPage(1);
   setQuery("");
+  setCodingFilter("all");
   setFamilies(new Set<string>());
 }
 
