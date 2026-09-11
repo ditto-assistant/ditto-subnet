@@ -272,16 +272,9 @@ const minZstdFrameBytes = 13
 
 var zstdFrameMagic = []byte{0x28, 0xb5, 0x2f, 0xfd}
 
-func validCompressed(path string, side *sidecar) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if info.Size() != side.Bytes {
-		return fmt.Errorf("artifact is %d bytes, sidecar says %d", info.Size(), side.Bytes)
-	}
-	if info.Size() < minZstdFrameBytes {
-		return fmt.Errorf("artifact is %d bytes, smaller than any zstd frame", info.Size())
+func validFrame(path string, size int64) error {
+	if size < minZstdFrameBytes {
+		return fmt.Errorf("artifact is %d bytes, shorter than the smallest zstd frame", size)
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -296,6 +289,17 @@ func validCompressed(path string, side *sidecar) error {
 		return fmt.Errorf("artifact does not start with a zstd frame header")
 	}
 	return nil
+}
+
+func validCompressed(path string, side *sidecar) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.Size() != side.Bytes {
+		return fmt.Errorf("artifact is %d bytes, sidecar says %d", info.Size(), side.Bytes)
+	}
+	return validFrame(path, info.Size())
 }
 
 func objectKey(prefix string, rf *readyFile) string {
@@ -346,6 +350,10 @@ func compressFile(src, dst string) (string, int64, error) {
 	info, err := os.Stat(tmp)
 	if err != nil {
 		return "", 0, err
+	}
+	if err := validFrame(tmp, info.Size()); err != nil {
+		_ = os.Remove(tmp)
+		return "", 0, fmt.Errorf("compressing %s produced an unusable artifact: %w", src, err)
 	}
 	if err := os.Rename(tmp, dst); err != nil {
 		return "", 0, err

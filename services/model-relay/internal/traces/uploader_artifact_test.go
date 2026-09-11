@@ -114,6 +114,38 @@ func TestShipRefusesToUploadAnUnusableArtifactItCannotRebuild(t *testing.T) {
 	}
 }
 
+func TestCompressFileRefusesToProduceAnUnusableArtifact(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "empty.jsonl")
+	if err := os.WriteFile(src, nil, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "empty.zst")
+	_, size, err := compressFile(src, dst)
+	if err == nil {
+		t.Fatalf("compressing an empty source reported success with a %d byte artifact", size)
+	}
+	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
+		t.Fatal("an unusable artifact must not be left where ship can pick it up")
+	}
+	if _, statErr := os.Stat(dst + ".tmp"); !os.IsNotExist(statErr) {
+		t.Fatal("the temporary artifact must be removed")
+	}
+
+	good := filepath.Join(dir, "records.jsonl")
+	if err := os.WriteFile(good, []byte("{\"a\":1}\n{\"b\":2}\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	goodDst := filepath.Join(dir, "records.zst")
+	sum, size, err := compressFile(good, goodDst)
+	if err != nil {
+		t.Fatalf("a source with records must still compress: %v", err)
+	}
+	if sum == "" || size < minZstdFrameBytes {
+		t.Fatalf("real output looks unusable: sum=%q size=%d", sum, size)
+	}
+}
+
 func TestValidCompressedAcceptsRealOutputAndRejectsHusks(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.jsonl")
