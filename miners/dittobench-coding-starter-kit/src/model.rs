@@ -1401,6 +1401,58 @@ mod tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn broker_multiple_tool_calls_fail_closed_without_retry() {
+        let mut payload = response(
+            LUNA_MODEL,
+            Some(json!({
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            })),
+        );
+        payload["choices"][0]["message"]["tool_calls"] =
+            Value::Array((0..2).map(tool_call).collect());
+        let (model, requests, server) = ticket_vector_mock(vec![payload], 100).await;
+        let messages = [ChatMessage {
+            role: "user".to_string(),
+            content: vec![Content::text("fix")],
+            ..ChatMessage::default()
+        }];
+
+        let result = model.next(&messages, &[]).await;
+        assert!(matches!(
+            result,
+            Err(Error::Model(message)) if message.contains("after 0 serial retries")
+        ));
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn broker_rate_limit_envelope_is_not_retried() {
+        let (model, requests, server) = ticket_vector_mock(
+            vec![json!({
+                "error": {"message": "temporarily rate-limited upstream", "code": 429}
+            })],
+            100,
+        )
+        .await;
+        let messages = [ChatMessage {
+            role: "user".to_string(),
+            content: vec![Content::text("fix")],
+            ..ChatMessage::default()
+        }];
+
+        let result = model.next(&messages, &[]).await;
+        assert!(matches!(
+            result,
+            Err(Error::Model(message)) if message.contains("temporarily rate-limited upstream")
+        ));
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        server.abort();
+    }
+
     #[test]
     fn direct_response_rejects_model_mismatch_and_missing_usage() {
         let model = LunaChatModel::direct_openrouter("secret".to_string(), true, 100).unwrap();
