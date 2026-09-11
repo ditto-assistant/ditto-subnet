@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.257.1 (2026-09-11)
+
+### Bug Fixes
+
+- **coding**: Make direct Luna practice resilient
+  ([#1798](https://github.com/ditto-assistant/ditto-subnet/pull/1798),
+  [`72f115e`](https://github.com/ditto-assistant/ditto-subnet/commit/72f115ee48f70291e32803960b08a1ff5011a553))
+
+
 ## v0.257.0 (2026-09-11)
 
 ### Features
