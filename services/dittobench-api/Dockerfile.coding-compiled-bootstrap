@@ -10,7 +10,7 @@ FROM rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1
 COPY services/dittobench-api/coding_runtime/compiled/probe.rs /src/probe.rs
 RUN rustc --version && rustc --edition=2021 -D warnings /src/probe.rs -o /rust-init
 
-FROM python:3.13.14-slim@sha256:69e18bd8d831d88e0ef70239dc7771ab7c28bc296ae78ac75cde71e60aa4434f
+FROM python:3.14.7-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
 LABEL io.heyditto.dittobench.coding-supervisor-fixture="true"
 COPY --from=go-build --chmod=0555 /out/bootstrap /usr/local/libexec/dittobench-compiled-bootstrap
 COPY --from=go-build --chmod=0555 /out/c-init /out/go-init /opt/compiled/candidates/

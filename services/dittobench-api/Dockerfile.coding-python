@@ -9,7 +9,7 @@ COPY research/dittobench-datagen/ /src/research/dittobench-datagen/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
     -o /out/supervisor ./cmd/dittobench-coding-supervisor
 
-FROM python:3.13.14-slim@sha256:69e18bd8d831d88e0ef70239dc7771ab7c28bc296ae78ac75cde71e60aa4434f AS python
+FROM python:3.14.7-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6 AS python
 COPY services/dittobench-api/coding_runtime/python/requirements.txt /tmp/requirements.txt
 RUN python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt
 # Copy runtime files without inheriting base-image credential-shaped ENV names.
