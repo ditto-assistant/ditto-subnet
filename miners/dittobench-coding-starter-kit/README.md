@@ -140,10 +140,18 @@ direct-OpenRouter servers bind only to loopback; only the credential-free
 ticket-broker mode binds the container interface. Inference and workspace HTTP
 clients refuse redirects.
 
-If a provider nevertheless returns multiple tool calls, the adapter fails the
-response closed. It never rewrites one batched provider decision into several
-apparent model turns, so every workspace mutation follows a fresh, observed
-model decision and workspace operations remain serial.
+If the ticket broker returns multiple tool calls, the adapter fails the response
+closed. OpenRouter's Azure Luna endpoint does not advertise the standard
+`parallel_tool_calls` parameter, so direct local practice instead makes at most
+two bounded corrective model calls without executing any batched call. A retry
+must produce one fresh serial decision or the response still fails closed. When
+a retry succeeds, its token usage and cost include every rejected response.
+Direct practice also retries an exact pre-provider HTTP or error-envelope 429
+twice with bounded backoff; no charged or ambiguously settled response is
+retried.
+The adapter never rewrites one batched provider decision into several apparent
+model turns, so every workspace mutation follows a fresh, observed model
+decision and workspace operations remain serial.
 
 Live workspace observations may use the runner's full 32 KiB read bound.
 Context compaction separately evicts older complete tool-call/result pairs.
