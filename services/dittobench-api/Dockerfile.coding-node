@@ -9,7 +9,7 @@ COPY research/dittobench-datagen/ /src/research/dittobench-datagen/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
     -o /out/supervisor ./cmd/dittobench-coding-supervisor
 
-FROM node:24.20.0-bookworm@sha256:be23f54a88d34e8824c741b19b91064094f92c1c97b194144bfc8b50d67258e2 AS build
+FROM node:26.8-bookworm@sha256:e7bc1a4cd2419953c91f9a6f7bb6efb3737773093fb4ded0b1c77a0a5831fac4 AS build
 COPY services/dittobench-api/coding_runtime/node/confinement.c /src/confinement.c
 RUN cc -shared -fPIC -O2 -Wall -Wextra -Werror -I/usr/local/include/node \
     /src/confinement.c -o /confinement.node
@@ -17,7 +17,7 @@ WORKDIR /opt/coding-node
 COPY services/dittobench-api/coding_runtime/node/package.json services/dittobench-api/coding_runtime/node/package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 
-FROM node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS node
+FROM node:26.8-bookworm-slim@sha256:cd9f682fa2885cd1056e830424764158570061c59736a1da836bc3d73df095ae AS node
 FROM scratch AS runtime-base
 COPY --from=node / /
 ENV PATH=/usr/local/bin:/usr/bin:/bin
