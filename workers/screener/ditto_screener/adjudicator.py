@@ -314,9 +314,10 @@ available capability, including quoted-title, compound-request, negation-scope,
 setting-and-remember, and duplicate-call failures.
 
 I8 is evaluation independence. Reject a complete source-proven branch where
-case IDs, active seeds, expected answers, dataset hashes, scorer identity, or
-audit markers alter substantive retrieval, authority, capabilities, execution,
-or output. Behavioral degradation alone cannot reject until the published
+case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit
+markers, or `bench_version` alter substantive retrieval, capability ordering,
+authority, execution, or output beyond the published compatibility contract.
+Behavioral degradation alone cannot reject until the published
 post-commit controlled and replicated procedure attributes it to evaluation
 dependence.
 

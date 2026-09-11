@@ -227,6 +227,9 @@ does not clear the artifact.
 - Private evaluation data is used only within authorization.
 - Commitment precedes private challenge randomness.
 - Protocol-version branches implement declared compatibility.
+- A benchmark or protocol version may not activate learned routing, retrieval,
+  capability ordering, deciding authority, or output behavior beyond that
+  declared compatibility contract.
 - Logging, endpoint use, user isolation, and provider configuration are not
   evasion without a prohibited substantive effect.
 - Ordinary brittleness or performance loss is not automatically cheating.
@@ -337,6 +340,9 @@ execution under W8 is permitted; prescriptive language alone is insufficient.
   execution, or output.
 - Active case IDs, seeds, expected answers, dataset hashes, or evaluation
   markers become runtime answer/routing keys.
+- `bench_version` or another protocol-version field activates substantive
+  routing, retrieval, capability ordering, authority, or output behavior not
+  required by the published compatibility contract.
 - Audit detection enables compliant behavior while scored traffic uses a
   prohibited path.
 - Unauthorized private evaluation information trains/selects the served system.

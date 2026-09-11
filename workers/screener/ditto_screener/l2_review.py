@@ -957,7 +957,9 @@ _L2_POLICY_TAILS[12] = _L2_POLICY_TAILS[11] + _L2_POLICY_V12_ADDENDUM
 _L2_POLICY_V13_ADDENDUM = """\
 POLICY V13: decide I1 through I8 independently and apply the mechanism-based
 policy in docs/policy-v13.md. I8 rejects evaluation identity changing
-substantive retrieval, authority, capabilities, execution, or output; use
+substantive retrieval, authority, capabilities, execution, or output. This
+includes `bench_version` activating learned routing, capability ordering, or
+other substantive behavior beyond the published compatibility contract; use
 evaluation_identity_authoritative only for a reachable source-proven branch.
 Behavioral degradation alone is inconclusive until controlled, post-commit,
 predeclared and replicated evidence attributes it to evaluation dependence.

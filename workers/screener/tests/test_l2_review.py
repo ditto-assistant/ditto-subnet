@@ -402,6 +402,7 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "always-on\nbenchmark recipe is activated on every request" in v13
     assert "reject unjustified removal" in v13
     assert "evaluation_identity_authoritative" in v13
+    assert "`bench_version` activating learned routing" in v13
     assert l2_prompt_revision(13) == "l2-terra-source-review-v37-policy-v13"
 
     legacy = _l2_tools_for_policy(12)[-1]["parameters"]["properties"]["invariants"]
