@@ -53,6 +53,7 @@ from dittobench_coding_datagen.public_workspace import prepare_public_workspace
 HOSTED_CODING_CONTRACT_VERSION = 2
 MAX_PUBLIC_TOOL_CALLS = 150
 MAX_VISIBLE_OUTPUT_BYTES = 28 * 1024
+HARNESS_RESPONSE_GRACE_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -143,7 +144,10 @@ class PublicV2WorkspaceSession(PracticeWorkspaceSession):
             test_command_ids=tuple(self._test_commands),
             build_command_ids=tuple(self._build_commands),
         )
-        self.case = PublicAgentCase(
+        # The base session reads only task_id, active_user_id and the three
+        # runtime_policy tuples, which PublicAgentCase provides; public-v2 has no
+        # pack-v1 PracticeAgentCase fields to populate.
+        self.case = PublicAgentCase(  # type: ignore[assignment]
             task_id=task_id,
             active_user_id=profile,
             runtime_policy=runtime,
@@ -377,6 +381,7 @@ def _request_bodies(
     policy: dict[str, Any],
     capability_url: str,
     inference_base_url: str,
+    timeout_seconds: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     memories = sorted(memory["memories"], key=lambda item: item["memory_id"])
     seed = {
@@ -419,7 +424,11 @@ def _request_bodies(
             "model_input_tokens": 200_000,
             "model_output_tokens": 30_000,
             "workspace_tool_calls": MAX_PUBLIC_TOOL_CALLS,
-            "wall_time_seconds": min(int(policy["limits"]["wall_time_seconds"]), 1_800),
+            "wall_time_seconds": min(
+                int(policy["limits"]["wall_time_seconds"]),
+                1_800,
+                timeout_seconds - HARNESS_RESPONSE_GRACE_SECONDS,
+            ),
         },
     }
     return seed, run
@@ -466,6 +475,7 @@ def _run_task(
                 policy=policy,
                 capability_url=capability.capability_url,
                 inference_base_url="http://127.0.0.1:9/direct-openrouter-mode",
+                timeout_seconds=timeout_seconds,
             )
             seed_response = _request_json(
                 "POST",
@@ -540,7 +550,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Run the contract-v2 Coding starter harness against the public-v2 "
-            "practice pack. Results are local-only and never weight eligible."
+            "practice pack. Start the harness in direct-OpenRouter local-practice "
+            "mode: run requests carry only a placeholder inference URL. Results are "
+            "local-only and never weight eligible."
         )
     )
     parser.add_argument(
@@ -572,7 +584,10 @@ def _parser() -> argparse.ArgumentParser:
         "--timeout-seconds",
         type=int,
         default=960,
-        help="per-task harness timeout from 1 to 3600 seconds (default: 960)",
+        help=(
+            "per-task harness timeout from 61 to 3600 seconds; the harness wall-time "
+            "budget is kept 60 seconds shorter (default: 960)"
+        ),
     )
     return parser
 
@@ -586,8 +601,11 @@ def main() -> int:
         for character in args.harness_artifact_sha256
     ):
         raise CorpusError("harness artifact must be lowercase SHA-256")
-    if args.timeout_seconds < 1 or args.timeout_seconds > 3_600:
-        raise CorpusError("timeout must be between 1 and 3600 seconds")
+    if (
+        args.timeout_seconds <= HARNESS_RESPONSE_GRACE_SECONDS
+        or args.timeout_seconds > 3_600
+    ):
+        raise CorpusError("timeout must be between 61 and 3600 seconds")
     images: Any = json.loads(args.images.read_bytes())
     if not isinstance(images, dict) or not all(
         isinstance(task_id, str) and isinstance(image, str)
