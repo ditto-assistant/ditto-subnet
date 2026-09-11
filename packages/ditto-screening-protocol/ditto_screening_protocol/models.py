@@ -652,6 +652,28 @@ class SourceReviewPassClause(StrEnum):
     UNREACHABLE_NONRUNTIME_CODE = "unreachable_nonruntime_code"
 
 
+_POLICY_V13_ONLY_PASS_CLAUSES = frozenset(
+    {
+        SourceReviewPassClause.EVALUATION_INDEPENDENT_RUNTIME,
+        SourceReviewPassClause.NO_EVALUATION_IDENTITY_BRANCH,
+    }
+)
+
+
+def source_review_pass_clauses_for_policy(
+    policy_version: int,
+) -> tuple[SourceReviewPassClause, ...]:
+    """Return the pass-clause vocabulary exposed by one policy generation."""
+
+    if policy_version >= 13:
+        return tuple(SourceReviewPassClause)
+    return tuple(
+        clause
+        for clause in SourceReviewPassClause
+        if clause not in _POLICY_V13_ONLY_PASS_CLAUSES
+    )
+
+
 _PASS_CLAUSES_BY_INVARIANT = {
     SourceReviewInvariant.MODEL_INVOCATION: frozenset(
         {
@@ -1210,6 +1232,12 @@ class SourceReviewAdjudication(BaseModel):
         if self.decision == "reject":
             if self.reject_invariant is None:
                 raise ValueError("a reject must name the policy invariant it breached")
+            if self.reject_invariant not in source_review_invariants_for_policy(
+                self.policy_version
+            ):
+                raise ValueError(
+                    "a reject invariant is unavailable under the applied policy"
+                )
             if self.clear_clause is not None:
                 raise ValueError("a reject cannot cite a false-positive clause")
             if not self.citations:
@@ -1272,6 +1300,10 @@ class SourceReviewObservationPayload(BaseModel):
                 raise ValueError("source-review finding requires its digest")
             if self.finding.canonical_digest() != self.finding_digest:
                 raise ValueError("source-review finding does not match its digest")
+            if self.risk_level != self.finding.risk_level:
+                raise ValueError("source-review risk does not match its finding")
+            if set(self.categories) != set(self.finding.categories):
+                raise ValueError("source-review categories do not match its finding")
         if self.ok and self.risk_level is None:
             raise ValueError("successful source review requires a risk level")
         return self

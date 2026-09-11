@@ -59,7 +59,10 @@ from ditto_screening_protocol import (
     SourceReviewPassClause,
     SourceReviewScorerVisibleEffect,
 )
-from ditto_screening_protocol.models import source_review_invariants_for_policy
+from ditto_screening_protocol.models import (
+    source_review_invariants_for_policy,
+    source_review_pass_clauses_for_policy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -232,12 +235,21 @@ _POLICY_V13_ONLY_RESOLUTION_BASES = frozenset(
         "mandatory_contract_failure",
     }
 )
+_POLICY_V13_ONLY_AUTHORITY_TRANSITIONS = frozenset(
+    {SourceReviewAuthorityTransition.EVALUATION_IDENTITY_AUTHORITATIVE.value}
+)
 
 
 def _resolution_bases_for_policy(policy_version: int) -> frozenset[str]:
     if policy_version >= 13:
         return _RESOLUTION_BASES
     return _RESOLUTION_BASES - _POLICY_V13_ONLY_RESOLUTION_BASES
+
+
+def _authority_transitions_for_policy(policy_version: int) -> frozenset[str]:
+    if policy_version >= 13:
+        return _AUTHORITY_TRANSITIONS
+    return _AUTHORITY_TRANSITIONS - _POLICY_V13_ONLY_AUTHORITY_TRANSITIONS
 
 
 _BASIS_CATEGORIES = {
@@ -1714,6 +1726,19 @@ def _l2_tools_for_policy(policy_version: int) -> list[dict[str, object]]:
     evidence_category = evidence_properties["category"]
     assert isinstance(evidence_category, dict)
     evidence_category["enum"] = sorted(categories)
+    causal_evidence = properties["causal_evidence"]
+    assert isinstance(causal_evidence, dict)
+    causal_variants = causal_evidence["anyOf"]
+    assert isinstance(causal_variants, list)
+    causal_schema = causal_variants[1]
+    assert isinstance(causal_schema, dict)
+    causal_properties = causal_schema["properties"]
+    assert isinstance(causal_properties, dict)
+    authority_transition = causal_properties["authority_transition"]
+    assert isinstance(authority_transition, dict)
+    authority_transition["enum"] = sorted(
+        _authority_transitions_for_policy(policy_version)
+    )
     invariants = properties["invariants"]
     assert isinstance(invariants, dict)
     selected = source_review_invariants_for_policy(policy_version)
@@ -1726,6 +1751,15 @@ def _l2_tools_for_policy(policy_version: int) -> list[dict[str, object]]:
     invariant = item_properties["invariant"]
     assert isinstance(invariant, dict)
     invariant["enum"] = sorted(item.value for item in selected)
+    pass_clause = item_properties["pass_clause"]
+    assert isinstance(pass_clause, dict)
+    pass_variants = pass_clause["anyOf"]
+    assert isinstance(pass_variants, list)
+    pass_schema = pass_variants[1]
+    assert isinstance(pass_schema, dict)
+    pass_schema["enum"] = sorted(
+        clause.value for clause in source_review_pass_clauses_for_policy(policy_version)
+    )
     summary = item_properties["summary"]
     assert isinstance(summary, dict)
     summary["maxLength"] = 210 if policy_version >= 13 else 240
@@ -4793,6 +4827,7 @@ def _parse_l2_review(
         analyzed_map=analyzed_map,
         evidence=normalized_evidence,
         repository=repository,
+        policy_version=policy_version,
     )
     category_set = set(categories)
     if "none" in category_set and category_set != {"none"}:
@@ -4941,6 +4976,7 @@ def _parse_causal_evidence(
     analyzed_map: Mapping[str, str],
     evidence: list[Mapping[str, object]],
     repository: TarSourceRepository,
+    policy_version: int,
 ) -> SourceReviewCausalEvidence | None:
     if value is None:
         return None
@@ -4956,7 +4992,7 @@ def _parse_causal_evidence(
     transition = value["authority_transition"]
     scorer_visible_effect = value["scorer_visible_effect"]
     bindings = value["role_bindings"]
-    if transition not in _AUTHORITY_TRANSITIONS:
+    if transition not in _authority_transitions_for_policy(policy_version):
         raise ValueError("L2 causal authority transition is invalid")
     if scorer_visible_effect not in _SCORER_VISIBLE_EFFECTS:
         raise ValueError("L2 scorer-visible effect is invalid")

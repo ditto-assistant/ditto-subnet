@@ -58,7 +58,10 @@ from ditto_screening_protocol import (
     SourceReviewInvariantDisposition,
     SourceReviewPassClause,
 )
-from ditto_screening_protocol.models import source_review_invariants_for_policy
+from ditto_screening_protocol.models import (
+    source_review_invariants_for_policy,
+    source_review_pass_clauses_for_policy,
+)
 
 # Every policy version whose L1 policy text this build carries. The platform
 # may require any one of them during a scheduled activation window.
@@ -4546,6 +4549,15 @@ def _source_review_tools_for_policy(
     invariant = item_properties["invariant"]
     assert isinstance(invariant, dict)
     invariant["enum"] = sorted(item.value for item in selected)
+    pass_clause = item_properties["pass_clause"]
+    assert isinstance(pass_clause, dict)
+    pass_variants = pass_clause["anyOf"]
+    assert isinstance(pass_variants, list)
+    pass_schema = pass_variants[1]
+    assert isinstance(pass_schema, dict)
+    pass_schema["enum"] = sorted(
+        clause.value for clause in source_review_pass_clauses_for_policy(policy_version)
+    )
     summary = item_properties["summary"]
     assert isinstance(summary, dict)
     summary["maxLength"] = 210 if policy_version >= 13 else 240

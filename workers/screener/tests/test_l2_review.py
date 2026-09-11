@@ -52,6 +52,7 @@ from ditto_screener.l2_review import (
     _l2_review_system_prompt,
     _make_writable,
     _needs_violation_adjudication,
+    _parse_causal_evidence,
     _parse_l2_review,
     _qualifies_for_direct_clear,
     _require_complete_analysis,
@@ -427,6 +428,43 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
         "i8_evaluation_independence"
         in current["items"]["properties"]["invariant"]["enum"]
     )
+    legacy_transition = legacy_tool["parameters"]["properties"]["causal_evidence"][
+        "anyOf"
+    ][1]["properties"]["authority_transition"]["enum"]
+    current_transition = current_tool["parameters"]["properties"]["causal_evidence"][
+        "anyOf"
+    ][1]["properties"]["authority_transition"]["enum"]
+    assert "evaluation_identity_authoritative" not in legacy_transition
+    assert "evaluation_identity_authoritative" in current_transition
+    legacy_pass_clauses = legacy["items"]["properties"]["pass_clause"]["anyOf"][1][
+        "enum"
+    ]
+    current_pass_clauses = current["items"]["properties"]["pass_clause"]["anyOf"][1][
+        "enum"
+    ]
+    assert "evaluation_independent_runtime" not in legacy_pass_clauses
+    assert "evaluation_independent_runtime" in current_pass_clauses
+
+
+def test_l2_legacy_parser_refuses_v13_only_authority_transition(
+    tmp_path: Path,
+) -> None:
+    archive, _artifact_sha = _tar(tmp_path, "fn main() {}")
+    repository = TarSourceRepository(str(archive))
+
+    with pytest.raises(ValueError, match="authority transition"):
+        _parse_causal_evidence(
+            {
+                "schema_version": 2,
+                "authority_transition": "evaluation_identity_authoritative",
+                "scorer_visible_effect": "answer",
+                "role_bindings": [],
+            },
+            analyzed_map={},
+            evidence=[],
+            repository=repository,
+            policy_version=12,
+        )
 
 
 def test_l2_prompt_rejects_unimplemented_policy_version() -> None:

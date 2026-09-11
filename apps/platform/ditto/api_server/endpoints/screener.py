@@ -3325,8 +3325,14 @@ async def get_submission_source_review_source(
         row = await _locked_source_review_for_job(
             session, review_id=review_id, authorization=authorization
         )
+        attempt = await session.get(ScreeningAttempt, row.attempt_id)
+        if attempt is None:
+            raise HTTPException(
+                status_code=409, detail="source-review attempt is unavailable"
+            )
         agent_id = row.agent_id
         artifact_sha256 = row.artifact_sha256
+        policy_version = attempt.policy_version
     url = await storage.presigned_get_url(
         key=_artifact_key(agent_id),
         expires_in=int(_SOURCE_REVIEW_URL_TTL.total_seconds()),
@@ -3334,6 +3340,7 @@ async def get_submission_source_review_source(
     return SubmissionSourceReviewSourceResponse(
         source_url_b64=base64.b64encode(url.encode()).decode(),
         artifact_sha256=artifact_sha256,
+        policy_version=policy_version,
     )
 
 
@@ -3362,10 +3369,48 @@ async def complete_submission_source_review(
         row = await _locked_source_review_for_job(
             session, review_id=review_id, authorization=authorization
         )
+        attempt = await session.get(ScreeningAttempt, row.attempt_id)
+        if attempt is None:
+            raise HTTPException(
+                status_code=409, detail="source-review attempt is unavailable"
+            )
+        expected_policy_suffix = f"-policy-v{attempt.policy_version}"
         finding = payload.observation.finding
         if finding is not None and finding.artifact_sha256 != row.artifact_sha256:
             raise HTTPException(
                 status_code=409, detail="source-review artifact mismatch"
+            )
+        if finding is not None and not finding.prompt_revision.endswith(
+            expected_policy_suffix
+        ):
+            raise HTTPException(
+                status_code=409, detail="source-review finding policy mismatch"
+            )
+        if finding is not None:
+            expected_assessment_schema = 2 if attempt.policy_version >= 13 else 1
+            assessment = finding.invariant_assessment
+            if (
+                assessment is None
+                or assessment.schema_version != expected_assessment_schema
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="source-review invariant policy mismatch",
+                )
+        review_audit = payload.observation.review_audit
+        if review_audit is not None and not review_audit.prompt_revision.endswith(
+            expected_policy_suffix
+        ):
+            raise HTTPException(
+                status_code=409, detail="source-review audit policy mismatch"
+            )
+        adjudication = payload.observation.adjudication
+        if adjudication is not None and (
+            adjudication.policy_version != attempt.policy_version
+            or not adjudication.prompt_revision.endswith(expected_policy_suffix)
+        ):
+            raise HTTPException(
+                status_code=409, detail="source-review adjudication policy mismatch"
             )
         row.observation = payload.observation.model_dump(mode="json")
         parked = bool(
