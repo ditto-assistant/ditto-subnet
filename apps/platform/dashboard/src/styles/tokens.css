@@ -315,6 +315,7 @@
   --gold: #9a692c;
   --tool: #9a692c;
   --memory: #6d5873;
+  --coding: oklch(48% 0.12 225);
   --good: #356845;
   --warn: #8a5a1f;
   --danger: #a33d36;
@@ -338,6 +339,7 @@
   --gold: oklch(78% 0.12 75);
   --tool: var(--gold);
   --memory: var(--accent-2);
+  --coding: oklch(76% 0.11 220);
   --good: oklch(75% 0.11 145);
   --warn: oklch(76% 0.15 52);
   --danger: oklch(72% 0.13 28);

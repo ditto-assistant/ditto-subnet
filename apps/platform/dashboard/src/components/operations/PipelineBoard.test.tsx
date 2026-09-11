@@ -64,6 +64,22 @@ const waiting = (over: Partial<PipelineEntryExt>): PipelineEntryExt => ({
   ...over,
 });
 
+const codingShadow = (
+  status: "scheduled" | "collecting" | "complete" | "stale",
+  resultCount: number,
+  score: number | null = null,
+): NonNullable<PipelineEntryExt["coding_shadow"]> => ({
+  status,
+  score,
+  result_count: resultCount,
+  score_quorum: 3,
+  bench_version: status === "stale" ? 6 : 7,
+  coding_contract_version: 1,
+  completed_at: status === "complete" ? "2026-07-31T13:30:00Z" : null,
+  shadow_only: true,
+  weight_eligible: false,
+});
+
 describe("the Up next badge (#458)", () => {
   it("badges rank 1 only when nothing gates the lease", () => {
     const container = board([waiting({ validator_queue_rank: 1, agent_id: "head" })], {
@@ -234,6 +250,90 @@ describe("continual retests and rescores in Evaluating", () => {
     const stale = { ...retest, active_benchmarks: [{ bench_version: 6, slot_id: "slot-0" }] };
     expect(pipelineBoardStage(stale, 7)).toBe("scored");
     expect(pipelineRescoreState(stale, 7)).toBeNull();
+  });
+});
+
+describe("Coding shadow as a parallel pipeline lane", () => {
+  it("states absence without adding Coding to the core stage count", () => {
+    const container = board([waiting({ agent_id: "plain", status: "scored" })], {
+      statusCounts: { scored: 1 },
+    });
+    const lane = container.querySelector("#pipeline-evaluating .pipeline-coding-lane");
+    expect(lane).toHaveTextContent("Coding shadow");
+    expect(lane).toHaveTextContent("Parallel · weight zero");
+    expect(lane).toHaveTextContent("No Coding shadow evaluations in this snapshot.");
+    expect(lane).toHaveTextContent("Never blocks the core scoring pipeline.");
+    expect(container.querySelector("#pipeline-evaluating-count")?.textContent).toBe("0");
+    expect(container.querySelector(".pipeline-coding-shadow")).toBeNull();
+  });
+
+  it("shows aggregate statuses on Scored cards and preserves a measured zero", () => {
+    const container = board(
+      [
+        waiting({
+          agent_id: "coding-zero",
+          name: "Measured zero",
+          status: "scored",
+          coding_shadow: codingShadow("complete", 3, 0),
+        }),
+        waiting({
+          agent_id: "coding-collecting",
+          status: "scored",
+          coding_shadow: codingShadow("collecting", 1),
+        }),
+        waiting({
+          agent_id: "coding-scheduled",
+          status: "scored",
+          coding_shadow: codingShadow("scheduled", 0),
+        }),
+        waiting({
+          agent_id: "coding-stale",
+          status: "scored",
+          coding_shadow: codingShadow("stale", 3),
+        }),
+      ],
+      { statusCounts: { scored: 4 } },
+    );
+    const lane = container.querySelector("#pipeline-evaluating .pipeline-coding-lane");
+    expect(lane).toHaveTextContent("2 active · 1 complete · 1 stale");
+    const cards = container.querySelectorAll("#pipeline-scored .pipeline-coding-shadow");
+    expect(cards).toHaveLength(4);
+    const zero = container.querySelector(
+      '#pipeline-scored .pipeline-coding-shadow[data-coding-status="complete"]',
+    );
+    expect(zero).toHaveTextContent("0.000 measured");
+    expect(zero).toHaveTextContent("3/3 validators · Coding v1 · Bench v7");
+    expect(zero).toHaveTextContent("does not delay Scored & live");
+    expect(
+      container.querySelector(
+        '#pipeline-scored .pipeline-coding-shadow[data-coding-status="collecting"]',
+      ),
+    ).toHaveTextContent("Collecting 1/3");
+    expect(
+      container.querySelector(
+        '#pipeline-scored .pipeline-coding-shadow[data-coding-status="scheduled"]',
+      ),
+    ).toHaveTextContent("Scheduled");
+    expect(
+      container.querySelector(
+        '#pipeline-scored .pipeline-coding-shadow[data-coding-status="stale"]',
+      ),
+    ).toHaveTextContent("not carried forward");
+    expect(
+      container.querySelector<HTMLAnchorElement>(
+        '#pipeline-scored .pipeline-item[href*="coding-zero"]',
+      ),
+    ).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("Coding shadow 0.000 measured, parallel display only"),
+    );
+  });
+
+  it("shows unavailable rather than a fabricated zero", () => {
+    const container = board([], { unavailable: true });
+    const lane = container.querySelector("#pipeline-evaluating .pipeline-coding-lane");
+    expect(lane).toHaveTextContent("Coding shadow status unavailable.");
+    expect(lane).not.toHaveTextContent("0 active");
   });
 });
 

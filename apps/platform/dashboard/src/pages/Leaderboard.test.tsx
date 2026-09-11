@@ -23,6 +23,8 @@ const leaderboardCss = readFileSync(
   join(HERE, "..", "styles", "pages", "leaderboard.css"),
   "utf-8",
 );
+const tokenCss = readFileSync(join(HERE, "..", "styles", "tokens.css"), "utf-8");
+const widgetCss = readFileSync(join(HERE, "..", "styles", "widgets.css"), "utf-8");
 const cssNorm = leaderboardCss.replace(/\s+/g, " ");
 
 const leaderboard = loadFixture<LeaderboardPayload>("leaderboard");
@@ -343,11 +345,21 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
       const coding = document.querySelector("#rows tr[data-i]:first-child .coding-shadow-row");
       expect(coding?.querySelector(".mval")).toHaveTextContent("0.000");
       expect(coding?.querySelector<HTMLElement>(".bar.coding")?.style.width).toBe("0%");
+      expect(coding?.querySelector(".barwrap")).toHaveClass("coding-measured-zero");
       expect(coding?.querySelector(".coding-shadow-label")).toHaveAttribute(
         "data-tooltip",
         expect.stringContaining("does not affect composite, rank, weights, or emissions"),
       );
     });
+  });
+
+  it("uses one dedicated Coding encoding in both modes without faking a zero fill", () => {
+    expect(tokenCss.match(/--coding:/g)).toHaveLength(2);
+    expect(widgetCss).toMatch(/\.bar\.coding\s*\{\s*background: var\(--coding\);\s*\}/);
+    expect(widgetCss).toMatch(
+      /\.coding-measured-zero::after\s*\{[^}]*background: var\(--coding\)/s,
+    );
+    expect(widgetCss).not.toMatch(/\.bar\.coding\s*\{[^}]*min-width/s);
   });
 
   it("keeps collecting and stale Coding states distinct from scores", async () => {

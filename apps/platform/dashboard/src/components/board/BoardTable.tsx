@@ -285,7 +285,10 @@ function Bar(props: {
 }): JSX.Element {
   return (
     <div class="metric">
-      <div class="barwrap">
+      <div
+        class="barwrap"
+        classList={{ "coding-measured-zero": props.kind === "coding" && props.value === 0 }}
+      >
         <div
           class={"bar " + props.kind}
           style={{ width: (Math.max(0, Math.min(1, props.value)) * 100).toFixed(1) + "%" }}

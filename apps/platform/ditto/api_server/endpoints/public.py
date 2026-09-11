@@ -4942,6 +4942,7 @@ def _public_activity_response(
     owner_roots: dict[UUID, str] | None = None,
     strike_colliding_names: bool = True,
     avatar_urls: dict[str, str] | None = None,
+    coding_runs: dict[UUID, CodingShadowRunBundle] | None = None,
 ) -> PublicActivityResponse:
     """Project activity from the same validated work set used by fleet health."""
     claims = handle_claims or {}
@@ -5162,6 +5163,16 @@ def _public_activity_response(
                     row.agent.agent_id
                 ),
                 score_count=row.score_count,
+                coding_shadow=(
+                    _public_coding_shadow(
+                        (coding_runs or {}).get(row.agent.agent_id),
+                        artifact_sha256=row.agent.sha256,
+                        screened_image_sha256=row.agent.screened_image_sha256,
+                        bench_version=active_bench_version,
+                    )
+                    if active_bench_version is not None
+                    else None
+                ),
                 provisional_composite=row.provisional_composite,
                 validator_queue_rank=_queue_rank(queue_preview, row.agent.agent_id),
                 validator_queue_gate=_queue_gate(queue_preview, row.agent.agent_id),
@@ -5601,6 +5612,11 @@ async def activity(
         owner_roots=await _attested_owner_roots_for_rows(session, rows),
         strike_colliding_names=True,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
+        coding_runs=await latest_coding_shadow_runs(
+            session,
+            agent_ids=[row.agent.agent_id for row in rows],
+            bench_version=active_version,
+        ),
     )
 
 
@@ -5863,6 +5879,11 @@ async def operations(
         owner_roots=owner_roots,
         strike_colliding_names=False,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
+        coding_runs=await latest_coding_shadow_runs(
+            session,
+            agent_ids=[row.agent.agent_id for row in activity_rows],
+            bench_version=active_version,
+        ),
     )
     validator_snapshot = _validator_heartbeats_response(
         rows=heartbeat_rows,
