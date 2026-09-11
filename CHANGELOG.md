@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.257.0 (2026-09-11)
+
+### Features
+
+- **coding**: Add public v2 harness practice runner
+  ([#1797](https://github.com/ditto-assistant/ditto-subnet/pull/1797),
+  [`35ef4cb`](https://github.com/ditto-assistant/ditto-subnet/commit/35ef4cba75da13b4d656a7040d46d2bd75b78a5e))
+
+
 ## v0.256.0 (2026-09-11)
 
 ### Features
