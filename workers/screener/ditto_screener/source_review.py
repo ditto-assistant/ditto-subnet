@@ -1845,9 +1845,10 @@ unauthorized read, disclosure, write, execution, persistence, privilege, or
 material availability effect; no model or scorer effect is required.
 
 Decide I1 through I8 independently. I8 EVALUATION INDEPENDENCE prohibits live
-case IDs, active seeds, expected answers, dataset hashes, scorer identity, or
-audit markers from changing substantive retrieval, authority, capabilities,
-execution, or output. Complete source proof is enforceable. Behavioral
+case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit
+markers, or `bench_version` from changing substantive retrieval, capability
+ordering, authority, execution, or output beyond the published compatibility
+contract. Complete source proof is enforceable. Behavioral
 degradation alone is a lead until a versioned post-commit, controlled,
 predeclared and replicated test attributes it to evaluation dependence. Use
 evaluation_independent_runtime or no_evaluation_identity_branch only after

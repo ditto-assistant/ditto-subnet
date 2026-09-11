@@ -345,6 +345,7 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
         policy_v13
     )
     assert "withhold submit_adjudication" in policy_v13
+    assert "`bench_version` alter substantive retrieval" in policy_v13
 
     legacy_submit = _adjudicator_tools_for_policy(12, decision_only=True)[0]
     current_submit = _adjudicator_tools_for_policy(13, decision_only=True)[0]

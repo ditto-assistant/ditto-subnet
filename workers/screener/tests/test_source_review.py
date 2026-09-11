@@ -3039,6 +3039,7 @@ def test_policy_v13_prompt_adds_mechanism_security_and_i8_rules() -> None:
     assert "unknown, none, or\nn/a" in v13
     assert "incorrect host removal" in v13
     assert "Security review covers" in v13
+    assert "`bench_version` from changing substantive retrieval" in v13
     assert "Decide I1 through I8 independently" not in v12
 
     legacy = _source_review_tools_for_policy(12, final_turn=True)[0]
@@ -3132,6 +3133,7 @@ def test_written_policy_v13_covers_new_invariant_and_activation_boundaries() -> 
     ).read_text()
     required = {
         "I8: prohibited evaluation dependence",
+        "`bench_version` or another protocol-version field",
         "Conditionality is neither necessary nor sufficient",
         "V1: required evidence missing",
         "V2: verification not completed",
