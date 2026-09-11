@@ -125,6 +125,35 @@ func TestShipRefusesToUploadAnUnusableArtifactItCannotRebuild(t *testing.T) {
 	}
 }
 
+func TestShipDoesNotRebuildAValidArtifact(t *testing.T) {
+	dir := t.TempDir()
+	s3 := newFakeS3(t)
+	up := newTestUploader(t, dir, s3)
+	rf := plantReadyFile(t, dir, 25)
+
+	zstPath := rf.path + ".zst"
+	sidePath := rf.path + ".sinks.json"
+	sum, size, err := compressFile(rf.path, zstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSidecar(sidePath, &sidecar{
+		Key: objectKey("traces/v1", rf), SHA256: sum, Bytes: size,
+		Completed: map[string]string{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := up.ship(context.Background(), rf); err != nil {
+		t.Fatalf("valid artifact must ship: %v", err)
+	}
+	if _, statErr := os.Stat(zstPath + rebuildExt); !os.IsNotExist(statErr) {
+		t.Fatal("a valid artifact must not trigger a rebuild")
+	}
+	if recs := s3.decode(t, s3.keys()[0]); len(recs) != 25 {
+		t.Fatalf("stored %d records, want 25", len(recs))
+	}
+}
+
 func TestShipRejectsATruncatedFrameWhoseSidecarAgrees(t *testing.T) {
 	dir := t.TempDir()
 	s3 := newFakeS3(t)
