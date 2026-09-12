@@ -1090,7 +1090,8 @@ class BuildGate:
                         preflight_clearance = resolved_preflight
                     else:
                         decision = self._policy.preexecution_source_decision(
-                            resolved_preflight
+                            resolved_preflight,
+                            policy_version=policy_version,
                         )
 
                         async def unreachable_challenge(
@@ -1115,6 +1116,7 @@ class BuildGate:
                             health_elapsed_ms=0,
                             run_challenge=unreachable_challenge,
                             review_source=None,
+                            policy_version=policy_version,
                         )
                         self._journal.record(context=context, decision=decision)
                         return decision
@@ -1220,6 +1222,7 @@ class BuildGate:
                     health_elapsed_ms=0,
                     run_challenge=unavailable_challenge,
                     review_source=review_source,
+                    policy_version=policy_version,
                 )
                 report("validating")
                 decision = await self._policy.evaluate(context, skip_challenges=True)
@@ -1229,10 +1232,11 @@ class BuildGate:
                     and preflight_clearance.failure_disposition == "pass_inconclusive"
                 ):
                     deferred = self._policy.preexecution_source_decision(
-                        preflight_clearance
+                        preflight_clearance,
+                        policy_version=policy_version,
                     )
                     decision = ScreeningDecision(
-                        outcome=ScreeningOutcome.PASS_INCONCLUSIVE,
+                        outcome=deferred.outcome,
                         detail=deferred.detail,
                         manifest_digest=decision.manifest_digest,
                         evidence=(*deferred.evidence, *decision.evidence),
@@ -1462,6 +1466,7 @@ class BuildGate:
                 # given no source-review source and never runs the selector
                 # (anti-cheat) phase.
                 review_source=None if build_only else review_source,
+                policy_version=policy_version,
             )
             report("validating")
             exhausted = self._lease_exhausted(deadline, "policy review")
@@ -1494,7 +1499,10 @@ class BuildGate:
                     policy_version=policy_version,
                 )
                 if settled.adjudication is not None:
-                    source_decision = self._policy.preexecution_source_decision(settled)
+                    source_decision = self._policy.preexecution_source_decision(
+                        settled,
+                        policy_version=policy_version,
+                    )
                     decision = ScreeningDecision(
                         outcome=source_decision.outcome,
                         detail=source_decision.detail,
@@ -1521,10 +1529,11 @@ class BuildGate:
                 and preflight_clearance.failure_disposition == "pass_inconclusive"
             ):
                 deferred = self._policy.preexecution_source_decision(
-                    preflight_clearance
+                    preflight_clearance,
+                    policy_version=policy_version,
                 )
                 decision = ScreeningDecision(
-                    outcome=ScreeningOutcome.PASS_INCONCLUSIVE,
+                    outcome=deferred.outcome,
                     detail=deferred.detail,
                     manifest_digest=decision.manifest_digest,
                     evidence=(*deferred.evidence, *decision.evidence),

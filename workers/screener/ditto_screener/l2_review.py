@@ -214,8 +214,6 @@ _RESOLUTION_BASES = frozenset(
         "cross_user_data_flow",
         "duplicate_artifact",
         "evaluation_dependence",
-        "unauthorized_execution",
-        "resource_isolation_violation",
         "mandatory_contract_failure",
         "other_policy_violation",
         "insufficient_static_evidence",
@@ -230,8 +228,6 @@ _VIOLATION_RESOLUTION_BASES = (
 _POLICY_V13_ONLY_RESOLUTION_BASES = frozenset(
     {
         "evaluation_dependence",
-        "unauthorized_execution",
-        "resource_isolation_violation",
         "mandatory_contract_failure",
     }
 )
@@ -283,8 +279,6 @@ _BASIS_CATEGORIES = {
     "evaluation_dependence": frozenset(
         {"seed_state_shortcut", "embedded_evaluator_logic"}
     ),
-    "unauthorized_execution": frozenset({"unauthorized_execution", "malicious_build"}),
-    "resource_isolation_violation": frozenset({"resource_isolation_violation"}),
     "mandatory_contract_failure": frozenset({"mandatory_contract_failure"}),
 }
 _INVARIANT_BY_RESOLUTION_BASIS = {

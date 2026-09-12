@@ -11,7 +11,7 @@ operator may reject a submission. Historical v9 findings retain their original
 wire identity and are not silently reinterpreted; v10 applies to new or
 explicitly rescreened attempts.
 
-## Policy v13 (implemented, activation pending)
+## Policy v13 (published, activation pending)
 
 Policy v13 replaces identifier-oriented review guidance with the mechanism-based
 white and black checklist in [policy-v13.md](policy-v13.md). It adds I8
@@ -244,12 +244,14 @@ Synthetic source fixtures must encode the adjudicated top-five patterns:
   re-screen is the fair mechanism, not retroactive enforcement.
 
 A deterministic source-review step, read, token, or cost budget exhaustion is
-not infrastructure failure and must not retry forever. After archive, build,
-runtime, isolation, duplicate/oracle, and other cheap fail-closed gates pass, the
-screener may emit a signed `pass_inconclusive` with bounded accounting. The
-platform admits the artifact for scoring and can claim a separate deep review
-when its score or rank warrants one. Concrete cheap-gate violations remain
-authoritative; only the exhausted deep review is deferred.
+not infrastructure failure and must not retry forever. Historical v10-v12
+attempts may emit a signed `pass_inconclusive` with bounded accounting after the
+cheap fail-closed gates pass. Policy v13 instead transports the same unresolved
+review as signed, non-passing `inconclusive` processing evidence; it cannot
+admit the artifact. The published retry/deadline finalizer must later record
+`REJECT` with `violation_proven: false` and the correct V1/V2/V3 failure domain
+if verification still cannot complete. Concrete cheap-gate violations remain
+authoritative.
 
 ## Allowed optimization
 

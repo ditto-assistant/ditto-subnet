@@ -44,6 +44,7 @@ def _context(  # type: ignore[no-untyped-def]
     review_source=None,
     *,
     bench_version: int = _BENCH_VERSION,
+    policy_version: int = SCREENING_POLICY_VERSION,
 ) -> PolicyContext:
     return PolicyContext(
         agent_id=_AGENT,
@@ -57,6 +58,7 @@ def _context(  # type: ignore[no-untyped-def]
         health_elapsed_ms=20,
         run_challenge=challenge,
         review_source=review_source,
+        policy_version=policy_version,
     )
 
 
@@ -263,6 +265,81 @@ async def test_l2_failure_disposition_fails_closed_without_rejection(
 
     assert decision.outcome == expected
     assert decision.outcome != ScreeningOutcome.DETERMINISTIC_REJECT
+
+
+@pytest.mark.parametrize(
+    ("policy_version", "expected", "passed"),
+    [
+        (12, ScreeningOutcome.PASS_INCONCLUSIVE, True),
+        (13, ScreeningOutcome.INCONCLUSIVE, False),
+    ],
+)
+async def test_bounded_review_exhaustion_is_fail_closed_for_v13(
+    policy_version: int,
+    expected: ScreeningOutcome,
+    passed: bool,
+) -> None:
+    async def challenge(*_):  # type: ignore[no-untyped-def]
+        raise AssertionError("bounded source review does not need a challenge")
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="source-review-step-budget-exhausted",
+            failure_disposition="pass_inconclusive",
+            review_audit={"stage": "l1", "steps_used": 20},
+        )
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="bounded-review-exhaustion",
+            module_specs=({"kind": "agentic_source_review"},),
+        ),
+        (AgenticSourceReviewModule(module_id="private-source-review"),),
+    )
+
+    decision = await engine.evaluate(
+        _context(challenge, review, policy_version=policy_version)
+    )
+
+    assert decision.outcome == expected
+    assert decision.review_audit == {"stage": "l1", "steps_used": 20}
+    assert decision.submits_verdict is passed
+    if passed:
+        assert decision.passed
+
+
+@pytest.mark.parametrize(
+    ("policy_version", "expected"),
+    [
+        (12, ScreeningOutcome.PASS_INCONCLUSIVE),
+        (13, ScreeningOutcome.INCONCLUSIVE),
+    ],
+)
+def test_preexecution_budget_exhaustion_is_fail_closed_for_v13(
+    policy_version: int,
+    expected: ScreeningOutcome,
+) -> None:
+    observation = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="source-review-step-budget-exhausted",
+        failure_disposition="pass_inconclusive",
+        review_audit={"stage": "l1", "steps_used": 20},
+    )
+
+    decision = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
+        observation,
+        policy_version=policy_version,
+    )
+
+    assert decision.outcome == expected
+    assert decision.review_audit == {"stage": "l1", "steps_used": 20}
 
 
 def test_l2_enforcement_is_manifest_bound_but_shadow_is_not() -> None:

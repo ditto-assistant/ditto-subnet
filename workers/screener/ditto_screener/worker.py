@@ -55,6 +55,7 @@ from ditto_screener.signing import sign_heartbeat, sign_verdict
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
+    STRICT_TWO_OUTCOME_POLICY_VERSION,
     ScreenerQueueItem,
     ScreenEvidenceItem,
     ScreenResultOutcome,
@@ -704,6 +705,7 @@ class ScreenerWorker:
             is_quarantine = typed_outcome == ScreenResultOutcome.QUARANTINE
             is_audited_result = typed_outcome in {
                 ScreenResultOutcome.QUARANTINE,
+                ScreenResultOutcome.INCONCLUSIVE,
                 ScreenResultOutcome.PASS_INCONCLUSIVE,
             }
             has_review_notes = bool(result.review_notes)
@@ -766,7 +768,13 @@ class ScreenerWorker:
             )
             review_audit = (
                 ScreenReviewAudit.model_validate(result.review_audit)
-                if typed_outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+                if (
+                    typed_outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+                    or (
+                        policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                        and typed_outcome == ScreenResultOutcome.INCONCLUSIVE
+                    )
+                )
                 and result.review_audit is not None
                 else None
             )

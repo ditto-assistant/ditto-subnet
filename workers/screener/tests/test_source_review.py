@@ -3050,18 +3050,16 @@ def test_policy_v13_prompt_adds_mechanism_security_and_i8_rules() -> None:
     assert current_invariants["minItems"] == current_invariants["maxItems"] == 8
     assert legacy_invariants["items"]["properties"]["summary"]["maxLength"] == 240
     assert current_invariants["items"]["properties"]["summary"]["maxLength"] == 210
-    assert (
-        "unauthorized_execution"
-        not in legacy["function"]["parameters"]["properties"]["categories"]["items"][
-            "enum"
-        ]
-    )
-    assert (
-        "unauthorized_execution"
-        in current["function"]["parameters"]["properties"]["categories"]["items"][
-            "enum"
-        ]
-    )
+    legacy_categories = legacy["function"]["parameters"]["properties"]["categories"][
+        "items"
+    ]["enum"]
+    current_categories = current["function"]["parameters"]["properties"]["categories"][
+        "items"
+    ]["enum"]
+    assert "mandatory_contract_failure" not in legacy_categories
+    assert "mandatory_contract_failure" in current_categories
+    assert "unauthorized_execution" not in current_categories
+    assert "resource_isolation_violation" not in current_categories
     assert (
         "i8_evaluation_independence"
         not in legacy_invariants["items"]["properties"]["invariant"]["enum"]
@@ -3210,9 +3208,7 @@ def test_written_policy_v13_forbids_every_non_decisive_admission() -> None:
     """No non-decisive screener code may read as a clearance under v13.
 
     Every code the engine can emit without reaching a decision has to be named
-    in the policy as something that cannot CLEAR. ``source-review-inconclusive``
-    is the one that still admits today, so the policy carries it as an explicit
-    activation blocker.
+    in the policy as something that cannot CLEAR.
     """
 
     policy = (
@@ -3232,38 +3228,8 @@ def test_written_policy_v13_forbids_every_non_decisive_admission() -> None:
     assert not unpublished, f"policy v13 does not resolve: {unpublished}"
 
     assert "may produce `CLEAR`, and none of them may submit a passing" in policy
-    assert "`pass_inconclusive` outcome currently admits" in policy
-
-
-def test_pass_inconclusive_still_admits_so_activation_stays_blocked() -> None:
-    """Couple the fail-open path to the policy that has to retire it.
-
-    ``PASS_INCONCLUSIVE`` submits a passing verdict, which policy v13 forbids.
-    The gate is a separate behavioural change, so this test pins the coupling:
-    whoever stops it admitting must also drop the activation blocker from the
-    policy text, and whoever drops that blocker must have stopped it admitting.
-    """
-
-    from ditto_screener.policy import (
-        ModuleDisposition,
-        ScreeningOutcome,
-        _module_terminal,
-    )
-
-    policy = (
-        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
-    ).read_text()
-    blocker = "`pass_inconclusive` outcome currently admits"
-
-    terminal = _module_terminal(ModuleDisposition.PASS_INCONCLUSIVE)
-    admits = terminal is ScreeningOutcome.PASS_INCONCLUSIVE and ScreeningOutcome(
-        terminal
-    ) in {ScreeningOutcome.PASS, ScreeningOutcome.PASS_INCONCLUSIVE}
-
-    assert admits == (blocker in policy), (
-        "policy v13 and the screener disagree about whether a non-decisive "
-        "source review still admits"
-    )
+    assert "v13 protocol guard that rejects\n  `pass_inconclusive`" in policy
+    assert "deadline finalizer" in policy
 
 
 def test_written_policy_v13_covers_the_prompt_security_surface() -> None:
@@ -3279,16 +3245,19 @@ def test_written_policy_v13_covers_the_prompt_security_surface() -> None:
     policy = (
         Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
     ).read_text()
-    assert "resource/isolation escape" in _POLICY_V13_ADDENDUM
+    assert "host-resource access" in _POLICY_V13_ADDENDUM
+    assert "additional rejection\ngrounds" in _POLICY_V13_ADDENDUM
     required = {
-        "isolation escape",
-        "Isolation or resource controls are bypassed or materially defeated.",
-        "interferes materially with other tenants",
-        "Processes persist beyond their authorized lifecycle.",
+        "### S2: credential or data exfiltration",
+        "host-resource access",
+        "hidden runtime replacement",
+        "S2.credential_or_data_exfiltration",
     }
 
     missing = sorted(fragment for fragment in required if fragment not in policy)
     assert not missing, f"policy v13 is missing: {missing}"
+    assert "S2.unauthorized_execution" not in policy
+    assert "S2.resource_isolation_violation" not in policy
 
 
 def test_written_policy_v13_publishes_the_metamorphic_minimum_profile() -> None:

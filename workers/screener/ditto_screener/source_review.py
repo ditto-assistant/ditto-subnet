@@ -334,16 +334,12 @@ _ALLOWED_CATEGORIES = frozenset(
         "user_isolation_correctness",
         "external_build_dependency",
         "prompt_injection",
-        "unauthorized_execution",
-        "resource_isolation_violation",
         "mandatory_contract_failure",
         "none",
     }
 )
 _POLICY_V13_ONLY_CATEGORIES = frozenset(
     {
-        "unauthorized_execution",
-        "resource_isolation_violation",
         "mandatory_contract_failure",
     }
 )
@@ -1894,10 +1890,11 @@ source causality remains unresolved. Tests, diagnostics, and helpers require
 effective build/startup/runtime reachability; refuting one dormant lead does
 not clear the rest of the artifact.
 
-Security review covers unauthorized cross-user access, credential or protected
-data transfer, executable deserialization, filesystem or command execution,
-sandbox escape, privilege escalation, persistence, endpoint redirection, and
-resource/isolation escape. Attribute platform/provider failures separately.
+Security review covers unauthorized cross-user access, credential access,
+secret emission, private-data exfiltration, host-resource access, hidden
+runtime replacement, and screening-only behavior changes. Attribute
+platform/provider failures separately. Do not invent additional rejection
+grounds outside the published S1-S3 contract.
 Missing predefined evidence or incomplete mandatory verification cannot CLEAR,
 but neither proves misconduct. Final operator eligibility outcomes are CLEAR or
 REJECT with a reason and violation_proven flag; screening pass, quarantine,

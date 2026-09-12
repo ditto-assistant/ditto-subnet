@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 SCREENING_POLICY_VERSION = 13
+STRICT_TWO_OUTCOME_POLICY_VERSION = 13
 # The oldest policy version a mixed-fleet platform may require during a
 # scheduled activation window. v10 stays the floor while v13 is distributed
 # but not activated; raise it only after every older-policy cohort has reached
@@ -1536,6 +1537,11 @@ class ScreenResultRequest(BaseModel):
         ):
             raise ValueError("passed must agree with outcome")
         if (
+            self.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+            and self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+        ):
+            raise ValueError("strict two-outcome policy cannot admit pass-inconclusive")
+        if (
             self.outcome
             in {
                 ScreenResultOutcome.QUARANTINE,
@@ -1545,10 +1551,16 @@ class ScreenResultRequest(BaseModel):
             and self.attempt_id is None
         ):
             raise ValueError("review outcome requires attempt_id")
-        if self.outcome in {
+        review_binding_required = self.outcome in {
             ScreenResultOutcome.QUARANTINE,
             ScreenResultOutcome.PASS_INCONCLUSIVE,
-        } and (self.manifest_digest is None or self.reason_code is None):
+        } or (
+            self.outcome == ScreenResultOutcome.INCONCLUSIVE
+            and self.review_audit is not None
+        )
+        if review_binding_required and (
+            self.manifest_digest is None or self.reason_code is None
+        ):
             raise ValueError("review result requires manifest_digest and reason_code")
         image_fields = (
             self.image_sha256,
@@ -1609,13 +1621,25 @@ class ScreenResultRequest(BaseModel):
                 != self.review_notes_digest
             ):
                 raise ValueError("review_notes do not match review_notes_digest")
-        if self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
-            if self.review_audit is None or self.review_audit_digest is None:
-                raise ValueError("pass-inconclusive requires review audit")
+        review_audit_allowed = (
+            self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+            or (
+                self.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                and self.outcome == ScreenResultOutcome.INCONCLUSIVE
+            )
+        )
+        if review_audit_allowed and self.review_audit is not None:
+            if self.review_audit_digest is None:
+                raise ValueError("review audit requires its digest")
             if self.review_audit.canonical_digest() != self.review_audit_digest:
                 raise ValueError("review audit does not match review_audit_digest")
+        elif self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
+            if self.review_audit is None or self.review_audit_digest is None:
+                raise ValueError("pass-inconclusive requires review audit")
         elif self.review_audit is not None or self.review_audit_digest is not None:
-            raise ValueError("review audit requires pass-inconclusive outcome")
+            raise ValueError(
+                "review audit requires a compatible inconclusive review outcome"
+            )
         if (self.adjudication is None) != (self.adjudication_digest is None):
             raise ValueError(
                 "adjudication and adjudication_digest must travel together"

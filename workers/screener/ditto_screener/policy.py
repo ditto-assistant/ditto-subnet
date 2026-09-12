@@ -27,7 +27,10 @@ from pathlib import Path
 from typing import Any, ClassVar, Protocol
 from uuid import UUID
 
-from ditto_screening_protocol import SCREENING_POLICY_VERSION
+from ditto_screening_protocol import (
+    SCREENING_POLICY_VERSION,
+    STRICT_TWO_OUTCOME_POLICY_VERSION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +275,7 @@ class PolicyContext:
     health_elapsed_ms: int
     run_challenge: ChallengeRunner
     review_source: SourceReviewRunner | None = None
+    policy_version: int = SCREENING_POLICY_VERSION
 
 
 @dataclass(frozen=True)
@@ -1217,7 +1221,11 @@ class PolicyEngine:
 
         if pass_inconclusive:
             return self._decision(
-                ScreeningOutcome.PASS_INCONCLUSIVE,
+                (
+                    ScreeningOutcome.INCONCLUSIVE
+                    if context.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                    else ScreeningOutcome.PASS_INCONCLUSIVE
+                ),
                 evidence,
                 finding,
                 review_audit=review_audit,
@@ -1276,15 +1284,23 @@ class PolicyEngine:
         )
 
     def malicious_preflight_decision(
-        self, observation: SourceReviewObservation
+        self,
+        observation: SourceReviewObservation,
+        *,
+        policy_version: int = SCREENING_POLICY_VERSION,
     ) -> ScreeningDecision:
         """Compatibility entrypoint for a high-risk pre-execution lead."""
         if not observation.ok or observation.risk_level != "high":
             raise ValueError("malicious preflight requires a high-risk finding")
-        return self.preexecution_source_decision(observation)
+        return self.preexecution_source_decision(
+            observation, policy_version=policy_version
+        )
 
     def preexecution_source_decision(
-        self, observation: SourceReviewObservation
+        self,
+        observation: SourceReviewObservation,
+        *,
+        policy_version: int = SCREENING_POLICY_VERSION,
     ) -> ScreeningDecision:
         """Fail closed on an unresolved pre-execution lead without rejecting it."""
         adjudication = observation.adjudication
@@ -1341,7 +1357,11 @@ class PolicyEngine:
                 (
                     ScreeningOutcome.RETRYABLE_INFRA
                     if retryable
-                    else ScreeningOutcome.PASS_INCONCLUSIVE
+                    else (
+                        ScreeningOutcome.INCONCLUSIVE
+                        if policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                        else ScreeningOutcome.PASS_INCONCLUSIVE
+                    )
                     if pass_inconclusive
                     else ScreeningOutcome.INCONCLUSIVE
                 ),

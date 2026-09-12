@@ -1,8 +1,8 @@
 # SN118 source-review policy v13
 
-Status: implemented in the screener, activation pending. This policy takes
-effect only through the versioned activation control after every prerequisite
-at the end of this document is satisfied.
+Status: published with partial screener support; activation pending. This policy
+takes effect only through the versioned activation control after every
+prerequisite at the end of this document is satisfied.
 
 Policy v13 is a strict two-outcome policy. Every completed review ends in
 `CLEAR` or `REJECT`. When verification cannot be completed the result is
@@ -457,9 +457,6 @@ published retry and remediation procedure.
 - Different authenticated users never share substantive content.
 - Credentials remain outside submission-controlled output.
 - External requests use authorized endpoints.
-- Work stays inside published resource, process, network, concurrency, and
-  cancellation boundaries.
-- Processes do not persist beyond their authorized lifecycle.
 - Logging, endpoint use, user isolation, and provider configuration are not
   evasion without a prohibited substantive effect.
 
@@ -662,29 +659,13 @@ tools, output, logs, caches, or an external sink.
 
 Explicit authorized sharing and administration are permitted.
 
-### S2: exfiltration, unauthorized execution, or isolation escape
+### S2: credential or data exfiltration
 
 Reject unauthorized credential access, secret emission, private-data
-exfiltration, host-resource access, unauthorized execution, hidden runtime
-replacement, or escape from a published isolation or resource boundary.
+exfiltration, host-resource access, or hidden runtime replacement.
 
-- Reachable lifecycle code performs unauthorized credential
-  access/disclosure, filesystem modification, command execution, executable
-  deserialization, privilege escalation, or persistence.
-- Privileged traffic/credentials are redirected outside authorized
-  destinations.
-- Undeclared executable substitution changes the reviewed agent.
-- Untrusted source, tool, or model content gains execution authority.
-- Work escapes published resource, process, network, concurrency, or
-  cancellation boundaries.
-- A submission interferes materially with other tenants, builds, or requests.
-- Processes persist beyond their authorized lifecycle.
-- Isolation or resource controls are bypassed or materially defeated.
-
-No model, score benefit, malicious intent, or real-secret leakage is required.
-
-Slow work inside its own allocation is ordinarily a performance issue, not an
-isolation escape.
+A declared dependency, ordinary authorized provider call, or inert asset is not
+sufficient. Prove the reachable operation and unauthorized effect.
 
 ### S3: screening evasion
 
@@ -994,8 +975,6 @@ I8.hidden_variant_collapse
 
 S1.cross_user_data_flow
 S2.credential_or_data_exfiltration
-S2.unauthorized_execution
-S2.resource_isolation_violation
 S3.screening_evasion
 
 Q1.protocol_contract_failure
@@ -1082,10 +1061,13 @@ An operator override is an administrative action, not a third review outcome.
   generation.
 - A staged activation names the exact rules/tests/artifact classes it covers.
 - Scheduled/unavailable verification is not an implemented safeguard.
-- Retire every fail-open admission path so no non-decisive result submits a
-  passing verdict. The screener's `pass_inconclusive` outcome currently admits
-  on `source-review-inconclusive`; it must stop admitting for a v13 attempt
-  before v13 is activated.
+- Verify fleet adoption of the v13 protocol guard that rejects
+  `pass_inconclusive` and transports bounded review exhaustion as the
+  non-passing `inconclusive` processing state. Historical v10-v12 attempts
+  retain their signed compatibility behavior.
+- Implement the deadline finalizer that converts unresolved v13 processing
+  states into `REJECT` with V1, V2, or V3, the correct failure domain, complete
+  retry evidence, and no misconduct allegation.
 - Rollback preserves evidence/revocations and does not restore fail-open
   approval.
 

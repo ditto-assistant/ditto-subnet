@@ -11,9 +11,9 @@ the worker. They do not change `SCREENING_POLICY_VERSION`.
 | `pass` | Stable core passed; selected private audit, if any, cleared | Signed `passed=true`; existing promotion applies |
 | `deterministic_reject` | Objective stable-core archive, container contract, build, or health failure | Signed `passed=false`; terminal `rejected` |
 | `retryable_infra` | Download, Docker host, policy feed/pack, or other infrastructure failure | Signed `passed=false` with the existing `screener error:` marker; retryable `screening_failed` |
-| `pass_inconclusive` | A healthy submission exhausted a deterministic deep-review budget after cheap gates passed | Signed pass with public-safe budget evidence; score-first admission completes without a retry loop and remains eligible for deferred ATH review |
+| `pass_inconclusive` | A v10-v12 submission exhausted a deterministic deep-review budget after cheap gates passed | Historical signed compatibility pass with public-safe budget evidence; rejected by the v13 wire contract |
 | `quarantine` | Private source review or behavioral audit needs review | Signed attempt-bound quarantine result; platform persists a non-scoreable hold |
-| `inconclusive` | Selected private challenge could not yield usable evidence | No public verdict; bounded private journal entry; lease remains authoritative |
+| `inconclusive` | Selected private challenge could not yield usable evidence, or a v13 deep review exhausted | Signed non-passing processing result with bounded evidence; it cannot clear or reject until the retry/deadline finalizer resolves it |
 
 Only `deterministic_reject` is a terminal failure, and private modules cannot
 emit it. Timing, score, relay, source, and response-shape observations are risk
