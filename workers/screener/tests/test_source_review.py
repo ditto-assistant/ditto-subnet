@@ -3135,8 +3135,9 @@ def test_written_policy_v13_covers_new_invariant_and_activation_boundaries() -> 
         "I8: prohibited evaluation dependence",
         "`bench_version` or another protocol-version field",
         "Conditionality is neither necessary nor sufficient",
-        "V1: required evidence missing",
-        "V2: verification not completed",
+        "V1: required submission evidence missing",
+        "V2: platform verification not completed",
+        "V3: provider verification not completed",
         "Approval and emission eligibility",
         "Activation prerequisites",
         "policy-v13-opaque-verification.md",
@@ -3145,6 +3146,169 @@ def test_written_policy_v13_covers_new_invariant_and_activation_boundaries() -> 
     }
 
     assert all(fragment in policy for fragment in required)
+
+
+def test_written_policy_v13_is_strictly_two_outcome() -> None:
+    """v13 resolves every completed review to CLEAR or REJECT.
+
+    A verification failure is a rejection with ``violation_proven: false`` and
+    a named failure domain, never an indefinite hold and never an allegation
+    of cheating.
+    """
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    required = {
+        "Policy v13 has exactly two final outcomes",
+        "There is no `REVIEW_INCOMPLETE`, `INCONCLUSIVE`, implied clearance",
+        "violation_proven: true | false",
+        "failure_domain: artifact | submission | platform | provider | none",
+        "must never be described as cheating",
+        "A. Proven integrity or security violation",
+        "B. Submission-controlled verification failure",
+        "C. Platform verification failure",
+        "D. Provider verification failure",
+        "V1.required_submission_evidence_missing",
+        "V2.platform_verification_failed",
+        "V3.provider_verification_failed",
+        "Q1.protocol_contract_failure",
+        "## Operator override",
+        "It does not convert `REJECT` to `CLEAR`.",
+        "maximum verification window: 24 hours",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 is missing: {missing}"
+
+
+def test_written_policy_v13_publishes_a_ground_for_every_v13_category() -> None:
+    """A category the reviewer can emit must have a published ground.
+
+    Policy v13 requires every rejection ground to be published before it is
+    enforced. A review category that exists only in the screener would let a
+    finding land with no policy behind it, so each v13-only category is named
+    in the policy text.
+    """
+
+    from ditto_screener.source_review import _POLICY_V13_ONLY_CATEGORIES
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+
+    unpublished = sorted(
+        category for category in _POLICY_V13_ONLY_CATEGORIES if category not in policy
+    )
+
+    assert not unpublished, (
+        f"screener can emit v13 categories with no published ground: {unpublished}"
+    )
+
+
+def test_written_policy_v13_forbids_every_non_decisive_admission() -> None:
+    """No non-decisive screener code may read as a clearance under v13.
+
+    Every code the engine can emit without reaching a decision has to be named
+    in the policy as something that cannot CLEAR. ``source-review-inconclusive``
+    is the one that still admits today, so the policy carries it as an explicit
+    activation blocker.
+    """
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    non_decisive = {
+        "source-review-inconclusive",
+        "source-review-invalid-risk",
+        "source-review-inconsistent-verdict",
+        "adjudicated-source-review-escalate",
+        "behavioral-oracle-inconclusive",
+        "challenge-inconclusive",
+        "source-review-unavailable",
+    }
+
+    unpublished = sorted(code for code in non_decisive if code not in policy)
+    assert not unpublished, f"policy v13 does not resolve: {unpublished}"
+
+    assert "may produce `CLEAR`, and none of them may submit a passing" in policy
+    assert "`pass_inconclusive` outcome currently admits" in policy
+
+
+def test_pass_inconclusive_still_admits_so_activation_stays_blocked() -> None:
+    """Couple the fail-open path to the policy that has to retire it.
+
+    ``PASS_INCONCLUSIVE`` submits a passing verdict, which policy v13 forbids.
+    The gate is a separate behavioural change, so this test pins the coupling:
+    whoever stops it admitting must also drop the activation blocker from the
+    policy text, and whoever drops that blocker must have stopped it admitting.
+    """
+
+    from ditto_screener.policy import (
+        ModuleDisposition,
+        ScreeningOutcome,
+        _module_terminal,
+    )
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    blocker = "`pass_inconclusive` outcome currently admits"
+
+    terminal = _module_terminal(ModuleDisposition.PASS_INCONCLUSIVE)
+    admits = terminal is ScreeningOutcome.PASS_INCONCLUSIVE and ScreeningOutcome(
+        terminal
+    ) in {ScreeningOutcome.PASS, ScreeningOutcome.PASS_INCONCLUSIVE}
+
+    assert admits == (blocker in policy), (
+        "policy v13 and the screener disagree about whether a non-decisive "
+        "source review still admits"
+    )
+
+
+def test_written_policy_v13_covers_the_prompt_security_surface() -> None:
+    """The v13 prompt and the published grounds must not drift apart.
+
+    The prompt tells the reviewer which security surface to cover. Anything it
+    names has to be a published S-condition, otherwise the screener reviews
+    for something it cannot reject on.
+    """
+
+    from ditto_screener.source_review import _POLICY_V13_ADDENDUM
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    assert "resource/isolation escape" in _POLICY_V13_ADDENDUM
+    required = {
+        "isolation escape",
+        "Isolation or resource controls are bypassed or materially defeated.",
+        "interferes materially with other tenants",
+        "Processes persist beyond their authorized lifecycle.",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 is missing: {missing}"
+
+
+def test_written_policy_v13_publishes_the_metamorphic_minimum_profile() -> None:
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    required = {
+        "private\nmetamorphic testing is mandatory",
+        "60 paired cases",
+        "three transformation classes",
+        "at least 20 cases per class",
+        "two independent hidden seeds",
+        "material degradation of at least 15 percentage points",
+        "95% confidence lower bound above 5 percentage points",
+        "clean-control degradation no greater than 5 percentage points",
+        "replication in the same direction across both seeds",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 is missing: {missing}"
 
 
 def test_latest_backroom_safe_batch_is_fully_represented() -> None:
