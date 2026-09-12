@@ -945,6 +945,8 @@ export async function fetchConfirmationLaneDiagnosis(rawInput: unknown = {}) {
       dailyBundleCap: settings.effective.settings.daily_bundle_cap,
       dailyDollarCapMicrousd: settings.effective.settings.daily_dollar_cap_microusd,
       profileRevision: settings.effective.settings.profile_revision,
+      profileInstalled: settings.effective.profile_installed,
+      installedProfiles: settings.effective.installed_profiles,
       fleet,
       pages,
     }),

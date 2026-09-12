@@ -14235,6 +14235,16 @@ export interface components {
             token_budget: number;
         };
         /**
+         * ConfirmationProfileIdentity
+         * @description One exact frozen confirmation profile installed in this Platform release.
+         */
+        ConfirmationProfileIdentity: {
+            /** Checksum */
+            checksum: string;
+            /** Revision */
+            revision: string;
+        };
+        /**
          * ConfirmationProgress
          * @description One independent LongMem/ablation slot reported by its validator.
          *
@@ -14824,6 +14834,8 @@ export interface components {
             checksum: string | null;
             /** Configured */
             configured: boolean;
+            /** Installed Profiles */
+            installed_profiles?: components["schemas"]["ConfirmationProfileIdentity"][];
             /** Issuance Active */
             issuance_active: boolean;
             /**
@@ -14851,6 +14863,11 @@ export interface components {
              * @default 10
              */
             max_top_n: number;
+            /**
+             * Profile Installed
+             * @default false
+             */
+            profile_installed: boolean;
             /** Revision */
             revision: number;
             /** Scope */

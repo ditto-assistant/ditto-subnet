@@ -2303,6 +2303,11 @@ export const confirmationBundleSettingsRevisionSchema = z.strictObject({
   created_at: confirmationTimestampSchema,
 })
 
+export const confirmationProfileIdentitySchema = z.strictObject({
+  revision: z.string().min(1),
+  checksum: confirmationSha256Schema,
+})
+
 export const effectiveConfirmationBundleSettingsSchema = z.strictObject({
   revision: z.number().int().nonnegative(),
   scope: z.literal(CONFIRMATION_BUNDLE_SCOPE),
@@ -2310,6 +2315,10 @@ export const effectiveConfirmationBundleSettingsSchema = z.strictObject({
   checksum: confirmationSha256Schema.nullable(),
   source: z.enum(['default', 'revision']),
   configured: z.boolean(),
+  // Optional so a Backroom deployed ahead of Platform still parses the older
+  // response; once Platform ships them they are always present.
+  profile_installed: z.boolean().optional(),
+  installed_profiles: z.array(confirmationProfileIdentitySchema).optional(),
   issuance_active: z.boolean(),
   max_top_n: z.literal(10),
   max_daily_bundle_cap: z.literal(1_000),

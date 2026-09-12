@@ -731,6 +731,10 @@ function confirmationSettingsControl() {
       checksum: confirmationDigest,
       source: 'revision',
       configured: true,
+      profile_installed: true,
+      installed_profiles: [
+        { revision: 'v9-confirmation-shadow-1', checksum: confirmationDigest },
+      ],
       issuance_active: true,
       max_top_n: 10,
       max_daily_bundle_cap: 1_000,
@@ -1048,6 +1052,35 @@ describe('Bench v9 confirmation bundle schemas', () => {
     )
     expect(parsed.default.mode).toBe('off')
     expect(parsed.effective.issuance_active).toBe(true)
+    expect(parsed.effective.profile_installed).toBe(true)
+    expect(parsed.effective.installed_profiles).toEqual([
+      { revision: 'v9-confirmation-shadow-1', checksum: confirmationDigest },
+    ])
+  })
+
+  it('still parses an effective view from a Platform that predates installed_profiles', () => {
+    const control = confirmationSettingsControl()
+    const { profile_installed: _installed, installed_profiles: _profiles, ...older } =
+      control.effective
+    const parsed = confirmationBundleSettingsControlSchema.parse({
+      ...control,
+      effective: older,
+    })
+    expect(parsed.effective.profile_installed).toBeUndefined()
+    expect(parsed.effective.installed_profiles).toBeUndefined()
+  })
+
+  it('rejects an installed profile identity without a canonical checksum', () => {
+    const control = confirmationSettingsControl()
+    expect(() =>
+      confirmationBundleSettingsControlSchema.parse({
+        ...control,
+        effective: {
+          ...control.effective,
+          installed_profiles: [{ revision: 'v9-confirmation-shadow-1', checksum: 'abc' }],
+        },
+      }),
+    ).toThrow()
   })
 
   it.each(['shadow', 'enforce'] as const)(
