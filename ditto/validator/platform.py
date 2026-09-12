@@ -1937,7 +1937,26 @@ class PlatformClient:
         return ledger
 
     async def get_artifact(self, agent_id: UUID) -> ArtifactResponse:
-        """Get a presigned tarball URL with fresh proof of hotkey ownership."""
+        """Get a presigned tarball URL with fresh proof of hotkey ownership.
+
+        A transport failure or a 408/429/5xx is Platform infrastructure, not a
+        verdict on the submission, and this call happens strictly before
+        ``docker run`` -- the harness has not executed an instruction. Charging
+        it to the miner spends one of their finite attempts on an outage they
+        did not cause and could not have influenced, which is the same reasoning
+        that puts ``screened_image_unavailable`` in
+        ``dittobench._SANDBOX_INFRASTRUCTURE_CODES``. Agent ``6d0aa2f5`` burned
+        two validators' entire retry budgets to ``retry_budget_exhausted`` on
+        bare ``artifact rejected (500): {"error_code":3000,...}`` hand-backs,
+        because every non-200 left here as a plain :class:`PlatformError` and
+        the worker's ``(DittobenchError, PlatformError)`` branch reports those
+        as ``scoring_error``.
+
+        Deliberately the same split :meth:`submit_score` already uses. A 4xx
+        other than 408/429 stays a :class:`PlatformError`: those are
+        deterministic in what this validator asked for, and a no-fault verdict
+        would re-lease a permanently broken request without bound.
+        """
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/artifact"
         requested_at = datetime.now(UTC)
         nonce = uuid4()
@@ -1956,11 +1975,12 @@ class PlatformClient:
         try:
             resp = await self._client.get(url, headers=proof_headers)
         except httpx.HTTPError as e:
-            raise PlatformError(f"artifact fetch failed: {e}") from e
+            raise PlatformInfrastructureError(f"artifact fetch failed: {e}") from e
         if resp.status_code != 200:
-            raise PlatformError(
-                f"artifact rejected ({resp.status_code}): {resp.text[:200]}"
-            )
+            message = f"artifact rejected ({resp.status_code}): {resp.text[:200]}"
+            if resp.status_code in {408, 429} or resp.status_code >= 500:
+                raise PlatformInfrastructureError(message)
+            raise PlatformError(message)
         try:
             return ArtifactResponse.model_validate(resp.json())
         except (ValidationError, ValueError) as e:
