@@ -145,6 +145,41 @@ Reads: `GET /admin/copy-court/recommendations` (Backroom MCP
 `pending_only` by default; `GET /admin/copy-court/settings` is the posture
 and its history (Backroom MCP `get_copy_court_settings`).
 
+## Fail-open admissions are held, not admitted
+
+Between 2026-08-30 and 2026-09-07 the screener's L4 court settled every
+refusal (crash, timeout, exhausted budget, malformed verdict) as a clear with
+the `no_proven_breach_before_deadline` clause, so rows were admitted and
+scored without any layer reading their source. The worker no longer emits that
+clause, and the platform now fails closed on the rows that carry it:
+
+- The adjudication evidence stored on the admitting attempt's quarantine row
+  carries `clear_clause` (and `escalation_code`); older rows only say
+  "no-proven-breach-before-deadline" in the summary prose, and both spellings
+  count (`ditto/api_server/fail_open_admission.py`).
+- **Score finalization** (`evaluating -> scored`): if the agent's newest
+  adjudicated court record is a fail-open clear and no operator has cleared the
+  UUID since, the agent goes to `ath_pending_review` instead of `scored`, with
+  reason "Automated review did not complete; held for operator source review",
+  review kind `deferred_source_review`, provenance
+  `algorithm_version: fail-open-admission-v1`, `opened_at_source:
+  score-finalization`. Scores are kept; a resolved operator `clear` restores
+  `previous_status`.
+- **Policy rescreen of a scored or live row**: a passing report whose
+  adjudication is fail-open opens the same hold (`opened_at_source:
+  screen-result`), and a fail-open pass on a deferred deep attempt keeps the
+  existing deferred hold open instead of lifting it.
+- **Backfill**: `POST /api/v1/admin/copy-reviews/backfill-fail-open` with
+  `{"dry_run": true}` lists every scored/live agent whose newest adjudicated
+  record is a fail-open clear and has no later operator clear; `{"dry_run":
+  false}` opens the holds, audited as `opened_by: platform:fail-open-backfill`,
+  `backfilled: true`. It is idempotent: already-held and operator-cleared
+  agents are reported as `skipped_*` and never re-held. A newer certified clear
+  or reject on the same agent supersedes an older fail-open row.
+
+These holds look like any other row in the queue. Read the source before
+clearing them: the point of the hold is that nothing has.
+
 ## Generation is not a queue filter
 
 `GET /admin/copy-reviews` also takes `generation`, which selects reviews by
