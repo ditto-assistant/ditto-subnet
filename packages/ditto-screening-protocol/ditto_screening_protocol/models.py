@@ -18,6 +18,10 @@ from pydantic import (
 
 SCREENING_POLICY_VERSION = 13
 STRICT_TWO_OUTCOME_POLICY_VERSION = 13
+# V13 review/evidence code is distributed for compatibility and pre-activation tests,
+# but the global activation remains capped at v12 until the published V1/V2/V3
+# retry/deadline finalizer and every mandatory verification route are released.
+SCREENING_ACTIVATION_CEILING_POLICY_VERSION = 12
 # The oldest policy version a mixed-fleet platform may require during a
 # scheduled activation window. v10 stays the floor while v13 is distributed
 # but not activated; raise it only after every older-policy cohort has reached

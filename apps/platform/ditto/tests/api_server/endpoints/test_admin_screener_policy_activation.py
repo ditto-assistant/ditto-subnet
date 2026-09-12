@@ -36,6 +36,7 @@ from ditto.db.queries.screener_policy_activation import (
     insert_screener_policy_activation,
 )
 from ditto_screening_protocol import (
+    SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
 )
@@ -89,7 +90,7 @@ def _payload(
         "target_policy_version": (
             target_policy_version
             if target_policy_version is not None
-            else SCREENING_POLICY_VERSION
+            else SCREENING_ACTIVATION_CEILING_POLICY_VERSION
         ),
         "activate_at": activate_at if activate_at is not None else _future(),
         "rescreen_scored": rescreen_scored,
@@ -151,7 +152,10 @@ class TestDefaultAndRoundTrip:
         assert body["effective_policy_version"] == SCREENING_FLOOR_POLICY_VERSION
         assert body["latest"]["state"] == "pending"
         assert body["latest"]["revision"] == 1
-        assert body["latest"]["target_policy_version"] == SCREENING_POLICY_VERSION
+        assert (
+            body["latest"]["target_policy_version"]
+            == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+        )
         assert body["latest"]["canary_only"] is False
 
     async def test_past_activate_at_via_the_api_is_rejected_even_for_due_semantics(
@@ -295,6 +299,23 @@ class TestWriteGuards:
         assert response.status_code == 422
         assert "implements" in response.json()["message"]
 
+    async def test_distributed_v13_is_not_activation_ready(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        activation_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, activation_maker)
+        response = await client.post(
+            _URL,
+            json=_payload(target_policy_version=SCREENING_POLICY_VERSION),
+            headers=_HEADERS,
+        )
+
+        assert response.status_code == 422
+        assert "not activation-ready" in response.json()["message"]
+        assert str(SCREENING_ACTIVATION_CEILING_POLICY_VERSION) in response.text
+
     async def test_stale_expected_revision_conflicts(
         self,
         app: FastAPI,
@@ -313,7 +334,7 @@ class TestWriteGuards:
 
 
 class TestResolverDueActivation:
-    async def test_due_activation_governs_and_clamps_to_the_build(
+    async def test_due_activation_governs_at_the_activation_ceiling(
         self,
         activation_maker: async_sessionmaker[AsyncSession],
     ) -> None:
@@ -325,7 +346,7 @@ class TestResolverDueActivation:
             await insert_screener_policy_activation(
                 session,
                 parent_revision=0,
-                target_policy_version=SCREENING_POLICY_VERSION,
+                target_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
                 activate_at=datetime.now(UTC) - timedelta(minutes=1),
                 rescreen_scored=True,
                 reason="test: due activation governs the required version",
@@ -333,15 +354,70 @@ class TestResolverDueActivation:
             )
             await session.commit()
             policy = await resolve_screener_policy_activation(session)
-            assert policy.required_policy_version == SCREENING_POLICY_VERSION
+            assert (
+                policy.required_policy_version
+                == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+            )
             assert policy.rescreen_stale_agents is True
             assert policy.rescreen_scored is True
             # A full activation still releases scored rows one at a time. The
             # global V11 requirement applies to fresh work, while the target
             # here fences each retained V10 score behind an explicit release.
-            assert policy.scored_rescreen_policy_version == SCREENING_POLICY_VERSION
+            assert (
+                policy.scored_rescreen_policy_version
+                == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+            )
 
-    async def test_target_above_the_build_clamps_to_it(
+    async def test_due_v13_row_does_not_override_valid_v12_activation(
+        self,
+        activation_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        from ditto.api_server.screener_policy_activation import (
+            ScreenerPolicyActivationResolver,
+            resolve_screener_policy_activation,
+        )
+
+        async with activation_maker() as session:
+            v12 = await insert_screener_policy_activation(
+                session,
+                parent_revision=0,
+                target_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
+                activate_at=datetime.now(UTC) - timedelta(minutes=2),
+                rescreen_scored=True,
+                reason="test: valid v12 activation remains authoritative",
+                actor="test",
+            )
+            v13 = await insert_screener_policy_activation(
+                session,
+                parent_revision=v12.revision,
+                target_policy_version=SCREENING_POLICY_VERSION,
+                activate_at=datetime.now(UTC) - timedelta(minutes=1),
+                rescreen_scored=True,
+                reason="test: incomplete v13 activation must remain ineffective",
+                actor="test",
+            )
+            await session.commit()
+
+            policy = await resolve_screener_policy_activation(session)
+
+            assert (
+                policy.required_policy_version
+                == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+            )
+            assert policy.governing_revision == v12.revision
+            assert policy.latest_revision == v13.revision
+
+            cached = await ScreenerPolicyActivationResolver(ttl_seconds=0).resolve(
+                activation_maker
+            )
+            assert (
+                cached.required_policy_version
+                == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+            )
+            assert cached.governing_revision == v12.revision
+            assert cached.latest_revision == v13.revision
+
+    async def test_due_version_above_activation_ceiling_cannot_govern(
         self,
         activation_maker: async_sessionmaker[AsyncSession],
     ) -> None:
@@ -363,7 +439,8 @@ class TestResolverDueActivation:
             )
             await session.commit()
             policy = await resolve_screener_policy_activation(session)
-            assert policy.required_policy_version == SCREENING_POLICY_VERSION
+            assert policy.required_policy_version == SCREENING_FLOOR_POLICY_VERSION
+            assert policy.scored_rescreen_policy_version is None
 
     async def test_due_canary_keeps_ordinary_queue_at_the_floor(
         self,
@@ -377,7 +454,7 @@ class TestResolverDueActivation:
             await insert_screener_policy_activation(
                 session,
                 parent_revision=0,
-                target_policy_version=SCREENING_POLICY_VERSION,
+                target_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
                 activate_at=datetime.now(UTC) - timedelta(minutes=1),
                 rescreen_scored=True,
                 canary_only=True,
@@ -387,7 +464,10 @@ class TestResolverDueActivation:
             await session.commit()
             policy = await resolve_screener_policy_activation(session)
             assert policy.required_policy_version == SCREENING_FLOOR_POLICY_VERSION
-            assert policy.scored_rescreen_policy_version == SCREENING_POLICY_VERSION
+            assert (
+                policy.scored_rescreen_policy_version
+                == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+            )
             assert policy.rescreen_stale_agents is True
 
 
@@ -579,7 +659,7 @@ class TestScoredPolicyRescreenCheckpoint:
             activation = await insert_screener_policy_activation(
                 session,
                 parent_revision=0,
-                target_policy_version=SCREENING_POLICY_VERSION,
+                target_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
                 activate_at=datetime.now(UTC) - timedelta(minutes=5),
                 rescreen_scored=True,
                 canary_only=True,
@@ -616,7 +696,7 @@ class TestScoredPolicyRescreenCheckpoint:
             activation = await insert_screener_policy_activation(
                 session,
                 parent_revision=0,
-                target_policy_version=SCREENING_POLICY_VERSION,
+                target_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
                 activate_at=now - timedelta(minutes=5),
                 rescreen_scored=True,
                 reason="canary v11 scored policy rollout retains the v10 board",
@@ -672,7 +752,7 @@ class TestScoredPolicyRescreenCheckpoint:
         assert checkpoint.status_code == 200, checkpoint.text
         assert checkpoint.json() == {
             "activation_revision": activation.revision,
-            "target_policy_version": SCREENING_POLICY_VERSION,
+            "target_policy_version": SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
             "current": None,
             "active": [],
             "next_agent_id": str(first_id),
@@ -694,7 +774,7 @@ class TestScoredPolicyRescreenCheckpoint:
         assert response.status_code == 200, response.text
         assert response.json()["current"] == {
             "activation_revision": activation.revision,
-            "target_policy_version": SCREENING_POLICY_VERSION,
+            "target_policy_version": SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
             "agent_id": str(first_id),
             "position": 1,
             "state": "pending",
@@ -906,6 +986,9 @@ class TestFleetReadiness:
         response = await client.get(_URL, headers=_HEADERS)
         assert response.status_code == 200, response.text
         fleet = response.json()["fleet"]
-        assert fleet["safe_to_schedule_up_to"] == SCREENING_POLICY_VERSION
+        assert (
+            fleet["safe_to_schedule_up_to"]
+            == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+        )
         assert fleet["lagging_instances"] == []
         assert fleet["instances_without_release"] == []

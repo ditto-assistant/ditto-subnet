@@ -550,6 +550,7 @@ class ScreenerWorker:
                     code=EXACT_CROSS_MINER_DUPLICATE,
                     summary="artifact is an exact cross-miner duplicate",
                     detail="exact cross-miner duplicate",
+                    policy_version=policy_version,
                 )
             else:
                 screen_deadline = self._active_lease_deadline
@@ -567,6 +568,7 @@ class ScreenerWorker:
                         code="lease-budget-exhausted",
                         summary="insufficient screening lease budget at claim",
                         detail="screener error: insufficient lease budget at claim",
+                        policy_version=policy_version,
                     )
                 else:
                     artifact = await self._platform.get_artifact(
@@ -662,6 +664,10 @@ class ScreenerWorker:
                         deferred_source_review=item.deferred_source_review,
                         policy_version=policy_version,
                     )
+            if result.policy_version != policy_version:
+                raise PlatformError(
+                    "screening decision policy version does not match the claim"
+                )
             shadow_review = self._gate.pop_shadow_review(attempt_id)
             if shadow_review is not None:
                 await self._submit_shadow_review(

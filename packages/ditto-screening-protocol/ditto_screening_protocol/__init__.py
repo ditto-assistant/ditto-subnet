@@ -15,6 +15,7 @@ from ditto_screening_protocol.confirmation_progress import (
     confirmation_progress_signing_token,
 )
 from ditto_screening_protocol.models import (
+    SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
     STRICT_TWO_OUTCOME_POLICY_VERSION,
@@ -83,6 +84,7 @@ from ditto_screening_protocol.signing import verdict_signing_message
 
 __all__ = [
     "MAX_CONFIRMATION_SLOTS",
+    "SCREENING_ACTIVATION_CEILING_POLICY_VERSION",
     "SCREENING_FLOOR_POLICY_VERSION",
     "SCREENING_POLICY_VERSION",
     "STRICT_TWO_OUTCOME_POLICY_VERSION",

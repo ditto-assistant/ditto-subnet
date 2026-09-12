@@ -80,8 +80,11 @@ def _decision(outcome: ScreeningOutcome, detail: str = "") -> ScreeningDecision:
 
 
 class _FakeGate:
-    def __init__(self, result: ScreeningDecision) -> None:
+    def __init__(
+        self, result: ScreeningDecision, *, bind_policy_version: bool = True
+    ) -> None:
         self.result = result
+        self.bind_policy_version = bind_policy_version
         self.calls: list[UUID] = []
         self.deadlines: list[float | None] = []
         self.build_only_calls: list[bool] = []
@@ -143,6 +146,8 @@ class _FakeGate:
                     image_ref=f"ditto-screen/{agent_id}:latest",
                 )
             )
+        if self.bind_policy_version and policy_version is not None:
+            return replace(self.result, policy_version=policy_version)
         return self.result
 
 
@@ -728,6 +733,31 @@ async def test_v13_source_budget_exhaustion_is_nonpassing_with_signed_evidence(
     assert verdict["review_audit_digest"] == audit.canonical_digest()
     assert verdict["evidence"] is not None
     assert verdict["reason_code"] == "source-review-inconclusive"
+
+
+async def test_worker_refuses_to_sign_a_mismatched_decision_policy(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    result = core_decision(
+        ScreeningOutcome.INCONCLUSIVE,
+        code="source-review-inconclusive",
+        summary="review did not complete",
+        detail="private policy audit inconclusive",
+        policy_version=SCREENING_POLICY_VERSION,
+    )
+    platform = _FakePlatform([])
+    gate = _FakeGate(result, bind_policy_version=False)
+    worker = _worker(make_config(), platform, gate)
+
+    await worker._screen_one(_item(uuid4()), policy_version=12)
+
+    assert len(platform.verdicts) == 1
+    verdict = platform.verdicts[0]
+    assert verdict["passed"] is False
+    assert verdict["policy_version"] == 12
+    assert verdict["outcome"] == ScreenResultOutcome.RETRYABLE_INFRA
+    assert verdict["reason_code"] == "worker-platform-request-failed"
+    assert "decision policy version does not match" in verdict["detail"]
 
 
 async def test_passing_source_review_notes_keep_the_policy_manifest_binding(

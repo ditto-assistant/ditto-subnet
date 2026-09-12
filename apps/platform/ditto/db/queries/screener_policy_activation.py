@@ -38,18 +38,25 @@ async def latest_screener_policy_activation(
 
 
 async def governing_screener_policy_activation(
-    session: AsyncSession, *, now: datetime
+    session: AsyncSession,
+    *,
+    now: datetime,
+    maximum_policy_version: int | None = None,
 ) -> ScreenerPolicyActivation | None:
     """The newest revision whose ``activate_at`` has passed.
 
     A newer not-yet-due revision never pulls the required version down: only
     due activations govern, and among those the newest revision wins.
     """
+    stmt = select(ScreenerPolicyActivation).where(
+        ScreenerPolicyActivation.activate_at <= now
+    )
+    if maximum_policy_version is not None:
+        stmt = stmt.where(
+            ScreenerPolicyActivation.target_policy_version <= maximum_policy_version
+        )
     return await session.scalar(
-        select(ScreenerPolicyActivation)
-        .where(ScreenerPolicyActivation.activate_at <= now)
-        .order_by(ScreenerPolicyActivation.revision.desc())
-        .limit(1)
+        stmt.order_by(ScreenerPolicyActivation.revision.desc()).limit(1)
     )
 
 

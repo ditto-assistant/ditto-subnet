@@ -28,6 +28,7 @@ from typing import Any, ClassVar, Protocol
 from uuid import UUID
 
 from ditto_screening_protocol import (
+    SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
     STRICT_TWO_OUTCOME_POLICY_VERSION,
 )
@@ -140,8 +141,12 @@ class ScreeningDecision:
     review_notes: tuple[Mapping[str, object], ...] = ()
 
     def __post_init__(self) -> None:
-        if self.policy_version != SCREENING_POLICY_VERSION:
-            raise ValueError("decision policy version does not match worker policy")
+        if not (
+            SCREENING_FLOOR_POLICY_VERSION
+            <= self.policy_version
+            <= SCREENING_POLICY_VERSION
+        ):
+            raise ValueError("decision policy version is unsupported by this worker")
         if len(self.detail) > 3900:
             raise ValueError("decision detail exceeds protocol bound")
         if not _is_sha256(self.manifest_digest):
@@ -277,6 +282,14 @@ class PolicyContext:
     review_source: SourceReviewRunner | None = None
     policy_version: int = SCREENING_POLICY_VERSION
 
+    def __post_init__(self) -> None:
+        if not (
+            SCREENING_FLOOR_POLICY_VERSION
+            <= self.policy_version
+            <= SCREENING_POLICY_VERSION
+        ):
+            raise ValueError("policy context version is unsupported by this worker")
+
 
 @dataclass(frozen=True)
 class ModuleResult:
@@ -370,13 +383,15 @@ def core_decision(
     code: str,
     summary: str,
     detail: str,
+    policy_version: int = SCREENING_POLICY_VERSION,
 ) -> ScreeningDecision:
-    """Build an objective stable-core result under the current policy."""
+    """Build an objective stable-core result under one supported policy."""
     return ScreeningDecision(
         outcome=outcome,
         detail=detail,
         manifest_digest=CORE_ONLY_MANIFEST.digest,
         evidence=(PolicyEvidence("stable-core", code, summary),),
+        policy_version=policy_version,
     )
 
 
@@ -1120,6 +1135,7 @@ class PolicyEngine:
                         review_audit=review_audit,
                         adjudication=adjudication,
                         review_notes=review_notes,
+                        policy_version=context.policy_version,
                     )
                 selected = selected or result.disposition == ModuleDisposition.TRIPWIRE
 
@@ -1131,7 +1147,12 @@ class PolicyEngine:
         # here made an otherwise successful image build "inconclusive" and put
         # it into the full lease backoff before validators could ever score it.
         if build_only:
-            return self._decision(ScreeningOutcome.PASS, evidence, finding)
+            return self._decision(
+                ScreeningOutcome.PASS,
+                evidence,
+                finding,
+                policy_version=context.policy_version,
+            )
 
         # Challenge-phase modules run on every full review, decoupled from the
         # selector tripwire. The always-on behavioral oracle lives here so a
@@ -1140,11 +1161,31 @@ class PolicyEngine:
         # only establishes that an image is ready for validator scoring.
         # Targon runtime smoke has no isolated fake-gateway sidecar, so the
         # oracle is skipped until a screener-to-rental prompt tool exists.
-        challenges = (
-            ()
-            if skip_challenges
-            else tuple(m for m in self.modules if m.phase == "challenge")
+        configured_challenges = tuple(
+            module for module in self.modules if module.phase == "challenge"
         )
+        if (
+            skip_challenges
+            and configured_challenges
+            and context.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+        ):
+            evidence.append(
+                PolicyEvidence(
+                    "policy-engine",
+                    "challenge-inconclusive",
+                    "mandatory v13 behavioral verification was unavailable",
+                )
+            )
+            return self._decision(
+                ScreeningOutcome.INCONCLUSIVE,
+                evidence,
+                finding,
+                review_audit=review_audit,
+                adjudication=adjudication,
+                review_notes=review_notes,
+                policy_version=context.policy_version,
+            )
+        challenges = () if skip_challenges else configured_challenges
         cleared = False
         for module in challenges:
             result = await module.evaluate(context)
@@ -1155,18 +1196,18 @@ class PolicyEngine:
             review_notes = (*review_notes, *result.review_notes)
             terminal = _module_terminal(result.disposition)
             if terminal is not None:
-                # L4 may already have made a signed, evidence-bound clearance
-                # from the retained source-review ledger. A later transport
-                # failure in the auxiliary behavioral oracle has no response or
-                # gateway call to weigh against that verdict, so it must not
-                # park an otherwise-complete review for an operator retry.
+                # Historical policy allowed an evidence-bound source-review L4
+                # clearance to settle an auxiliary oracle transport failure.
+                # V13 makes runtime verification mandatory, so a source-only
+                # decision cannot clear its missing runtime observation.
                 #
-                # Keep this exception narrow: a usable oracle response with
+                # Keep the legacy exception narrow: a usable oracle response with
                 # insufficient calls, a wrong token, or an implausibly fast
                 # answer remains a distinct observation on its normal
                 # inconclusive/quarantine path.
                 if (
-                    terminal == ScreeningOutcome.INCONCLUSIVE
+                    context.policy_version < STRICT_TWO_OUTCOME_POLICY_VERSION
+                    and terminal == ScreeningOutcome.INCONCLUSIVE
                     and isinstance(module, BehavioralOracleModule)
                     and result.evidence
                     and result.evidence[-1].code == "challenge-transport-failure"
@@ -1180,6 +1221,7 @@ class PolicyEngine:
                         review_audit=review_audit,
                         adjudication=adjudication,
                         review_notes=review_notes,
+                        policy_version=context.policy_version,
                     )
                 return self._decision(
                     terminal,
@@ -1188,6 +1230,7 @@ class PolicyEngine:
                     review_audit=review_audit,
                     adjudication=adjudication,
                     review_notes=review_notes,
+                    policy_version=context.policy_version,
                 )
             cleared = cleared or (
                 module.clears_selection
@@ -1217,6 +1260,7 @@ class PolicyEngine:
                 review_audit=review_audit,
                 adjudication=adjudication,
                 review_notes=review_notes,
+                policy_version=context.policy_version,
             )
 
         if pass_inconclusive:
@@ -1231,6 +1275,7 @@ class PolicyEngine:
                 review_audit=review_audit,
                 adjudication=adjudication,
                 review_notes=review_notes,
+                policy_version=context.policy_version,
             )
 
         return self._decision(
@@ -1240,6 +1285,7 @@ class PolicyEngine:
             review_audit=review_audit,
             adjudication=adjudication,
             review_notes=review_notes,
+            policy_version=context.policy_version,
         )
 
     def _decision(
@@ -1251,6 +1297,7 @@ class PolicyEngine:
         review_audit: Mapping[str, object] | None = None,
         adjudication: Mapping[str, object] | None = None,
         review_notes: tuple[Mapping[str, object], ...] = (),
+        policy_version: int = SCREENING_POLICY_VERSION,
     ) -> ScreeningDecision:
         bounded = tuple(evidence[:_MAX_EVIDENCE])
         detail = ""
@@ -1281,6 +1328,7 @@ class PolicyEngine:
             review_audit=review_audit,
             adjudication=adjudication,
             review_notes=review_notes,
+            policy_version=policy_version,
         )
 
     def malicious_preflight_decision(
@@ -1325,6 +1373,7 @@ class PolicyEngine:
                     observation.finding,
                     review_audit=observation.review_audit,
                     review_notes=observation.notes,
+                    policy_version=policy_version,
                 )
             evidence: tuple[PolicyEvidence, ...] = (
                 PolicyEvidence(
@@ -1349,6 +1398,7 @@ class PolicyEngine:
                 review_audit=observation.review_audit,
                 adjudication=adjudication,
                 review_notes=observation.notes,
+                policy_version=policy_version,
             )
         if not observation.ok:
             retryable = observation.failure_disposition == "retryable_infra"
@@ -1379,6 +1429,7 @@ class PolicyEngine:
                 observation.finding,
                 review_audit=observation.review_audit,
                 review_notes=observation.notes,
+                policy_version=policy_version,
             )
         if observation.risk_level not in {"medium", "high"}:
             raise ValueError("pre-execution source decision requires elevated risk")
@@ -1395,6 +1446,7 @@ class PolicyEngine:
             ),
             observation.finding,
             review_notes=observation.notes,
+            policy_version=policy_version,
         )
 
 
@@ -1471,6 +1523,8 @@ class ReviewJournal:
         context: PolicyContext,
         decision: ScreeningDecision,
     ) -> None:
+        if decision.policy_version != context.policy_version:
+            raise ValueError("review journal policy version mismatch")
         if self._path is None:
             return
         if decision.outcome not in {

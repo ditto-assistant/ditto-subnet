@@ -1068,6 +1068,9 @@ An operator override is an administrative action, not a third review outcome.
 - Implement the deadline finalizer that converts unresolved v13 processing
   states into `REJECT` with V1, V2, or V3, the correct failure domain, complete
   retry evidence, and no misconduct allegation.
+- Raise the separately enforced screening-policy activation ceiling from v12
+  only after the deadline finalizer and every other prerequisite above are
+  released and verified.
 - Rollback preserves evidence/revocations and does not restore fail-open
   approval.
 
