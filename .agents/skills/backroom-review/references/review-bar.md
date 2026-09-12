@@ -167,6 +167,16 @@ re-adjudicated by the scheduled v11 rescreen with every other cohort member.
   pattern. Grammar routing alone is not a reject basis — it needs a
   companion violation (a forced plan, a family compiler, a two-limb failure)
   on the same served path.
+- **Verbatim-lines closers are still I5 (2026-09-09, Hogwarts_v5 v20 f6ca6967
+  / v21 9d002e89, first ruling).** A retrieval-side closer that emits only
+  verbatim record lines breaches I5 when BOTH its trigger and its extractor
+  are closed over one benchmark value-family: a hand-enumerated family
+  predicate (quoted alias + role-cue list + address-cue list) selecting via a
+  compiled-in address/email recognizer, superseding broader retrieval. "It
+  computes no value and the model writes the final string" answers I4 and the
+  two-limb test, never I5, which review-bar already lists as independent of
+  both. Selection keyed on live schema or arbitrary linked components passes.
+
 - **`bench_version` switching — warning sign only.** Branching behavior on
   `bench_version` (e.g. enabling bench-only retrieval modes or classifier
   paths when `bench_version >= 9`, `lets_v609` `baseline.py:2471-2475,

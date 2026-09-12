@@ -11,7 +11,7 @@ operator may reject a submission. Historical v9 findings retain their original
 wire identity and are not silently reinterpreted; v10 applies to new or
 explicitly rescreened attempts.
 
-## Policy v12 (in place, activation pending)
+## Policy v12 (activated 2026-09-06T18:59Z, revision 5, rescreen_scored)
 
 Policy v12 is the second scheduled activation under the bench-scaling loop. It
 was triggered by the 2026-09-06 review of the aceron_v13/aceron_v14 lineage and
@@ -108,9 +108,14 @@ addendum.
   hold on a deferred rescreen), and `adjudicator-unavailable` (no key file or
   unreadable archive on the node) is a retryable infrastructure outcome.
 - **Fairness.** The same rules as v11 apply: agents are held to the policy
-  that screened them; the scheduled activation with `rescreen_scored` is the
-  mechanism that re-adjudicates every scored row — including the champion —
-  on identical criteria. The grader defect itself is a bench v13 item (money
+  that screened them (read `screening_policy_version` on the submission).
+  The activation's `rescreen_scored` releases were parked at position 5 on
+  2026-09-06 because the automated court was fail-open; the scored cohort
+  was adjudicated by operators instead (fail-closed holds 2026-09-08).
+  The request-keyed slot rewrite was already an I4 breach under v11 as the
+  court applied it (aceron_v13/v14, rick23, Imperious), so a v11-stamped
+  carrier is judged the same way; the bunny safe harbor covers passing a
+  published gate, not a mechanism the court rejected in the same window. The grader defect itself is a bench v13 item (money
   questions are also being de-emphasized there); v12 stops the rewrite race,
   it does not fix the grader.
 
