@@ -47,6 +47,7 @@ _PASS_CLAUSES = {
     "i5_production_engine": "no_family_compiler",
     "i6_tool_execution_fidelity": "no_reported_tool_calls",
     "i7_model_tool_planning": "no_tool_planning",
+    "i8_evaluation_independence": "evaluation_independent_runtime",
 }
 _INVARIANT_FOR_CATEGORY = {
     "benchmark_emulation": "i5_production_engine",
@@ -185,6 +186,7 @@ def test_pass_invariant_evidence_is_dropped_before_strict_validation() -> None:
             {"path": "src/main.rs", "line": 1, "category": "benchmark_emulation"}
         ],
         demoted_to_low=False,
+        policy_version=13,
     )
 
     assert all(
@@ -2104,7 +2106,7 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     assert observation.finding["prompt_revision"] == (
         f"source-review-v24-policy-v{SCREENING_POLICY_VERSION}"
     )
-    assert len(observation.finding["invariant_assessment"]["decisions"]) == 7
+    assert len(observation.finding["invariant_assessment"]["decisions"]) == 8
     initial_inventory = json.loads(
         seen[0]["messages"][1]["content"]
         .split("\nExact-file trusted provenance:\n", 1)[0]
@@ -2902,12 +2904,11 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
     from ditto_screener.source_review import (
         _prompt_revision,
     )
-    from ditto_screener.source_review import (
-        _source_review_system_prompt as _prompt,
-    )
+    from ditto_screener.source_review import _source_review_system_prompt as _prompt
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
+    assert _prompt_revision(13) == "source-review-v24-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -3019,6 +3020,64 @@ def test_policy_v12_prompt_narrows_plain_normalization_to_slot_rewrite_i4() -> N
         assert "scorer-slot-rescale" not in frozen
 
 
+def test_policy_v13_prompt_adds_mechanism_security_and_i8_rules() -> None:
+    from ditto_screener.source_review import (
+        _POLICY_TAILS,
+        _source_review_tools_for_policy,
+    )
+    from ditto_screener.source_review import (
+        _source_review_system_prompt as _prompt,
+    )
+
+    v12 = _prompt(12)
+    v13 = _prompt(13)
+
+    assert _POLICY_TAILS[13].startswith(_POLICY_TAILS[12])
+    assert "Decide I1 through I8 independently" in v13
+    assert "EVALUATION INDEPENDENCE" in v13
+    assert "always-on benchmark recipe is activated on every served request" in v13
+    assert "unknown, none, or\nn/a" in v13
+    assert "incorrect host removal" in v13
+    assert "Security review covers" in v13
+    assert "`bench_version` from changing substantive retrieval" in v13
+    assert "Decide I1 through I8 independently" not in v12
+
+    legacy = _source_review_tools_for_policy(12, final_turn=True)[0]
+    current = _source_review_tools_for_policy(13, final_turn=True)[0]
+    legacy_invariants = legacy["function"]["parameters"]["properties"]["invariants"]
+    current_invariants = current["function"]["parameters"]["properties"]["invariants"]
+    assert legacy_invariants["minItems"] == legacy_invariants["maxItems"] == 7
+    assert current_invariants["minItems"] == current_invariants["maxItems"] == 8
+    assert legacy_invariants["items"]["properties"]["summary"]["maxLength"] == 240
+    assert current_invariants["items"]["properties"]["summary"]["maxLength"] == 210
+    legacy_categories = legacy["function"]["parameters"]["properties"]["categories"][
+        "items"
+    ]["enum"]
+    current_categories = current["function"]["parameters"]["properties"]["categories"][
+        "items"
+    ]["enum"]
+    assert "mandatory_contract_failure" not in legacy_categories
+    assert "mandatory_contract_failure" in current_categories
+    assert "unauthorized_execution" not in current_categories
+    assert "resource_isolation_violation" not in current_categories
+    assert (
+        "i8_evaluation_independence"
+        not in legacy_invariants["items"]["properties"]["invariant"]["enum"]
+    )
+    assert (
+        "i8_evaluation_independence"
+        in current_invariants["items"]["properties"]["invariant"]["enum"]
+    )
+    legacy_pass_clauses = legacy_invariants["items"]["properties"]["pass_clause"][
+        "anyOf"
+    ][1]["enum"]
+    current_pass_clauses = current_invariants["items"]["properties"]["pass_clause"][
+        "anyOf"
+    ][1]["enum"]
+    assert "evaluation_independent_runtime" not in legacy_pass_clauses
+    assert "evaluation_independent_runtime" in current_pass_clauses
+
+
 def test_source_review_prompt_rejects_unimplemented_policy_version() -> None:
     from ditto_screener.source_review import _source_review_system_prompt
 
@@ -3064,6 +3123,161 @@ def test_written_policy_makes_policy_v10_invariants_implementable() -> None:
     }
 
     assert all(fragment in policy for fragment in required)
+
+
+def test_written_policy_v13_covers_new_invariant_and_activation_boundaries() -> None:
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    required = {
+        "I8: prohibited evaluation dependence",
+        "`bench_version` or another protocol-version field",
+        "Conditionality is neither necessary nor sufficient",
+        "V1: required submission evidence missing",
+        "V2: platform verification not completed",
+        "V3: provider verification not completed",
+        "Approval and emission eligibility",
+        "Activation prerequisites",
+        "policy-v13-opaque-verification.md",
+        "CLEAR",
+        "REJECT",
+    }
+
+    assert all(fragment in policy for fragment in required)
+
+
+def test_written_policy_v13_is_strictly_two_outcome() -> None:
+    """v13 resolves every completed review to CLEAR or REJECT.
+
+    A verification failure is a rejection with ``violation_proven: false`` and
+    a named failure domain, never an indefinite hold and never an allegation
+    of cheating.
+    """
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    required = {
+        "Policy v13 has exactly two final outcomes",
+        "There is no `REVIEW_INCOMPLETE`, `INCONCLUSIVE`, implied clearance",
+        "violation_proven: true | false",
+        "failure_domain: artifact | submission | platform | provider | none",
+        "must never be described as cheating",
+        "A. Proven integrity or security violation",
+        "B. Submission-controlled verification failure",
+        "C. Platform verification failure",
+        "D. Provider verification failure",
+        "V1.required_submission_evidence_missing",
+        "V2.platform_verification_failed",
+        "V3.provider_verification_failed",
+        "Q1.protocol_contract_failure",
+        "## Operator override",
+        "It does not convert `REJECT` to `CLEAR`.",
+        "maximum verification window: 24 hours",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 is missing: {missing}"
+
+
+def test_written_policy_v13_publishes_a_ground_for_every_v13_category() -> None:
+    """A category the reviewer can emit must have a published ground.
+
+    Policy v13 requires every rejection ground to be published before it is
+    enforced. A review category that exists only in the screener would let a
+    finding land with no policy behind it, so each v13-only category is named
+    in the policy text.
+    """
+
+    from ditto_screener.source_review import _POLICY_V13_ONLY_CATEGORIES
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+
+    unpublished = sorted(
+        category for category in _POLICY_V13_ONLY_CATEGORIES if category not in policy
+    )
+
+    assert not unpublished, (
+        f"screener can emit v13 categories with no published ground: {unpublished}"
+    )
+
+
+def test_written_policy_v13_forbids_every_non_decisive_admission() -> None:
+    """No non-decisive screener code may read as a clearance under v13.
+
+    Every code the engine can emit without reaching a decision has to be named
+    in the policy as something that cannot CLEAR.
+    """
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    non_decisive = {
+        "source-review-inconclusive",
+        "source-review-invalid-risk",
+        "source-review-inconsistent-verdict",
+        "adjudicated-source-review-escalate",
+        "behavioral-oracle-inconclusive",
+        "challenge-inconclusive",
+        "source-review-unavailable",
+    }
+
+    unpublished = sorted(code for code in non_decisive if code not in policy)
+    assert not unpublished, f"policy v13 does not resolve: {unpublished}"
+
+    assert "may produce `CLEAR`, and none of them may submit a passing" in policy
+    assert "v13 protocol guard that rejects\n  `pass_inconclusive`" in policy
+    assert "deadline finalizer" in policy
+
+
+def test_written_policy_v13_covers_the_prompt_security_surface() -> None:
+    """The v13 prompt and the published grounds must not drift apart.
+
+    The prompt tells the reviewer which security surface to cover. Anything it
+    names has to be a published S-condition, otherwise the screener reviews
+    for something it cannot reject on.
+    """
+
+    from ditto_screener.source_review import _POLICY_V13_ADDENDUM
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    assert "host-resource access" in _POLICY_V13_ADDENDUM
+    assert "additional rejection\ngrounds" in _POLICY_V13_ADDENDUM
+    required = {
+        "### S2: credential or data exfiltration",
+        "host-resource access",
+        "hidden runtime replacement",
+        "S2.credential_or_data_exfiltration",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 is missing: {missing}"
+    assert "S2.unauthorized_execution" not in policy
+    assert "S2.resource_isolation_violation" not in policy
+
+
+def test_written_policy_v13_publishes_the_metamorphic_minimum_profile() -> None:
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    required = {
+        "private\nmetamorphic testing is mandatory",
+        "60 paired cases",
+        "three transformation classes",
+        "at least 20 cases per class",
+        "two independent hidden seeds",
+        "material degradation of at least 15 percentage points",
+        "95% confidence lower bound above 5 percentage points",
+        "clean-control degradation no greater than 5 percentage points",
+        "replication in the same direction across both seeds",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 is missing: {missing}"
 
 
 def test_latest_backroom_safe_batch_is_fully_represented() -> None:

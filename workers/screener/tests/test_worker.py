@@ -80,8 +80,11 @@ def _decision(outcome: ScreeningOutcome, detail: str = "") -> ScreeningDecision:
 
 
 class _FakeGate:
-    def __init__(self, result: ScreeningDecision) -> None:
+    def __init__(
+        self, result: ScreeningDecision, *, bind_policy_version: bool = True
+    ) -> None:
         self.result = result
+        self.bind_policy_version = bind_policy_version
         self.calls: list[UUID] = []
         self.deadlines: list[float | None] = []
         self.build_only_calls: list[bool] = []
@@ -143,6 +146,8 @@ class _FakeGate:
                     image_ref=f"ditto-screen/{agent_id}:latest",
                 )
             )
+        if self.bind_policy_version and policy_version is not None:
+            return replace(self.result, policy_version=policy_version)
         return self.result
 
 
@@ -625,7 +630,7 @@ async def test_deferred_mechanical_oracle_quarantine_is_submitted(
     assert verdict["deferred_source_review"] is True
 
 
-async def test_terminal_source_budget_exhaustion_is_signed_and_submitted_once(
+async def test_legacy_source_budget_exhaustion_is_signed_and_submitted_once(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
     audit = ScreenReviewAudit(
@@ -661,7 +666,7 @@ async def test_terminal_source_budget_exhaustion_is_signed_and_submitted_once(
     platform = _FakePlatform([])
     worker = _worker(make_config(), platform, _FakeGate(result))
 
-    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+    await worker._screen_one(_item(uuid4()), policy_version=12)
 
     assert len(platform.verdicts) == 1
     verdict = platform.verdicts[0]
@@ -679,6 +684,80 @@ async def test_terminal_source_budget_exhaustion_is_signed_and_submitted_once(
     assert verdict["review_notes"] == expected_notes
     assert verdict["review_notes_digest"] == source_review_notes_digest(expected_notes)
     assert verdict["reason_code"] == "source-review-inconclusive"
+
+
+async def test_v13_source_budget_exhaustion_is_nonpassing_with_signed_evidence(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    audit = ScreenReviewAudit(
+        stage="l1",
+        reason_code="source-review-step-budget-exhausted",
+        prompt_revision="source-review-v24-policy-v13",
+        max_steps=20,
+        steps_used=20,
+        max_read_bytes=2_000_000,
+        read_bytes_used=123_456,
+    )
+    result = ScreeningDecision(
+        outcome=ScreeningOutcome.INCONCLUSIVE,
+        detail="bounded source review inconclusive; retry or deadline required",
+        manifest_digest="ab" * 32,
+        evidence=(
+            PolicyEvidence(
+                module_id="luna-source-review",
+                code="source-review-inconclusive",
+                summary="bounded source review exhausted without a decisive finding",
+            ),
+        ),
+        review_audit=audit.model_dump(mode="json"),
+        review_notes=(
+            {
+                "kind": "observation",
+                "category": "review_budget",
+                "summary": "Collected bounded review evidence before exhaustion.",
+                "stage": "l1",
+            },
+        ),
+    )
+    platform = _FakePlatform([])
+    worker = _worker(make_config(), platform, _FakeGate(result))
+
+    await worker._screen_one(_item(uuid4()), policy_version=SCREENING_POLICY_VERSION)
+
+    assert len(platform.verdicts) == 1
+    verdict = platform.verdicts[0]
+    assert verdict["passed"] is False
+    assert verdict["outcome"] == ScreenResultOutcome.INCONCLUSIVE
+    assert verdict["manifest_digest"] == "ab" * 32
+    assert verdict["review_audit"] == audit
+    assert verdict["review_audit_digest"] == audit.canonical_digest()
+    assert verdict["evidence"] is not None
+    assert verdict["reason_code"] == "source-review-inconclusive"
+
+
+async def test_worker_refuses_to_sign_a_mismatched_decision_policy(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    result = core_decision(
+        ScreeningOutcome.INCONCLUSIVE,
+        code="source-review-inconclusive",
+        summary="review did not complete",
+        detail="private policy audit inconclusive",
+        policy_version=SCREENING_POLICY_VERSION,
+    )
+    platform = _FakePlatform([])
+    gate = _FakeGate(result, bind_policy_version=False)
+    worker = _worker(make_config(), platform, gate)
+
+    await worker._screen_one(_item(uuid4()), policy_version=12)
+
+    assert len(platform.verdicts) == 1
+    verdict = platform.verdicts[0]
+    assert verdict["passed"] is False
+    assert verdict["policy_version"] == 12
+    assert verdict["outcome"] == ScreenResultOutcome.RETRYABLE_INFRA
+    assert verdict["reason_code"] == "worker-platform-request-failed"
+    assert "decision policy version does not match" in verdict["detail"]
 
 
 async def test_passing_source_review_notes_keep_the_policy_manifest_binding(

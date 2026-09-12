@@ -960,6 +960,55 @@ class TestFederatedScreenerNodes:
         )
         assert source.status_code == 200, source.text
         assert source.json()["artifact_sha256"] == _SHA256
+        async with session_maker() as session:
+            source_attempt = await session.get(ScreeningAttempt, UUID(attempt_id))
+            assert source_attempt is not None
+            expected_policy_version = source_attempt.policy_version
+        assert source.json()["policy_version"] == expected_policy_version
+        mismatched = await client.post(
+            f"/api/v1/screener/submission-source-reviews/{review_id}/complete",
+            headers=job_headers,
+            json={
+                "observation": {
+                    "ok": False,
+                    "categories": [],
+                    "adjudication": {
+                        "decision": "escalate",
+                        "reason": "test policy mismatch",
+                        "model": "test-model",
+                        "prompt_revision": "adjudicator-v3-policy-v999",
+                        "policy_version": expected_policy_version + 1,
+                        "escalation_code": "test-policy-mismatch",
+                    },
+                }
+            },
+        )
+        assert mismatched.status_code == 409, mismatched.text
+        assert mismatched.json()["message"] == (
+            "source-review adjudication policy mismatch"
+        )
+        mismatched_prompt = await client.post(
+            f"/api/v1/screener/submission-source-reviews/{review_id}/complete",
+            headers=job_headers,
+            json={
+                "observation": {
+                    "ok": False,
+                    "categories": [],
+                    "adjudication": {
+                        "decision": "escalate",
+                        "reason": "test prompt mismatch",
+                        "model": "test-model",
+                        "prompt_revision": "adjudicator-v3-policy-v999",
+                        "policy_version": expected_policy_version,
+                        "escalation_code": "test-policy-mismatch",
+                    },
+                }
+            },
+        )
+        assert mismatched_prompt.status_code == 409, mismatched_prompt.text
+        assert mismatched_prompt.json()["message"] == (
+            "source-review adjudication policy mismatch"
+        )
         complete = await client.post(
             f"/api/v1/screener/submission-source-reviews/{review_id}/complete",
             headers=job_headers,

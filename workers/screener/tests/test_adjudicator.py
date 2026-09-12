@@ -16,6 +16,7 @@ import ditto_screener.adjudicator as adjudicator_module
 from ditto_screener.adjudicator import (
     ADJUDICATOR_PROMPT_REVISION,
     SourceReviewAdjudicator,
+    _adjudicator_tools_for_policy,
     _compacted_adjudicator_messages,
     _system_prompt,
     adjudicator_prompt_revision,
@@ -317,7 +318,8 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(10) == "adjudicator-v3-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v3-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v3-policy-v12"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v3-policy-v12"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v3-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v3-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
@@ -330,7 +332,62 @@ def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
     assert "NARROWED" not in policy_v11
     assert "NARROWED" not in _system_prompt(10)
     with pytest.raises(ValueError, match="not implemented by this build"):
-        adjudicator_prompt_revision(13)
+        adjudicator_prompt_revision(14)
+
+
+def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None:
+    policy_v12 = _system_prompt(12)
+    policy_v13 = _system_prompt(13)
+
+    assert policy_v13.startswith(policy_v12)
+    assert "I8 is evaluation independence" in policy_v13
+    assert "always-on benchmark-specific recipe is activated on every request" in (
+        policy_v13
+    )
+    assert "withhold submit_adjudication" in policy_v13
+    assert "`bench_version` alter substantive retrieval" in policy_v13
+
+    legacy_submit = _adjudicator_tools_for_policy(12, decision_only=True)[0]
+    current_submit = _adjudicator_tools_for_policy(13, decision_only=True)[0]
+    legacy_invariants = legacy_submit["function"]["parameters"]["properties"][
+        "reject_invariant"
+    ]["enum"]
+    current_invariants = current_submit["function"]["parameters"]["properties"][
+        "reject_invariant"
+    ]["enum"]
+    assert "i8_evaluation_independence" not in legacy_invariants
+    assert "i8_evaluation_independence" in current_invariants
+
+
+async def test_legacy_policy_refuses_a_v13_only_adjudication_basis(
+    tmp_path: Path,
+) -> None:
+    result = await _adjudicator(
+        _key(tmp_path),
+        _transport(
+            [
+                [
+                    _call(
+                        "submit_adjudication",
+                        {
+                            "decision": "reject",
+                            "reject_invariant": "i8_evaluation_independence",
+                            "reason": "provider returned a newer-policy basis",
+                            "citations": [{"path": "src/main.rs", "line": 10}],
+                        },
+                    )
+                ]
+            ]
+        ),
+    ).adjudicate(
+        _archive(tmp_path),
+        notes=[_CONCERN],
+        policy_version=12,
+        ledger_final=True,
+    )
+
+    assert result.decision == "escalate"
+    assert result.escalation_code == "verdict-contract-failed"
 
 
 async def test_v11_court_request_and_signed_verdict_bind_policy_version(

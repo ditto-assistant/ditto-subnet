@@ -45,12 +45,15 @@ from ditto_screener.policy import (
     CORE_ONLY_MANIFEST,
     AgenticSourceReviewModule,
     PolicyEngine,
+    PolicyEvidence,
     PolicyManifest,
     ReviewJournal,
+    ScreeningDecision,
     ScreeningOutcome,
     SourceReviewObservation,
     load_policy_engine,
 )
+from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _ATTEMPT = UUID("7c5df3f9-3ea7-47ba-92d1-1bbcf4c5f300")
@@ -197,6 +200,7 @@ async def _screen(  # type: ignore[no-untyped-def]
     progress=None,
     build_only=False,
     policy_only=False,
+    policy_version=SCREENING_POLICY_VERSION,
 ):
     return await gate.screen(
         agent_id=_AGENT,
@@ -208,6 +212,7 @@ async def _screen(  # type: ignore[no-untyped-def]
         progress=progress,
         build_only=build_only,
         policy_only=policy_only,
+        policy_version=policy_version,
     )
 
 
@@ -1173,10 +1178,20 @@ async def test_policy_only_rescreen_starts_source_review_without_runtime(
     assert not any(call[0] in {"build", "run", "exec"} for call in docker_calls)
 
 
-async def test_oracle_transport_failure_runs_l4_from_the_completed_source_ledger(
+@pytest.mark.parametrize(
+    ("policy_version", "expected", "settle_calls"),
+    [
+        (12, ScreeningOutcome.PASS, 1),
+        (13, ScreeningOutcome.INCONCLUSIVE, 0),
+    ],
+)
+async def test_oracle_transport_failure_is_fail_closed_for_v13(
     make_config: Callable[..., ScreenerConfig],
+    policy_version: int,
+    expected: ScreeningOutcome,
+    settle_calls: int,
 ) -> None:
-    """A clean L1 result is terminally settled only after a no-response fault."""
+    """A source-only settlement cannot clear v13 mandatory runtime verification."""
     events: list[str] = []
     tarball = _valid_tar()
     gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
@@ -1191,16 +1206,25 @@ async def test_oracle_transport_failure_runs_l4_from_the_completed_source_ledger
 
     gate._request_from_sidecar = no_response  # type: ignore[method-assign]
     async with gate._client:
-        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+        result = await _screen(
+            gate,
+            hashlib.sha256(tarball).hexdigest(),
+            policy_version=policy_version,
+        )
 
-    assert result.outcome == ScreeningOutcome.PASS
-    assert reviewer.settle_calls == 1
-    assert result.adjudication is not None
-    assert result.adjudication["decision"] == "clear"
-    assert [evidence.code for evidence in result.evidence][-2:] == [
-        "challenge-transport-failure",
-        "source-review-adjudicated",
-    ]
+    assert result.outcome == expected
+    assert result.policy_version == policy_version
+    assert reviewer.settle_calls == settle_calls
+    if policy_version == 12:
+        assert result.adjudication is not None
+        assert result.adjudication["decision"] == "clear"
+        assert [evidence.code for evidence in result.evidence][-2:] == [
+            "challenge-transport-failure",
+            "source-review-adjudicated",
+        ]
+    else:
+        assert result.adjudication is None
+        assert result.evidence[-1].code == "challenge-transport-failure"
 
 
 async def test_source_review_is_not_started_when_the_build_fails(
@@ -1692,6 +1716,47 @@ async def test_prebuilt_binary_entrypoint_is_advisory_quarantine(
     assert any(call[0] == "build" for call in calls)
 
 
+def test_image_binding_escalation_preserves_review_and_policy_identity() -> None:
+    adjudication = {
+        "decision": "clear",
+        "reason": "review completed",
+        "model": "openai/gpt-5.6-sol",
+        "prompt_revision": "adjudicator-v3-policy-v12",
+        "notes_considered": 1,
+        "policy_version": 12,
+    }
+    notes = (
+        {
+            "kind": "cleared",
+            "category": "general_runtime",
+            "summary": "Reviewed the served runtime path.",
+            "stage": "l3",
+        },
+    )
+    decision = ScreeningDecision(
+        outcome=ScreeningOutcome.PASS,
+        detail="",
+        manifest_digest="ab" * 32,
+        evidence=(
+            PolicyEvidence(
+                "source-review", "source-review-adjudicated", "review completed"
+            ),
+        ),
+        adjudication=adjudication,
+        review_notes=notes,
+        policy_version=12,
+    )
+
+    escalated = gate_module._with_image_binding_advisory(
+        decision, "prebuilt entrypoint requires provenance review"
+    )
+
+    assert escalated.outcome == ScreeningOutcome.QUARANTINE
+    assert escalated.policy_version == 12
+    assert escalated.adjudication == adjudication
+    assert escalated.review_notes == notes
+
+
 async def test_build_only_skips_image_binding_advisory_and_passes(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -1719,6 +1784,24 @@ async def test_build_only_skips_image_binding_advisory_and_passes(
     assert result.submits_verdict
     # It still builds the image (that is the whole point of a build-only pass).
     assert any(call[0] == "build" for call in calls)
+
+
+async def test_screen_decision_binds_the_claimed_policy_version(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
+
+    async with gate._client:
+        result = await _screen(
+            gate,
+            hashlib.sha256(tarball).hexdigest(),
+            build_only=True,
+            policy_version=12,
+        )
+
+    assert result.outcome == ScreeningOutcome.PASS
+    assert result.policy_version == 12
 
 
 async def test_build_and_health_failures_are_deterministic(

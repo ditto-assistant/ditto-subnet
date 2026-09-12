@@ -91,8 +91,10 @@ from ditto_screener.policy import (
     ReviewJournal,
     ScreeningDecision,
     ScreeningOutcome,
-    core_decision,
     load_policy_engine,
+)
+from ditto_screener.policy import (
+    core_decision as make_core_decision,
 )
 from ditto_screener.preflight_audit import (
     StaticPreflightAuditError,
@@ -103,7 +105,10 @@ from ditto_screener.source_review import (
     SourceReviewObservation,
     TarSourceRepository,
 )
-from ditto_screening_protocol import SCREENING_POLICY_VERSION
+from ditto_screening_protocol import (
+    SCREENING_POLICY_VERSION,
+    STRICT_TWO_OUTCOME_POLICY_VERSION,
+)
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
@@ -466,6 +471,9 @@ def _with_image_binding_advisory(
         evidence=evidence,
         finding=decision.finding,
         review_audit=decision.review_audit,
+        adjudication=decision.adjudication,
+        review_notes=decision.review_notes,
+        policy_version=decision.policy_version,
     )
 
 
@@ -930,6 +938,21 @@ class BuildGate:
         if build_only and policy_only:
             raise ValueError("build-only and policy-only modes are mutually exclusive")
 
+        def core_decision(
+            outcome: ScreeningOutcome,
+            *,
+            code: str,
+            summary: str,
+            detail: str,
+        ) -> ScreeningDecision:
+            return make_core_decision(
+                outcome,
+                code=code,
+                summary=summary,
+                detail=detail,
+                policy_version=policy_version,
+            )
+
         loop = asyncio.get_running_loop()
         screen_started = loop.time()
         # (stage, entered_at) transitions; folded into one per-stage timing
@@ -965,7 +988,11 @@ class BuildGate:
         remote_archive: RemoteImageArchive | None = None
         try:
             report("downloading")
-            if (exhausted := self._lease_exhausted(deadline, "download")) is not None:
+            if (
+                exhausted := self._lease_exhausted(
+                    deadline, "download", policy_version=policy_version
+                )
+            ) is not None:
                 return exhausted
             tmp_path, dl_detail = await self._download_verified(download_url, sha256)
             if tmp_path is None:
@@ -1027,6 +1054,7 @@ class BuildGate:
                     preflight = TarSourceRepository(tmp_path).malicious_preflight(
                         artifact_sha256=sha256.lower(),
                         mode=self._config.static_preflight_v2_mode,
+                        policy_version=policy_version,
                         audit_recorder=lambda payload: (
                             self._static_preflight_audit.record(
                                 agent_id=agent_id,
@@ -1089,7 +1117,8 @@ class BuildGate:
                         preflight_clearance = resolved_preflight
                     else:
                         decision = self._policy.preexecution_source_decision(
-                            resolved_preflight
+                            resolved_preflight,
+                            policy_version=policy_version,
                         )
 
                         async def unreachable_challenge(
@@ -1114,6 +1143,7 @@ class BuildGate:
                             health_elapsed_ms=0,
                             run_challenge=unreachable_challenge,
                             review_source=None,
+                            policy_version=policy_version,
                         )
                         self._journal.record(context=context, decision=decision)
                         return decision
@@ -1219,6 +1249,7 @@ class BuildGate:
                     health_elapsed_ms=0,
                     run_challenge=unavailable_challenge,
                     review_source=review_source,
+                    policy_version=policy_version,
                 )
                 report("validating")
                 decision = await self._policy.evaluate(context, skip_challenges=True)
@@ -1228,15 +1259,19 @@ class BuildGate:
                     and preflight_clearance.failure_disposition == "pass_inconclusive"
                 ):
                     deferred = self._policy.preexecution_source_decision(
-                        preflight_clearance
+                        preflight_clearance,
+                        policy_version=policy_version,
                     )
                     decision = ScreeningDecision(
-                        outcome=ScreeningOutcome.PASS_INCONCLUSIVE,
+                        outcome=deferred.outcome,
                         detail=deferred.detail,
                         manifest_digest=decision.manifest_digest,
                         evidence=(*deferred.evidence, *decision.evidence),
                         finding=deferred.finding,
                         review_audit=deferred.review_audit,
+                        adjudication=deferred.adjudication,
+                        review_notes=deferred.review_notes,
+                        policy_version=policy_version,
                     )
                 decision = _with_image_binding_advisory(
                     decision, self._image_binding_advisory(tmp_path)
@@ -1245,7 +1280,11 @@ class BuildGate:
                 return decision
 
             report("building")
-            if (exhausted := self._lease_exhausted(deadline, "build")) is not None:
+            if (
+                exhausted := self._lease_exhausted(
+                    deadline, "build", policy_version=policy_version
+                )
+            ) is not None:
                 return exhausted
             build_timeout = self._config.build_timeout_seconds
             remaining = self._lease_remaining(deadline)
@@ -1368,7 +1407,9 @@ class BuildGate:
                 raise RuntimeError("successful Docker build did not return an image id")
 
             report("starting")
-            exhausted = self._lease_exhausted(deadline, "serve check")
+            exhausted = self._lease_exhausted(
+                deadline, "serve check", policy_version=policy_version
+            )
             if exhausted is not None:
                 return exhausted
             started = asyncio.get_running_loop().time()
@@ -1461,9 +1502,12 @@ class BuildGate:
                 # given no source-review source and never runs the selector
                 # (anti-cheat) phase.
                 review_source=None if build_only else review_source,
+                policy_version=policy_version,
             )
             report("validating")
-            exhausted = self._lease_exhausted(deadline, "policy review")
+            exhausted = self._lease_exhausted(
+                deadline, "policy review", policy_version=policy_version
+            )
             if exhausted is not None:
                 return exhausted
             decision = await self._policy.evaluate(
@@ -1473,18 +1517,19 @@ class BuildGate:
                 skip_challenges=targon_runtime_ok,
             )
             if (
-                decision.outcome == ScreeningOutcome.INCONCLUSIVE
+                policy_version < STRICT_TWO_OUTCOME_POLICY_VERSION
+                and decision.outcome == ScreeningOutcome.INCONCLUSIVE
                 and review_task is not None
                 and any(
                     evidence.code == "challenge-transport-failure"
                     for evidence in decision.evidence
                 )
             ):
-                # A no-response behavioral-oracle failure does not establish a
-                # harness defect. When the completed source review retained
-                # typed notes, ask L4 to make the terminal, decision-only call
-                # from that ledger instead of parking a clean submission for a
-                # retry that merely repeats the same evidence collection.
+                # Historical policy lets a source-only L4 decision settle an
+                # auxiliary oracle transport failure. V13 makes the runtime
+                # observation mandatory, so it remains non-passing for the
+                # retry/deadline finalizer instead of asking source review to
+                # clear a check it could not perform.
                 observation = await review_task
                 settled = await self._source_reviewer.settle_oracle_transport_failure(
                     observation,
@@ -1493,7 +1538,10 @@ class BuildGate:
                     policy_version=policy_version,
                 )
                 if settled.adjudication is not None:
-                    source_decision = self._policy.preexecution_source_decision(settled)
+                    source_decision = self._policy.preexecution_source_decision(
+                        settled,
+                        policy_version=policy_version,
+                    )
                     decision = ScreeningDecision(
                         outcome=source_decision.outcome,
                         detail=source_decision.detail,
@@ -1513,6 +1561,7 @@ class BuildGate:
                         review_notes=(
                             source_decision.review_notes or decision.review_notes
                         ),
+                        policy_version=policy_version,
                     )
             if (
                 decision.outcome == ScreeningOutcome.PASS
@@ -1520,15 +1569,19 @@ class BuildGate:
                 and preflight_clearance.failure_disposition == "pass_inconclusive"
             ):
                 deferred = self._policy.preexecution_source_decision(
-                    preflight_clearance
+                    preflight_clearance,
+                    policy_version=policy_version,
                 )
                 decision = ScreeningDecision(
-                    outcome=ScreeningOutcome.PASS_INCONCLUSIVE,
+                    outcome=deferred.outcome,
                     detail=deferred.detail,
                     manifest_digest=decision.manifest_digest,
                     evidence=(*deferred.evidence, *decision.evidence),
                     finding=deferred.finding,
                     review_audit=deferred.review_audit,
+                    adjudication=deferred.adjudication,
+                    review_notes=deferred.review_notes,
+                    policy_version=policy_version,
                 )
             # The image-binding advisory can only escalate a PASS to an
             # operator-reviewed QUARANTINE. The mechanical lane collected no
@@ -1549,7 +1602,9 @@ class BuildGate:
             ):
                 report("submitting")
                 if (
-                    exhausted := self._lease_exhausted(deadline, "image export")
+                    exhausted := self._lease_exhausted(
+                        deadline, "image export", policy_version=policy_version
+                    )
                 ) is not None:
                     return exhausted
                 try:
@@ -1575,7 +1630,7 @@ class BuildGate:
                     )
                 except _LeaseDeadlineError:
                     return self._lease_exhausted(
-                        deadline, "image export"
+                        deadline, "image export", policy_version=policy_version
                     ) or core_decision(
                         ScreeningOutcome.RETRYABLE_INFRA,
                         code="lease-budget-exhausted",
@@ -1677,7 +1732,11 @@ class BuildGate:
         return expires_at - asyncio.get_running_loop().time()
 
     def _lease_exhausted(
-        self, deadline: Deadline, stage: str
+        self,
+        deadline: Deadline,
+        stage: str,
+        *,
+        policy_version: int = SCREENING_POLICY_VERSION,
     ) -> ScreeningDecision | None:
         """A parked infrastructure decision when the lease cannot fit ``stage``."""
         remaining = self._lease_remaining(deadline)
@@ -1688,11 +1747,12 @@ class BuildGate:
                 stage,
                 remaining,
             )
-            return core_decision(
+            return make_core_decision(
                 ScreeningOutcome.RETRYABLE_INFRA,
                 code="lease-budget-exhausted",
                 summary="screening lease budget exhausted before completion",
                 detail=f"screener error: lease budget exhausted before {stage}",
+                policy_version=policy_version,
             )
         return None
 

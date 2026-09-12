@@ -22056,7 +22056,7 @@ export interface components {
          * @example {
          *       "detail": "",
          *       "passed": true,
-         *       "policy_version": 12,
+         *       "policy_version": 13,
          *       "screener_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
          *       "signature": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
          *     }
@@ -22667,8 +22667,9 @@ export interface components {
          *
          *     ``builtin_policy_version`` above is the Platform build; this is the fleet.
          *     A worker on an older build fails closed when the required version exceeds
-         *     its builtin, so ``safe_to_schedule_up_to`` is the highest target that would
-         *     not pause any fresh reporting worker. Workers below heartbeat protocol v7
+         *     its builtin. ``safe_to_schedule_up_to`` is additionally capped by the
+         *     published activation ceiling, so distributed-but-incomplete policy code is
+         *     never presented as activation-ready. Workers below heartbeat protocol v7
          *     cannot announce a build and are listed separately.
          */
         ScreenerFleetPolicyReadinessView: {
@@ -23799,7 +23800,7 @@ export interface components {
             notes_considered: number;
             /**
              * Policy Version
-             * @default 12
+             * @default 13
              */
             policy_version: number;
             /** Prompt Revision */
@@ -23813,7 +23814,7 @@ export interface components {
          * @description Bounded ways served code can make genuine model/tool output non-authoritative.
          * @enum {string}
          */
-        SourceReviewAuthorityTransition: "model_skipped" | "model_output_overwritten" | "tool_execution_bypassed" | "tool_trajectory_fabricated" | "selective_model_disablement" | "scorer_field_rewritten" | "derived_value_authoritative" | "family_compiler_authoritative" | "tool_selection_predetermined";
+        SourceReviewAuthorityTransition: "model_skipped" | "model_output_overwritten" | "tool_execution_bypassed" | "tool_trajectory_fabricated" | "selective_model_disablement" | "scorer_field_rewritten" | "derived_value_authoritative" | "family_compiler_authoritative" | "tool_selection_predetermined" | "evaluation_identity_authoritative";
         /**
          * SourceReviewCausalEvidence
          * @description Opt-in v2 causal evidence carried alongside the legacy location list.
@@ -23904,13 +23905,16 @@ export interface components {
         };
         /**
          * SourceReviewInvariant
-         * @description Policy-v10 source-review invariants, evaluated independently.
+         * @description Versioned source-review invariants, evaluated independently.
          * @enum {string}
          */
-        SourceReviewInvariant: "i1_model_invocation" | "i2_evidence_retention" | "i3_model_dissent" | "i4_derived_value_authority" | "i5_production_engine" | "i6_tool_execution_fidelity" | "i7_model_tool_planning";
+        SourceReviewInvariant: "i1_model_invocation" | "i2_evidence_retention" | "i3_model_dissent" | "i4_derived_value_authority" | "i5_production_engine" | "i6_tool_execution_fidelity" | "i7_model_tool_planning" | "i8_evaluation_independence";
         /**
          * SourceReviewInvariantAssessment
-         * @description Complete policy-v10 sweep; omission cannot silently clear an invariant.
+         * @description Complete versioned sweep; omission cannot silently clear an invariant.
+         *
+         *     Schema v1 is the byte-compatible policy-v10-v12 I1-I7 assessment. Schema
+         *     v2 adds policy-v13 I8 without making stored historical findings invalid.
          */
         SourceReviewInvariantAssessment: {
             /** Decisions */
@@ -23918,9 +23922,9 @@ export interface components {
             /**
              * Schema Version
              * @default 1
-             * @constant
+             * @enum {integer}
              */
-            schema_version: 1;
+            schema_version: 1 | 2;
         };
         /**
          * SourceReviewInvariantDecision
@@ -24016,7 +24020,7 @@ export interface components {
          * @description Published false-positive clauses that can refute a matching breach.
          * @enum {string}
          */
-        SourceReviewPassClause: "genuine_model_result" | "no_premodel_response" | "full_records_on_deciding_turn" | "non_authoritative_preliminary_pass" | "shape_only_validation" | "model_dissent_preserved" | "no_derived_value" | "untrusted_candidate_channel" | "runtime_described_generic_engine" | "no_family_compiler" | "model_selected_executed_tool" | "no_reported_tool_calls" | "no_tool_planning" | "policy_capability_filter_only" | "natural_singleton_class" | "unreachable_nonruntime_code";
+        SourceReviewPassClause: "genuine_model_result" | "no_premodel_response" | "full_records_on_deciding_turn" | "non_authoritative_preliminary_pass" | "shape_only_validation" | "model_dissent_preserved" | "no_derived_value" | "untrusted_candidate_channel" | "runtime_described_generic_engine" | "no_family_compiler" | "model_selected_executed_tool" | "no_reported_tool_calls" | "no_tool_planning" | "policy_capability_filter_only" | "natural_singleton_class" | "evaluation_independent_runtime" | "no_evaluation_identity_branch" | "unreachable_nonruntime_code";
         /**
          * SourceReviewScorerVisibleEffect
          * @description Concrete graded field or validator-owned outcome changed by a transition.
@@ -24423,6 +24427,8 @@ export interface components {
         SubmissionSourceReviewSourceResponse: {
             /** Artifact Sha256 */
             artifact_sha256: string;
+            /** Policy Version */
+            policy_version: number;
             /** Source Url B64 */
             source_url_b64: string;
         };

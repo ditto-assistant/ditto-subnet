@@ -8,9 +8,11 @@ import pytest
 from pydantic import ValidationError
 
 from ditto_screening_protocol import (
+    SourceReviewAdjudication,
     SourceReviewAuthorityTransition,
     SourceReviewCausalEvidence,
     SourceReviewCausalRoleBinding,
+    SourceReviewCitation,
     SourceReviewEvidenceItem,
     SourceReviewEvidenceRole,
     SourceReviewFinding,
@@ -18,9 +20,11 @@ from ditto_screening_protocol import (
     SourceReviewInvariantAssessment,
     SourceReviewInvariantDecision,
     SourceReviewInvariantDisposition,
+    SourceReviewObservationPayload,
     SourceReviewPassClause,
     SourceReviewScorerVisibleEffect,
 )
+from ditto_screening_protocol.models import source_review_invariants_for_policy
 
 _SHA256 = "ab" * 32
 _LEGACY_CANONICAL = (
@@ -49,6 +53,9 @@ _PASS_CLAUSES = {
         SourceReviewPassClause.MODEL_SELECTED_EXECUTED_TOOL
     ),
     SourceReviewInvariant.MODEL_TOOL_PLANNING: SourceReviewPassClause.NO_TOOL_PLANNING,
+    SourceReviewInvariant.EVALUATION_INDEPENDENCE: (
+        SourceReviewPassClause.EVALUATION_INDEPENDENT_RUNTIME
+    ),
 }
 
 
@@ -124,7 +131,7 @@ def _policy_v10_assessment(
     evidence_indices: list[int] | None = None,
 ) -> SourceReviewInvariantAssessment:
     decisions = []
-    for invariant in SourceReviewInvariant:
+    for invariant in source_review_invariants_for_policy(10):
         if invariant == breach:
             decisions.append(
                 SourceReviewInvariantDecision(
@@ -143,7 +150,7 @@ def _policy_v10_assessment(
                     summary="The reviewed path satisfies the published pass clause.",
                 )
             )
-    return SourceReviewInvariantAssessment(decisions=decisions)
+    return SourceReviewInvariantAssessment(schema_version=1, decisions=decisions)
 
 
 def _v2_finding(
@@ -696,6 +703,64 @@ def test_policy_v10_requires_all_invariants_exactly_once() -> None:
         SourceReviewInvariantAssessment.model_validate(raw)
 
 
+def test_policy_v13_adds_i8_without_invalidating_policy_v10_assessments() -> None:
+    legacy = _policy_v10_assessment()
+    assert legacy.schema_version == 1
+    assert len(legacy.decisions) == 7
+
+    decisions = [
+        SourceReviewInvariantDecision(
+            invariant=invariant,
+            disposition=SourceReviewInvariantDisposition.PASS,
+            pass_clause=_PASS_CLAUSES[invariant],
+            summary="The reviewed path satisfies the published pass clause.",
+        )
+        for invariant in SourceReviewInvariant
+    ]
+    current = SourceReviewInvariantAssessment(decisions=decisions)
+    assert current.schema_version == 2
+    assert len(current.decisions) == 8
+
+    with pytest.raises(ValidationError, match="every invariant"):
+        SourceReviewInvariantAssessment(schema_version=1, decisions=decisions)
+
+
+def test_adjudication_reject_invariant_is_bound_to_policy_version() -> None:
+    values = {
+        "decision": "reject",
+        "reason": "A reachable evaluation-identity branch controls the answer.",
+        "reject_invariant": SourceReviewInvariant.EVALUATION_INDEPENDENCE,
+        "citations": [SourceReviewCitation(path="src/main.rs", line=7)],
+        "model": "test-court",
+        "prompt_revision": "adjudicator-v3-policy-v13",
+    }
+
+    with pytest.raises(ValidationError, match="unavailable under the applied policy"):
+        SourceReviewAdjudication(policy_version=12, **values)
+
+    current = SourceReviewAdjudication(policy_version=13, **values)
+    assert current.reject_invariant == SourceReviewInvariant.EVALUATION_INDEPENDENCE
+
+
+def test_observation_decision_fields_are_bound_to_the_finding() -> None:
+    finding = _v2_finding()
+    values = {
+        "ok": True,
+        "risk_level": finding.risk_level,
+        "categories": finding.categories,
+        "finding_digest": finding.canonical_digest(),
+        "finding": finding,
+    }
+
+    SourceReviewObservationPayload.model_validate(values)
+    with pytest.raises(ValidationError, match="risk does not match"):
+        SourceReviewObservationPayload.model_validate({**values, "risk_level": "low"})
+    with pytest.raises(ValidationError, match="categories do not match"):
+        SourceReviewObservationPayload.model_validate(
+            {**values, "categories": ["none"]}
+        )
+
+
 def test_policy_v10_pass_clause_is_invariant_specific() -> None:
     with pytest.raises(ValidationError, match="incompatible"):
         SourceReviewInvariantDecision(
@@ -786,7 +851,7 @@ def test_policy_v10_maximum_invariant_projection_fits_worker_bound() -> None:
             SourceReviewInvariantDecision(
                 invariant=invariant,
                 disposition=SourceReviewInvariantDisposition.BREACH,
-                summary="s" * 240,
+                summary="s" * 210,
                 evidence_indices=list(range(16)),
             )
             for invariant in SourceReviewInvariant

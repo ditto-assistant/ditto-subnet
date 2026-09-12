@@ -16,11 +16,16 @@ from pydantic import (
     model_validator,
 )
 
-SCREENING_POLICY_VERSION = 12
+SCREENING_POLICY_VERSION = 13
+STRICT_TWO_OUTCOME_POLICY_VERSION = 13
+# V13 review/evidence code is distributed for compatibility and pre-activation tests,
+# but the global activation remains capped at v12 until the published V1/V2/V3
+# retry/deadline finalizer and every mandatory verification route are released.
+SCREENING_ACTIVATION_CEILING_POLICY_VERSION = 12
 # The oldest policy version a mixed-fleet platform may require during a
-# scheduled activation window. v10 stays the floor until the v12 activation
-# has re-stamped the scored cohort; raise it in a follow-up, never alongside
-# the policy text that the activation window still has to serve.
+# scheduled activation window. v10 stays the floor while v13 is distributed
+# but not activated; raise it only after every older-policy cohort has reached
+# a terminal, recorded transition.
 SCREENING_FLOOR_POLICY_VERSION = 10
 TYPED_OUTCOME_POLICY_VERSION = 9
 
@@ -495,6 +500,7 @@ class SourceReviewAuthorityTransition(StrEnum):
     DERIVED_VALUE_AUTHORITATIVE = "derived_value_authoritative"
     FAMILY_COMPILER_AUTHORITATIVE = "family_compiler_authoritative"
     TOOL_SELECTION_PREDETERMINED = "tool_selection_predetermined"
+    EVALUATION_IDENTITY_AUTHORITATIVE = "evaluation_identity_authoritative"
 
 
 class SourceReviewScorerVisibleEffect(StrEnum):
@@ -577,11 +583,21 @@ _SCORER_VISIBLE_EFFECTS_BY_TRANSITION = {
             SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
         }
     ),
+    SourceReviewAuthorityTransition.EVALUATION_IDENTITY_AUTHORITATIVE: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.FINAL_TEXT,
+            SourceReviewScorerVisibleEffect.ANSWER,
+            SourceReviewScorerVisibleEffect.ABSTAIN,
+            SourceReviewScorerVisibleEffect.TOOL_CALLS,
+            SourceReviewScorerVisibleEffect.VALIDATOR_OBSERVED_TRAJECTORY,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
 }
 
 
 class SourceReviewInvariant(StrEnum):
-    """Policy-v10 source-review invariants, evaluated independently."""
+    """Versioned source-review invariants, evaluated independently."""
 
     MODEL_INVOCATION = "i1_model_invocation"
     EVIDENCE_RETENTION = "i2_evidence_retention"
@@ -590,6 +606,24 @@ class SourceReviewInvariant(StrEnum):
     PRODUCTION_ENGINE = "i5_production_engine"
     TOOL_EXECUTION_FIDELITY = "i6_tool_execution_fidelity"
     MODEL_TOOL_PLANNING = "i7_model_tool_planning"
+    EVALUATION_INDEPENDENCE = "i8_evaluation_independence"
+
+
+_POLICY_V10_V12_INVARIANTS = tuple(
+    invariant
+    for invariant in SourceReviewInvariant
+    if invariant != SourceReviewInvariant.EVALUATION_INDEPENDENCE
+)
+
+
+def source_review_invariants_for_policy(
+    policy_version: int,
+) -> tuple[SourceReviewInvariant, ...]:
+    """Return the invariant set signed by one screening-policy generation."""
+
+    if policy_version >= 13:
+        return tuple(SourceReviewInvariant)
+    return _POLICY_V10_V12_INVARIANTS
 
 
 class SourceReviewInvariantDisposition(StrEnum):
@@ -618,7 +652,31 @@ class SourceReviewPassClause(StrEnum):
     NO_TOOL_PLANNING = "no_tool_planning"
     POLICY_CAPABILITY_FILTER_ONLY = "policy_capability_filter_only"
     NATURAL_SINGLETON_CLASS = "natural_singleton_class"
+    EVALUATION_INDEPENDENT_RUNTIME = "evaluation_independent_runtime"
+    NO_EVALUATION_IDENTITY_BRANCH = "no_evaluation_identity_branch"
     UNREACHABLE_NONRUNTIME_CODE = "unreachable_nonruntime_code"
+
+
+_POLICY_V13_ONLY_PASS_CLAUSES = frozenset(
+    {
+        SourceReviewPassClause.EVALUATION_INDEPENDENT_RUNTIME,
+        SourceReviewPassClause.NO_EVALUATION_IDENTITY_BRANCH,
+    }
+)
+
+
+def source_review_pass_clauses_for_policy(
+    policy_version: int,
+) -> tuple[SourceReviewPassClause, ...]:
+    """Return the pass-clause vocabulary exposed by one policy generation."""
+
+    if policy_version >= 13:
+        return tuple(SourceReviewPassClause)
+    return tuple(
+        clause
+        for clause in SourceReviewPassClause
+        if clause not in _POLICY_V13_ONLY_PASS_CLAUSES
+    )
 
 
 _PASS_CLAUSES_BY_INVARIANT = {
@@ -665,6 +723,12 @@ _PASS_CLAUSES_BY_INVARIANT = {
             SourceReviewPassClause.NATURAL_SINGLETON_CLASS,
         }
     ),
+    SourceReviewInvariant.EVALUATION_INDEPENDENCE: frozenset(
+        {
+            SourceReviewPassClause.EVALUATION_INDEPENDENT_RUNTIME,
+            SourceReviewPassClause.NO_EVALUATION_IDENTITY_BRANCH,
+        }
+    ),
 }
 for _invariant in SourceReviewInvariant:
     _PASS_CLAUSES_BY_INVARIANT[_invariant] = _PASS_CLAUSES_BY_INVARIANT[_invariant] | {
@@ -706,22 +770,49 @@ class SourceReviewInvariantDecision(BaseModel):
 
 
 class SourceReviewInvariantAssessment(BaseModel):
-    """Complete policy-v10 sweep; omission cannot silently clear an invariant."""
+    """Complete versioned sweep; omission cannot silently clear an invariant.
+
+    Schema v1 is the byte-compatible policy-v10-v12 I1-I7 assessment. Schema
+    v2 adds policy-v13 I8 without making stored historical findings invalid.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     decisions: Annotated[
-        list[SourceReviewInvariantDecision], Field(min_length=7, max_length=7)
+        list[SourceReviewInvariantDecision], Field(min_length=7, max_length=8)
     ]
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_schema_version(cls, value: object) -> object:
+        """Let current producers omit the version while preserving v1 inputs."""
+
+        if isinstance(value, dict) and "schema_version" not in value:
+            decisions = value.get("decisions")
+            if isinstance(decisions, list) and len(decisions) == 8:
+                return {**value, "schema_version": 2}
+        return value
 
     @model_validator(mode="after")
     def validate_complete_sweep(self) -> Self:
         invariants = [decision.invariant for decision in self.decisions]
         if len(invariants) != len(set(invariants)):
             raise ValueError("invariant decisions must be unique")
-        if set(invariants) != set(SourceReviewInvariant):
-            raise ValueError("source review must decide every policy-v10 invariant")
+        expected = (
+            set(_POLICY_V10_V12_INVARIANTS)
+            if self.schema_version == 1
+            else set(SourceReviewInvariant)
+        )
+        if set(invariants) != expected:
+            raise ValueError(
+                "source review must decide every invariant for its schema version"
+            )
+        if (
+            self.schema_version == 2
+            and sum(len(decision.summary) for decision in self.decisions) > 1_680
+        ):
+            raise ValueError("policy-v13 invariant summaries exceed bounded size")
         return self
 
 
@@ -1146,6 +1237,12 @@ class SourceReviewAdjudication(BaseModel):
         if self.decision == "reject":
             if self.reject_invariant is None:
                 raise ValueError("a reject must name the policy invariant it breached")
+            if self.reject_invariant not in source_review_invariants_for_policy(
+                self.policy_version
+            ):
+                raise ValueError(
+                    "a reject invariant is unavailable under the applied policy"
+                )
             if self.clear_clause is not None:
                 raise ValueError("a reject cannot cite a false-positive clause")
             if not self.citations:
@@ -1208,6 +1305,10 @@ class SourceReviewObservationPayload(BaseModel):
                 raise ValueError("source-review finding requires its digest")
             if self.finding.canonical_digest() != self.finding_digest:
                 raise ValueError("source-review finding does not match its digest")
+            if self.risk_level != self.finding.risk_level:
+                raise ValueError("source-review risk does not match its finding")
+            if set(self.categories) != set(self.finding.categories):
+                raise ValueError("source-review categories do not match its finding")
         if self.ok and self.risk_level is None:
             raise ValueError("successful source review requires a risk level")
         return self
@@ -1440,6 +1541,11 @@ class ScreenResultRequest(BaseModel):
         ):
             raise ValueError("passed must agree with outcome")
         if (
+            self.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+            and self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+        ):
+            raise ValueError("strict two-outcome policy cannot admit pass-inconclusive")
+        if (
             self.outcome
             in {
                 ScreenResultOutcome.QUARANTINE,
@@ -1449,10 +1555,16 @@ class ScreenResultRequest(BaseModel):
             and self.attempt_id is None
         ):
             raise ValueError("review outcome requires attempt_id")
-        if self.outcome in {
+        review_binding_required = self.outcome in {
             ScreenResultOutcome.QUARANTINE,
             ScreenResultOutcome.PASS_INCONCLUSIVE,
-        } and (self.manifest_digest is None or self.reason_code is None):
+        } or (
+            self.outcome == ScreenResultOutcome.INCONCLUSIVE
+            and self.review_audit is not None
+        )
+        if review_binding_required and (
+            self.manifest_digest is None or self.reason_code is None
+        ):
             raise ValueError("review result requires manifest_digest and reason_code")
         image_fields = (
             self.image_sha256,
@@ -1513,13 +1625,25 @@ class ScreenResultRequest(BaseModel):
                 != self.review_notes_digest
             ):
                 raise ValueError("review_notes do not match review_notes_digest")
-        if self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
-            if self.review_audit is None or self.review_audit_digest is None:
-                raise ValueError("pass-inconclusive requires review audit")
+        review_audit_allowed = (
+            self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+            or (
+                self.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                and self.outcome == ScreenResultOutcome.INCONCLUSIVE
+            )
+        )
+        if review_audit_allowed and self.review_audit is not None:
+            if self.review_audit_digest is None:
+                raise ValueError("review audit requires its digest")
             if self.review_audit.canonical_digest() != self.review_audit_digest:
                 raise ValueError("review audit does not match review_audit_digest")
+        elif self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
+            if self.review_audit is None or self.review_audit_digest is None:
+                raise ValueError("pass-inconclusive requires review audit")
         elif self.review_audit is not None or self.review_audit_digest is not None:
-            raise ValueError("review audit requires pass-inconclusive outcome")
+            raise ValueError(
+                "review audit requires a compatible inconclusive review outcome"
+            )
         if (self.adjudication is None) != (self.adjudication_digest is None):
             raise ValueError(
                 "adjudication and adjudication_digest must travel together"
