@@ -567,6 +567,33 @@ class TestV9ConfirmationExecution:
         assert report.longmemeval == _prepared(job).longmemeval
         _assert_score_lanes_untouched(platform)
 
+    async def test_diagnostics_telemetry_failure_never_fails_the_completed_run(
+        self,
+    ) -> None:
+        worker, platform, dittobench, _ = _worker(capacity=1)
+        worker._telemetry = MagicMock()
+        worker._telemetry.record_confirmation_longmem_diagnostics.side_effect = (
+            RuntimeError("wandb down")
+        )
+        job = _job("longmem-0")
+        platform.request_v9_confirmation_job.return_value = job
+        platform.get_v9_confirmation_artifact.return_value = _artifact(job)
+        dittobench.execute_v9_confirmation.return_value = _result().model_copy(
+            update={
+                "longmem_diagnostics": V9ConfirmationLongMemDiagnostics(
+                    received_failures=48,
+                    received_failure_kinds={"http_status_503": 48},
+                )
+            }
+        )
+
+        await worker._run_v9_confirmation_lane()
+
+        worker._telemetry.record_confirmation_longmem_diagnostics.assert_called_once()
+        platform.submit_v9_confirmation_report.assert_awaited_once()
+        platform.fail_v9_confirmation_job.assert_not_awaited()
+        _assert_score_lanes_untouched(platform)
+
     async def test_runs_without_received_failures_publish_no_diagnostics(
         self,
     ) -> None:

@@ -1708,20 +1708,28 @@ class ValidatorWorker:
             diagnostics.received_failure_reader_attempts,
             diagnostics.received_failure_embedding_dispatches,
         )
-        self._telemetry.record_confirmation_longmem_diagnostics(
-            ConfirmationLongMemDiagnosticsStat(
-                bundle_id=str(job.bundle_id),
-                case_count=case_total,
-                received_failures=diagnostics.received_failures,
-                received_failure_kinds=kinds,
-                received_failure_reader_attempts=(
-                    diagnostics.received_failure_reader_attempts
-                ),
-                received_failure_embedding_dispatches=(
-                    diagnostics.received_failure_embedding_dispatches
-                ),
+        try:
+            self._telemetry.record_confirmation_longmem_diagnostics(
+                ConfirmationLongMemDiagnosticsStat(
+                    bundle_id=str(job.bundle_id),
+                    case_count=case_total,
+                    received_failures=diagnostics.received_failures,
+                    received_failure_kinds=kinds,
+                    received_failure_reader_attempts=(
+                        diagnostics.received_failure_reader_attempts
+                    ),
+                    received_failure_embedding_dispatches=(
+                        diagnostics.received_failure_embedding_dispatches
+                    ),
+                )
             )
-        )
+        except Exception as telemetry_error:  # noqa: BLE001 - never break a slot
+            # A completed run must never be handed back as execution_failed
+            # because its observational side channel could not be published.
+            logger.warning(
+                "confirmation diagnostics telemetry failed (continuing): %s",
+                telemetry_error,
+            )
 
     def _record_confirmation_failure(
         self,
