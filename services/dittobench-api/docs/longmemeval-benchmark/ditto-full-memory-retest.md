@@ -7,6 +7,10 @@ methodology; raw answers, internal tool transcripts, fixture dumps, credentials,
 and provider generation IDs stay in the private evidence workspace. No result
 is implied by this protocol. Publish a completed audit before quoting a score.
 
+The backend preparation and baseline implementation is tracked in
+[backend PR #2679](https://github.com/ditto-assistant/backend/pull/2679).
+PR publication does not mean the retest is complete, merged, or deployed.
+
 ## Why retest
 
 The historical isolated-user measurement reported 448/500 (89.6%) with Gemini
@@ -56,11 +60,13 @@ occurrences and 484 questions. Five of those occurrences are answer-bearing
 sessions; an answer-session flag is diagnostic only, never permission to omit
 other histories.
 
-The same audit found 23,350 pairs with the wrong per-occurrence session date,
-across 4,651 session occurrences and 482 questions, among 23,867 total session
+The strict exact-date audit found 23,363 pairs with the wrong per-occurrence
+session date, across 4,653 session occurrences and 482 questions, among 23,867 total session
 occurrences. Eight affected answer-session occurrences span five questions.
 The defect reused a date associated with a shared session ID rather than each
 question's specific session occurrence.
+This supersedes the earlier 23,350-pair/4,651-occurrence count, which permitted
+13 small positive timestamp offsets instead of requiring exact dataset dates.
 
 The new fixture must restore those assistant-first turns and each occurrence's
 actual dataset date, then run dreaming afresh. Summaries already generated from
