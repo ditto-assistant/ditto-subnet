@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.258.0 (2026-09-12)
+
+### Features
+
+- **screener**: Restructure policy v13 as a strict two-outcome contract
+  ([`cd1ae1a`](https://github.com/ditto-assistant/ditto-subnet/commit/cd1ae1ae180c2ab61e5bf9a7bd9e3c411c0366c0))
+
+
 ## v0.257.2 (2026-09-11)
 
 ### Bug Fixes
