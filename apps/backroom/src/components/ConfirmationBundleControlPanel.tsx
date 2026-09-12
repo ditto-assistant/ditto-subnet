@@ -172,6 +172,17 @@ export function ConfirmationBundleControlPanel({
             </div>
             <Status>{control.effective.issuance_active ? control.effective.settings.mode : 'off'}</Status>
           </div>
+          {control.effective.profile_installed === false && control.effective.settings.mode !== 'off' && (
+            <p className="mt-3 text-xs text-[var(--amber)]" role="status">
+              Pinned profile {control.effective.settings.profile_revision} is not installed in the running
+              Platform release, so no confirmation work can issue. Installed:{' '}
+              {(control.effective.installed_profiles ?? []).length === 0
+                ? 'none'
+                : (control.effective.installed_profiles ?? [])
+                    .map((profile) => `${profile.revision} · ${profile.checksum.slice(0, 8)}`)
+                    .join(', ')}
+            </p>
+          )}
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Field label="Mode">

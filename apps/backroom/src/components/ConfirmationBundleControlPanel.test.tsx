@@ -445,6 +445,34 @@ describe('ConfirmationBundleControlPanel', () => {
     expect(screen.getByText(/cannot submit evidence or activate rewards/)).toBeTruthy()
   })
 
+  it('names the installed profiles when the pinned identity is not installed', () => {
+    const settings = control()
+    const uninstalled = {
+      ...settings,
+      effective: {
+        ...settings.effective,
+        profile_installed: false,
+        installed_profiles: [
+          {
+            revision: 'v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8',
+            checksum: '8e5be01e3efd17dbf6cc21e79b9d53d82d842b1563d403b0318f2a272d6297af',
+          },
+        ],
+        issuance_active: false,
+      },
+    }
+    render(<ConfirmationBundleControlPanel initialSettings={uninstalled} initialBundles={listing()} readOnly />)
+
+    const notice = screen.getByRole('status')
+    expect(notice.textContent).toContain(`Pinned profile ${SETTINGS.profile_revision} is not installed`)
+    expect(notice.textContent).toContain('v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8 · 8e5be01e')
+  })
+
+  it('shows no installation notice when the pinned profile is installed', () => {
+    render(<ConfirmationBundleControlPanel initialSettings={control()} initialBundles={listing()} readOnly />)
+    expect(screen.queryByText(/is not installed in the running Platform release/)).toBeNull()
+  })
+
   it('keeps every policy mutation disabled for read-only operators', () => {
     render(<ConfirmationBundleControlPanel initialSettings={control()} initialBundles={listing()} readOnly />)
 

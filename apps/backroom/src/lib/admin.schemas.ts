@@ -2352,8 +2352,13 @@ export const confirmationBundleSettingsControlSchema = z
         path: ['effective', 'configured'],
       })
     }
+    // A Platform that reports profile_installed also folds it into
+    // issuance_active: a pinned identity this release did not install never
+    // issues. Older Platforms omit the field and keep the mode/profile rule.
     const expectedActive =
-      control.effective.settings.mode !== 'off' && expectedConfigured
+      control.effective.settings.mode !== 'off' &&
+      expectedConfigured &&
+      (control.effective.profile_installed ?? true)
     if (control.effective.issuance_active !== expectedActive) {
       context.addIssue({
         code: 'custom',

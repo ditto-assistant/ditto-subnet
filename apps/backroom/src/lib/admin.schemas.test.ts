@@ -1070,6 +1070,48 @@ describe('Bench v9 confirmation bundle schemas', () => {
     expect(parsed.effective.installed_profiles).toBeUndefined()
   })
 
+  it('parses the pinned-but-uninstalled shape: shadow, configured, inactive', () => {
+    // Production revision 39 pinned v7 after the release moved to v8.
+    const control = confirmationSettingsControl()
+    const parsed = confirmationBundleSettingsControlSchema.parse({
+      ...control,
+      effective: {
+        ...control.effective,
+        profile_installed: false,
+        installed_profiles: [
+          {
+            revision: 'v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8',
+            checksum: '8e5be01e3efd17dbf6cc21e79b9d53d82d842b1563d403b0318f2a272d6297af',
+          },
+        ],
+        issuance_active: false,
+      },
+    })
+    expect(parsed.effective.configured).toBe(true)
+    expect(parsed.effective.profile_installed).toBe(false)
+    expect(parsed.effective.issuance_active).toBe(false)
+  })
+
+  it('rejects issuance_active=true when the pinned profile is not installed', () => {
+    const control = confirmationSettingsControl()
+    expect(() =>
+      confirmationBundleSettingsControlSchema.parse({
+        ...control,
+        effective: { ...control.effective, profile_installed: false, issuance_active: true },
+      }),
+    ).toThrow(/issuance_active contradicts/)
+  })
+
+  it('rejects issuance_active=false when the pinned profile is installed and mode is on', () => {
+    const control = confirmationSettingsControl()
+    expect(() =>
+      confirmationBundleSettingsControlSchema.parse({
+        ...control,
+        effective: { ...control.effective, profile_installed: true, issuance_active: false },
+      }),
+    ).toThrow(/issuance_active contradicts/)
+  })
+
   it('rejects an installed profile identity without a canonical checksum', () => {
     const control = confirmationSettingsControl()
     expect(() =>
