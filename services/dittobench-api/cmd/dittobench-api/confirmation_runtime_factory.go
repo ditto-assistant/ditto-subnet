@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -354,6 +355,7 @@ func (h *confirmationLongMemHarness) Run(
 	}
 	defer stopTool()
 	response, runErr := h.harness.Run(ctx, request)
+	h.logReceivedFailureTailLocked(ctx, runErr)
 	snapshot, snapshotErr := h.finishCaseLocked()
 	if snapshotErr != nil {
 		return protocol.RunResponse{}, snapshotErr
@@ -374,6 +376,31 @@ func (h *confirmationLongMemHarness) Run(
 		EmbeddingInFlight:      snapshot.EmbeddingInFlight,
 		EmbeddingCancellations: snapshot.EmbeddingCancellations,
 	})
+}
+
+// logReceivedFailureTailLocked keeps the harness's own explanation of an
+// unjudgeable /run response on the validator host. The case container is
+// stopped by finishCaseLocked immediately afterwards, so this is the only
+// moment its merged stdout+stderr still exists. The tail is bounded and
+// redacted by the sandbox and stays in the local scorer log: it never enters
+// evidence, telemetry, or a Platform report.
+func (h *confirmationLongMemHarness) logReceivedFailureTailLocked(ctx context.Context, runErr error) {
+	var caseFailure *longmemeval.HarnessCaseFailure
+	if runErr == nil || !errors.As(runErr, &caseFailure) || h.current == nil || nilInterface(h.sandbox) {
+		return
+	}
+	tail := strings.TrimSpace(h.sandbox.Logs(ctx, h.current))
+	if tail == "" {
+		log.Printf(
+			"confirmation LongMem harness returned an unjudgeable /run response (kind=%s status=%d); no container log tail",
+			caseFailure.Kind, caseFailure.StatusCode,
+		)
+		return
+	}
+	log.Printf(
+		"confirmation LongMem harness returned an unjudgeable /run response (kind=%s status=%d); container log tail:\n%s",
+		caseFailure.Kind, caseFailure.StatusCode, tail,
+	)
 }
 
 func (h *confirmationLongMemHarness) Close() error {

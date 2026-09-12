@@ -57,6 +57,80 @@ type Executor struct {
 type ExecutionResult struct {
 	Evidence  Evidence `json:"evidence"`
 	selection Selection
+	// Diagnostics is scorer-owned context about received harness case
+	// failures. It is not evidence: it never enters the signed root or the
+	// native wire digest and it carries no bodies, identities, or exception
+	// text. It exists so a completed official zero can still say which
+	// boundary the submitted harness failed at instead of reading like an
+	// execution outage. Excluded from the result's JSON so the marshaled
+	// result stays evidence-only; the confirmation executor copies it onto its
+	// own unsigned side channel.
+	Diagnostics ExecutionDiagnostics `json:"-"`
+}
+
+// ExecutionDiagnostics reduces every received HarnessCaseFailure of one run to
+// allowlisted, low-cardinality counters.
+type ExecutionDiagnostics struct {
+	// ReceivedFailures counts selected cases whose /run response was received
+	// but unjudgeable (non-2xx, malformed JSON, or missing final_text).
+	ReceivedFailures int `json:"received_failures"`
+	// ReceivedFailureKinds histograms those failures by receivedFailureKindKey
+	// (for example http_status_503 or missing_final_text).
+	ReceivedFailureKinds map[string]int `json:"received_failure_kinds,omitempty"`
+	// ReceivedFailureReaderAttempts sums the trusted broker's reader attempts
+	// observed inside the failed cases: zero means the harness never tried the
+	// frozen reader before answering.
+	ReceivedFailureReaderAttempts uint64 `json:"received_failure_reader_attempts"`
+	// ReceivedFailureEmbeddingDispatches sums the embedding dispatches the
+	// broker admitted inside the failed cases.
+	ReceivedFailureEmbeddingDispatches uint64 `json:"received_failure_embedding_dispatches"`
+}
+
+// receivedFailureStatusBuckets are the exact HTTP statuses a diagnostics key
+// may name; anything else collapses into its class so the histogram stays
+// bounded regardless of what the submitted harness returns.
+var receivedFailureStatusBuckets = map[int]struct{}{
+	400: {}, 401: {}, 403: {}, 404: {}, 405: {}, 408: {}, 409: {}, 413: {}, 415: {},
+	422: {}, 429: {}, 500: {}, 501: {}, 502: {}, 503: {}, 504: {},
+}
+
+// receivedFailureKindKey maps one received HarnessCaseFailure to its allowlisted
+// histogram key.
+func receivedFailureKindKey(failure *HarnessCaseFailure) string {
+	if failure == nil {
+		return "other"
+	}
+	switch failure.Kind {
+	case "malformed_json", "missing_final_text":
+		return failure.Kind
+	case "http_status":
+		status := failure.StatusCode
+		if _, exact := receivedFailureStatusBuckets[status]; exact {
+			return fmt.Sprintf("http_status_%d", status)
+		}
+		switch {
+		case status >= 400 && status < 500:
+			return "http_status_4xx"
+		case status >= 500 && status < 600:
+			return "http_status_5xx"
+		default:
+			return "http_status_other"
+		}
+	default:
+		return "other"
+	}
+}
+
+func (d *ExecutionDiagnostics) recordReceivedFailure(failure *HarnessCaseFailure) {
+	d.ReceivedFailures++
+	if d.ReceivedFailureKinds == nil {
+		d.ReceivedFailureKinds = make(map[string]int)
+	}
+	d.ReceivedFailureKinds[receivedFailureKindKey(failure)]++
+	if failure != nil && failure.activity != nil {
+		d.ReceivedFailureReaderAttempts += failure.activity.ReaderAttempts
+		d.ReceivedFailureEmbeddingDispatches += failure.activity.EmbeddingDispatches
+	}
 }
 
 func (r ExecutionResult) Validate(profile Profile) error {
@@ -105,6 +179,7 @@ func (e Executor) Execute(
 
 	outcomes := make([]Outcome, 0, len(projected))
 	receivedFailures := 0
+	var diagnostics ExecutionDiagnostics
 	if e.OnCase != nil {
 		e.OnCase(0, len(projected))
 	}
@@ -171,6 +246,7 @@ func (e Executor) Execute(
 			current = next
 			outcomes = append(outcomes, Outcome{QuestionID: item.questionID, Correct: false})
 			receivedFailures++
+			diagnostics.recordReceivedFailure(caseFailure)
 			if e.OnCase != nil {
 				e.OnCase(len(outcomes), len(projected))
 			}
@@ -259,7 +335,7 @@ func (e Executor) Execute(
 	if err != nil {
 		return ExecutionResult{}, err
 	}
-	return ExecutionResult{Evidence: evidence, selection: dataset.Selection}, nil
+	return ExecutionResult{Evidence: evidence, selection: dataset.Selection, Diagnostics: diagnostics}, nil
 }
 
 // validEmbeddingOnlyCaseActivity is the narrow Rev14 attribution boundary.

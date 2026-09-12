@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"reflect"
 	"sort"
@@ -696,6 +697,21 @@ func executeTrustedConfirmationDimensions(
 		)
 	}
 	result.EvidenceSHA256 = wireDigest
+	if longMemResult.Diagnostics.ReceivedFailures > 0 {
+		// Attached after the digest on purpose: the digest covers exactly the
+		// three dimensions and the coordinator latency, and this must stay a
+		// side channel the Platform never verifies or scores.
+		diagnostics := longMemResult.Diagnostics
+		result.LongMemDiagnostics = &diagnostics
+		log.Printf(
+			"confirmation LongMemEval received harness failures: bundle_id=%s agent_id=%s slot_id=%s "+
+				"received_failures=%d of %d kinds=%v reader_attempts=%d embedding_dispatches=%d",
+			request.BundleID, request.AgentID, request.SlotID,
+			diagnostics.ReceivedFailures, longMemResult.Evidence.Score.CaseCount,
+			diagnostics.ReceivedFailureKinds, diagnostics.ReceivedFailureReaderAttempts,
+			diagnostics.ReceivedFailureEmbeddingDispatches,
+		)
+	}
 	return result, nil
 }
 

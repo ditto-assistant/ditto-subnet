@@ -54,6 +54,7 @@ from ditto.api_models.validator_capabilities import (
 from ditto.api_models.validator_confirmation import (
     V9ConfirmationCompletionReport,
     V9ConfirmationJobResponse,
+    V9ConfirmationLongMemDiagnostics,
     V9ConfirmationScorerReadiness,
 )
 from ditto.chain import ChainError
@@ -97,6 +98,7 @@ from ditto.validator.stack_identity import (
 )
 from ditto.validator.telemetry import (
     ConfirmationFailureStat,
+    ConfirmationLongMemDiagnosticsStat,
     ScoredAgentStat,
     SweepStats,
     TelemetryConfig,
@@ -1680,6 +1682,47 @@ class ValidatorWorker:
         progress = self._confirmation_progress.get(slot_id)
         return progress.stage if progress is not None else "unknown"
 
+    def _record_confirmation_longmem_diagnostics(
+        self,
+        job: V9ConfirmationJobResponse,
+        diagnostics: V9ConfirmationLongMemDiagnostics | None,
+        case_total: int,
+    ) -> None:
+        """Surface received harness failures behind a completed LongMem run.
+
+        The signed evidence for such a run is an official zero that Platform
+        cannot distinguish from an execution outage; the scorer's allowlisted
+        histogram is the only place that says which boundary the submitted
+        harness failed at. Observational only: it never changes the report.
+        """
+        if diagnostics is None or diagnostics.received_failures <= 0:
+            return
+        kinds = dict(sorted(diagnostics.received_failure_kinds.items()))
+        logger.warning(
+            "v9 confirmation bundle %s: %d/%d LongMem cases were received harness "
+            "failures kinds=%s reader_attempts=%d embedding_dispatches=%d",
+            job.bundle_id,
+            diagnostics.received_failures,
+            case_total,
+            kinds,
+            diagnostics.received_failure_reader_attempts,
+            diagnostics.received_failure_embedding_dispatches,
+        )
+        self._telemetry.record_confirmation_longmem_diagnostics(
+            ConfirmationLongMemDiagnosticsStat(
+                bundle_id=str(job.bundle_id),
+                case_count=case_total,
+                received_failures=diagnostics.received_failures,
+                received_failure_kinds=kinds,
+                received_failure_reader_attempts=(
+                    diagnostics.received_failure_reader_attempts
+                ),
+                received_failure_embedding_dispatches=(
+                    diagnostics.received_failure_embedding_dispatches
+                ),
+            )
+        )
+
     def _record_confirmation_failure(
         self,
         error: BaseException,
@@ -2279,6 +2322,9 @@ class ValidatorWorker:
                     raise LeaseDeadlineError(
                         "v9 confirmation execution finished after its ticket deadline"
                     )
+                self._record_confirmation_longmem_diagnostics(
+                    job, result.longmem_diagnostics, case_total
+                )
                 await self._publish_confirmation_progress(
                     job,
                     "finalizing",

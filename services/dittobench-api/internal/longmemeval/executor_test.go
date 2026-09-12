@@ -247,12 +247,22 @@ func TestExecutorScoresOneReceivedUnjudgeableRunAsIncorrectAndContinues(t *testi
 	if len(judge.inputs) != 11 || base.runs != 12 {
 		t.Fatalf("runs/judges=%d/%d, want 12/11", base.runs, len(judge.inputs))
 	}
+	if want := (ExecutionDiagnostics{
+		ReceivedFailures:              1,
+		ReceivedFailureKinds:          map[string]int{"http_status_500": 1},
+		ReceivedFailureReaderAttempts: 1,
+	}); !reflect.DeepEqual(result.Diagnostics, want) {
+		t.Fatalf("diagnostics=%#v, want %#v", result.Diagnostics, want)
+	}
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(encoded, []byte("private-failure")) || bytes.Contains(encoded, []byte("opaque case")) {
 		t.Fatalf("private harness failure leaked into evidence: %s", encoded)
+	}
+	if bytes.Contains(encoded, []byte("received_failure")) {
+		t.Fatalf("diagnostics leaked into the marshaled result: %s", encoded)
 	}
 	if err := result.Validate(profile); err != nil {
 		t.Fatalf("case-local miss produced invalid evidence: %v", err)
@@ -319,6 +329,13 @@ func TestExecutorScoresEmbeddingBackedReceivedRunFailureAsIncorrectAndContinues(
 	}
 	if harness.runCalls != 12 || base.runs != 11 || len(judge.inputs) != 11 {
 		t.Fatalf("runs/base/judges=%d/%d/%d, want 12/11/11", harness.runCalls, base.runs, len(judge.inputs))
+	}
+	if want := (ExecutionDiagnostics{
+		ReceivedFailures:                   1,
+		ReceivedFailureKinds:               map[string]int{"http_status_500": 1},
+		ReceivedFailureEmbeddingDispatches: 1,
+	}); !reflect.DeepEqual(result.Diagnostics, want) {
+		t.Fatalf("diagnostics=%#v, want %#v", result.Diagnostics, want)
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil {
@@ -453,6 +470,16 @@ func TestExecutorProducesOfficialZeroOnlyForAllReceivedEmbeddingBackedFailures(t
 	if result.Evidence.Score.CaseCount != 12 || !zeroScore(result.Evidence.Score) || len(judge.inputs) != 0 {
 		t.Fatalf("official zero score=%#v judges=%d", result.Evidence.Score, len(judge.inputs))
 	}
+	// The official zero is indistinguishable from an execution outage on the
+	// evidence alone; the diagnostics must say every case was a received
+	// failure of one kind with no reader attempt.
+	if want := (ExecutionDiagnostics{
+		ReceivedFailures:                   12,
+		ReceivedFailureKinds:               map[string]int{"http_status_500": 12},
+		ReceivedFailureEmbeddingDispatches: 12,
+	}); !reflect.DeepEqual(result.Diagnostics, want) {
+		t.Fatalf("diagnostics=%#v, want %#v", result.Diagnostics, want)
+	}
 	for _, row := range result.Evidence.ProviderEvidence {
 		if !zeroProviderCounters(row) || row.ReceiptSetSHA256 != "" {
 			t.Fatalf("nonzero provider row: %#v", row)
@@ -466,6 +493,42 @@ func TestExecutorProducesOfficialZeroOnlyForAllReceivedEmbeddingBackedFailures(t
 		result.Evidence.Score, result.Evidence.ProviderEvidence,
 	); err == nil {
 		t.Fatal("ordinary evidence constructor accepted zero-provider producer input")
+	}
+}
+
+func TestReceivedFailureKindKeyIsAnAllowlist(t *testing.T) {
+	for _, testCase := range []struct {
+		failure *HarnessCaseFailure
+		want    string
+	}{
+		{failure: nil, want: "other"},
+		{failure: &HarnessCaseFailure{Kind: "missing_final_text"}, want: "missing_final_text"},
+		{failure: &HarnessCaseFailure{Kind: "malformed_json", StatusCode: 200}, want: "malformed_json"},
+		{failure: &HarnessCaseFailure{Kind: "http_status", StatusCode: 503}, want: "http_status_503"},
+		{failure: &HarnessCaseFailure{Kind: "http_status", StatusCode: 422}, want: "http_status_422"},
+		{failure: &HarnessCaseFailure{Kind: "http_status", StatusCode: 418}, want: "http_status_4xx"},
+		{failure: &HarnessCaseFailure{Kind: "http_status", StatusCode: 599}, want: "http_status_5xx"},
+		{failure: &HarnessCaseFailure{Kind: "http_status", StatusCode: 302}, want: "http_status_other"},
+		{failure: &HarnessCaseFailure{Kind: "http_status", StatusCode: 0}, want: "http_status_other"},
+		{failure: &HarnessCaseFailure{Kind: "submitted.invalid detail", StatusCode: 500}, want: "other"},
+	} {
+		if got := receivedFailureKindKey(testCase.failure); got != testCase.want {
+			t.Fatalf("kind key for %#v = %q, want %q", testCase.failure, got, testCase.want)
+		}
+	}
+	var diagnostics ExecutionDiagnostics
+	diagnostics.recordReceivedFailure(nil)
+	diagnostics.recordReceivedFailure(BindTrustedCaseInferenceActivity(
+		&HarnessCaseFailure{Kind: "http_status", StatusCode: 503, received: true},
+		TrustedCaseInferenceActivity{ReaderAttempts: 2, EmbeddingDispatches: 3},
+	).(*HarnessCaseFailure))
+	if want := (ExecutionDiagnostics{
+		ReceivedFailures:                   2,
+		ReceivedFailureKinds:               map[string]int{"other": 1, "http_status_503": 1},
+		ReceivedFailureReaderAttempts:      2,
+		ReceivedFailureEmbeddingDispatches: 3,
+	}); !reflect.DeepEqual(diagnostics, want) {
+		t.Fatalf("diagnostics=%#v, want %#v", diagnostics, want)
 	}
 }
 

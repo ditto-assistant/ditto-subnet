@@ -18,6 +18,7 @@ from ditto.api_models.validator import CaseScore, ScoreReport
 from ditto.validator.errors import DittobenchError, SandboxOomError
 from ditto.validator.telemetry import (
     ConfirmationFailureStat,
+    ConfirmationLongMemDiagnosticsStat,
     SweepStats,
     TelemetryConfig,
     ValidatorTelemetry,
@@ -364,6 +365,87 @@ class TestConfirmationFailureTelemetry:
                 hand_back_reason="deadline",
             )
         )
+
+
+class TestConfirmationLongMemDiagnosticsTelemetry:
+    """A completed official zero must still say which boundary the harness failed at."""
+
+    def _stat(self, **overrides: object) -> ConfirmationLongMemDiagnosticsStat:
+        base: dict[str, object] = {
+            "bundle_id": "85447c2e-27fe-4263-9f7a-f07049dabcb1",
+            "case_count": 48,
+            "received_failures": 48,
+            "received_failure_kinds": {"http_status_503": 48},
+            "received_failure_reader_attempts": 0,
+            "received_failure_embedding_dispatches": 48,
+        }
+        base.update(overrides)
+        return ConfirmationLongMemDiagnosticsStat(**base)  # type: ignore[arg-type]
+
+    def test_disabled_sink_is_a_no_op(self) -> None:
+        telemetry = ValidatorTelemetry(
+            TelemetryConfig(mode="disabled", project="p", entity=None, run_name=None),
+            validator_hotkey=_VALIDATOR,
+            netuid=118,
+        )
+        telemetry.record_confirmation_longmem_diagnostics(self._stat())
+
+    def test_publishes_counts_and_allowlisted_kind_metrics(self) -> None:
+        logged: list[dict[str, object]] = []
+        telemetry = ValidatorTelemetry(
+            TelemetryConfig(mode="disabled", project="p", entity=None, run_name=None),
+            validator_hotkey=_VALIDATOR,
+            netuid=118,
+        )
+        telemetry._run = SimpleNamespace()
+        telemetry._wandb = SimpleNamespace(
+            log=lambda payload, **_kwargs: logged.append(payload)
+        )
+
+        telemetry.record_confirmation_longmem_diagnostics(
+            self._stat(
+                received_failure_kinds={
+                    "http_status_503": 47,
+                    "missing_final_text": 1,
+                    # Never minted by the scorer; must not become a metric name.
+                    "Bad Kind/With Slash": 1,
+                }
+            )
+        )
+
+        assert len(logged) == 1
+        payload = logged[0]
+        assert payload["confirmation/longmem_bundle_id"] == (
+            "85447c2e-27fe-4263-9f7a-f07049dabcb1"
+        )
+        assert payload["confirmation/longmem_case_count"] == 48
+        assert payload["confirmation/longmem_received_failures"] == 48
+        assert payload["confirmation/longmem_received_failure_reader_attempts"] == 0
+        assert (
+            payload["confirmation/longmem_received_failure_embedding_dispatches"] == 48
+        )
+        assert (
+            payload["confirmation/longmem_received_failure_kinds/http_status_503"] == 47
+        )
+        assert (
+            payload["confirmation/longmem_received_failure_kinds/missing_final_text"]
+            == 1
+        )
+        assert not any("Bad Kind" in key for key in payload)
+
+    def test_a_logging_failure_never_propagates(self) -> None:
+        def boom(_payload: object, **_kwargs: object) -> None:
+            raise RuntimeError("wandb down")
+
+        telemetry = ValidatorTelemetry(
+            TelemetryConfig(mode="disabled", project="p", entity=None, run_name=None),
+            validator_hotkey=_VALIDATOR,
+            netuid=118,
+        )
+        telemetry._run = SimpleNamespace()
+        telemetry._wandb = SimpleNamespace(log=boom)
+
+        telemetry.record_confirmation_longmem_diagnostics(self._stat())
 
 
 class TestConfirmationFailureClass:

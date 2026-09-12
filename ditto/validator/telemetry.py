@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -81,6 +83,27 @@ class ScoredAgentStat:
     observed_tool_cases: int = 0
     capped_tool_cases: int = 0
     isolation_cases: int = 0
+
+
+# Diagnostic kinds are minted by the scorer's allowlist (http_status_503,
+# missing_final_text, ...); this only guards the metric-name shape.
+_CONFIRMATION_DIAGNOSTIC_KIND = re.compile(r"[a-z0-9_]{1,40}")
+
+
+@dataclass(frozen=True)
+class ConfirmationLongMemDiagnosticsStat:
+    """One completed LongMem bundle's received-failure histogram.
+
+    Mirrors the scorer's allowlisted ``longmem_diagnostics``: counts only, no
+    bodies, identities, or exception text. Purely observational.
+    """
+
+    bundle_id: str
+    case_count: int
+    received_failures: int
+    received_failure_kinds: Mapping[str, int]
+    received_failure_reader_attempts: int
+    received_failure_embedding_dispatches: int
 
 
 @dataclass(frozen=True)
@@ -259,6 +282,50 @@ class ValidatorTelemetry:
             self._log_confirmation_failure(stat)
         except Exception as e:  # noqa: BLE001 - telemetry must never break scoring
             logger.warning("wandb confirmation log failed (continuing): %s", e)
+
+    def record_confirmation_longmem_diagnostics(
+        self, stat: ConfirmationLongMemDiagnosticsStat
+    ) -> None:
+        """Log one completed bundle's received-failure histogram. Swallows errors.
+
+        A bundle that completes as an official zero because every ``/run``
+        returned an unjudgeable response looks, from Platform, exactly like an
+        execution outage. This is the only fleet-wide signal saying which
+        boundary the submitted harness failed at and whether it ever attempted
+        the frozen reader.
+        """
+        if self._run is None:
+            return
+        try:
+            self._log_confirmation_longmem_diagnostics(stat)
+        except Exception as e:  # noqa: BLE001 - telemetry must never break scoring
+            logger.warning(
+                "wandb confirmation diagnostics log failed (continuing): %s", e
+            )
+
+    def _log_confirmation_longmem_diagnostics(
+        self, stat: ConfirmationLongMemDiagnosticsStat
+    ) -> None:
+        wandb = self._wandb
+        payload: dict[str, Any] = {
+            "confirmation/longmem_bundle_id": stat.bundle_id,
+            "confirmation/longmem_case_count": stat.case_count,
+            "confirmation/longmem_received_failures": stat.received_failures,
+            "confirmation/longmem_received_failure_reader_attempts": (
+                stat.received_failure_reader_attempts
+            ),
+            "confirmation/longmem_received_failure_embedding_dispatches": (
+                stat.received_failure_embedding_dispatches
+            ),
+        }
+        for kind, count in sorted(stat.received_failure_kinds.items()):
+            if _CONFIRMATION_DIAGNOSTIC_KIND.fullmatch(kind) is None:
+                # The scorer allowlists kinds; refuse to mint a metric name from
+                # anything that does not look like one.
+                continue
+            payload[f"confirmation/longmem_received_failure_kinds/{kind}"] = count
+        wandb.log(payload, step=self._step)
+        self._step += 1
 
     def _log_confirmation_failure(self, stat: ConfirmationFailureStat) -> None:
         wandb = self._wandb

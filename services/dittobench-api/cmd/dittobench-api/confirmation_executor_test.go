@@ -1065,6 +1065,34 @@ func TestConfirmationDimensionWrapperAndWireDigestAreStrict(t *testing.T) {
 	if got != want {
 		t.Fatalf("wire digest = %s, want %s", got, want)
 	}
+	// Diagnostics are an unsigned side channel: they must neither move the
+	// digest nor appear on the wire when there were no received failures.
+	plain, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "longmem_diagnostics") {
+		t.Fatalf("empty diagnostics serialized: %s", plain)
+	}
+	result.LongMemDiagnostics = &longmemeval.ExecutionDiagnostics{
+		ReceivedFailures:                   48,
+		ReceivedFailureKinds:               map[string]int{"http_status_503": 48},
+		ReceivedFailureEmbeddingDispatches: 48,
+	}
+	withDiagnostics, err := confirmationWireSHA256(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withDiagnostics != want {
+		t.Fatalf("diagnostics changed the wire digest: %s", withDiagnostics)
+	}
+	annotated, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(annotated), `"longmem_diagnostics":{"received_failures":48,"received_failure_kinds":{"http_status_503":48},"received_failure_reader_attempts":0,"received_failure_embedding_dispatches":48}`) {
+		t.Fatalf("diagnostics wire = %s", annotated)
+	}
 	for _, hostile := range []string{
 		`{"go_evidence_sha256":"` + digest + `","latency_ms":19,"evidence":{"value":7},"extra":true}`,
 		`{"go_evidence_sha256":"` + digest + `","latency_ms":19,"latency_ms":20,"evidence":{"value":7}}`,

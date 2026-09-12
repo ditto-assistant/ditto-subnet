@@ -22,6 +22,7 @@ from ditto.api_models.validator_confirmation import (
     ConfirmationBundleMode,
     ConfirmationExecutionProfile,
     V9ConfirmationJobResponse,
+    V9ConfirmationLongMemDiagnostics,
     V9ConfirmationPreparedReport,
     V9ConfirmationScorerReadiness,
     V9ConfirmationScorerResult,
@@ -33,6 +34,7 @@ from ditto.validator.errors import (
     PlatformError,
     ValidatorInfrastructureError,
 )
+from ditto.validator.telemetry import ConfirmationLongMemDiagnosticsStat
 from ditto.validator.worker import ValidatorWorker
 from ditto_screening_protocol.confirmation import CAPABILITY_ORDER
 
@@ -521,6 +523,74 @@ class TestV9ConfirmationExecution:
         platform.fail_v9_confirmation_job.assert_not_awaited()
         _assert_score_lanes_untouched(platform)
 
+    async def test_received_failure_diagnostics_are_logged_and_published(
+        self,
+    ) -> None:
+        """A completed official zero must not read like an execution outage.
+
+        The scorer attaches an allowlisted histogram when /run responses were
+        received but unjudgeable; the worker forwards it to telemetry and
+        leaves the signed report untouched.
+        """
+        worker, platform, dittobench, _ = _worker(capacity=1)
+        worker._telemetry = MagicMock()
+        job = _job("longmem-0")
+        platform.request_v9_confirmation_job.return_value = job
+        platform.get_v9_confirmation_artifact.return_value = _artifact(job)
+        dittobench.execute_v9_confirmation.return_value = _result().model_copy(
+            update={
+                "longmem_diagnostics": V9ConfirmationLongMemDiagnostics(
+                    received_failures=48,
+                    received_failure_kinds={"http_status_503": 47, "other": 1},
+                    received_failure_reader_attempts=0,
+                    received_failure_embedding_dispatches=48,
+                )
+            }
+        )
+
+        await worker._run_v9_confirmation_lane()
+
+        record = worker._telemetry.record_confirmation_longmem_diagnostics
+        record.assert_called_once()
+        (stat,) = record.call_args.args
+        assert isinstance(stat, ConfirmationLongMemDiagnosticsStat)
+        assert stat.bundle_id == str(job.bundle_id)
+        per_capability = job.execution_profile.longmem_cases_per_capability
+        assert stat.case_count == per_capability * len(CAPABILITY_ORDER)
+        assert stat.received_failures == 48
+        assert dict(stat.received_failure_kinds) == {"http_status_503": 47, "other": 1}
+        assert stat.received_failure_reader_attempts == 0
+        assert stat.received_failure_embedding_dispatches == 48
+        # Observational only: the exact signed report still ships.
+        platform.submit_v9_confirmation_report.assert_awaited_once()
+        _, report = platform.submit_v9_confirmation_report.await_args.args
+        assert report.longmemeval == _prepared(job).longmemeval
+        _assert_score_lanes_untouched(platform)
+
+    async def test_runs_without_received_failures_publish_no_diagnostics(
+        self,
+    ) -> None:
+        worker, platform, dittobench, _ = _worker(capacity=1)
+        worker._telemetry = MagicMock()
+        job = _job("longmem-0")
+        platform.request_v9_confirmation_job.return_value = job
+        platform.get_v9_confirmation_artifact.return_value = _artifact(job)
+        assert _result().longmem_diagnostics is None
+
+        await worker._run_v9_confirmation_lane()
+
+        worker._telemetry.record_confirmation_longmem_diagnostics.assert_not_called()
+        dittobench.execute_v9_confirmation.return_value = _result().model_copy(
+            update={
+                "longmem_diagnostics": V9ConfirmationLongMemDiagnostics(
+                    received_failures=0
+                )
+            }
+        )
+        platform.request_v9_confirmation_job.return_value = job
+        await worker._run_v9_confirmation_lane()
+        worker._telemetry.record_confirmation_longmem_diagnostics.assert_not_called()
+
     async def test_longmem_case_progress_is_published_like_dittobench_checks(
         self,
     ) -> None:
@@ -832,3 +902,48 @@ class TestV9ConfirmationSweepIntegration:
         top5.assert_not_awaited()
         platform.submit_top5_confirmation_score.assert_not_awaited()
         platform.submit_score.assert_not_awaited()
+
+
+class TestV9ConfirmationScorerResultDiagnostics:
+    """The scorer's diagnostics are additive, optional, and strictly typed."""
+
+    def test_missing_field_reads_as_none(self) -> None:
+        assert _result().longmem_diagnostics is None
+        payload = _result().model_dump(mode="json")
+        payload.pop("longmem_diagnostics", None)
+        assert (
+            V9ConfirmationScorerResult.model_validate(payload).longmem_diagnostics
+            is None
+        )
+
+    def test_scorer_wire_shape_round_trips(self) -> None:
+        payload = _result().model_dump(mode="json")
+        payload["longmem_diagnostics"] = {
+            "received_failures": 48,
+            "received_failure_kinds": {"http_status_503": 48},
+            "received_failure_reader_attempts": 0,
+            "received_failure_embedding_dispatches": 48,
+        }
+        parsed = V9ConfirmationScorerResult.model_validate(payload)
+        assert parsed.longmem_diagnostics is not None
+        assert parsed.longmem_diagnostics.received_failures == 48
+        assert parsed.longmem_diagnostics.received_failure_kinds == {
+            "http_status_503": 48
+        }
+        # Wire digest inputs are unchanged by the side channel.
+        assert parsed.evidence_sha256 == _result().evidence_sha256
+
+    @pytest.mark.parametrize(
+        "diagnostics",
+        [
+            {"received_failures": "48"},
+            {"received_failures": -1},
+            {"received_failures": 1, "received_failure_kinds": {"x": "1"}},
+            {"received_failures": 1, "received_failure_reader_attempts": -2},
+        ],
+    )
+    def test_malformed_diagnostics_are_rejected(self, diagnostics: dict) -> None:
+        payload = _result().model_dump(mode="json")
+        payload["longmem_diagnostics"] = diagnostics
+        with pytest.raises(ValueError):
+            V9ConfirmationScorerResult.model_validate(payload)
