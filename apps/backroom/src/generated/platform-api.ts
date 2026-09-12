@@ -22667,8 +22667,9 @@ export interface components {
          *
          *     ``builtin_policy_version`` above is the Platform build; this is the fleet.
          *     A worker on an older build fails closed when the required version exceeds
-         *     its builtin, so ``safe_to_schedule_up_to`` is the highest target that would
-         *     not pause any fresh reporting worker. Workers below heartbeat protocol v7
+         *     its builtin. ``safe_to_schedule_up_to`` is additionally capped by the
+         *     published activation ceiling, so distributed-but-incomplete policy code is
+         *     never presented as activation-ready. Workers below heartbeat protocol v7
          *     cannot announce a build and are listed separately.
          */
         ScreenerFleetPolicyReadinessView: {
