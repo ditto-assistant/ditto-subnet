@@ -26,6 +26,8 @@ applied to an existing version. It ships as a new one.
 | 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
 | 13 (in development) | `2027-05-01` | Typed-semantic contract (#1518): label-insufficiency, unregenerable surface, causal model dependence, provenance over containment, bounded money share, grader-only claim sets. Plumbing shipped (version, 250-case envelope, grader-only protocol types); surface levers shipped (per-seed `persona.Grammar` banks for every tool/world/settings/integrity/question surface, permuted-clause identity records, typo projector v2, the salted artifact surface pass with a private-pass hand-off and a regeneration canary); families, grader, and gates land behind `bench_version >= 13`; not advertised by the runtime until the contract is complete. |
 
+| 13 (pre-activation, assembling) | `2027-05-01` | Envelope rebalance and monetary cap: the v8 residual budget becomes a published 250-case slot table (story 78 · ordinary world 32 · business programs 28 · personal programs 24 · abstention 25 · record-determined quantity 16 · divergence 12 · point-in-time 12 · integrity 14 · isolation 9), six oracles per story arc, project-outstanding capped at 4, a fourth injection probe, and a deterministic per-seed mix audit (`cmd/mixaudit`) with the #1529 caps. Generation is explicit; three slots are interim until their generators land. |
+
 ## V10 generator-as-spec contract
 
 V10 starts from a seed-scoped semantic specification rather than a reusable
@@ -828,6 +830,99 @@ score. `datagen-ci.yml` runs `-release-gate` on every datagen pull request;
 `TestReleaseGateCoversEverySupportedVersionAndPolicyFloor` runs the same check
 under `go test ./...` in the release workflow's datagen gate. The GIH transcript negative (answer present, derivation absent from
 completions) needs completion spans and lands with the provenance gate.
+
+## Bench v13 (private, envelope rebalance and monetary cap)
+
+v12 measured on the public seed: 117 of 251 memory cases are direct
+`AnswerMoney`, 143 carry a monetary claim once typed list items count, and
+monetary claims own **127.83 / 251 = 50.9%** of memory score weight; 143 of the
+157 computed answers are money (issue #1529). Money was the benchmark's
+difficulty axis, so a cents ledger with a money formatter competed with a
+generally competent agent. v13 makes the memory mix a published contract and
+audits it per seed. Every lever is gated on `bench_version >= 13`, so v2–v12
+regenerate byte-identically (the v2–v12 known-vector tests are unchanged).
+
+### The slot table
+
+`gen/v13_envelope.go` replaces `v8PrimaryCaseBudget` and its carve-outs with a
+slot table per run size. Full (`Mem 224 + 9 isolation = 250`):
+
+| Slot | Count | Generator today | Status |
+| --- | ---: | --- | --- |
+| story | 78 | `universe.World.SelectQuestionPlans`, six oracles per arc (13 arcs); one pure-money oracle dropped per arc in rotation (balance / delta / post-approval) | final selection; oracle set moves with #1841 |
+| ordinary world | 32 | ordinary person / project / trip oracles, `project-outstanding` ≤ 4 | final |
+| business programs | 28 | `universe.GenerateV12Programs` (7 groups × 4) | **interim generator**: monetary until #1520 |
+| personal programs | 24 | interim fill | **interim slot** (#1838) |
+| abstention | 25 | interim fill | **interim slot** (#1530) |
+| record-determined quantity | 16 | `gen.buildFamilyCompiler` | **interim generator**: monetary until #1837 |
+| divergence | 12 | `gen.buildParserDivergence` | final |
+| point-in-time | 12 | interim fill | **interim slot** (#1844) |
+| integrity | 14 | 3 chitchat, 3 declarative ack, 3 declarative behaviour, 1 canary, **4** injection | final |
+| isolation | 9 | `gen.GenerateIsolationForVersion` | final |
+
+An **interim slot** is filled with additional non-monetary ordinary world
+questions (`WorldPlanSelection.Interim`) so the envelope is complete and
+byte-reproducible now; `gen.V13InterimSlots` names them and the mix audit
+reports them. Wiring a dedicated generator is a one-line swap in
+`generateV13WorldMemorySuite` plus removing the slot from that list.
+`gen.V13InterimGenerators` names the slots whose count is final but whose cases
+still come from a monetary v12-era generator (business programs, record
+quantity, story oracles); the #1529 gate (`TestV13MixAuditGateAcrossFortySeeds`)
+stays informational until both lists are empty, so this envelope does **not**
+yet satisfy #1529.
+Medium is 95 memory cases (36 · 10 · 8 · 6 · 6 · 4 · 4 · 2 · 14 · 5) and small
+27 (6 · 4 · 4 · 13); only the three public run sizes have a table, any other
+size fails closed.
+
+### The mix audit and the #1529 gate
+
+`gen/mixaudit.go` classifies every memory case by slot, domain / sub-domain,
+answer kind × operation, money-bearing weight (typed list items count at their
+share of case credit), arithmetic-required, computed-vs-verbatim
+(`AnswerVerbatimInEvidence` over the declared evidence), and dependency
+cluster (metamorphic group / counterfactual pair). An unclassified question
+type or answer kind is an error, so a new family cannot bypass the histogram.
+`TestMixAuditReproducesV12MoneyExposure` pins the classifier to the 117 / 143 /
+50.9% v12 figures.
+
+`gen.MixGateV13` (Owner decision — default taken: ≤ 12% target / 15% hard):
+money ≤ 15% of memory weight, ≤ 22 money-bearing cases, 0 monetary open
+programs, arithmetic ≤ 20%, money ≤ 25% of computed answers, personal ≥ 30%,
+business ≥ 40%, no sub-domain > 20%, no answer-kind × operation > 15%,
+abstention 10% ± 1, twin coverage ≥ 40%, gate-exposed ≤ 40%, and the cascade
+cap (largest dependency cluster ≤ 4% of memory weight). The structural bounds
+(project-outstanding cap, gate-exposed, cascade) and the pinned interim
+ceilings (money ≤ 37% of memory weight, ≤ 110 money-bearing cases, arithmetic
+≤ 45%, so interim exposure cannot creep upward) are asserted on the pinned 40
+seeds today; the full gate skips with a violation report for the first failing
+seed while any interim slot or interim generator remains and turns on by itself
+once both lists are empty. Run it with
+
+```bash
+go run ./cmd/mixaudit -bench-version 13 -seeds 40 -run-size full
+go run ./cmd/mixaudit -bench-version 13 -seeds 40 -gate   # exit 1 on a violation
+```
+
+Interim measurement (seeds 1–40, see `docs/v13-family-mix-study.md`): money
+36.4% of memory weight (v12: 50.9%), 106 money-bearing cases (v12: 143),
+personal 43%, business 57%, project-outstanding ≤ 4 on every seed, gate-exposed
+12.8%, largest cascade 1.2%. The remaining violations are exactly the interim
+generators: 28 monetary open programs, 16 monetary record-balance cases, the
+two pure-money story oracles kept per arc, zero abstention, and 12.8% twin
+coverage.
+
+### Public vector
+
+**Not pinned yet.** A known vector is an immutable contract, so the v13 vector
+is pinned once, after the /seed label-leak fix (#1827: `story-%02d-*` session
+ids and fixed timestamp steps are still emitted today) and after the pending
+generator swaps above (`gen.V13InterimSlots`, `gen.V13InterimGenerators`) have
+landed. Publishing an interim hash that every swap would move would freeze the
+leak into the contract and make a run scored against it unauditable the moment
+the hash changed. Until the pin, `TestSameSeedSameBytes` asserts v13
+determinism and `TestV13PublicSeedEnvelope` the published envelope on the
+public seed `123456789`; the change that lands the last swap adds
+`TestV13KnownVector` and the README table row. v2–v12 vectors do not move.
 
 ## Auditing an old score
 

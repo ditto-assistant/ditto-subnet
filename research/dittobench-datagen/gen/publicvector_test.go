@@ -484,9 +484,12 @@ func TestUnsupportedVersionRejected(t *testing.T) {
 }
 
 // TestSameSeedSameBytes is the core determinism guarantee: one seed, one artifact.
+// v2..v12 keep the historical check under the legacy ProfileFor("full") shape
+// (Tools 60 / Mem 50), exactly as before v13 landed; v13 publishes a slot table
+// only for its own public run sizes (a foreign size fails closed), so it is
+// checked under its canonical ProfileForVersion profile in a second loop.
 func TestSameSeedSameBytes(t *testing.T) {
-	prof, _ := ProfileFor("full")
-	for _, version := range protocol.SupportedBenchVersions() {
+	assertSameBytes := func(version int, prof Profile) {
 		artifactA, err := GenerateDataset(42, prof, version)
 		if err != nil {
 			t.Fatalf("v%d generate a: %v", version, err)
@@ -506,5 +509,19 @@ func TestSameSeedSameBytes(t *testing.T) {
 		if a != b {
 			t.Fatalf("v%d same seed produced different bytes: %s vs %s", version, a, b)
 		}
+	}
+	legacy, _ := ProfileFor("full")
+	for _, version := range []int{protocol.BenchVersionV2, protocol.BenchVersionV3, protocol.BenchVersionV4, protocol.BenchVersionV5, protocol.BenchVersionV6, protocol.BenchVersionV7, protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12} {
+		assertSameBytes(version, legacy)
+	}
+	for version := protocol.BenchVersionV13; protocol.SupportedBenchVersion(version); version++ {
+		prof, ok := ProfileForVersion("full", version)
+		if !ok {
+			t.Fatalf("v%d has no canonical full profile", version)
+		}
+		if _, err := GenerateDataset(42, legacy, version); err == nil {
+			t.Fatalf("v%d accepted the legacy full profile; it must fail closed on a size without a slot table", version)
+		}
+		assertSameBytes(version, prof)
 	}
 }

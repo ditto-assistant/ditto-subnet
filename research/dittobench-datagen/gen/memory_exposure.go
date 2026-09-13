@@ -56,6 +56,11 @@ func AuditV10MemoryExposure(artifact DatasetArtifact) (MemoryExposureResult, err
 	return AuditMemoryExposureForVersion(artifact, protocol.BenchVersionV10)
 }
 
+// AuditMemoryExposure audits the artifact's explicitly recorded version.
+func AuditMemoryExposure(artifact DatasetArtifact) (MemoryExposureResult, error) {
+	return AuditMemoryExposureForVersion(artifact, artifact.BenchVersion)
+}
+
 // AuditMemoryExposureForVersion evaluates only cases with explicit evidence
 // bindings under an explicit contract. The artifact must have been generated
 // for benchVersion, which must carry evidence bindings (v10 and later), so an

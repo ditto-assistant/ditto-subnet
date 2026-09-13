@@ -129,14 +129,12 @@ var profilesV10 = map[string]Profile{
 	"full":   {Tools: 100, Mem: 225, Waves: 5, RawPairsFrac: 0.5, IsoCases: 9},
 }
 
-// profilesV13 is the explicit v13 run-size envelope. Small and medium are
-// pinned to the v10 values. Full keeps 100 tool cases and five seeding waves
-// but pins the memory envelope at 250 actual cases (224 primary-envelope +
-// 9 isolation): 228 primary world/program cases, the fixed 13-case
-// conversational/integrity tail, and nine cross-user isolation cases. The
-// primary budget for Mem=224 is carved in v13PrimaryCaseBudget; v13 must not
-// inherit v10's envelope through a >= comparison, so a later mix rebalance is
-// an explicit profile decision here rather than a silent carry-over.
+// profilesV13 is the envelope-rebalance profile (docs/bench-versions.md, Bench
+// v13). Full keeps 100 tool cases and spends Mem 224 + 9 isolation cases on the
+// published 250-case memory slot table in gen/memory_v2.go (v13EnvelopeFor); the
+// slot table, not Mem, is the contract, and Mem is pinned so a future version
+// must still make an explicit profile decision. Medium and small are pinned
+// alongside so every public run size has a v13 envelope.
 var profilesV13 = map[string]Profile{
 	"small":  {Tools: 6, Mem: 6, Waves: 1, RawPairsFrac: 0, IsoCases: 0},
 	"medium": {Tools: 48, Mem: 64, Waves: 4, RawPairsFrac: 0.45, IsoCases: 5},

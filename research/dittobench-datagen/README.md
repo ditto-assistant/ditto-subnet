@@ -109,6 +109,14 @@ Each is regenerated and asserted by CI (`TestV2KnownVector` and friends), so a
 value here that disagrees with `cmd/generate` is a bug in this table, not in the
 generator.
 
+v13 (epoch `2027-05-01T00:00:00Z`) generates deterministically but has **no
+canonical vector yet**: a known vector is an immutable contract, and the v13
+hash is pinned only after the /seed label-leak fix (#1827) and the pending
+generator swaps land (see `docs/bench-versions.md`, Bench v13). Until then
+`TestSameSeedSameBytes` covers v13 determinism and `TestV13PublicSeedEnvelope`
+the published envelope shape. Audit the v13 memory mix with
+`go run ./cmd/mixaudit -bench-version 13 -seeds 40`.
+
 See [docs/bench-versions.md](docs/bench-versions.md) for what each contract is,
 what changed in v4, and how module releases are versioned relative to it.
 
