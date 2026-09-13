@@ -97,7 +97,7 @@ interface DittoLinkStatus {
 
 interface DittoLinkAttempt {
   attempt_id: string;
-  status: "pending" | "authenticated" | "linked" | "failed" | "expired";
+  status: "pending" | "identity_verified" | "authenticated" | "linked" | "failed" | "expired";
   error?: string | null;
   ditto_user_id?: string | null;
   ditto_email?: string | null;
@@ -518,7 +518,12 @@ function AccountPanel(): JSX.Element {
         { headers: sessionAuthHeader() },
       );
       setDittoAttempt(attempt);
-      if (attempt.status !== "authenticated") {
+      if (attempt.status === "identity_verified") {
+        setDittoNotice({
+          ok: true,
+          text: "Ditto verified the sign-in. Approve linking this hotkey on the Ditto page first, then confirm here.",
+        });
+      } else if (attempt.status !== "authenticated") {
         setDittoNotice({
           ok: attempt.status === "linked",
           text:
@@ -818,8 +823,9 @@ function AccountPanel(): JSX.Element {
                       account <strong>{attempt().ditto_email || attempt().ditto_user_id}</strong>?
                     </p>
                     <p class="muted">
-                      Only confirm if this is the account you just signed in with. A sign-in link
-                      someone else sent you can never attach their hotkey to your account.
+                      Only confirm if this is the account you just signed in with and accepted on
+                      the Ditto page. Both sides agree before anything is written: the Ditto
+                      account holder accepts this hotkey there, and you confirm here.
                     </p>
                     <button
                       class="btn"

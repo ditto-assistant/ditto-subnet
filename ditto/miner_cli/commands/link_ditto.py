@@ -173,10 +173,19 @@ def run(args: argparse.Namespace) -> int:
             deadline = time.monotonic() + max(
                 5, min(args.wait_seconds, started.expires_in)
             )
+            told_accept = False
             while time.monotonic() < deadline:
                 attempt = client.get_ditto_link_attempt(
                     token=token, attempt_id=started.attempt_id
                 )
+                if attempt.status == "identity_verified" and not told_accept:
+                    # Ditto verified who signed in; that person now has to accept
+                    # THIS hotkey on the page Ditto sent them to.
+                    print(
+                        "Ditto verified the sign-in. In the browser, approve linking "
+                        f"hotkey {hotkey} to your Ditto account, then return here."
+                    )
+                    told_accept = True
                 if attempt.status == "authenticated":
                     # Ditto verified who signed in; nothing is linked until this
                     # hotkey's owner says so. A sign-in link someone else sent

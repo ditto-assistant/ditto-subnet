@@ -2970,11 +2970,15 @@ CREATE TABLE public.miner_ditto_link_attempts (
     error text,
     ditto_user_id text,
     ditto_email text,
+    accept_token_hash text,
+    accept_expires_at timestamp with time zone,
+    user_accepted_at timestamp with time zone,
+    browser_binding_hash text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     completed_at timestamp with time zone,
     CONSTRAINT ck_miner_ditto_link_attempts_miner_ditto_link_attempts__a335 CHECK ((length(state_hash) = 64)),
-    CONSTRAINT ck_miner_ditto_link_attempts_miner_ditto_link_attempts__dbac CHECK ((status = ANY (ARRAY['pending'::text, 'authenticated'::text, 'linked'::text, 'failed'::text, 'expired'::text]))),
+    CONSTRAINT ck_miner_ditto_link_attempts_miner_ditto_link_attempts__dbac CHECK ((status = ANY (ARRAY['pending'::text, 'identity_verified'::text, 'authenticated'::text, 'linked'::text, 'failed'::text, 'expired'::text]))),
     CONSTRAINT ck_miner_ditto_link_attempts_miner_ditto_link_attempts__f3b8 CHECK ((client = ANY (ARRAY['dashboard'::text, 'cli'::text])))
 );
 

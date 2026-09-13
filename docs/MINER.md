@@ -717,10 +717,12 @@ Ditto's own OpenID sign-in (Google, Apple, X, GitHub or email on the Ditto
 side) and, when you consent, the Platform records that this hotkey belongs
 to your Ditto account. The hotkey is proven by your miner session; the
 account is proven by Ditto's signed id_token, which the Platform verifies
-against Ditto's published keys. After Ditto sends you back, the console (or
-the CLI) shows **which** Ditto account signed in and asks you to confirm the
-pairing before anything is written — a sign-in link someone else sent you can
-never attach their hotkey to your account. You never type a Ditto password
+against Ditto's published keys. Pairing is agreed by both sides: right after
+you sign in, Ditto shows you **which hotkey** is asking for your account and you
+accept or decline; then the console (or the CLI) shows **which** Ditto account
+accepted and asks you to confirm before anything is written. A sign-in link
+someone else sent you therefore cannot attach their hotkey to your account — you
+would see their hotkey on the accept page and choose *Not me*. You never type a Ditto password
 into dittobench.ai and the CLI never sees your Ditto credentials.
 
 ```sh

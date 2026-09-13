@@ -13,7 +13,8 @@ may point at the same Ditto account.
 | Ditto user id | the `sub` of an RS256 id_token verified against `/.well-known/jwks.json` (iss, aud, exp, nonce) | the browser, the CLI, or a query string |
 | Callback ↔ attempt | the hashed `state` stored on the attempt | anything else in the callback |
 | Return URL | `DITTO_LINK_RETURN_URL` origin only, re-serialised, backslashes/userinfo/control chars refused, `ditto`/`reason`/`attempt` stripped | a caller-supplied absolute URL |
-| Pairing hotkey ↔ account | an explicit confirm by the miner session that started the attempt | the browser that happened to complete the callback |
+| Pairing hotkey ↔ account | two-sided: the signed-in Ditto browser accepts the named hotkey (single-use token), then the miner session that started the attempt confirms | either party alone; the browser that happened to complete the callback |
+| Dashboard attempts | HttpOnly `SameSite=Lax` cookie bound to the attempt, required at the callback | an authorize URL forwarded to another browser |
 
 The client secret lives only in `DITTO_LINK_CLIENT_SECRET` and is sent only in
 the token request to the configured issuer. It is never logged or served.
@@ -29,16 +30,23 @@ the token request to the configured issuer. It is never logged or served.
 3. The callback locks the attempt by state, marks it consumed **before** the
    network call (a replay can never redeem twice), exchanges the code with
    `client_id` + `client_secret` + `code_verifier`, verifies the id_token and
-   **parks** the verified identity on the attempt (`status=authenticated`,
-   `ditto_user_id`, verified `ditto_email`). Nothing is linked yet: the
-   callback is reachable by whoever holds the authorize URL, so it must not
-   pair an account with a hotkey on its own. It redirects to
-   `return_to#/reviews?ditto=confirm&attempt=<id>` (or `?ditto=error&reason=…`).
-4. `POST /api/v1/me/ditto-link/attempts/{id}/confirm` — bearer = the miner
+   parks the verified identity as `identity_verified` with a **single-use
+   accept token** (sha256 at rest, 10-minute TTL). Nothing is linked and the
+   hotkey side is told nothing about who signed in. For a dashboard-started
+   attempt the callback also requires the HttpOnly `SameSite=Lax` cookie set at
+   `/start`, so a dashboard authorize URL handed to someone else fails closed.
+   The signed-in browser is redirected to `GET /api/v1/miner-auth/ditto/accept`.
+4. **Ditto-side acceptance.** That page names the hotkey (and coldkey) asking
+   for the account and offers *Yes, link* / *Not me*. `POST …/accept` consumes
+   the token: accept → `authenticated` (identity now visible to the hotkey
+   side), decline → `failed`. This is what stops the reverse phish: a miner
+   who tricks someone else into signing in on their attempt gets a declined
+   attempt, not that person's account.
+4b. `POST /api/v1/me/ditto-link/attempts/{id}/confirm` — bearer = the miner
    session that **started** the attempt (scope `profile`), attempt must be
    `authenticated` and unexpired — writes `miner_ditto_links` (recording the
-   bound coldkey when attestation knows one). The dashboard shows "Link
-   hotkey … to <email>?" and the CLI asks the same question before calling it.
+   bound coldkey when attestation knows one). Two-sided: the account holder
+   accepted the hotkey, the hotkey holder confirms the account.
 5. `GET /api/v1/me/ditto-link` shows the link; `DELETE` revokes it;
    `GET /api/v1/me/ditto-link/attempts/{id}` lets the dashboard and CLI poll
    (it carries the parked identity once authenticated).

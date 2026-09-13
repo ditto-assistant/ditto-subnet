@@ -8,12 +8,15 @@ verified id_token and nowhere else.
 
 from __future__ import annotations
 
+import hashlib
+import html
+import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.miner_ditto_link import (
@@ -61,6 +64,27 @@ router = APIRouter(tags=["miner-ditto-link"], dependencies=[Depends(no_store)])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
+# How long the signed-in Ditto browser has to accept the hotkey after the
+# callback verified who they are.
+ACCEPT_TTL_SECONDS = 600
+BINDING_COOKIE_PREFIX = "ditto_link_"
+
+
+def _sha256(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _binding_cookie_name(attempt_id: UUID) -> str:
+    return BINDING_COOKIE_PREFIX + attempt_id.hex
+
+
+def _accept_url(config_redirect_url: str) -> str:
+    base = config_redirect_url
+    if base.endswith("/callback"):
+        base = base[: -len("/callback")]
+    return base + "/accept"
+
+
 def _client(request: Request) -> DittoLinkClient:
     client = getattr(request.app.state, "ditto_link", None)
     if client is None or not client.enabled:
@@ -99,6 +123,7 @@ async def current_link(request: Request, session: SessionDep) -> MinerDittoLinkR
 @router.post("/me/ditto-link/start", response_model=MinerDittoLinkStartResponse)
 async def start_link(
     request: Request,
+    response: Response,
     session: SessionDep,
     body: MinerDittoLinkStartRequest | None = None,
 ) -> MinerDittoLinkStartResponse:
@@ -109,6 +134,10 @@ async def start_link(
     nonce = new_nonce()
     verifier = new_code_verifier()
     return_to = safe_return_to(client.config, payload.return_to)
+    # A dashboard attempt is bound to the browser that started it: the public
+    # callback must present this HttpOnly cookie, so an authorize URL handed
+    # to someone else cannot complete a dashboard-started attempt at all.
+    binding = secrets.token_urlsafe(32) if payload.client == "dashboard" else None
     async with session.begin():
         row, _token = await resolve_miner_session(request, session)
         require_scope(row, "profile")
@@ -124,7 +153,20 @@ async def start_link(
             now=now,
             expires_at=now + timedelta(seconds=ATTEMPT_TTL_SECONDS),
         )
+        if binding is not None:
+            attempt.browser_binding_hash = _sha256(binding)
+            await session.flush()
         attempt_id = attempt.attempt_id
+    if binding is not None:
+        response.set_cookie(
+            _binding_cookie_name(attempt_id),
+            binding,
+            max_age=ATTEMPT_TTL_SECONDS,
+            httponly=True,
+            secure=request.url.scheme == "https",
+            samesite="lax",
+            path="/api/v1/miner-auth/ditto",
+        )
     return MinerDittoLinkStartResponse(
         attempt_id=attempt_id,
         authorize_url=client.authorize_url(
@@ -288,6 +330,18 @@ async def oidc_callback(
                 with_result(return_to, outcome="error", reason=attempt.error),
                 status_code=302,
             )
+        if attempt.browser_binding_hash is not None:
+            presented = request.cookies.get(_binding_cookie_name(attempt.attempt_id))
+            if presented is None or not secrets.compare_digest(
+                _sha256(presented), attempt.browser_binding_hash
+            ):
+                # A different browser finished a dashboard-started attempt:
+                # someone was handed the authorize URL. Fail closed.
+                _fail(attempt, now, "this sign-in was started in a different browser")
+                return RedirectResponse(
+                    with_result(return_to, outcome="error", reason=attempt.error),
+                    status_code=302,
+                )
         # Consume the attempt before the network call so a replayed callback
         # with the same state can never redeem twice.
         attempt.status = "failed"
@@ -316,18 +370,141 @@ async def oidc_callback(
                 with_result(return_to, outcome="error", reason="link attempt vanished"),
                 status_code=302,
             )
-        # Park the verified identity; the link itself is written only when the
-        # holder of the miner session confirms the pairing (see confirm_link).
-        fresh.status = "authenticated"
+        # Park the verified identity as identity_verified: the person who just
+        # signed in has NOT yet agreed to be paired with this hotkey. They must
+        # accept on the page below (single-use token, short TTL); only then may
+        # the miner session confirm. Without this, whoever holds the authorize
+        # URL could bind a victim's account to the attacker's hotkey.
+        fresh.status = "identity_verified"
         fresh.error = None
         fresh.ditto_user_id = identity.user_id
         fresh.ditto_email = identity.email if identity.email_verified else None
         fresh.completed_at = None
+        accept_token = secrets.token_urlsafe(32)
+        fresh.accept_token_hash = _sha256(accept_token)
+        fresh.accept_expires_at = now + timedelta(seconds=ACCEPT_TTL_SECONDS)
         attempt_id = fresh.attempt_id
-    return RedirectResponse(
-        with_result(return_to, outcome="confirm", attempt=str(attempt_id)),
-        status_code=302,
+    accept_url = (
+        f"{_accept_url(client.config.redirect_url)}"
+        f"?attempt={attempt_id}&t={accept_token}"
     )
+    return RedirectResponse(accept_url, status_code=302)
+
+
+async def _load_acceptable_attempt(
+    session: AsyncSession, *, attempt_id: UUID, token: str, now: datetime
+) -> MinerDittoLinkAttempt | None:
+    attempt = await get_attempt(session, attempt_id=attempt_id)
+    if attempt is None:
+        return None
+    attempt = await expire_stale_attempt(session, attempt=attempt, now=now)
+    if attempt.status != "identity_verified" or attempt.accept_token_hash is None:
+        return None
+    if not secrets.compare_digest(_sha256(token), attempt.accept_token_hash):
+        return None
+    return attempt
+
+
+def _accept_page(
+    *,
+    attempt: MinerDittoLinkAttempt,
+    coldkey: str | None,
+    token: str,
+    accept_base: str,
+) -> str:
+    who = html.escape(
+        attempt.ditto_email or attempt.ditto_user_id or "your Ditto account"
+    )
+    hotkey = html.escape(attempt.miner_hotkey)
+    cold = html.escape(coldkey) if coldkey else "unknown"
+    q = f"attempt={attempt.attempt_id}&amp;t={html.escape(token)}"
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Link this hotkey to your Ditto account?</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<style>body{{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:3rem auto;
+padding:0 1rem;color:#111}}code{{font-size:.9em;word-break:break-all}}
+.warn{{background:#fff4d6;padding:.75rem 1rem;border-radius:.5rem}}
+button{{font:inherit;padding:.6rem 1.2rem;border-radius:.5rem;border:1px solid #333;
+cursor:pointer}}.ok{{background:#111;color:#fff}}.no{{background:#fff}}</style></head>
+<body>
+<h1>Link this miner hotkey to your Ditto account?</h1>
+<p>You just signed in to Ditto as <strong>{who}</strong>. A DittoBench miner asked to
+attach <strong>their hotkey</strong> to that account:</p>
+<p>Hotkey: <code>{hotkey}</code><br>Coldkey: <code>{cold}</code></p>
+<p class="warn">Only continue if <strong>you</strong> started this from your own
+DittoBench console or <code>ditto link-ditto</code> for a hotkey you control. If
+someone sent you this sign-in link, choose <em>Not me</em>: linking would let their
+miner attribute Router inference and Feedback Track credit to your account and, once
+user billing is enabled, spend your Ditto credits.</p>
+<form method="post" style="display:inline"
+ action="{accept_base}?{q}&amp;decision=accept">
+<button class="ok" type="submit">Yes, link my Ditto account to this hotkey</button>
+</form>
+<form method="post" style="display:inline;margin-left:.75rem"
+ action="{accept_base}?{q}&amp;decision=decline">
+<button class="no" type="submit">Not me</button></form>
+<p><small>Nothing is linked until you choose. After you accept, the miner still has to
+confirm the pairing from their own session.</small></p>
+</body></html>"""
+
+
+@router.get("/miner-auth/ditto/accept", response_class=HTMLResponse)
+async def accept_link_page(
+    request: Request, session: SessionDep, attempt: UUID, t: str
+) -> HTMLResponse:
+    """The Ditto-side half of the pairing: show WHICH hotkey wants this account."""
+    client = _client(request)
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await _load_acceptable_attempt(
+            session, attempt_id=attempt, token=t, now=now
+        )
+        if row is None:
+            return HTMLResponse(
+                "<!doctype html><title>Link request not available</title>"
+                "<p>This link request is not available: it was already answered, "
+                "expired, or the link is invalid.</p>",
+                status_code=404,
+                headers={"Cache-Control": "no-store"},
+            )
+        coldkey = await get_bound_coldkey_for_hotkey(session, hotkey=row.miner_hotkey)
+        page = _accept_page(
+            attempt=row,
+            coldkey=coldkey,
+            token=t,
+            accept_base=_accept_url(client.config.redirect_url),
+        )
+    return HTMLResponse(page, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/miner-auth/ditto/accept")
+async def accept_link_decide(
+    request: Request, session: SessionDep, attempt: UUID, t: str, decision: str
+) -> RedirectResponse:
+    """Consume the single-use accept token: accept → authenticated, else failed."""
+    client = _client(request)
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await _load_acceptable_attempt(
+            session, attempt_id=attempt, token=t, now=now
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="link request not available")
+        return_to = row.return_to or client.config.return_url
+        row.accept_token_hash = None
+        if decision == "accept":
+            row.status = "authenticated"
+            row.user_accepted_at = now
+            outcome = with_result(
+                return_to, outcome="confirm", attempt=str(row.attempt_id)
+            )
+        else:
+            _fail(row, now, "declined by the Ditto account holder")
+            outcome = with_result(return_to, outcome="error", reason=row.error)
+        await session.flush()
+    return RedirectResponse(outcome, status_code=303)
 
 
 def _fail(attempt: MinerDittoLinkAttempt, now: datetime, reason: str) -> None:

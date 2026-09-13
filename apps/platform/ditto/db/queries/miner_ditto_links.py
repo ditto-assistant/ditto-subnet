@@ -150,4 +150,14 @@ async def expire_stale_attempt(
         attempt.status = "expired"
         attempt.completed_at = now
         await session.flush()
+    elif (
+        attempt.status == "identity_verified"
+        and attempt.accept_expires_at is not None
+        and attempt.accept_expires_at <= now
+    ):
+        attempt.status = "expired"
+        attempt.error = "the Ditto account holder did not accept in time"
+        attempt.accept_token_hash = None
+        attempt.completed_at = now
+        await session.flush()
     return attempt

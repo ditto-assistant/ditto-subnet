@@ -131,6 +131,15 @@ async def _sign_in(client: httpx.AsyncClient, keypair: bittensor.Keypair) -> str
     return str(approved.json()["access_token"])
 
 
+def _accept_params(response: httpx.Response) -> dict[str, str]:
+    """The callback now hands the SIGNED-IN browser to the accept page."""
+    assert response.status_code == 302, response.text
+    location = response.headers["location"]
+    assert location.startswith("https://dittobench.ai/api/v1/miner-auth/ditto/accept?")
+    q = parse_qs(urlparse(location).query)
+    return {"attempt": q["attempt"][0], "t": q["t"][0]}
+
+
 def _callback_result(response: httpx.Response) -> dict[str, list[str]]:
     assert response.status_code == 302, response.text
     location = response.headers["location"]
@@ -173,27 +182,70 @@ async def test_link_binds_verified_ditto_identity_to_the_session_hotkey(
     assert pending.json()["status"] == "pending"
 
     # The public callback carries no bearer; the hashed state binds it to Alice.
+    # It does NOT link and does not even mark the attempt authenticated: it
+    # sends the browser that signed in to a page naming the hotkey.
     done = await client.get(
         "/api/v1/miner-auth/ditto/callback", params={"code": "code-1", "state": state}
     )
-    result = _callback_result(done)
-    assert result["ditto"] == ["confirm"]
-    assert result["attempt"] == [body["attempt_id"]]
+    accept = _accept_params(done)
+    assert accept["attempt"] == body["attempt_id"]
     # The token exchange used PKCE and the app secret, never the user's word.
     assert provider.token_requests[-1]["code_verifier"]
     assert provider.token_requests[-1]["grant_type"] == ["authorization_code"]
 
-    # Nothing is linked until the miner-session holder confirms the pairing:
-    # whoever holds the authorize URL could have been the one who signed in.
+    # Before the Ditto side accepts, the hotkey side learns nothing about who
+    # signed in, and cannot confirm.
     assert (await client.get("/api/v1/me/ditto-link", headers=auth)).json()[
         "link"
     ] is None
     parked = await client.get(
         f"/api/v1/me/ditto-link/attempts/{body['attempt_id']}", headers=auth
     )
+    assert parked.json()["status"] == "identity_verified"
+    assert parked.json()["ditto_email"] is None
+    assert parked.json()["ditto_user_id"] is None
+    early = await client.post(
+        f"/api/v1/me/ditto-link/attempts/{body['attempt_id']}/confirm", headers=auth
+    )
+    assert early.status_code == 409
+
+    # The accept page shows the account holder exactly which hotkey wants them.
+    page = await client.get("/api/v1/miner-auth/ditto/accept", params=accept)
+    assert page.status_code == 200, page.text
+    assert alice.ss58_address in page.text
+    assert "miner@example.com" in page.text
+    assert "Not me" in page.text
+    # A wrong token shows nothing.
+    assert (
+        await client.get(
+            "/api/v1/miner-auth/ditto/accept",
+            params={"attempt": accept["attempt"], "t": "nope"},
+        )
+    ).status_code == 404
+    accepted = await client.post(
+        "/api/v1/miner-auth/ditto/accept", params={**accept, "decision": "accept"}
+    )
+    assert accepted.status_code == 303, accepted.text
+    result = parse_qs(urlparse(accepted.headers["location"].replace("#/", "/")).query)
+    assert result["ditto"] == ["confirm"]
+    assert result["attempt"] == [body["attempt_id"]]
+    # The accept token is single-use.
+    assert (
+        await client.post(
+            "/api/v1/miner-auth/ditto/accept", params={**accept, "decision": "accept"}
+        )
+    ).status_code == 404
+
+    # Now the hotkey side sees who accepted and may confirm.
+    parked = await client.get(
+        f"/api/v1/me/ditto-link/attempts/{body['attempt_id']}", headers=auth
+    )
     assert parked.json()["status"] == "authenticated"
     assert parked.json()["ditto_email"] == "miner@example.com"
     assert parked.json()["miner_hotkey"] == alice.ss58_address
+    assert (await client.get("/api/v1/me/ditto-link", headers=auth)).json()[
+        "link"
+    ] is None
     # Another hotkey's session cannot confirm Alice's attempt (account-binding CSRF).
     bob = bittensor.Keypair.create_from_uri("//Bob")
     bob_auth = {"authorization": f"Bearer {await _sign_in(client, bob)}"}
@@ -335,3 +387,118 @@ async def test_link_endpoints_are_inert_until_configured(
     )
     assert callback.status_code == 302
     assert json.dumps(callback.headers["location"]).count("ditto=error") == 1
+
+
+async def test_attacker_hotkey_cannot_capture_a_victims_account(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Reverse-direction phish: Mallory starts an attempt for HER hotkey and hands
+    the authorize URL to a victim. The victim's sign-in must never bind their
+    account to Mallory's hotkey, and Mallory must learn nothing about them."""
+    _install(app, session_maker)
+    provider = FakeProvider()
+    provider.subject = "victim-ditto-user"
+    app.state.ditto_link = DittoLinkClient(_config(), transport=provider.transport())
+    mallory = bittensor.Keypair.create_from_uri("//Bob")
+    mallory_auth = {"authorization": f"Bearer {await _sign_in(client, mallory)}"}
+    # CLI attempts carry no browser cookie, so this is the path a phish would use.
+    started = await client.post(
+        "/api/v1/me/ditto-link/start", headers=mallory_auth, json={"client": "cli"}
+    )
+    body = started.json()
+    query = parse_qs(urlparse(body["authorize_url"]).query)
+    provider.nonce_for_code["code-v"] = query["nonce"][0]
+
+    # The victim's browser completes the callback.
+    done = await client.get(
+        "/api/v1/miner-auth/ditto/callback",
+        params={"code": "code-v", "state": query["state"][0]},
+    )
+    accept = _accept_params(done)
+
+    # Mallory sees no identity and cannot confirm.
+    seen = await client.get(
+        f"/api/v1/me/ditto-link/attempts/{body['attempt_id']}", headers=mallory_auth
+    )
+    assert seen.json()["status"] == "identity_verified"
+    assert seen.json()["ditto_user_id"] is None
+    assert seen.json()["ditto_email"] is None
+    assert "victim" not in seen.text
+    assert (
+        await client.post(
+            f"/api/v1/me/ditto-link/attempts/{body['attempt_id']}/confirm",
+            headers=mallory_auth,
+        )
+    ).status_code == 409
+
+    # The victim's page names Mallory's hotkey; the victim declines.
+    page = await client.get("/api/v1/miner-auth/ditto/accept", params=accept)
+    assert mallory.ss58_address in page.text
+    declined = await client.post(
+        "/api/v1/miner-auth/ditto/accept", params={**accept, "decision": "decline"}
+    )
+    assert declined.status_code == 303
+    assert parse_qs(urlparse(declined.headers["location"].replace("#/", "/")).query)[
+        "ditto"
+    ] == ["error"]
+
+    after = await client.get(
+        f"/api/v1/me/ditto-link/attempts/{body['attempt_id']}", headers=mallory_auth
+    )
+    assert after.json()["status"] == "failed"
+    assert after.json()["ditto_user_id"] is None
+    assert (
+        await client.post(
+            f"/api/v1/me/ditto-link/attempts/{body['attempt_id']}/confirm",
+            headers=mallory_auth,
+        )
+    ).status_code == 409
+    assert (await client.get("/api/v1/me/ditto-link", headers=mallory_auth)).json()[
+        "link"
+    ] is None
+    assert (
+        await client.get(f"/api/v1/public/feedback-track/{mallory.ss58_address}")
+    ).json()["linked"] is False
+
+
+async def test_dashboard_attempt_is_bound_to_the_starting_browser(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    provider = FakeProvider()
+    app.state.ditto_link = DittoLinkClient(_config(), transport=provider.transport())
+    alice = bittensor.Keypair.create_from_uri("//Alice")
+    auth = {"authorization": f"Bearer {await _sign_in(client, alice)}"}
+    started = await client.post(
+        "/api/v1/me/ditto-link/start", headers=auth, json={"client": "dashboard"}
+    )
+    assert started.status_code == 200, started.text
+    body = started.json()
+    cookie_names = [c.name for c in client.cookies.jar]
+    assert any(n.startswith("ditto_link_") for n in cookie_names)
+    query = parse_qs(urlparse(body["authorize_url"]).query)
+    provider.nonce_for_code["code-d"] = query["nonce"][0]
+
+    # A different browser (no cookie) presenting the callback is refused
+    # before any token exchange happens.
+    other_browser = httpx.AsyncClient(
+        transport=client._transport,  # noqa: SLF001 - same app, fresh cookie jar
+        base_url=str(client.base_url),
+    )
+    async with other_browser:
+        done = await other_browser.get(
+            "/api/v1/miner-auth/ditto/callback",
+            params={"code": "code-d", "state": query["state"][0]},
+        )
+    result = _callback_result(done)
+    assert result["ditto"] == ["error"]
+    assert "different browser" in result["reason"][0]
+    assert provider.token_requests == []
+    attempt = await client.get(
+        f"/api/v1/me/ditto-link/attempts/{body['attempt_id']}", headers=auth
+    )
+    assert attempt.json()["status"] == "failed"

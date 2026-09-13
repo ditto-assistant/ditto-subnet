@@ -3185,6 +3185,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/miner-auth/ditto/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Accept Link Page
+         * @description The Ditto-side half of the pairing: show WHICH hotkey wants this account.
+         */
+        get: operations["accept_link_page_api_v1_miner_auth_ditto_accept_get"];
+        put?: never;
+        /**
+         * Accept Link Decide
+         * @description Consume the single-use accept token: accept → authenticated, else failed.
+         */
+        post: operations["accept_link_decide_api_v1_miner_auth_ditto_accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/miner-auth/session": {
         parameters: {
             query?: never;
@@ -16901,8 +16925,10 @@ export interface components {
         };
         /**
          * MinerDittoLinkAttemptResponse
-         * @description One attempt. ``authenticated`` carries who signed in on Ditto so the
-         *     miner can confirm the pairing before anything is written.
+         * @description One attempt. ``identity_verified`` means Ditto signed someone in but
+         *     that person has not yet accepted the hotkey; ``authenticated`` carries who
+         *     accepted, so the miner can confirm the pairing before anything is written.
+         *     Identity fields are only present once the Ditto side has accepted.
          */
         MinerDittoLinkAttemptResponse: {
             /**
@@ -16923,7 +16949,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "pending" | "authenticated" | "linked" | "failed" | "expired";
+            status: "pending" | "identity_verified" | "authenticated" | "linked" | "failed" | "expired";
         };
         /** MinerDittoLinkResponse */
         MinerDittoLinkResponse: {
@@ -32577,6 +32603,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MinerDeviceStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_link_page_api_v1_miner_auth_ditto_accept_get: {
+        parameters: {
+            query: {
+                attempt: string;
+                t: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_link_decide_api_v1_miner_auth_ditto_accept_post: {
+        parameters: {
+            query: {
+                attempt: string;
+                t: string;
+                decision: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

@@ -71,6 +71,14 @@ def upgrade() -> None:
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("ditto_user_id", sa.Text(), nullable=True),
         sa.Column("ditto_email", sa.Text(), nullable=True),
+        # Two-sided pairing: the signed-in Ditto browser must accept the hotkey
+        # (single-use token, short TTL) before the miner session may confirm.
+        sa.Column("accept_token_hash", sa.Text(), nullable=True),
+        sa.Column("accept_expires_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("user_accepted_at", sa.DateTime(timezone=True), nullable=True),
+        # Dashboard attempts bind the starting browser with an HttpOnly cookie
+        # that the public callback must present.
+        sa.Column("browser_binding_hash", sa.Text(), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -93,7 +101,8 @@ def upgrade() -> None:
             name="miner_ditto_link_attempts_client_check",
         ),
         sa.CheckConstraint(
-            "status IN ('pending', 'authenticated', 'linked', 'failed', 'expired')",
+            "status IN ('pending', 'identity_verified', 'authenticated', 'linked', "
+            "'failed', 'expired')",
             name="miner_ditto_link_attempts_status_check",
         ),
         sa.UniqueConstraint("state_hash", name="miner_ditto_link_attempts_state_key"),

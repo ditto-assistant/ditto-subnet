@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 DittoLinkClient = Literal["dashboard", "cli"]
 DittoLinkAttemptStatus = Literal[
-    "pending", "authenticated", "linked", "failed", "expired"
+    "pending", "identity_verified", "authenticated", "linked", "failed", "expired"
 ]
 
 
@@ -55,8 +55,10 @@ class MinerDittoLinkStartResponse(BaseModel):
 
 
 class MinerDittoLinkAttemptResponse(BaseModel):
-    """One attempt. ``authenticated`` carries who signed in on Ditto so the
-    miner can confirm the pairing before anything is written."""
+    """One attempt. ``identity_verified`` means Ditto signed someone in but
+    that person has not yet accepted the hotkey; ``authenticated`` carries who
+    accepted, so the miner can confirm the pairing before anything is written.
+    Identity fields are only present once the Ditto side has accepted."""
 
     model_config = ConfigDict(extra="ignore")
 

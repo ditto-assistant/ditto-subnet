@@ -8245,6 +8245,14 @@ class MinerDittoLinkAttempt(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     ditto_user_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     ditto_email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    accept_token_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    accept_expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    user_accepted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    browser_binding_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -8270,7 +8278,8 @@ class MinerDittoLinkAttempt(Base):
             name="miner_ditto_link_attempts_client_check",
         ),
         CheckConstraint(
-            "status IN ('pending', 'authenticated', 'linked', 'failed', 'expired')",
+            "status IN ('pending', 'identity_verified', 'authenticated', 'linked', "
+            "'failed', 'expired')",
             name="miner_ditto_link_attempts_status_check",
         ),
         UniqueConstraint("state_hash", name="miner_ditto_link_attempts_state_key"),
