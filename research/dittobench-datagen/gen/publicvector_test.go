@@ -438,18 +438,19 @@ func TestV12KnownVector(t *testing.T) {
 	}
 }
 
-// TestV13KnownVector is the PLACEHOLDER pin for the v13 plumbing contract
-// (issue #1824): the v13 version constant, the 250-case memory envelope
-// (profilesV13 full: Mem 224 + 9 isolation), and a surface pass that is a
-// byte-for-byte copy of v12. It exists so every later v13 PR (mix rebalance,
-// story v2, tool bench, grader, label-leak fix) moves THIS hash deliberately
-// and leaves every v2..v12 vector above untouched — a moved earlier vector
-// means a lever is not gated on bench_version >= 13. It is re-pinned when the
-// v13 envelope lands, after the /seed label-leak fix.
+// TestV13KnownVector pins the v13 contract at the public rehearsal default
+// (surface salt 0) without changing the currently advertised benchmark
+// version: the v13 version constant, the 250-case memory envelope
+// (profilesV13 full: Mem 224 + 9 isolation), the per-seed grammar banks, the
+// typo v2 projector, the identity-record and question grammars, and the salted
+// surface pass. Any change to one of them moves this hash and must be a
+// deliberate, reviewed new-contract decision inside the v13 pre-activation
+// window; every v2..v12 vector above stays untouched — a moved earlier vector
+// means a lever is not gated on bench_version >= 13.
 func TestV13KnownVector(t *testing.T) {
 	const (
 		seed = int64(123456789)
-		want = "b9bfb611f4509599fb6c79579114244178ca09077737a0313b6db9c5b6f1966c"
+		want = "731e32ceaee82d6e18020c2f3a285627e7d30d104eab1575f283222df0d23059"
 	)
 	prof, ok := ProfileForVersion("full", protocol.BenchVersionV13)
 	if !ok {
@@ -469,6 +470,9 @@ func TestV13KnownVector(t *testing.T) {
 	epoch, _ := protocol.DatasetEpochForVersion(protocol.BenchVersionV13)
 	if artifact.GeneratedAt != epoch.Format("2006-01-02T15:04:05Z07:00") || artifact.BenchVersion != protocol.BenchVersionV13 {
 		t.Fatalf("v13 artifact envelope: generated_at=%s bench_version=%d", artifact.GeneratedAt, artifact.BenchVersion)
+	}
+	if artifact.SurfaceSalt != 0 {
+		t.Fatalf("public rehearsal artifact recorded surface salt %d", artifact.SurfaceSalt)
 	}
 }
 

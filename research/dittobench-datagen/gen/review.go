@@ -79,7 +79,7 @@ func GenerateDatasetReview(seed int64, prof Profile, benchVersion int) (DatasetR
 	if worldCaseCount == 0 {
 		return review, nil
 	}
-	world := universe.Generate(seed, scale)
+	world := universe.GenerateForVersion(seed, scale, benchVersion)
 	primaryCount := primaryCaseBudgetForVersion(prof.Mem, benchVersion)
 	if primaryCount == 0 {
 		primaryCount = prof.Mem

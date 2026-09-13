@@ -231,8 +231,8 @@ func GenerateIsolationForVersion(seed int64, primaryN, nWaves, isoCases, benchVe
 // near-clones merely to make the question text byte-identical.
 func generateV8WorldIsolation(seed int64, primaryN, isoCases, benchVersion int) (IsolationSuite, error) {
 	scale, _ := v8WorldProfile(primaryN)
-	primary := universe.Generate(seed, scale)
-	secondary := universe.Generate(seed^isolationSalt, scale)
+	primary := universe.GenerateForVersion(seed, scale, benchVersion)
+	secondary := universe.GenerateForVersion(seed^isolationSalt, scale, benchVersion)
 	if isoCases > len(primary.People) || isoCases > len(secondary.People) {
 		return IsolationSuite{}, fmt.Errorf("v8 world isolation needs %d people, generated %d", isoCases, len(primary.People))
 	}
