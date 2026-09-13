@@ -755,6 +755,78 @@ The envelope, mix, surface pass, and gates for v13 land in the sibling v13
 issues; `TestV13KnownVector` is pinned only after they do, so the hash frozen
 into the contract already carries opaque ids and jittered timestamps.
 
+### Surface gate and mix audit (#1829 parserprobe, #1830 mixaudit)
+
+Two public, model-free CI instruments land ahead of the v13 contract so every
+v13 surface and mix claim is measured against the same adversary and the same
+histogram (issues #1829, #1830).
+
+**`cmd/parserprobe` — the generator-inverse harness (GIH, N13) and the
+seed-trained router (N14).** Every earlier surface metric (1-NN < 35%,
+family-id < 60%, 4-gram recurrence ≤ 10%, fixed-recipe solver < 50%) was a
+strawman the generator itself beats: `persona.Grammar` is a hand-reviewed CFG,
+and a CFG is exactly invertible. The GIH reads only what a harness sees on the
+wire — the `/seed` records, the staged questions, the tool prompts — assembles a
+typo-tolerant parser from the repository's own frames (the world record
+frames, the story fact renderings, the v12 program forms and glossary banks,
+the family-compiler and divergence frames, and `datagen.ToolSurfacesForVersion`
+for every tool category), recovers (family, slots) for every question, applies
+the public oracle arithmetic that `universe/questions.go resolveWithEvidence`
+defines, launders the value through one "reply exactly" completion, and is
+graded by the real deterministic grader. The router replaces only the
+family-identification step with a naive-Bayes classifier trained on locally
+generated seeds (10,000 is the documented N14 configuration; CI trains a small
+disjoint range) and shares the slot extractors and launder step.
+
+```sh
+go run ./cmd/parserprobe -bench-version 12 -seeds 40 -run-size full -json
+go run ./cmd/parserprobe -bench-version 12 -seeds 40 -router-seeds 10000 -json
+go run ./cmd/parserprobe -artifact surface-passed.json -json
+```
+
+On the public v12 pass-off artifact the GIH scores **0.992 composite** over
+seeds 1–40 (per seed 0.969–0.997; memory family-id 97.6%, answer rate 99.1%,
+tool outcome 99.9%; story 97.7%, programs 99.8%, personal, business and
+quantity 100%). **That is the published baseline, not a failure**: on an
+exactly invertible public surface the honest adversary is the oracle. Three
+wire properties the probe exposes are worth naming because an honest harness
+pays for them too: the v12 program question binds its subject relationally and
+never names its group, so the only wire-visible binding is *order* (the k-th
+program question belongs to the ⌊k/4⌋-th seeded group); the parser-divergence
+questions repeat verbatim per round and bind the same way; and the projector
+edits unprotected join keys (a story's trip alias, a colleague graph's nickname,
+a possessive `Name's` in a family-compiler question), which the GIH absorbs
+with one-edit fuzzy joins.
+
+The ceilings the surface pass must meet — GIH composite ≤ starter-kit − 0.05
+overall and on every surface slice (story, programs, personal, quantity, tool
+prompts), same bound for the router — are defined in `gen/parserprobe_test.go`
+and stay **report-only** until the unregenerable surface-pass owner decision
+(validator commit-reveal salt vs Platform private paraphrase) lands. The CI
+gate `TestParserprobeCeilingOnSurfacePassedArtifacts` is armed by
+`DITTOBENCH_SURFACE_PASSED_ARTIFACTS` (a directory of surface-passed artifact
+JSON) and skips otherwise; the pass-off baseline itself is asserted so a frame
+the parser silently stops recognising cannot masquerade as hardening.
+
+**`cmd/mixaudit` — the per-seed memory-mix histogram and envelope gate.** It
+classifies every memory case by family, semantic domain and sub-domain, answer
+kind, head operation, monetary exposure (direct kinds *and* typed list items,
+weighted by their fraction of case credit), arithmetic, computed-vs-verbatim,
+language, twin/metamorphic relation, and gate exposure, and fails closed on any
+kind or family it cannot classify. It reproduces issue #1529's 117 / 143 /
+50.9% on the public seed. The v13 caps and floors (`mixaudit.V13Envelope`:
+money ≤ 15% of memory weight with a 12% target and ≤ 22 cases, zero monetary
+open programs, arithmetic ≤ 20%, personal ≥ 30%, business ≥ 40%, no
+sub-domain > 20%, no answer-kind × operation > 15%, abstention 10% ± 1%, twin
+coverage ≥ 40%, gate-exposed ≤ 40%, single-error cascade ≤ 4%) are defined here
+and asserted green only by the envelope PR; the v12 baseline against them is
+[v13-family-mix-study.md](v13-family-mix-study.md).
+
+```sh
+go run ./cmd/mixaudit -bench-version 12 -seed 123456789 -run-size full
+go run ./cmd/mixaudit -bench-version 12 -seeds 40 -run-size full -markdown -gih gih40.json
+```
+
 ## Auditing an old score
 
 Pin two things: the `bench_version` published with the score, and the **module
