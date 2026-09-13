@@ -518,7 +518,7 @@ func buildV13Probes(seed int64, w *World) V13Probes {
 		seenAliases[strings.ToLower(p.Name)] = true
 	}
 	for k := 0; k < counts[V13FamilyInsufficient]; k++ {
-		vendor := uniqueCompany(r, seenCompanies)
+		vendor := uniqueCompanyWith(r, seenCompanies, corpusCompany)
 		alias := uniqueString(r, seenAliases, func(r *rand.Rand) string {
 			return strings.ToLower(humandata.Surname(r, k) + " " + []string{"retainer", "refresh", "rollout", "audit", "pilot"}[r.Intn(5)])
 		})

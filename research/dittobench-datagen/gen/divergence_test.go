@@ -16,7 +16,7 @@ import (
 // surface parser really can reach it) and the correct value must differ from it.
 func TestParserDivergenceTrapGrades(t *testing.T) {
 	for seed := int64(1); seed <= 30; seed++ {
-		cases, pairs := buildParserDivergence(seed, 12)
+		cases, pairs := buildParserDivergenceForVersion(seed, 12, protocol.BenchVersionV12)
 		if len(cases) != 12 || len(pairs) != 12 {
 			t.Fatalf("seed %d: got %d cases / %d pairs, want 12/12", seed, len(cases), len(pairs))
 		}
@@ -97,7 +97,7 @@ func containsMoneyOrNumber(mc protocol.MemoryCase, surface, body string) bool {
 // divergence-type label, and the answer key (QuestionType / ExpectedAnswer /
 // DistractorAnswers) is validator-internal and never part of RunRequest.
 func TestParserDivergenceIsWireOpaque(t *testing.T) {
-	cases, _ := buildParserDivergence(123456789, 12)
+	cases, _ := buildParserDivergenceForVersion(123456789, 12, protocol.BenchVersionV12)
 	banned := []string{"parser-divergence", "canary", "distractor", "surface", "template", "expected_answer", "divergence"}
 	for _, sc := range cases {
 		q := strings.ToLower(sc.Case.Question)
@@ -118,8 +118,8 @@ func TestParserDivergenceIsWireOpaque(t *testing.T) {
 // from the same seed (a prerequisite for the pinned known-vector).
 func TestParserDivergenceDeterministic(t *testing.T) {
 	for _, seed := range []int64{1, 42, 123456789} {
-		a, ap := buildParserDivergence(seed, 12)
-		b, bp := buildParserDivergence(seed, 12)
+		a, ap := buildParserDivergenceForVersion(seed, 12, protocol.BenchVersionV12)
+		b, bp := buildParserDivergenceForVersion(seed, 12, protocol.BenchVersionV12)
 		if len(a) != len(b) || len(ap) != len(bp) {
 			t.Fatalf("seed %d: length mismatch", seed)
 		}

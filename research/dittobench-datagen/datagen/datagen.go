@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/ditto-assistant/dittobench-datagen/internal/assistantvoice"
+	"github.com/ditto-assistant/dittobench-datagen/internal/humandata"
+	"github.com/ditto-assistant/dittobench-datagen/internal/publicdata"
 	"github.com/ditto-assistant/dittobench-datagen/internal/textnoise"
 	"github.com/ditto-assistant/dittobench-datagen/internal/uservoice"
 	"github.com/ditto-assistant/dittobench-datagen/persona"
@@ -712,6 +714,19 @@ func fillerForVersion(r *rand.Rand, cat string, benchVersion int) string {
 		p := poolV5(base, extra, benchVersion)
 		return p[r.Intn(len(p))]
 	}
+	if benchVersion >= protocol.BenchVersionV13 {
+		// v13 (#1825): the appearance fillers draw from the public colour and
+		// font corpora, and the addressee fillers from the human-name corpus,
+		// instead of hand lists of four or five entries.
+		switch cat {
+		case "set_accent":
+			return publicdata.Color(r)
+		case "set_font":
+			return publicdata.FontFamily(r, r.Intn(4))
+		case "email_send":
+			return corpusEmailRecipient(r)
+		}
+	}
 	switch cat {
 	case "entity_lookup_chain":
 		return pick(subjects, nil)
@@ -731,6 +746,20 @@ func fillerForVersion(r *rand.Rand, cat string, benchVersion int) string {
 		return pick(calendarTitles, calendarTitlesV5)
 	}
 	return fillerForLegacy(r, cat)
+}
+
+// corpusEmailRecipient composes a v13 email_send addressee from the human-name
+// corpus and an organisation stem ("priya.okafor@talgo.example"), or one of the
+// role-shaped addressees the templates already accept.
+func corpusEmailRecipient(r *rand.Rand) string {
+	switch r.Intn(3) {
+	case 0:
+		return strings.ToLower(humandata.GivenName(r, r.Intn(5))) + "." + strings.ToLower(humandata.Surname(r, r.Intn(7))) + "@" + strings.ToLower(publicdata.OrgStem(r)) + ".example"
+	case 1:
+		return strings.ToLower(humandata.GivenName(r, r.Intn(5))) + "@" + strings.ToLower(publicdata.OrgStem(r)) + ".example"
+	default:
+		return []string{"the team", "my accountant", "my " + publicdata.Occupation(r), "the " + publicdata.OrgStem(r) + " reviewers"}[r.Intn(4)]
+	}
 }
 
 // fillerForLegacy is the historical per-category pool selection for every category
@@ -1431,10 +1460,17 @@ func applyV10StateDependentActions(seed int64, benchVersion int, cases []protoco
 		originalProtected := cases[i].WritingProtected
 		tc := fuzzyWorldTool(cases[i].ID, category, prompt, expected, behavior)
 		tc.ForbiddenTools = forbidden
-		tc.PrerequisitePairs = append(append([]protocol.MemoryPair(nil), originalPrerequisites...), protocol.MemoryPair{
+		routeRecord := protocol.MemoryPair{
 			PairID: pairID, SessionID: fmt.Sprintf("v10-tool-route-%02d", projectIndex), Timestamp: "2026-01-15T10:00:00Z",
 			Prompt: planningPrompt, Response: planningResponse,
-		})
+		}
+		if benchVersion >= protocol.BenchVersionV13 {
+			// v13 (#1827): "v10-tool-route-04" named the routing family (and the
+			// project) on the /seed wire; the fixed timestamp marked it too.
+			routeRecord.SessionID = protocol.OpaqueCaseID(seed, "v13-tool-route-session", projectIndex)
+			routeRecord.Timestamp = protocol.NewOpaqueTimeline(seed, fmt.Sprintf("v13-tool-route-%d", projectIndex)).Next()
+		}
+		tc.PrerequisitePairs = append(append([]protocol.MemoryPair(nil), originalPrerequisites...), routeRecord)
 		tc.WritingProtected = append(append([]string(nil), originalProtected...), project.Alias, project.Client, project.Name)
 		tc.WritingProtected = append(tc.WritingProtected, extraProtected...)
 		cases[i] = tc
@@ -1652,17 +1688,17 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 			cases[i].WritingProtected = append(cases[i].WritingProtected, protected...)
 		}
 		if strings.HasPrefix(cases[i].Category, "world_") {
-			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleForV8World(seed, cases[i].ID).Subject)
+			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleForV8WorldVersion(seed, cases[i].ID, benchVersion).Subject)
 		} else {
-			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleFor(seed, cases[i].ID).Subject)
+			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleForVersion(seed, cases[i].ID, benchVersion).Subject)
 		}
 	}
 	return storyPairs
 }
 
-func v8WorldContactEmail(seed int64, caseID string, world universe.World, index int) protocol.ToolCase {
+func v8WorldContactEmail(seed int64, benchVersion int, caseID string, world universe.World, index int) protocol.ToolCase {
 	p := world.People[index%len(world.People)]
-	needle := toolexec.NeedleForV8World(seed, caseID)
+	needle := toolexec.NeedleForV8WorldVersion(seed, caseID, benchVersion)
 	prompts := []string{
 		"What is %s at right now? Forward the figure to %s — the %s in %s from the %s.",
 		"Could you check the latest figure for %s and send it to %s? I mean my %s in %s, the one from the %s.",
@@ -1687,8 +1723,8 @@ func v8WorldMemoryUpdate(caseID string, world universe.World, index int) protoco
 	return fuzzyWorldTool(caseID, "world_memory_update", fmt.Sprintf("Add to the handoff note for %q at %s that we're doing the handoff Friday. It's the %s project; update the scratchpad, not the project history.", p.Alias, p.Client, p.Purpose), []protocol.ToolSpec{{Name: "update_memory", RequiredArgs: map[string]string{"pair_id": p.ToolNotePairID, "content": "handoff is Friday"}}}, "resolve the project's mutable handoff note and update it without overwriting canonical project evidence")
 }
 
-func v8WorldLinkRead(seed int64, caseID string) protocol.ToolCase {
-	needle := toolexec.NeedleForV8World(seed, caseID)
+func v8WorldLinkRead(seed int64, benchVersion int, caseID string) protocol.ToolCase {
+	needle := toolexec.NeedleForV8WorldVersion(seed, caseID, benchVersion)
 	return fuzzyWorldTool(caseID, "world_link_chain_result_usage", fmt.Sprintf("See what %s is at right now, and open the actual page rather than relying on the search blurb.", needle.Subject), []protocol.ToolSpec{{Name: "search_web"}, {Name: "read_links"}}, "find and read the live source, then report the served value")
 }
 
@@ -1748,10 +1784,10 @@ func (w worldPrompts) expand(family string, index int, grammar persona.Grammar, 
 
 func (w worldPrompts) contactEmail(caseID string, world universe.World, index int) protocol.ToolCase {
 	if !w.v13() {
-		return v8WorldContactEmail(w.seed, caseID, world, index)
+		return v8WorldContactEmail(w.seed, w.benchVersion, caseID, world, index)
 	}
 	p := world.People[index%len(world.People)]
-	needle := toolexec.NeedleForV8World(w.seed, caseID)
+	needle := toolexec.NeedleForV8WorldVersion(w.seed, caseID, w.benchVersion)
 	prompt := w.expand("contact-email", index, v13WorldContactEmailGrammar, map[string]string{
 		"subject": needle.Subject, "nickname": p.Nickname, "relation": p.Relation, "city": p.City, "context": p.Context,
 	})
@@ -1802,9 +1838,9 @@ func (w worldPrompts) businessWorkflow(caseID string, world universe.World, inde
 
 func (w worldPrompts) linkRead(caseID string) protocol.ToolCase {
 	if !w.v13() {
-		return v8WorldLinkRead(w.seed, caseID)
+		return v8WorldLinkRead(w.seed, w.benchVersion, caseID)
 	}
-	needle := toolexec.NeedleForV8World(w.seed, caseID)
+	needle := toolexec.NeedleForV8WorldVersion(w.seed, caseID, w.benchVersion)
 	// The case id is the per-case identity here (no world index), so two
 	// link-read cases in one run do not share a frame.
 	prompt := persona.ExpandSlots(persona.HashRand(w.seed, "v13-world", "link-read", caseID), v13Bank(w.seed, "world:link-read", v13WorldLinkReadGrammar), "root", map[string]string{"subject": needle.Subject})
@@ -2129,7 +2165,7 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		// ("the Veltrix index reached 3,418 points") are always coherent.
 		var filler string
 		if IsResultUsage(cat.name) {
-			filler = toolexec.NeedleFor(seed, caseID).Subject
+			filler = toolexec.NeedleForVersion(seed, caseID, benchVersion).Subject
 		} else {
 			filler = fillerForVersion(r, cat.name, benchVersion)
 		}
@@ -2262,6 +2298,10 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 				Prompt:    "Please remember that Morgan Lee handled my 2024 taxes.",
 				Response:  "Morgan Lee's office number is " + phone + ".",
 			}}
+			if benchVersion >= protocol.BenchVersionV13 {
+				tc.PrerequisitePairs[0].SessionID = protocol.OpaqueCaseID(seed, "v13-tool-prerequisite-session", i)
+				tc.PrerequisitePairs[0].Timestamp = protocol.NewOpaqueTimeline(seed, fmt.Sprintf("v13-tool-prerequisite-%d", i)).Next()
+			}
 			usedFiller = ""
 		}
 		if benchVersion >= protocol.BenchVersionV8 && cat.name == "stale_context_web" {
@@ -2275,6 +2315,10 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 				Prompt:   notePrompt,
 				Response: "I’ll remember that as background, and I’ll check current sources whenever you ask what changed.",
 			}}
+			if benchVersion >= protocol.BenchVersionV13 {
+				tc.PrerequisitePairs[0].SessionID = protocol.OpaqueCaseID(seed, "v13-tool-prerequisite-session", i)
+				tc.PrerequisitePairs[0].Timestamp = protocol.NewOpaqueTimeline(seed, fmt.Sprintf("v13-tool-prerequisite-%d", i)).Next()
+			}
 		}
 		if benchVersion >= protocol.BenchVersionV13 {
 			applyV13CapabilityResolution(&tc, argValue, seed, i)

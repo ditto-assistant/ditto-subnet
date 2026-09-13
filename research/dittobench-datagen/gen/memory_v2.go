@@ -704,7 +704,7 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 			// binds the subject relationally for every group, and removes the
 			// v11 format tells. The case budget and metamorphic-group structure
 			// are unchanged.
-			v10Programs, err = universe.GenerateV12Programs(seed, v10Count)
+			v10Programs, err = universe.GenerateV12ProgramsForVersion(seed, v10Count, benchVersion)
 			if err != nil {
 				return MemorySuite{}, fmt.Errorf("v12 open programs: %w", err)
 			}
@@ -756,13 +756,13 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 	}
 	suite.Cases = append(suite.Cases, integrity...)
 	if divergenceCount > 0 {
-		divergence, divergencePairs := buildParserDivergence(seed, divergenceCount)
+		divergence, divergencePairs := buildParserDivergenceForVersion(seed, divergenceCount, benchVersion)
 		suite.Cases = append(suite.Cases, divergence...)
 		suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, divergencePairs...)
 		suite.ParserDivergenceCases = len(divergence)
 	}
 	if familyCompilerCount > 0 {
-		family := buildFamilyCompiler(seed, familyCompilerCount)
+		family := buildFamilyCompiler(seed, familyCompilerCount, benchVersion)
 		for _, fc := range family {
 			suite.Cases = append(suite.Cases, fc.Staged)
 			suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, fc.Pairs...)

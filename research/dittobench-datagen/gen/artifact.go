@@ -162,7 +162,7 @@ func BuildArtifactForVersionWithSurface(seed int64, benchVersion int, toolCases 
 	}
 	fixtures := make([]FixtureDigest, 0, len(toolCases))
 	for _, c := range toolCases {
-		f := toolexec.BuildFixture(seed, c)
+		f := toolexec.BuildFixtureForVersion(seed, c, benchVersion)
 		fixtures = append(fixtures, FixtureDigest{CaseID: c.ID, Needle: f.NeedleText()})
 	}
 	sort.Slice(fixtures, func(i, j int) bool { return fixtures[i].CaseID < fixtures[j].CaseID })

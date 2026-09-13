@@ -170,7 +170,7 @@ func storyArcCount(scale int) int {
 	}
 }
 
-func buildStories(seed int64, scale int, w World) ([]StoryArc, []Story) {
+func buildStories(seed int64, scale int, w World, benchVersion int) ([]StoryArc, []Story) {
 	r := rand.New(rand.NewSource(storySeed(seed)))
 	arcN := storyArcCount(scale)
 	people := r.Perm(len(w.People))
@@ -253,6 +253,14 @@ func buildStories(seed int64, scale int, w World) ([]StoryArc, []Story) {
 			arc.StoryPairIDs[part] = pairID
 		}
 		arcStories := storiesForArc(seed, i, arc, person, project, trip, r)
+		if benchVersion >= protocol.BenchVersionV13 {
+			// v13 (#1827): "story-04-decision" named the arc and the slot on the
+			// wire. The rendered pair id is opaque again in renderPairs; the story
+			// object mirrors it so reviewer citations carry no label either.
+			for part := range arcStories {
+				arcStories[part].SessionID = protocol.OpaqueCaseID(seed, "v13-story-session", i*3+part)
+			}
+		}
 		stories = append(stories, arcStories...)
 		arcs = append(arcs, arc)
 	}

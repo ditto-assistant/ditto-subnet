@@ -101,6 +101,13 @@ func buildParserDivergenceForVersion(seed int64, count int, benchVersion int) ([
 		return nil, nil
 	}
 	r := v12DivergenceRand(seed)
+	// v13 (#1827): the fixed "2026-02-<ordinal>T<8+ordinal>:15" pattern named
+	// this family to any /seed reader. A seeded business-hours timeline
+	// replaces it; v12 keeps its frozen bytes.
+	var timeline *protocol.OpaqueTimeline
+	if benchVersion >= protocol.BenchVersionV13 {
+		timeline = protocol.NewOpaqueTimeline(seed, "v13-parser-divergence")
+	}
 	rounds := count / 4
 	cases := make([]StagedCase, 0, count)
 	pairs := make([]protocol.MemoryPair, 0, count)
@@ -115,10 +122,14 @@ func buildParserDivergenceForVersion(seed int64, count int, benchVersion int) ([
 		caseID := protocol.OpaqueCaseID(seed, "v12-parser-divergence", ordinal)
 		pairID := protocol.OpaqueCaseID(seed, "v12-parser-divergence-pair", ordinal)
 		ordinal++
+		timestamp := fmt.Sprintf("2026-02-%02dT%02d:15:00Z", 1+(ordinal%27), 8+(ordinal%12))
+		if timeline != nil {
+			timestamp = timeline.Next()
+		}
 		pair := protocol.MemoryPair{
 			PairID:    pairID,
 			SessionID: protocol.OpaqueCaseID(seed, "v12-parser-divergence-session", ordinal),
-			Timestamp: fmt.Sprintf("2026-02-%02dT%02d:15:00Z", 1+(ordinal%27), 8+(ordinal%12)),
+			Timestamp: timestamp,
 			Prompt:    prompt,
 			Response:  response,
 		}

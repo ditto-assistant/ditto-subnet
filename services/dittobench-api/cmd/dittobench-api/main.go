@@ -1480,7 +1480,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// bytes for a seed — recomputes the fixture digests from the same (seed, case).
 	toolFixtureByInternalID := make(map[string]toolexec.Fixture, len(toolCases))
 	for _, c := range toolCases {
-		toolFixtureByInternalID[c.ID] = toolexec.BuildFixture(seed, c)
+		toolFixtureByInternalID[c.ID] = toolexec.BuildFixtureForVersion(seed, c, req.BenchVersion)
 	}
 	// The hashed artifact covers the secondary isolation graph too (when present),
 	// so a dispute re-scores the exact multi-graph seeding.
@@ -1809,7 +1809,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				return
 			}
 		}
-		toolSrv.Register(sc.Case.ID, toolexec.BuildFixture(seed, protocol.ToolCase{ID: internalID}))
+		toolSrv.Register(sc.Case.ID, toolexec.BuildFixtureForVersion(seed, protocol.ToolCase{ID: internalID}, req.BenchVersion))
 	}
 	toolSourceIP := ""
 	if handle != nil {

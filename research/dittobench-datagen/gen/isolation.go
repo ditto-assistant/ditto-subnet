@@ -304,6 +304,12 @@ func generateV8WorldIsolation(seed int64, primaryN, isoCases, benchVersion int) 
 			}
 			pair.PairID = protocol.OpaqueCaseID(seed, "world-isolation-person-"+item.purpose, i)
 			pair.SessionID = fmt.Sprintf("isolation-person-%02d-%s", i, item.session)
+			if benchVersion >= protocol.BenchVersionV13 {
+				// v13 (#1827): "isolation-person-03-d" told a /seed reader this is
+				// the cross-user contamination graph, which person, and that the
+				// row is the address correction. The opaque id carries none of it.
+				pair.SessionID = protocol.OpaqueCaseID(seed, "v13-isolation-session", i*len(ids)+group)
+			}
 			pair.Prompt = projectIsolationPrompt(pair.Prompt, source, projected)
 			item.set(pair.PairID)
 			pairGroups[group] = append(pairGroups[group], pair)
