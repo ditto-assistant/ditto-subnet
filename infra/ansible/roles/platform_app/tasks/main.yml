@@ -199,6 +199,34 @@
     platform_secrets: "{{ dict(platform_secret_reads.results | map(attribute='item.key') | zip(platform_secret_reads.results | map(attribute='stdout'))) }}"
   no_log: true
 
+# Optional secrets: only read when a host names the Secret Manager id, so an
+# unactivated host renders DITTO_LINK_CLIENT_SECRET= and DITTO_ROUTER_API_KEY= empty.
+- name: Read Ditto link client secret from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_ditto_link_client_secret }} --project={{ gcp_project }}"
+  register: platform_ditto_link_secret_read
+  changed_when: false
+  no_log: true
+  when: secret_ditto_link_client_secret | length > 0
+
+- name: Add the Ditto link client secret to the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'ditto_link_client_secret': platform_ditto_link_secret_read.stdout}) }}"
+  no_log: true
+  when: secret_ditto_link_client_secret | length > 0
+
+- name: Read Ditto Router API key from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_ditto_router_api_key }} --project={{ gcp_project }}"
+  register: platform_ditto_router_key_read
+  changed_when: false
+  no_log: true
+  when: secret_ditto_router_api_key | length > 0
+
+- name: Add the Ditto Router API key to the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'ditto_router_api_key': platform_ditto_router_key_read.stdout}) }}"
+  no_log: true
+  when: secret_ditto_router_api_key | length > 0
+
 - name: Read platform OpenRouter key when a Platform inference lane is enabled
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_platform_openrouter_key }} --project={{ gcp_project }}"
   register: platform_openrouter_read

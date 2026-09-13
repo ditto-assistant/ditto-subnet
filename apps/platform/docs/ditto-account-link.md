@@ -100,3 +100,28 @@ keyed idempotently by `(source, external_ref, kind)`.
 `weight` is stored and consumed by nothing. No reward policy, emission split or
 scoring input is defined by this table; that decision belongs to a separate,
 reviewed change.
+
+## Activation (Ansible, land-inactive)
+
+Everything ships OFF. `infra/ansible/roles/platform_app` renders the variables
+below into `apps/platform/.env` (shared by the API and the relay pool);
+activation is a `host_vars` change followed by a converge, in this order:
+
+1. **Prove the origin.** `heyditto apps origins verify <app> https://dittobench.ai`
+   returns a challenge token; set `platform_ditto_callback_challenge_token` to it,
+   converge, check `curl https://dittobench.ai/.well-known/ditto-callback-challenge`
+   returns the token, then `heyditto apps origins verify … --confirm`. Linking stays
+   off during this step.
+2. **Land the secrets.** `heyditto apps secret rotate <app> --gcp-secret <id> --project ditto-app-dev`
+   forwards the new secret straight into Secret Manager (nothing is printed); set
+   `secret_ditto_link_client_secret: <id>`. For the relay, mint a key on the
+   sponsor-billed DittoBench endpoint into Secret Manager and set `secret_ditto_router_api_key`.
+3. **Switch on.** `platform_ditto_link_enabled: true`, `platform_ditto_link_client_id`,
+   `platform_ditto_link_redirect_url: https://dittobench.ai/api/v1/miner-auth/ditto/callback`;
+   converge; `GET /api/v1/me/ditto-link` reports `enabled: true`. For the relay,
+   `platform_ditto_router_upstream_enabled: true`, `platform_ditto_router_lanes: competition`
+   and the exact ack `platform_ditto_router_competition_ack: memories-off-locked-model`,
+   after a canary parity sample.
+
+User billing on the DittoBench endpoint stays `sponsor` until the acceptance run in
+backend#2695 passes with a real consenting account.

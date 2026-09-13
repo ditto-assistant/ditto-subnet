@@ -345,3 +345,26 @@ secret_platform_perplexity_key: "PERPLEXITY_API_KEY"
 
 # Docker apt repo (Debian).
 platform_docker_apt_arch: amd64
+
+# --- Sign in with Ditto (miner hotkey <-> Ditto account) and Ditto Router upstream ---
+# All OFF/empty by default: merging this renders the same behaviour as before.
+# Activation is a host_vars change (see apps/platform/docs/ditto-account-link.md):
+#   1. put the challenge token Ditto issued in platform_ditto_callback_challenge_token,
+#      converge, run `heyditto apps origins verify <app> https://dittobench.ai --confirm`;
+#   2. name the Secret Manager ids and set platform_ditto_link_enabled: true.
+platform_ditto_link_enabled: false
+platform_ditto_link_issuer: "https://api.heyditto.ai"
+platform_ditto_link_client_id: ""
+platform_ditto_link_redirect_url: ""
+platform_ditto_link_return_url: "https://dittobench.ai/#/reviews"
+platform_ditto_callback_challenge_token: ""
+# Secret Manager id holding the DittoBench app's OIDC client secret; empty = not read.
+secret_ditto_link_client_secret: ""
+# Relay pool -> Ditto Router. The competition lane additionally needs the exact
+# ack the relay demands (memories-off-locked-model); see services/model-relay/README.md.
+platform_ditto_router_upstream_enabled: false
+platform_ditto_router_upstream_url: "https://inference.heyditto.ai/v1"
+platform_ditto_router_lanes: ""
+platform_ditto_router_competition_ack: ""
+# Secret Manager id holding the DittoBench endpoint key used by the relay; empty = not read.
+secret_ditto_router_api_key: ""

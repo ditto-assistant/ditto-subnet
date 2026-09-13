@@ -59,6 +59,10 @@ class DittoLinkConfig:
     """Where the browser lands after linking (the dashboard sign-in page)."""
     scopes: str = DEFAULT_SCOPES
     timeout_seconds: float = 10.0
+    # Served verbatim at GET /.well-known/ditto-callback-challenge so Ditto can
+    # verify that this deployment owns its origin BEFORE linking is enabled;
+    # None (unset) means the path answers 404.
+    callback_challenge_token: str | None = None
 
 
 @dataclass(frozen=True)

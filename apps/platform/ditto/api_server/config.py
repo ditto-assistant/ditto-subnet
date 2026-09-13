@@ -996,6 +996,10 @@ def parse_ditto_link_config_from_env() -> DittoLinkConfig:
         scopes=os.environ.get("DITTO_LINK_SCOPES", "openid email").strip()
         or "openid email",
         timeout_seconds=timeout_seconds,
+        callback_challenge_token=os.environ.get(
+            "DITTO_CALLBACK_CHALLENGE_TOKEN", ""
+        ).strip()
+        or None,
     )
 
 

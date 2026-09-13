@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/.well-known/ditto-callback-challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ditto Callback Challenge */
+        get: operations["ditto_callback_challenge__well_known_ditto_callback_challenge_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/.well-known/mcp/server.json": {
         parameters: {
             query?: never;
@@ -26627,6 +26644,26 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    ditto_callback_challenge__well_known_ditto_callback_challenge_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
     mcp_server_metadata__well_known_mcp_server_json_get: {
         parameters: {
             query?: never;
