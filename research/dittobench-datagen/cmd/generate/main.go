@@ -12,6 +12,12 @@
 //	generate -bench-version 2 -seed 123456789 -run-size full -out d.json
 //	generate -bench-version 3 -seed 123456789 -sha
 //	generate -bench-version 3 -run-size small # random seed (prints it)
+//	generate -bench-version 13 -seed 123456789 -surface-salt 7 -sha
+//
+// -surface-salt (bench_version >= 13 only) re-renders the dataset's surfaces
+// under a validator- or Platform-held salt; 0 is the public rehearsal default
+// and reproduces the unsalted artifact byte-for-byte. A post-acceptance
+// reproduction passes back the salt recorded with the score.
 //
 // The SHA-256 printed on stderr is the same dataset_sha256 the platform pins and a
 // validator re-derives. If two runs of the same seed print a different hash, the
@@ -36,8 +42,10 @@ func main() {
 		outPath string
 		shaOnly bool
 		version int
+		salt    uint64
 	)
 	flag.IntVar(&version, "bench-version", 0, "required benchmark generation version ("+protocol.SupportedBenchVersionList()+")")
+	flag.Uint64Var(&salt, "surface-salt", 0, "bench_version >= 13 surface salt (0 = public rehearsal default)")
 	flag.Int64Var(&seed, "seed", 0, "dataset seed (omit for a fresh random seed)")
 	flag.StringVar(&runSize, "run-size", "full", "profile: small | medium | full")
 	flag.StringVar(&outPath, "out", "", "write canonical JSON here (default: stdout)")
@@ -45,6 +53,10 @@ func main() {
 	flag.Parse()
 	if !protocol.SupportedBenchVersion(version) {
 		fmt.Fprintln(os.Stderr, "-bench-version is required and must be one of "+protocol.SupportedBenchVersionList())
+		os.Exit(2)
+	}
+	if salt != 0 && version < protocol.BenchVersionV13 {
+		fmt.Fprintln(os.Stderr, "-surface-salt applies to bench_version 13 and later only")
 		os.Exit(2)
 	}
 
@@ -64,7 +76,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	art, err := gen.GenerateDataset(seed, prof, version)
+	art, err := gen.GenerateDatasetWithSurface(seed, prof, version, gen.SurfaceOptions{Salt: salt})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "generate artifact: %v\n", err)
 		os.Exit(1)
@@ -76,8 +88,8 @@ func main() {
 	}
 
 	// Provenance to stderr so stdout stays clean for piping the artifact.
-	fmt.Fprintf(os.Stderr, "seed=%d run_size=%s bench_version=%d dataset_sha256=%s\n",
-		seed, runSize, art.BenchVersion, sha)
+	fmt.Fprintf(os.Stderr, "seed=%d run_size=%s bench_version=%d surface_salt=%d dataset_sha256=%s\n",
+		seed, runSize, art.BenchVersion, art.SurfaceSalt, sha)
 
 	if shaOnly {
 		fmt.Println(sha)

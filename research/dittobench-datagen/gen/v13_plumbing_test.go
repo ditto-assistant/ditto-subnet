@@ -218,49 +218,6 @@ func TestV13ProfileAndEnvelope(t *testing.T) {
 	}
 }
 
-// TestV13SurfacePassStartsAsV12Copy pins that the v13 surface pass is today a
-// byte-for-byte copy of the v12 pass: applied to the same assembled artifact,
-// both produce identical bytes. Delete this test in the PR that makes the v13
-// pass diverge (the public pre-pass for the private surface pass); until then a
-// failure here means one of the two frozen bank tables drifted.
-func TestV13SurfacePassStartsAsV12Copy(t *testing.T) {
-	prof, _ := ProfileForVersion("medium", protocol.BenchVersionV12)
-	rng, err := NewRNGForVersion(5, protocol.BenchVersionV12)
-	if err != nil {
-		t.Fatal(err)
-	}
-	toolCases, _ := GenerateToolsForVersion(rng, 5, prof.Tools, protocol.BenchVersionV12)
-	suite, err := GenerateMemorySuiteForVersion(rng, 5, prof.Mem, prof.Waves, prof.RawPairsFrac, protocol.BenchVersionV12)
-	if err != nil {
-		t.Fatal(err)
-	}
-	build := func() DatasetArtifact {
-		flat := make([]ArtifactCase, 0, len(suite.Cases))
-		for _, sc := range suite.Cases {
-			flat = append(flat, ArtifactCase{MemoryCase: sc.Case, UserID: sc.UserID})
-		}
-		tools, waves := cloneV8TranscriptSurfaces(toolCases, suite.Waves)
-		return DatasetArtifact{Seed: 5, ToolCases: tools, MemoryWaves: waves, MemoryCases: flat}
-	}
-	viaV12 := build()
-	V12ApplyArtifactSurfaceNoise(5, protocol.BenchVersionV12, &viaV12)
-	viaV13 := build()
-	V13ApplyArtifactSurfacePass(5, protocol.BenchVersionV13, &viaV13)
-	a, _, _ := viaV12.SHA256Hex()
-	b, _, _ := viaV13.SHA256Hex()
-	if a != b {
-		t.Fatalf("v13 surface pass diverged from the v12 pass: %s vs %s", a, b)
-	}
-	untouched := build()
-	V13ApplyArtifactSurfacePass(5, protocol.BenchVersionV12, &untouched)
-	c, _, _ := untouched.SHA256Hex()
-	raw := build()
-	d, _, _ := raw.SHA256Hex()
-	if c != d {
-		t.Fatal("v13 surface pass must be a no-op below bench_version 13")
-	}
-}
-
 // TestMemoryExposureAuditIsVersionExplicit pins that the exposure audit names
 // its contract: the artifact version must match the requested version, the
 // v10 entry point still works, and from v13 correction/join families count as

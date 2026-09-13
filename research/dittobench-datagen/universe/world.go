@@ -111,6 +111,8 @@ type World struct {
 	// (the v8..v12 path) records BenchVersionV8; GenerateForVersion records the
 	// requested version so version-gated levers (v13 public corpora, opaque
 	// session ids, jittered timestamps) can be audited from the value itself.
+	// From v13 it also selects version-gated surface rendering (identity records
+	// and question frames from per-seed grammars, universe/v13_surface.go).
 	BenchVersion   int
 	UserName       string
 	UserCompany    string
@@ -171,7 +173,10 @@ func Generate(seed int64, scale int) World {
 // as an OpaqueCaseID, and stamps pairs from a seeded business-hours timeline
 // instead of a 137-hour stride. The rng draw order for the frozen path is
 // untouched: every v13 lever either replaces a draw one-for-one or consumes an
-// independent seed stream.
+// independent seed stream. From v13 the project/person identity records and
+// the question frames also render from per-seed grammars (v13_surface.go)
+// while people, projects, trips, stories, values, pair identities, and
+// oracles stay the same.
 func GenerateForVersion(seed int64, scale int, benchVersion int) World {
 	if scale < 1 {
 		scale = 1
@@ -341,7 +346,11 @@ func (w World) renderPairs(r *rand.Rand) []protocol.MemoryPair {
 		pairs = append(pairs, protocol.MemoryPair{PairID: id, SessionID: session, Timestamp: timestamp, Prompt: prompt, Response: response})
 	}
 	for i, p := range w.People {
-		add(p.IdentityPairID, fmt.Sprintf("people-%02d-a", i), shortLead(r)+p.Name+" is my "+p.Relation+". Everyone there calls them “"+p.Nickname+".”", warmResponse(w.Seed, p.IdentityPairID,
+		identity := shortLead(r) + p.Name + " is my " + p.Relation + ". Everyone there calls them “" + p.Nickname + ".”"
+		if w.v13Surface() {
+			identity = w.v13PersonIdentity(p, i)
+		}
+		add(p.IdentityPairID, fmt.Sprintf("people-%02d-a", i), identity, warmResponse(w.Seed, p.IdentityPairID,
 			"Aw, I love that nickname. I’ll remember them.",
 			"That history helps — I know who you mean.",
 			"I’ve got the person and nickname together."))
@@ -381,7 +390,11 @@ func (w World) renderPairs(r *rand.Rand) []protocol.MemoryPair {
 	add(w.BusinessPairID, "business-import", "Here is the raw operations paste:\n\n"+wall.String(), "Send it my way — I’ll untangle this without losing how everything connects.")
 	for i, p := range w.Projects {
 		lead := w.People[p.Lead]
-		add(p.ContextPairID, fmt.Sprintf("project-%02d-context", i), fmt.Sprintf("When I say “%s” I mean %s for %s, not the similarly named client work. %s owns it internally; %s is the vendor, and the AP record is %s.", p.Alias, p.Name, p.Client, lead.Name, p.Vendor, p.RecordID), warmResponse(w.Seed, p.ContextPairID,
+		context := fmt.Sprintf("When I say “%s” I mean %s for %s, not the similarly named client work. %s owns it internally; %s is the vendor, and the AP record is %s.", p.Alias, p.Name, p.Client, lead.Name, p.Vendor, p.RecordID)
+		if w.v13Surface() {
+			context = w.v13ProjectIdentity(p, lead, i)
+		}
+		add(p.ContextPairID, fmt.Sprintf("project-%02d-context", i), context, warmResponse(w.Seed, p.ContextPairID,
 			"Got you — every name in the right role.",
 			"I’ll keep the shorthand mapped correctly.",
 			"I won’t mix up the project or people."))
@@ -428,7 +441,7 @@ func (w World) renderPairs(r *rand.Rand) []protocol.MemoryPair {
 			"I’ve got the change; everything else stays."))
 	}
 	for _, story := range w.Stories {
-		prompt, response := story.render(w.Seed)
+		prompt, response := story.renderForVersion(w.Seed, w.BenchVersion)
 		add(story.PairID, story.SessionID, prompt, response)
 	}
 	for i, preference := range w.Preferences {

@@ -35,6 +35,12 @@ type DatasetArtifact struct {
 	// re-score sees identical tool results. Sorted by CaseID (no Go map) so the
 	// JSON stays byte-stable. Omitted when no tool endpoint was served.
 	ToolFixtures []FixtureDigest `json:"tool_fixtures,omitempty"`
+	// SurfaceSalt records the bench_version >= 13 surface salt the artifact was
+	// rendered under (gen/v13_surface.go). Omitted for the public rehearsal
+	// default (salt 0) and for every earlier version, so their bytes are
+	// unchanged; a non-zero salt is what a post-acceptance reproduction passes
+	// back (`generate -surface-salt`).
+	SurfaceSalt uint64 `json:"surface_salt,omitempty"`
 }
 
 // ArtifactCase is a memory case as it enters the hashed artifact: the case plus
@@ -68,6 +74,15 @@ type FixtureDigest struct {
 // fixtures + staged suite) and calls BuildArtifact with them, so both paths
 // produce an identical artifact for a given seed.
 func GenerateDataset(seed int64, prof Profile, benchVersion int) (DatasetArtifact, error) {
+	return GenerateDatasetWithSurface(seed, prof, benchVersion, SurfaceOptions{})
+}
+
+// GenerateDatasetWithSurface is GenerateDataset with an explicit v13 surface
+// contract. SurfaceOptions{} (salt 0, no private pass) is byte-identical to
+// GenerateDataset for every version; a non-zero salt re-renders only the
+// bench_version >= 13 surfaces (see V13ApplyArtifactSurfacePass) and is
+// ignored below v13.
+func GenerateDatasetWithSurface(seed int64, prof Profile, benchVersion int, surface SurfaceOptions) (DatasetArtifact, error) {
 	// v2 is a FROZEN contract, served from a snapshot of the generator as it
 	// stood when v2 shipped (internal/v2gen). It is not a conditional through
 	// the live generator: the v3 anti-gaming work perturbs the shared rng stream
@@ -98,7 +113,7 @@ func GenerateDataset(seed int64, prof Profile, benchVersion int) (DatasetArtifac
 	}
 	suite.Cases = append(suite.Cases, iso.Cases...)
 	memWaves := MergeMemoryWaves(suite.Waves, iso.SecondaryWave)
-	return BuildArtifactForVersion(seed, benchVersion, toolCases, suite.Cases, memWaves)
+	return BuildArtifactForVersionWithSurface(seed, benchVersion, toolCases, suite.Cases, memWaves, surface)
 }
 
 // MergeMemoryWaves appends the secondary isolation graph's seeding wave to the
@@ -126,6 +141,13 @@ func BuildArtifact(seed int64, toolCases []protocol.ToolCase, memCases []StagedC
 // contract. It rejects unknown versions instead of silently using the current
 // release.
 func BuildArtifactForVersion(seed int64, benchVersion int, toolCases []protocol.ToolCase, memCases []StagedCase, memWaves []protocol.SeedRequest) (DatasetArtifact, error) {
+	return BuildArtifactForVersionWithSurface(seed, benchVersion, toolCases, memCases, memWaves, SurfaceOptions{})
+}
+
+// BuildArtifactForVersionWithSurface is BuildArtifactForVersion with an
+// explicit v13 surface contract; SurfaceOptions{} reproduces
+// BuildArtifactForVersion byte-for-byte.
+func BuildArtifactForVersionWithSurface(seed int64, benchVersion int, toolCases []protocol.ToolCase, memCases []StagedCase, memWaves []protocol.SeedRequest, surface SurfaceOptions) (DatasetArtifact, error) {
 	epoch, err := protocol.DatasetEpochForVersion(benchVersion)
 	if err != nil {
 		return DatasetArtifact{}, err
@@ -161,13 +183,14 @@ func BuildArtifactForVersion(seed int64, benchVersion int, toolCases []protocol.
 	}
 	// One surface pass per contract, dispatched as floors so a new version is
 	// an explicit branch here rather than an inherited one. v12 supersedes the
-	// v11 pass with compositional stored-directive markers; v13 starts as a
-	// byte-for-byte copy of v12 and becomes the public pre-pass for the private
-	// surface pass. Every pass leaves every value byte-exact, so grading is
-	// unaffected.
+	// v11 pass with compositional stored-directive markers; v13 supersedes v12
+	// with the salted surface pass (compositional markers, typo v2,
+	// private-pass hand-off, regeneration canary). Every pass leaves graded
+	// values byte-exact (the non-zero-salt canary re-key is the deliberate,
+	// documented exception), so grading is unaffected.
 	switch {
 	case benchVersion >= protocol.BenchVersionV13:
-		V13ApplyArtifactSurfacePass(seed, benchVersion, &artifact)
+		V13ApplyArtifactSurfacePass(seed, benchVersion, &artifact, surface)
 	case benchVersion >= protocol.BenchVersionV12:
 		V12ApplyArtifactSurfaceNoise(seed, benchVersion, &artifact)
 	default:
