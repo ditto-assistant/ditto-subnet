@@ -220,6 +220,14 @@ class LedgerFamilyMember:
     agent_name: str
     agent_version: int | None
     canonical_composite: float
+    official_composite: float | None = None
+    """Continual / ranking composite for this generation, when known.
+
+    The compact board must show this, not ``canonical_composite``. The
+    three-validator median is a different estimator; pairing it with a
+    retest-seed chip made later uploads look like they outranked the
+    representative.
+    """
     submitted_at: datetime | None = None
     """When this generation arrived, for readers explaining the crown anchor.
 
@@ -2344,6 +2352,7 @@ async def list_eligible_ledger(
             family_agent.c.name.label("family_agent_name"),
             family_agent.c.version.label("family_agent_version"),
             rooted.c.composite.label("family_canonical_composite"),
+            rooted.c.official_score.label("family_official_composite"),
         )
     else:
         family_columns = (
@@ -2351,6 +2360,7 @@ async def list_eligible_ledger(
             null().label("family_agent_name"),
             null().label("family_agent_version"),
             null().label("family_canonical_composite"),
+            null().label("family_official_composite"),
         )
     if v9_enforce:
         receipt_columns: tuple[ColumnElement[Any], ...] = (
@@ -2532,6 +2542,11 @@ async def list_eligible_ledger(
                 agent_name=member.family_agent_name,
                 agent_version=member.family_agent_version,
                 canonical_composite=float(member.family_canonical_composite),
+                official_composite=(
+                    float(member.family_official_composite)
+                    if member.family_official_composite is not None
+                    else None
+                ),
             )
             for member in group_rows
             if member.family_agent_id is not None

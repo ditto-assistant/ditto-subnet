@@ -128,6 +128,8 @@ export interface LeaderboardFamilyMember {
   agent_name: string;
   agent_version?: number | null;
   canonical_composite: number;
+  /** Same estimator as the parent KOTH row. Prefer this over canonical_composite. */
+  official_composite?: number | null;
   /** Match against the entry's crown_first_seen to find the generation that
    * supplies the fold anchor. May sit on a different hotkey than the winner. */
   submitted_at?: string | null;

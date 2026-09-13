@@ -862,6 +862,7 @@ describe("board view controls (row 1 slice)", () => {
                         agent_name: "prior-version",
                         agent_version: 4,
                         canonical_composite: 0.91,
+                        official_composite: 0.786333,
                         confirmation_seed_depth: 1,
                       },
                     ],
@@ -888,6 +889,9 @@ describe("board view controls (row 1 slice)", () => {
     });
     expect(chip).toHaveClass("settled");
     expect(chip).toHaveAttribute("data-tooltip", expect.stringContaining("this exact submission"));
+    const score = document.querySelector(".family-child:not([hidden]) .family-member-score");
+    expect(score?.textContent).toBe("0.786333");
+    expect(score).toHaveAttribute("title", expect.stringContaining("Official composite"));
   });
 
   it("labels all v9 confirmation states and suppresses pending rows in enforce mode", async () => {

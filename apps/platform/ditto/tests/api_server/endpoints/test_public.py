@@ -3908,6 +3908,7 @@ class TestPublicLeaderboard:
                     "agent_name": "agent",
                     "agent_version": None,
                     "canonical_composite": pytest.approx(0.958),
+                    "official_composite": pytest.approx(0.958),
                     # Published so a reader can tell which generation supplies
                     # the winner's crown_first_seen, and on whose hotkey.
                     "submitted_at": ANY,
@@ -3946,6 +3947,105 @@ class TestPublicLeaderboard:
                 "shared_seed_confirmations": 0,
             }
         ]
+
+    async def test_owner_family_child_publishes_official_not_just_canonical(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A later upload's 3-validator median must not be the expander score.
+
+        The parent KOTH row uses the continual mean. Publishing only the
+        canonical median next to a retest-seed chip made Arachne v31 look
+        like it outranked the v14 representative.
+        """
+        from ditto.db.queries.confirmation_scores import (
+            ConfirmationSeedScore,
+            append_confirmation_scores,
+        )
+
+        coldkey = "5FamilyOfficialScoreColdkey"
+        representative = await _seed_k3(
+            session_maker,
+            miner="5" + "A" * 47,
+            composites=[0.90, 0.90, 0.90],
+            details={"bench_version": _ERA},
+            created_at=datetime(2026, 6, 8, 12, 0, tzinfo=UTC),
+        )
+        hidden_generation = await _seed_k3(
+            session_maker,
+            miner="5" + "B" * 47,
+            composites=[0.96, 0.96, 0.96],
+            details={"bench_version": _ERA},
+            created_at=datetime(2026, 6, 8, 18, 0, tzinfo=UTC),
+        )
+        retest_seed = 424242
+        async with session_maker() as s, s.begin():
+            now = datetime.now(UTC)
+            s.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_C,
+                    software_version="0.28.0",
+                    protocol_version=14,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_ERA]),
+                )
+            )
+            await append_confirmation_scores(
+                s,
+                rows=[
+                    ConfirmationSeedScore(
+                        UUID(representative),
+                        _VALIDATOR_C,
+                        retest_seed,
+                        0.90,
+                        f"family-official-rep-{representative}",
+                        None,
+                    ),
+                    ConfirmationSeedScore(
+                        UUID(hidden_generation),
+                        _VALIDATOR_C,
+                        retest_seed,
+                        0.50,
+                        f"family-official-hid-{hidden_generation}",
+                        None,
+                    ),
+                ],
+                bench_version=_ERA,
+                created_at=now,
+            )
+        await _seed_payment(
+            session_maker,
+            agent_id=representative,
+            miner_hotkey="5" + "A" * 47,
+            miner_coldkey=coldkey,
+            index=51,
+        )
+        await _seed_payment(
+            session_maker,
+            agent_id=hidden_generation,
+            miner_hotkey="5" + "B" * 47,
+            miner_coldkey=coldkey,
+            index=52,
+        )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+
+        board = (await client.get("/api/v1/public/leaderboard")).json()
+        assert board["continual_aggregate_active"] is True
+        entry = board["entries"][0]
+        assert entry["agent_id"] == representative
+        child = entry["submission_family"]["members"][0]
+        assert child["agent_id"] == str(hidden_generation)
+        assert child["canonical_composite"] == pytest.approx(0.96)
+        assert child["official_composite"] == pytest.approx((0.96 * 3 + 0.50) / 4)
+        assert child["official_composite"] < child["canonical_composite"]
+        assert child["confirmation_seed_depth"] == 1
 
     async def test_agent_detail_family_uses_current_factor_adjusted_representative(
         self,
@@ -4074,6 +4174,9 @@ class TestPublicLeaderboard:
         assert entry["agent_id"] == representative
         family_members = (entry["submission_family"] or {}).get("members", [])
         assert [member["canonical_composite"] for member in family_members] == [
+            pytest.approx(0.0)
+        ]
+        assert [member["official_composite"] for member in family_members] == [
             pytest.approx(0.0)
         ]
         # Unranked: a zero-score child is rendered, never listed as its own entry.

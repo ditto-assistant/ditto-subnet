@@ -39,6 +39,7 @@ import {
   dethroneBandScale,
   dethroneFloor,
   displayComposite,
+  familyMemberDisplayComposite,
   embargoHours,
   foldArrival,
   foldArrivalMs,
@@ -132,6 +133,22 @@ describe("displayComposite", () => {
     expect(displayComposite({ composite: 0.5, official_composite: 0.6 })).toBe(0.6);
     expect(displayComposite({ composite: 0.5 })).toBe(0.5);
     expect(displayComposite({ composite: 0.5, official_composite: null })).toBe(0.5);
+  });
+
+  it("shows a family child's official composite instead of the three-validator median", () => {
+    expect(
+      familyMemberDisplayComposite({
+        canonical_composite: 0.82861,
+        official_composite: 0.786333,
+      }),
+    ).toBe(0.786333);
+    expect(
+      familyMemberDisplayComposite({
+        canonical_composite: 0.82861,
+        official_composite: null,
+      }),
+    ).toBe(0.82861);
+    expect(familyMemberDisplayComposite({ canonical_composite: 0.82861 })).toBe(0.82861);
   });
 
   it("ranks by the settled active-version median mid-rollout", () => {

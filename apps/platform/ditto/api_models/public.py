@@ -516,6 +516,22 @@ class PublicLeaderboardFamilyMember(BaseModel):
     agent_name: str
     agent_version: Annotated[int | None, Field(default=None, ge=1)] = None
     canonical_composite: Annotated[float, Field(ge=_MIN_DISPLAY_COMPOSITE, le=1.0)]
+    official_composite: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=_MIN_DISPLAY_COMPOSITE,
+            le=1.0,
+            description=(
+                "The same ranking composite the parent KOTH row uses: the "
+                "continual mean of the quorum scores plus shared retest seeds "
+                "when that estimator is active, otherwise the canonical "
+                "median. The expander must render this, not "
+                "``canonical_composite``, or a later upload's three-validator "
+                "median looks like it outranks the representative."
+            ),
+        ),
+    ] = None
     submitted_at: Annotated[
         datetime | None,
         Field(

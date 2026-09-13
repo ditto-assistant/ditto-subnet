@@ -68,6 +68,16 @@ export function displayComposite(e: CompositeCarrier, settledView = false): numb
   return e.official_composite != null ? e.official_composite : e.composite;
 }
 
+/** The number a family expander must show: official when present, else canonical. */
+export function familyMemberDisplayComposite(member: {
+  canonical_composite: number;
+  official_composite?: number | null;
+}): number {
+  return member.official_composite != null
+    ? member.official_composite
+    : member.canonical_composite;
+}
+
 /** Arrival fields the KOTH fold and the board clock read. */
 export interface ArrivalCarrier {
   first_seen?: string | null;

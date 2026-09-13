@@ -2399,6 +2399,7 @@ def _public_leaderboard_family(
             )[0],
             agent_version=member.agent_version,
             canonical_composite=member.canonical_composite,
+            official_composite=getattr(member, "official_composite", None),
             submitted_at=member.submitted_at,
             miner_hotkey=member.miner_hotkey,
             confirmation_seed_depth=depths.get(member.agent_id, 0),
@@ -2406,6 +2407,17 @@ def _public_leaderboard_family(
         for member in members
         if member.agent_id != representative_agent_id
     ]
+    children.sort(
+        key=lambda member: (
+            -(
+                member.official_composite
+                if member.official_composite is not None
+                else member.canonical_composite
+            ),
+            member.submitted_at or datetime.min.replace(tzinfo=UTC),
+            str(member.agent_id),
+        )
+    )
     return PublicLeaderboardFamily(members=children) if children else None
 
 
@@ -3101,6 +3113,9 @@ async def build_public_leaderboard(
                         agent_name=member.agent_name,
                         agent_version=member.agent_version,
                         canonical_composite=member.canonical_composite,
+                        official_composite=board_official_composites.get(
+                            member.agent_id, member.canonical_composite
+                        ),
                         submitted_at=member.submitted_at,
                         miner_hotkey=member.miner_hotkey,
                     )

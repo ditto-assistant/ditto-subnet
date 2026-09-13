@@ -20197,6 +20197,11 @@ export interface components {
              */
             miner_hotkey?: string | null;
             /**
+             * Official Composite
+             * @description The same ranking composite the parent KOTH row uses: the continual mean of the quorum scores plus shared retest seeds when that estimator is active, otherwise the canonical median. The expander must render this, not ``canonical_composite``, or a later upload's three-validator median looks like it outranks the representative.
+             */
+            official_composite?: number | null;
+            /**
              * Submitted At
              * @description When this generation arrived (UTC). The family's earliest arrival within the dethrone margin of the winner is what the KOTH fold orders on, so this is what lets a reader locate the generation supplying the winner's ``crown_first_seen`` rather than infer it.
              */

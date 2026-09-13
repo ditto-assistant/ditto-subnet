@@ -25,6 +25,7 @@ import {
   crownHeldRowLabel,
   crownHeldRowTip,
   displayComposite,
+  familyMemberDisplayComposite,
   chainWeightLabel,
   errBandBounds,
   foldArrival,
@@ -934,8 +935,11 @@ function BoardRow(props: {
                   />
                   <span class="submission-version">{agentVersionLabel(member.agent_version)}</span>
                 </span>
-                <span class="family-member-score" title="Canonical three-validator median">
-                  {fxScore(member.canonical_composite)}
+                <span
+                  class="family-member-score"
+                  title="Official composite (same estimator as KOTH). Includes shared retest seeds when the continual mean is active."
+                >
+                  {fxScore(familyMemberDisplayComposite(member))}
                 </span>
                 <Show when={member.submitted_at}>
                   <span class="family-member-submitted" title={"Upload " + member.submitted_at}>
