@@ -2967,6 +2967,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/ditto-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current Link */
+        get: operations["current_link_api_v1_me_ditto_link_get"];
+        put?: never;
+        post?: never;
+        /** Unlink */
+        delete: operations["unlink_api_v1_me_ditto_link_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/ditto-link/attempts/{attempt_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Link Attempt */
+        get: operations["link_attempt_api_v1_me_ditto_link_attempts__attempt_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/ditto-link/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Link */
+        post: operations["start_link_api_v1_me_ditto_link_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/reviews": {
         parameters: {
             query?: never;
@@ -16687,6 +16739,83 @@ export interface components {
             ttl_seconds: number;
             /** User Code */
             user_code: string;
+        };
+        /** MinerDittoLinkAttemptResponse */
+        MinerDittoLinkAttemptResponse: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Error */
+            error?: string | null;
+            link?: components["schemas"]["MinerDittoLinkView"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "linked" | "failed" | "expired";
+        };
+        /** MinerDittoLinkResponse */
+        MinerDittoLinkResponse: {
+            /** Enabled */
+            enabled: boolean;
+            link?: components["schemas"]["MinerDittoLinkView"] | null;
+        };
+        /** MinerDittoLinkStartRequest */
+        MinerDittoLinkStartRequest: {
+            /**
+             * Client
+             * @default dashboard
+             * @enum {string}
+             */
+            client: "dashboard" | "cli";
+            /** Return To */
+            return_to?: string | null;
+        };
+        /** MinerDittoLinkStartResponse */
+        MinerDittoLinkStartResponse: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Authorize Url */
+            authorize_url: string;
+            /** Expires In */
+            expires_in: number;
+        };
+        /**
+         * MinerDittoLinkView
+         * @description One hotkey's Ditto account link as the miner sees it.
+         *
+         *     ``ditto_user_id`` is the verified OIDC subject; nothing here was supplied
+         *     by the caller.
+         */
+        MinerDittoLinkView: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Ditto Email */
+            ditto_email?: string | null;
+            /** Ditto User Id */
+            ditto_user_id: string;
+            /**
+             * Linked Via
+             * @enum {string}
+             */
+            linked_via: "dashboard" | "cli";
+            /** Miner Coldkey */
+            miner_coldkey?: string | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** MinerFeeDay */
         MinerFeeDay: {
@@ -31883,6 +32012,108 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MinerCommand"][];
+                };
+            };
+        };
+    };
+    current_link_api_v1_me_ditto_link_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerDittoLinkResponse"];
+                };
+            };
+        };
+    };
+    unlink_api_v1_me_ditto_link_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    link_attempt_api_v1_me_ditto_link_attempts__attempt_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerDittoLinkAttemptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_link_api_v1_me_ditto_link_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["MinerDittoLinkStartRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerDittoLinkStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
