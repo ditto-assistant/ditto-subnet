@@ -64,3 +64,22 @@ and restart. `check_config` refuses a half-configured deployment.
 Consenting and non-consenting users, revoked sessions, cross-hotkey reads,
 replayed callbacks and disabled deployments are covered by
 `ditto/tests/api_server/endpoints/test_miner_ditto_link.py`.
+
+## Feedback Track plumbing
+
+`feedback_track_contributions` records, per Ditto account, that a feedback
+report was filed (`report`), followed up (`follow_up`) or shipped (`shipped`),
+keyed idempotently by `(source, external_ref, kind)`.
+
+- `POST /api/v1/feedback-track/contributions` — operator bearer
+  (`DITTO_ADMIN_API_TOKEN`), written by the Ditto backend; replays return 200
+  with `created: false`. `X-Admin-Actor` names the writer.
+- `GET /api/v1/me/feedback-track` — the signed-in miner's contributions through
+  the account linked to their hotkey; `linked: false` when there is no link.
+- `GET /api/v1/public/feedback-track/{hotkey}` — counts by kind only; never
+  the account id, email, or report text. Revoking the link zeroes the public
+  view without deleting the record.
+
+`weight` is stored and consumed by nothing. No reward policy, emission split or
+scoring input is defined by this table; that decision belongs to a separate,
+reviewed change.

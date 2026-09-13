@@ -103,6 +103,7 @@ from ditto.api_server.endpoints import (
     admin_validator_slot_settings_router,
     admin_validator_weights_router,
     attestation_router,
+    feedback_track_router,
     health_router,
     inference_router,
     metrics_router,
@@ -608,6 +609,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(miner_auth_router, prefix="/api/v1")
     app.include_router(miner_me_router, prefix="/api/v1")
     app.include_router(miner_ditto_link_router, prefix="/api/v1")
+    app.include_router(feedback_track_router, prefix="/api/v1")
     app.include_router(miner_mcp_router)
     app.include_router(upload_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")

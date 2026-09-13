@@ -2772,6 +2772,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/feedback-track/contributions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Contribution
+         * @description Operator write. Idempotent on (source, external_ref, kind).
+         */
+        post: operations["record_contribution_api_v1_feedback_track_contributions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inference/chat/completions": {
         parameters: {
             query?: never;
@@ -3013,6 +3033,23 @@ export interface paths {
         put?: never;
         /** Start Link */
         post: operations["start_link_api_v1_me_ditto_link_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/feedback-track": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My Contributions */
+        get: operations["my_contributions_api_v1_me_feedback_track_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3645,6 +3682,26 @@ export interface paths {
          *     Snapshots never change once written, so this response is immutable.
          */
         get: operations["efficiency_snapshot_api_v1_public_efficiency_snapshots__snapshot_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/feedback-track/{hotkey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Contributions
+         * @description Counts by kind for one hotkey. Never names the account.
+         */
+        get: operations["public_contributions_api_v1_public_feedback_track__hotkey__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -15379,6 +15436,82 @@ export interface components {
             reopened: boolean;
         };
         /**
+         * FeedbackTrackContributionRequest
+         * @description One contribution recorded by the Ditto backend (operator bearer).
+         */
+        FeedbackTrackContributionRequest: {
+            /** Ditto User Id */
+            ditto_user_id: string;
+            /** External Ref */
+            external_ref: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "report" | "follow_up" | "shipped";
+            /** Note */
+            note?: string | null;
+            /**
+             * Source
+             * @default ditto_feedback
+             * @constant
+             */
+            source: "ditto_feedback";
+            /** Weight */
+            weight?: number | string | null;
+        };
+        /** FeedbackTrackContributionResponse */
+        FeedbackTrackContributionResponse: {
+            contribution: components["schemas"]["FeedbackTrackContributionView"];
+            /** Created */
+            created: boolean;
+        };
+        /** FeedbackTrackContributionView */
+        FeedbackTrackContributionView: {
+            /**
+             * Contribution Id
+             * Format: uuid
+             */
+            contribution_id: string;
+            /** External Ref */
+            external_ref: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "report" | "follow_up" | "shipped";
+            /** Note */
+            note?: string | null;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /**
+             * Source
+             * @constant
+             */
+            source: "ditto_feedback";
+            /** Weight */
+            weight?: string | null;
+        };
+        /**
+         * FeedbackTrackMeResponse
+         * @description The signed-in miner's contributions, via the account linked to the hotkey.
+         */
+        FeedbackTrackMeResponse: {
+            /** Contributions */
+            contributions: components["schemas"]["FeedbackTrackContributionView"][];
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Ditto User Id */
+            ditto_user_id?: string | null;
+            /** Linked */
+            linked: boolean;
+        };
+        /**
          * FleetRelease
          * @description Which build a screener worker is, as distinct from which policy it screens.
          *
@@ -19298,6 +19431,22 @@ export interface components {
              * @default 0
              */
             shared_seed_confirmations: number;
+        };
+        /**
+         * PublicFeedbackTrackResponse
+         * @description Counts only. Never the account, the email, or the report text.
+         */
+        PublicFeedbackTrackResponse: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Linked */
+            linked: boolean;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Total */
+            total: number;
         };
         /**
          * PublicHealthResponse
@@ -31649,6 +31798,41 @@ export interface operations {
             };
         };
     };
+    record_contribution_api_v1_feedback_track_contributions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackTrackContributionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackTrackContributionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     proxy_chat_completions_api_v1_inference_chat_completions_post: {
         parameters: {
             query?: never;
@@ -32114,6 +32298,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_contributions_api_v1_me_feedback_track_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackTrackMeResponse"];
                 };
             };
         };
@@ -33009,6 +33213,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_contributions_api_v1_public_feedback_track__hotkey__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hotkey: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicFeedbackTrackResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

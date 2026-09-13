@@ -2625,6 +2625,29 @@ CREATE TABLE public.evaluation_payments (
 
 
 --
+-- Name: feedback_track_contributions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.feedback_track_contributions (
+    contribution_id uuid NOT NULL,
+    ditto_user_id text NOT NULL,
+    source text NOT NULL,
+    external_ref text NOT NULL,
+    kind text NOT NULL,
+    weight numeric(12,6),
+    note text,
+    recorded_by text NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_feedback_track_contributions_feedback_track_external_ref_len CHECK (((length(external_ref) >= 1) AND (length(external_ref) <= 200))),
+    CONSTRAINT ck_feedback_track_contributions_feedback_track_kind_check CHECK ((kind = ANY (ARRAY['report'::text, 'follow_up'::text, 'shipped'::text]))),
+    CONSTRAINT ck_feedback_track_contributions_feedback_track_source_check CHECK ((source = 'ditto_feedback'::text)),
+    CONSTRAINT ck_feedback_track_contributions_feedback_track_user_id_len CHECK (((length(ditto_user_id) >= 1) AND (length(ditto_user_id) <= 128))),
+    CONSTRAINT ck_feedback_track_contributions_feedback_track_weight_nonneg CHECK (((weight IS NULL) OR (weight >= (0)::numeric)))
+);
+
+
+--
 -- Name: hotkey_ban_audit; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5252,6 +5275,14 @@ ALTER TABLE ONLY public.evaluation_payments
 
 
 --
+-- Name: feedback_track_contributions feedback_track_dedupe_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.feedback_track_contributions
+    ADD CONSTRAINT feedback_track_dedupe_key UNIQUE (source, external_ref, kind);
+
+
+--
 -- Name: hotkey_ban_audit hotkey_ban_audit_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5737,6 +5768,14 @@ ALTER TABLE ONLY public.efficiency_bonus_settings_revisions
 
 ALTER TABLE ONLY public.efficiency_cohort_snapshots
     ADD CONSTRAINT pk_efficiency_cohort_snapshots PRIMARY KEY (snapshot_id);
+
+
+--
+-- Name: feedback_track_contributions pk_feedback_track_contributions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.feedback_track_contributions
+    ADD CONSTRAINT pk_feedback_track_contributions PRIMARY KEY (contribution_id);
 
 
 --
@@ -6867,6 +6906,13 @@ CREATE INDEX evaluation_payments_available_credit_idx ON public.evaluation_payme
 --
 
 CREATE INDEX evaluation_payments_miner_hotkey_idx ON public.evaluation_payments USING btree (miner_hotkey);
+
+
+--
+-- Name: feedback_track_user_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX feedback_track_user_idx ON public.feedback_track_contributions USING btree (ditto_user_id, recorded_at);
 
 
 --

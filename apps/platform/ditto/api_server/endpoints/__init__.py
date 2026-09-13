@@ -117,6 +117,7 @@ from ditto.api_server.endpoints.admin_validator_weights import (
     router as admin_validator_weights_router,
 )
 from ditto.api_server.endpoints.attestation import router as attestation_router
+from ditto.api_server.endpoints.feedback_track import router as feedback_track_router
 from ditto.api_server.endpoints.health import router as health_router
 from ditto.api_server.endpoints.inference import router as inference_router
 from ditto.api_server.endpoints.metrics import router as metrics_router
@@ -210,6 +211,7 @@ __all__ = [
     "miner_auth_router",
     "miner_avatars_router",
     "miner_ditto_link_router",
+    "feedback_track_router",
     "miner_mcp_router",
     "miner_me_router",
     "public_router",

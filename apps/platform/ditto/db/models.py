@@ -8277,6 +8277,58 @@ class MinerDittoLinkAttempt(Base):
     )
 
 
+class FeedbackTrackContribution(Base):
+    """One Ditto feedback contribution credited to a Ditto account.
+
+    Identity plumbing only: hotkeys resolve through miner_ditto_links at read
+    time and ``weight`` is stored for a future policy that nothing reads yet.
+    """
+
+    __tablename__ = "feedback_track_contributions"
+
+    contribution_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    ditto_user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    external_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    weight: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recorded_by: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(ditto_user_id) BETWEEN 1 AND 128",
+            name="feedback_track_user_id_len",
+        ),
+        CheckConstraint(
+            "source IN ('ditto_feedback')", name="feedback_track_source_check"
+        ),
+        CheckConstraint(
+            "kind IN ('report', 'follow_up', 'shipped')",
+            name="feedback_track_kind_check",
+        ),
+        CheckConstraint(
+            "length(external_ref) BETWEEN 1 AND 200",
+            name="feedback_track_external_ref_len",
+        ),
+        CheckConstraint(
+            "weight IS NULL OR weight >= 0", name="feedback_track_weight_nonneg"
+        ),
+        UniqueConstraint(
+            "source", "external_ref", "kind", name="feedback_track_dedupe_key"
+        ),
+        Index("feedback_track_user_idx", "ditto_user_id", "recorded_at"),
+    )
+
+
 class MinerDeviceGrant(Base):
     """One device-authorization / MCP consent grant awaiting a hotkey signature."""
 
