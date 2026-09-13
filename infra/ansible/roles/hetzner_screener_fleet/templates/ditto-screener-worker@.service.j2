@@ -6,6 +6,9 @@ Requires=ditto-screener-enroll.service
 
 [Service]
 Type=simple
+{% if screener_fleet_resource_slice %}
+Slice={{ screener_fleet_resource_slice }}
+{% endif %}
 User={{ screener_fleet_user }}
 Group={{ screener_fleet_group }}
 WorkingDirectory={{ screener_fleet_active_worker_dir }}

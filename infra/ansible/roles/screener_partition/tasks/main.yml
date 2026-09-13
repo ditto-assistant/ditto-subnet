@@ -1,0 +1,81 @@
+---
+- name: Verify rootless daemon identity before installing numeric user-unit override
+  ansible.builtin.command: id -u ditto-builder
+  register: builder_uid
+  changed_when: false
+- name: Require the expected rootless daemon owner
+  ansible.builtin.assert:
+    that: builder_uid.stdout == '1005'
+- name: Require the canonical screener host
+  ansible.builtin.assert:
+    that: inventory_hostname == 'subnet-screener-1'
+- name: Verify installed primary release supports local admission and resource partitions
+  ansible.builtin.command:
+    argv:
+      - /opt/ditto/screener-fleet/current/orchestrator-venv/bin/python
+      - -m
+      - screener_capacity.fleet_node
+      - --help
+    chdir: /opt/ditto/screener-fleet/current/src/services/screener-orchestrator
+  register: primary_help
+  changed_when: false
+- name: Refuse to install arguments unsupported by current release
+  ansible.builtin.assert:
+    that:
+      - "'--local-sandbox-slots' in primary_help.stdout"
+      - "'--local-source-review-slots' in primary_help.stdout"
+      - "'--resource-slice' in primary_help.stdout"
+- name: Read current primary entrypoint without reading environment credentials
+  ansible.builtin.command: systemctl show ditto-screener-fleet-agent.service -p ExecStart --value
+  register: primary_entrypoint
+  changed_when: false
+- name: Preserve the existing entrypoint and immutable runtime inputs
+  ansible.builtin.set_fact:
+    primary_argv: "{{ (primary_entrypoint.stdout | regex_search('argv\\[\\]=(.*?) ; ignore_errors', '\\1')) | first | regex_replace(' --local-sandbox-slots [0-9]+', '') | regex_replace(' --local-source-review-slots [0-9]+', '') | regex_replace(' --resource-slice [a-z0-9-]+\\.slice', '') }}"
+- name: Install bounded primary resource slice
+  ansible.builtin.template:
+    src: dittoscreener.slice.j2
+    dest: /etc/systemd/system/dittoscreener.slice
+    mode: '0644'
+- name: Create persistent primary unit overrides
+  ansible.builtin.file:
+    path: '/etc/systemd/system/{{ item }}.d'
+    state: directory
+    mode: '0755'
+  loop: "{{ ['ditto-screener-fleet-agent.service', 'user@1005.service'] + screener_partition_worker_units }}"
+- name: Put primary workers under the aggregate cap and preserve graceful drain
+  ansible.builtin.copy:
+    dest: '/etc/systemd/system/{{ item }}.d/partition.conf'
+    mode: '0644'
+    content: |
+      [Service]
+      Slice=dittoscreener.slice
+      TimeoutStopSec=infinity
+      SendSIGKILL=no
+      {{ 'KillMode=mixed' if item != 'user@1005.service' else '' }}
+  loop: "{{ ['user@1005.service'] + screener_partition_worker_units }}"
+- name: Bound local VM/review admission without changing Platform settings
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/ditto-screener-fleet-agent.service.d/partition.conf
+    mode: '0644'
+    content: |
+      [Service]
+      Slice=dittoscreener.slice
+      TimeoutStopSec=infinity
+      SendSIGKILL=no
+      KillMode=mixed
+      ExecStart=
+      ExecStart={{ primary_argv }} --local-sandbox-slots 2 --local-source-review-slots 1 --resource-slice dittoscreener.slice
+- name: Reload primary partition metadata without restarting jobs
+  ansible.builtin.systemd:
+    daemon_reload: true
+- name: Install serialized graceful activation helper
+  ansible.builtin.copy:
+    src: activate-partition.sh
+    dest: /usr/local/sbin/ditto-screener-partition-activate
+    owner: root
+    group: root
+    mode: '0755'
+- name: Activate with existing updater lock and graceful primary drain
+  ansible.builtin.command: /usr/local/sbin/ditto-screener-partition-activate
+  when: screener_partition_activate | bool

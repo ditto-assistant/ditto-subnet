@@ -75,6 +75,7 @@ def test_kvm_runner_pins_system_uri_for_create_poll_and_cleanup(
         memory_mib=8192,
         vcpus=2,
         disk_gib=80,
+        resource_slice="dittoscreener.slice",
     )
 
     ok, _console = runner.run(
@@ -82,6 +83,8 @@ def test_kvm_runner_pins_system_uri_for_create_poll_and_cleanup(
     )
 
     assert ok is True
+    create = next(call for call in calls if call[0] == "virt-install")
+    assert create[create.index("--resource") + 1] == "partition=/dittoscreener"
     lifecycle = [call for call in calls if call[0] in {"virt-install", "virsh"}]
     assert lifecycle
     assert all(_LIBVIRT_URI in call for call in lifecycle)
@@ -359,7 +362,9 @@ def test_source_review_uses_image_project_environment(
         timeouts.append(kwargs.get("timeout"))
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-    node = FleetNode(_settings(tmp_path))
+    from dataclasses import replace
+
+    node = FleetNode(replace(_settings(tmp_path), resource_slice="dittoscreener.slice"))
     node.control = Control()  # type: ignore[assignment]
     monkeypatch.setattr(subprocess, "run", run)
 
@@ -373,6 +378,9 @@ def test_source_review_uses_image_project_environment(
         }
     )
 
+    assert (
+        commands[0][commands[0].index("--cgroup-parent") + 1] == "dittoscreener.slice"
+    )
     assert commands[0][-3:] == [
         "/app/workers/screener/.venv/bin/python",
         "-m",
@@ -392,3 +400,50 @@ def test_stop_request_prevents_new_claims(tmp_path: Path) -> None:
     node.request_stop()
 
     assert node.run() == 0
+
+
+def test_local_partition_ceiling_does_not_claim_beyond_budget(tmp_path: Path) -> None:
+    from concurrent.futures import Future
+    from dataclasses import replace
+
+    node = FleetNode(
+        replace(_settings(tmp_path), local_sandbox_slots=1, local_source_review_slots=1)
+    )
+    control = _Control()
+    control.jobs["source_review"] = [{"review_id": "one"}, {"review_id": "two"}]
+    original_settings = control.settings
+    control.settings = lambda: replace(
+        original_settings(), sandbox_slots=4, source_review_concurrency=4
+    )
+    node.control = control
+    # Simulate an existing active runtime occupying the local VM allowance.
+    active = Future()
+    node.futures[active] = "runtime"
+    node._run_source_review = lambda _job: None
+    try:
+        node.tick()
+        assert "runtime" not in control.claimed
+        assert "build" not in control.claimed
+        assert control.claimed.count("source_review") == 1
+        assert not active.cancelled()
+    finally:
+        node.executor.shutdown(wait=True)
+
+
+def test_local_partition_never_increases_platform_admission(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    node = FleetNode(
+        replace(_settings(tmp_path), local_sandbox_slots=4, local_source_review_slots=4)
+    )
+    control = _Control()
+    original_settings = control.settings
+    control.settings = lambda: replace(
+        original_settings(), sandbox_slots=0, source_review_concurrency=0
+    )
+    node.control = control
+    try:
+        assert not node.tick()
+        assert not control.claimed
+    finally:
+        node.executor.shutdown(wait=True)

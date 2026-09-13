@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Serialize with the existing release updater. No active job is force-killed.
+exec 9>/var/lib/ditto-screener-fleet/updater/lock
+flock -n 9 || { echo 'Release update/drain already active' >&2; exit 1; }
+workers=(ditto-screener-worker@{1..4}.service)
+restore() {
+  systemctl start user@1005.service
+  ready=false
+  for _ in {1..30}; do
+    if runuser -u ditto-builder -- env DOCKER_HOST=unix:///run/ditto-screener-docker/docker.sock docker info >/dev/null 2>&1; then ready=true; break; fi
+    sleep 1
+  done
+  "$ready" || { echo 'Rootless daemon did not become ready' >&2; return 1; }
+  systemctl start ditto-screener-fleet-agent.service "${workers[@]}"
+}
+trap restore EXIT
+# Workers drain first while the lane agent can still finish their build/review.
+pids=()
+for unit in "${workers[@]}"; do
+  systemctl stop "$unit" & pids+=("$!")
+done
+for pid in "${pids[@]}"; do wait "$pid"; done
+systemctl stop ditto-screener-fleet-agent.service
+# Refuse to interrupt any independent/rootless workload or orphan sandbox.
+if virsh --connect qemu:///system list --name | grep -Eq '^ditto-(build|smoke)-'; then
+  echo 'Primary VM remains active after drain' >&2; exit 1
+fi
+if [ -n "$(docker ps --filter name=ditto-source- --format '{{.ID}}')" ]; then
+  echo 'Primary source review remains active after drain' >&2; exit 1
+fi
+if [ -n "$(runuser -u ditto-builder -- env DOCKER_HOST=unix:///run/ditto-screener-docker/docker.sock docker ps --format '{{.ID}}')" ]; then
+  echo 'Rootless workload remains active after drain' >&2; exit 1
+fi
+systemctl stop user@1005.service
+systemctl start dittoscreener.slice
+restore
+trap - EXIT
+# Verify every service and descendant subtree enters the aggregate partition.
+for unit in user@1005.service ditto-screener-fleet-agent.service "${workers[@]}"; do
+  path=$(systemctl show "$unit" -p ControlGroup --value)
+  [[ "$path" == /dittoscreener.slice/* ]] || { echo "Wrong partition for $unit" >&2; exit 1; }
+done
