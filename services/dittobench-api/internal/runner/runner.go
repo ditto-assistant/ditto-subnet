@@ -379,6 +379,12 @@ type CaseExecution struct {
 	// is a last-resort safety net, never expected to fire on normal full-context
 	// use.
 	AnswerStuffReviewRequired bool `json:"answer_stuff_review_required,omitempty"`
+	// InferenceCost (bench_version 13) is the trusted broker's per-case
+	// inference cost record and shadow cost factor for this case (issue #1850):
+	// successful completions, sampled choices, output tokens, the published
+	// class budget, and the factor the rule WOULD apply. Reported only; never
+	// multiplied into a score in v13.0. nil before Bench v13.
+	InferenceCost *protocol.InferenceCostEvidence `json:"inference_cost,omitempty"`
 }
 
 // RunCase POSTs one tool OR memory case to <harnessURL>/run. For a tool case,
@@ -455,6 +461,18 @@ func runOneWithTelemetry(ctx context.Context, harnessURL string, c protocol.Tool
 // contract advertises (miners/dittobench-starter-kit/PROTOCOL.md). Every scorer
 // revision above it is validator-owned: it changes the dataset, projection, and
 // grader, but never what a harness must advertise or branch on.
+//
+// Bench v13 wire-version decision (issue #1519, option A -- Owner decision,
+// default taken): the wire STAYS pinned at v9. Every harness-visible v13
+// addition (enum schemas, coined decoys, wave-0 corrections, tools_offered)
+// ships as an additive OPTIONAL field on the existing v9 shapes, and every
+// grader-only v13 field is stripped (json:"-") before /run. The alternative, a
+// bump to 13 with a compatibility window, fails every deployed harness closed:
+// the starter kit range-checks MIN..=MAX_SUPPORTED_BENCH_VERSION
+// (miners/dittobench-starter-kit/src/protocol.rs), so an unreleased 13 on the
+// wire 400s before a single case runs and turns negotiation into a difficulty
+// signal. Revisit only with a starter-kit release >= 2 weeks ahead of
+// activation. Recorded in services/dittobench-api/PROTOCOL.md as well.
 const publicWireBenchVersion = protocol.BenchVersionV9
 
 func harnessWireBenchVersion(benchVersion int) int {

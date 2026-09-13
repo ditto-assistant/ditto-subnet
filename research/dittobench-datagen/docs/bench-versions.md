@@ -24,7 +24,7 @@ applied to an existing version. It ships as a new one.
 | 10 (pre-activation) | `2027-02-01` | A generator-as-spec contract: seed-scoped ontologies, recursive query programs, independent renderers, and linked metamorphic/counterfactual cases. Runtime execution is available; Platform activation remains separate. |
 | 11 (pre-activation) | `2027-03-01` | Anti-template-fitting: sampled program shapes, compositional surface grammar, descriptive entity binding, a multi-edit surface-noise projector, and per-seed composed injection markers. Runtime execution is available; Platform activation remains separate. |
 | 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
-| 13 (in development) | `2027-05-01` | Typed-semantic contract (#1518): label-insufficiency, unregenerable surface, causal model dependence, provenance over containment, bounded money share, grader-only claim sets. Plumbing shipped (version, 250-case envelope, grader-only protocol types); public-corpora vocabulary and `/seed` label hygiene (#1825, #1827: frozen SHA-pinned public tables, opaque session ids, seeded business-hours timestamps); surface levers shipped (per-seed `persona.Grammar` banks for every tool/world/settings/integrity/question surface, permuted-clause identity records, typo projector v2, the salted artifact surface pass with a private-pass hand-off and a regeneration canary); typed-claim grader (#1523/#1522/#1831: asserted-vs-cited claims, requested-unit quantities, grounded abstention, per-policy audit bank, multilingual lexicons — see the Grader subsection); evidence-bounded slice (#1844 same-turn point-in-time corrections with `as_of_twin` pairs behind the `/seed` ingest acknowledgement, #1530 six grounded-abstention families with `decision_twin` pairs graded by `AnswerAbsence`); envelope rebalance and monetary cap (#1848/#1529: the published 250-case slot table in `gen/v13_envelope.go`, ordinary project-outstanding capped at 4, the per-seed mix audit); tool bench (#1843/#1842/#1580/#1840: per-seed catalog with coined decoys, discovery inventories, schema enums, retired setters, coined list fixtures); claim-span provenance and causal model dependence in shadow (#1833/#1849: `Verdict.Provenance`, `served_text_not_model_emitted`, `answer_in_prompt`); families and gates land behind `bench_version >= 13`; not advertised by the runtime until the contract is complete. |
+| 13 (in development) | `2027-05-01` | Typed-semantic contract (#1518): label-insufficiency, unregenerable surface, causal model dependence, provenance over containment, bounded money share, grader-only claim sets. Plumbing shipped (version, 250-case envelope, grader-only protocol types); public-corpora vocabulary and `/seed` label hygiene (#1825, #1827: frozen SHA-pinned public tables, opaque session ids, seeded business-hours timestamps); surface levers shipped (per-seed `persona.Grammar` banks for every tool/world/settings/integrity/question surface, permuted-clause identity records, typo projector v2, the salted artifact surface pass with a private-pass hand-off and a regeneration canary); typed-claim grader (#1523/#1522/#1831: asserted-vs-cited claims, requested-unit quantities, grounded abstention, per-policy audit bank, multilingual lexicons — see the Grader subsection); evidence-bounded slice (#1844 same-turn point-in-time corrections with `as_of_twin` pairs behind the `/seed` ingest acknowledgement, #1530 six grounded-abstention families with `decision_twin` pairs graded by `AnswerAbsence`); envelope rebalance and monetary cap (#1848/#1529: the published 250-case slot table in `gen/v13_envelope.go`, ordinary project-outstanding capped at 4, the per-seed mix audit); tool bench (#1843/#1842/#1580/#1840: per-seed catalog with coined decoys, discovery inventories, schema enums, retired setters, coined list fixtures); claim-span provenance and causal model dependence in shadow (#1833/#1849: `Verdict.Provenance`, `served_text_not_model_emitted`, `answer_in_prompt`); twin post-pass (observe) and shadow inference cost factor (#1835/#1850), and the scorer advertises v13 (#1519); families and gates land behind `bench_version >= 13`; not advertised by the runtime until the contract is complete. |
 
 ## V10 generator-as-spec contract
 
@@ -543,8 +543,93 @@ extends it when its lever lands.
 
 Scorer side: `scoregates.SupportedBenchVersion` accepts v13 (inheriting the v12
 gate stack) and `efficiency.ProductionReadyForVersion` treats v13 as
-technically ready; the runtime's advertised `supported_bench_versions` does
-**not** include 13 until the last v13 PR.
+technically ready. The runtime advertises 13 in `supported_bench_versions`
+(issue #1519, scorer half): the candidate list is derived from
+`protocol.SupportedBenchVersions()` with a v8 floor, the release deploy
+identity gate asserts `[8, 9, 10, 11, 12, 13]`, LongMemEval confirmation
+accepts every subject epoch `>= 9` as a floor, and the harness wire stays
+pinned at v9 (option A, recorded in `services/dittobench-api/PROTOCOL.md`).
+Advertisement is not activation: validators must advertise the identical set
+before Platform can count v13-capable capacity, and Platform targets v13 only
+in shadow during calibration.
+
+### Twin / pair post-pass (issue #1835, scorer)
+
+Every evidence-independent default — always-answer, always-abstain,
+always-act, keep-only-the-latest-state — must score 0 on a paired bank, but
+zeroing a whole metamorphic group for one miss charges an honest harness four
+cases for one error. The scorer's v13 post-pass
+(`internal/scorer/twins_v13.go`, run on the scored population before
+`AggregateForVersion`) therefore scopes the penalty to the members that carry
+the evidence of a default:
+
+- **`decision_twin` / `as_of_twin` groups** (`protocol.TwinRelation*`, paired
+  through the case `TwinGroup`, or the tool `Category` for tool twins). An
+  identical decision class (`answer` / `abstain` / `act`, classified from the
+  observed trajectory and the grader's own decline rule `grade.Declines`)
+  across every delivered member of a decision twin, or an identical asserted
+  answer across every member of an as-of twin, is **concordance**. Rule R1
+  `concordant_zero` zeroes every member; rule R2 `pair_product` sets every
+  member to the product of the members' scores. One switch
+  (`DITTOBENCH_V13_TWIN_RULE`) selects the rule, default R1; when the
+  calibration-measured honest concordant-error rate
+  (`DITTOBENCH_V13_TWIN_HONEST_CONCORDANT_ERROR_RATE`) exceeds 5% the pass
+  falls back to R2 automatically and reports `auto_fallback`. #1521 measures
+  the rate and selects the rule.
+- **Metamorphic groups** (`V10CaseProvenance.Relation`: `base`,
+  `renderer_invariant`, `distractor_invariant`, `causal_counterfactual`,
+  paired through `MetamorphicGroup` because the counterfactual member carries
+  no `TwinGroup`). When the counterfactual member was answered with the base
+  member's answer, **only the base + counterfactual pair is zeroed**
+  (`counterfactual_insensitive`); the renderer and distractor members are
+  graded independently, so a solver is capped at 0.5 of the group and one
+  honest miss recovers 0.5.
+- Groups with an undelivered member (transport failure) or a mixed relation
+  are skipped, exactly as `MetamorphicConsistency` skips them.
+- The posture switch `DITTOBENCH_V13_TWIN_POSTURE` defaults to **observe**:
+  cases receive the exact marker notes `twin_concordant` /
+  `counterfactual_insensitive` plus a reason, and `details.twin_post_pass`
+  publishes rule, posture, group counts, `cases_affected_share` (auditable
+  against the envelope cascade cap), and per-relation means — but no score
+  moves. `enforce` is an explicit, fleet-wide operator choice after #1521.
+- `CaseScore.Relation` carries the generator relation into the report for v13
+  runs; v2–v12 reports and scores are byte-identical (the pass is the identity
+  below v13, pinned by `TestTwinPostPassLeavesEarlierVersionsUntouched`).
+
+On the synthetic paired bank in `internal/scorer/twins_v13_test.go` the
+always-answer, always-abstain, and always-act baselines score 0 on the paired
+members under both rules while the oracle scores 1.0.
+
+### Per-case inference cost factor (issue #1850, shadow in v13.0)
+
+Extra completions were free beyond the tie-break efficiency fold, so a
+voting / re-ask / planner stack lost nothing. Counting requests alone misses
+`n` sampling and single-completion self-consistency, so the v13 factor is over
+**output tokens of successful completions**, with sampled choices recorded
+alongside:
+
+```
+cost_factor = clamp(1 − α · max(0, tokens_out − budget_c), 0.6, 1)
+```
+
+- The ticket-bound broker books every **successful** (2xx) chat completion on
+  the `/run` case it can bind exactly — a case-scoped inference capability
+  route, or a serial `/run` window with one case in flight — recording
+  completions, `choices` length (so `n=5` is visible), and provider-reported
+  completion tokens. Provider failures and 5xx retries never reach the ledger.
+  Completions that overlap several in-flight cases (concurrent `/run`) are
+  booked unattributed and reported at run level; nothing is guessed onto a
+  case, and an unattributed case reports the full factor.
+- Published budgets (`scoregates.CostBudgets()`): one completion-equivalent is
+  512 output tokens; `memory` and `single_tool` cases get 3 equivalents
+  (1536 tokens), `tool_chain` cases 5 (2560 tokens) — plan → call → observe →
+  answer plus one LLM tool-router completion sits inside budget. α is
+  `(1 − 0.6) / budget_c`, so the floor is reached at exactly twice the budget.
+- **Shadow only in v13.0.** `per_case[].inference_cost` and
+  `details.inference_cost` (`posture: "shadow"`, `applied: false`) report the
+  factor; it is never multiplied into a composite and is kept out of the signed
+  score-gate evidence root until the enforce decision, which follows #1521
+  showing honest ReAct and LLM-router loops at factor 1.0 on ≥95% of cases.
 
 ### Surface levers (#1828 grammars + typo v2, #1832 salted surface pass)
 

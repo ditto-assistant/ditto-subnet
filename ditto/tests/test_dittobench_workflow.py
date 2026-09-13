@@ -55,7 +55,8 @@ def test_hosted_release_fails_closed_unless_current_contracts_are_advertised() -
         "Verify the live practice endpoint reports its release identity",
     )
 
-    assert "(.supported_bench_versions | sort == [8, 9, 10, 11, 12])" in verify["run"]
+    identity_gate = "(.supported_bench_versions | sort == [8, 9, 10, 11, 12, 13])"
+    assert identity_gate in verify["run"]
 
 
 def test_every_dittobench_surface_triggers_ci() -> None:

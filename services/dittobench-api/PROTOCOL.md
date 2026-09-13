@@ -35,6 +35,25 @@ it must not silently advance to the current version. Version 3 has its own
 seed-domain and pinned deterministic vectors, while version 2 retains its
 existing byte goldens and scoring behavior.
 
+### Harness wire version for Bench v10 and later (recorded decision)
+
+The `bench_version` a harness sees on `/seed` and `/run` is the newest
+PUBLISHED harness contract, `publicWireBenchVersion = 9`
+(`internal/runner/runner.go`), not the validator-owned scorer revision that
+generated the dataset. Bench v10, v11, v12, and v13 change the dataset,
+projection, grader, and gates; none of them changes what a harness must
+advertise or branch on. **Bench v13 wire-version decision (issue #1519, option
+A — owner decision, default taken): the wire stays at 9.** Every
+harness-visible v13 addition (enum schemas, coined decoys, wave-0 corrections,
+`tools_offered`) ships as an additive optional field on the existing shapes, and
+every grader-only v13 field (`claims`, `twin_relation`, `required_arg_claims`,
+`restraint`) is stripped before the wire. The alternative — sending 13 with a
+compatibility window — fails every deployed harness closed, because the starter
+kit range-checks `MIN..=MAX_SUPPORTED_BENCH_VERSION`
+(`miners/dittobench-starter-kit/src/protocol.rs`) and would 400 the first
+`/run`, turning version negotiation into a difficulty signal. Revisit only with
+a starter-kit release at least two weeks ahead of activation.
+
 ### V9 hostile-harness projection
 
 For `bench_version: 9`, the API treats the miner process as a hostile observer.
@@ -558,11 +577,26 @@ validator infrastructure and fails the run closed; it is never converted into
 an agent score. V7 artifacts carry no prerequisite facts and preserve their
 historical seed/tool ordering.
 
-Capability advertisement is not activation. A scorer advertises v8 through v10
-only when its embedded quality-only authority is technically ready; each execution
-path then enforces its exact dataset, route, model, embedding, and score-gate
-identities. The platform's backroom-controlled benchmark target remains the
-separate authority that selects which supported version is dispatched.
+Capability advertisement is not activation. A scorer advertises v8 through the
+newest generator-supported contract (v13 from this release) only when each
+version's embedded quality-only authority is technically ready; the candidate
+list is derived from the generator's single supported-version list with a v8
+floor, never retyped. Each execution path then enforces its exact dataset,
+route, model, embedding, and score-gate identities. The platform's
+backroom-controlled benchmark target remains the separate authority that
+selects which supported version is dispatched; v13 is dispatched only in
+shadow during calibration, and activation is a separate owner decision.
+
+Bench v13 adds two report-only surfaces, both additive-optional and absent
+from every earlier contract: `per_case[].inference_cost` plus
+`details.inference_cost` (the shadow per-case cost factor over successful
+completions, sampled choices, and output tokens against published per-class
+budgets — reported, never applied in v13.0) and `details.twin_post_pass` (the
+decision/as-of twin and base+counterfactual pair post-pass: rule, posture,
+concordant-group counts, per-relation means). `per_case[].notes` may carry the
+exact markers `twin_concordant` and `counterfactual_insensitive`. Under the
+default observe posture no score moves. See
+`research/dittobench-datagen/docs/bench-versions.md`, "Bench v13".
 
 V10 retains the v9-and-later agent-selected reasoning route and hostile-harness
 projection, while its ordinary score is independent of the v9-only confirmation
