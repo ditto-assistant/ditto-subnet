@@ -22,6 +22,9 @@ type QuestionPlan struct {
 	Facts           []string
 	Constraints     []string
 	Operations      []string
+	// Claims are the typed graded assertions of a story v2 plan (bench_version
+	// >= 13, questions_v13.go). Validator-internal; nil for every other family.
+	Claims []Claim
 
 	oracleKind  string
 	oracleIndex int
@@ -329,6 +332,9 @@ func tripPlan(w World, kind string, index int, question string, answer int, evid
 }
 
 func (w World) storyQuestionCandidates() []QuestionPlan {
+	if w.BenchVersion >= protocol.BenchVersionV13 {
+		return w.storyQuestionCandidatesV13()
+	}
 	out := make([]QuestionPlan, 0, len(w.StoryArcs)*7)
 	for i, arc := range w.StoryArcs {
 		person := w.People[arc.PersonIndex]
@@ -696,7 +702,11 @@ func (w World) validatePlan(plan QuestionPlan) error {
 	if !sameStrings(plan.Operations, wantOperations) {
 		return fmt.Errorf("declared operations %v do not match oracle operations %v", plan.Operations, wantOperations)
 	}
-	if err := w.validateStoryPlan(plan); err != nil {
+	if isStoryV2Oracle(plan.oracleKind) {
+		if err := w.validateStoryPlanV13(plan); err != nil {
+			return err
+		}
+	} else if err := w.validateStoryPlan(plan); err != nil {
 		return err
 	}
 	for _, omitted := range plan.RequiredPairIDs {
@@ -749,6 +759,9 @@ func (w World) validatePlan(plan QuestionPlan) error {
 }
 
 func (w World) oracleEvidence(plan QuestionPlan) []string {
+	if isStoryV2Oracle(plan.oracleKind) {
+		return w.storyV13Evidence(plan.oracleKind, plan.oracleIndex)
+	}
 	switch plan.oracleKind {
 	case oracleContactCurrent:
 		p := w.People[plan.oracleIndex]
@@ -779,6 +792,9 @@ func (w World) oracleEvidence(plan QuestionPlan) []string {
 }
 
 func (w World) oracleOperations(plan QuestionPlan) []string {
+	if isStoryV2Oracle(plan.oracleKind) {
+		return storyV13Operations(plan.oracleKind)
+	}
 	switch plan.oracleKind {
 	case oracleContactCurrent:
 		return []string{"resolve the relationship and event to a person", "join the person to their current employer", "follow the nickname-and-employer correction to the current address"}
@@ -856,6 +872,9 @@ func (w World) resolveWithEvidence(plan QuestionPlan, available map[string]bool)
 			}
 		}
 		return true
+	}
+	if isStoryV2Oracle(plan.oracleKind) {
+		return w.resolveStoryV13(plan, available)
 	}
 	switch plan.oracleKind {
 	case oracleContactCurrent:
@@ -945,6 +964,9 @@ func (w World) resolveWithEvidence(plan QuestionPlan, available map[string]bool)
 }
 
 func (w World) subjectMatches(plan QuestionPlan) int {
+	if isStoryV2Oracle(plan.oracleKind) {
+		return w.storyV13SubjectMatches(plan)
+	}
 	matches := 0
 	switch plan.oracleKind {
 	case oracleContactCurrent, oracleContactPrevious:

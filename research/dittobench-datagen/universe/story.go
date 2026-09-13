@@ -82,12 +82,23 @@ type Story struct {
 	LessonsLearned []string          `json:"lessons_learned"`
 	Facts          []StoryFact       `json:"facts"`
 	TargetBytes    int               `json:"target_bytes"`
+	// Timestamp is set only by story v2 (bench_version >= 13): an
+	// arc-chronological, jittered RFC3339 instant. Empty for the v8 script, whose
+	// memories keep the positional world grid.
+	Timestamp string `json:"timestamp,omitempty"`
+	// ArcIndex is the owning StoryArc for story v2 memories (including the
+	// spurious near-name decoy). The v8 script does not set it.
+	ArcIndex int `json:"arc_index,omitempty"`
 }
 
 // StoryArc joins a personal origin, a business decision, and a later outcome.
 // None of the bridge/decision identities or story-only values are rendered in a
 // short memory. Questions enter through personal context and must recover both
 // hidden joins before they can apply the final state.
+//
+// The six *Cents fields and StoryPairIDs are the frozen v8–v12 script state.
+// Story v2 (bench_version >= 13) leaves them zero and carries its typed event
+// DAG, state machine, and typed outcomes in V2 (story_events.go).
 type StoryArc struct {
 	ID                  string
 	PersonIndex         int
@@ -107,11 +118,15 @@ type StoryArc struct {
 	Lesson              string
 	LessonAcceptAny     []string
 	StoryPairIDs        [3]string
+	V2                  *StoryArcV2
 }
 
 type lessonSet struct {
 	canonical string
 	accept    []string
+	// concepts is the story v2 key-concept claim set (lessons_corpus.go); nil
+	// for lessons that are only in the v8 pool.
+	concepts []lessonConcept
 }
 
 var storyLessons = []lessonSet{
@@ -513,6 +528,11 @@ func (s Story) renderDraft(seed int64) (string, string) {
 			b.WriteString(event)
 			for _, fact := range s.Facts {
 				if fact.Phase != phase || fact.AfterEvent != eventIndex {
+					continue
+				}
+				if len(fact.Renderings) == 0 {
+					// Story v2 inline fact: the value is already carried by the event
+					// sentence itself; it is declared only for validation.
 					continue
 				}
 				b.WriteString(" ")

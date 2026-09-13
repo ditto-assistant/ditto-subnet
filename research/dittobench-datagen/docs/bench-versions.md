@@ -924,6 +924,55 @@ determinism and `TestV13PublicSeedEnvelope` the published envelope on the
 public seed `123456789`; the change that lands the last swap adds
 `TestV13KnownVector` and the README table row. v2–v12 vectors do not move.
 
+## Bench v13 story v2 (per-seed typed event DAG)
+
+v13 replaces the fixed 61-sentence origin→decision→outcome story script
+(`universe/story.go`, ~89% word overlap between seeds) with a per-seed typed
+event DAG (`universe/story_events.go`, `universe/story_v2.go`), gated on
+`bench_version >= 13` through `universe.GenerateForVersion`; v2–v12 worlds are
+byte-identical (`TestStoryV2DoesNotDisturbTheV8Script`, the v2–v12 known
+vectors). The hidden multi-memory join is kept and the shape varies:
+
+- **Typed event catalog with preconditions/effects.** Business arcs draw from
+  kickoff, quote, approval_capped, contact_route_changed, vendor_swapped,
+  incident, correction, handoff_assigned, follow_up, outcome; personal arcs root
+  in one theme (move, medical_course, school_logistics, wedding, renovation,
+  bill_dispute, trip_replan, subscription_cancelled) plus booking and
+  provider_swapped. An arc is 6–9 events in a constrained topological shuffle
+  (root first, the quote/booking hop second, outcome last), 0–2 contradictory
+  updates, and at least half of the arcs per seed carry a revision. 13 arcs per
+  full seed: 7 business, 6 personal.
+- **3–5 memories over >= 2 opaque sessions plus one near-name decoy thread.**
+  Session ids are `protocol.OpaqueCaseID` hashes and timestamps are
+  arc-chronological with jitter, so neither predicts the arc or the slot. The
+  first memory binds the (person, subject) anchor to a join key, the second
+  binds that key to a second reference in a different shape (>= 6 shapes), and
+  every later record speaks only in the second reference.
+- **Grammar renderers as the surface-pass input.** Every event kind has >= 8
+  `persona.Grammar` frames, every planted fact 4–6 renderings; no complete
+  sentence is stored. The 137-cent quantum and the `%+d` / `->` tells are gone.
+  The catalog is public, so parse-resistance is delivered by the private v13
+  surface pass and measured by `cmd/parserprobe`; the raw pre-pass ceiling is
+  reported by `TestStoryV2ArcRecoveryCeilingIsReportedAndDeterministic`.
+- **Six typed oracles per arc, 78 story cases per full seed
+  (`universe/questions_v13.go`).** owner-current (name, nickname accepted),
+  status-current (per-seed surface term ∪ canonical synonyms; on two arcs per
+  seed a "records disagree" claim set `{status A, status B, conflict marker}`
+  exempt from distractor scanning), ordering of the replaced entities
+  (`ordered_list`), next-action `{who, what, channel}` claim set, one rotating
+  slot — a record-stated quantity (money on <= 4 business arcs, else
+  nights/seats/days/percent) or the lesson key-concept claim set (<= 1 per
+  arc, reviewed key sets in `universe/lessons_corpus.go`; lessons without a
+  set are dropped) — and one cross-record inference oracle joining the arc to
+  the ordinary world (`latest-by-time` over handoff records → `owner-of` → the
+  owner's current work address through the person's identity/work/correction
+  records). The four v8 money oracles and the cents-baking summary are gone;
+  `StoryArc`'s `*Cents` fields stay zero at v13 and the typed state lives in
+  `StoryArc.V2`. Every plan carries typed `Claims` for the v13 grader.
+
+Wire shape is unchanged: v13 story cases are ordinary `MemoryCase`s graded by
+the existing kinds today; `Claims` are validator-internal.
+
 ## Auditing an old score
 
 Pin two things: the `bench_version` published with the score, and the **module

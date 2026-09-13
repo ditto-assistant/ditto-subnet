@@ -1276,8 +1276,8 @@ var difficultyCategoriesV7 = []category{
 // the validator-observed final action and its seed-derived argument remain
 // deterministic. MaxToolCalls describes the expected envelope; it is not a hard
 // cap and creative agents may legitimately exceed it.
-func applyV8WorldActions(seed int64, cases []protocol.ToolCase) {
-	applyWorldActions(seed, cases, false, protocol.BenchVersionV8)
+func applyV8WorldActions(seed int64, cases []protocol.ToolCase) map[string]bool {
+	return applyWorldActions(seed, cases, false, protocol.BenchVersionV8)
 }
 
 const (
@@ -1307,8 +1307,8 @@ const (
 // world tool prompt from a slot-bound grammar (datagen/grammars_v13.go) while
 // the conversion targets, world kinds, and expected tool outcomes stay exactly
 // the v9 ones for every version from 9 on.
-func applyV9WorldActionsForVersion(seed int64, benchVersion int, cases []protocol.ToolCase) {
-	applyWorldActions(seed, cases, true, benchVersion)
+func applyV9WorldActionsForVersion(seed int64, benchVersion int, cases []protocol.ToolCase) map[string]bool {
+	return applyWorldActions(seed, cases, true, benchVersion)
 }
 
 // applyV10StateDependentActions removes the last easy prompt-to-tool shortcut
@@ -1438,9 +1438,9 @@ func v9ComposedFamily(category string) bool {
 	return v9WorldFamily(category) || category == "stale_context_web" || category == "memory_fetch"
 }
 
-func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFloor bool, benchVersion int) {
+func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFloor bool, benchVersion int) map[string]bool {
 	if len(cases) == 0 {
-		return
+		return nil
 	}
 	prompts := worldPromptsForVersion(seed, benchVersion)
 	remainingByCategory := make(map[string]int, len(cases))
@@ -1456,6 +1456,10 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 		scale = 2
 	}
 	world := universe.GenerateForVersion(seed, scale, benchVersion)
+	storyPairs := make(map[string]bool, len(world.Stories))
+	for _, story := range world.Stories {
+		storyPairs[story.PairID] = true
+	}
 	target := (65*len(cases) + 99) / 100
 	if target >= len(cases) {
 		target = len(cases) - 1 // retain at least one plain v7-style coverage case
@@ -1631,6 +1635,7 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleFor(seed, cases[i].ID).Subject)
 		}
 	}
+	return storyPairs
 }
 
 func v8WorldContactEmail(seed int64, caseID string, world universe.World, index int) protocol.ToolCase {
@@ -1804,7 +1809,11 @@ func v13Bank(seed int64, surface string, grammar persona.Grammar) persona.Gramma
 // projects user-authored prerequisite transcripts, except long stories (their
 // structured compiler owns fact-safe projection). Exact required arguments and
 // machine-like values stay canonical.
-func applyV8WritingNoise(seed int64, cases []protocol.ToolCase) map[string]int {
+// applyV8WritingNoise projects writing noise onto a seeded share of tool prompts
+// and short prerequisite pairs. storyPairs names the long story memories, which
+// carry their own bounded noise pass and are never re-noised here; the legacy
+// "story-" session prefix still identifies them for the frozen v8–v12 script.
+func applyV8WritingNoise(seed int64, cases []protocol.ToolCase, storyPairs map[string]bool) map[string]int {
 	coverage := map[string]int{}
 	byDomain := map[string][]string{}
 	for _, tc := range cases {
@@ -1843,7 +1852,7 @@ func applyV8WritingNoise(seed int64, cases []protocol.ToolCase) map[string]int {
 	pairIDs := map[string][]string{}
 	for _, tc := range cases {
 		for _, pair := range tc.PrerequisitePairs {
-			if strings.HasPrefix(pair.SessionID, "story-") {
+			if strings.HasPrefix(pair.SessionID, "story-") || storyPairs[pair.PairID] {
 				continue
 			}
 			domain := pairWritingDomain(pair.SessionID)
@@ -1859,7 +1868,7 @@ func applyV8WritingNoise(seed int64, cases []protocol.ToolCase) map[string]int {
 	for i := range cases {
 		for j := range cases[i].PrerequisitePairs {
 			pair := &cases[i].PrerequisitePairs[j]
-			if !selectedPairs[pair.PairID] || strings.HasPrefix(pair.SessionID, "story-") {
+			if !selectedPairs[pair.PairID] || strings.HasPrefix(pair.SessionID, "story-") || storyPairs[pair.PairID] {
 				continue
 			}
 			projected, stats := textnoise.Project(pair.Prompt, seed, "pair:"+pair.PairID, textnoise.Options{Grammar: true, MaxEdits: 1, Protected: cases[i].WritingProtected})
@@ -2241,10 +2250,11 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		cases = append(cases, tc)
 		fillers = append(fillers, usedFiller)
 	}
+	var storyPairs map[string]bool
 	if benchVersion >= protocol.BenchVersionV9 {
-		applyV9WorldActionsForVersion(seed, benchVersion, cases)
+		storyPairs = applyV9WorldActionsForVersion(seed, benchVersion, cases)
 	} else if benchVersion >= protocol.BenchVersionV8 {
-		applyV8WorldActions(seed, cases)
+		storyPairs = applyV8WorldActions(seed, cases)
 	}
 	if benchVersion >= protocol.BenchVersionV10 {
 		applyV10StateDependentActions(seed, benchVersion, cases)
@@ -2253,7 +2263,7 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		// v13 moves writing noise to the artifact surface pass (gen/v13_surface.go),
 		// where the typo v2 projector runs once over every surface with the
 		// surface salt; the v8 single-edit QWERTY projector is retired there.
-		applyV8WritingNoise(seed, cases)
+		applyV8WritingNoise(seed, cases, storyPairs)
 	}
 	if benchVersion >= protocol.BenchVersionV8 {
 		applyV8AssistantVoice(seed, cases)
