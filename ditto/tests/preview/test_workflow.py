@@ -401,6 +401,7 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     assert explain["env"]["PUBLISH_RESULT"] == "${{ needs.publish.result }}"
     assert explain["env"]["CONFIGURED"] == "${{ needs.preflight.outputs.configured }}"
     assert explain["env"]["PREVIEW_PR"] == "${{ inputs.pr }}"
+    assert explain["env"]["PREVIEW_SHA"] == "${{ inputs.sha }}"
     assert len(explain["steps"]) == 1
     assert "uses" not in explain["steps"][0]
     explain_script = explain["steps"][0]["run"]
