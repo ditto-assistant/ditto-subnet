@@ -1,4 +1,5 @@
 """Exercise the real drain helper with failed workload inventory commands."""
+
 import os
 import subprocess
 from pathlib import Path
@@ -11,24 +12,34 @@ def test_partition_never_stops_rootless_on_unknown_workloads(tmp_path, failure):
     root = Path(__file__).resolve().parents[3]
     source = root / "infra/ansible/roles/screener_partition/files/activate-partition.sh"
     script = tmp_path / "activate.sh"
-    script.write_text(source.read_text().replace(
-        "/var/lib/ditto-screener-fleet/updater/lock", str(tmp_path / "lock")
-    ))
+    script.write_text(
+        source.read_text().replace(
+            "/var/lib/ditto-screener-fleet/updater/lock", str(tmp_path / "lock")
+        )
+    )
     log = tmp_path / "commands"
-    wrapper = '''#!/bin/bash
+    wrapper = """#!/bin/bash
 name=${0##*/}
 echo "$name $*" >> "$TEST_LOG"
 if [[ "$name" == "$FAIL_COMMAND" && "$*" != *"docker info"* ]]; then exit 42; fi
-if [[ "$name" == systemctl && "$1" == show ]]; then echo /dittoscreener.slice/service; fi
+if [[ "$name" == systemctl && "$1" == show ]]; then
+  echo /dittoscreener.slice/service
+fi
 exit 0
-'''
+"""
     for name in ("systemctl", "virsh", "docker", "runuser", "flock"):
         target = tmp_path / name
         target.write_text(wrapper)
         target.chmod(0o755)
-    env = dict(os.environ, PATH=f"{tmp_path}:{os.environ['PATH']}",
-               TEST_LOG=str(log), FAIL_COMMAND=failure)
-    result = subprocess.run(["bash", str(script)], env=env, capture_output=True, timeout=10)
+    env = dict(
+        os.environ,
+        PATH=f"{tmp_path}:{os.environ['PATH']}",
+        TEST_LOG=str(log),
+        FAIL_COMMAND=failure,
+    )
+    result = subprocess.run(
+        ["bash", str(script)], env=env, capture_output=True, timeout=10
+    )
     commands = log.read_text()
     if failure != "none":
         assert result.returncode != 0
@@ -37,5 +48,9 @@ exit 0
     else:
         assert result.returncode == 0, result.stderr
         assert "systemctl disable ditto-screener-worker@2.service" in commands
-    assert "systemctl start ditto-screener-fleet-agent.service ditto-screener-worker@1.service\n" in commands or failure == "runuser"
-    assert "systemctl start ditto-screener-fleet-agent.service ditto-screener-worker@1.service ditto-screener-worker@2" not in commands
+    start = "systemctl start ditto-screener-fleet-agent.service "
+    assert start + "ditto-screener-worker@1.service\n" in commands
+    assert (
+        start + "ditto-screener-worker@1.service ditto-screener-worker@2"
+        not in commands
+    )
