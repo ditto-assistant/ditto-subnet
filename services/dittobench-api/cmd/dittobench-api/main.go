@@ -1912,6 +1912,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	toolWasObserved := make([]bool, len(toolCases))
 	toolWasCapped := make([]bool, len(toolCases))
 	toolTranscripts := make([]transcriptCase, len(toolCases))
+	// Bench v13 twin evidence (issue #1835): what the post-pass needs about
+	// each case beyond its CaseScore, keyed by the case id the report carries.
+	// Collected per index inside the bounded loops, merged single-threaded.
+	twinEvidence := map[string]scorer.TwinEvidence{}
+	toolTwins := make([]scorer.TwinEvidence, len(toolCases))
 	var projectionFailure error
 	var projectionFailureOnce sync.Once
 	recordProjectionFailure := func(err error) {
@@ -1942,6 +1947,10 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		// what the harness OFFERED the model (relay-recorded). Shadow by default;
 		// no-op below v13.
 		cs = applyV13CatalogGate(req.BenchVersion, scope, v13CatalogGatePosture, cs, c, tools, observed, execution)
+		// The broker ledger is keyed by the wire case id, so read it before any
+		// v9 projection reverse-maps cs.CaseID below.
+		cs = s.applyV13InferenceCost(req.BenchVersion, inferenceSessionID, cs, toolCostClass(c), &execution)
+		toolTwins[i] = toolTwinEvidence(req.BenchVersion, c, resp, observed)
 		fixture := toolFixtureByInternalID[c.ID]
 		if harnessProjection != nil {
 			internalID, reverseErr := harnessProjection.InternalCaseID(c.ID)
@@ -2015,6 +2024,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	toolResults = scorer.ApplyV13RestraintGroupRule(req.BenchVersion, toolResults, v13RestraintGroupPosture())
 	for i, cs := range toolResults {
 		perCase = append(perCase, cs)
+		if toolTwins[i].Group != "" {
+			twinEvidence[cs.CaseID] = toolTwins[i]
+		}
 		if toolWasObserved[i] {
 			observedTool++
 		} else if toolWasCapped[i] {
@@ -2087,6 +2099,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 		waveResults := make([]protocol.CaseScore, len(waveCases))
 		waveTranscripts := make([]transcriptCase, len(waveCases))
+		waveTwins := make([]scorer.TwinEvidence, len(waveCases))
 		runBounded(ctx, len(waveCases), effectiveCaseConcurrency, func(i int) {
 			sc := waveCases[i]
 			mc := sc.Case
@@ -2123,6 +2136,8 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				req.BenchVersion, scope, v13ClaimProvenancePosture, cs, mc, gradedResp,
 				runner.DefaultSystemPrompt, recordTokens, claimProvenanceReader, inferenceSessionID,
 			)
+			cs = s.applyV13InferenceCost(req.BenchVersion, inferenceSessionID, cs, memoryCostClass(), &execution)
+			waveTwins[i] = memoryTwinEvidence(req.BenchVersion, sc, gradedResp, observedCalls)
 			if runErr != nil {
 				// The case still scores 0 on its own accuracy (an empty response
 				// grades 0); this only tells the group metrics to drop it, so a
@@ -2172,6 +2187,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 		perCase = append(perCase, waveResults...)
 		transcripts = append(transcripts, waveTranscripts...)
+		for i, cs := range waveResults {
+			if waveTwins[i].Group != "" {
+				twinEvidence[cs.CaseID] = waveTwins[i]
+			}
+		}
 		return nil
 	})
 	if waveErr != nil {
@@ -2240,6 +2260,12 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// into any mean, uncertainty estimate, or gate.
 	perCase = scorer.ScoredPopulation(perCase)
 	s.store.SetStage(runID, store.StatusScoring, len(perCase), total)
+	// Bench v13 twin / pair post-pass (issue #1835) runs on the scored
+	// population before aggregation so the per-relation means and any enforced
+	// rule land in the composite's inputs. It is the identity for bench_version
+	// < 13 and, under the default observe posture, annotates without moving a
+	// score.
+	perCase, twinSummary := scorer.ApplyV13TwinPostPass(perCase, twinEvidence, scorer.TwinPostPassConfigFromEnv(), req.BenchVersion)
 	// Score under the contract this run was GENERATED for, not the module's
 	// current release: a v2 run's composite is pure accuracy, and the v3+ gate
 	// factors must not retroactively apply to it.
@@ -2317,6 +2343,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		report.Details.CalibrationBrier = brier
 		report.Details.CalibrationN = cn
 	}
+	// Bench v13 shadow telemetry: the twin post-pass record and the per-case
+	// inference cost summary. Both are nil before v13, so earlier details keep
+	// their exact shape.
+	report.Details.TwinPostPass = twinSummary
+	report.Details.InferenceCost = s.summarizeV13InferenceCost(req.BenchVersion, inferenceSessionID, perCase)
 	report = applyTokenContract(report, req.BenchVersion, req.RunSize, tokenUsage)
 	if injections > 0 {
 		log.Printf("run %s: %d injection-compliance case(s) flagged", runID, injections)

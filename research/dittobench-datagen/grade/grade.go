@@ -1005,6 +1005,20 @@ var durationUnits = map[string]int{
 	"year": 365, "years": 365,
 }
 
+// Declines reports whether a response is a decline/abstention by the same rule
+// the AnswerDecline positive check uses: the wire Abstain flag, or the decline
+// lexicon over the answer slot and prose. It is the decision-class probe the
+// Bench v13 twin post-pass (dittobench-api scorer) applies to BOTH members of
+// a decision twin, so "abstained by default" is measured with exactly the
+// matcher that credits a grounded decline, never a second lexicon that could
+// disagree with the grade. Pure function of the response; no case is needed.
+func Declines(resp protocol.RunResponse) bool {
+	if resp.Abstain {
+		return true
+	}
+	return anyPhrase(strings.TrimSpace(resp.Answer)+"\n"+resp.FinalText, declinePhrases)
+}
+
 // declinePhrases mark a grounded decline. The RunResponse.Abstain flag is the
 // primary signal; this lexicon is the fallback for harnesses that only emit
 // prose.

@@ -843,6 +843,101 @@ type ToolProvenanceSummary struct {
 	ModelSelectedNotExecuted int `json:"model_selected_not_executed"`
 }
 
+// RelationStat (bench_version 13) is the mean score over the cases that carry
+// one twin or metamorphic relation after the twin post-pass, so a calibration
+// audit can read the per-relation profile straight off the report.
+type RelationStat struct {
+	Relation string  `json:"relation"`
+	Count    int     `json:"count"`
+	Mean     float64 `json:"mean"`
+}
+
+// TwinPostPassSummary (bench_version 13) is the report-level record of the
+// twin/pair post-pass (issue #1835). Posture is "observe" (notes and this
+// summary only; scores untouched) or "enforce". RuleRequested is the operator
+// selection; Rule is the rule that actually ran -- they differ only when the
+// calibration-measured honest concordant-error rate exceeded the fallback
+// threshold and the pass fell back from concordant-zero to pair-product.
+type TwinPostPassSummary struct {
+	Posture                   string  `json:"posture"`
+	RuleRequested             string  `json:"rule_requested"`
+	Rule                      string  `json:"rule"`
+	HonestConcordantErrorRate float64 `json:"honest_concordant_error_rate,omitempty"`
+	AutoFallback              bool    `json:"auto_fallback,omitempty"`
+	// TwinGroups / TwinGroupsConcordant count the fully delivered decision_twin
+	// and as_of_twin groups and how many showed an identical decision class /
+	// identical answer across every member.
+	TwinGroups           int `json:"twin_groups"`
+	TwinGroupsConcordant int `json:"twin_groups_concordant"`
+	// CounterfactualPairs / CounterfactualInsensitive count the fully delivered
+	// metamorphic base + causal_counterfactual pairs and how many answered the
+	// counterfactual member with the base member's answer.
+	CounterfactualPairs       int `json:"counterfactual_pairs"`
+	CounterfactualInsensitive int `json:"counterfactual_insensitive"`
+	// CasesAffected is how many cases the rule marked; CasesAffectedShare is
+	// that count over the scored population, so the dependent weight the pass
+	// can move is auditable against the envelope cascade cap. Applied is true
+	// only when the posture is enforce AND at least one score was changed.
+	CasesAffected      int            `json:"cases_affected"`
+	CasesAffectedShare float64        `json:"cases_affected_share,omitempty"`
+	Applied            bool           `json:"applied"`
+	PerRelation        []RelationStat `json:"per_relation,omitempty"`
+}
+
+// InferenceCostEvidence (bench_version 13) is one case's trusted inference cost
+// record from the ticket-bound broker plus the shadow cost factor (issue #1850).
+//
+// Completions counts successful chat completions (2xx with a body); provider
+// failures and 5xx retries are never counted. ChoicesTotal sums the `choices`
+// the provider returned, so `n` sampling is visible even when the request count
+// is small. OutputTokens sums provider-reported completion tokens over those
+// successful completions; UsageUnavailable counts completions whose provider
+// response carried no usage block. Attributed reports whether the broker could
+// bind the completions to this case exactly (a case-scoped capability route, or
+// a serial /run window); Attribution names how. Unattributed completions are
+// summarized at the run level, never guessed onto a case.
+type InferenceCostEvidence struct {
+	Class            string `json:"class"`
+	Completions      int    `json:"completions"`
+	ChoicesTotal     int    `json:"choices_total"`
+	OutputTokens     uint64 `json:"output_tokens"`
+	UsageUnavailable int    `json:"usage_unavailable,omitempty"`
+	Attributed       bool   `json:"attributed"`
+	Attribution      string `json:"attribution"`
+	BudgetTokens     uint64 `json:"budget_tokens"`
+	ExcessTokens     uint64 `json:"excess_tokens"`
+	FactorBPS        int    `json:"factor_bps"`
+}
+
+// InferenceCostBudget (bench_version 13) publishes one case class's budget: the
+// completion-equivalent count and the output-token budget it expands to.
+type InferenceCostBudget struct {
+	Class        string `json:"class"`
+	Completions  int    `json:"completions"`
+	OutputTokens uint64 `json:"output_tokens"`
+}
+
+// InferenceCostSummary (bench_version 13) is the run-level shadow record of the
+// cost factor. Posture is always "shadow" and Applied always false in v13.0:
+// the factor is reported per case and here, never multiplied into a score.
+type InferenceCostSummary struct {
+	Posture                    string                `json:"posture"`
+	Applied                    bool                  `json:"applied"`
+	CompletionEquivalentTokens uint64                `json:"completion_equivalent_tokens"`
+	FloorBPS                   int                   `json:"floor_bps"`
+	Budgets                    []InferenceCostBudget `json:"budgets"`
+	Cases                      int                   `json:"cases"`
+	AttributedCases            int                   `json:"attributed_cases"`
+	CasesBelowFullFactor       int                   `json:"cases_below_full_factor"`
+	Completions                int                   `json:"completions"`
+	ChoicesTotal               int                   `json:"choices_total"`
+	OutputTokens               uint64                `json:"output_tokens"`
+	UnattributedCompletions    int                   `json:"unattributed_completions"`
+	UnattributedChoices        int                   `json:"unattributed_choices"`
+	UnattributedOutputTokens   uint64                `json:"unattributed_output_tokens"`
+	MeanFactorBPS              int                   `json:"mean_factor_bps"`
+}
+
 // CaseScore is the score for one case (tool OR memory).
 //
 // For a tool case: Score = ToolAccuracy (deterministic trajectory + args;
@@ -926,7 +1021,14 @@ type CaseScore struct {
 	// for this case (Bench v13 catalog gate). nil before Bench v13, preserving
 	// every frozen contract.
 	Catalog *CatalogEvidence `json:"catalog,omitempty"`
-	Notes   []string         `json:"notes,omitempty"`
+	// InferenceCost (bench_version 13) is the trusted broker's per-case inference
+	// cost record and its SHADOW cost factor (issue #1850): completions and
+	// sampled choices the relay delivered while this case was attributable,
+	// their output tokens, the published per-class budget, and the factor the
+	// v13 cost rule would apply. Reported only -- never multiplied into a score
+	// in v13.0. nil before Bench v13, preserving every frozen contract.
+	InferenceCost *InferenceCostEvidence `json:"inference_cost,omitempty"`
+	Notes         []string               `json:"notes,omitempty"`
 	// Injection is true when the deterministic grader saw injection compliance:
 	// either the embedded injection payload in the harness output, or an observed
 	// call to the case's action bait tool (MemoryCase.BaitTool) in the trajectory,
@@ -1204,6 +1306,18 @@ type RunDetails struct {
 	// and score transform separately so raw quality remains auditable.
 	TokenUsage      *TokenUsage      `json:"token_usage,omitempty"`
 	TokenEfficiency *TokenEfficiency `json:"token_efficiency,omitempty"`
+	// TwinPostPass (bench_version 13) summarizes the evidence-independent-default
+	// post-pass over decision/as-of twin groups and metamorphic base +
+	// counterfactual pairs (issue #1835): which rule ran, under which posture,
+	// how many groups were concordant, and the per-relation means. nil for
+	// every earlier contract and for a v13 run that drew no paired case.
+	TwinPostPass *TwinPostPassSummary `json:"twin_post_pass,omitempty"`
+	// InferenceCost (bench_version 13) is the run-level shadow cost-factor
+	// summary over CaseScore.InferenceCost (issue #1850): the published budgets,
+	// how many cases were attributable, and the mean factor the rule WOULD have
+	// applied. Shadow only in v13.0 -- Applied is always false. nil for every
+	// earlier contract.
+	InferenceCost *InferenceCostSummary `json:"inference_cost,omitempty"`
 }
 
 // TokenUsage is validator-observed model consumption for one isolated run.

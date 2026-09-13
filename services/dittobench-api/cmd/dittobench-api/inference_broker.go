@@ -199,6 +199,14 @@ type brokerSession struct {
 	// admission or accounting input -- and it is what lets a concurrent v10+
 	// run still tell the relay which cases a call could belong to.
 	runCases map[string]int
+	// caseCosts is the Bench v13 per-case inference cost ledger (issue #1850):
+	// successful completions, sampled choices, and output tokens bound to one
+	// /run case exactly (case-scoped capability route or a serial /run window).
+	// unattributedCost collects the completions that overlapped several
+	// in-flight cases; they are reported at run level, never guessed onto a
+	// case. Shadow evidence: never an admission or accounting input.
+	caseCosts        map[string]brokerCaseCost
+	unattributedCost brokerCaseCost
 	// Session-scoped v10+ tool provenance. Concurrent /run opens no exclusive
 	// case windows, so every ordinary chat completion is admitted at
 	// caseGeneration 0: its model-emitted tool calls are recorded here,
@@ -4274,13 +4282,18 @@ func (b *inferenceBroker) proxy(
 	// Metadata only; no-op for bench_version<13.
 	recordCatalogCompletionLocked(session, catalogAttribution, body, responseBody)
 	session.providerLatency += totalLatency
+	completionTokens := uint64(0)
 	if usageOK {
 		session.usageAvailable++
 		session.promptTokens += uint64(decoded.Usage.PromptTokens)
 		session.completionTokens += uint64(decoded.Usage.CompletionTokens)
+		completionTokens = uint64(decoded.Usage.CompletionTokens)
 	} else {
 		session.usageUnavailable++
 	}
+	// Bench v13 cost ledger: book this successful completion's choices and
+	// output tokens on the case it can be bound to. No-op for bench_version<13.
+	recordInferenceCostLocked(session, caseGeneration, responseBody, usageOK, completionTokens)
 	session.mu.Unlock()
 	if injectedDelay > 0 {
 		// Hold the completed upstream response for the scheduled fingerprint
