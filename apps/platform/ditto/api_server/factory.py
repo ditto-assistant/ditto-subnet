@@ -56,6 +56,7 @@ from ditto.api_server.dashboard_seo import (
     sitemap_xml,
 )
 from ditto.api_server.datapipeline import create_generator
+from ditto.api_server.ditto_link import DittoLinkClient
 from ditto.api_server.efficiency import EfficiencyStateMaterializer
 from ditto.api_server.efficiency_settings import (
     DEFAULT_SETTINGS_TTL_SECONDS,
@@ -107,6 +108,7 @@ from ditto.api_server.endpoints import (
     metrics_router,
     miner_auth_router,
     miner_avatars_router,
+    miner_ditto_link_router,
     miner_mcp_router,
     miner_me_router,
     name_claims_router,
@@ -569,6 +571,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # snapshot path is synchronous and disabled by default; production lifespan
     # starts the optional background refresher without blocking API startup.
     app.state.validator_names = create_validator_names(config.validator_names)
+    # Sign in with Ditto relying party. Inert (every route answers 503) until
+    # DITTO_LINK_* names the DittoBench app; tests swap in a mock transport.
+    app.state.ditto_link = DittoLinkClient(config.ditto_link)
 
     # Starlette inserts each middleware at position 0, so the LAST
     # add_middleware call ends up outermost on the wire. RequestIDMiddleware
@@ -602,6 +607,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(miner_avatars_router, prefix="/api/v1")
     app.include_router(miner_auth_router, prefix="/api/v1")
     app.include_router(miner_me_router, prefix="/api/v1")
+    app.include_router(miner_ditto_link_router, prefix="/api/v1")
     app.include_router(miner_mcp_router)
     app.include_router(upload_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")

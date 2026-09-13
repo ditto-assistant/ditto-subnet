@@ -247,3 +247,145 @@ describe("miner sign-in page", () => {
     });
   });
 });
+
+describe("Ditto account link", () => {
+  const session = {
+    token: "ditto_ms_abc",
+    hotkey: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    scopes: ["read", "profile"],
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  };
+  const me = {
+    session: {
+      miner_hotkey: session.hotkey,
+      scopes: session.scopes,
+      expires_at: session.expiresAt,
+      expires_in: 3600,
+    },
+    profile: {},
+    profile_url: "/miner/" + session.hotkey,
+    commands: [],
+  };
+
+  async function signIn(): Promise<void> {
+    localStorage.setItem("ditto.miner.session.v1", JSON.stringify(session));
+    const { setMinerSession } = await import("../stores/sessionStore");
+    setMinerSession(session);
+  }
+
+  it("offers Sign in with Ditto and sends the browser to the consent URL", async () => {
+    await signIn();
+    const assign = vi.fn();
+    vi.stubGlobal("location", {
+      ...location,
+      origin: "https://dittobench.ai",
+      pathname: "/",
+      search: "",
+      hash: "#/reviews",
+      href: "https://dittobench.ai/#/reviews",
+      assign,
+    });
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, init });
+        if (url.endsWith("/me")) return Response.json(me);
+        if (url.endsWith("/me/ditto-link") && (!init?.method || init.method === "GET"))
+          return Response.json({ enabled: true, link: null });
+        if (url.endsWith("/me/ditto-link/start"))
+          return Response.json({
+            attempt_id: "00000000-0000-4000-8000-000000000001",
+            authorize_url: "https://api.heyditto.ai/authorize?client_id=dittobench&state=s",
+            expires_in: 600,
+          });
+        return new Response("[]", { status: 200 });
+      }),
+    );
+    render(() => <ReviewsPage />);
+    const card = await waitFor(() => {
+      const found = document.querySelector('[data-testid="ditto-account-card"]');
+      expect(found).toBeTruthy();
+      return found as HTMLElement;
+    });
+    const button = Array.from(card.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Sign in with Ditto"),
+    );
+    expect(button).toBeTruthy();
+    fireEvent.click(button!);
+    await waitFor(() => {
+      expect(assign).toHaveBeenCalledWith(
+        "https://api.heyditto.ai/authorize?client_id=dittobench&state=s",
+      );
+    });
+    const start = calls.find((c) => c.url.endsWith("/me/ditto-link/start"));
+    expect(start?.init?.method).toBe("POST");
+    const body = JSON.parse(String(start?.init?.body)) as { client: string; return_to: string };
+    expect(body.client).toBe("dashboard");
+    expect(body.return_to).toBe("https://dittobench.ai/#/reviews");
+    // Only the session bearer travels; the page never names a Ditto user.
+    expect(new Headers(start?.init?.headers).get("authorization")).toBe("Bearer ditto_ms_abc");
+  });
+
+  it("shows the linked account, the callback notice, and can unlink", async () => {
+    await signIn();
+    history.replaceState(null, "", "/#/reviews?ditto=linked");
+    syncFromLocation();
+    let linked: { ditto_user_id: string; ditto_email: string; linked_via: string } | null = {
+      ditto_user_id: "ditto-user-1",
+      ditto_email: "miner@example.com",
+      linked_via: "cli",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/me")) return Response.json(me);
+        if (url.endsWith("/me/ditto-link") && init?.method === "DELETE") {
+          linked = null;
+          return new Response(null, { status: 204 });
+        }
+        if (url.endsWith("/me/ditto-link"))
+          return Response.json({
+            enabled: true,
+            link: linked
+              ? { miner_hotkey: session.hotkey, created_at: "2026-09-12T12:00:00Z", ...linked }
+              : null,
+          });
+        return new Response("[]", { status: 200 });
+      }),
+    );
+    render(() => <ReviewsPage />);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Ditto account linked.");
+      expect(document.body.textContent).toContain("miner@example.com");
+    });
+    expect(location.hash).not.toContain("ditto=linked");
+    const unlink = Array.from(document.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Unlink Ditto account"),
+    );
+    fireEvent.click(unlink!);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Ditto account unlinked.");
+      expect(document.body.textContent).toContain("Sign in with Ditto");
+    });
+  });
+
+  it("explains when linking is not enabled on this deployment", async () => {
+    await signIn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/me")) return Response.json(me);
+        if (url.endsWith("/me/ditto-link")) return Response.json({ enabled: false, link: null });
+        return new Response("[]", { status: 200 });
+      }),
+    );
+    render(() => <ReviewsPage />);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Linking is not enabled on this deployment yet.");
+    });
+  });
+});

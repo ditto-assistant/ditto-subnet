@@ -49,6 +49,12 @@ from ditto.api_models import (
     UploadCheckRequest,
     UploadCheckResponse,
 )
+from ditto.api_models.miner_ditto_link import (
+    MinerDittoLinkAttemptResponse,
+    MinerDittoLinkResponse,
+    MinerDittoLinkStartRequest,
+    MinerDittoLinkStartResponse,
+)
 from ditto.api_models.miner_logs import (
     MinerHarnessLogsResponse,
 )
@@ -431,6 +437,55 @@ class ApiClient:
         )
         if response.status_code not in (200, 204):
             raise LoginRejectedError(_format_error(response, prefix="miner-logout"))
+
+    # ---- /me/ditto-link (Sign in with Ditto) -----------------------------
+
+    def _ditto_link_error(self, response: httpx.Response) -> ApiResponseError:
+        if response.status_code == 401:
+            return LoginRequiredError("miner session is invalid or expired")
+        return ApiResponseError(_format_error(response, prefix="ditto-link"))
+
+    def get_ditto_link(self, *, token: str) -> MinerDittoLinkResponse:
+        response = self._request(
+            "GET", "/api/v1/me/ditto-link", headers={"authorization": f"Bearer {token}"}
+        )
+        if response.status_code != 200:
+            raise self._ditto_link_error(response)
+        return MinerDittoLinkResponse.model_validate(response.json())
+
+    def start_ditto_link(
+        self, *, token: str, body: MinerDittoLinkStartRequest
+    ) -> MinerDittoLinkStartResponse:
+        response = self._request(
+            "POST",
+            "/api/v1/me/ditto-link/start",
+            headers={"authorization": f"Bearer {token}"},
+            json=body.model_dump(mode="json"),
+        )
+        if response.status_code != 200:
+            raise self._ditto_link_error(response)
+        return MinerDittoLinkStartResponse.model_validate(response.json())
+
+    def get_ditto_link_attempt(
+        self, *, token: str, attempt_id: UUID
+    ) -> MinerDittoLinkAttemptResponse:
+        response = self._request(
+            "GET",
+            f"/api/v1/me/ditto-link/attempts/{attempt_id}",
+            headers={"authorization": f"Bearer {token}"},
+        )
+        if response.status_code != 200:
+            raise self._ditto_link_error(response)
+        return MinerDittoLinkAttemptResponse.model_validate(response.json())
+
+    def delete_ditto_link(self, *, token: str) -> None:
+        response = self._request(
+            "DELETE",
+            "/api/v1/me/ditto-link",
+            headers={"authorization": f"Bearer {token}"},
+        )
+        if response.status_code not in (200, 204):
+            raise self._ditto_link_error(response)
 
     def clear_miner_avatar(self, body: MinerAvatarClearRequest) -> MinerAvatarResponse:
         response = self._request(

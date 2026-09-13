@@ -82,6 +82,19 @@ interface MinerMe {
   commands: Array<{ action: string; command: string; reason: string }>;
 }
 
+interface DittoLinkView {
+  miner_hotkey: string;
+  ditto_user_id: string;
+  ditto_email?: string | null;
+  linked_via: "dashboard" | "cli";
+  created_at: string;
+}
+
+interface DittoLinkStatus {
+  enabled: boolean;
+  link: DittoLinkView | null;
+}
+
 interface MinerSubmission {
   agent_id: string;
   name: string;
@@ -176,6 +189,21 @@ function readPollGrant(): StoredPollGrant | null {
   } catch {
     return null;
   }
+}
+
+/** The OIDC callback lands on `#/reviews?ditto=linked|error&reason=…`, which
+ * boot canonicalizes to `/reviews?ditto=…` (both are page-scoped params). Read
+ * it once, then drop it from the URL so a reload does not repeat the notice. */
+function readDittoResult(): { ok: boolean; text: string } | null {
+  const params = loginParams();
+  const outcome = params.get("ditto");
+  if (!outcome) return null;
+  const reason = params.get("reason") || "";
+  params.delete("ditto");
+  params.delete("reason");
+  history.replaceState(history.state ?? {}, "", spaHref("reviews", params));
+  if (outcome === "linked") return { ok: true, text: "Ditto account linked." };
+  return { ok: false, text: "Ditto sign-in did not complete" + (reason ? ": " + reason : ".") };
 }
 
 function writeLoginHash(userCode: string, completeToken?: string): void {
@@ -454,10 +482,59 @@ function AccountPanel(): JSX.Element {
   const [discord, setDiscord] = createSignal("");
   const [error, setError] = createSignal("");
   const [saved, setSaved] = createSignal("");
+  const [dittoLink, setDittoLink] = createSignal<DittoLinkStatus | null>(null);
+  const [dittoNotice, setDittoNotice] = createSignal(readDittoResult());
+  const [dittoBusy, setDittoBusy] = createSignal(false);
 
   createEffect(() => {
     void loadMe();
+    void loadDittoLink();
   });
+
+  async function loadDittoLink(): Promise<void> {
+    try {
+      setDittoLink(
+        await authJSON<DittoLinkStatus>("/me/ditto-link", { headers: sessionAuthHeader() }),
+      );
+    } catch {
+      // An older Platform has no link endpoint; the card simply stays hidden.
+      setDittoLink(null);
+    }
+  }
+
+  async function startDittoLink(): Promise<void> {
+    setDittoBusy(true);
+    setError("");
+    try {
+      const started = await authJSON<{ authorize_url: string }>("/me/ditto-link/start", {
+        method: "POST",
+        headers: { ...sessionAuthHeader(), "content-type": "application/json" },
+        body: JSON.stringify({
+          client: "dashboard",
+          return_to: location.origin + location.pathname + "#/reviews",
+        }),
+      });
+      location.assign(started.authorize_url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start Sign in with Ditto.");
+      setDittoBusy(false);
+    }
+  }
+
+  async function unlinkDitto(): Promise<void> {
+    setDittoBusy(true);
+    setDittoNotice(null);
+    setError("");
+    try {
+      await authJSON<unknown>("/me/ditto-link", { method: "DELETE", headers: sessionAuthHeader() });
+      setSaved("Ditto account unlinked.");
+      await loadDittoLink();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not unlink the Ditto account.");
+    } finally {
+      setDittoBusy(false);
+    }
+  }
 
   async function loadMe(): Promise<boolean> {
     try {
@@ -654,6 +731,68 @@ function AccountPanel(): JSX.Element {
             Save profile
           </button>
         </div>
+        <Show when={dittoLink()}>
+          {(status) => (
+            <div class="account-card" data-testid="ditto-account-card">
+              <h3>Ditto account</h3>
+              <Show when={dittoNotice()}>
+                {(notice) => <p class={notice().ok ? "muted" : "account-error"}>{notice().text}</p>}
+              </Show>
+              <Show
+                when={status().link}
+                fallback={
+                  <>
+                    <p class="muted">
+                      Sign in with Ditto to attach your Ditto account to this hotkey. The link lets
+                      DittoBench attribute Router inference to your consenting account and credit
+                      Feedback Track contributions to it. Nothing is signed and no TAO moves; the
+                      hotkey is proven by this session, the account by Ditto.
+                    </p>
+                    <Show
+                      when={status().enabled}
+                      fallback={<p class="muted">Linking is not enabled on this deployment yet.</p>}
+                    >
+                      <button
+                        class="btn"
+                        disabled={dittoBusy()}
+                        onClick={() => void startDittoLink()}
+                      >
+                        Sign in with Ditto
+                      </button>
+                    </Show>
+                    <p class="muted">
+                      From a terminal: <code>ditto link-ditto</code> (uses your saved{" "}
+                      <code>ditto login</code> session).
+                    </p>
+                  </>
+                }
+              >
+                {(link) => (
+                  <>
+                    <p>
+                      Linked to <strong>{link().ditto_email || link().ditto_user_id}</strong>
+                      <span class="muted">
+                        {" "}
+                        · via {link().linked_via} · {link().created_at}
+                      </span>
+                    </p>
+                    <p class="muted">
+                      Other hotkeys can link to the same Ditto account; each one signs in on its
+                      own. Unlinking here stops attribution for this hotkey only.
+                    </p>
+                    <button
+                      class="btn ghost"
+                      disabled={dittoBusy()}
+                      onClick={() => void unlinkDitto()}
+                    >
+                      Unlink Ditto account
+                    </button>
+                  </>
+                )}
+              </Show>
+            </div>
+          )}
+        </Show>
       </Show>
       <Show when={tab() === "submissions"}>
         <div class="account-card">

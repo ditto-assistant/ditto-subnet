@@ -708,8 +708,30 @@ one-shot signed actions still happen in the CLI. The hosted MCP at
 signing remotely.
 
 Public miner profiles are `/miner/<hotkey>` and `/h/<handle>`. X, GitHub,
-and Discord are optional. Connecting a Ditto product account is reserved
-for a later sign-in-with-Ditto step.
+and Discord are optional.
+
+### Link your Ditto account
+
+Once signed in, the **Profile** tab offers **Sign in with Ditto**. It runs
+Ditto's own OpenID sign-in (Google, Apple, X, GitHub or email on the Ditto
+side) and, when you consent, the Platform records that this hotkey belongs
+to your Ditto account. The hotkey is proven by your miner session; the
+account is proven by Ditto's signed id_token, which the Platform verifies
+against Ditto's published keys. You never type a Ditto password into
+dittobench.ai and the CLI never sees your Ditto credentials.
+
+```sh
+# From a terminal, using the session `ditto login` saved
+uv run ditto --network finney link-ditto          # opens the consent page, waits
+uv run ditto --network finney link-ditto status   # show the linked account
+uv run ditto --network finney link-ditto unlink   # revoke the link for this hotkey
+```
+
+Several hotkeys (and their coldkeys) may point at one Ditto account; each
+hotkey signs in on its own. The link is identity plumbing only: it lets
+DittoBench attribute Router inference to your consenting Ditto account and
+credit Feedback Track contributions to it. It moves no TAO, changes no
+weights, and unlinking stops attribution for that hotkey only.
 
 ## Common questions
 

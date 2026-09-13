@@ -8188,6 +8188,95 @@ class MinerOauthClient(Base):
     )
 
 
+class MinerDittoLink(Base):
+    """One hotkey's Ditto product account, bound through Sign in with Ditto.
+
+    ``ditto_user_id`` is the verified OIDC subject; the hotkey is whatever
+    live miner session started the link. Many hotkeys may share one account.
+    """
+
+    __tablename__ = "miner_ditto_links"
+
+    miner_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    ditto_user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    ditto_email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    miner_coldkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    linked_via: Mapped[str] = mapped_column(Text, nullable=False)
+    session_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(ditto_user_id) BETWEEN 1 AND 128",
+            name="miner_ditto_links_user_id_len",
+        ),
+        CheckConstraint(
+            "linked_via IN ('dashboard', 'cli')",
+            name="miner_ditto_links_linked_via_check",
+        ),
+        Index("miner_ditto_links_user_idx", "ditto_user_id"),
+    )
+
+
+class MinerDittoLinkAttempt(Base):
+    """One authorization-code round trip for a Ditto account link."""
+
+    __tablename__ = "miner_ditto_link_attempts"
+
+    attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    session_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    state_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[str] = mapped_column(Text, nullable=False)
+    code_verifier: Mapped[str] = mapped_column(Text, nullable=False)
+    client: Mapped[str] = mapped_column(Text, nullable=False)
+    return_to: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ditto_user_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["session_id"],
+            ["miner_sessions.session_id"],
+            ondelete="CASCADE",
+            name="miner_ditto_link_attempts_session_id_fkey",
+        ),
+        CheckConstraint(
+            "length(state_hash) = 64", name="miner_ditto_link_attempts_state_len"
+        ),
+        CheckConstraint(
+            "client IN ('dashboard', 'cli')",
+            name="miner_ditto_link_attempts_client_check",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'linked', 'failed', 'expired')",
+            name="miner_ditto_link_attempts_status_check",
+        ),
+        UniqueConstraint("state_hash", name="miner_ditto_link_attempts_state_key"),
+        Index("miner_ditto_link_attempts_hotkey_idx", "miner_hotkey", "created_at"),
+    )
+
+
 class MinerDeviceGrant(Base):
     """One device-authorization / MCP consent grant awaiting a hotkey signature."""
 

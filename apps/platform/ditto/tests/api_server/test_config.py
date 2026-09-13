@@ -798,3 +798,40 @@ class TestTargonRentalConfig:
         exhaustion.
         """
         assert DEFAULT_CHAT_REQUEST_BUDGET >= 5 * 1024
+
+
+def test_ditto_link_config_is_off_by_default_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_minimum_env(monkeypatch)
+    for name in (
+        "DITTO_LINK_ENABLED",
+        "DITTO_LINK_CLIENT_ID",
+        "DITTO_LINK_CLIENT_SECRET",
+        "DITTO_LINK_REDIRECT_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    config = parse_api_server_config_from_env("c")
+    assert config.ditto_link.enabled is False
+    check_config(config)
+
+    monkeypatch.setenv("DITTO_LINK_ENABLED", "true")
+    with pytest.raises(ApiServerConfigError, match="DITTO_LINK_CLIENT_ID"):
+        check_config(parse_api_server_config_from_env("c"))
+
+    monkeypatch.setenv("DITTO_LINK_CLIENT_ID", "dittobench")
+    monkeypatch.setenv("DITTO_LINK_CLIENT_SECRET", "s")
+    monkeypatch.setenv("DITTO_LINK_REDIRECT_URL", "http://insecure.example/cb")
+    with pytest.raises(ApiServerConfigError, match="DITTO_LINK_REDIRECT_URL"):
+        check_config(parse_api_server_config_from_env("c"))
+
+    monkeypatch.setenv(
+        "DITTO_LINK_REDIRECT_URL",
+        "https://dittobench.ai/api/v1/miner-auth/ditto/callback",
+    )
+    monkeypatch.setenv("DITTO_LINK_ISSUER", "https://api.heyditto.ai/")
+    config = parse_api_server_config_from_env("c")
+    check_config(config)
+    assert config.ditto_link.issuer == "https://api.heyditto.ai"
+    assert config.ditto_link.client_id == "dittobench"
+    assert config.ditto_link.return_url == "https://dittobench.ai/#/reviews"

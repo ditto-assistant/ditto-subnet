@@ -35,6 +35,7 @@ from ditto.api_server.datapipeline import (
     DataPipelineConfig,
     parse_data_pipeline_config_from_env,
 )
+from ditto.api_server.ditto_link import DittoLinkConfig
 from ditto.api_server.embedding import (
     EmbeddingConfig,
     parse_embedding_config_from_env,
@@ -395,6 +396,18 @@ class ApiServerConfig:
 
     admin_api_token: str | None = None
     """Bearer token for private Backroom/operator administration endpoints."""
+
+    ditto_link: DittoLinkConfig = field(
+        default_factory=lambda: DittoLinkConfig(
+            enabled=False,
+            issuer="https://api.heyditto.ai",
+            client_id=None,
+            client_secret=None,
+            redirect_url="",
+            return_url="https://dittobench.ai/#/reviews",
+        )
+    )
+    """Sign in with Ditto relying-party settings; disabled until configured."""
 
     coding_catalog_curator_hotkeys: tuple[str, ...] = ()
     """Offline curator keys allowed to register signed coding catalogs.
@@ -935,6 +948,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         ),
         inference_proxy=inference_proxy,
         admin_api_token=os.environ.get("DITTO_ADMIN_API_TOKEN") or None,
+        ditto_link=parse_ditto_link_config_from_env(),
         coding_catalog_curator_hotkeys=tuple(
             value
             for item in os.environ.get(
@@ -959,6 +973,55 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     )
 
 
+def parse_ditto_link_config_from_env() -> DittoLinkConfig:
+    """``DITTO_LINK_*``: Sign in with Ditto as a relying party. Off by default."""
+    enabled = os.environ.get("DITTO_LINK_ENABLED", "false").strip().lower() in _TRUTHY
+    try:
+        timeout_seconds = float(os.environ.get("DITTO_LINK_TIMEOUT_SECONDS", "10"))
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "DITTO_LINK_TIMEOUT_SECONDS must be numeric"
+        ) from error
+    return DittoLinkConfig(
+        enabled=enabled,
+        issuer=os.environ.get("DITTO_LINK_ISSUER", "https://api.heyditto.ai")
+        .strip()
+        .rstrip("/"),
+        client_id=os.environ.get("DITTO_LINK_CLIENT_ID", "").strip() or None,
+        client_secret=os.environ.get("DITTO_LINK_CLIENT_SECRET", "").strip() or None,
+        redirect_url=os.environ.get("DITTO_LINK_REDIRECT_URL", "").strip(),
+        return_url=os.environ.get(
+            "DITTO_LINK_RETURN_URL", "https://dittobench.ai/#/reviews"
+        ).strip(),
+        scopes=os.environ.get("DITTO_LINK_SCOPES", "openid email").strip()
+        or "openid email",
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def check_ditto_link_config(config: DittoLinkConfig) -> None:
+    if not config.enabled:
+        return
+    if not config.client_id or not config.client_secret:
+        raise ApiServerConfigError(
+            "DITTO_LINK_CLIENT_ID and DITTO_LINK_CLIENT_SECRET are required when "
+            "DITTO_LINK_ENABLED is true"
+        )
+    for name, value in (
+        ("DITTO_LINK_ISSUER", config.issuer),
+        ("DITTO_LINK_REDIRECT_URL", config.redirect_url),
+        ("DITTO_LINK_RETURN_URL", config.return_url),
+    ):
+        if not value.startswith("https://") and not value.startswith(
+            "http://localhost"
+        ):
+            raise ApiServerConfigError(f"{name} must be an https URL")
+    if not 1 <= config.timeout_seconds <= 60:
+        raise ApiServerConfigError(
+            "DITTO_LINK_TIMEOUT_SECONDS must be between 1 and 60"
+        )
+
+
 def check_config(config: ApiServerConfig) -> None:
     """Validate port range + log-level set membership.
 
@@ -967,6 +1030,7 @@ def check_config(config: ApiServerConfig) -> None:
             ``log_level`` is not a stdlib level name.
     """
     check_hosted_signer_config(config.coding_hosted_signer)
+    check_ditto_link_config(config.ditto_link)
     if not 1 <= config.port <= 65535:
         raise ApiServerConfigError(f"port out of range: {config.port}")
     if config.log_level not in _VALID_LOG_LEVELS:
