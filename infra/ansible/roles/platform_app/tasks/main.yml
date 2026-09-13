@@ -508,7 +508,7 @@
 - name: Validate Hippius Coding evidence credentials
   ansible.builtin.assert:
     that:
-      - platform_coding_hippius_evidence_access_key_read.stdout | default('') | regex_search('^hip_')
+      - platform_coding_hippius_evidence_access_key_read.stdout | default('') is match('^hip_')
       - platform_coding_hippius_evidence_secret_key_read.stdout | default('') | length > 0
       - platform_coding_hippius_evidence_access_key_read.stdout != platform_coding_hippius_evidence_secret_key_read.stdout
       - platform_coding_hippius_evidence_access_key_read.stdout != (platform_secrets.hmac_secret | default(''))
