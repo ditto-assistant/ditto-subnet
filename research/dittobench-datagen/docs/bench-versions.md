@@ -24,7 +24,7 @@ applied to an existing version. It ships as a new one.
 | 10 (pre-activation) | `2027-02-01` | A generator-as-spec contract: seed-scoped ontologies, recursive query programs, independent renderers, and linked metamorphic/counterfactual cases. Runtime execution is available; Platform activation remains separate. |
 | 11 (pre-activation) | `2027-03-01` | Anti-template-fitting: sampled program shapes, compositional surface grammar, descriptive entity binding, a multi-edit surface-noise projector, and per-seed composed injection markers. Runtime execution is available; Platform activation remains separate. |
 | 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
-| 13 (in development) | `2027-05-01` | Typed-semantic contract (#1518): label-insufficiency, unregenerable surface, causal model dependence, provenance over containment, bounded money share, grader-only claim sets. Plumbing shipped (version, 250-case envelope, grader-only protocol types, v12-copy surface pass); families, grader, and gates land behind `bench_version >= 13`; not advertised by the runtime until the contract is complete. |
+| 13 (in development) | `2027-05-01` | Typed-semantic contract (#1518): label-insufficiency, unregenerable surface, causal model dependence, provenance over containment, bounded money share, grader-only claim sets. Plumbing shipped (version, 250-case envelope, grader-only protocol types, v12-copy surface pass); public-corpora vocabulary and `/seed` label hygiene (#1825, #1827: frozen SHA-pinned public tables, opaque session ids, seeded business-hours timestamps); families, grader, and gates land behind `bench_version >= 13`; not advertised by the runtime until the contract is complete. |
 
 ## V10 generator-as-spec contract
 
@@ -617,6 +617,59 @@ by the #1521 calibration PR against real cleared agents and synthetic S/N
 carriers, not by CI alone. Activation is a separate owner gate after shadow
 calibration: `CurrentBenchVersion` stays v8, the runtime advertises v13 only
 when the contract is complete, and Platform rollout state activates it.
+
+### Public corpora and `/seed` label hygiene (#1825, #1827)
+
+The corpora PR adds two levers on top of the plumbing, both gated on
+`bench_version >= 13` so v12 and earlier regenerate byte-identically (the
+v2–v12 known-vector tests are unchanged, and `universe.Generate` is now a thin
+alias for `GenerateForVersion(seed, scale, 8)` whose bytes a dedicated test
+pins against every version from v8 to v12).
+
+- **Public vocabulary corpora (#1825).** `internal/publicdata` embeds frozen,
+  SHA-pinned tables — GeoNames cities ≥ 15k (31,799; CC-BY 4.0), O*NET
+  occupation titles (721; CC-BY 4.0), Google Fonts families (1,946; OFL/Apache
+  metadata), the xkcd colour survey plus CSS named colours (952; CC0), Wikidata
+  organisation stems (1,528; CC0), and an authored 181-entry purpose bank — with
+  provenance in `internal/publicdata/data/SOURCES.md` and the humandata-style
+  weighted head + long-tail sampler. At v13 the world's relations, roles,
+  cities, event contexts, employers, clients, vendors, project-name families,
+  trip aliases, purposes, accent colour, and interface font all come from these
+  corpora or from compositional banks whose product exceeds 500 surfaces; the
+  `datagen` appearance and addressee fillers and the `toolexec` needle names,
+  web sources, and URL hosts do too. The one deliberately small list left is the
+  closed company-suffix enum. The mock `discover_capabilities` inventory is now
+  seed-specific (`internal/appearance`): it lists the seeded accent and font
+  among corpus near-misses ("Inter" beside "Inter Tight", "teal" beside "dark
+  teal"), each verified not to be graded as contained in the true value, so a
+  harness must read the inventory rather than pattern-match eight fixed names.
+  A public corpus is a bigger table, not an open set — a miner can vendor every
+  file; what v13 buys is variety and near-miss ambiguity, not secrecy.
+- **`/seed` label hygiene (#1827).** Before v13 `MemoryPair.session_id` carried
+  `story-04-outcome`, `people-11-d`, `project-03-ledger`, `isolation-person-02-a`
+  and `v10-tool-route-07`, and timestamps sat on per-family grids (a 137-hour
+  stride for world pairs, `2026-01-0<i>T0<9+i>` for program records,
+  `2026-02/03-<n>T<8+n>` for the divergence and compiler families). A reader
+  could classify every record's generator family, entity, and slot before
+  reading a word. At v13 every session id is a `protocol.OpaqueCaseID` and every
+  timestamp comes from `protocol.OpaqueTimeline` / `OpaqueBusinessInstant`: a
+  seeded business-hours instant in one shared 180-day window, with chronology
+  restored only where an oracle relies on it (identity → work, address →
+  correction, ledger → approval, plan → correction, origin → decision → outcome)
+  by anchoring each chain and advancing later members by one to four working
+  days with an independent time of day. `gen/labelleak_test.go` trains a
+  best-of-twelve-features classifier (session shape/length/prefix, year, month,
+  day, weekday, hour, minute, …) on 30 seeds and scores 10 held-out seeds: on
+  v13 it may not beat a shuffled-label null on family, story slot, or program
+  record slot, and on v12 the same probe recovers the family from the session
+  prefix at 94%. The subject-link audit is recorded in the same file: the v8+
+  world path emits no prepared subjects or links, so `/seed` cannot enumerate
+  the three-record join a story oracle needs (the v2–v7 `synthesizeSubjects`
+  path is frozen and unreachable at v13).
+
+The envelope, mix, surface pass, and gates for v13 land in the sibling v13
+issues; `TestV13KnownVector` is pinned only after they do, so the hash frozen
+into the contract already carries opaque ids and jittered timestamps.
 
 ## Auditing an old score
 

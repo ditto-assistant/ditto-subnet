@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/ditto-assistant/dittobench-datagen/internal/assistantvoice"
+	"github.com/ditto-assistant/dittobench-datagen/internal/humandata"
+	"github.com/ditto-assistant/dittobench-datagen/internal/publicdata"
 	"github.com/ditto-assistant/dittobench-datagen/internal/textnoise"
 	"github.com/ditto-assistant/dittobench-datagen/internal/uservoice"
 	"github.com/ditto-assistant/dittobench-datagen/persona"
@@ -712,6 +714,19 @@ func fillerForVersion(r *rand.Rand, cat string, benchVersion int) string {
 		p := poolV5(base, extra, benchVersion)
 		return p[r.Intn(len(p))]
 	}
+	if benchVersion >= protocol.BenchVersionV13 {
+		// v13 (#1825): the appearance fillers draw from the public colour and
+		// font corpora, and the addressee fillers from the human-name corpus,
+		// instead of hand lists of four or five entries.
+		switch cat {
+		case "set_accent":
+			return publicdata.Color(r)
+		case "set_font":
+			return publicdata.FontFamily(r, r.Intn(4))
+		case "email_send":
+			return corpusEmailRecipient(r)
+		}
+	}
 	switch cat {
 	case "entity_lookup_chain":
 		return pick(subjects, nil)
@@ -731,6 +746,20 @@ func fillerForVersion(r *rand.Rand, cat string, benchVersion int) string {
 		return pick(calendarTitles, calendarTitlesV5)
 	}
 	return fillerForLegacy(r, cat)
+}
+
+// corpusEmailRecipient composes a v13 email_send addressee from the human-name
+// corpus and an organisation stem ("priya.okafor@talgo.example"), or one of the
+// role-shaped addressees the templates already accept.
+func corpusEmailRecipient(r *rand.Rand) string {
+	switch r.Intn(3) {
+	case 0:
+		return strings.ToLower(humandata.GivenName(r, r.Intn(5))) + "." + strings.ToLower(humandata.Surname(r, r.Intn(7))) + "@" + strings.ToLower(publicdata.OrgStem(r)) + ".example"
+	case 1:
+		return strings.ToLower(humandata.GivenName(r, r.Intn(5))) + "@" + strings.ToLower(publicdata.OrgStem(r)) + ".example"
+	default:
+		return []string{"the team", "my accountant", "my " + publicdata.Occupation(r), "the " + publicdata.OrgStem(r) + " reviewers"}[r.Intn(4)]
+	}
 }
 
 // fillerForLegacy is the historical per-category pool selection for every category
@@ -1277,7 +1306,7 @@ var difficultyCategoriesV7 = []category{
 // deterministic. MaxToolCalls describes the expected envelope; it is not a hard
 // cap and creative agents may legitimately exceed it.
 func applyV8WorldActions(seed int64, cases []protocol.ToolCase) {
-	applyWorldActions(seed, cases, false)
+	applyWorldActions(seed, protocol.BenchVersionV8, cases, false)
 }
 
 const (
@@ -1303,8 +1332,8 @@ const (
 // stale-context and memory-fetch programs, at least half of the run remains
 // evidence-bound or composed. The explicit legacy replacements below remain
 // authoritative retirements of obsolete product behavior.
-func applyV9WorldActions(seed int64, cases []protocol.ToolCase) {
-	applyWorldActions(seed, cases, true)
+func applyV9WorldActions(seed int64, benchVersion int, cases []protocol.ToolCase) {
+	applyWorldActions(seed, benchVersion, cases, true)
 }
 
 // applyV10StateDependentActions removes the last easy prompt-to-tool shortcut
@@ -1324,7 +1353,7 @@ func applyV10StateDependentActions(seed int64, benchVersion int, cases []protoco
 	} else if len(cases) >= 30 {
 		scale = 2
 	}
-	world := universe.Generate(seed, scale)
+	world := universe.GenerateForVersion(seed, scale, benchVersion)
 	routes := toolMixRNG(seed, protocol.BenchVersionV10, len(cases), "state-dependent-route")
 	projectIndex := 0
 	for i := range cases {
@@ -1398,10 +1427,17 @@ func applyV10StateDependentActions(seed int64, benchVersion int, cases []protoco
 		originalPrerequisites := cases[i].PrerequisitePairs
 		originalProtected := cases[i].WritingProtected
 		tc := fuzzyWorldTool(cases[i].ID, "v10_state_dependent_routing", prompt, expected, behavior)
-		tc.PrerequisitePairs = append(append([]protocol.MemoryPair(nil), originalPrerequisites...), protocol.MemoryPair{
+		routeRecord := protocol.MemoryPair{
 			PairID: pairID, SessionID: fmt.Sprintf("v10-tool-route-%02d", projectIndex), Timestamp: "2026-01-15T10:00:00Z",
 			Prompt: planningPrompt, Response: planningResponse,
-		})
+		}
+		if benchVersion >= protocol.BenchVersionV13 {
+			// v13 (#1827): "v10-tool-route-04" named the routing family (and the
+			// project) on the /seed wire; the fixed timestamp marked it too.
+			routeRecord.SessionID = protocol.OpaqueCaseID(seed, "v13-tool-route-session", projectIndex)
+			routeRecord.Timestamp = protocol.NewOpaqueTimeline(seed, fmt.Sprintf("v13-tool-route-%d", projectIndex)).Next()
+		}
+		tc.PrerequisitePairs = append(append([]protocol.MemoryPair(nil), originalPrerequisites...), routeRecord)
 		tc.WritingProtected = append(append([]string(nil), originalProtected...), project.Alias, project.Client, project.Name)
 		cases[i] = tc
 	}
@@ -1425,7 +1461,7 @@ func v9ComposedFamily(category string) bool {
 	return v9WorldFamily(category) || category == "stale_context_web" || category == "memory_fetch"
 }
 
-func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFloor bool) {
+func applyWorldActions(seed int64, benchVersion int, cases []protocol.ToolCase, preserveSemanticFloor bool) {
 	if len(cases) == 0 {
 		return
 	}
@@ -1441,7 +1477,7 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 	} else if len(cases) >= 30 {
 		scale = 2
 	}
-	world := universe.Generate(seed, scale)
+	world := universe.GenerateForVersion(seed, scale, benchVersion)
 	target := (65*len(cases) + 99) / 100
 	if target >= len(cases) {
 		target = len(cases) - 1 // retain at least one plain v7-style coverage case
@@ -1486,7 +1522,7 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 		}
 		switch worldKind {
 		case 0, 5: // resolve a vague referent, research a live fact, and email it
-			tc = v8WorldContactEmail(seed, caseID, world, converted+i)
+			tc = v8WorldContactEmail(seed, benchVersion, caseID, world, converted+i)
 		case 1: // description -> target pair -> destructive action
 			tc = v8WorldMemoryDelete(caseID, world, deleteTarget)
 			deleteTarget++
@@ -1500,7 +1536,7 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 			lead := world.People[p.Lead]
 			tc = fuzzyWorldTool(caseID, "world_business_workflow", fmt.Sprintf("Check whether I already have a workflow for %q, the project for %s. If not, create one under the project's formal name and put the current contact address for internal reviewer %s in its review step.", p.Alias, p.Client, lead.Nickname), []protocol.ToolSpec{{Name: "list_workflows"}, {Name: "create_workflow", RequiredArgs: map[string]string{"name": p.Name, "steps": lead.Email}}}, "resolve the project, its formal name, and current reviewer contact; then check existing workflows and create the requested reusable workflow")
 		case 6: // outcome proves a search -> dynamic-link -> read chain
-			tc = v8WorldLinkRead(seed, caseID)
+			tc = v8WorldLinkRead(seed, benchVersion, caseID)
 		case 7: // Ditto App presents approval and owns the async job lifecycle
 			tc = v8WorldAgentJob(caseID, world, converted+i)
 		}
@@ -1563,7 +1599,7 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 		caseID := cases[i].ID
 		switch cases[i].Category {
 		case "email_send":
-			cases[i] = v8WorldContactEmail(seed, caseID, world, i)
+			cases[i] = v8WorldContactEmail(seed, benchVersion, caseID, world, i)
 		case "memory_delete":
 			cases[i] = v8WorldMemoryDelete(caseID, world, deleteTarget)
 			deleteTarget++
@@ -1571,7 +1607,7 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 			cases[i] = v8WorldMemoryUpdate(caseID, world, updateTarget)
 			updateTarget++
 		case "link_read":
-			cases[i] = v8WorldLinkRead(seed, caseID)
+			cases[i] = v8WorldLinkRead(seed, benchVersion, caseID)
 		case "multi_job_status", "job_chain_result_usage", "job_chain_recovery_result_usage":
 			// Production stops the agent turn at execute_agent_job: Ditto App
 			// presents the approval and owns subsequent progress/result display.
@@ -1614,16 +1650,16 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 			cases[i].WritingProtected = append(cases[i].WritingProtected, protected...)
 		}
 		if strings.HasPrefix(cases[i].Category, "world_") {
-			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleForV8World(seed, cases[i].ID).Subject)
+			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleForV8WorldVersion(seed, cases[i].ID, benchVersion).Subject)
 		} else {
-			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleFor(seed, cases[i].ID).Subject)
+			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleForVersion(seed, cases[i].ID, benchVersion).Subject)
 		}
 	}
 }
 
-func v8WorldContactEmail(seed int64, caseID string, world universe.World, index int) protocol.ToolCase {
+func v8WorldContactEmail(seed int64, benchVersion int, caseID string, world universe.World, index int) protocol.ToolCase {
 	p := world.People[index%len(world.People)]
-	needle := toolexec.NeedleForV8World(seed, caseID)
+	needle := toolexec.NeedleForV8WorldVersion(seed, caseID, benchVersion)
 	prompts := []string{
 		"What is %s at right now? Forward the figure to %s — the %s in %s from the %s.",
 		"Could you check the latest figure for %s and send it to %s? I mean my %s in %s, the one from the %s.",
@@ -1648,8 +1684,8 @@ func v8WorldMemoryUpdate(caseID string, world universe.World, index int) protoco
 	return fuzzyWorldTool(caseID, "world_memory_update", fmt.Sprintf("Add to the handoff note for %q at %s that we're doing the handoff Friday. It's the %s project; update the scratchpad, not the project history.", p.Alias, p.Client, p.Purpose), []protocol.ToolSpec{{Name: "update_memory", RequiredArgs: map[string]string{"pair_id": p.ToolNotePairID, "content": "handoff is Friday"}}}, "resolve the project's mutable handoff note and update it without overwriting canonical project evidence")
 }
 
-func v8WorldLinkRead(seed int64, caseID string) protocol.ToolCase {
-	needle := toolexec.NeedleForV8World(seed, caseID)
+func v8WorldLinkRead(seed int64, benchVersion int, caseID string) protocol.ToolCase {
+	needle := toolexec.NeedleForV8WorldVersion(seed, caseID, benchVersion)
 	return fuzzyWorldTool(caseID, "world_link_chain_result_usage", fmt.Sprintf("See what %s is at right now, and open the actual page rather than relying on the search blurb.", needle.Subject), []protocol.ToolSpec{{Name: "search_web"}, {Name: "read_links"}}, "find and read the live source, then report the served value")
 }
 
@@ -1933,7 +1969,7 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		// ("the Veltrix index reached 3,418 points") are always coherent.
 		var filler string
 		if IsResultUsage(cat.name) {
-			filler = toolexec.NeedleFor(seed, caseID).Subject
+			filler = toolexec.NeedleForVersion(seed, caseID, benchVersion).Subject
 		} else {
 			filler = fillerForVersion(r, cat.name, benchVersion)
 		}
@@ -2047,6 +2083,10 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 				Prompt:    "Please remember that Morgan Lee handled my 2024 taxes.",
 				Response:  "Morgan Lee's office number is " + phone + ".",
 			}}
+			if benchVersion >= protocol.BenchVersionV13 {
+				tc.PrerequisitePairs[0].SessionID = protocol.OpaqueCaseID(seed, "v13-tool-prerequisite-session", i)
+				tc.PrerequisitePairs[0].Timestamp = protocol.NewOpaqueTimeline(seed, fmt.Sprintf("v13-tool-prerequisite-%d", i)).Next()
+			}
 			usedFiller = ""
 		}
 		if benchVersion >= protocol.BenchVersionV8 && cat.name == "stale_context_web" {
@@ -2056,6 +2096,10 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 				Prompt:   fmt.Sprintf("I was reading about %s last year and saved a few notes, but I know they may be out of date now.", filler),
 				Response: "I’ll remember that as background, and I’ll check current sources whenever you ask what changed.",
 			}}
+			if benchVersion >= protocol.BenchVersionV13 {
+				tc.PrerequisitePairs[0].SessionID = protocol.OpaqueCaseID(seed, "v13-tool-prerequisite-session", i)
+				tc.PrerequisitePairs[0].Timestamp = protocol.NewOpaqueTimeline(seed, fmt.Sprintf("v13-tool-prerequisite-%d", i)).Next()
+			}
 		}
 		if benchVersion >= protocol.BenchVersionV8 {
 			applyV8CapabilityResolution(&tc, argValue, i)
@@ -2065,7 +2109,7 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		fillers = append(fillers, usedFiller)
 	}
 	if benchVersion >= protocol.BenchVersionV9 {
-		applyV9WorldActions(seed, cases)
+		applyV9WorldActions(seed, benchVersion, cases)
 	} else if benchVersion >= protocol.BenchVersionV8 {
 		applyV8WorldActions(seed, cases)
 	}

@@ -26,7 +26,7 @@ func dollarAnswer(cents int) string { return "$" + strconv.Itoa(cents/100) }
 // than a single recipe: no fixed recipe is right across the record shapes.
 func TestFamilyCompilerSurfaceClassifierScoresZero(t *testing.T) {
 	for seed := int64(1); seed <= 30; seed++ {
-		cases := buildFamilyCompiler(seed, 24)
+		cases := buildFamilyCompiler(seed, 24, protocol.BenchVersionV12)
 		if len(cases) == 0 {
 			t.Fatalf("seed %d: no family-compiler cases", seed)
 		}
@@ -81,7 +81,7 @@ func TestFamilyCompilerSurfaceClassifierScoresZero(t *testing.T) {
 func TestFamilyCompilerCounterfactualCacheScoresZero(t *testing.T) {
 	seen := 0
 	for seed := int64(1); seed <= 30; seed++ {
-		for _, fc := range buildFamilyCompiler(seed, 24) {
+		for _, fc := range buildFamilyCompiler(seed, 24, protocol.BenchVersionV12) {
 			if fc.Family != familyCounterfactual {
 				continue
 			}
@@ -121,7 +121,7 @@ func TestFamilyCompilerCounterfactualCacheScoresZero(t *testing.T) {
 // identical across every record shape (so a surface classifier cannot tell them
 // apart).
 func TestFamilyCompilerWireOpaque(t *testing.T) {
-	cases := buildFamilyCompiler(123456789, 24)
+	cases := buildFamilyCompiler(123456789, 24, protocol.BenchVersionV12)
 	banned := []string{
 		"subtract", "adjust", "supersed", "latest", "larger", "recipe", "distractor",
 		"expected_answer", "family", "compiler", "canary", "counterfactual", "forgiven twist",
@@ -167,8 +167,8 @@ func TestFamilyCompilerWireOpaque(t *testing.T) {
 // the same seed (a prerequisite for the pinned known-vector).
 func TestFamilyCompilerDeterministic(t *testing.T) {
 	for _, seed := range []int64{1, 42, 123456789} {
-		a := buildFamilyCompiler(seed, 24)
-		b := buildFamilyCompiler(seed, 24)
+		a := buildFamilyCompiler(seed, 24, protocol.BenchVersionV12)
+		b := buildFamilyCompiler(seed, 24, protocol.BenchVersionV12)
 		if len(a) != len(b) {
 			t.Fatalf("seed %d: length mismatch %d vs %d", seed, len(a), len(b))
 		}
@@ -191,7 +191,7 @@ func TestFamilyCompilerDeterministic(t *testing.T) {
 // ever collides with the correct answer.
 func TestFamilyCompilerAnswersPositiveAndDistractorFree(t *testing.T) {
 	for seed := int64(1); seed <= 25; seed++ {
-		for _, fc := range buildFamilyCompiler(seed, 24) {
+		for _, fc := range buildFamilyCompiler(seed, 24, protocol.BenchVersionV12) {
 			mc := fc.Staged.Case
 			answer, err := strconv.Atoi(mc.ExpectedAnswer)
 			if err != nil || answer < 0 || answer != fc.CorrectCents {
@@ -222,7 +222,7 @@ func TestFamilyCompilerAnswersPositiveAndDistractorFree(t *testing.T) {
 // present, so a genuine reader has everything it needs.
 func TestFamilyCompiledTotalsAbsentFromSeededEvidence(t *testing.T) {
 	for seed := int64(1); seed <= 25; seed++ {
-		for _, fc := range buildFamilyCompiler(seed, 24) {
+		for _, fc := range buildFamilyCompiler(seed, 24, protocol.BenchVersionV12) {
 			mc := fc.Staged.Case
 			var evidence strings.Builder
 			for _, p := range fc.Pairs {

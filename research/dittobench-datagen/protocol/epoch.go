@@ -128,6 +128,17 @@ import (
 // bench_version >= 13 while v2..v12 regenerate and re-grade byte-identically.
 // See docs/bench-versions.md "Bench v13".
 //
+// The public-corpora and label-hygiene levers (issues #1825, #1827) ride the
+// same gate:
+//   - the shared world draws its vocabulary from frozen, SHA-pinned public
+//     corpora (internal/publicdata: GeoNames cities, O*NET occupations, Google
+//     Fonts families, xkcd/CSS colours, Wikidata organisation stems) instead of
+//     hand lists of 6-24 entries, so no pool below 500 entries remains except
+//     closed product enums;
+//   - every MemoryPair session id crosses /seed as an OpaqueCaseID and every
+//     timestamp comes from a seeded business-hours timeline (OpaqueTimeline), so
+//     neither field carries the generator family, story arc, or record slot.
+//
 // The deterministic grader, run sizes, inference boundary, LongMemEval
 // deep-history floors, and the v9 signed-evidence/score-gate/curve-v3
 // efficiency stack all carry forward unchanged.
