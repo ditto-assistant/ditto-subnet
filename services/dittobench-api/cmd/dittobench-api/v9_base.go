@@ -39,6 +39,12 @@ func (s *server) runCaseWithModelAttribution(
 	if opts.BenchVersion >= protocol.BenchVersionV10 && inferenceSessionID != "" && s.broker != nil {
 		execution.ToolProvenance = s.broker.sessionToolProvenance(inferenceSessionID, caseID)
 	}
+	// Bench v13 catalog evidence: what the harness offered the model for this
+	// case, read after /run returned (every attributed completion is booked under
+	// the session lock before its response is released to the harness).
+	if opts.BenchVersion >= protocol.BenchVersionV13 && inferenceSessionID != "" && s.broker != nil {
+		execution.Catalog = s.broker.sessionCatalogEvidence(inferenceSessionID, caseID)
+	}
 	return response, execution, runErr
 }
 

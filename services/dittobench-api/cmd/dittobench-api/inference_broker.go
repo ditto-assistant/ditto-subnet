@@ -216,12 +216,21 @@ type brokerSession struct {
 	// the SAME pointers keyed by wire case id so the scorer can read one case's
 	// log post-run. Both are populated only for bench_version>=12, so v9..v11 are
 	// byte-identical and unaffected.
-	answerIO              map[uint64]*caseModelIOLog
-	answerIOByCaseID      map[string]*caseModelIOLog
-	embeddingPhaseStarted bool
-	embeddingPhaseActive  bool
-	embeddingInFlight     int
-	embeddingConcurrency  int
+	answerIO         map[uint64]*caseModelIOLog
+	answerIOByCaseID map[string]*caseModelIOLog
+	// Bench v13 catalog capture (catalog_capture.go): per wire case, what the
+	// harness OFFERED the model on each attributed chat completion, plus the
+	// run-wide counters. Populated only for bench_version>=13, so v9..v12 are
+	// byte-identical and unaffected.
+	catalogCases                   map[string]*brokerCatalogLedger
+	catalogCompletions             uint64
+	catalogCompletionsWithCatalog  uint64
+	catalogUnattributedCompletions uint64
+	catalogUnattributedAdmitted    uint64
+	embeddingPhaseStarted          bool
+	embeddingPhaseActive           bool
+	embeddingInFlight              int
+	embeddingConcurrency           int
 	// embeddingQueueChanged wakes calls waiting behind this session's local
 	// lane whenever capacity is released or the phase is revoked. Excess
 	// harness concurrency is queued inside the trusted broker instead of being
@@ -1742,6 +1751,7 @@ func (b *inferenceBroker) consumeModelToolCall(
 		session.caseToolCalls[generation] = calls
 		snapshot.MatchedToolCalls++
 		session.caseSnapshots[generation] = snapshot
+		recordCatalogToolResultLocked(session, caseID)
 		return true
 	}
 	snapshot.UnmatchedToolCalls++
@@ -1843,6 +1853,7 @@ func consumeSessionModelToolCallLocked(
 		candidate.consumed = true
 		session.sessionToolConsumed++
 		ledger.MatchedToolCalls++
+		recordCatalogToolResultLocked(session, caseID)
 		return true
 	}
 	ledger.UnmatchedToolCalls++
@@ -3911,6 +3922,10 @@ func (b *inferenceBroker) proxy(
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
 	currentChargeUpperBound := platformChatChargeUpperBound(body, maxOutputTokens)
 	traceCtx := traceContextLocked(session, caseGeneration, "", r.Header.Get(harnessCaseHeader))
+	// Bench v13 catalog capture resolves WHICH case this completion serves at
+	// admission, from the same evidence the trace context uses; the booking
+	// itself happens on the success path below. No-op for bench_version<13.
+	catalogAttribution := beginCatalogCompletionLocked(session, caseGeneration, r.Header.Get(harnessCaseHeader))
 	session.requests++
 	if caseGeneration != 0 {
 		snapshot := session.caseSnapshots[caseGeneration]
@@ -4182,6 +4197,10 @@ func (b *inferenceBroker) proxy(
 	// input and completion value tokens in call order. `body` is the normalized
 	// model INPUT; `responseBody` is the COMPLETION. No-op for bench_version<12.
 	recordAnswerIOLocked(session, caseGeneration, body, responseBody)
+	// Bench v13 catalog capture: what the harness OFFERED (request tools[],
+	// tool_choice, system-span digest) paired with what the model CHOSE.
+	// Metadata only; no-op for bench_version<13.
+	recordCatalogCompletionLocked(session, catalogAttribution, body, responseBody)
 	session.providerLatency += totalLatency
 	if usageOK {
 		session.usageAvailable++
