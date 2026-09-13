@@ -1938,6 +1938,10 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		cs := scorer.ScoreToolCaseObservedForVersion(c, resp, runErr == nil, observed, scope, req.BenchVersion)
 		cs = applyV10ToolProvenance(req.BenchVersion, scope, cs, resp, observed, execution)
 		cs = applyV13RestraintProvenance(req.BenchVersion, c, cs, execution)
+		// Bench v13 catalog gate: restraint and expected-tool credit scored against
+		// what the harness OFFERED the model (relay-recorded). Shadow by default;
+		// no-op below v13.
+		cs = applyV13CatalogGate(req.BenchVersion, scope, v13CatalogGatePosture, cs, c, tools, observed, execution)
 		fixture := toolFixtureByInternalID[c.ID]
 		if harnessProjection != nil {
 			internalID, reverseErr := harnessProjection.InternalCaseID(c.ID)
@@ -2251,6 +2255,14 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			toolProvenanceTotals = &totals
 		}
 	}
+	// Bench v13 catalog capture run totals (completions attributed / not) for
+	// the catalog_gate summary and its published catalog_suppression_rate.
+	var catalogTotals *sessionCatalogTotals
+	if req.BenchVersion >= scorer.CatalogGateBenchVersion && inferenceSessionID != "" && s.broker != nil {
+		if totals, ok := s.broker.sessionCatalogTotals(inferenceSessionID); ok {
+			catalogTotals = &totals
+		}
+	}
 	report.Details = &protocol.RunDetails{
 		BenchVersion:      req.BenchVersion,
 		RunSize:           req.RunSize,
@@ -2265,6 +2277,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		CappedToolCases:   cappedTool,
 		ToolProvenance:    summarizeV10ToolProvenance(perCase, toolProvenanceTotals),
 		ClaimProvenance:   summarizeV13ClaimProvenance(req.BenchVersion, v13ClaimProvenancePosture, perCase),
+		CatalogGate:       summarizeV13CatalogGate(req.BenchVersion, v13CatalogGatePosture, perCase, catalogTotals),
 		IsolationCases:    len(iso.Cases),
 		LifecycleCases:    memSuite.LifecycleCases,
 		ToolEfficiency:    scorer.ToolEfficiencyFactorForVersion(perCase, req.BenchVersion),

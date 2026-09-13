@@ -674,6 +674,109 @@ type ToolProvenanceEvidence struct {
 	Findings                 []string `json:"findings,omitempty"`
 }
 
+// CatalogEvidence (bench_version 13) is trusted, per-case relay evidence of
+// what the harness OFFERED the controlled model, not only what the model chose.
+// The ticket-bound inference broker parses the request side of every successful
+// chat completion it forwards -- the tools[] catalog (names plus a digest of
+// each tool's description and parameter schema), tool_choice, and the
+// harness-authored system/prefill spans (as a digest) -- and pairs it with the
+// model-emitted tool calls of the response. Only metadata is kept: no prompt,
+// no completion, no tool description text, so the record can neither reproduce
+// the prompt nor leak the answer key. It is populated only by Bench v13+
+// scorers; historical report bytes omit it.
+//
+// Attribution is exact or absent. A completion is booked on the case whose
+// exclusive window, verified X-Ditto-Case-Id claim, or sole in-flight /run
+// admitted it; a completion the broker cannot attribute to exactly one case is
+// booked run-wide and marks every case then in flight incomplete
+// (CompletionsTotal nil, Complete false). The v13 catalog gate fails OPEN on an
+// incomplete case: it zeroes only on affirmative, attributed evidence.
+type CatalogEvidence struct {
+	// CompletionsTotal is the number of successful chat completions attributed to
+	// this case. nil when the case's attribution is incomplete -- the fleet
+	// precondition for enforcing the catalog gate is that this field is non-nil on
+	// >= 99% of cases across >= 3 v13-capable validators.
+	CompletionsTotal *int `json:"completions_total"`
+	// CompletionsAfterLastToolResult counts the attributed completions made after
+	// the validator last served this case a tool_endpoint result (every completion
+	// when no tool result was served). It is the length of the deciding tail.
+	CompletionsAfterLastToolResult int `json:"completions_after_last_tool_result"`
+	// CatalogPresent is true when at least one attributed completion offered a
+	// non-empty tools[] catalog.
+	CatalogPresent bool `json:"catalog_present"`
+	// ToolsOffered is the union, over the case's attributed completions, of the
+	// tools offered to the model, sorted by name. A tool offered under two
+	// different schema digests appears once per digest.
+	ToolsOffered []OfferedTool `json:"tools_offered,omitempty"`
+	// Completions is the per-completion metadata in admission order, bounded by
+	// the broker's capture ceiling (Complete is false once the ceiling is hit).
+	Completions []CatalogCompletion `json:"completions,omitempty"`
+	// ModelEmittedToolCalls lists, in emission order, the tool names the model
+	// selected in this case's attributed completions (memory tools included).
+	ModelEmittedToolCalls []string `json:"model_emitted_tool_calls,omitempty"`
+	// HarnessSystemSpanSHA256 is the set of distinct digests of the
+	// harness-authored system/prefill spans across the case's completions, sorted.
+	// A prompt-level "do not call tools" suppression is recorded here as a
+	// citable digest, never as text.
+	HarnessSystemSpanSHA256 []string `json:"harness_system_span_sha256,omitempty"`
+	Complete                bool     `json:"complete"`
+	Findings                []string `json:"findings,omitempty"`
+}
+
+// OfferedTool is one tool the harness offered the model: its wire name and the
+// SHA-256 digest of the canonical JSON of {"description","parameters"} the
+// harness sent for it, so catalog fidelity (W10) is checkable against the
+// published catalog without storing the description text.
+type OfferedTool struct {
+	Name         string `json:"name"`
+	SchemaSHA256 string `json:"schema_sha256,omitempty"`
+}
+
+// CatalogCompletion is the relay metadata of one attributed chat completion.
+type CatalogCompletion struct {
+	// ToolsOffered is the number of tools in the request's catalog.
+	ToolsOffered int `json:"tools_offered"`
+	// CatalogSHA256 is the SHA-256 over the sorted "name:schema_sha256" lines of
+	// the offered catalog; empty when no tool was offered.
+	CatalogSHA256 string `json:"catalog_sha256,omitempty"`
+	// ToolChoice is the normalized tool_choice the request carried: "" (absent),
+	// "auto", "none", "required", or "tool:<name>" for a pinned function.
+	ToolChoice string `json:"tool_choice,omitempty"`
+	// ModelEmittedToolCalls are the tool names the model selected in this
+	// completion's response, in order.
+	ModelEmittedToolCalls []string `json:"model_emitted_tool_calls,omitempty"`
+	// SystemSpanSHA256 is the digest over the harness-authored system/developer
+	// spans and any assistant prefill in this request; empty when none.
+	SystemSpanSHA256 string `json:"system_span_sha256,omitempty"`
+	// AfterLastToolResult is true when no tool_endpoint result was served to this
+	// case after this completion was admitted.
+	AfterLastToolResult bool `json:"after_last_tool_result"`
+}
+
+// CatalogGateSummary aggregates the Bench v13 catalog gate over a run's tool
+// cases. Counts, not rates, where they pool; CatalogSuppressionRate is the
+// run-level published metric (catalog absent / attributed cases with at least
+// one completion).
+type CatalogGateSummary struct {
+	Posture                string  `json:"posture"`
+	ToolCases              int     `json:"tool_cases"`
+	AttributedCases        int     `json:"attributed_cases"`
+	NoCompletionCases      int     `json:"no_completion_cases,omitempty"`
+	CatalogAbsentCases     int     `json:"catalog_absent_cases"`
+	CatalogSuppressionRate float64 `json:"catalog_suppression_rate"`
+	SafeHarborCases        int     `json:"safe_harbor_cases,omitempty"`
+	RestraintWithoutOffer  int     `json:"restraint_without_offer,omitempty"`
+	ExpectedToolNotOffered int     `json:"expected_tool_not_offered,omitempty"`
+	SwallowedModelCall     int     `json:"swallowed_model_call,omitempty"`
+	ZeroedCases            int     `json:"zeroed_cases,omitempty"`
+	// CompletionsTotal and CompletionsUnattributed are the session-wide relay
+	// counts; AttributionCoverageBPS is attributed tool cases over tool cases in
+	// basis points -- the per-validator half of the enforce precondition.
+	CompletionsTotal        int `json:"completions_total"`
+	CompletionsUnattributed int `json:"completions_unattributed"`
+	AttributionCoverageBPS  int `json:"attribution_coverage_bps"`
+}
+
 // ToolProvenanceSummary aggregates ToolProvenanceEvidence over a run. Counts
 // are advisory evidence; per-case tool credit is already fail-closed before
 // aggregation.
@@ -766,7 +869,11 @@ type CaseScore struct {
 	// only -- no prompt, completion, or answer text. nil before Bench v13,
 	// preserving every frozen contract.
 	ClaimProvenance *ClaimProvenanceEvidence `json:"claim_provenance,omitempty"`
-	Notes           []string                 `json:"notes,omitempty"`
+	// Catalog is the trusted relay record of what the harness offered the model
+	// for this case (Bench v13 catalog gate). nil before Bench v13, preserving
+	// every frozen contract.
+	Catalog *CatalogEvidence `json:"catalog,omitempty"`
+	Notes   []string         `json:"notes,omitempty"`
 	// Injection is true when the deterministic grader saw injection compliance:
 	// either the embedded injection payload in the harness output, or an observed
 	// call to the case's action bait tool (MemoryCase.BaitTool) in the trajectory,
@@ -1010,6 +1117,9 @@ type RunDetails struct {
 	// provenance and causal answer_in_prompt gates (posture, settled and flagged
 	// counts, attribution coverage). nil before Bench v13.
 	ClaimProvenance *ClaimProvenanceSummary `json:"claim_provenance,omitempty"`
+	// CatalogGate is the Bench v13 catalog-gate run summary, including the
+	// published catalog_suppression_rate. nil before Bench v13.
+	CatalogGate *CatalogGateSummary `json:"catalog_gate,omitempty"`
 	// IsolationCases is how many multi-graph isolation cases ran: a second
 	// persona seeded under a different user_id with a conflicting value, so a
 	// cross-graph memory leak scores wrong. Advisory telemetry.

@@ -303,6 +303,11 @@ type CaseExecution struct {
 	ModelInferenceObserved   bool                             `json:"model_inference_observed,omitempty"`
 	ModelAttributionComplete bool                             `json:"model_attribution_complete,omitempty"`
 	ToolProvenance           *protocol.ToolProvenanceEvidence `json:"tool_provenance,omitempty"`
+	// Catalog is the Bench v13 relay record of what the harness OFFERED the model
+	// for this case (tools[] names and schema digests, tool_choice, model-emitted
+	// calls, system-span digests, completion counts). Metadata only; nil before
+	// Bench v13 so every earlier transcript is byte-identical.
+	Catalog *protocol.CatalogEvidence `json:"catalog,omitempty"`
 	// RelayInjectedDelayMs is the total delay-fingerprint hold the trusted
 	// relay imposed inside this case's window; RelayDelayConsistent reports
 	// whether the case's wall time can contain it (nil = unmeasured). Shadow

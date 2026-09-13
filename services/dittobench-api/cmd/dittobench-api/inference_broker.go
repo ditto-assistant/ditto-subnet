@@ -232,10 +232,19 @@ type brokerSession struct {
 	// tokens across the whole session (all cases, attributed or not); it exempts
 	// assistant-role prompt spans from the causal gate.
 	claimSpanSessionCompletion scoregates.TokenSet
-	embeddingPhaseStarted      bool
-	embeddingPhaseActive       bool
-	embeddingInFlight          int
-	embeddingConcurrency       int
+	// Bench v13 catalog capture (catalog_capture.go): per wire case, what the
+	// harness OFFERED the model on each attributed chat completion, plus the
+	// run-wide counters. Populated only for bench_version>=13, so v9..v12 are
+	// byte-identical and unaffected.
+	catalogCases                   map[string]*brokerCatalogLedger
+	catalogCompletions             uint64
+	catalogCompletionsWithCatalog  uint64
+	catalogUnattributedCompletions uint64
+	catalogUnattributedAdmitted    uint64
+	embeddingPhaseStarted          bool
+	embeddingPhaseActive           bool
+	embeddingInFlight              int
+	embeddingConcurrency           int
 	// embeddingQueueChanged wakes calls waiting behind this session's local
 	// lane whenever capacity is released or the phase is revoked. Excess
 	// harness concurrency is queued inside the trusted broker instead of being
@@ -1794,6 +1803,7 @@ func (b *inferenceBroker) consumeModelToolCall(
 		session.caseToolCalls[generation] = calls
 		snapshot.MatchedToolCalls++
 		session.caseSnapshots[generation] = snapshot
+		recordCatalogToolResultLocked(session, caseID)
 		return true
 	}
 	snapshot.UnmatchedToolCalls++
@@ -1895,6 +1905,7 @@ func consumeSessionModelToolCallLocked(
 		candidate.consumed = true
 		session.sessionToolConsumed++
 		ledger.MatchedToolCalls++
+		recordCatalogToolResultLocked(session, caseID)
 		return true
 	}
 	ledger.UnmatchedToolCalls++
@@ -3979,6 +3990,10 @@ func (b *inferenceBroker) proxy(
 	// admission, from the same evidence the trace context uses; the booking
 	// itself happens on the success path below. No-op for bench_version<13.
 	claimSpanAttribution := beginClaimSpanCompletionLocked(session, caseGeneration, r.Header.Get(harnessCaseHeader))
+	// Bench v13 catalog capture resolves WHICH case this completion serves at
+	// admission, from the same evidence the trace context uses; the booking
+	// itself happens on the success path below. No-op for bench_version<13.
+	catalogAttribution := beginCatalogCompletionLocked(session, caseGeneration, r.Header.Get(harnessCaseHeader))
 	session.requests++
 	if caseGeneration != 0 {
 		snapshot := session.caseSnapshots[caseGeneration]
@@ -4254,6 +4269,10 @@ func (b *inferenceBroker) proxy(
 	// model-emitted completion spans, as value-token hashes on the attributed
 	// case. No-op for bench_version<13.
 	recordClaimSpanCompletionLocked(session, claimSpanAttribution, body, responseBody)
+	// Bench v13 catalog capture: what the harness OFFERED (request tools[],
+	// tool_choice, system-span digest) paired with what the model CHOSE.
+	// Metadata only; no-op for bench_version<13.
+	recordCatalogCompletionLocked(session, catalogAttribution, body, responseBody)
 	session.providerLatency += totalLatency
 	if usageOK {
 		session.usageAvailable++

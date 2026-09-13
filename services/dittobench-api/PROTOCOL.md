@@ -710,6 +710,109 @@ case under concurrency -- zeroes the case's score in scored scope; unavailable
 or relay-incomplete evidence always fails **open**. Enforce is an operator decision gated on the
 honest cohort (including the reference harness) showing zero false zeros.
 Evidence rows are leads for source review either way.
+### bench_version 13: catalog capture and the catalog-present gate
+
+Bench v10 provenance proves that an *executed* tool call was model-selected. It
+says nothing about a case where no tool ran, which left two cheap constructs
+invisible to scoring: withholding the `tools[]` catalog on a request-keyed
+family so the model could not act (the host, not the model, decided
+"restraint"), and offering the catalog, letting the model emit the call, and
+swallowing it before execution. From `bench_version` 13 the ticket-bound
+inference broker records what the harness **offered** on every successful chat
+completion it forwards, and the scorer grades restraint and expected-tool
+credit against that record. Every rule below is gated `bench_version >= 13`;
+v2 through v12 transcripts and reports are byte-identical.
+
+**What the relay records (metadata only).** For each successful completion,
+from the request body in either the OpenAI shape (`tools[]`/`functions[]`,
+`tool_choice`/`function_call`, `messages[]`) or the Anthropic shape (`tools[]`
+with `input_schema`, `tool_choice` object, `system`):
+
+- every offered tool's **name** and a **schema digest** — the SHA-256 of the
+  canonical JSON of `{"description", "parameters"}` — so catalog fidelity is
+  checkable against the published catalog without storing description text;
+- the normalized `tool_choice` (`auto`, `none`, `required`, `tool:<name>`);
+- a **digest** over the harness-authored spans: every `system`/`developer`
+  message, the Anthropic top-level `system`, and a trailing assistant prefill.
+  A prompt-level "do not call tools" suppression is therefore recorded as a
+  citable value; the prose itself is never retained;
+- the **model-emitted tool names** of the response (OpenAI `tool_calls`,
+  Anthropic `tool_use` blocks), including invalid emissions;
+- whether the completion came **after the last tool result** the validator
+  served that case through `tool_endpoint`.
+
+No prompt, completion, description, or argument text enters the record. The
+capture is bounded per case; a case that hits a bound is marked incomplete.
+
+**Attribution is exact or absent.** A completion is booked on the case whose
+exclusive window, verified `X-Ditto-Case-Id` claim (naming a case in flight), or
+sole in-flight `/run` admitted it. Under concurrent `/run` with several cases in
+flight and no verified claim the completion is booked run-wide and every case
+then in flight is marked incomplete (`completions_total: null`,
+`complete: false`). A harness that sends `X-Ditto-Case-Id` on its inference
+calls keeps every case attributable at any concurrency.
+
+**Where it appears.** The transcript's `execution.catalog` and the report's
+per-case `catalog` carry the same `CatalogEvidence`:
+
+```jsonc
+"catalog": {
+  "completions_total": 2,                 // null when attribution is incomplete
+  "completions_after_last_tool_result": 1,
+  "catalog_present": true,
+  "tools_offered": [ { "name": "search_web", "schema_sha256": "…" }, /* union, sorted */ ],
+  "completions": [ { "tools_offered": 31, "catalog_sha256": "…", "tool_choice": "auto",
+                     "model_emitted_tool_calls": ["search_web"], "system_span_sha256": "…",
+                     "after_last_tool_result": false }, /* … */ ],
+  "model_emitted_tool_calls": ["search_web"],
+  "harness_system_span_sha256": ["…"],
+  "complete": true,
+  "findings": ["semantic_preloading_safe_harbor"]
+}
+```
+
+The report's `details.catalog_gate` summary publishes the run-level
+**`catalog_suppression_rate`** (tool cases with at least one completion and no
+tool offered, over attributed tool cases with a completion), the per-finding
+counts, the posture, and `attribution_coverage_bps` — this validator's half of
+the enforce precondition below.
+
+**Scoring rules (tool cases; memory cases are never gated here).**
+
+- (a) **`restraint_without_offer`** — a no-expected-tool case (chit-chat,
+  abstention, missing-argument, negation) earns restraint credit only when the
+  model was in a position to act: at least one attributed completion offered a
+  catalog. A case with no completion at all is the host answering without the
+  model and is charged the same way. Waived by the safe harbor (d).
+- (b) **`expected_tool_not_offered`** — a case whose expected non-memory tool
+  was never offered on any attributed completion earns no tool credit: the
+  model could not have chosen it. Memory tools are harness-internal and never
+  required on the wire. Waived by the safe harbor (d).
+- (c) **`swallowed_model_call`** — restraint is scored on what the **model**
+  chose: on a no-expected-tool case, a model-emitted non-memory call the
+  validator never observed executed is a host override, not restraint.
+- (d) **Semantic-preloading safe harbor (published).** Trimming the catalog is
+  free when the retained set contains the **top-k (k = 3)** tools of the
+  published embedding for the request, or when the catalog is merely
+  **non-empty** on a declarative/chit-chat/decline case. The published embedding
+  is deliberately model-free and recomputable by anyone from the dataset and
+  transcript: TF-IDF over each tool's name and description (snake_case split,
+  lowercased, stopwords dropped, light suffix stemming) against the request,
+  cosine similarity, ties broken on tool name
+  (`scorer.CatalogSemanticTopK`). The negation family is the exception to the
+  non-empty rule: its prompt names the tool cue, so restraint is evidence of
+  judgment only when the retained set holds the top-k. A preloader that offers
+  **zero** tools on a case satisfies neither ground; the honest pattern keeps at
+  least the top-k. A harness that offers the full catalog always passes.
+
+**Posture.** The gate ships in **shadow**: findings, the per-case evidence and
+`catalog_suppression_rate` are recorded and no score moves. Under **enforce**
+(`DITTOBENCH_V13_CATALOG_GATE_POSTURE=enforce`) a settled finding zeroes the
+case's tool credit in scored scope; incomplete or unavailable evidence always
+fails **open**. Enforce is an operator decision with an explicit fleet
+precondition: `completions_total` non-null on **≥ 99 %** of cases across **≥ 3**
+v13-capable validators. Evidence rows are leads for source review (policy v14)
+either way.
 
 ### Prohibited: content-keyed mutation of the graded response
 
