@@ -824,8 +824,8 @@ function AccountPanel(): JSX.Element {
                     </p>
                     <p class="muted">
                       Only confirm if this is the account you just signed in with and accepted on
-                      the Ditto page. Both sides agree before anything is written: the Ditto
-                      account holder accepts this hotkey there, and you confirm here.
+                      the Ditto page. Both sides agree before anything is written: the Ditto account
+                      holder accepts this hotkey there, and you confirm here.
                     </p>
                     <button
                       class="btn"
