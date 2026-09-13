@@ -1,4 +1,36 @@
 ---
+- name: Restrict partition preparation to the canonical primary host
+  ansible.builtin.assert:
+    that: inventory_hostname == 'subnet-screener-1'
+- name: Prepare graceful-drain overrides before any release update
+  ansible.builtin.file:
+    path: '/etc/systemd/system/{{ item }}.d'
+    state: directory
+    mode: '0755'
+  loop: "{{ ['ditto-screener-fleet-agent.service', 'ditto-screener-fleet-auto-update.service'] + screener_partition_worker_units }}"
+- name: Signal only primary parent processes and never escalate to SIGKILL
+  ansible.builtin.copy:
+    dest: '/etc/systemd/system/{{ item }}.d/drain-safety.conf'
+    mode: '0644'
+    content: |
+      [Service]
+      KillMode=mixed
+      SendSIGKILL=no
+      TimeoutStopSec=infinity
+  loop: "{{ ['ditto-screener-fleet-agent.service'] + screener_partition_worker_units }}"
+- name: Let the updater wait for graceful job completion without a separate deadline
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/ditto-screener-fleet-auto-update.service.d/drain-safety.conf
+    mode: '0644'
+    content: |
+      [Service]
+      TimeoutStartSec=infinity
+- name: Load drain policy without restarting any primary process
+  ansible.builtin.systemd:
+    daemon_reload: true
+- name: End preparation before runtime partition changes when requested
+  ansible.builtin.meta: end_host
+  when: screener_partition_prepare_only | bool
 - name: Verify rootless daemon identity before installing numeric user-unit override
   ansible.builtin.command: id -u ditto-builder
   register: builder_uid

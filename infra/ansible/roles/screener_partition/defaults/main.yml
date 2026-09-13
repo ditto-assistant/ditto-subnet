@@ -5,3 +5,4 @@ screener_partition_worker_units:
   - ditto-screener-worker@2.service
   - ditto-screener-worker@3.service
   - ditto-screener-worker@4.service
+screener_partition_prepare_only: false
