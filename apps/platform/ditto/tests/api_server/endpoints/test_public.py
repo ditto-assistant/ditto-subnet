@@ -4247,6 +4247,7 @@ class TestPublicLeaderboard:
             "agent_name",
             "agent_version",
             "canonical_composite",
+            "official_composite",
             "submitted_at",
             "miner_hotkey",
         }
