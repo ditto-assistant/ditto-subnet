@@ -84,6 +84,19 @@ func v12DivergenceRand(seed int64) *rand.Rand {
 // pairs they seed (which the caller adds to wave 0). count must be a multiple of
 // four. Every value is deterministic in seed.
 func buildParserDivergence(seed int64, count int) ([]StagedCase, []protocol.MemoryPair) {
+	return buildParserDivergenceForVersion(seed, count, protocol.BenchVersionV12)
+}
+
+// v13DivergenceMoneyCap bounds the monetary share of the v13 divergence
+// family: of every four-case round only the hypothetical member grades money,
+// so a 12-case full profile carries at most three money cases.
+const v13DivergenceMoneyCap = 3
+
+// buildParserDivergenceForVersion is the version-explicit form. v13 keeps the
+// family byte-for-byte (12 cases, one money case per round, so at most three
+// on the full profile) and only stamps the contract version on each case;
+// benchVersion 12 is exactly the frozen v12 output.
+func buildParserDivergenceForVersion(seed int64, count int, benchVersion int) ([]StagedCase, []protocol.MemoryPair) {
 	if count <= 0 {
 		return nil, nil
 	}
@@ -111,7 +124,7 @@ func buildParserDivergence(seed int64, count int) ([]StagedCase, []protocol.Memo
 		}
 		pairs = append(pairs, pair)
 		mc := protocol.MemoryCase{
-			BenchVersion:      protocol.BenchVersionV12,
+			BenchVersion:      benchVersion,
 			ID:                caseID,
 			QuestionID:        caseID,
 			QuestionType:      questionType,
