@@ -588,6 +588,19 @@ func (s *server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("X-Bench-Version", strconv.Itoa(benchVersion))
+	// From bench_version 13 the advertised catalog is a per-seed surface (coined
+	// decoys, paraphrased descriptions). A practice caller that pins ?seed= sees
+	// exactly the surface a scored run of that seed advertises; without a seed
+	// the seed-free production surface (no decoys) is returned.
+	if seedText := strings.TrimSpace(r.URL.Query().Get("seed")); seedText != "" && benchVersion >= protocol.BenchVersionV13 {
+		seed, err := strconv.ParseInt(seedText, 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "seed must be an integer")
+			return
+		}
+		writeJSON(w, http.StatusOK, catalog.CatalogForSeed(benchVersion, seed))
+		return
+	}
 	writeJSON(w, http.StatusOK, catalog.CatalogForVersion(benchVersion))
 }
 
@@ -1636,7 +1649,10 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		s.store.Fail(runID, "harness never became healthy: "+healthErr.Error())
 		return
 	}
-	tools := catalog.CatalogForVersion(req.BenchVersion)
+	// v13+ advertises the per-seed surface (paraphrased descriptions, enum
+	// schemas, coined decoys); the same seed drives the fixtures above, so the
+	// decoys a harness sees are exactly the ones the mock endpoint knows.
+	tools := catalog.CatalogForSeed(req.BenchVersion, seed)
 
 	// V8 harnesses may embed before any model turn, including the route probe
 	// below. Admit the ticket-bound embedding lane before probing so a working

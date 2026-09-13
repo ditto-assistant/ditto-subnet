@@ -1156,6 +1156,66 @@ The envelope, mix, surface pass, and gates for v13 land in the sibling v13
 issues; `TestV13KnownVector` is pinned only after they do, so the hash frozen
 into the contract already carries opaque ids and jittered timestamps.
 
+## Bench v13 (private, tool bench)
+
+v13 targets the harness archetype the 2026-09-13 top-of-board review found on
+four of five rows: a request-keyed phrase table that names the tool from fixed
+catalog bytes and emits the argument from a baked option pool, with the model
+never deciding anything. Every lever is gated on `bench_version >= 13`, so v12
+and earlier regenerate byte-identically (the v2–v12 known-vector tests are
+unchanged). The levers (issues #1843, #1842, #1580, #1840):
+
+- **Per-seed catalog** (`catalog.CatalogForSeed`). Production tool names never
+  change, but every description is drawn per seed from a bank of at least six
+  paraphrases, `set_theme` and `set_reasoning_effort` close their value space
+  with a JSON-schema `enum` (the production pattern), and the discovery-grounded
+  setters describe their option list as runtime-configured and listed only by
+  `discover_capabilities`. Three to five **coined decoy tools** per seed
+  (`<brand>_<shape>` over a frozen pool of 24 near-miss shapes, descriptions
+  stating what the decoy is *not*) are spliced in at seeded positions. The mock
+  answers a decoy with a "not configured" error — an ordinary extra call — except
+  on the **decoy-correct** cases (≥10% of the run), where the coined decoy is the
+  bearer of a result-usage needle. `set_main_model` is retired from the surface.
+- **Dropped baking families** (#1580). `set_model`/`set_main_model` and
+  `set_font`/`set_chat_font` no longer exist as families, and the five-colour
+  `set_accent` pool is gone. Appearance values survive only in the schema-enum
+  `settings` family (`set_theme`, option list on the wire, no discovery call)
+  and in the discovery-grounded cases. `set_effort` stays but leaves the
+  one-per-family floor (weight 2, ~60% of full runs).
+- **Discovery inventories** (#1842). Each seed configures its workspace's accent
+  colours (CSS/xkcd names) and chat fonts (Google Fonts families) with one
+  planted near-miss pair ("Inter" / "Inter Tight"). Six discovery-grounded cases
+  per full run name the option through a bounded misspelling — one to three
+  edits, at most ⌊len/3⌋ — whose unique nearest listed option has a margin of at
+  least one edit; on the near-miss share (≥30%) the prompt misspells the base and
+  names the partner's qualifier, so an edit-distance-only picker lands on the
+  wrong member. The canonical spelling exists only in the served
+  `discover_capabilities` result, including the setter's error text. The legacy
+  8-colour `world_theme_discover_set` family is capped at three per run and the
+  v8 mock/graded-value mismatch (fonts the mock never listed) is gone.
+- **Coined fixtures** (#1840). `list_workflows`, `list_schedules`,
+  `list_agent_jobs`, `search_tools`, `run_code`, and `discover_capabilities`
+  serve per-seed coined content. `recipe_apply` names its workflow by cadence
+  so `run_workflow`'s argument exists only in the served list, and four
+  result-usage families (`schedules_`, `tool_registry_`, `sandbox_`,
+  `agent_jobs_result_usage`) carry their needle only inside that content.
+  Non-bearer coined content carries six-digit fillers only, so no other case's
+  served list can contain a five-digit needle.
+
+The dataset artifact pins the seeded catalog (`catalog`) from v13. The
+deterministic grader, run sizes, inference boundary, and the wire
+`bench_version` a harness receives (`publicWireBenchVersion` stays 9) are
+unchanged. The public model-free probe stays under the launch gate:
+
+```sh
+go run ./cmd/toolprobe -bench-version 13 -run-size full -train-seeds 30 -held-out-seeds 10
+```
+
+The pinned candidate measures 36.10% complete tool-outcome accuracy and 1.80%
+verbatim argument exposure on ten held-out seeds. Regenerate the catalog mirrors
+(starter kit `catalog.rs`, screener `_ORACLE_TOOL_NAMES`, OpenClaw plugin) with
+`go run ./cmd/catalogmirror`; `catalog/mirror_test.go` fails when one drifts.
+
 ## Auditing an old score
 
 Pin two things: the `bench_version` published with the score, and the **module

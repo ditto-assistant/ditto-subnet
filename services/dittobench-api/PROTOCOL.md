@@ -96,6 +96,34 @@ reviewed identity, `openrouter-route-6a097486af3c178d-v1`; a v9 scorer rejects
 the fixed-medium v7/v8 profile `openrouter-route-a471cd87ae7df5b9-v1` even
 though both serve the same model.
 
+## Bench v13 tool catalog: seeded descriptions, enums, coined decoys, discovery inventories
+
+From `bench_version: 13` the `tools` array on every `RunRequest` is a
+**per-seed surface** (`catalog.CatalogForSeed`), not a fixed list. Production
+tool names never change; what moves per seed is everything a fixed-name phrase
+table used to bake:
+
+| Surface | v13 contract |
+| --- | --- |
+| Descriptions | Every production tool's description is drawn per seed from a bank of at least six paraphrases that preserve the routing guidance. Read the description; do not match its bytes. |
+| `set_theme.theme`, `set_reasoning_effort.effort` | Closed on the wire with a JSON-schema `enum` (`system, light, dark, midnight, solarized`; `low, medium, high`). A schema-reading agent passes these cases without a discovery call; the mock refuses a value outside the enum. |
+| `set_accent_color.color`, `set_chat_font.font` | Runtime-described: the schema says the options are configured per workspace and listed only by `discover_capabilities`. The canonical spelling of an accent or font exists **only** in that served result, so a discovery-grounded case ("make the accent `mraoon`-ish, check the options first") is solved by list-then-act. The mock refuses an unlisted value with an error that names only the submitted spelling. |
+| Coined decoy tools | Three to five tools with coined names (`<brand>_<shape>`, e.g. `nimit_docs_search`) and coined descriptions that say what they are **not** are spliced into the catalog at seeded positions. The mock answers a decoy with `{"error": "<name> is not configured for this workspace. …"}`; the call is recorded as an ordinary (extra) call. On the **decoy-correct** cases — at least 10% of the tool cases — the coined decoy *is* the right tool and serves the result-usage needle, so a blacklist of unknown names forfeits real weight. |
+| `set_main_model` | Retired from the advertised surface (#1580); no v13 case grades it. |
+| `list_workflows`, `list_schedules`, `list_agent_jobs`, `search_tools`, `run_code`, `discover_capabilities` | Serve per-seed **coined content** instead of fixed strings. Cases that depend on them (`recipe_apply` names its workflow by cadence; the `schedules_`/`tool_registry_`/`sandbox_`/`agent_jobs_result_usage` families) are result-usage graded: the needle lives only inside the served content. |
+
+The scoring rule for a decoy call is unchanged: an unexpected tool name is an
+extra call (doubled penalty under v7+ strict scoring, free under
+`allow_extra_tools`), and recovering after a "not configured" error is graded
+exactly like the transient-error recovery family. The seed's full catalog is
+pinned in the dataset artifact (`catalog`) so a dispute re-scores against the
+exact surface the run advertised. The practice `GET /catalog?bench_version=13`
+returns the seed-free production surface (no decoys); add `&seed=<n>` to see
+the exact surface a scored run of that seed advertises. The wire
+`bench_version` a harness receives is unchanged (`publicWireBenchVersion`
+stays 9); every v13 field above is additive and optional for a v9-era harness,
+which simply sees a few more tools and richer schemas.
+
 ## Dataset
 
 The validator generates a `Dataset` of tool-calling cases. The harness never

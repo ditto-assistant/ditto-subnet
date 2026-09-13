@@ -32,8 +32,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ditto-assistant/dittobench-datagen/internal/appearance"
 	"github.com/ditto-assistant/dittobench-datagen/internal/publicdata"
+	"github.com/ditto-assistant/dittobench-datagen/catalog"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
@@ -148,7 +148,10 @@ type Fixture struct {
 	recovery     bool   // an error-recovery case: the first content-tool call returns a transient error
 	linkDep      bool   // a dependent link chain: read_links gates the needle on pageURL
 	pageURL      string // the stable URL search_web serves for a link chain
-	inventory    string // v13: the seed's discover_capabilities appearance inventory
+	inventory    catalog.Inventory
+	category string
+	decoys map[string]catalog.Decoy
+	coined Coined
 }
 
 // v13 reports whether the fixture serves under the public-corpora contract.
@@ -229,8 +232,7 @@ func BuildFixture(masterSeed int64, c protocol.ToolCase) Fixture {
 func BuildFixtureForVersion(masterSeed int64, c protocol.ToolCase, benchVersion int) Fixture {
 	f := Fixture{seed: caseSeed(masterSeed, c.ID)}
 	if benchVersion >= protocol.BenchVersionV13 {
-		f.benchVersion = benchVersion
-		f.inventory = appearance.ForSeed(masterSeed).Inventory()
+		return buildFixtureV13(masterSeed, benchVersion, c)
 	}
 	f.jobID = jobIDForSeed(f.seed)
 	f.dependent = IsJobChain(c.Category)
@@ -364,6 +366,11 @@ func (f Fixture) Result(name string, args json.RawMessage) (string, bool) {
 	// bearer; every other content tool serves a plausible decoy (a wrong number),
 	// so a harness cannot fish the answer from the easiest/wrong tool.
 	serveNeedle := f.has && name == f.bearer
+	if f.benchVersion >= protocol.BenchVersionV13 {
+		if out, handled := f.resultV13(name, args, r, serveNeedle); handled {
+			return out, true
+		}
+	}
 	switch name {
 	case "search_web":
 		src := f.webSource(r)
@@ -427,9 +434,6 @@ func (f Fixture) Result(name string, args json.RawMessage) (string, bool) {
 	case "list_workflows":
 		return "Saved workflows: weekly standup digest; invoice review; launch checklist.", true
 	case "discover_capabilities":
-		if f.inventory != "" {
-			return f.inventory, true
-		}
 		return "Appearance options: accent colors teal, indigo, amber, emerald, crimson, violet, cobalt, coral; fonts Atkinson Hyperlegible, Inter, and system; light and dark modes.", true
 	case "search_tools":
 		return "Matching tools: run_code for calculations; artifacts for file conversion; search_web for live public information.", true
@@ -866,6 +870,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// on the retry, so a harness that does not recover cannot answer.
 	if fixture.recovery && contentTools[req.Name] && priorSameTool == 0 {
 		writeJSON(w, http.StatusOK, protocol.ToolExecResponse{Error: "transient upstream error (503); retry"})
+		return
+	}
+
+	// Bench v13: a decoy that is not this case's bearer is "not configured",
+	// and a setter given an unlisted/invalid value is refused without echoing
+	// any canonical spelling. Both are recorded above as ordinary calls.
+	if msg, refused := fixture.unavailable(req.Name, req.Args); refused {
+		writeJSON(w, http.StatusOK, protocol.ToolExecResponse{Error: msg})
 		return
 	}
 
