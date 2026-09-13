@@ -8,6 +8,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/internal/textnoise"
 	"github.com/ditto-assistant/dittobench-datagen/persona"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
 // Bench v13 surface pass. It supersedes the v12 pass for bench_version >= 13
@@ -121,6 +122,7 @@ func V13ApplyArtifactSurfacePass(seed int64, benchVersion int, artifact *Dataset
 	// PairID alone, wherever it is attached (wave or tool prerequisite), so one
 	// pair renders identically everywhere it appears.
 	global := v13GlobalProtected(artifact)
+	storyPairs := v13StoryPairIDs(seed, benchVersion, artifact)
 	layout := textnoise.LayoutForSeed(seed, opts.Salt)
 	selectDomain := fmt.Sprintf("v13-typo:%d:", opts.Salt)
 	var toolIDs, caseIDs, pairIDs []string
@@ -150,7 +152,7 @@ func V13ApplyArtifactSurfacePass(seed int64, benchVersion int, artifact *Dataset
 		if !selectedTools[tc.ID] {
 			for j := range tc.PrerequisitePairs {
 				pair := &tc.PrerequisitePairs[j]
-				if selectedPairs[pair.PairID] && !v13SkipPairNoise(*pair) {
+				if selectedPairs[pair.PairID] && !v13SkipPairNoise(*pair, storyPairs) {
 					pair.Prompt = project("pair:"+pair.PairID, pair.Prompt, global)
 				}
 			}
@@ -166,7 +168,7 @@ func V13ApplyArtifactSurfacePass(seed int64, benchVersion int, artifact *Dataset
 		tc.Prompt = project("tool:"+tc.ID, tc.Prompt, protected)
 		for j := range tc.PrerequisitePairs {
 			pair := &tc.PrerequisitePairs[j]
-			if !selectedPairs[pair.PairID] || v13SkipPairNoise(*pair) {
+			if !selectedPairs[pair.PairID] || v13SkipPairNoise(*pair, storyPairs) {
 				continue
 			}
 			pair.Prompt = project("pair:"+pair.PairID, pair.Prompt, global)
@@ -185,7 +187,7 @@ func V13ApplyArtifactSurfacePass(seed int64, benchVersion int, artifact *Dataset
 	for w := range artifact.MemoryWaves {
 		for j := range artifact.MemoryWaves[w].Pairs {
 			pair := &artifact.MemoryWaves[w].Pairs[j]
-			if !selectedPairs[pair.PairID] || v13SkipPairNoise(*pair) {
+			if !selectedPairs[pair.PairID] || v13SkipPairNoise(*pair, storyPairs) {
 				continue
 			}
 			pair.Prompt = project("pair:"+pair.PairID, pair.Prompt, global)
@@ -222,9 +224,23 @@ func V13ApplyArtifactSurfacePass(seed int64, benchVersion int, artifact *Dataset
 
 // v13SkipPairNoise excludes the long story memories from the artifact-level
 // typo pass: their structured compiler owns fact-safe projection
-// (universe.Story.renderForVersion).
-func v13SkipPairNoise(pair protocol.MemoryPair) bool {
-	return strings.HasPrefix(pair.SessionID, "story-")
+// (universe.Story.renderForVersion). At v13 every session id is opaque, so
+// the story pairs are named by PairID from the seed's world (v13StoryPairIDs)
+// and the legacy "story-" prefix is kept only as a belt-and-braces check.
+func v13SkipPairNoise(pair protocol.MemoryPair, storyPairs map[string]bool) bool {
+	return storyPairs[pair.PairID] || strings.HasPrefix(pair.SessionID, "story-")
+}
+
+// v13StoryPairIDs regenerates the artifact's world at the scale its memory
+// envelope implies and returns the story memories' pair ids.
+func v13StoryPairIDs(seed int64, benchVersion int, artifact *DatasetArtifact) map[string]bool {
+	scale, _ := v8WorldProfile(len(artifact.MemoryCases))
+	world := universe.GenerateForVersion(seed, scale, benchVersion)
+	out := make(map[string]bool, len(world.Stories))
+	for _, story := range world.Stories {
+		out[story.PairID] = true
+	}
+	return out
 }
 
 // v13GlobalProtected is the union of every case's grading values and

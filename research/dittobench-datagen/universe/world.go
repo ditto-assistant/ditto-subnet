@@ -112,7 +112,8 @@ type World struct {
 	// requested version so version-gated levers (v13 public corpora, opaque
 	// session ids, jittered timestamps) can be audited from the value itself.
 	// From v13 it also selects version-gated surface rendering (identity records
-	// and question frames from per-seed grammars, universe/v13_surface.go).
+	// and question frames from per-seed grammars, universe/v13_surface.go) and
+	// the story v2 typed event DAG.
 	BenchVersion   int
 	UserName       string
 	UserCompany    string
@@ -176,7 +177,8 @@ func Generate(seed int64, scale int) World {
 // independent seed stream. From v13 the project/person identity records and
 // the question frames also render from per-seed grammars (v13_surface.go)
 // while people, projects, trips, stories, values, pair identities, and
-// oracles stay the same.
+// oracles stay the same, and the fixed story script is replaced by the story
+// v2 typed event DAG (story_events.go), which owns an independent seed stream.
 func GenerateForVersion(seed int64, scale int, benchVersion int) World {
 	if scale < 1 {
 		scale = 1
@@ -320,7 +322,11 @@ func GenerateForVersion(seed int64, scale int, benchVersion int) World {
 	// Story generation owns an independent seed stream: adding surface variety
 	// cannot perturb the people/projects/trips already established above. Each
 	// arc contributes three long memories and story-only join/state facts.
-	w.StoryArcs, w.Stories = buildStories(seed, scale, w, benchVersion)
+	if benchVersion >= protocol.BenchVersionV13 {
+		w.StoryArcs, w.Stories = buildStoriesV2(seed, scale, w)
+	} else {
+		w.StoryArcs, w.Stories = buildStories(seed, scale, w, benchVersion)
+	}
 	w.Pairs = w.renderPairs(r)
 	return w
 }
@@ -343,6 +349,12 @@ func (w World) renderPairs(r *rand.Rand) []protocol.MemoryPair {
 			// is replaced by the opaque id of its emission ordinal.
 			session = protocol.OpaqueCaseID(w.Seed, "v13-world-session", len(pairs))
 		}
+		pairs = append(pairs, protocol.MemoryPair{PairID: id, SessionID: session, Timestamp: timestamp, Prompt: prompt, Response: response})
+	}
+	// addAt is the story v2 path: the memory carries its own arc-chronological,
+	// jittered timestamp instead of the positional 137-hour grid, so neither the
+	// session id nor the timestamp predicts the arc or the slot (#1827).
+	addAt := func(id, session, timestamp, prompt, response string) {
 		pairs = append(pairs, protocol.MemoryPair{PairID: id, SessionID: session, Timestamp: timestamp, Prompt: prompt, Response: response})
 	}
 	for i, p := range w.People {
@@ -442,6 +454,10 @@ func (w World) renderPairs(r *rand.Rand) []protocol.MemoryPair {
 	}
 	for _, story := range w.Stories {
 		prompt, response := story.renderForVersion(w.Seed, w.BenchVersion)
+		if story.Timestamp != "" {
+			addAt(story.PairID, story.SessionID, story.Timestamp, prompt, response)
+			continue
+		}
 		add(story.PairID, story.SessionID, prompt, response)
 	}
 	for i, preference := range w.Preferences {
