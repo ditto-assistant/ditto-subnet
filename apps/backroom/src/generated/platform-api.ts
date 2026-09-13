@@ -450,6 +450,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/coding-hosted-assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Hosted Assignment Endpoint
+         * @description Re-derive the previewed authority, then create and bind it atomically.
+         */
+        post: operations["create_hosted_assignment_endpoint_api_v1_admin_coding_hosted_assignments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/coding-hosted-assignments/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Hosted Assignment
+         * @description Derive the exact authority without writing anything.
+         */
+        post: operations["preview_hosted_assignment_api_v1_admin_coding_hosted_assignments_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/coding-private-v2-releases": {
         parameters: {
             query?: never;
@@ -7606,6 +7646,206 @@ export interface components {
              * @default false
              */
             idempotent: boolean;
+        };
+        /** AdminHostedAssignmentCreateRequest */
+        AdminHostedAssignmentCreateRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Catalog Index */
+            catalog_index: number;
+            /** Confirmation */
+            confirmation: string;
+            /** Confirmed Assignment Sha256 */
+            confirmed_assignment_sha256: string;
+            /** Deadline Unix */
+            deadline_unix: number;
+            /**
+             * Evaluation Id
+             * Format: uuid
+             */
+            evaluation_id: string;
+            /** Execution Profile Sha256 */
+            execution_profile_sha256: string;
+            /** Grading Profile Sha256 */
+            grading_profile_sha256: string;
+            /** Max Patch Bytes */
+            max_patch_bytes: number;
+            /** Policy Sha256 */
+            policy_sha256: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Release Row Id
+             * Format: uuid
+             */
+            release_row_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** AdminHostedAssignmentCreated */
+        AdminHostedAssignmentCreated: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Assignment Sha256 */
+            assignment_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Authoring Grant Id
+             * Format: uuid
+             */
+            authoring_grant_id: string;
+            /** Authority */
+            authority: {
+                [key: string]: unknown;
+            };
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Certification Row Id
+             * Format: uuid
+             */
+            certification_row_id: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Deadline Unix */
+            deadline_unix: number;
+            /**
+             * Evaluation Id
+             * Format: uuid
+             */
+            evaluation_id: string;
+            /**
+             * Grading Grant Id
+             * Format: uuid
+             */
+            grading_grant_id: string;
+            /** Registration Sha256 */
+            registration_sha256: string;
+            /** Schedule Sha256 */
+            schedule_sha256: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Selection */
+            selection: {
+                [key: string]: unknown;
+            };
+            /** Selection Sha256 */
+            selection_sha256: string;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** AdminHostedAssignmentPlan */
+        AdminHostedAssignmentPlan: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Assignment Sha256 */
+            assignment_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Authority */
+            authority: {
+                [key: string]: unknown;
+            };
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Certification Row Id
+             * Format: uuid
+             */
+            certification_row_id: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Deadline Unix */
+            deadline_unix: number;
+            /**
+             * Evaluation Id
+             * Format: uuid
+             */
+            evaluation_id: string;
+            /** Registration Sha256 */
+            registration_sha256: string;
+            /** Schedule Sha256 */
+            schedule_sha256: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Selection */
+            selection: {
+                [key: string]: unknown;
+            };
+            /** Selection Sha256 */
+            selection_sha256: string;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** AdminHostedAssignmentPreviewRequest */
+        AdminHostedAssignmentPreviewRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Catalog Index */
+            catalog_index: number;
+            /** Execution Profile Sha256 */
+            execution_profile_sha256: string;
+            /** Grading Profile Sha256 */
+            grading_profile_sha256: string;
+            /**
+             * Lease Seconds
+             * @default 900
+             */
+            lease_seconds: number;
+            /** Max Patch Bytes */
+            max_patch_bytes: number;
+            /** Policy Sha256 */
+            policy_sha256: string;
+            /**
+             * Release Row Id
+             * Format: uuid
+             */
+            release_row_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /** AdminHotkeyBanAuditEntry */
         AdminHotkeyBanAuditEntry: {
@@ -27464,6 +27704,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminCodingControlPlaneResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_hosted_assignment_endpoint_api_v1_admin_coding_hosted_assignments_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminHostedAssignmentCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminHostedAssignmentCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_hosted_assignment_api_v1_admin_coding_hosted_assignments_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminHostedAssignmentPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminHostedAssignmentPlan"];
                 };
             };
             /** @description Validation Error */
