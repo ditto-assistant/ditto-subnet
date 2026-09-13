@@ -23,13 +23,16 @@ done
 for pid in "${pids[@]}"; do wait "$pid"; done
 systemctl stop ditto-screener-fleet-agent.service
 # Refuse to interrupt any independent/rootless workload or orphan sandbox.
-if virsh --connect qemu:///system list --name | grep -Eq '^ditto-(build|smoke)-'; then
+primary_vms=$(virsh --connect qemu:///system list --name)
+if grep -Eq '^ditto-(build|smoke)-' <<<"$primary_vms"; then
   echo 'Primary VM remains active after drain' >&2; exit 1
 fi
-if [ -n "$(docker ps --filter name=ditto-source- --format '{{.ID}}')" ]; then
+reviews=$(docker ps --filter name=ditto-source- --format '{{.ID}}')
+if [ -n "$reviews" ]; then
   echo 'Primary source review remains active after drain' >&2; exit 1
 fi
-if [ -n "$(runuser -u ditto-builder -- env DOCKER_HOST=unix:///run/ditto-screener-docker/docker.sock docker ps --format '{{.ID}}')" ]; then
+rootless=$(runuser -u ditto-builder -- env DOCKER_HOST=unix:///run/ditto-screener-docker/docker.sock docker ps --format '{{.ID}}')
+if [ -n "$rootless" ]; then
   echo 'Rootless workload remains active after drain' >&2; exit 1
 fi
 systemctl stop user@1005.service
