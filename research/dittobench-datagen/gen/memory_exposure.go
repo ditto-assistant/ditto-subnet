@@ -17,6 +17,12 @@ type MemoryExposureResult struct {
 	Verbatim          int
 	Transformed       int
 	MissingEvidenceID int
+	// ComputedByRule counts cases whose answer IS a copyable evidence token but
+	// that the bench_version >= 13 correction/join rule
+	// (v13ComputedQuestionType) classified as computed anyway. It is always 0
+	// below v13. Transformed - ComputedByRule is the strict verbatim-rule share,
+	// kept visible so a v13 family regression cannot hide behind the rule.
+	ComputedByRule int
 }
 
 func (r MemoryExposureResult) VerbatimShare() float64 {
@@ -33,12 +39,43 @@ func (r MemoryExposureResult) TransformedShare() float64 {
 	return float64(r.Transformed) / float64(r.Eligible)
 }
 
-// AuditV10MemoryExposure evaluates only cases with explicit evidence bindings.
-// Missing evidence is an error: silently treating an unresolvable answer as a
-// transformation would make the difficulty gate pass for the wrong reason.
+// StrictTransformedShare is the share of eligible cases whose answer is not a
+// copyable evidence token under the exact v10 verbatim rule, ignoring the v13
+// correction/join classification. Equal to TransformedShare below v13.
+func (r MemoryExposureResult) StrictTransformedShare() float64 {
+	if r.Eligible == 0 {
+		return 0
+	}
+	return float64(r.Transformed-r.ComputedByRule) / float64(r.Eligible)
+}
+
+// AuditV10MemoryExposure evaluates a v10 artifact. It is the source-compatible
+// entry point behind the original v10 transformation gate; new callers pass an
+// explicit version through AuditMemoryExposureForVersion.
 func AuditV10MemoryExposure(artifact DatasetArtifact) (MemoryExposureResult, error) {
-	if artifact.BenchVersion != protocol.BenchVersionV10 {
-		return MemoryExposureResult{}, fmt.Errorf("memory exposure audit requires bench version 10, got %d", artifact.BenchVersion)
+	return AuditMemoryExposureForVersion(artifact, protocol.BenchVersionV10)
+}
+
+// AuditMemoryExposureForVersion evaluates only cases with explicit evidence
+// bindings under an explicit contract. The artifact must have been generated
+// for benchVersion, which must carry evidence bindings (v10 and later), so an
+// audit can never silently re-pin itself to a different contract than the one
+// it names. Missing evidence is an error: silently treating an unresolvable
+// answer as a transformation would make the difficulty gate pass for the wrong
+// reason.
+//
+// From v13 a case whose answer is a copyable token of its evidence still counts
+// as COMPUTED when producing it required applying a correction or following a
+// join (v13ComputedQuestionType): "who leads it now" after a lead change, or a
+// contact reached through a companion link, is a state resolution even though
+// the final name is verbatim somewhere in the records. v10..v12 keep the exact
+// verbatim rule so their pinned gate numbers are unchanged.
+func AuditMemoryExposureForVersion(artifact DatasetArtifact, benchVersion int) (MemoryExposureResult, error) {
+	if benchVersion < protocol.BenchVersionV10 {
+		return MemoryExposureResult{}, fmt.Errorf("memory exposure audit requires bench version %d or later, got %d", protocol.BenchVersionV10, benchVersion)
+	}
+	if artifact.BenchVersion != benchVersion {
+		return MemoryExposureResult{}, fmt.Errorf("memory exposure audit requested bench version %d, artifact is %d", benchVersion, artifact.BenchVersion)
 	}
 	pairs := make(map[string]string)
 	for _, tc := range artifact.ToolCases {
@@ -68,7 +105,12 @@ func AuditV10MemoryExposure(artifact DatasetArtifact) (MemoryExposureResult, err
 			evidence.WriteByte(' ')
 			evidence.WriteString(text)
 		}
-		if containsWholeAnswer(evidence.String(), memoryCase.ExpectedAnswer) {
+		verbatim := containsWholeAnswer(evidence.String(), memoryCase.ExpectedAnswer)
+		if verbatim && benchVersion >= protocol.BenchVersionV13 && v13ComputedQuestionType(memoryCase.QuestionType) {
+			verbatim = false
+			result.ComputedByRule++
+		}
+		if verbatim {
 			result.Verbatim++
 		} else {
 			result.Transformed++
@@ -78,6 +120,29 @@ func AuditV10MemoryExposure(artifact DatasetArtifact) (MemoryExposureResult, err
 		return result, fmt.Errorf("memory exposure audit could not resolve %d evidence pair ids", result.MissingEvidenceID)
 	}
 	return result, nil
+}
+
+// v13ComputedQuestionTypes are the shared-world oracle families whose answer is
+// a copyable evidence token only after a correction has been applied or a join
+// followed: current/previous state after an update chain, a trip leg after an
+// itinerary correction, a contact reached through the story's cross-record
+// link, and the cross-user isolation read. From v13 the exposure audit counts
+// them as computed. Programs, story oracles, and every other family keep the
+// verbatim rule.
+var v13ComputedQuestionTypes = map[string]bool{
+	"world-contact-current":           true,
+	"world-contact-previous":          true,
+	"world-project-lead-current":      true,
+	"world-project-lead-previous":     true,
+	"world-trip-current":              true,
+	"world-trip-changed-leg-current":  true,
+	"world-trip-changed-leg-previous": true,
+	"world-story-contact-current":     true,
+	"world-isolation-contact-current": true,
+}
+
+func v13ComputedQuestionType(questionType string) bool {
+	return v13ComputedQuestionTypes[questionType]
 }
 
 // AnswerVerbatimInEvidence reports whether answer can be copied as a contiguous,

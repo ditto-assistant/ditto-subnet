@@ -21,6 +21,7 @@ const (
 	BenchVersionV10 = 10
 	BenchVersionV11 = 11
 	BenchVersionV12 = 12
+	BenchVersionV13 = 13
 	BasisPointScale = 10_000
 	MaxCaseCount    = 10_000_000
 	MaxUsageCount   = uint64(9_007_199_254_740_991)
@@ -32,8 +33,13 @@ const (
 // adds the causal model-dependence gate on top of the identical v9 stack: the
 // extra gate is emitted, canonicalized, and multiplied into the composite only
 // for bench_version>=12, so v9..v11 evidence and digests stay byte-identical.
+// v13 inherits the v12 gate stack unchanged through the same floors; its own
+// gates (catalog-present, provenance, cost factor, twin rule) land behind
+// bench_version>=13 switches and ship in shadow. The upper bound is the newest
+// contract this scorer has reviewed: a stale bound here silently rejects a new
+// version's evidence, which is the failure mode every bump so far has hit.
 func SupportedBenchVersion(benchVersion int) bool {
-	return benchVersion >= BenchVersionV9 && benchVersion <= BenchVersionV12
+	return benchVersion >= BenchVersionV9 && benchVersion <= BenchVersionV13
 }
 
 var (

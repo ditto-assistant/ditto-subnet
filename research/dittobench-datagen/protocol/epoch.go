@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -116,6 +118,16 @@ import (
 //     seed instead of drawn from finite variant banks, and labels sample a
 //     widened superset with opaque, role-free session identifiers.
 //
+// v13 is the TYPED-SEMANTIC contract (issue #1518): label-insufficiency,
+// unregenerable surface, causal model dependence, provenance over containment,
+// and a bounded monetary share, graded through grader-only claim sets rather
+// than surface containment. This module ships the v13 PLUMBING first — the
+// version constant, the run-size envelope (250 memory cases), the grader-only
+// protocol types, and a surface pass that starts as a byte-for-byte copy of
+// v12 — so every v13 family, grader, and gate can land behind
+// bench_version >= 13 while v2..v12 regenerate and re-grade byte-identically.
+// See docs/bench-versions.md "Bench v13".
+//
 // The deterministic grader, run sizes, inference boundary, LongMemEval
 // deep-history floors, and the v9 signed-evidence/score-gate/curve-v3
 // efficiency stack all carry forward unchanged.
@@ -131,6 +143,7 @@ const (
 	BenchVersionV10     = 10
 	BenchVersionV11     = 11
 	BenchVersionV12     = 12
+	BenchVersionV13     = 13
 	CurrentBenchVersion = BenchVersionV8
 
 	// BenchVersion is retained as a source-compatible alias for consumers that
@@ -151,6 +164,7 @@ var (
 	datasetEpochV10 = time.Date(2027, 2, 1, 0, 0, 0, 0, time.UTC)
 	datasetEpochV11 = time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
 	datasetEpochV12 = time.Date(2027, 4, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV13 = time.Date(2027, 5, 1, 0, 0, 0, 0, time.UTC)
 
 	// DatasetEpoch and DatasetEpochRFC3339 retain the v2 values for legacy
 	// package callers. Canonical versioned generation uses DatasetEpochForVersion.
@@ -158,14 +172,50 @@ var (
 	DatasetEpochRFC3339 = datasetEpochV2.Format(time.RFC3339)
 )
 
+// supportedBenchVersions is the single ordered source of truth for every
+// version this module can reproduce. Every other enumeration — the acceptance
+// check, the error strings, probe defaults, and the newest-version helper —
+// derives from it, so a bump edits exactly one list (see the
+// ditto-subnet-bench-version-bump skill: floors and shared constants, never
+// retyped enumerations).
+var supportedBenchVersions = []int{
+	BenchVersionV2, BenchVersionV3, BenchVersionV4, BenchVersionV5,
+	BenchVersionV6, BenchVersionV7, BenchVersionV8, BenchVersionV9,
+	BenchVersionV10, BenchVersionV11, BenchVersionV12, BenchVersionV13,
+}
+
+// SupportedBenchVersions returns a copy of the ordered list of versions this
+// module can reproduce.
+func SupportedBenchVersions() []int {
+	return append([]int(nil), supportedBenchVersions...)
+}
+
+// NewestSupportedBenchVersion is the highest version this module can
+// reproduce. Offline probes default to it so a bump never silently re-pins an
+// audit to an older contract. It is NOT the advertised or active version:
+// CurrentBenchVersion and Platform rollout state decide those.
+func NewestSupportedBenchVersion() int {
+	return supportedBenchVersions[len(supportedBenchVersions)-1]
+}
+
+// SupportedBenchVersionList renders the supported versions as "2, 3, ..., N"
+// for error messages, so every consumer reports the same list.
+func SupportedBenchVersionList() string {
+	parts := make([]string, 0, len(supportedBenchVersions))
+	for _, v := range supportedBenchVersions {
+		parts = append(parts, strconv.Itoa(v))
+	}
+	return strings.Join(parts, ", ")
+}
+
 // SupportedBenchVersion reports whether this module can reproduce a version.
 func SupportedBenchVersion(version int) bool {
-	return version == BenchVersionV2 || version == BenchVersionV3 ||
-		version == BenchVersionV4 || version == BenchVersionV5 ||
-		version == BenchVersionV6 || version == BenchVersionV7 ||
-		version == BenchVersionV8 || version == BenchVersionV9 ||
-		version == BenchVersionV10 || version == BenchVersionV11 ||
-		version == BenchVersionV12
+	for _, v := range supportedBenchVersions {
+		if v == version {
+			return true
+		}
+	}
+	return false
 }
 
 // DatasetEpochForVersion returns the immutable reference instant for version.
@@ -193,8 +243,10 @@ func DatasetEpochForVersion(version int) (time.Time, error) {
 		return datasetEpochV11, nil
 	case BenchVersionV12:
 		return datasetEpochV12, nil
+	case BenchVersionV13:
+		return datasetEpochV13, nil
 	default:
-		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)", version)
+		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: %s)", version, SupportedBenchVersionList())
 	}
 }
 
@@ -202,7 +254,7 @@ func DatasetEpochForVersion(version int) (time.Time, error) {
 // It is deterministic and retains the exact historical v2 mixing function.
 func RotateSeedForVersion(seed int64, version int) (int64, error) {
 	if !SupportedBenchVersion(version) {
-		return 0, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)", version)
+		return 0, fmt.Errorf("unsupported bench_version %d (supported: %s)", version, SupportedBenchVersionList())
 	}
 	v := uint64(version)
 	x := uint64(seed) ^ (v * 0x9E3779B97F4A7C15)

@@ -159,11 +159,18 @@ func BuildArtifactForVersion(seed int64, benchVersion int, toolCases []protocol.
 			return DatasetArtifact{}, err
 		}
 	}
-	// v12 supersedes the v11 surface pass with compositional stored-directive
-	// markers; both leave every value byte-exact, so grading is unaffected.
-	if benchVersion >= protocol.BenchVersionV12 {
+	// One surface pass per contract, dispatched as floors so a new version is
+	// an explicit branch here rather than an inherited one. v12 supersedes the
+	// v11 pass with compositional stored-directive markers; v13 starts as a
+	// byte-for-byte copy of v12 and becomes the public pre-pass for the private
+	// surface pass. Every pass leaves every value byte-exact, so grading is
+	// unaffected.
+	switch {
+	case benchVersion >= protocol.BenchVersionV13:
+		V13ApplyArtifactSurfacePass(seed, benchVersion, &artifact)
+	case benchVersion >= protocol.BenchVersionV12:
 		V12ApplyArtifactSurfaceNoise(seed, benchVersion, &artifact)
-	} else {
+	default:
 		V11ApplyArtifactSurfaceNoise(seed, benchVersion, &artifact)
 	}
 	return artifact, nil

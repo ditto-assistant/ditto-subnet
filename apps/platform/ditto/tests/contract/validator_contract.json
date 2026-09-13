@@ -173,6 +173,10 @@
         "minimum": 0.0,
         "type": "number"
       },
+      "relation": {
+        "default": "",
+        "type": "string"
+      },
       "result_usage": {
         "default": 0.0,
         "maximum": 1.0,
@@ -4487,6 +4491,10 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "relation": {
+            "default": "",
+            "type": "string"
+          },
           "result_usage": {
             "default": 0.0,
             "maximum": 1.0,
@@ -4808,6 +4816,10 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "type": "number"
+          },
+          "relation": {
+            "default": "",
+            "type": "string"
           },
           "result_usage": {
             "default": 0.0,

@@ -438,9 +438,43 @@ func TestV12KnownVector(t *testing.T) {
 	}
 }
 
+// TestV13KnownVector is the PLACEHOLDER pin for the v13 plumbing contract
+// (issue #1824): the v13 version constant, the 250-case memory envelope
+// (profilesV13 full: Mem 224 + 9 isolation), and a surface pass that is a
+// byte-for-byte copy of v12. It exists so every later v13 PR (mix rebalance,
+// story v2, tool bench, grader, label-leak fix) moves THIS hash deliberately
+// and leaves every v2..v12 vector above untouched — a moved earlier vector
+// means a lever is not gated on bench_version >= 13. It is re-pinned when the
+// v13 envelope lands, after the /seed label-leak fix.
+func TestV13KnownVector(t *testing.T) {
+	const (
+		seed = int64(123456789)
+		want = "b9bfb611f4509599fb6c79579114244178ca09077737a0313b6db9c5b6f1966c"
+	)
+	prof, ok := ProfileForVersion("full", protocol.BenchVersionV13)
+	if !ok {
+		t.Fatal("v13 full profile missing")
+	}
+	artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV13)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	got, _, err := artifact.SHA256Hex()
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if got != want {
+		t.Fatalf("v13 known-vector hash drift for seed %d full:\n got %s\nwant %s", seed, got, want)
+	}
+	epoch, _ := protocol.DatasetEpochForVersion(protocol.BenchVersionV13)
+	if artifact.GeneratedAt != epoch.Format("2006-01-02T15:04:05Z07:00") || artifact.BenchVersion != protocol.BenchVersionV13 {
+		t.Fatalf("v13 artifact envelope: generated_at=%s bench_version=%d", artifact.GeneratedAt, artifact.BenchVersion)
+	}
+}
+
 func TestUnsupportedVersionRejected(t *testing.T) {
 	prof, _ := ProfileFor("small")
-	if _, err := GenerateDataset(42, prof, protocol.BenchVersionV12+1); err == nil {
+	if _, err := GenerateDataset(42, prof, protocol.NewestSupportedBenchVersion()+1); err == nil {
 		t.Fatal("unsupported version accepted")
 	}
 }
@@ -448,7 +482,7 @@ func TestUnsupportedVersionRejected(t *testing.T) {
 // TestSameSeedSameBytes is the core determinism guarantee: one seed, one artifact.
 func TestSameSeedSameBytes(t *testing.T) {
 	prof, _ := ProfileFor("full")
-	for _, version := range []int{protocol.BenchVersionV2, protocol.BenchVersionV3, protocol.BenchVersionV4, protocol.BenchVersionV5, protocol.BenchVersionV6, protocol.BenchVersionV7, protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12} {
+	for _, version := range protocol.SupportedBenchVersions() {
 		artifactA, err := GenerateDataset(42, prof, version)
 		if err != nil {
 			t.Fatalf("v%d generate a: %v", version, err)

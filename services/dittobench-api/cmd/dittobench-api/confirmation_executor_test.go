@@ -18,6 +18,7 @@ import (
 
 	"github.com/ditto-assistant/dittobench-api/internal/ablation"
 	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
+	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
@@ -610,17 +611,64 @@ func TestTrustedConfirmationReadinessPublishesOnlyValidatedInstallation(t *testi
 
 func TestConfirmationSubjectEpochAllowListTracksEvidenceStack(t *testing.T) {
 	t.Parallel()
+	// A >= v9 floor bounded by the scorer's accepted set: every version
+	// scoregates accepts is a confirmable subject, and the first one it does not
+	// accept yet is refused.
+	unaccepted := scoregates.BenchVersionV13 + 1
 	for version, want := range map[int]bool{
-		8: false, 9: true, 10: true, 11: true, 12: true, 13: false, 0: false,
+		8: false, 9: true, 10: true, 11: true, 12: true, 13: true, unaccepted: false, 0: false,
 	} {
 		if got := confirmationSubjectEpochSupported(version); got != want {
 			t.Fatalf("confirmationSubjectEpochSupported(%d) = %v, want %v", version, got, want)
 		}
 	}
-	// The instrument allow-list stays {9, 12}. A live v11 *subject* must not
-	// require a v11 *profile*.
+	// The instrument allow-list is v9 plus >= v12 within the accepted set. A
+	// live v11 *subject* must not require a v11 *profile*, and v13 is an
+	// installable profile epoch without being required for a v13 subject.
 	if confirmationBenchVersionSupported(11) {
 		t.Fatal("instrument allow-list must not treat bench 11 as an installable profile")
+	}
+	if !confirmationBenchVersionSupported(13) || confirmationBenchVersionSupported(unaccepted) {
+		t.Fatal("instrument allow-list must accept v13 and refuse the first unaccepted version")
+	}
+}
+
+func TestTrustedConfirmationExecuteAcceptsV13SubjectAgainstV9Instrument(t *testing.T) {
+	t.Parallel()
+	profile, raw := validInstalledConfirmationProfile(t)
+	request := validTrustedConfirmationRequest(t, raw, profile)
+	request.BenchVersion = scoregates.BenchVersionV13
+	acquired := 0
+	executor := installTrustedExecutor(t, raw, confirmationRuntimeFactoryFunc(func(context.Context, confirmationRuntimeIdentity) (*confirmationRuntime, error) {
+		acquired++
+		return validConfirmationRuntime(), nil
+	}))
+	executor.coordinate = func(
+		context.Context, confirmationExecutionRequest, confirmationExecutionProfileWire, *confirmationRuntime,
+	) (confirmationExecutionResult, error) {
+		return confirmationExecutionResult{
+			LongMemEval:                  json.RawMessage(`{"ok":"longmem"}`),
+			InferenceAblation:            json.RawMessage(`{"ok":"inference"}`),
+			EmbeddingAblation:            json.RawMessage(`{"ok":"embedding"}`),
+			AblationCoordinatorLatencyMS: 1,
+		}, nil
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), request.Deadline)
+	defer cancel()
+	if _, err := executor.Execute(ctx, request); err != nil {
+		t.Fatalf("v9 instrument rejected a v13 subject: %v", err)
+	}
+	if acquired != 1 {
+		t.Fatalf("acquisitions = %d, want 1", acquired)
+	}
+	// The first version the scorer does not accept yet still fails closed at
+	// the request validator, before any runtime is acquired.
+	request.BenchVersion = scoregates.BenchVersionV13 + 1
+	if _, err := executor.Execute(ctx, request); err == nil {
+		t.Fatal("unaccepted subject epoch passed the confirmation request validator")
+	}
+	if acquired != 1 {
+		t.Fatalf("acquisitions after refused epoch = %d, want 1", acquired)
 	}
 }
 

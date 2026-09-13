@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 )
 
 const (
@@ -42,11 +44,23 @@ const (
 // ConfirmationBenchVersionSupported reports whether a bench version runs its
 // confirmation ablation dimensions under this frozen (v9-named) ablation
 // contract. The contract string is a stable transport name; the frozen
-// profile's bench_version field carries the actual version (9 or 12). This is
-// the single source of truth for the confirmation version allow-list — the
-// scorer request validator and inference broker both defer to it.
+// profile's bench_version field carries the actual version. This is the single
+// source of truth for the confirmation *instrument* allow-list — the frozen
+// profile validator, fixture builder, coordinator, and inference broker all
+// defer to it.
+//
+// It is a floor, not an enumeration: v9 (the shadow instrument) plus every
+// version from the v12 counterfactual contract up to the newest version the
+// scorer accepts (scoregates.SupportedBenchVersion). v10 and v11 never had a
+// confirmation ablation contract built and stay refused. Enumerating {9, 12}
+// here is what would fail a v13 confirmation closed while scoregates already
+// accepted v13 evidence — the same silent exclusion that stranded v12 on a
+// Literal[9] wire pin.
 func ConfirmationBenchVersionSupported(benchVersion int) bool {
-	return benchVersion == BenchVersionV9 || benchVersion == BenchVersionV12
+	if benchVersion == BenchVersionV9 {
+		return true
+	}
+	return benchVersion >= BenchVersionV12 && scoregates.SupportedBenchVersion(benchVersion)
 }
 
 var (

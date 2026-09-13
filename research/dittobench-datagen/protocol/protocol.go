@@ -14,7 +14,91 @@ type ToolSpec struct {
 	Name          string            `json:"name"`
 	RequiredArgs  map[string]string `json:"required_args,omitempty"`
 	ForbiddenArgs []string          `json:"forbidden_args,omitempty"`
+	// RequiredArgClaims (bench_version 13, grader-only) are paraphrase-accepting
+	// claims over argument values, keyed by argument name. Where RequiredArgs
+	// demands one exact string, a claim states the semantic value plus the
+	// equivalent forms an honest harness may emit, so an exact-output argument
+	// recipe (strategy S5) earns no more than a paraphrase. Never serialized:
+	// the harness sees only the tool definitions, never the expected spec.
+	RequiredArgClaims map[string]Claim `json:"-"`
 }
+
+// Claim (bench_version 13, grader-only) is one typed semantic expectation the
+// deterministic grader scores against a natural-language answer. A case may
+// carry several; the grader canonicalizes the response and scores the claim
+// set, so a semantically equivalent quantity, entity, status, event, action,
+// set, or date never fails on harmless formatting (issue #1518).
+//
+// Claims are validator-internal like ExpectedAnswer, and additionally never
+// enter the hashed DatasetArtifact: the containing fields are tagged json:"-",
+// so v2..v12 artifact bytes are untouched and the dispute artifact continues to
+// pin the contract through (seed, bench_version) regeneration. The claim
+// vocabulary (Kind values, Unit grammar) is defined by the v13 grader
+// contract; this type is the shared shape every v13 family populates.
+type Claim struct {
+	// Kind names the typed matcher (for example quantity, entity, status,
+	// event, action, set, date, grounding). The v13 grader owns the vocabulary.
+	Kind string `json:"kind"`
+	// Expected is the canonical value of the claim.
+	Expected string `json:"expected"`
+	// Accept lists equivalent surface forms of Expected, any of which grades
+	// correct, mirroring MemoryCase.AcceptAny at claim granularity.
+	Accept []string `json:"accept,omitempty"`
+	// Unit is the unit the QUESTION requested (for example "cents", "USD",
+	// "days"); a quantity claim is graded in that unit, which is the v12
+	// minor-unit inversion fix.
+	Unit string `json:"unit,omitempty"`
+	// Critical marks a claim whose failure zeroes the case regardless of the
+	// weighted remainder (the load-bearing fact); non-critical claims contribute
+	// their Weight share of the case credit.
+	Critical bool `json:"critical,omitempty"`
+	// Weight is the claim's share of the case credit; zero means equal share.
+	Weight float64 `json:"weight,omitempty"`
+}
+
+// RestraintClaim (bench_version 13, grader-only) states what a correct harness
+// must NOT do on a case whose right move is restraint: no call at all, a
+// clarifying question first, or a grounded decline. It is the reward-side
+// counterpart to the request-keyed empty-catalog and decline-gate strategies
+// (S1, S2, S16): a harness that withholds its catalog or declines by default
+// is distinguished from one that reads the request, because the restraint
+// triplet pairs a case where restraint is right with matched cases where the
+// same surface demands action. Never serialized.
+type RestraintClaim struct {
+	// Kind is one of the RestraintKind constants.
+	Kind string `json:"kind"`
+	// ForbiddenTools are the capabilities whose observed call fails the claim.
+	ForbiddenTools []string `json:"forbidden_tools,omitempty"`
+	// Accept lists phrasings that satisfy the claim (a clarifying question that
+	// names the ambiguity, a decline that cites the missing evidence).
+	Accept []string `json:"accept,omitempty"`
+}
+
+// RestraintKind values for RestraintClaim.Kind.
+const (
+	// RestraintNoCall: a correct response calls no tool.
+	RestraintNoCall = "no_call"
+	// RestraintClarifyFirst: a correct response asks a clarifying question
+	// instead of acting on an ambiguous request.
+	RestraintClarifyFirst = "clarify_first"
+	// RestraintDecline: a correct response declines with grounding.
+	RestraintDecline = "decline"
+)
+
+// TwinRelation values (bench_version 13, grader-only) name how a case is paired
+// with its twin for the evidence-independent-default post-pass. Twins are
+// distributionally matched (same family and oracle, different surface draw)
+// and never adjacent, so in-run pairing (N11) is not cheaper than reading.
+const (
+	// TwinRelationDecision pairs an abstention/restraint case with a matched
+	// case where the same surface has sufficient evidence, so a harness that
+	// declines (or answers) by default is concordant-wrong on one of them.
+	TwinRelationDecision = "decision_twin"
+	// TwinRelationAsOf pairs two point-in-time readings of one fact whose
+	// answers differ, so an ingest-time compilation that keeps only the latest
+	// state (S9, N5, N10) is concordant-wrong on the earlier reading.
+	TwinRelationAsOf = "as_of_twin"
+)
 
 // ToolCase is one tool-calling benchmark case.
 //
@@ -47,6 +131,14 @@ type ToolCase struct {
 	// aliases, people, products, and other join keys out of the typo projector;
 	// it never enters the public artifact or harness request.
 	WritingProtected []string `json:"-"`
+	// TwinRelation (bench_version 13, grader-only) names how this case is paired
+	// with its twin (see the TwinRelation constants); TwinGroup-style pairing
+	// identity for tool cases rides on Category plus this relation. Never
+	// serialized.
+	TwinRelation string `json:"-"`
+	// Restraint (bench_version 13, grader-only) is set on a case whose correct
+	// outcome is restraint rather than a call. Never serialized.
+	Restraint *RestraintClaim `json:"-"`
 }
 
 // AnswerKind values: how a memory case is graded deterministically. Grading is
@@ -105,6 +197,22 @@ const (
 	// precede the positive check already enforce the leak zero, so the positive
 	// check for this kind is simply "did the harness say anything at all".
 	AnswerChitchat = "chitchat"
+	// AnswerClarify (bench_version 13): the question is genuinely ambiguous
+	// against the seeded evidence (two anchors resolve), so the correct response
+	// is a clarifying question that names the ambiguity rather than a guess.
+	// Graded through the case's Claims (a grounding claim citing the competing
+	// anchors); asserting either candidate as the answer scores 0. Distinct
+	// from AnswerDecline: there IS an answer once the user disambiguates.
+	AnswerClarify = "clarify"
+	// AnswerAbsence (bench_version 13): evidence-bounded abstention. The seeded
+	// evidence does not support an answer (pure absence, or misleading evidence
+	// for a near-miss entity or period), so the correct response declines AND
+	// proves a read by citing what was found. The tempting value is forbidden
+	// only when ASSERTED as the answer (slot, or an assertive claim without a
+	// rejection marker); a value cited-and-rejected as insufficient evidence is
+	// never a forbidden hit (issue #1518 scan-scope rule). Supersedes the
+	// pre-v8 AnswerDecline pattern for v13 abstention families.
+	AnswerAbsence = "absence"
 )
 
 // MemoryCase is one memory-recall benchmark case. The harness is first seeded
@@ -190,6 +298,18 @@ type MemoryCase struct {
 	// WritingProtected is generator-only semantic identity metadata. It never
 	// enters the public artifact or harness request.
 	WritingProtected []string `json:"-"`
+	// Claims (bench_version 13, grader-only) is the typed claim set the v13
+	// grader scores in place of surface containment. Empty for v2..v12 cases
+	// and for v13 families that have not yet moved to claim grading (they keep
+	// ExpectedAnswer/AnswerKind). Never serialized: not in the hashed artifact,
+	// not on /seed or /run. gen.TestV13GraderOnlyFieldsNeverReachHarnessWire
+	// pins this.
+	Claims []Claim `json:"-"`
+	// TwinRelation (bench_version 13, grader-only) names how this case is
+	// paired with the other member(s) of its TwinGroup (see the TwinRelation
+	// constants). Empty for the v5+ metamorphic phrasing twins, which remain
+	// graded by agreement alone. Never serialized.
+	TwinRelation string `json:"-"`
 }
 
 // Dataset is a (fresh, seeded) set of tool-calling + memory cases.
@@ -408,6 +528,14 @@ type CaseScore struct {
 	// TwinGroup, when set, ties this case to the other metamorphic invariance cases
 	// for the same fact, so the aggregate can score phrasing consistency.
 	TwinGroup string `json:"twin_group,omitempty"`
+	// Relation (bench_version 13) carries the generator's metamorphic /
+	// counterfactual relation for this case (V10CaseProvenance.Relation) into
+	// the report, so the twin post-pass and the calibration audit can group
+	// cases by relation without regenerating the dataset. Report-only and
+	// additive-optional: it is populated only for bench_version >= 13, so
+	// v9..v12 reports keep their exact shape. Like AuditHalf it is not a tell —
+	// it appears only after every case has been answered.
+	Relation string `json:"relation,omitempty"`
 	// AuditHalf marks which side of a transform-audit pair this case is:
 	// AuditHalfBase or AuditHalfTransform, empty for every other case. Without it
 	// the two halves are indistinguishable in a report and only their AGREEMENT

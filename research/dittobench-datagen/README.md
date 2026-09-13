@@ -82,9 +82,13 @@ Run sizes: `small` (smoke), `medium`, `full` (the scored profile).
 
 `-bench-version` is required. Use the version published with the score you are
 auditing; never substitute the latest version. Explicit generation supports v2
-through the pre-activation v10 contract. `CurrentBenchVersion` remains v8 while
-the runtime advertises v8, v9, and v10; Platform rollout state separately
-controls which executable contract is active. For the public full-profile seed
+through the pre-activation v13 contract. `CurrentBenchVersion` remains v8 while
+the runtime advertises v8 through v12 (v13 joins once its contract is
+complete); Platform rollout state separately controls which executable contract
+is active. v11 has no pinned public vector (its contract is exercised through
+the v12 vector, which carries every v11 lever). The v13 row is the PLUMBING
+placeholder pinned by `TestV13KnownVector`; it is re-pinned when the v13
+envelope lands. For the public full-profile seed
 `123456789`, the canonical SHA-256 vectors are:
 
 | Version | Dataset epoch | SHA-256 |
@@ -98,6 +102,8 @@ controls which executable contract is active. For the public full-profile seed
 | 8 | `2026-12-01T00:00:00Z` | `6a09587706c95b5f61d3e65e0e34b317fc8ce24d0c927c66864d2869c8728e98` |
 | 9 (pre-activation) | `2027-01-01T00:00:00Z` | `b12edd3649dece3af415ad289a24a1a8615b7d906773e718ee637da14cbd541f` |
 | 10 (pre-activation) | `2027-02-01T00:00:00Z` | `04d6f3d9099dd9922f931d9a6f90caffd18e70d041d074986d68752ddf928a0f` |
+| 12 (pre-activation) | `2027-04-01T00:00:00Z` | `775e0eaf2d41c0cf4647c51f19c56ecc3bb6db37a780538bb7db745811ab91bb` |
+| 13 (plumbing placeholder) | `2027-05-01T00:00:00Z` | `b9bfb611f4509599fb6c79579114244178ca09077737a0313b6db9c5b6f1966c` |
 
 Each is regenerated and asserted by CI (`TestV2KnownVector` and friends), so a
 value here that disagrees with `cmd/generate` is a bug in this table, not in the

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
+	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 )
 
 const (
@@ -412,7 +413,9 @@ func TestConfirmationExecuteRejectsInvalidFrozenContractBeforeExecution(t *testi
 		{
 			name: "future version",
 			mutate: func(request *confirmationExecutionRequest) {
-				request.BenchVersion = 13
+				// The first version the scorer does not accept yet; v13 is a
+				// supported subject epoch.
+				request.BenchVersion = scoregates.BenchVersionV13 + 1
 			},
 			message: "confirmation execution requires a supported confirmation bench version",
 		},

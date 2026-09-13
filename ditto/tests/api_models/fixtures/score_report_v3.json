@@ -37,6 +37,7 @@
       "tool_score": 0,
       "correct": true,
       "twin_group": "twin-7f3a",
+      "relation": "decision_twin",
       "confidence": 0.75,
       "latency_ms": 1042,
       "called": [
