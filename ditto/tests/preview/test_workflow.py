@@ -70,6 +70,10 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     )
     assert publish["with"]["bundle_result"] == "${{ needs.dashboard-bundle.result }}"
     assert publish["with"]["proof_result"] == "${{ needs.cheatcodes.result }}"
+    # The publisher only sees "bundle skipped"; the resolved profiles are the
+    # reason, and they exist only here, so a skip cannot be explained without
+    # forwarding them.
+    assert publish["with"]["profiles"] == "${{ needs.plan.outputs.profiles }}"
     assert publish["with"]["sha"] == "${{ github.event.pull_request.head.sha }}"
     assert publish["secrets"] == {
         "cloudflare_api_token": "${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}"
@@ -319,6 +323,7 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
         "action",
         "bundle_result",
         "pr",
+        "profiles",
         "proof_result",
         "repo",
         "sha",
@@ -329,10 +334,17 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
             "required": False,
         }
     }
-    assert set(workflow["jobs"]) == {"preflight", "inspect", "publish", "retire"}
+    assert set(workflow["jobs"]) == {
+        "preflight",
+        "inspect",
+        "publish",
+        "explain",
+        "retire",
+    }
     preflight = workflow["jobs"]["preflight"]
     inspect = workflow["jobs"]["inspect"]
     publish = workflow["jobs"]["publish"]
+    explain = workflow["jobs"]["explain"]
     retire = workflow["jobs"]["retire"]
     # Preflight enters the preview environment only to answer "are the Pages
     # credentials configured", so an unconfigured repository skips publication
@@ -371,6 +383,27 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
             f"needs.inspect.outputs.mode == '{mode}' && "
             "needs.preflight.outputs.configured == 'true'"
         )
+    # A silent skip reads as a broken integration, so a policy skip explains
+    # itself on the PR. Explaining needs no credentials and no PR code: no
+    # environment, no checkout, and only the comment scope.
+    assert "environment" not in explain
+    assert explain["permissions"] == {"pull-requests": "write"}
+    assert explain["needs"] == ["inspect", "preflight", "publish"]
+    assert "inputs.action != 'closed'" in explain["if"]
+    assert len(explain["steps"]) == 1
+    assert "uses" not in explain["steps"][0]
+    explain_script = explain["steps"][0]["run"]
+    assert "marker='<!-- ditto-dashboard-preview-skipped -->'" in explain_script
+    # The comment must hand over the dispatch that provisions what the change
+    # needs, not merely state that nothing was published.
+    assert "gh workflow run preview-stack.yml -f pr=%s" in explain_script
+    assert "-f action=retire" in explain_script
+    # A later dashboard-only push publishes a real URL, so the stale
+    # explanation is removed rather than left to contradict it.
+    assert "-X DELETE" in explain_script
+    # Nothing a pull request controls reaches a shell word; it arrives via env.
+    assert "${{ inputs." not in explain_script
+    assert "${{ github.event." not in explain_script
     assert "workflow_run:" not in text
     assert "pull_request_target:" not in text
     assert SETUP_NODE in text

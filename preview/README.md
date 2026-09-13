@@ -140,6 +140,14 @@ API-reported immutable `pages.dev` deployment URL on the PR. The stable Pages
 branch is `pr-<number>`; each update replaces its branch alias while preserving
 exact-SHA deployment metadata. Fork PRs never enter the publisher.
 
+A PR that is not dashboard-only never gets a `pages.dev` URL, so the publisher
+leaves one updating comment naming the resolved profiles and the
+`gh workflow run preview-stack.yml` dispatch that would provision what the
+change needs. The same comment covers a repository whose `preview` environment
+has no Pages credentials. It explains policy skips only -- a failed build or
+proof is already a red check -- and it is deleted once a later push does
+publish a URL, so an explanation never sits beside a live preview.
+
 Same-repository PRs get `stack` or `stack-copy` only from a dispatched run of
 the controller. Dispatching requires repository write access; the workflow runs
 on the default branch, refuses any other ref, and no workflow in this repository

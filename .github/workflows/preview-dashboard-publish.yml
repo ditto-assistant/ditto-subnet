@@ -16,6 +16,11 @@ on:
         description: dashboard-bundle job result (success, failure, skipped, cancelled)
         required: true
         type: string
+      profiles:
+        description: Profiles the caller resolved for this PR (explains a skip)
+        required: false
+        default: ''
+        type: string
       proof_result:
         description: cheatcodes job result (success, failure, skipped, cancelled)
         required: true
@@ -396,6 +401,69 @@ jobs:
             gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" -f body="$body" >/dev/null
           else
             gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PREVIEW_PR}/comments" -f body="$body" >/dev/null
+          fi
+
+  explain:
+    # A dashboard preview that simply never appears reads as a broken
+    # integration rather than as policy. When publication is skipped because
+    # of what the PR touches -- or because this repository has no Pages
+    # credentials -- say so on the PR and name the dispatch that provisions
+    # what the change actually needs. Explaining needs no credentials and no
+    # PR code, so this job stays out of the preview environment, takes no
+    # checkout, and holds only the comment scope.
+    needs: [inspect, preflight, publish]
+    if: always() && inputs.action != 'closed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    env:
+      CONFIGURED: ${{ needs.preflight.outputs.configured }}
+      GH_TOKEN: ${{ github.token }}
+      PREVIEW_PR: ${{ inputs.pr }}
+      PREVIEW_PROFILES: ${{ inputs.profiles }}
+      PREVIEW_SHA: ${{ inputs.sha }}
+      PUBLISH_RESULT: ${{ needs.publish.result }}
+    steps:
+      - name: Explain a skipped dashboard preview, or clear a stale explanation
+        run: |
+          set -euo pipefail
+          [[ "$PREVIEW_PR" =~ ^[1-9][0-9]*$ ]]
+          marker='<!-- ditto-dashboard-preview-skipped -->'
+
+          # Only policy skips are explained. A failed build or proof is already
+          # a red check on the PR, and restating it here would just add noise.
+          reason=''
+          if [ -n "$PREVIEW_PROFILES" ] && [ "$PREVIEW_PROFILES" != dashboard ]; then
+            reason="This PR resolved to preview profiles \`$PREVIEW_PROFILES\`, not \`dashboard\` alone. A dashboard preview serves the built SPA against the **production public Platform API**, which is not permitted alongside a stack change, so only a dashboard-only PR publishes a \`pages.dev\` URL."
+          elif [ "$CONFIGURED" != true ]; then
+            reason="Cloudflare Pages credentials are not configured in the \`preview\` environment of this repository, so dashboard previews are inactive here."
+          fi
+
+          body=''
+          if [ "$PUBLISH_RESULT" != success ] && [ -n "$reason" ]; then
+            printf -v body '%s\n**No dashboard preview for this commit.** %s\n\nStack previews are never automatic. A maintainer can provision one for this PR:\n\n```bash\ngh workflow run preview-stack.yml -f pr=%s\ngh workflow run preview-stack.yml -f pr=%s -f action=retire\n```\n\nIt runs on the default branch, resolves the head commit from the API, and comments dashboard, Platform, and isolated Backroom URLs once readiness succeeds. `profile` defaults to `auto`, which picks `stack-copy` when the PR touches `apps/platform/alembic/`. Eight slots cap every active preview; a re-dispatch reuses the slot this PR already holds. Reconciliation keeps it while the PR is open, up to a 24-hour lease cap, and retires it four hours after the PR closes.\n\nExact SHA: `%s`\n' \
+              "$marker" "$reason" "$PREVIEW_PR" "$PREVIEW_PR" "$PREVIEW_SHA"
+          fi
+
+          comment_id="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PREVIEW_PR}/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("<!-- ditto-dashboard-preview-skipped -->")) | .id' \
+            | tail -n 1)"
+
+          # A push that turns a stack PR back into a dashboard-only one
+          # publishes a real URL, so the stale explanation must go rather than
+          # sit next to it contradicting it.
+          if [ -z "$body" ]; then
+            [ -z "$comment_id" ] || gh api -X DELETE \
+              "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" >/dev/null
+            exit 0
+          fi
+          if [ -n "$comment_id" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
+              -f body="$body" >/dev/null
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PREVIEW_PR}/comments" \
+              -f body="$body" >/dev/null
           fi
 
   retire:
