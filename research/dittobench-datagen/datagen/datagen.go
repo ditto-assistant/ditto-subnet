@@ -1485,6 +1485,7 @@ func applyWorldActions(seed int64, benchVersion int, cases []protocol.ToolCase, 
 	for _, story := range world.Stories {
 		storyPairs[story.PairID] = true
 	}
+	initialPairs := world.InitialPairs(world.StagedCorrectionMembership(world.V13Allocation(0)))
 	target := (65*len(cases) + 99) / 100
 	if target >= len(cases) {
 		target = len(cases) - 1 // retain at least one plain v7-style coverage case
@@ -1546,7 +1547,7 @@ func applyWorldActions(seed int64, benchVersion int, cases []protocol.ToolCase, 
 			tc = prompts.agentJob(caseID, world, converted+i)
 		}
 		if !attachedWorld {
-			tc.PrerequisitePairs = append([]protocol.MemoryPair(nil), world.Pairs...)
+			tc.PrerequisitePairs = append([]protocol.MemoryPair(nil), initialPairs...)
 			attachedWorld = true
 			worldCarrier = i
 		}
@@ -1646,7 +1647,7 @@ func applyWorldActions(seed int64, benchVersion int, cases []protocol.ToolCase, 
 		if worldCarrier < 0 {
 			worldCarrier = 0
 		}
-		cases[worldCarrier].PrerequisitePairs = append(cases[worldCarrier].PrerequisitePairs, world.Pairs...)
+		cases[worldCarrier].PrerequisitePairs = append(cases[worldCarrier].PrerequisitePairs, initialPairs...)
 		attachedWorld = true
 	}
 	protected := world.ProtectedTerms()

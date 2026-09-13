@@ -529,6 +529,13 @@ func oracleResponse(mc protocol.MemoryCase) protocol.RunResponse {
 	switch mc.AnswerKind {
 	case protocol.AnswerDecline:
 		return protocol.RunResponse{Abstain: true, FinalText: "I don't have that on record."}
+	case protocol.AnswerAbsence:
+		// v13 grounded abstention: the decline must cite a record actually read.
+		grounding := ""
+		if len(mc.GroundingTokens) > 0 {
+			grounding = " The closest record I hold mentions " + mc.GroundingTokens[0] + ", which does not establish it."
+		}
+		return protocol.RunResponse{Abstain: true, FinalText: "I don't have a record that establishes that." + grounding}
 	case protocol.AnswerAcknowledge:
 		return protocol.RunResponse{FinalText: "Done — I've removed that from my records."}
 	case protocol.AnswerChitchat:

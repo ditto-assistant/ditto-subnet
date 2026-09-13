@@ -154,6 +154,17 @@ var (
 		"nothing in my records", "no note", "no notes", "there is no", "there's no", "there are no",
 		"there isn't", "there aren't", "not in your", "isn't in your", "nothing for", "no figure",
 		"no budget", "no value", "no amount", "was never", "were never", "never gave", "never provided",
+		// Grounded-abstention paraphrases (#1530): the natural ways a reader says
+		// the records do not establish a fact. Multi-word or negation-anchored.
+		"not established", "isn't established", "is not established", "is not recorded",
+		"no evidence", "can't determine", "cannot determine", "not enough", "never stated",
+		"isn't stated", "is not stated", "doesn't exist", "does not exist", "wasn't part",
+		"was not part", "not in the records", "nothing in my", "isn't in my", "is not in my",
+		"never came up", "don't have anything", "do not have anything", "not something i have",
+		"never gave me", "never shared", "no longer on file", "no longer have", "was removed",
+		"has been removed", "i removed", "i deleted", "can't work out", "cannot work out",
+		"can't compute", "cannot compute", "can't calculate", "cannot calculate", "not able to",
+		"isn't in my records", "isn't in your records", "can't be determined", "cannot be determined",
 	}
 	acknowledgeV13EN = []string{
 		"removed it", "deleted it", "erased it", "it's removed", "it's deleted", "has been removed",

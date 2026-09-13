@@ -91,6 +91,16 @@ type MemorySuite struct {
 	// world-question budget, so the total memory envelope is unchanged. Zero for
 	// pre-v12 contracts. Advisory telemetry.
 	FamilyCompilerCases int
+	// PointInTimeCases counts the v13 same-turn as-of cases (gen/pointintime.go,
+	// two per as_of_twin pair) and AbstentionCases the v13 unanswerable grounded
+	// abstention cases (gen/abstention_v13.go; each has an answerable
+	// decision_twin counted in WorldCases). StagedCorrectionCases counts the
+	// ordinary world cases whose correction arrives in a later /seed wave
+	// (RunAfterWave > 0). All carved out of the world-question budget; zero for
+	// pre-v13 contracts. Advisory telemetry.
+	PointInTimeCases      int
+	AbstentionCases       int
+	StagedCorrectionCases int
 	// LexicalGap is the query↔needle overlap telemetry (NoLiMa): how much
 	// content wording the emitted questions share with their evidence, before and
 	// after the low-overlap rewrite.
@@ -663,6 +673,8 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 		budget = n
 	}
 	scale, _ := v8WorldProfile(n)
+	// GenerateForVersion is exactly Generate below v13; at v13 it appends the
+	// absence-probe records and unlocks staged-correction planning.
 	world := universe.GenerateForVersion(seed, scale, benchVersion)
 	v10Count := 0
 	if benchVersion >= protocol.BenchVersionV10 {
@@ -681,7 +693,26 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 		// count is unchanged from v10/v11.
 		familyCompilerCount = v12FamilyCompilerCaseCount(n)
 	}
-	plans, err := world.QuestionPlans(budget - v10Count - divergenceCount - familyCompilerCount)
+	// v13 carves the same-turn point-in-time twins and the grounded-abstention
+	// decision pairs (unanswerable + answerable twin) out of the world-question
+	// budget too, and moves a bounded share of trip corrections into later waves.
+	// Every ordinary world plan that needs a staged correction unlocks after the
+	// wave that delivers it; nothing else about the envelope changes.
+	pointInTimeCount, abstentionPairCount := 0, 0
+	var v13Alloc universe.V13Allocation
+	staged := map[string]int{}
+	worldCount := budget - v10Count - divergenceCount - familyCompilerCount
+	var plans []universe.QuestionPlan
+	var err error
+	if benchVersion >= protocol.BenchVersionV13 {
+		v13Alloc = world.V13Allocation(v13IsoCasesForMem(n))
+		pointInTimeCount = v13PointInTimeCaseCount(n)
+		abstentionPairCount = v13AbstentionCaseCount(n)
+		staged = world.StagedCorrectionWaves(v13Alloc, nWaves)
+		plans, err = world.QuestionPlansV13(worldCount-pointInTimeCount-2*abstentionPairCount, v13Alloc)
+	} else {
+		plans, err = world.QuestionPlans(worldCount)
+	}
 	if err != nil {
 		return MemorySuite{}, fmt.Errorf("v8 world questions: %w", err)
 	}
@@ -728,10 +759,17 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 	for _, plan := range plans {
 		plan.Case.BenchVersion = benchVersion
 		plan.Case.WritingProtected = append([]string(nil), plan.Constraints...)
+		unlock := universe.UnlockWaveFor(plan, staged)
+		if unlock > 0 {
+			suite.StagedCorrectionCases++
+		}
 		suite.Cases = append(suite.Cases, StagedCase{
-			Case: plan.Case, RunAfterWave: 0,
+			Case: plan.Case, RunAfterWave: unlock,
 			RequiredPairIDs: append([]string(nil), plan.RequiredPairIDs...),
 		})
+	}
+	for w := range suite.Waves {
+		suite.Waves[w].Pairs = append(suite.Waves[w].Pairs, world.StagedPairs(staged, w)...)
 	}
 	for i := range v10Programs {
 		generated := &v10Programs[i]
@@ -759,11 +797,43 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 		suite.FamilyCompilerCases = len(family)
 	}
 	if benchVersion >= protocol.BenchVersionV13 {
-		// The program, divergence, and family-compiler builders stamp the version
-		// that introduced them (v10/v11/v12). The grader dispatches its policy on
-		// MemoryCase.BenchVersion, so a v13 run must grade every case under the
-		// v13 policy: stamp the run's contract on every staged case. v12 and
-		// earlier keep the builders' own stamps, so their bytes are unchanged.
+		var pairs [][2]StagedCase
+		if pointInTimeCount > 0 {
+			asOf, err := buildV13PointInTime(seed, world, v13Alloc, benchVersion)
+			if err != nil {
+				return MemorySuite{}, err
+			}
+			if 2*len(asOf) != pointInTimeCount {
+				return MemorySuite{}, fmt.Errorf("v13 point-in-time built %d cases, budget %d", 2*len(asOf), pointInTimeCount)
+			}
+			pairs = append(pairs, asOf...)
+			suite.PointInTimeCases = 2 * len(asOf)
+		}
+		if abstentionPairCount > 0 {
+			decision, err := buildV13Abstention(seed, n, world, v13Alloc, benchVersion)
+			if err != nil {
+				return MemorySuite{}, err
+			}
+			if len(decision) != abstentionPairCount {
+				return MemorySuite{}, fmt.Errorf("v13 abstention built %d pairs, budget %d", len(decision), abstentionPairCount)
+			}
+			pairs = append(pairs, decision...)
+			suite.AbstentionCases = len(decision)
+			suite.WorldCases += len(decision)
+		}
+		// Relation pairs live in wave 0 and are placed half a run apart; cases
+		// that unlock in a later wave keep their bucket regardless of position.
+		var wave0, later []StagedCase
+		for _, staged := range suite.Cases {
+			if staged.RunAfterWave > 0 {
+				later = append(later, staged)
+				continue
+			}
+			wave0 = append(wave0, staged)
+		}
+		suite.Cases = append(placeV13TwinPairs(seed, wave0, pairs), later...)
+		// Every v13 case carries the v13 contract, including the shared program,
+		// divergence, and family-compiler builders that pin their own version.
 		for i := range suite.Cases {
 			suite.Cases[i].Case.BenchVersion = benchVersion
 		}

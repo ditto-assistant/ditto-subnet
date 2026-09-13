@@ -88,6 +88,13 @@ DittoBench v8 memory seeding modes:
 - Staged: `/seed` is called repeatedly, each with an incremented
   `wave`, interleaved with `/run`. Seeding is an idempotent upsert: accept
   each wave and merge. Questions may target facts from any wave already seeded.
+  Your `2xx` is the **ingest acknowledgement**: return it only once every pair
+  in the request is embedded and queryable, because the validator dispatches
+  the questions that depend on that wave the moment it arrives, and a question
+  answered from a store still mid-ingest grades 0 exactly as a fabricated
+  answer would. From `bench_version` 13 a bounded share of corrections arrives
+  this way (the initial seed no longer carries every record), so a harness
+  that acknowledges before it has finished indexing loses real credit.
 
 ## Observed tool execution
 

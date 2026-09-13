@@ -711,7 +711,30 @@ func assertedKnownValues(mc protocol.MemoryCase, an analysis) bool {
 		if i > 0 && an.segments[i-1].sentence == seg.sentence && !seg.afterContrast && qualified(an.segments[i-1]) {
 			continue
 		}
+		// The value may be cited in its own sentence and rejected in the NEXT
+		// one ("The address on file is X. That belongs to Kit, not to Tomas, so
+		// I can't confirm ..."): a rejection or decline that opens the following
+		// sentence binds to the citation (#1530). A later, unrelated sentence
+		// does not excuse it.
+		if nextSentenceQualifies(an, i, qualified) {
+			continue
+		}
 		return true
+	}
+	return false
+}
+
+// nextSentenceQualifies reports whether the sentence after segment i carries a
+// rejection, decline, or citation marker in any of its clauses.
+func nextSentenceQualifies(an analysis, i int, qualified func(segment) bool) bool {
+	next := an.segments[i].sentence + 1
+	for j := i + 1; j < len(an.segments); j++ {
+		if an.segments[j].sentence > next {
+			break
+		}
+		if an.segments[j].sentence == next && qualified(an.segments[j]) {
+			return true
+		}
 	}
 	return false
 }

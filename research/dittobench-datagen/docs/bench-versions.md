@@ -24,7 +24,7 @@ applied to an existing version. It ships as a new one.
 | 10 (pre-activation) | `2027-02-01` | A generator-as-spec contract: seed-scoped ontologies, recursive query programs, independent renderers, and linked metamorphic/counterfactual cases. Runtime execution is available; Platform activation remains separate. |
 | 11 (pre-activation) | `2027-03-01` | Anti-template-fitting: sampled program shapes, compositional surface grammar, descriptive entity binding, a multi-edit surface-noise projector, and per-seed composed injection markers. Runtime execution is available; Platform activation remains separate. |
 | 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
-| 13 (in development) | `2027-05-01` | Typed-semantic contract (#1518): label-insufficiency, unregenerable surface, causal model dependence, provenance over containment, bounded money share, grader-only claim sets. Plumbing shipped (version, 250-case envelope, grader-only protocol types); public-corpora vocabulary and `/seed` label hygiene (#1825, #1827: frozen SHA-pinned public tables, opaque session ids, seeded business-hours timestamps); surface levers shipped (per-seed `persona.Grammar` banks for every tool/world/settings/integrity/question surface, permuted-clause identity records, typo projector v2, the salted artifact surface pass with a private-pass hand-off and a regeneration canary); typed-claim grader (#1523/#1522/#1831: asserted-vs-cited claims, requested-unit quantities, grounded abstention, per-policy audit bank, multilingual lexicons — see the Grader subsection); families and gates land behind `bench_version >= 13`; not advertised by the runtime until the contract is complete. |
+| 13 (in development) | `2027-05-01` | Typed-semantic contract (#1518): label-insufficiency, unregenerable surface, causal model dependence, provenance over containment, bounded money share, grader-only claim sets. Plumbing shipped (version, 250-case envelope, grader-only protocol types); public-corpora vocabulary and `/seed` label hygiene (#1825, #1827: frozen SHA-pinned public tables, opaque session ids, seeded business-hours timestamps); surface levers shipped (per-seed `persona.Grammar` banks for every tool/world/settings/integrity/question surface, permuted-clause identity records, typo projector v2, the salted artifact surface pass with a private-pass hand-off and a regeneration canary); typed-claim grader (#1523/#1522/#1831: asserted-vs-cited claims, requested-unit quantities, grounded abstention, per-policy audit bank, multilingual lexicons — see the Grader subsection); evidence-bounded slice (#1844 same-turn point-in-time corrections with `as_of_twin` pairs behind the `/seed` ingest acknowledgement, #1530 six grounded-abstention families with `decision_twin` pairs graded by `AnswerAbsence`); families and gates land behind `bench_version >= 13`; not advertised by the runtime until the contract is complete. |
 
 ## V10 generator-as-spec contract
 
@@ -750,7 +750,7 @@ pins against every version from v8 to v12).
   seeded business-hours instant in one shared 180-day window, with chronology
   restored only where an oracle relies on it (identity → work, address →
   correction, ledger → approval, plan → correction, origin → decision → outcome)
-  by anchoring each chain and advancing later members by one to four working
+  by anchoring each chain and advancing later members by two to four working
   days with an independent time of day. `gen/labelleak_test.go` trains a
   best-of-twelve-features classifier (session shape/length/prefix, year, month,
   day, weekday, hour, minute, …) on 30 seeds and scores 10 held-out seeds: on
@@ -1024,6 +1024,78 @@ vectors). The hidden multi-memory join is kept and the shape varies:
 
 Wire shape is unchanged: v13 story cases are ordinary `MemoryCase`s graded by
 the existing kinds today; `Claims` are validator-internal.
+
+### Evidence-bounded slice (#1844 point-in-time, #1530 grounded abstention)
+
+v13 keeps the whole v12 substrate — the same programs, divergence and
+family-compiler families, renderers, projection, and grader policy — and adds
+three things a template-fitting or ingest-time-compiling harness cannot absorb.
+Every lever is gated on `bench_version >= 13`, so v12 and earlier regenerate
+byte-identically (the v2–v12 known-vector tests are unchanged). The envelope is
+unchanged too: every new case is carved out of the world-question budget
+(full: 12 point-in-time + 25 unanswerable + 25 answerable twins; medium: 4 + 8 +
+8; small: none).
+
+- **Same-turn point-in-time corrections (`gen/pointintime.go`,
+  `universe/v13_asof.go`).** Every v8 correction chain (a person's address, a
+  project's invoice figure, a trip's leg length) is an original record and a
+  correction with timestamps. An as-of question supplies an anchor date INSIDE
+  the `/run` `user_input` and asks for the state in force on that date. The
+  anchor exists in no seeded record, so an index compiled at ingest time — which
+  knows only the current state — cannot answer it. Each chain yields an
+  `as_of_twin` pair (`MemoryCase.TwinRelation`, `TwinPairID`): the before-half
+  anchors strictly between the two records (answer: the superseded value; the
+  current value is its planted distractor), the after-half anchors after the
+  correction. A current-state index scores exactly one half; the scorer's
+  relation post-pass grades the pair. This is the port of the v2–v7 persona
+  `point-in-time` modality onto the shared world and `QuestionPlan`, so every
+  half passes the same counterfactual-causality proof as an ordinary program.
+- **Realism-only staged seeding (`universe.StagedCorrectionWaves`,
+  `services/dittobench-api/internal/runner/waves.go`).** Waves cannot defeat
+  ingest-time compilation on their own (a harness re-indexes after each
+  `/seed`), so they carry realism, not the point-in-time signal: roughly a tenth
+  of the world's ordinary corrections — trip corrections, which no tool case
+  depends on — leave the initial seed and arrive in `/seed` waves 1–2, and the
+  ordinary world programs that need them run after that wave. The harness's 2xx
+  on `/seed` is its **ingest acknowledgement**: it means the pairs are embedded
+  and answerable, not merely received. The runner dispatches a case only after
+  the ack for the wave that delivers its evidence and sends wave w+1 only after
+  every wave-w case has finished (`runner.RunStagedWaves`; the ordering is
+  proven under `case_concurrency` 1–64 in `cmd/dittobench-api`). The v8
+  answerability contract becomes "answerable after its wave": every record a
+  case requires is available by the wave it runs after, and a staged case is
+  genuinely not answerable one wave earlier.
+- **Grounded abstention (`gen/abstention_v13.go`, `universe/v13_absence.go`,
+  `grade/v13.go`).** Six absence-proof families on the shared world — pure
+  absence, near miss (a coined colleague of a real person, never given an
+  address), stale/removed (a withdrawn messaging handle), false premise (a leg
+  in a country the trip never visited), cross-user only (a person who exists
+  only in the other user's graph), and insufficient composition (an approved
+  total with an unstated partial payment). Misleading-evidence families carry at
+  least half of the slice and pure absence at most a quarter. Each unanswerable
+  case is proved by `validatePlan` with the polarity reversed: the oracle
+  resolves to nothing over the searched records, every tempting value is
+  genuinely planted there, and the case carries `GroundingTokens` (entities,
+  record ids, or amounts present in the records and absent from the question).
+  Grading is the new `AnswerAbsence` kind: a decline (`abstain`, a decline
+  phrase, or an absence phrase) that cites at least one grounding token scores
+  1; the tempting value scores 0 only when **asserted as the answer** — in the
+  answer slot, or in a prose sentence with no rejection marker nearby — never
+  when cited as insufficient evidence ("the approved total was $500, but the
+  payment amount was never recorded"); a generic refusal or a templated
+  grounding naming an entity not in the records scores 0. Every unanswerable
+  case is paired with a distributionally matched answerable `decision_twin`
+  (same family and oracle, a different surface draw), placed at least twenty
+  cases apart and never adjacent, so wording cannot reveal whether to answer or
+  abstain: an always-answer policy fails the absence half and an always-abstain
+  policy fails the twin. The relation is inert until the scorer post-pass reads
+  it; per-case grading is unchanged.
+
+`TwinRelation`/`TwinPairID` are deliberately distinct from `TwinGroup`: the
+metamorphic-consistency fold reads `TwinGroup` and must never see a relation
+pair, whose halves are graded by their own rule. The wire/artifact schema is
+otherwise unchanged — every new field is additive and omitted below v13 — and the
+public harness contract still advertises `bench_version` 9 on `/run`.
 
 ## Auditing an old score
 

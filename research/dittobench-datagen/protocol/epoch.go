@@ -159,6 +159,22 @@ import (
 // audit bank, and the multilingual lexicons can be pinned independently of the
 // v13 generation contract; SupportedBenchVersion and DatasetEpochForVersion
 // admit v13 only once that contract lands.
+//
+// The evidence-bounded levers (issues #1844, #1530) ride the same gate:
+//   - same-turn point-in-time corrections: the "as of <anchor>" context arrives
+//     inside the /run user_input, so a state index compiled at ingest time
+//     cannot answer it; each anchor has an as_of_twin whose anchor falls on
+//     the other side of the correction;
+//   - realism-only staged seeding: the shared world is seeded first, a bounded
+//     share of ordinary corrections arrives in later /seed waves whose 2xx is
+//     the harness's ingest acknowledgement, and dependent cases dispatch only
+//     after that ack;
+//   - grounded abstention: six absence-proof families on the shared world
+//     (pure absence, near miss, stale/removed, false premise, cross-user only,
+//     insufficient composition), each with a distributionally matched
+//     answerable decision_twin, graded by the AnswerAbsence kind (a decline
+//     that cites a record actually read; the tempting value is forbidden only
+//     when asserted as the answer).
 const (
 	BenchVersionV2      = 2
 	BenchVersionV3      = 3

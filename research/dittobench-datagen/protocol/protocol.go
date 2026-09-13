@@ -336,6 +336,13 @@ type MemoryCase struct {
 	// compliance by scrubbing its own output — the call already reached the
 	// validator. Validator-internal, never sent to the harness.
 	BaitTool string `json:"bait_tool,omitempty"`
+	// TwinPairID (bench_version 13, grader-only) groups the two members of a
+	// TwinRelation pair (decision_twin / as_of_twin). Distinct from TwinGroup so
+	// the metamorphic-consistency fold never treats a relation pair as a
+	// phrasing-invariance family. Like TwinRelation and Claims it is never
+	// serialized: the relation is inert until the scorer post-pass reads it
+	// in-process; ordinary per-case grading is unchanged.
+	TwinPairID string `json:"-"`
 	// WritingProtected is generator-only semantic identity metadata. It never
 	// enters the public artifact or harness request.
 	WritingProtected []string `json:"-"`
@@ -347,9 +354,9 @@ type MemoryCase struct {
 	// pins this.
 	Claims []Claim `json:"-"`
 	// TwinRelation (bench_version 13, grader-only) names how this case is
-	// paired with the other member(s) of its TwinGroup (see the TwinRelation
-	// constants). Empty for the v5+ metamorphic phrasing twins, which remain
-	// graded by agreement alone. Never serialized.
+	// paired with its TwinPairID partner (see the TwinRelation constants).
+	// Empty for the v5+ metamorphic phrasing twins, which remain graded by
+	// agreement alone. Never serialized.
 	TwinRelation string `json:"-"`
 }
 

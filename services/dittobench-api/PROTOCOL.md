@@ -519,6 +519,41 @@ receipt contract. Its scored tool trajectory is additionally restricted to the
 intersection of broker-observed model tool selections and case-bound
 `tool_endpoint` executions; see *Observed tool execution* above.
 
+### bench_version 13: staged seeding waves and the `/seed` ingest acknowledgement
+
+V13 keeps the v8 ordering contract (tool prerequisites, tool cases, then the
+memory phase in the same harness store) and uses the staged-seeding waves for
+the first time. A bounded share of the shared world's ordinary corrections —
+about a tenth, drawn from trip records no tool case depends on — leaves the
+initial seed and arrives in later `/seed` waves interleaved with `/run`. The
+memory cases that need those corrections are dispatched only after the wave
+that delivers them.
+
+The harness's **2xx on `POST /seed` is its ingest acknowledgement**: it means
+every pair in that request is embedded, indexed, and answerable, not merely
+received. The validator relies on it as a barrier:
+
+- wave *w*'s dependent cases are sent only after wave *w*'s `/seed` returned
+  2xx (`runner.RunStagedWaves`);
+- wave *w+1*'s `/seed` is sent only after every wave-*w* case has finished;
+- a non-2xx `/seed` is validator-visible infrastructure and fails the run
+  closed exactly as a v7+ seed failure does; it is never converted into an
+  agent score.
+
+A harness that returns 2xx before ingestion completes therefore races itself:
+a case dispatched while it is still embedding grades 0 against evidence it does
+not yet hold, indistinguishable from fabrication. Return 2xx only when the
+store is queryable. The ordering holds at every `case_concurrency` the runtime
+accepts (1–64); the wave boundary is the only serialization point, so cases
+within a wave still overlap.
+
+Waves are realism, not the point-in-time signal: a harness re-indexes after
+each `/seed`, so nothing delivered by a wave defeats ingest-time compilation.
+V13's point-in-time cases instead carry their "as of <date>" anchor inside the
+`/run` `user_input` itself (`research/dittobench-datagen/docs/bench-versions.md`,
+*Bench v13*); the wire contract is unchanged and the harness still receives
+`bench_version` 9 on `/run`.
+
 ### Prohibited: content-keyed mutation of the graded response
 
 `final_text`, `answer`, `abstain`, and the reported `tool_calls` are the graded

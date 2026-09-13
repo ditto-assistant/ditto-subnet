@@ -17,7 +17,7 @@ import (
 // -> outcome.
 //
 // Each such chain is anchored at one uniform instant and its later members land
-// one to four working days after the previous one with an independent time of
+// two to four working days after the previous one with an independent time of
 // day, so an arc's three parts share a month, a member's hour says nothing about
 // its slot, and only a reader who has already grouped the records by content
 // can recover their order. Every other pair is an independent uniform draw.
@@ -55,6 +55,18 @@ func (w World) assignV13Timestamps(pairs []protocol.MemoryPair) {
 		}
 		chains = append(chains, arc.StoryPairIDs[:])
 	}
+	if w.Probes != nil {
+		// Absence probes (#1530): a withdrawn handle follows the record that
+		// planted it; a partial-payment acknowledgement follows its approval.
+		for _, h := range w.Probes.Handles {
+			if h.Removed && h.RemovalPairID != "" {
+				chains = append(chains, []string{h.HandlePairID, h.RemovalPairID})
+			}
+		}
+		for _, th := range w.Probes.Threads {
+			chains = append(chains, []string{th.ApprovalPairID, th.PaymentPairID})
+		}
+	}
 	for k, chain := range chains {
 		at := protocol.OpaqueBusinessInstant(w.Seed, fmt.Sprintf("v13-world-chain-%d", k))
 		for j, id := range chain {
@@ -63,7 +75,10 @@ func (w World) assignV13Timestamps(pairs []protocol.MemoryPair) {
 				continue
 			}
 			if j > 0 {
-				days := 1 + int(v13ChainDraw(w.Seed, k, j, "days")%4)
+				// Two to four working days: a whole calendar date always lies
+				// strictly between chain members, so a date-granular as-of anchor
+				// (#1844) can fall between the record and its correction.
+				days := 2 + int(v13ChainDraw(w.Seed, k, j, "days")%3)
 				minute := int(v13ChainDraw(w.Seed, k, j, "minute") % 600)
 				at = protocol.ShiftBusinessDays(at, days, minute)
 			}

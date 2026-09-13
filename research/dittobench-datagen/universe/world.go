@@ -127,6 +127,12 @@ type World struct {
 	Accent         string
 	Preferences    []Preference
 	Integrity      IntegrityFacts
+	// Version is the benchmark contract the world was generated for. It is zero
+	// for Generate (the frozen v8-v12 world) and set only by GenerateForVersion
+	// at bench_version >= 13, where it unlocks the appended absence probes and
+	// staged-correction planning.
+	// Probes are the v13 planted absence-probe records (nil below v13).
+	Probes *V13Probes
 }
 
 // ProtectedTerms returns semantic identity and join-key surfaces that writing
@@ -327,6 +333,14 @@ func GenerateForVersion(seed int64, scale int, benchVersion int) World {
 	} else {
 		w.StoryArcs, w.Stories = buildStories(seed, scale, w, benchVersion)
 	}
+	if v13 {
+		// Absence probes (#1530) are planted before the pairs render so they
+		// pass through the same v13 hygiene as every other record: opaque
+		// session ids by emission ordinal and shared-window timestamps with
+		// handle -> removal and approval -> payment chronology.
+		probes := buildV13Probes(seed, &w)
+		w.Probes = &probes
+	}
 	w.Pairs = w.renderPairs(r)
 	return w
 }
@@ -489,6 +503,11 @@ func (w World) renderPairs(r *rand.Rand) []protocol.MemoryPair {
 			"I won’t — that badge code belongs to them.",
 			"All three registrations are distinct in my notes.",
 			"Understood — vendor badge, correctly attributed."))
+	}
+	if v13 && w.Probes != nil {
+		for _, probe := range w.Probes.Pairs {
+			add(probe.PairID, probe.SessionID, probe.Prompt, probe.Response)
+		}
 	}
 	if v13 {
 		w.assignV13Timestamps(pairs)

@@ -217,11 +217,24 @@ var v13QuestionGrammars = map[string]persona.Grammar{
 // draw is a per-(seed, oracle, index) hash so adding or reordering candidates
 // never shifts another question's frame.
 func (w World) v13Question(kind string, index int, slots map[string]string) string {
+	return w.v13QuestionVariant(kind, index, 0, slots)
+}
+
+// v13QuestionVariant is v13Question under an alternative grammar draw. Variant
+// 0 is the canonical rendering every ordinary plan uses; the decision-twin
+// builders (#1530) walk variants 1.. only when the canonical draw trips the
+// accidental lexical-shortcut exclusion, exactly as the v8 frame list was
+// walked by index.
+func (w World) v13QuestionVariant(kind string, index, variant int, slots map[string]string) string {
 	g, ok := v13QuestionGrammars[kind]
 	if !ok {
 		panic("v13 question grammar missing for " + kind)
 	}
-	r := w.v13Rand("question", kind, fmt.Sprint(index))
+	parts := []string{"question", kind, fmt.Sprint(index)}
+	if variant != 0 {
+		parts = append(parts, "variant", fmt.Sprint(variant))
+	}
+	r := w.v13Rand(parts...)
 	return persona.ExpandSlots(r, w.v13Bank("question:"+kind, g), "root", slots)
 }
 
