@@ -2931,6 +2931,50 @@ CREATE TABLE public.miner_device_grants (
 
 
 --
+-- Name: miner_ditto_link_attempts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_ditto_link_attempts (
+    attempt_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    session_id uuid NOT NULL,
+    state_hash text NOT NULL,
+    nonce text NOT NULL,
+    code_verifier text NOT NULL,
+    client text NOT NULL,
+    return_to text,
+    status text NOT NULL,
+    error text,
+    ditto_user_id text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT ck_miner_ditto_link_attempts_miner_ditto_link_attempts__a335 CHECK ((length(state_hash) = 64)),
+    CONSTRAINT ck_miner_ditto_link_attempts_miner_ditto_link_attempts__dbac CHECK ((status = ANY (ARRAY['pending'::text, 'linked'::text, 'failed'::text, 'expired'::text]))),
+    CONSTRAINT ck_miner_ditto_link_attempts_miner_ditto_link_attempts__f3b8 CHECK ((client = ANY (ARRAY['dashboard'::text, 'cli'::text])))
+);
+
+
+--
+-- Name: miner_ditto_links; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_ditto_links (
+    miner_hotkey text NOT NULL,
+    ditto_user_id text NOT NULL,
+    ditto_email text,
+    miner_coldkey text,
+    linked_via text NOT NULL,
+    session_id uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    revoked_at timestamp with time zone,
+    CONSTRAINT ck_miner_ditto_links_miner_ditto_links_linked_via_check CHECK ((linked_via = ANY (ARRAY['dashboard'::text, 'cli'::text]))),
+    CONSTRAINT ck_miner_ditto_links_miner_ditto_links_user_id_len CHECK (((length(ditto_user_id) >= 1) AND (length(ditto_user_id) <= 128)))
+);
+
+
+--
 -- Name: miner_login_nonces; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5288,6 +5332,14 @@ ALTER TABLE ONLY public.miner_device_grants
 
 
 --
+-- Name: miner_ditto_link_attempts miner_ditto_link_attempts_state_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_ditto_link_attempts
+    ADD CONSTRAINT miner_ditto_link_attempts_state_key UNIQUE (state_hash);
+
+
+--
 -- Name: miner_login_nonces miner_login_nonces_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5733,6 +5785,22 @@ ALTER TABLE ONLY public.inference_routing_audit
 
 ALTER TABLE ONLY public.inference_routing_policies
     ADD CONSTRAINT pk_inference_routing_policies PRIMARY KEY (model);
+
+
+--
+-- Name: miner_ditto_link_attempts pk_miner_ditto_link_attempts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_ditto_link_attempts
+    ADD CONSTRAINT pk_miner_ditto_link_attempts PRIMARY KEY (attempt_id);
+
+
+--
+-- Name: miner_ditto_links pk_miner_ditto_links; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_ditto_links
+    ADD CONSTRAINT pk_miner_ditto_links PRIMARY KEY (miner_hotkey);
 
 
 --
@@ -6869,6 +6937,20 @@ CREATE INDEX miner_avatar_nonces_hotkey_idx ON public.miner_avatar_nonces USING 
 --
 
 CREATE INDEX miner_device_grants_status_idx ON public.miner_device_grants USING btree (status, expires_at);
+
+
+--
+-- Name: miner_ditto_link_attempts_hotkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_ditto_link_attempts_hotkey_idx ON public.miner_ditto_link_attempts USING btree (miner_hotkey, created_at);
+
+
+--
+-- Name: miner_ditto_links_user_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_ditto_links_user_idx ON public.miner_ditto_links USING btree (ditto_user_id);
 
 
 --
@@ -8196,6 +8278,14 @@ ALTER TABLE ONLY public.miner_device_grants
 
 ALTER TABLE ONLY public.miner_device_grants
     ADD CONSTRAINT miner_device_grants_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.miner_sessions(session_id) ON DELETE SET NULL;
+
+
+--
+-- Name: miner_ditto_link_attempts miner_ditto_link_attempts_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_ditto_link_attempts
+    ADD CONSTRAINT miner_ditto_link_attempts_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.miner_sessions(session_id) ON DELETE CASCADE;
 
 
 --

@@ -78,6 +78,56 @@ type Config struct {
 	Inference InferenceProxyConfig
 	Upload    UploadConfig
 	Traces    TraceConfig
+	// DittoRouter is the optional Ditto Router upstream for miners who linked
+	// a Ditto account. Off by default; the centralized OpenRouter path is
+	// untouched for everyone else and for every lane not listed.
+	DittoRouter DittoRouterConfig
+}
+
+// DittoRouterConfig dogfoods Ditto's own Router as an inference upstream.
+//
+// A chat request is sent to the Router only when (1) Enabled, (2) the lane
+// is listed in Lanes, and (3) the grant's agent belongs to a miner with an
+// active miner_ditto_links row; the call then carries
+// `X-Ditto-On-Behalf-Of: <ditto_user_id>` so Ditto's ledger names the
+// consenting account. Anything else falls through to OpenRouter unchanged.
+//
+// The competition lane is the scored benchmark: enabling it requires the
+// operator to acknowledge that the Router endpoint has memories OFF and a
+// locked model, because a recall-enabled endpoint would leak context between
+// miners and change what the benchmark measures. Screener-side inference
+// (memories ON) is a different endpoint and a different lane.
+type DittoRouterConfig struct {
+	Enabled          bool     // DITTO_ROUTER_UPSTREAM_ENABLED, default false
+	URL              string   // DITTO_ROUTER_UPSTREAM_URL, default https://inference.heyditto.ai/v1/chat/completions
+	APIKey           string   // DITTO_ROUTER_API_KEY; REQUIRED when Enabled (an owner-minted app endpoint key)
+	OnBehalfOfHeader string   // DITTO_ROUTER_ON_BEHALF_OF_HEADER, default X-Ditto-On-Behalf-Of
+	Lanes            []string // DITTO_ROUTER_LANES csv of {screener, competition}; default empty (nothing routed)
+	// CompetitionAck is DITTO_ROUTER_COMPETITION_ACK and must equal
+	// CompetitionAckValue before "competition" may appear in Lanes.
+	CompetitionAck string
+}
+
+// CompetitionAckValue is the exact acknowledgement an operator sets to route
+// the scored benchmark lane through the Ditto Router.
+const CompetitionAckValue = "memories-off-locked-model"
+
+const (
+	DittoRouterLaneScreener    = "screener"
+	DittoRouterLaneCompetition = "competition"
+)
+
+// RoutesLane reports whether the Ditto Router upstream is on for lane.
+func (c DittoRouterConfig) RoutesLane(lane string) bool {
+	if !c.Enabled || c.APIKey == "" {
+		return false
+	}
+	for _, l := range c.Lanes {
+		if l == lane {
+			return true
+		}
+	}
+	return false
 }
 
 // TraceConfig is the inference trace capture: every brokered call's bodies,
@@ -412,11 +462,63 @@ func Load(lookup Lookup) (*Config, error) {
 
 	cfg.Inference = loadInferenceProxy(r)
 	cfg.Traces = loadTraces(r)
+	cfg.DittoRouter = loadDittoRouter(r)
 
 	if len(r.errs) > 0 {
 		return nil, fmt.Errorf("config: %s", strings.Join(r.errs, "; "))
 	}
 	return cfg, nil
+}
+
+func loadDittoRouter(r *envReader) DittoRouterConfig {
+	var lanes []string
+	for _, lane := range strings.Split(r.str("DITTO_ROUTER_LANES", ""), ",") {
+		if lane = strings.TrimSpace(lane); lane != "" {
+			lanes = append(lanes, lane)
+		}
+	}
+	cfg := DittoRouterConfig{
+		Enabled:          r.boolval("DITTO_ROUTER_UPSTREAM_ENABLED", false),
+		URL:              r.str("DITTO_ROUTER_UPSTREAM_URL", "https://inference.heyditto.ai/v1/chat/completions"),
+		APIKey:           r.str("DITTO_ROUTER_API_KEY", ""),
+		OnBehalfOfHeader: r.str("DITTO_ROUTER_ON_BEHALF_OF_HEADER", "X-Ditto-On-Behalf-Of"),
+		Lanes:            lanes,
+		CompetitionAck:   r.str("DITTO_ROUTER_COMPETITION_ACK", ""),
+	}
+	if !cfg.Enabled {
+		return cfg
+	}
+	if cfg.APIKey == "" {
+		r.fail("DITTO_ROUTER_API_KEY is required when DITTO_ROUTER_UPSTREAM_ENABLED is true")
+	}
+	// The same credential-boundary pin as the OpenRouter URLs: the relay
+	// attaches the Router key to this URL, so only Ditto's inference hosts
+	// (production, staging, or a pr-N/be-N preview) are acceptable.
+	if u, err := url.Parse(cfg.URL); err != nil || u.Scheme != "https" || !dittoInferenceHost(u.Hostname()) ||
+		u.Path != "/v1/chat/completions" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		r.fail("DITTO_ROUTER_UPSTREAM_URL must be Ditto's https .../v1/chat/completions, got %q", cfg.URL)
+	}
+	for _, lane := range cfg.Lanes {
+		switch lane {
+		case DittoRouterLaneScreener:
+		case DittoRouterLaneCompetition:
+			if cfg.CompetitionAck != CompetitionAckValue {
+				r.fail("DITTO_ROUTER_LANES includes competition; set DITTO_ROUTER_COMPETITION_ACK=%s to confirm the Router endpoint has memories off and a locked model", CompetitionAckValue)
+			}
+		default:
+			r.fail("DITTO_ROUTER_LANES has unknown lane %q (screener, competition)", lane)
+		}
+	}
+	if strings.TrimSpace(cfg.OnBehalfOfHeader) == "" {
+		r.fail("DITTO_ROUTER_ON_BEHALF_OF_HEADER must not be empty")
+	}
+	return cfg
+}
+
+func dittoInferenceHost(host string) bool {
+	h := strings.ToLower(host)
+	return h == "inference.heyditto.ai" || h == "api.heyditto.ai" || h == "staging-api.heyditto.ai" ||
+		(strings.HasSuffix(h, "-api.heyditto.ai") && !strings.Contains(strings.TrimSuffix(h, "-api.heyditto.ai"), "."))
 }
 
 func loadInferenceProxy(r *envReader) InferenceProxyConfig {

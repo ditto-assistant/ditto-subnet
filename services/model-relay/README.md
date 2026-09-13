@@ -182,3 +182,36 @@ Caddy keeps them on Python while
 relay slots report the intended release SHA from `/health`, then set the flag
 true and converge the `platform_app` role. Roll back only this slice by setting
 the flag false and reconverging; inference routing is unaffected.
+
+## Ditto Router upstream (dogfood, off by default)
+
+The relay can forward a miner's chat inference to **Ditto's own Router** instead
+of OpenRouter, for miners who linked a Ditto account (`miner_ditto_links`,
+written by apps/platform's Sign in with Ditto flow). Attribution rides on
+`X-Ditto-On-Behalf-Of: <ditto_user_id>` read from the link row, never from the
+request, and the Router re-checks that user's own `credits:spend` consent (a
+402 comes back as `ditto_router_payment_required`, distinct from an outage,
+and is never retried). Everything else — unlinked miners, disabled lanes,
+lookup errors — takes the centralized OpenRouter path byte for byte.
+
+| Env | Default | Meaning |
+| --- | --- | --- |
+| `DITTO_ROUTER_UPSTREAM_ENABLED` | `false` | Master switch. |
+| `DITTO_ROUTER_UPSTREAM_URL` | `https://inference.heyditto.ai/v1/chat/completions` | Pinned to Ditto inference hosts (prod, staging, `pr-N`/`be-N` previews); anything else fails boot. |
+| `DITTO_ROUTER_API_KEY` | — | Owner-minted key on the DittoBench app endpoint. Required when enabled. |
+| `DITTO_ROUTER_LANES` | *(empty)* | csv of `screener`, `competition`. Empty routes nothing. |
+| `DITTO_ROUTER_COMPETITION_ACK` | — | Must be `memories-off-locked-model` before `competition` is accepted. |
+| `DITTO_ROUTER_ON_BEHALF_OF_HEADER` | `X-Ditto-On-Behalf-Of` | Header the Router reads the user id from. |
+
+Two Router endpoints back the two lanes, and the difference is the point:
+
+- **`dittobench-screener`** — memories **on** (`recall_enabled`, the screener's
+  KG), used by screener-side source review. Not wired in this service yet;
+  the screener worker has its own provider client.
+- **`dittobench-competition`** — memories **off**, `record_enabled` off, model
+  **locked** to the benchmark's pinned model, `model_mode` fixed. The scored
+  benchmark must measure the miner's agent, not Ditto's memory, so the ack
+  is required and the endpoint posture is part of the bench contract.
+
+Live parity (same model, same usage accounting, receipts on the Ditto side)
+must be shown on a canary before `competition` is enabled in production.

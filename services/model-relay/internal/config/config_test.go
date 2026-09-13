@@ -456,3 +456,45 @@ func mustLoad(t *testing.T, extra map[string]string) *Config {
 	}
 	return cfg
 }
+
+func TestDittoRouterDefaultsOffAndFailsClosed(t *testing.T) {
+	cfg, err := Load(MapLookup(minimalEnv()))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DittoRouter.Enabled || cfg.DittoRouter.RoutesLane(DittoRouterLaneCompetition) || cfg.DittoRouter.RoutesLane(DittoRouterLaneScreener) {
+		t.Fatalf("ditto router must default off: %+v", cfg.DittoRouter)
+	}
+	if cfg.DittoRouter.URL != "https://inference.heyditto.ai/v1/chat/completions" || cfg.DittoRouter.OnBehalfOfHeader != "X-Ditto-On-Behalf-Of" {
+		t.Fatalf("ditto router defaults: %+v", cfg.DittoRouter)
+	}
+
+	env := minimalEnv()
+	env["DITTO_ROUTER_UPSTREAM_ENABLED"] = "true"
+	if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "DITTO_ROUTER_API_KEY") {
+		t.Fatalf("enabled without a key must fail boot, got %v", err)
+	}
+	env["DITTO_ROUTER_API_KEY"] = "dk_test"
+	env["DITTO_ROUTER_UPSTREAM_URL"] = "https://evil.example/v1/chat/completions"
+	if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "DITTO_ROUTER_UPSTREAM_URL") {
+		t.Fatalf("foreign host must fail boot, got %v", err)
+	}
+	env["DITTO_ROUTER_UPSTREAM_URL"] = "https://pr-2725-api.heyditto.ai/v1/chat/completions"
+	env["DITTO_ROUTER_LANES"] = "competition"
+	if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "DITTO_ROUTER_COMPETITION_ACK") {
+		t.Fatalf("competition lane without the acknowledgement must fail boot, got %v", err)
+	}
+	env["DITTO_ROUTER_COMPETITION_ACK"] = CompetitionAckValue
+	env["DITTO_ROUTER_LANES"] = "screener, competition"
+	cfg, err = Load(MapLookup(env))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.DittoRouter.RoutesLane(DittoRouterLaneCompetition) || !cfg.DittoRouter.RoutesLane(DittoRouterLaneScreener) {
+		t.Fatalf("both lanes should route: %+v", cfg.DittoRouter)
+	}
+	env["DITTO_ROUTER_LANES"] = "everything"
+	if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "unknown lane") {
+		t.Fatalf("unknown lane must fail boot, got %v", err)
+	}
+}
