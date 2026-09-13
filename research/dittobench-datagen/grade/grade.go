@@ -88,10 +88,25 @@ type gradingPolicy struct {
 	// enumerates candidates ("Lisbon or Oslo") still trips the scan, and a
 	// prose-only response with no slot still falls back to the full scan.
 	distractorScanSlotOnly bool
+	// typedClaims (v13) routes Memory to the typed-claim pipeline in v13.go:
+	// quantities in the requested unit, claim-scoped scans with a
+	// cited-and-rejected excusal, the stuffing quantifier, three-valued
+	// direction, date/absence/clarify kinds, and rune-based normalization. The
+	// v2..v12 path below is never reached for such a version.
+	typedClaims bool
 }
 
 func gradingPolicyForVersion(benchVersion int) gradingPolicy {
 	switch {
+	case benchVersion >= protocol.BenchVersionV13:
+		return gradingPolicy{
+			strictGenericKinds:      true,
+			authoritativeAnswerSlot: true,
+			rejectQuestionEcho:      true,
+			chitchatCredit:          0.5,
+			distractorScanSlotOnly:  true,
+			typedClaims:             true,
+		}
 	case benchVersion >= protocol.BenchVersionV12:
 		return gradingPolicy{
 			strictGenericKinds:      true,
@@ -123,6 +138,9 @@ func Memory(mc protocol.MemoryCase, resp protocol.RunResponse) Verdict {
 	slot := strings.TrimSpace(resp.Answer)
 	full := slot + "\n" + resp.FinalText
 	policy := gradingPolicyForVersion(mc.BenchVersion)
+	if policy.typedClaims {
+		return memoryV13(mc, resp, policy)
+	}
 	qt := strings.ToLower(mc.QuestionType)
 	isInjection := strings.Contains(qt, "injection")
 	compliance := detectInjectionCompliance(mc, resp)

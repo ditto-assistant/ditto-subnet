@@ -222,6 +222,191 @@ func TestSyntheticRobustnessFailsClosedOnMissingKindAndPerKindRegression(t *test
 	}
 }
 
+// TestReleaseGateCoversEverySupportedVersionAndPolicyFloor is the #1522
+// release gate: every generatable version from the audit floor up and every
+// grading-policy floor resolves to a bank owned by its own policy floor, and
+// removing a bank fails the gate closed.
+func TestReleaseGateCoversEverySupportedVersionAndPolicyFloor(t *testing.T) {
+	rows, err := releaseGate()
+	if err != nil {
+		t.Fatalf("release gate failed: %v\n%+v", err, rows)
+	}
+	covered := map[int]string{}
+	for _, row := range rows {
+		if row.Error != "" || row.BankVersion == "" {
+			t.Fatalf("uncovered row: %+v", row)
+		}
+		covered[row.BenchVersion] = row.BankVersion
+	}
+	for v := grade.AuditBankFloor; v <= protocol.BenchVersionV12; v++ {
+		if !protocol.SupportedBenchVersion(v) {
+			continue
+		}
+		if covered[v] == "" {
+			t.Fatalf("supported bench_version %d not covered by the release gate", v)
+		}
+	}
+	if covered[protocol.BenchVersionV9] != robustnessBankVersion || covered[protocol.BenchVersionV12] != robustnessBankV12 || covered[protocol.BenchVersionV13] != grade.AuditBankV13().Version {
+		t.Fatalf("bank resolution drifted: %+v", covered)
+	}
+	// Every grading policy floor from the audit floor up owns exactly one bank.
+	for _, floor := range grade.GradingPolicyFloors() {
+		if floor < grade.AuditBankFloor {
+			continue
+		}
+		n := 0
+		for _, bank := range auditBanks() {
+			if bank.FloorBenchVersion == floor {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Fatalf("policy floor %d owns %d banks, want exactly 1", floor, n)
+		}
+	}
+	// A version below the audit floor never resolves.
+	if _, err := bankForVersion(protocol.BenchVersionV8); err == nil {
+		t.Fatal("bench_version 8 resolved a bank")
+	}
+	// The CLI form fails closed too.
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"-release-gate"}, &stdout, &stderr); err != nil {
+		t.Fatalf("release gate CLI: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "gate\trelease") || !strings.Contains(stdout.String(), grade.AuditBankV13().Version) {
+		t.Fatalf("release gate output: %q", stdout.String())
+	}
+	if err := run([]string{"-release-gate", "-bench-version", "9", "-seeds", "1"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "no other mode flags") {
+		t.Fatalf("release gate accepted other modes: %v", err)
+	}
+}
+
+// TestSyntheticRobustnessV13BankIsCleanAndCoversEveryKind runs the v13-1
+// bank under the v13 policy: full kind coverage, every limit respected, every
+// hard negative at 0, every reviewed positive at its floor.
+func TestSyntheticRobustnessV13BankIsCleanAndCoversEveryKind(t *testing.T) {
+	bank := grade.AuditBankV13()
+	report, err := syntheticRobustnessAudit(protocol.BenchVersionV13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.BankVersion != bank.Version || report.BenchVersion != protocol.BenchVersionV13 {
+		t.Fatalf("wrong bank: %+v", report)
+	}
+	if !report.CoverageOK || !report.WithinLimits || report.NegativeFailures != 0 || report.ReviewedPositiveFailures != 0 || report.PositiveFailures != 0 {
+		t.Fatalf("v13 bank not clean: failed=%v report=%+v", report.FailedChecks, report)
+	}
+	if report.NegativeChecks < 50 || report.ReviewedPositives < 40 || report.Cases < 15 || report.PromptOnly < 6 {
+		t.Fatalf("v13 bank is not broad: negatives=%d positives=%d cases=%d prompt_only=%d", report.NegativeChecks, report.ReviewedPositives, report.Cases, report.PromptOnly)
+	}
+	// Every v13 answer kind has a case, a limit, at least one negative, and at
+	// least one reviewed positive or positive control.
+	for _, kind := range []string{
+		protocol.AnswerValue, protocol.AnswerNumber, protocol.AnswerMoney, protocol.AnswerDirection,
+		protocol.AnswerList, protocol.AnswerDuration, protocol.AnswerDate, protocol.AnswerDecline,
+		protocol.AnswerAbsence, protocol.AnswerClarify, protocol.AnswerAcknowledge, protocol.AnswerChitchat,
+		protocol.AnswerPersistence, protocol.AnswerReversal,
+	} {
+		if _, ok := bank.Limits[kind]; !ok {
+			t.Errorf("kind %s has no limit", kind)
+		}
+		cases, negatives := 0, 0
+		for _, c := range bank.Cases {
+			if kindOrValue(c.Case.AnswerKind) == kind {
+				cases++
+			}
+		}
+		for _, n := range bank.Negatives {
+			if kindOrValue(n.Case.AnswerKind) == kind {
+				negatives++
+			}
+		}
+		if cases == 0 || negatives == 0 {
+			t.Errorf("kind %s: cases=%d negatives=%d", kind, cases, negatives)
+		}
+	}
+	// Claim kinds have a zero worst-strategy exposure; interaction-only kinds
+	// publish theirs explicitly.
+	for _, stat := range report.Kinds {
+		if bank.InteractionOnly(stat.Kind) {
+			continue
+		}
+		if stat.PassShare != 0 || stat.MeanCredit != 0 {
+			t.Errorf("claim kind %s exposed: %+v", stat.Kind, stat)
+		}
+	}
+	// The exact v12 minor-unit contradiction is a pinned v13 positive control.
+	found := false
+	for _, p := range bank.Positives {
+		if p.Name == "minor-unit-bare" {
+			found = true
+			mc := p.Case
+			mc.BenchVersion = protocol.BenchVersionV12
+			if grade.Memory(mc, p.Response).Score != 0 {
+				t.Fatal("the v12 minor-unit contradiction no longer reproduces at v12")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("minor-unit-bare positive control missing")
+	}
+}
+
+// TestSyntheticRobustnessV12BankIsClean runs the v12-1 bank under the v12
+// policy so the slot-scope contract has fixtures of its own.
+func TestSyntheticRobustnessV12BankIsClean(t *testing.T) {
+	report, err := syntheticRobustnessAudit(protocol.BenchVersionV12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.BankVersion != robustnessBankV12 || !report.CoverageOK || !report.WithinLimits || report.NegativeFailures != 0 || report.ReviewedPositiveFailures != 0 {
+		t.Fatalf("v12 bank not clean: %+v", report)
+	}
+	if report.NegativeChecks != len(robustnessNegativesV1)+3 || report.ReviewedPositives != 1 {
+		t.Fatalf("v12 bank shape drifted: %+v", report)
+	}
+}
+
+// TestCannedAuditV13RegradesTheNewestGeneratableCorpus: until the v13
+// generation contract lands, the v13 grading policy is audited over the v12
+// corpus regraded at v13, with the per-claim-kind gate applied. The declarative
+// acknowledgement exposure that made 120 v9 value cases passable is gone.
+func TestCannedAuditV13RegradesTheNewestGeneratableCorpus(t *testing.T) {
+	report, err := cannedAudit(protocol.BenchVersionV13, "small", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCorpus, _ := corpusVersionFor(protocol.BenchVersionV13)
+	if report.BenchVersion != protocol.BenchVersionV13 || report.CorpusBenchVersion != wantCorpus || report.CorpusBenchVersion > protocol.BenchVersionV13 {
+		t.Fatalf("corpus fallback drifted: %+v", report)
+	}
+	if !report.ClaimKindsWithinTarget || len(report.ClaimKindGates) == 0 {
+		t.Fatalf("claim-kind gate: %+v", report.ClaimKindGates)
+	}
+	for _, gate := range report.ClaimKindGates {
+		if gate.Kind == protocol.AnswerChitchat || gate.Kind == protocol.AnswerDecline || gate.Kind == protocol.AnswerAcknowledge {
+			t.Fatalf("interaction-only kind %s gated as a claim kind", gate.Kind)
+		}
+		if gate.Target != grade.ClaimKindTargetShare || !gate.Within {
+			t.Fatalf("claim kind gate failed: %+v", gate)
+		}
+	}
+	for _, stat := range report.Kinds {
+		if stat.Kind == protocol.AnswerValue && stat.Passable != 0 {
+			t.Fatalf("v13 value kind still passable by a canned strategy: %+v", stat)
+		}
+	}
+	// Full-profile v9 exposure is frozen: the v9 corpus keeps its pinned table
+	// (TestCannedAuditV9FortySeedsBelowLaunchTarget) and its corpus version.
+	v9, err := cannedAudit(protocol.BenchVersionV9, "small", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v9.CorpusBenchVersion != protocol.BenchVersionV9 {
+		t.Fatalf("v9 corpus version drifted: %+v", v9)
+	}
+}
+
 func TestSyntheticRobustnessIsDeterministicAndV9Only(t *testing.T) {
 	a, err := syntheticRobustnessAudit(protocol.BenchVersionV9)
 	if err != nil {
@@ -234,8 +419,15 @@ func TestSyntheticRobustnessIsDeterministicAndV9Only(t *testing.T) {
 	if !reflect.DeepEqual(a, b) {
 		t.Fatalf("same bank produced different reports:\n%+v\n%+v", a, b)
 	}
-	if _, err := syntheticRobustnessAudit(protocol.BenchVersionV8); err == nil || !strings.Contains(err.Error(), "requires bench_version 9") {
-		t.Fatalf("synthetic v9 bank accepted v8: %v", err)
+	if _, err := syntheticRobustnessAudit(protocol.BenchVersionV8); err == nil || !strings.Contains(err.Error(), "no grader audit bank covers bench_version 8") {
+		t.Fatalf("synthetic bank accepted v8: %v", err)
+	}
+	// v10 and v11 share v9's grading policy and therefore its bank.
+	for _, v := range []int{protocol.BenchVersionV10, protocol.BenchVersionV11} {
+		bank, err := bankForVersion(v)
+		if err != nil || bank.Version != robustnessBankVersion {
+			t.Fatalf("v%d resolved bank %q (%v), want %s", v, bank.Version, err, robustnessBankVersion)
+		}
 	}
 }
 
@@ -277,7 +469,7 @@ func TestBestCannedScorePinsGenericKindExposure(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			score, probe := bestCannedScore(tc.mc)
+			score, probe := bestCannedScore(tc.mc, robustnessBankV9())
 			if score != tc.wantScore || probe != tc.wantProbe {
 				t.Fatalf("best=(%v,%q), want (%v,%q)", score, probe, tc.wantScore, tc.wantProbe)
 			}
@@ -395,7 +587,7 @@ func TestRunGeneratedJSONIsDeterministicAndParseable(t *testing.T) {
 		t.Fatalf("invalid JSON %q: %v", first.String(), err)
 	}
 	if report.GeneratedCorpus.BenchVersion != 9 || report.GeneratedCorpus.Seeds != 2 || report.GeneratedCorpus.RunSize != "small" ||
-		len(report.GeneratedCorpus.Probes) != len(generatedCannedProbes()) || report.Synthetic.BankVersion != robustnessBankVersion || !report.Synthetic.CoverageOK {
+		len(report.GeneratedCorpus.Probes) != len(generatedCannedProbes(robustnessBankV9())) || report.Synthetic.BankVersion != robustnessBankVersion || !report.Synthetic.CoverageOK {
 		t.Fatalf("missing report identity: %+v", report)
 	}
 	generatedNames := map[string]bool{}
