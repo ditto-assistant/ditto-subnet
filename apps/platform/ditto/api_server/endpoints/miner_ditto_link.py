@@ -154,12 +154,76 @@ async def link_attempt(
             if attempt.status == "linked"
             else None
         )
+    return _attempt_view(attempt, link)
+
+
+def _attempt_view(
+    attempt: MinerDittoLinkAttempt, link: MinerDittoLink | None
+) -> MinerDittoLinkAttemptResponse:
+    authenticated = attempt.status in ("authenticated", "linked")
     return MinerDittoLinkAttemptResponse(
         attempt_id=attempt.attempt_id,
         status=attempt.status,  # type: ignore[arg-type]
         error=attempt.error,
+        ditto_user_id=attempt.ditto_user_id if authenticated else None,
+        ditto_email=attempt.ditto_email if authenticated else None,
+        miner_hotkey=attempt.miner_hotkey,
         link=_link_view(link) if link else None,
     )
+
+
+@router.post(
+    "/me/ditto-link/attempts/{attempt_id}/confirm",
+    response_model=MinerDittoLinkAttemptResponse,
+)
+async def confirm_link(
+    attempt_id: UUID, request: Request, session: SessionDep
+) -> MinerDittoLinkAttemptResponse:
+    """Write the link. Only the holder of the miner session that started the
+    attempt can do this, and only for an attempt Ditto has authenticated.
+
+    The callback is reachable by whoever holds the authorize URL, so it must
+    never pair an account with a hotkey on its own: an attacker could start an
+    attempt for their hotkey and trick a victim into signing in on it. The
+    pairing is confirmed here, by the hotkey side, after seeing who signed in.
+    """
+    now = datetime.now(UTC)
+    async with session.begin():
+        row, _token = await resolve_miner_session(request, session)
+        require_scope(row, "profile")
+        attempt = await get_attempt(session, attempt_id=attempt_id)
+        if attempt is None or attempt.miner_hotkey != row.miner_hotkey:
+            raise HTTPException(status_code=404, detail="unknown link attempt")
+        attempt = await expire_stale_attempt(session, attempt=attempt, now=now)
+        if attempt.status == "linked":
+            link = await get_active_link(session, hotkey=row.miner_hotkey)
+            return _attempt_view(attempt, link)
+        if attempt.status != "authenticated" or not attempt.ditto_user_id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"link attempt is {attempt.status}, not awaiting confirmation",
+            )
+        if attempt.expires_at <= now:
+            attempt.status = "expired"
+            attempt.completed_at = now
+            raise HTTPException(status_code=409, detail="link attempt has expired")
+        coldkey = await get_bound_coldkey_for_hotkey(session, hotkey=row.miner_hotkey)
+        link = await upsert_link(
+            session,
+            hotkey=row.miner_hotkey,
+            ditto_user_id=attempt.ditto_user_id,
+            ditto_email=attempt.ditto_email,
+            miner_coldkey=coldkey,
+            linked_via=attempt.client,
+            session_id=row.session_id,
+            now=now,
+        )
+        attempt.status = "linked"
+        attempt.error = None
+        attempt.completed_at = now
+        await session.flush()
+        view = _attempt_view(attempt, link)
+    return view
 
 
 @router.delete("/me/ditto-link", status_code=204)
@@ -252,22 +316,18 @@ async def oidc_callback(
                 with_result(return_to, outcome="error", reason="link attempt vanished"),
                 status_code=302,
             )
-        coldkey = await get_bound_coldkey_for_hotkey(session, hotkey=fresh.miner_hotkey)
-        await upsert_link(
-            session,
-            hotkey=fresh.miner_hotkey,
-            ditto_user_id=identity.user_id,
-            ditto_email=identity.email if identity.email_verified else None,
-            miner_coldkey=coldkey,
-            linked_via=fresh.client,
-            session_id=fresh.session_id,
-            now=now,
-        )
-        fresh.status = "linked"
+        # Park the verified identity; the link itself is written only when the
+        # holder of the miner session confirms the pairing (see confirm_link).
+        fresh.status = "authenticated"
         fresh.error = None
         fresh.ditto_user_id = identity.user_id
-        fresh.completed_at = now
-    return RedirectResponse(with_result(return_to, outcome="linked"), status_code=302)
+        fresh.ditto_email = identity.email if identity.email_verified else None
+        fresh.completed_at = None
+        attempt_id = fresh.attempt_id
+    return RedirectResponse(
+        with_result(return_to, outcome="confirm", attempt=str(attempt_id)),
+        status_code=302,
+    )
 
 
 def _fail(attempt: MinerDittoLinkAttempt, now: datetime, reason: str) -> None:

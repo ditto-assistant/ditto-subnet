@@ -478,6 +478,18 @@ class ApiClient:
             raise self._ditto_link_error(response)
         return MinerDittoLinkAttemptResponse.model_validate(response.json())
 
+    def confirm_ditto_link(
+        self, *, token: str, attempt_id: UUID
+    ) -> MinerDittoLinkAttemptResponse:
+        response = self._request(
+            "POST",
+            f"/api/v1/me/ditto-link/attempts/{attempt_id}/confirm",
+            headers={"authorization": f"Bearer {token}"},
+        )
+        if response.status_code != 200:
+            raise self._ditto_link_error(response)
+        return MinerDittoLinkAttemptResponse.model_validate(response.json())
+
     def delete_ditto_link(self, *, token: str) -> None:
         response = self._request(
             "DELETE",

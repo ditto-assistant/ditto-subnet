@@ -328,20 +328,34 @@ describe("Ditto account link", () => {
     expect(new Headers(start?.init?.headers).get("authorization")).toBe("Bearer ditto_ms_abc");
   });
 
-  it("shows the linked account, the callback notice, and can unlink", async () => {
+  it("asks the miner to confirm the pairing, then shows the link and can unlink", async () => {
     await signIn();
-    history.replaceState(null, "", "/#/reviews?ditto=linked");
+    history.replaceState(null, "", "/#/reviews?ditto=confirm&attempt=att-1");
     syncFromLocation();
-    let linked: { ditto_user_id: string; ditto_email: string; linked_via: string } | null = {
-      ditto_user_id: "ditto-user-1",
-      ditto_email: "miner@example.com",
-      linked_via: "cli",
-    };
+    let linked: { ditto_user_id: string; ditto_email: string; linked_via: string } | null = null;
+    const confirms: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         if (url.endsWith("/me")) return Response.json(me);
+        if (url.endsWith("/me/ditto-link/attempts/att-1/confirm") && init?.method === "POST") {
+          confirms.push(new Headers(init.headers).get("authorization") || "");
+          linked = {
+            ditto_user_id: "ditto-user-1",
+            ditto_email: "miner@example.com",
+            linked_via: "dashboard",
+          };
+          return Response.json({ attempt_id: "att-1", status: "linked", link: linked });
+        }
+        if (url.endsWith("/me/ditto-link/attempts/att-1"))
+          return Response.json({
+            attempt_id: "att-1",
+            status: linked ? "linked" : "authenticated",
+            ditto_user_id: "ditto-user-1",
+            ditto_email: "miner@example.com",
+            miner_hotkey: session.hotkey,
+          });
         if (url.endsWith("/me/ditto-link") && init?.method === "DELETE") {
           linked = null;
           return new Response(null, { status: 204 });
@@ -357,11 +371,25 @@ describe("Ditto account link", () => {
       }),
     );
     render(() => <ReviewsPage />);
+    const confirmCard = await waitFor(() => {
+      const found = document.querySelector('[data-testid="ditto-link-confirm"]');
+      expect(found).toBeTruthy();
+      return found as HTMLElement;
+    });
+    expect(confirmCard.textContent).toContain("miner@example.com");
+    expect(confirmCard.textContent).toContain(session.hotkey);
+    // Nothing is linked until the miner confirms.
+    expect(document.body.textContent).not.toContain("Unlink Ditto account");
+    const confirm = Array.from(confirmCard.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Confirm link"),
+    );
+    fireEvent.click(confirm!);
     await waitFor(() => {
       expect(document.body.textContent).toContain("Ditto account linked.");
-      expect(document.body.textContent).toContain("miner@example.com");
+      expect(document.body.textContent).toContain("Unlink Ditto account");
     });
-    expect(location.hash).not.toContain("ditto=linked");
+    expect(confirms).toEqual(["Bearer ditto_ms_abc"]);
+    expect(location.hash).not.toContain("attempt=");
     const unlink = Array.from(document.querySelectorAll("button")).find((b) =>
       b.textContent?.includes("Unlink Ditto account"),
     );

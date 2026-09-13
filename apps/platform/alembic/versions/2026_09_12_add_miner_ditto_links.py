@@ -54,7 +54,9 @@ def upgrade() -> None:
 
     # One authorization-code round trip. The state is stored hashed and is the
     # only thing the public callback can present; the attempt row is what
-    # binds that callback to the hotkey whose session started it.
+    # binds that callback to the hotkey whose session started it. The callback
+    # only parks the verified identity ('authenticated'); the link is written
+    # when the holder of that miner session confirms the pairing.
     op.create_table(
         "miner_ditto_link_attempts",
         sa.Column("attempt_id", sa.UUID(as_uuid=True), primary_key=True),
@@ -68,6 +70,7 @@ def upgrade() -> None:
         sa.Column("status", sa.Text(), nullable=False),
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("ditto_user_id", sa.Text(), nullable=True),
+        sa.Column("ditto_email", sa.Text(), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -90,7 +93,7 @@ def upgrade() -> None:
             name="miner_ditto_link_attempts_client_check",
         ),
         sa.CheckConstraint(
-            "status IN ('pending', 'linked', 'failed', 'expired')",
+            "status IN ('pending', 'authenticated', 'linked', 'failed', 'expired')",
             name="miner_ditto_link_attempts_status_check",
         ),
         sa.UniqueConstraint("state_hash", name="miner_ditto_link_attempts_state_key"),

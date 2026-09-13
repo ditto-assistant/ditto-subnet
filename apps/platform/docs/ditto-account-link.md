@@ -12,7 +12,8 @@ may point at the same Ditto account.
 | Hotkey | a live miner session (`ditto login`, hotkey-signed device grant) | a request body |
 | Ditto user id | the `sub` of an RS256 id_token verified against `/.well-known/jwks.json` (iss, aud, exp, nonce) | the browser, the CLI, or a query string |
 | Callback ↔ attempt | the hashed `state` stored on the attempt | anything else in the callback |
-| Return URL | `DITTO_LINK_RETURN_URL` origin only | a caller-supplied absolute URL |
+| Return URL | `DITTO_LINK_RETURN_URL` origin only, re-serialised, backslashes/userinfo/control chars refused, `ditto`/`reason`/`attempt` stripped | a caller-supplied absolute URL |
+| Pairing hotkey ↔ account | an explicit confirm by the miner session that started the attempt | the browser that happened to complete the callback |
 
 The client secret lives only in `DITTO_LINK_CLIENT_SECRET` and is sent only in
 the token request to the configured issuer. It is never logged or served.
@@ -27,12 +28,20 @@ the token request to the configured issuer. It is never logged or served.
    `GET /api/v1/miner-auth/ditto/callback?code&state` (public).
 3. The callback locks the attempt by state, marks it consumed **before** the
    network call (a replay can never redeem twice), exchanges the code with
-   `client_id` + `client_secret` + `code_verifier`, verifies the id_token,
-   upserts `miner_ditto_links` for the attempt's hotkey (recording the bound
-   coldkey when attestation knows one), and redirects to
-   `return_to#/reviews?ditto=linked` or `?ditto=error&reason=…`.
-4. `GET /api/v1/me/ditto-link` shows the link; `DELETE` revokes it;
-   `GET /api/v1/me/ditto-link/attempts/{id}` lets the CLI poll.
+   `client_id` + `client_secret` + `code_verifier`, verifies the id_token and
+   **parks** the verified identity on the attempt (`status=authenticated`,
+   `ditto_user_id`, verified `ditto_email`). Nothing is linked yet: the
+   callback is reachable by whoever holds the authorize URL, so it must not
+   pair an account with a hotkey on its own. It redirects to
+   `return_to#/reviews?ditto=confirm&attempt=<id>` (or `?ditto=error&reason=…`).
+4. `POST /api/v1/me/ditto-link/attempts/{id}/confirm` — bearer = the miner
+   session that **started** the attempt (scope `profile`), attempt must be
+   `authenticated` and unexpired — writes `miner_ditto_links` (recording the
+   bound coldkey when attestation knows one). The dashboard shows "Link
+   hotkey … to <email>?" and the CLI asks the same question before calling it.
+5. `GET /api/v1/me/ditto-link` shows the link; `DELETE` revokes it;
+   `GET /api/v1/me/ditto-link/attempts/{id}` lets the dashboard and CLI poll
+   (it carries the parked identity once authenticated).
 
 ## Configuration
 

@@ -355,14 +355,46 @@ def _token_error(response: httpx.Response) -> str:
     return f"Ditto sign-in was refused (HTTP {response.status_code})"
 
 
+RESULT_PARAMS: Final = ("ditto", "reason", "attempt")
+
+
+def _strip_result_params(url: str) -> str:
+    """Drop our own result parameters from a URL so they cannot be pre-seeded."""
+    base, hash_sep, fragment = url.partition("#")
+    path, q_sep, query = base.partition("?")
+    kept = [
+        pair
+        for pair in query.split("&")
+        if pair and pair.split("=", 1)[0] not in RESULT_PARAMS
+    ]
+    base = path + ("?" + "&".join(kept) if kept else "")
+    if hash_sep:
+        route, fq_sep, fquery = fragment.partition("?")
+        fkept = [
+            pair
+            for pair in fquery.split("&")
+            if pair and pair.split("=", 1)[0] not in RESULT_PARAMS
+        ]
+        fragment = route + ("?" + "&".join(fkept) if fkept else "")
+        return base + "#" + fragment
+    return base
+
+
 def safe_return_to(config: DittoLinkConfig, requested: str | None) -> str:
     """Only the configured dashboard origin may receive the browser back.
 
     A ``return_to`` on another origin is dropped, not honoured, so the
-    callback can never be turned into an open redirect.
+    callback can never be turned into an open redirect. The candidate is
+    re-serialised from the parsed URL (never echoed raw), backslashes and
+    control characters are refused outright, and our own result parameters
+    are stripped so a caller cannot pre-seed ``ditto=linked``.
     """
     default = config.return_url
     if not requested:
+        return default
+    if any(ch in requested for ch in "\\\x00\r\n\t ") or any(
+        ord(ch) < 0x20 or ord(ch) == 0x7F for ch in requested
+    ):
         return default
     allowed = httpx.URL(default)
     try:
@@ -373,12 +405,19 @@ def safe_return_to(config: DittoLinkConfig, requested: str | None) -> str:
         candidate.scheme != allowed.scheme
         or candidate.host != allowed.host
         or candidate.port != allowed.port
+        or candidate.userinfo
     ):
         return default
-    return requested
+    normalized = str(candidate)
+    origin = f"{allowed.scheme}://{allowed.netloc.decode()}"
+    if not (normalized == origin or normalized.startswith(origin + "/")):
+        return default
+    return _strip_result_params(normalized)
 
 
-def with_result(url: str, *, outcome: str, reason: str | None = None) -> str:
+def with_result(
+    url: str, *, outcome: str, reason: str | None = None, attempt: str | None = None
+) -> str:
     """Append ``ditto=<outcome>`` (and a bounded ``reason``) to a dashboard URL.
 
     Dashboard routes live in the hash (``/#/reviews``), so the query goes
@@ -387,6 +426,8 @@ def with_result(url: str, *, outcome: str, reason: str | None = None) -> str:
     params: dict[str, str] = {"ditto": outcome}
     if reason:
         params["reason"] = reason[:120]
+    if attempt:
+        params["attempt"] = attempt
     suffix = urlencode(params)
     if "#" in url:
         base, _, fragment = url.partition("#")

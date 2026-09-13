@@ -9,7 +9,9 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 DittoLinkClient = Literal["dashboard", "cli"]
-DittoLinkAttemptStatus = Literal["pending", "linked", "failed", "expired"]
+DittoLinkAttemptStatus = Literal[
+    "pending", "authenticated", "linked", "failed", "expired"
+]
 
 
 class MinerDittoLinkView(BaseModel):
@@ -53,9 +55,15 @@ class MinerDittoLinkStartResponse(BaseModel):
 
 
 class MinerDittoLinkAttemptResponse(BaseModel):
+    """One attempt. ``authenticated`` carries who signed in on Ditto so the
+    miner can confirm the pairing before anything is written."""
+
     model_config = ConfigDict(extra="ignore")
 
     attempt_id: UUID
     status: DittoLinkAttemptStatus
     error: str | None = None
+    ditto_user_id: str | None = None
+    ditto_email: str | None = None
+    miner_hotkey: str | None = None
     link: MinerDittoLinkView | None = None

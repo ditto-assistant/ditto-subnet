@@ -177,10 +177,44 @@ async def test_link_binds_verified_ditto_identity_to_the_session_hotkey(
         "/api/v1/miner-auth/ditto/callback", params={"code": "code-1", "state": state}
     )
     result = _callback_result(done)
-    assert result["ditto"] == ["linked"]
+    assert result["ditto"] == ["confirm"]
+    assert result["attempt"] == [body["attempt_id"]]
     # The token exchange used PKCE and the app secret, never the user's word.
     assert provider.token_requests[-1]["code_verifier"]
     assert provider.token_requests[-1]["grant_type"] == ["authorization_code"]
+
+    # Nothing is linked until the miner-session holder confirms the pairing:
+    # whoever holds the authorize URL could have been the one who signed in.
+    assert (await client.get("/api/v1/me/ditto-link", headers=auth)).json()[
+        "link"
+    ] is None
+    parked = await client.get(
+        f"/api/v1/me/ditto-link/attempts/{body['attempt_id']}", headers=auth
+    )
+    assert parked.json()["status"] == "authenticated"
+    assert parked.json()["ditto_email"] == "miner@example.com"
+    assert parked.json()["miner_hotkey"] == alice.ss58_address
+    # Another hotkey's session cannot confirm Alice's attempt (account-binding CSRF).
+    bob = bittensor.Keypair.create_from_uri("//Bob")
+    bob_auth = {"authorization": f"Bearer {await _sign_in(client, bob)}"}
+    stolen = await client.post(
+        f"/api/v1/me/ditto-link/attempts/{body['attempt_id']}/confirm", headers=bob_auth
+    )
+    assert stolen.status_code == 404
+    assert (await client.get("/api/v1/me/ditto-link", headers=bob_auth)).json()[
+        "link"
+    ] is None
+    confirmed = await client.post(
+        f"/api/v1/me/ditto-link/attempts/{body['attempt_id']}/confirm", headers=auth
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["status"] == "linked"
+    assert confirmed.json()["link"]["ditto_user_id"] == "ditto-user-1"
+    # Confirming twice is idempotent.
+    again = await client.post(
+        f"/api/v1/me/ditto-link/attempts/{body['attempt_id']}/confirm", headers=auth
+    )
+    assert again.json()["status"] == "linked"
 
     linked = await client.get("/api/v1/me/ditto-link", headers=auth)
     assert linked.status_code == 200
@@ -204,8 +238,6 @@ async def test_link_binds_verified_ditto_identity_to_the_session_hotkey(
     assert len(provider.token_requests) == 1
 
     # Another hotkey's session sees neither the attempt nor the link.
-    bob = bittensor.Keypair.create_from_uri("//Bob")
-    bob_auth = {"authorization": f"Bearer {await _sign_in(client, bob)}"}
     other = await client.get(
         f"/api/v1/me/ditto-link/attempts/{body['attempt_id']}", headers=bob_auth
     )
@@ -256,6 +288,12 @@ async def test_callback_rejects_denied_consent_unknown_state_and_bad_tokens(
         f"/api/v1/me/ditto-link/attempts/{started.json()['attempt_id']}", headers=auth
     )
     assert attempt.json()["status"] == "failed"
+    assert (
+        await client.post(
+            f"/api/v1/me/ditto-link/attempts/{started.json()['attempt_id']}/confirm",
+            headers=auth,
+        )
+    ).status_code == 409
     assert (await client.get("/api/v1/me/ditto-link", headers=auth)).json()[
         "link"
     ] is None

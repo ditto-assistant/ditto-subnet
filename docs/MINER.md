@@ -717,8 +717,11 @@ Ditto's own OpenID sign-in (Google, Apple, X, GitHub or email on the Ditto
 side) and, when you consent, the Platform records that this hotkey belongs
 to your Ditto account. The hotkey is proven by your miner session; the
 account is proven by Ditto's signed id_token, which the Platform verifies
-against Ditto's published keys. You never type a Ditto password into
-dittobench.ai and the CLI never sees your Ditto credentials.
+against Ditto's published keys. After Ditto sends you back, the console (or
+the CLI) shows **which** Ditto account signed in and asks you to confirm the
+pairing before anything is written — a sign-in link someone else sent you can
+never attach their hotkey to your account. You never type a Ditto password
+into dittobench.ai and the CLI never sees your Ditto credentials.
 
 ```sh
 # From a terminal, using the session `ditto login` saved

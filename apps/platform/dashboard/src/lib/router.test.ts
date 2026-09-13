@@ -110,6 +110,7 @@ describe("PAGES registry", () => {
       "complete",
       "ditto",
       "reason",
+      "attempt",
     ]);
   });
 });

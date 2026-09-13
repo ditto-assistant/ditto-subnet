@@ -3022,6 +3022,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/ditto-link/attempts/{attempt_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Link
+         * @description Write the link. Only the holder of the miner session that started the
+         *     attempt can do this, and only for an attempt Ditto has authenticated.
+         *
+         *     The callback is reachable by whoever holds the authorize URL, so it must
+         *     never pair an account with a hotkey on its own: an attacker could start an
+         *     attempt for their hotkey and trick a victim into signing in on it. The
+         *     pairing is confirmed here, by the hotkey side, after seeing who signed in.
+         */
+        post: operations["confirm_link_api_v1_me_ditto_link_attempts__attempt_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/ditto-link/start": {
         parameters: {
             query?: never;
@@ -16873,21 +16899,31 @@ export interface components {
             /** User Code */
             user_code: string;
         };
-        /** MinerDittoLinkAttemptResponse */
+        /**
+         * MinerDittoLinkAttemptResponse
+         * @description One attempt. ``authenticated`` carries who signed in on Ditto so the
+         *     miner can confirm the pairing before anything is written.
+         */
         MinerDittoLinkAttemptResponse: {
             /**
              * Attempt Id
              * Format: uuid
              */
             attempt_id: string;
+            /** Ditto Email */
+            ditto_email?: string | null;
+            /** Ditto User Id */
+            ditto_user_id?: string | null;
             /** Error */
             error?: string | null;
             link?: components["schemas"]["MinerDittoLinkView"] | null;
+            /** Miner Hotkey */
+            miner_hotkey?: string | null;
             /**
              * Status
              * @enum {string}
              */
-            status: "pending" | "linked" | "failed" | "expired";
+            status: "pending" | "authenticated" | "linked" | "failed" | "expired";
         };
         /** MinerDittoLinkResponse */
         MinerDittoLinkResponse: {
@@ -32239,6 +32275,37 @@ export interface operations {
         };
     };
     link_attempt_api_v1_me_ditto_link_attempts__attempt_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerDittoLinkAttemptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_link_api_v1_me_ditto_link_attempts__attempt_id__confirm_post: {
         parameters: {
             query?: never;
             header?: never;

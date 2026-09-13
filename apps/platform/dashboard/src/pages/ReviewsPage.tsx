@@ -95,6 +95,16 @@ interface DittoLinkStatus {
   link: DittoLinkView | null;
 }
 
+interface DittoLinkAttempt {
+  attempt_id: string;
+  status: "pending" | "authenticated" | "linked" | "failed" | "expired";
+  error?: string | null;
+  ditto_user_id?: string | null;
+  ditto_email?: string | null;
+  miner_hotkey?: string | null;
+  link?: DittoLinkView | null;
+}
+
 interface MinerSubmission {
   agent_id: string;
   name: string;
@@ -194,15 +204,20 @@ function readPollGrant(): StoredPollGrant | null {
 /** The OIDC callback lands on `#/reviews?ditto=linked|error&reason=…`, which
  * boot canonicalizes to `/reviews?ditto=…` (both are page-scoped params). Read
  * it once, then drop it from the URL so a reload does not repeat the notice. */
-function readDittoResult(): { ok: boolean; text: string } | null {
+function readDittoResult(): { ok: boolean; text: string; attempt?: string } | null {
   const params = loginParams();
   const outcome = params.get("ditto");
   if (!outcome) return null;
   const reason = params.get("reason") || "";
+  const attempt = params.get("attempt") || "";
   params.delete("ditto");
   params.delete("reason");
+  params.delete("attempt");
   history.replaceState(history.state ?? {}, "", spaHref("reviews", params));
   if (outcome === "linked") return { ok: true, text: "Ditto account linked." };
+  if (outcome === "confirm" && attempt) {
+    return { ok: true, text: "Ditto signed you in. Confirm the link below.", attempt };
+  }
   return { ok: false, text: "Ditto sign-in did not complete" + (reason ? ": " + reason : ".") };
 }
 
@@ -485,11 +500,68 @@ function AccountPanel(): JSX.Element {
   const [dittoLink, setDittoLink] = createSignal<DittoLinkStatus | null>(null);
   const [dittoNotice, setDittoNotice] = createSignal(readDittoResult());
   const [dittoBusy, setDittoBusy] = createSignal(false);
+  const [dittoAttempt, setDittoAttempt] = createSignal<DittoLinkAttempt | null>(null);
 
   createEffect(() => {
     void loadMe();
     void loadDittoLink();
+    const pending = dittoNotice()?.attempt;
+    if (pending) void loadDittoAttempt(pending);
   });
+
+  /** The callback only parks who signed in on Ditto; the pairing with this
+   * hotkey is written when the signed-in miner confirms it here. */
+  async function loadDittoAttempt(attemptId: string): Promise<void> {
+    try {
+      const attempt = await authJSON<DittoLinkAttempt>(
+        "/me/ditto-link/attempts/" + encodeURIComponent(attemptId),
+        { headers: sessionAuthHeader() },
+      );
+      setDittoAttempt(attempt);
+      if (attempt.status !== "authenticated") {
+        setDittoNotice({
+          ok: attempt.status === "linked",
+          text:
+            attempt.status === "linked"
+              ? "Ditto account linked."
+              : "That Ditto sign-in is " +
+                attempt.status +
+                (attempt.error ? ": " + attempt.error : "."),
+        });
+      }
+    } catch (err) {
+      setDittoAttempt(null);
+      setDittoNotice({
+        ok: false,
+        text: err instanceof Error ? err.message : "Could not load the Ditto sign-in.",
+      });
+    }
+  }
+
+  async function confirmDittoLink(): Promise<void> {
+    const attempt = dittoAttempt();
+    if (!attempt) return;
+    setDittoBusy(true);
+    setError("");
+    try {
+      const confirmed = await authJSON<DittoLinkAttempt>(
+        "/me/ditto-link/attempts/" + encodeURIComponent(attempt.attempt_id) + "/confirm",
+        { method: "POST", headers: sessionAuthHeader() },
+      );
+      setDittoAttempt(null);
+      setDittoNotice({ ok: confirmed.status === "linked", text: "Ditto account linked." });
+      await loadDittoLink();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not confirm the Ditto link.");
+    } finally {
+      setDittoBusy(false);
+    }
+  }
+
+  function declineDittoLink(): void {
+    setDittoAttempt(null);
+    setDittoNotice({ ok: false, text: "Not linked. The sign-in expires on its own." });
+  }
 
   async function loadDittoLink(): Promise<void> {
     try {
@@ -737,6 +809,30 @@ function AccountPanel(): JSX.Element {
               <h3>Ditto account</h3>
               <Show when={dittoNotice()}>
                 {(notice) => <p class={notice().ok ? "muted" : "account-error"}>{notice().text}</p>}
+              </Show>
+              <Show when={dittoAttempt()?.status === "authenticated" && dittoAttempt()}>
+                {(attempt) => (
+                  <div data-testid="ditto-link-confirm">
+                    <p>
+                      Link hotkey <span class="mono">{attempt().miner_hotkey}</span> to Ditto
+                      account <strong>{attempt().ditto_email || attempt().ditto_user_id}</strong>?
+                    </p>
+                    <p class="muted">
+                      Only confirm if this is the account you just signed in with. A sign-in link
+                      someone else sent you can never attach their hotkey to your account.
+                    </p>
+                    <button
+                      class="btn"
+                      disabled={dittoBusy()}
+                      onClick={() => void confirmDittoLink()}
+                    >
+                      Confirm link
+                    </button>{" "}
+                    <button class="btn ghost" disabled={dittoBusy()} onClick={declineDittoLink}>
+                      Not me
+                    </button>
+                  </div>
+                )}
               </Show>
               <Show
                 when={status().link}

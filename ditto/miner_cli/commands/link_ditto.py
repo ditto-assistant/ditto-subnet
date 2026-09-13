@@ -71,6 +71,11 @@ def add_subparser(
         ),
     )
     parser.add_argument("--json", action="store_true", help="Print the result as JSON.")
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm the pairing without asking once Ditto has signed you in.",
+    )
     subs = parser.add_subparsers(dest="link_command")
     status = subs.add_parser(
         "status", help="Show the Ditto account linked to this hotkey."
@@ -113,6 +118,26 @@ def _print_link(link: MinerDittoLinkView | None, *, as_json: bool) -> None:
     )
 
 
+def _confirm_pairing(*, hotkey: str, who: str, skip: bool) -> bool:
+    """Ask before writing the link. ``--yes`` skips the question; a non-TTY
+    without ``--yes`` refuses, because silence must never mean consent."""
+    print(f"Ditto signed in as {who}.")
+    if skip:
+        return True
+    if not sys.stdin.isatty():
+        print(
+            "refusing to link without confirmation on a non-interactive terminal; "
+            "re-run with --yes if this is the account you just signed in with",
+            file=sys.stderr,
+        )
+        return False
+    try:
+        answer = input(f"Link hotkey {hotkey} to {who}? [y/N] ").strip().lower()
+    except EOFError:
+        return False
+    return answer in ("y", "yes")
+
+
 def run(args: argparse.Namespace) -> int:
     command = getattr(args, "link_command", "link") or "link"
     found = _session_token(args)
@@ -152,6 +177,24 @@ def run(args: argparse.Namespace) -> int:
                 attempt = client.get_ditto_link_attempt(
                     token=token, attempt_id=started.attempt_id
                 )
+                if attempt.status == "authenticated":
+                    # Ditto verified who signed in; nothing is linked until this
+                    # hotkey's owner says so. A sign-in link someone else sent
+                    # can therefore never attach their hotkey to your account.
+                    who = (
+                        attempt.ditto_email
+                        or attempt.ditto_user_id
+                        or "unknown account"
+                    )
+                    if not _confirm_pairing(hotkey=hotkey, who=who, skip=args.yes):
+                        print(
+                            "not linked (the sign-in expires on its own)",
+                            file=sys.stderr,
+                        )
+                        return 1
+                    attempt = client.confirm_ditto_link(
+                        token=token, attempt_id=started.attempt_id
+                    )
                 if attempt.status == "linked":
                     _print_link(attempt.link, as_json=as_json)
                     return 0

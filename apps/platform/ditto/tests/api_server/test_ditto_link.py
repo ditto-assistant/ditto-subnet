@@ -197,3 +197,34 @@ def test_with_result_appends_after_the_hash_route() -> None:
     assert with_result("https://dittobench.ai/done", outcome="linked") == (
         "https://dittobench.ai/done?ditto=linked"
     )
+
+
+def test_safe_return_to_rejects_authority_confusion_and_preseeded_results() -> None:
+    config = _config()
+    # Backslash authority confusion: httpx reads dittobench.ai, browsers go to evil.com.
+    assert (
+        safe_return_to(config, "https://evil.com\\@dittobench.ai/") == config.return_url
+    )
+    assert (
+        safe_return_to(config, "https://user@dittobench.ai/#/reviews")
+        == config.return_url
+    )
+    assert (
+        safe_return_to(config, "https://dittobench.ai.evil.example/")
+        == config.return_url
+    )
+    assert safe_return_to(config, "//evil.example/") == config.return_url
+    assert (
+        safe_return_to(config, "https://dittobench.ai/\r\nSet-Cookie:x")
+        == config.return_url
+    )
+    # Our own result parameters cannot be pre-seeded by the caller.
+    assert safe_return_to(
+        config, "https://dittobench.ai/#/reviews?ditto=linked&tab=profile"
+    ) == ("https://dittobench.ai/#/reviews?tab=profile")
+    assert safe_return_to(config, "https://dittobench.ai/?ditto=linked#/reviews") == (
+        "https://dittobench.ai/#/reviews"
+    )
+    assert with_result(
+        "https://dittobench.ai/#/reviews", outcome="confirm", attempt="a-1"
+    ) == ("https://dittobench.ai/#/reviews?ditto=confirm&attempt=a-1")
