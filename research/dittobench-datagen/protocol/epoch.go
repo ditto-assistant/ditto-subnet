@@ -175,6 +175,20 @@ import (
 //     answerable decision_twin, graded by the AnswerAbsence kind (a decline
 //     that cites a record actually read; the tempting value is forbidden only
 //     when asserted as the answer).
+//
+// The envelope rebalance (issues #1848 / #1529) rides the same gate:
+// 50.9% of its memory score weight on monetary claims, so a cents ledger with
+// a money formatter competed with a generally competent agent. v13 replaces
+// the v8 primary/carve-out budget with a published 250-case slot table
+// (story 78, ordinary world 32, business programs 28, personal programs 24,
+// abstention 25, record-determined quantity 16, divergence 12, point-in-time
+// 12, integrity 14, isolation 9), caps ordinary project-outstanding questions,
+// and adds a deterministic per-seed mix audit (gen/mixaudit.go, cmd/mixaudit)
+// whose caps -- money <= 15% of memory weight, <= 22 money-bearing cases,
+// zero monetary open programs, personal >= 30%, business >= 40%, no
+// sub-domain > 20%, no answer-kind x operation > 15% -- gate the pinned
+// 40-seed qualification set. Every lever is gated on bench_version >= 13 so
+// v12 and earlier regenerate byte-identically.
 const (
 	BenchVersionV2      = 2
 	BenchVersionV3      = 3

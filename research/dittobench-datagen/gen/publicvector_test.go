@@ -450,7 +450,7 @@ func TestV12KnownVector(t *testing.T) {
 func TestV13KnownVector(t *testing.T) {
 	const (
 		seed = int64(123456789)
-		want = "9a05ca87cf03977b5d6e9ab2efc577146cdaeee35530a7d1f9274ce9d91c9b3c"
+		want = "aa5b71bf01a1765a13d1e0f7f5be5ceb8405ceeed5a280204ae87213bd39964c"
 	)
 	prof, ok := ProfileForVersion("full", protocol.BenchVersionV13)
 	if !ok {
@@ -484,9 +484,12 @@ func TestUnsupportedVersionRejected(t *testing.T) {
 }
 
 // TestSameSeedSameBytes is the core determinism guarantee: one seed, one artifact.
+// v2..v12 keep the historical check under the legacy ProfileFor("full") shape
+// (Tools 60 / Mem 50), exactly as before v13 landed; v13 publishes a slot table
+// only for its own public run sizes (a foreign size fails closed), so it is
+// checked under its canonical ProfileForVersion profile in a second loop.
 func TestSameSeedSameBytes(t *testing.T) {
-	prof, _ := ProfileFor("full")
-	for _, version := range protocol.SupportedBenchVersions() {
+	assertSameBytes := func(version int, prof Profile) {
 		artifactA, err := GenerateDataset(42, prof, version)
 		if err != nil {
 			t.Fatalf("v%d generate a: %v", version, err)
@@ -506,5 +509,52 @@ func TestSameSeedSameBytes(t *testing.T) {
 		if a != b {
 			t.Fatalf("v%d same seed produced different bytes: %s vs %s", version, a, b)
 		}
+	}
+	legacy, _ := ProfileFor("full")
+	for _, version := range []int{protocol.BenchVersionV2, protocol.BenchVersionV3, protocol.BenchVersionV4, protocol.BenchVersionV5, protocol.BenchVersionV6, protocol.BenchVersionV7, protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12} {
+		assertSameBytes(version, legacy)
+	}
+	for version := protocol.BenchVersionV13; protocol.SupportedBenchVersion(version); version++ {
+		prof, ok := ProfileForVersion("full", version)
+		if !ok {
+			t.Fatalf("v%d has no canonical full profile", version)
+		}
+		if _, err := GenerateDataset(42, legacy, version); err == nil {
+			t.Fatalf("v%d accepted the legacy full profile; it must fail closed on a size without a slot table", version)
+		}
+		assertSameBytes(version, prof)
+	}
+}
+
+// TestV13PublicSeedEnvelope checks the private, pre-activation
+// envelope-rebalance contract (issues #1848 / #1529) on the public seed without
+// changing the currently advertised benchmark version: v13 replaces the v8
+// residual budget with the published 250-case slot table (gen/v13_envelope.go),
+// keeps six oracles per story arc, caps the monetary project-outstanding
+// oracle, and adds a fourth injection probe. v2..v12 vectors above are
+// untouched: every lever is gated on bench_version >= 13.
+//
+// NO HASH IS PINNED YET. A known vector is an immutable contract, and #1848
+// requires the v13 vector to be pinned only after the /seed label-leak fix
+// (#1827: story-%02d-* session ids and fixed timestamp steps are still emitted
+// today) and the pending generator swaps (gen.V13InterimSlots /
+// gen.V13InterimGenerators). Publishing a hash advertised as movable would
+// freeze the leak into the contract and make any run scored against it
+// unauditable the moment the hash moved. Until the pin lands, v13 determinism
+// is covered by TestSameSeedSameBytes and this test asserts only the published
+// envelope shape. TestV13KnownVector is added, with its README /
+// docs/bench-versions.md row, in the change that lands the last swap.
+func TestV13PublicSeedEnvelope(t *testing.T) {
+	const seed = int64(123456789)
+	prof, _ := ProfileForVersion("full", protocol.BenchVersionV13)
+	artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV13)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if _, _, err := artifact.SHA256Hex(); err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if len(artifact.MemoryCases) != V13FullEnvelope.Total() || len(artifact.ToolCases) != prof.Tools {
+		t.Fatalf("v13 public seed has %d memory / %d tool cases, want %d / %d", len(artifact.MemoryCases), len(artifact.ToolCases), V13FullEnvelope.Total(), prof.Tools)
 	}
 }

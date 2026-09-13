@@ -137,6 +137,8 @@ var profilesV10 = map[string]Profile{
 // primary budget for Mem=224 is carved in v13PrimaryCaseBudget; v13 must not
 // inherit v10's envelope through a >= comparison, so a later mix rebalance is
 // an explicit profile decision here rather than a silent carry-over.
+// The published 250-case slot table that spends Mem 224 + 9 isolation lives in
+// gen/v13_envelope.go (v13EnvelopeFor); the table, not Mem, is the contract.
 var profilesV13 = map[string]Profile{
 	"small":  {Tools: 6, Mem: 6, Waves: 1, RawPairsFrac: 0, IsoCases: 0},
 	"medium": {Tools: 48, Mem: 64, Waves: 4, RawPairsFrac: 0.45, IsoCases: 5},

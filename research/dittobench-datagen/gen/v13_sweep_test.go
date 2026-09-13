@@ -3,6 +3,7 @@ package gen
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -34,21 +35,34 @@ func TestV13RandomSeedSweepGeneratesEveryDataset(t *testing.T) {
 	}
 }
 
-// TestV13NonPublicRunSizeGenerates covers the analysis path (vstudy/gstudy):
-// a memory count outside the three public profiles still builds the whole
-// abstention budget, including the cross-user family, from the world scale.
+// TestV13NonPublicRunSizeGenerates: the v13 slot table is published for the
+// three public profiles only, so a memory count outside them fails closed
+// instead of inventing an envelope (the analysis path passes a public profile
+// and derives its isolation quota from the world scale, v13IsoCasesForMem);
+// every public profile builds its whole abstention budget, cross-user family
+// included.
 func TestV13NonPublicRunSizeGenerates(t *testing.T) {
 	for _, n := range []int{45, 120} {
 		rng, err := NewRNGForVersion(7, protocol.BenchVersionV13)
 		if err != nil {
 			t.Fatal(err)
 		}
-		suite, err := GenerateMemorySuiteForVersion(rng, 7, n, 5, 0.5, protocol.BenchVersionV13)
-		if err != nil {
-			t.Fatalf("n=%d: %v", n, err)
+		if _, err := GenerateMemorySuiteForVersion(rng, 7, n, 5, 0.5, protocol.BenchVersionV13); err == nil || !strings.Contains(err.Error(), "no slot table") {
+			t.Fatalf("n=%d: want the slot-table fail-closed error, got %v", n, err)
 		}
-		if suite.AbstentionCases != v13AbstentionCaseCount(n) {
-			t.Fatalf("n=%d: %d abstention pairs, want %d", n, suite.AbstentionCases, v13AbstentionCaseCount(n))
+	}
+	for _, runSize := range []string{"medium", "full"} {
+		prof, _ := ProfileForVersion(runSize, protocol.BenchVersionV13)
+		rng, err := NewRNGForVersion(7, protocol.BenchVersionV13)
+		if err != nil {
+			t.Fatal(err)
+		}
+		suite, err := GenerateMemorySuiteForVersion(rng, 7, prof.Mem, prof.Waves, prof.RawPairsFrac, protocol.BenchVersionV13)
+		if err != nil {
+			t.Fatalf("%s: %v", runSize, err)
+		}
+		if suite.AbstentionCases != v13AbstentionCaseCount(prof.Mem) {
+			t.Fatalf("%s: %d abstention pairs, want %d", runSize, suite.AbstentionCases, v13AbstentionCaseCount(prof.Mem))
 		}
 	}
 }

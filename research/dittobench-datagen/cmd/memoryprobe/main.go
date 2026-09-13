@@ -1,3 +1,11 @@
+// Command memoryprobe runs the memory-exposure audit (gen.AuditMemoryExposure)
+// for one generated dataset: how many evidence-bound answers can be copied
+// verbatim out of their declared evidence versus how many must be computed.
+//
+// Usage: memoryprobe -bench-version 13 -seed 41 -run-size full
+//
+// -bench-version defaults to the newest supported contract so the probe never
+// silently re-pins to an old version.
 package main
 
 import (

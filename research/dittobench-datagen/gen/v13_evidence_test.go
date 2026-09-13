@@ -41,10 +41,13 @@ func TestV13ReferenceRunKeepsTheFixedEnvelope(t *testing.T) {
 			if !reflect.DeepEqual(artifact, again) {
 				t.Fatalf("v13 seed %d %s is not deterministic", seed, runSize)
 			}
-			// The plumbing envelope (profilesV13): full carries 100 tool cases and
-			// 250 memory cases (224 primary + 9 isolation + the fixed tail); small
-			// and medium keep the v12 counts.
-			want := map[string]int{"small": 30, "medium": 143, "full": 350}[runSize]
+			// The published v13 slot table (gen/v13_envelope.go) plus the tool
+			// envelope: small 6 + 27, medium 48 + 95, full 100 + 250.
+			envelope, ok := V13EnvelopeForRunSize(runSize)
+			if !ok {
+				t.Fatalf("no v13 envelope for %s", runSize)
+			}
+			want := prof.Tools + envelope.Total()
 			if got := len(artifact.ToolCases) + len(artifact.MemoryCases); got != want {
 				t.Fatalf("v13 seed %d %s run has %d cases, want fixed envelope %d", seed, runSize, got, want)
 			}

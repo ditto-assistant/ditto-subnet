@@ -386,6 +386,17 @@ func (w World) QuestionPlansExcluding(count int, exclude map[string]bool) ([]Que
 	return w.questionPlansFiltered(count, exclude, nil)
 }
 
+// V13RequiredOrdinaryKeys names the ordinary programs the staged-trip
+// corrections need selected (their current-itinerary program), as
+// (oracle, index) keys for WorldPlanSelection.Require.
+func (w World) V13RequiredOrdinaryKeys(a V13Allocation) []string {
+	out := make([]string, 0, len(a.StagedTrips))
+	for _, tripIndex := range a.StagedTrips {
+		out = append(out, excludeKey(oracleTripCurrent, tripIndex))
+	}
+	return out
+}
+
 // QuestionPlansV13 is the v13 selector: excluded keys are dropped, the
 // staged-trip current-itinerary programs are required, and story programs are
 // capped so ordinary programs keep a floor share.

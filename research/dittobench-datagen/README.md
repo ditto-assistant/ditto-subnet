@@ -103,11 +103,19 @@ envelope lands. For the public full-profile seed
 | 9 (pre-activation) | `2027-01-01T00:00:00Z` | `b12edd3649dece3af415ad289a24a1a8615b7d906773e718ee637da14cbd541f` |
 | 10 (pre-activation) | `2027-02-01T00:00:00Z` | `04d6f3d9099dd9922f931d9a6f90caffd18e70d041d074986d68752ddf928a0f` |
 | 12 (pre-activation) | `2027-04-01T00:00:00Z` | `775e0eaf2d41c0cf4647c51f19c56ecc3bb6db37a780538bb7db745811ab91bb` |
-| 13 (interim pin, re-pinned per v13 layer) | `2027-05-01T00:00:00Z` | `9a05ca87cf03977b5d6e9ab2efc577146cdaeee35530a7d1f9274ce9d91c9b3c` |
+| 13 (interim pin, re-pinned per v13 layer) | `2027-05-01T00:00:00Z` | `aa5b71bf01a1765a13d1e0f7f5be5ceb8405ceeed5a280204ae87213bd39964c` |
 
 Each is regenerated and asserted by CI (`TestV2KnownVector` and friends), so a
 value here that disagrees with `cmd/generate` is a bug in this table, not in the
 generator.
+
+v13 (epoch `2027-05-01T00:00:00Z`) generates deterministically but has **no
+canonical vector yet**: a known vector is an immutable contract, and the v13
+hash is pinned only after the /seed label-leak fix (#1827) and the pending
+generator swaps land (see `docs/bench-versions.md`, Bench v13). Until then
+`TestSameSeedSameBytes` covers v13 determinism and `TestV13PublicSeedEnvelope`
+the published envelope shape. Audit the v13 memory mix with
+`go run ./cmd/mixaudit -bench-version 13 -seeds 40`.
 
 See [docs/bench-versions.md](docs/bench-versions.md) for what each contract is,
 what changed in v4, and how module releases are versioned relative to it.

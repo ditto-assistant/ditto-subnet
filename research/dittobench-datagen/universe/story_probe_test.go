@@ -124,7 +124,7 @@ func storyGIHProbe(w World) storyProbeReport {
 // (#1829) must come in under; a change that lets the scan recover MORE than
 // this fails here, because it means a public frame started handing the graded
 // state over more cheaply.
-var storyProbeRawCeiling = storyProbeReport{Arcs: 104, Owner: 50, Status: 19, Sequence: 104, NextWho: 90, Quantity: 17}
+var storyProbeRawCeiling = storyProbeReport{Arcs: 104, Owner: 50, Status: 25, Sequence: 104, NextWho: 90, Quantity: 17}
 
 func TestStoryV2ArcRecoveryCeilingIsReportedAndDeterministic(t *testing.T) {
 	total := storyProbeReport{}

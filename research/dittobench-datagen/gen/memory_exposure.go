@@ -76,6 +76,7 @@ func AuditMemoryExposureForVersion(artifact DatasetArtifact, benchVersion int) (
 	}
 	if artifact.BenchVersion != benchVersion {
 		return MemoryExposureResult{}, fmt.Errorf("memory exposure audit requested bench version %d, artifact is %d", benchVersion, artifact.BenchVersion)
+
 	}
 	pairs := make(map[string]string)
 	for _, tc := range artifact.ToolCases {
@@ -120,6 +121,12 @@ func AuditMemoryExposureForVersion(artifact DatasetArtifact, benchVersion int) (
 		return result, fmt.Errorf("memory exposure audit could not resolve %d evidence pair ids", result.MissingEvidenceID)
 	}
 	return result, nil
+}
+
+// AuditMemoryExposure audits an artifact under the contract it was generated
+// for (artifact.BenchVersion); a floor over v10+, never an enumeration.
+func AuditMemoryExposure(artifact DatasetArtifact) (MemoryExposureResult, error) {
+	return AuditMemoryExposureForVersion(artifact, artifact.BenchVersion)
 }
 
 // v13ComputedQuestionTypes are the shared-world oracle families whose answer is

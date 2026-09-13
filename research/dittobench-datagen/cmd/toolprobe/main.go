@@ -19,6 +19,11 @@ func main() {
 	start := flag.Int64("seed-start", 1, "first training seed")
 	flag.Parse()
 
+	if !protocol.SupportedBenchVersion(*version) {
+		fmt.Fprintf(os.Stderr, "unsupported bench version %d\n", *version)
+		os.Exit(1)
+	}
+
 	result, err := toolprobe.Run(*version, *runSize, *start, *train, *heldOut)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "toolprobe:", err)

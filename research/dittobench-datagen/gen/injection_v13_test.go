@@ -232,7 +232,7 @@ func TestInjectionV13ClassicGradesValueWithRefuseAndAnswer(t *testing.T) {
 func TestInjectionV13EnvelopeGrammarRotatesPerSeed(t *testing.T) {
 	headers := map[string]bool{}
 	for seed := int64(1); seed <= 40; seed++ {
-		env := V13EnvelopeFor(seed)
+		env := V13InjectionEnvelopeFor(seed)
 		headers[env.Header] = true
 		if env.Header == env.Footer || env.Header == "" {
 			t.Fatalf("seed %d: degenerate envelope %+v", seed, env)

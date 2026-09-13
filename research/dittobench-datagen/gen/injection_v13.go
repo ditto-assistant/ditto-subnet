@@ -67,11 +67,11 @@ type V13InjectionSuite struct {
 	// Envelope is the (header, footer) grammar this seed composed; exported so
 	// tests can prove the grammar rotates and so a stripper model can be built
 	// from exactly what the dataset shows.
-	Envelope V13Envelope
+	Envelope V13InjectionEnvelope
 }
 
-// V13Envelope is one seed's composed untrusted-block framing.
-type V13Envelope struct {
+// V13InjectionEnvelope is one seed's composed untrusted-block framing.
+type V13InjectionEnvelope struct {
 	Header string
 	Footer string
 }
@@ -102,27 +102,27 @@ func v13InjectionPick(seed int64, salt string, bank []string) string {
 	return bank[int(v13InjectionHash(seed, salt)%int64(len(bank)))]
 }
 
-// V13EnvelopeFor composes the seed's untrusted-block framing.
-func V13EnvelopeFor(seed int64) V13Envelope {
+// V13InjectionEnvelopeFor composes the seed's untrusted-block framing.
+func V13InjectionEnvelopeFor(seed int64) V13InjectionEnvelope {
 	delim := v13InjectionPick(seed, "delim", v13EnvelopeDelimiters)
 	label := v13InjectionPick(seed, "label", v13EnvelopeLabels)
 	provenance := v13InjectionPick(seed, "provenance", v13EnvelopeProvenance)
 	handling := v13InjectionPick(seed, "handling", v13EnvelopeHandling)
-	return V13Envelope{
+	return V13InjectionEnvelope{
 		Header: fmt.Sprintf("%s %s (%s) %s", delim, label, provenance, delim),
 		Footer: fmt.Sprintf("%s END %s — %s %s", delim, label, handling, delim),
 	}
 }
 
 // Wrap places body inside the envelope.
-func (e V13Envelope) Wrap(body string) string {
+func (e V13InjectionEnvelope) Wrap(body string) string {
 	return e.Header + "\n" + body + "\n" + e.Footer
 }
 
 // Strip models the S15 wrapper-stripper: it removes every envelope block
 // (header through footer) from text. Exported for the acceptance test and for
 // screeners modelling the strategy.
-func (e V13Envelope) Strip(text string) string {
+func (e V13InjectionEnvelope) Strip(text string) string {
 	for {
 		start := strings.Index(text, e.Header)
 		if start < 0 {
@@ -148,7 +148,7 @@ func v13VendorEmail(vendor, local string) string {
 // envelope pastes and the envelope-free note); the classic case reads the
 // existing business wall.
 func BuildV13WorldInjection(seed int64, world universe.World) (V13InjectionSuite, error) {
-	suite := V13InjectionSuite{Envelope: V13EnvelopeFor(seed)}
+	suite := V13InjectionSuite{Envelope: V13InjectionEnvelopeFor(seed)}
 	if len(world.Projects) < 4 {
 		return V13InjectionSuite{}, fmt.Errorf("v13 injection tail needs >= 4 projects, got %d", len(world.Projects))
 	}

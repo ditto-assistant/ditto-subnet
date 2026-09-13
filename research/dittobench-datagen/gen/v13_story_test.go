@@ -15,16 +15,14 @@ import (
 // is regenerated alongside to prove the envelope did not move.
 func TestV13WorldMemorySuiteCarriesStoryV2(t *testing.T) {
 	for seed := int64(1); seed <= 3; seed++ {
-		v13, err := generateV8WorldMemorySuite(seed, 225, 5, protocol.BenchVersionV13)
+		// v13 fills the published slot table (gen/v13_envelope.go) rather than
+		// the v8 residual budget; the story slot is 13 arcs x 6 oracles = 78.
+		v13, err := generateV13WorldMemorySuite(seed, profilesV13["full"].Mem, 5, protocol.BenchVersionV13)
 		if err != nil {
 			t.Fatalf("seed %d v13 world suite: %v", seed, err)
 		}
-		v12, err := generateV8WorldMemorySuite(seed, 225, 5, protocol.BenchVersionV12)
-		if err != nil {
-			t.Fatalf("seed %d v12 world suite: %v", seed, err)
-		}
-		if len(v13.Cases) != len(v12.Cases) {
-			t.Fatalf("seed %d v13 world suite has %d cases, v12 has %d", seed, len(v13.Cases), len(v12.Cases))
+		if got := len(v13.Cases) + V13FullEnvelope.Isolation; got != V13FullEnvelope.Total() {
+			t.Fatalf("seed %d v13 world suite has %d cases plus isolation, envelope publishes %d", seed, got, V13FullEnvelope.Total())
 		}
 		story, money := 0, 0
 		kinds := map[string]int{}
@@ -51,8 +49,8 @@ func TestV13WorldMemorySuiteCarriesStoryV2(t *testing.T) {
 		// budget, so until the v13 envelope slot table (#1848) re-pins the
 		// story share the planner yields fewer story cases. Every oracle kind
 		// must still appear and the share must stay the majority of the slice.
-		if story < 52 || story > 78 {
-			t.Fatalf("seed %d v13 story cases=%d, want 52..78 (%v)", seed, story, kinds)
+		if story != V13FullEnvelope.Story {
+			t.Fatalf("seed %d v13 story cases=%d, want %d (%v)", seed, story, V13FullEnvelope.Story, kinds)
 		}
 		// status-disagree and lesson-claims are the rotating per-arc oracles and
 		// may fall out of a shrunken slice; the four fixed oracles never do.
@@ -69,8 +67,8 @@ func TestV13WorldMemorySuiteCarriesStoryV2(t *testing.T) {
 				t.Fatalf("seed %d v13 still emits the retired v8 story oracle %s", seed, retired)
 			}
 		}
-		if kinds["world-story-x-owner-email"] > 13 || kinds["world-story-x-owner-email"] < 9 {
-			t.Fatalf("seed %d cross-record story oracles=%d, want at most one per arc and most arcs covered", seed, kinds["world-story-x-owner-email"])
+		if kinds["world-story-x-owner-email"] != 13 {
+			t.Fatalf("seed %d cross-record story oracles=%d, want one per arc", seed, kinds["world-story-x-owner-email"])
 		}
 	}
 }

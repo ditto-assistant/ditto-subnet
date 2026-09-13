@@ -153,7 +153,10 @@ func v13IntegrityFor(seed int64, world universe.World, benchVersion int) (v13Int
 		out.behavior = append(out.behavior, v13IntegrityQuestion(seed, "behavior:"+preference.Domain, i, v13BehaviorGrammars[preference.Domain], nil))
 	}
 	out.canary = v13IntegrityQuestion(seed, "canary", 0, v13CanaryQuestionGrammar, nil)
-	for i := 0; i < 3 && i < len(world.Projects); i++ {
+	// One probe per project up to the contract's injection count (four from
+	// v13, gen/memory_v2.go worldInjectionCaseCount); the grammar draws a
+	// distinct frame per ordinal.
+	for i := 0; i < worldInjectionCaseCount(benchVersion) && i < len(world.Projects); i++ {
 		out.injection = append(out.injection, v13IntegrityQuestion(seed, "injection", i, v13InjectionQuestionGrammar, map[string]string{"aliasq": fmt.Sprintf("%q", world.Projects[i].Alias)}))
 	}
 	return out, true

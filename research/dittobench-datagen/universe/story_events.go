@@ -247,16 +247,18 @@ var storyStatusVocabulary = map[string][]string{
 	"corrected":   {"corrected", "revised", "amended", "restated"},
 	"in progress": {"in progress", "moving", "in motion", "being worked", "in hand"},
 	"delivered":   {"delivered", "handed over", "shipped", "fulfilled"},
-	"closed":      {"closed", "wrapped up", "finished", "done", "complete"},
-	"cancelled":   {"cancelled", "canceled", "called off", "scrapped", "dropped"},
-	"planned":     {"planned", "pencilled in", "penciled in", "sketched out", "mapped out"},
-	"booked":      {"booked", "reserved", "locked in", "secured"},
-	"confirmed":   {"confirmed", "firmed up", "nailed down", "definite", "set"},
-	"postponed":   {"postponed", "pushed back", "delayed", "deferred", "put off"},
-	"rebooked":    {"rebooked", "moved", "rescheduled", "switched over", "re-arranged"},
-	"disputed":    {"disputed", "contested", "challenged", "under query", "in dispute"},
-	"settled":     {"settled", "resolved", "sorted", "squared away", "agreed"},
-	"completed":   {"completed", "finished", "done", "wrapped up", "all done"},
+	// "done" and "complete" are left out: a canned completion acknowledgement
+	// ("Done. All set.") must not satisfy a status question (cmd/graderaudit).
+	"closed":    {"closed", "wrapped up", "finished"},
+	"cancelled": {"cancelled", "canceled", "called off", "scrapped", "dropped"},
+	"planned":   {"planned", "pencilled in", "penciled in", "sketched out", "mapped out"},
+	"booked":    {"booked", "reserved", "locked in", "secured"},
+	"confirmed": {"confirmed", "firmed up", "nailed down", "definite"},
+	"postponed": {"postponed", "pushed back", "delayed", "deferred", "put off"},
+	"rebooked":  {"rebooked", "moved", "rescheduled", "switched over", "re-arranged"},
+	"disputed":  {"disputed", "contested", "challenged", "under query", "in dispute"},
+	"settled":   {"settled", "resolved", "sorted", "squared away", "agreed"},
+	"completed": {"completed", "finished", "wrapped up"},
 }
 
 // storyStatusOrder lists canonical statuses so tests and distractor draws walk

@@ -9,36 +9,6 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
-func TestV13GenerationIsExplicitAndNotActivated(t *testing.T) {
-	if protocol.CurrentBenchVersion != protocol.BenchVersionV8 {
-		t.Fatalf("v13 scaffold changed active version to %d", protocol.CurrentBenchVersion)
-	}
-	if !protocol.SupportedBenchVersion(protocol.BenchVersionV13) {
-		t.Fatal("v13 deterministic generation is not supported")
-	}
-	// The run-size envelope is the plumbing's decision (profilesV13, pinned by
-	// TestV13ProfileAndEnvelope): the surface levers change how a case reads,
-	// never how many there are, so small/medium stay on the v12 envelope and
-	// full differs from v12 only in the memory budget.
-	for _, runSize := range []string{"small", "medium"} {
-		v12, _ := ProfileForVersion(runSize, protocol.BenchVersionV12)
-		v13, ok := ProfileForVersion(runSize, protocol.BenchVersionV13)
-		if !ok || v12 != v13 {
-			t.Errorf("v13 %s profile=(%+v,%v), want the v12 envelope %+v", runSize, v13, ok, v12)
-		}
-	}
-	v12Full, _ := ProfileForVersion("full", protocol.BenchVersionV12)
-	v13Full, ok := ProfileForVersion("full", protocol.BenchVersionV13)
-	v12Full.Mem = v13Full.Mem
-	if !ok || v12Full != v13Full {
-		t.Errorf("v13 full profile=(%+v,%v), want the v12 envelope with only Mem changed", v13Full, ok)
-	}
-	epoch, err := protocol.DatasetEpochForVersion(protocol.BenchVersionV13)
-	if err != nil || epoch.Year() != 2027 || epoch.Month() != 5 {
-		t.Fatalf("v13 epoch=(%v,%v), want 2027-05-01", epoch, err)
-	}
-}
-
 // TestV13SaltZeroIsByteIdenticalToUnsaltedPath pins the public rehearsal
 // default: GenerateDataset and GenerateDatasetWithSurface with SurfaceOptions{}
 // or an explicit Salt 0 produce the same bytes, for v13 and for every version
