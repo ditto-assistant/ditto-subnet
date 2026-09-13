@@ -14,6 +14,9 @@ export interface ActivityEntry {
   avatar_url?: string | null;
   version?: number | null;
   miner_hotkey?: string;
+  /** Submitting miner's current SN118 UID; null when unregistered or when the
+   * chain snapshot was unavailable. Decoration only — never a status or score. */
+  miner_uid?: number | null;
   /** Submission status slug, e.g. "waiting_screening" | "scored" | "rejected". */
   status?: string;
   submitted_at?: string;

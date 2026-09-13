@@ -4924,6 +4924,34 @@ def _public_activity_statuses(
     }
 
 
+_UID_SEARCH = re.compile(r"^(?:uid\s*)?#?(\d{1,6})$")
+
+
+def _uid_search_text(uid: int | None) -> str:
+    """The searchable form of a miner UID; empty when the miner is unregistered."""
+    return "" if uid is None else f"uid {uid}"
+
+
+def _query_uid_hotkeys(
+    query: str | None, uids_by_hotkey: dict[str, int] | None
+) -> set[str]:
+    """Hotkeys currently holding the UID typed into a search box.
+
+    A UID is chain state rather than a stored column, so searching "42" (or
+    "uid 42") is resolved against the same cached registration snapshot the
+    leaderboard reads and pushed into SQL as the hotkeys holding it. An
+    unreadable snapshot, or a UID nobody holds, simply matches nothing extra
+    instead of failing the search.
+    """
+    if not query or not uids_by_hotkey:
+        return set()
+    match = _UID_SEARCH.match(query.strip().casefold())
+    if match is None:
+        return set()
+    wanted = int(match.group(1))
+    return {hotkey for hotkey, uid in uids_by_hotkey.items() if uid == wanted}
+
+
 def _public_activity_response(
     *,
     rows: list[Any],
@@ -4958,10 +4986,12 @@ def _public_activity_response(
     strike_colliding_names: bool = True,
     avatar_urls: dict[str, str] | None = None,
     coding_runs: dict[UUID, CodingShadowRunBundle] | None = None,
+    miner_uids: dict[str, int] | None = None,
 ) -> PublicActivityResponse:
     """Project activity from the same validated work set used by fleet health."""
     claims = handle_claims or {}
     roots = owner_roots or {}
+    uids = miner_uids or {}
     active_by_agent: dict[UUID, list[PublicBenchmarkProgress]] = {}
     for work in active_work:
         active_by_agent.setdefault(work.agent.agent_id, []).append(
@@ -5022,6 +5052,10 @@ def _public_activity_response(
                     ),
                     str(row.agent.agent_id),
                     row.agent.miner_hotkey,
+                    # The SQL pass can match a row by resolved UID, so the same
+                    # text has to be searchable here or the re-filter would
+                    # drop exactly the rows the UID search just found.
+                    _uid_search_text(uids.get(row.agent.miner_hotkey)),
                     row_status,
                 )
             ).casefold()
@@ -5128,6 +5162,7 @@ def _public_activity_response(
             PublicActivityEntry(
                 agent_id=row.agent.agent_id,
                 miner_hotkey=row.agent.miner_hotkey,
+                miner_uid=uids.get(row.agent.miner_hotkey),
                 name=displayed[row.agent.agent_id][0],
                 name_handle=displayed[row.agent.agent_id][1],
                 avatar_url=avatars.get(row.agent.miner_hotkey),
@@ -5552,6 +5587,11 @@ async def activity(
     from ditto.db.queries.name_claims import active_handle_claims
 
     handle_claims = await active_handle_claims(session, netuid=_name_claim_netuid())
+    # The same cached registration snapshot the leaderboard reads: it labels
+    # each row with the miner's UID, and lets a typed UID resolve to the
+    # hotkeys holding it so "42" searches that miner's submissions.
+    registration = await _current_registration(request)
+    registered_uids = registration.uids_by_hotkey if registration else None
     activity_page = await query_public_activity_page(
         session,
         bench_version=active_version,
@@ -5564,6 +5604,7 @@ async def activity(
         reserved_name_stems={
             stem for stem, claim in handle_claims.items() if claim.status == "upheld"
         },
+        query_miner_hotkeys=_query_uid_hotkeys(q, registered_uids),
         miner_hotkey=miner,
         ath_only=review == "ath",
         active_validation_agent_ids=active_validation_agent_ids,
@@ -5632,6 +5673,7 @@ async def activity(
             agent_ids=[row.agent.agent_id for row in rows],
             bench_version=active_version,
         ),
+        miner_uids=registered_uids,
     )
 
 
@@ -5848,6 +5890,8 @@ async def operations(
     from ditto.db.queries.name_claims import active_handle_claims
 
     handle_claims = await active_handle_claims(session, netuid=_name_claim_netuid())
+    registration = await _current_registration(request)
+    registered_uids = registration.uids_by_hotkey if registration else None
     owner_roots = await _attested_owner_roots_for_rows(session, activity_rows)
     avatar_rows = await list_miner_avatars(
         session, hotkeys={row.agent.miner_hotkey for row in activity_rows}
@@ -5899,6 +5943,7 @@ async def operations(
             agent_ids=[row.agent.agent_id for row in activity_rows],
             bench_version=active_version,
         ),
+        miner_uids=registered_uids,
     )
     validator_snapshot = _validator_heartbeats_response(
         rows=heartbeat_rows,

@@ -6228,6 +6228,7 @@ class TestPublicActivity:
         assert set(body["entries"][0]) == {
             "agent_id",
             "miner_hotkey",
+            "miner_uid",
             "name",
             "name_handle",
             "avatar_url",
@@ -6949,6 +6950,83 @@ class TestPublicActivity:
             "screening": 1,
             "rejected": 1,
         }
+
+    async def test_search_resolves_a_miner_uid_to_that_miner_submissions(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_agent(
+            session_maker,
+            miner=_MINER_A,
+            status=AgentStatus.UPLOADED,
+            name="registered miner agent",
+        )
+        await _seed_agent(
+            session_maker,
+            miner=_MINER_B,
+            status=AgentStatus.UPLOADED,
+            name="unregistered miner agent",
+        )
+        _install_db(app, session_maker)
+        app.state.chain = SimpleNamespace(
+            get_recent_neurons=AsyncMock(
+                return_value=[SimpleNamespace(hotkey=_MINER_A, uid=42)]
+            )
+        )
+
+        # "uid 42" cannot collide with a random agent id the way a bare number
+        # can, so this form is the one with an assertable exact result set.
+        labeled = await client.get("/api/v1/public/activity", params={"q": "uid 42"})
+
+        assert labeled.status_code == 200
+        body = labeled.json()
+        assert [entry["name"] for entry in body["entries"]] == [
+            "registered miner agent"
+        ]
+        assert body["total"] == 1
+        assert body["entries"][0]["miner_uid"] == 42
+
+        # The bare number is what people actually type; it stays additive on top
+        # of the existing name/id/hotkey text search rather than replacing it.
+        bare = await client.get("/api/v1/public/activity", params={"q": "42"})
+
+        assert bare.status_code == 200
+        assert "registered miner agent" in {
+            entry["name"] for entry in bare.json()["entries"]
+        }
+
+    async def test_activity_reports_no_uid_when_the_miner_is_unregistered(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_agent(
+            session_maker,
+            miner=_MINER_B,
+            status=AgentStatus.UPLOADED,
+            name="unregistered miner agent",
+        )
+        _install_db(app, session_maker)
+        app.state.chain = SimpleNamespace(
+            get_recent_neurons=AsyncMock(
+                return_value=[SimpleNamespace(hotkey=_MINER_A, uid=42)]
+            )
+        )
+
+        response = await client.get("/api/v1/public/activity")
+
+        assert response.status_code == 200
+        entries = response.json()["entries"]
+        assert [entry["miner_uid"] for entry in entries] == [None]
+
+        # An unheld UID narrows to nothing rather than falling back to every row.
+        missing = await client.get("/api/v1/public/activity", params={"q": "uid 42"})
+
+        assert missing.status_code == 200
+        assert missing.json()["entries"] == []
 
     async def test_rejects_unknown_public_status_filter(
         self,

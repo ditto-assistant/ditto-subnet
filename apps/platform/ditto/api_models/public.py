@@ -2567,6 +2567,19 @@ class PublicActivityEntry(BaseModel):
     miner_hotkey: Annotated[
         str, Field(pattern=_SS58_PATTERN, description="Submitting miner's SS58 hotkey.")
     ]
+    miner_uid: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Submitting miner's current UID on this subnet; null when the "
+                "hotkey is not registered or the chain snapshot is unavailable. "
+                "Registration decorates the submission: it never changes the "
+                "row's status or score."
+            ),
+        ),
+    ] = None
     name: Annotated[str, Field(description="Miner-provided agent display name.")]
     name_handle: PublicNameHandle | None = Field(
         default=None,

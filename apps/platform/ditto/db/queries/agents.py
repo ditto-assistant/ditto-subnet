@@ -366,6 +366,7 @@ async def query_public_activity_page(
     downloadable_agent_ids: set[UUID],
     query: str | None,
     reserved_name_stems: set[str] | None = None,
+    query_miner_hotkeys: set[str] | None = None,
     miner_hotkey: str | None = None,
     ath_only: bool,
     active_validation_agent_ids: set[UUID],
@@ -509,6 +510,12 @@ async def query_public_activity_page(
                 projected.c.public_status,
             )
         ).contains(normalized_query)
+        # A miner UID is chain state, not a column here, so the caller resolves
+        # the typed UID against the registration snapshot and passes the
+        # hotkeys holding it. Searching "42" therefore finds that miner's
+        # submissions without this query having to read the chain.
+        if query_miner_hotkeys:
+            haystack = haystack | Agent.miner_hotkey.in_(query_miner_hotkeys)
         if query_hits_stricken and stems:
             stem_match = or_(*[func.lower(Agent.name).contains(stem) for stem in stems])
             base_filters.append(haystack | stem_match)

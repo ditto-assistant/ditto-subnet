@@ -17762,6 +17762,11 @@ export interface components {
              */
             miner_hotkey: string;
             /**
+             * Miner Uid
+             * @description Submitting miner's current UID on this subnet; null when the hotkey is not registered or the chain snapshot is unavailable. Registration decorates the submission: it never changes the row's status or score.
+             */
+            miner_uid?: number | null;
+            /**
              * Name
              * @description Miner-provided agent display name.
              */
