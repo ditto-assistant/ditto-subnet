@@ -395,36 +395,13 @@ Implementation must remain in independently reviewable, default-off layers:
 7. one settlement-bound artifact across three independent validators; and
 8. owner-reviewed real private release registration.
 
-The phase-6 source contract is implemented by
-`apps/platform/ditto/api_server/coding_hippius_canary.py`. It requires one
-reserved synthetic corpus, exact matching source/deployment SHAs, one validator,
-separate authoring and grading executors, the ticket-bound encrypted retriever,
-and the protected evidence runtime. It emits only a content-addressed redacted
-receipt after sealing the authoring transcript, frozen submission, and terminal
-request. The module has no route, scheduler, production adapters, or caller;
-merging it is not a live canary and does not advance phase 7.
-
-The follow-up operator layer adds a default-off confirmation-gated command,
-protected canonical plan loading, exact clean deployed-source verification,
-one local execution fence, and fixed owner-only process adapters for external
-unwrap plus separate authoring and grading helpers. It does not ship the helper
-implementations or any activation setting. A green source/CI result therefore
-remains distinct from a live phase-6 receipt.
-
-The helper packaging layer adds three distinct root-owned local proxy clients,
-pins each to one mode-`0660` Unix socket and expected backend UID/GID, and
-verifies the connected Linux peer credentials. The proxies carry only bounded
-canonical helper messages and do not implement a key service or execution
-backend. Their Ansible gate remains false and installs no service or secret by
-default.
-
-The isolated unwrap layer adds a no-network, systemd-socket-activated service
-for the synthetic canary only. A protected authority derived from the canary
-plan and encrypted manifest permits exactly the authoring and grading request
-digests for one wrapped key. The service recomputes each canonical request and
-verifies its private key's public digest before RSA-OAEP-SHA256 decryption; it
-is not a general unwrap or signing oracle. Both installation and activation
-remain false by default.
+The phase-6 local three-socket canary route (source contract, operator layer and
+helper packaging) has been retired. Its modules, operator command, proxies,
+unwrap service, Ansible gate and docs are removed. Steps 6 and 7 above are now
+carried by the hosted-v2 one-shot worker, which builds the authoring and grading
+retrievers in process and needs one externally provisioned key-custody helper
+rather than three local backend services. The native-v2 custody and sealed
+evidence components are unchanged.
 
 Every worker, scorer, catalog, evidence, readiness, weight, and emission gate
 remains false through the contract and infrastructure layers. A later

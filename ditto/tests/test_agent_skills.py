@@ -362,34 +362,10 @@ def test_platform_backroom_query_routes_to_both_owners() -> None:
     assert {"platform-api", "backroom"} <= topic_ids
 
 
-def test_hippius_canary_operator_query_routes_to_operator_contract() -> None:
-    topic_ids = [
-        str(topic["id"])
-        for topic in lookup("run Hippius canary with protected helper executable")
-    ]
-    assert topic_ids[0] == "coding-hippius-canary-operator"
-
-
 def test_hippius_token_expiry_query_routes_to_lifecycle_skill() -> None:
     topics = lookup("audit Hippius token age before expiry and rotate credentials")
     infra_cloud = next(topic for topic in topics if topic["id"] == "infra-cloud")
     assert "hippius-token-lifecycle" in topic_list(infra_cloud, "skills")
-
-
-def test_hippius_canary_helper_query_routes_to_proxy_packaging() -> None:
-    topic_ids = [
-        str(topic["id"])
-        for topic in lookup("package canary helpers with SO_PEERCRED backend sockets")
-    ]
-    assert topic_ids[0] == "coding-hippius-canary-helpers"
-
-
-def test_hippius_canary_unwrap_query_routes_to_isolated_service() -> None:
-    topic_ids = [
-        str(topic["id"])
-        for topic in lookup("prepare exact Hippius canary unwrap authority")
-    ]
-    assert topic_ids[0] == "coding-hippius-canary-unwrap"
 
 
 def test_targon_query_routes_to_capacity_and_release() -> None:
