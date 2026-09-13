@@ -520,13 +520,14 @@ func TestReceivedFailureKindKeyIsAnAllowlist(t *testing.T) {
 	diagnostics.recordReceivedFailure(nil)
 	diagnostics.recordReceivedFailure(BindTrustedCaseInferenceActivity(
 		&HarnessCaseFailure{Kind: "http_status", StatusCode: 503, received: true},
-		TrustedCaseInferenceActivity{ReaderAttempts: 2, EmbeddingDispatches: 3},
+		TrustedCaseInferenceActivity{ReaderAttempts: 2, ReaderAgentRejections: 2, EmbeddingDispatches: 3},
 	).(*HarnessCaseFailure))
 	if want := (ExecutionDiagnostics{
-		ReceivedFailures:                   2,
-		ReceivedFailureKinds:               map[string]int{"other": 1, "http_status_503": 1},
-		ReceivedFailureReaderAttempts:      2,
-		ReceivedFailureEmbeddingDispatches: 3,
+		ReceivedFailures:                     2,
+		ReceivedFailureKinds:                 map[string]int{"other": 1, "http_status_503": 1},
+		ReceivedFailureReaderAttempts:        2,
+		ReceivedFailureReaderAgentRejections: 2,
+		ReceivedFailureEmbeddingDispatches:   3,
 	}); !reflect.DeepEqual(diagnostics, want) {
 		t.Fatalf("diagnostics=%#v, want %#v", diagnostics, want)
 	}

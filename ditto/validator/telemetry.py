@@ -103,6 +103,7 @@ class ConfirmationLongMemDiagnosticsStat:
     received_failures: int
     received_failure_kinds: Mapping[str, int]
     received_failure_reader_attempts: int
+    received_failure_reader_agent_rejections: int
     received_failure_embedding_dispatches: int
 
 
@@ -313,6 +314,9 @@ class ValidatorTelemetry:
             "confirmation/longmem_received_failures": stat.received_failures,
             "confirmation/longmem_received_failure_reader_attempts": (
                 stat.received_failure_reader_attempts
+            ),
+            "confirmation/longmem_received_failure_reader_agent_rejections": (
+                stat.received_failure_reader_agent_rejections
             ),
             "confirmation/longmem_received_failure_embedding_dispatches": (
                 stat.received_failure_embedding_dispatches

@@ -1075,9 +1075,11 @@ func TestConfirmationDimensionWrapperAndWireDigestAreStrict(t *testing.T) {
 		t.Fatalf("empty diagnostics serialized: %s", plain)
 	}
 	result.LongMemDiagnostics = &longmemeval.ExecutionDiagnostics{
-		ReceivedFailures:                   48,
-		ReceivedFailureKinds:               map[string]int{"http_status_503": 48},
-		ReceivedFailureEmbeddingDispatches: 48,
+		ReceivedFailures:                     48,
+		ReceivedFailureKinds:                 map[string]int{"http_status_503": 48},
+		ReceivedFailureReaderAttempts:        196,
+		ReceivedFailureReaderAgentRejections: 196,
+		ReceivedFailureEmbeddingDispatches:   48,
 	}
 	withDiagnostics, err := confirmationWireSHA256(result)
 	if err != nil {
@@ -1090,7 +1092,7 @@ func TestConfirmationDimensionWrapperAndWireDigestAreStrict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(annotated), `"longmem_diagnostics":{"received_failures":48,"received_failure_kinds":{"http_status_503":48},"received_failure_reader_attempts":0,"received_failure_embedding_dispatches":48}`) {
+	if !strings.Contains(string(annotated), `"longmem_diagnostics":{"received_failures":48,"received_failure_kinds":{"http_status_503":48},"received_failure_reader_attempts":196,"received_failure_reader_agent_rejections":196,"received_failure_embedding_dispatches":48}`) {
 		t.Fatalf("diagnostics wire = %s", annotated)
 	}
 	for _, hostile := range []string{

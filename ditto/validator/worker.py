@@ -1700,12 +1700,14 @@ class ValidatorWorker:
         kinds = dict(sorted(diagnostics.received_failure_kinds.items()))
         logger.warning(
             "v9 confirmation bundle %s: %d/%d LongMem cases were received harness "
-            "failures kinds=%s reader_attempts=%d embedding_dispatches=%d",
+            "failures kinds=%s reader_attempts=%d reader_agent_rejections=%d "
+            "embedding_dispatches=%d",
             job.bundle_id,
             diagnostics.received_failures,
             case_total,
             kinds,
             diagnostics.received_failure_reader_attempts,
+            diagnostics.received_failure_reader_agent_rejections,
             diagnostics.received_failure_embedding_dispatches,
         )
         try:
@@ -1717,6 +1719,9 @@ class ValidatorWorker:
                     received_failure_kinds=kinds,
                     received_failure_reader_attempts=(
                         diagnostics.received_failure_reader_attempts
+                    ),
+                    received_failure_reader_agent_rejections=(
+                        diagnostics.received_failure_reader_agent_rejections
                     ),
                     received_failure_embedding_dispatches=(
                         diagnostics.received_failure_embedding_dispatches

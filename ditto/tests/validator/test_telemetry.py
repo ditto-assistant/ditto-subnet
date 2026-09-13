@@ -376,7 +376,8 @@ class TestConfirmationLongMemDiagnosticsTelemetry:
             "case_count": 48,
             "received_failures": 48,
             "received_failure_kinds": {"http_status_503": 48},
-            "received_failure_reader_attempts": 0,
+            "received_failure_reader_attempts": 196,
+            "received_failure_reader_agent_rejections": 196,
             "received_failure_embedding_dispatches": 48,
         }
         base.update(overrides)
@@ -420,7 +421,11 @@ class TestConfirmationLongMemDiagnosticsTelemetry:
         )
         assert payload["confirmation/longmem_case_count"] == 48
         assert payload["confirmation/longmem_received_failures"] == 48
-        assert payload["confirmation/longmem_received_failure_reader_attempts"] == 0
+        assert payload["confirmation/longmem_received_failure_reader_attempts"] == 196
+        assert (
+            payload["confirmation/longmem_received_failure_reader_agent_rejections"]
+            == 196
+        )
         assert (
             payload["confirmation/longmem_received_failure_embedding_dispatches"] == 48
         )

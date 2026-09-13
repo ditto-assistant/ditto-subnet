@@ -131,6 +131,7 @@ class V9ConfirmationLongMemDiagnostics(BaseModel):
         default_factory=dict
     )
     received_failure_reader_attempts: Annotated[int, Field(ge=0)] = 0
+    received_failure_reader_agent_rejections: Annotated[int, Field(ge=0)] = 0
     received_failure_embedding_dispatches: Annotated[int, Field(ge=0)] = 0
 
 

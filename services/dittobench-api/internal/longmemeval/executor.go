@@ -81,6 +81,11 @@ type ExecutionDiagnostics struct {
 	// observed inside the failed cases: zero means the harness never tried the
 	// frozen reader before answering.
 	ReceivedFailureReaderAttempts uint64 `json:"received_failure_reader_attempts"`
+	// ReceivedFailureReaderAgentRejections sums the reader attempts the
+	// trusted reader refused before any provider reservation (its
+	// pre-reservation 400/413 marker): attempts equal to rejections means the
+	// harness was calling the reader and every call was refused as sent.
+	ReceivedFailureReaderAgentRejections uint64 `json:"received_failure_reader_agent_rejections"`
 	// ReceivedFailureEmbeddingDispatches sums the embedding dispatches the
 	// broker admitted inside the failed cases.
 	ReceivedFailureEmbeddingDispatches uint64 `json:"received_failure_embedding_dispatches"`
@@ -129,6 +134,7 @@ func (d *ExecutionDiagnostics) recordReceivedFailure(failure *HarnessCaseFailure
 	d.ReceivedFailureKinds[receivedFailureKindKey(failure)]++
 	if failure != nil && failure.activity != nil {
 		d.ReceivedFailureReaderAttempts += failure.activity.ReaderAttempts
+		d.ReceivedFailureReaderAgentRejections += failure.activity.ReaderAgentRejections
 		d.ReceivedFailureEmbeddingDispatches += failure.activity.EmbeddingDispatches
 	}
 }

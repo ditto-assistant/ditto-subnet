@@ -542,7 +542,8 @@ class TestV9ConfirmationExecution:
                 "longmem_diagnostics": V9ConfirmationLongMemDiagnostics(
                     received_failures=48,
                     received_failure_kinds={"http_status_503": 47, "other": 1},
-                    received_failure_reader_attempts=0,
+                    received_failure_reader_attempts=196,
+                    received_failure_reader_agent_rejections=196,
                     received_failure_embedding_dispatches=48,
                 )
             }
@@ -559,7 +560,8 @@ class TestV9ConfirmationExecution:
         assert stat.case_count == per_capability * len(CAPABILITY_ORDER)
         assert stat.received_failures == 48
         assert dict(stat.received_failure_kinds) == {"http_status_503": 47, "other": 1}
-        assert stat.received_failure_reader_attempts == 0
+        assert stat.received_failure_reader_attempts == 196
+        assert stat.received_failure_reader_agent_rejections == 196
         assert stat.received_failure_embedding_dispatches == 48
         # Observational only: the exact signed report still ships.
         platform.submit_v9_confirmation_report.assert_awaited_once()
@@ -948,12 +950,17 @@ class TestV9ConfirmationScorerResultDiagnostics:
         payload["longmem_diagnostics"] = {
             "received_failures": 48,
             "received_failure_kinds": {"http_status_503": 48},
-            "received_failure_reader_attempts": 0,
+            "received_failure_reader_attempts": 196,
+            "received_failure_reader_agent_rejections": 196,
             "received_failure_embedding_dispatches": 48,
         }
         parsed = V9ConfirmationScorerResult.model_validate(payload)
         assert parsed.longmem_diagnostics is not None
         assert parsed.longmem_diagnostics.received_failures == 48
+        assert parsed.longmem_diagnostics.received_failure_reader_attempts == 196
+        assert (
+            parsed.longmem_diagnostics.received_failure_reader_agent_rejections == 196
+        )
         assert parsed.longmem_diagnostics.received_failure_kinds == {
             "http_status_503": 48
         }
@@ -967,6 +974,7 @@ class TestV9ConfirmationScorerResultDiagnostics:
             {"received_failures": -1},
             {"received_failures": 1, "received_failure_kinds": {"x": "1"}},
             {"received_failures": 1, "received_failure_reader_attempts": -2},
+            {"received_failures": 1, "received_failure_reader_agent_rejections": -1},
         ],
     )
     def test_malformed_diagnostics_are_rejected(self, diagnostics: dict) -> None:
