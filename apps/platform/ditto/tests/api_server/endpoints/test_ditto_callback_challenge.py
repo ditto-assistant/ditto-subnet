@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import httpx
 from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server.ditto_link import DittoLinkClient, DittoLinkConfig
+from ditto.tests.api_server.endpoints.test_miner_ditto_link import _install
 
 
 def _config(token: str | None) -> DittoLinkConfig:
@@ -21,8 +23,11 @@ def _config(token: str | None) -> DittoLinkConfig:
 
 
 async def test_challenge_is_served_only_when_configured(
-    app: FastAPI, client: httpx.AsyncClient
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
+    _install(app, session_maker)
     app.state.ditto_link = DittoLinkClient(_config(None))
     missing = await client.get("/.well-known/ditto-callback-challenge")
     assert missing.status_code == 404
