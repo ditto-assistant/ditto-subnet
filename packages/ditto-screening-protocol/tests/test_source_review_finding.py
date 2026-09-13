@@ -732,7 +732,7 @@ def test_adjudication_reject_invariant_is_bound_to_policy_version() -> None:
         "reject_invariant": SourceReviewInvariant.EVALUATION_INDEPENDENCE,
         "citations": [SourceReviewCitation(path="src/main.rs", line=7)],
         "model": "test-court",
-        "prompt_revision": "adjudicator-v3-policy-v13",
+        "prompt_revision": "adjudicator-v4-policy-v13",
     }
 
     with pytest.raises(ValidationError, match="unavailable under the applied policy"):

@@ -22,6 +22,7 @@ import httpx
 import pytest
 
 import ditto_screener.l2_review as l2_review
+from ditto_screener.adjudicator import adjudicator_prompt_revision
 from ditto_screener.heartbeat import source_review_progress_stage
 from ditto_screener.l2_review import (
     _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK,
@@ -403,7 +404,10 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "reject unjustified removal" in v13
     assert "evaluation_identity_authoritative" in v13
     assert "`bench_version` activating learned routing" in v13
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v37-policy-v13"
+    assert "Public production-score material disclosed" in v13
+    assert "independently\nsufficient to reject under I5, I7, or I8" in v13
+    assert "shipped dormant material" in v13
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v38-policy-v13"
 
     legacy = _l2_tools_for_policy(12)[-1]["parameters"]["properties"]["invariants"]
     current = _l2_tools_for_policy(13)[-1]["parameters"]["properties"]["invariants"]
@@ -4484,7 +4488,7 @@ class _FakeAdjudicator:
             clear_clause="model_authors_graded_slot",
             citations=[SourceReviewCitation(path="src/main.rs", line=6)],
             model="z-ai/glm-5.3-flash",
-            prompt_revision=(f"adjudicator-v3-policy-v{self.policy_version or 11}"),
+            prompt_revision=adjudicator_prompt_revision(self.policy_version or 11),
             policy_version=self.policy_version or 11,
         )
 

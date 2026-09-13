@@ -26,7 +26,7 @@ def _review_audit() -> ScreenReviewAudit:
     return ScreenReviewAudit(
         stage="l1",
         reason_code="source-review-step-budget-exhausted",
-        prompt_revision="source-review-v24-policy-v13",
+        prompt_revision="source-review-v25-policy-v13",
         max_steps=20,
         steps_used=20,
         max_read_bytes=2_000_000,

@@ -318,8 +318,8 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(10) == "adjudicator-v3-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v3-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v3-policy-v12"
-    assert adjudicator_prompt_revision(13) == "adjudicator-v3-policy-v13"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v3-policy-v13"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v4-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v4-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
@@ -346,6 +346,9 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
     )
     assert "withhold submit_adjudication" in policy_v13
     assert "`bench_version` alter substantive retrieval" in policy_v13
+    assert "Public production-score material disclosed" in policy_v13
+    assert "independently\nsufficient to reject under I5, I7, or I8" in policy_v13
+    assert "shipped dormant material" in policy_v13
 
     legacy_submit = _adjudicator_tools_for_policy(12, decision_only=True)[0]
     current_submit = _adjudicator_tools_for_policy(13, decision_only=True)[0]

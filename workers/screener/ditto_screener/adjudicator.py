@@ -74,7 +74,8 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"{policy_version} is not implemented by this build "
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
-    return f"adjudicator-v3-policy-v{policy_version}"
+    revision = 4 if policy_version >= 13 else 3
+    return f"adjudicator-v{revision}-policy-v{policy_version}"
 
 
 # Kept as the current-policy compatibility export for callers that only need
@@ -314,15 +315,23 @@ available capability, including quoted-title, compound-request, negation-scope,
 setting-and-remember, and duplicate-call failures.
 
 I8 is evaluation independence. Reject a complete source-proven branch where
-case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit
-markers, or `bench_version` alter substantive retrieval, capability ordering,
-authority, execution, or output beyond the published compatibility contract.
-Behavioral degradation alone cannot reject until the published
-post-commit controlled and replicated procedure attributes it to evaluation
-dependence.
+active private case IDs, challenge seeds, expected answers, dataset hashes,
+scorer identity, audit markers, or `bench_version` alter substantive retrieval,
+capability ordering, authority, execution, or output beyond the published
+compatibility contract. Public production-score material disclosed under the
+post-commit reproducibility contract is not by itself an I8 finding. Complete
+source or controlled-runtime proof satisfying the causal chain is independently
+sufficient to reject under I5, I7, or I8. Private metamorphic testing gates
+CLEAR or resolves incomplete source causality; it does not shield an already
+source-proven violation. Behavioral degradation alone cannot reject until the
+published post-commit controlled and replicated procedure attributes it to
+evaluation dependence.
 
 Opaque-file presence and feature-gated dead code are leads only. Establish the
-loaded role and effective lifecycle reachability. Build/security findings may
+loaded role and effective lifecycle reachability. Verify declaration of every
+shipped dormant material benchmark-facing mechanism and bind its disabled state
+to the approved configuration; enablement requires a complete fresh review but
+does not itself prove a breach. Build/security findings may
 end in unauthorized data access, disclosure, write, execution, persistence,
 privilege, or material availability effects without involving a model or
 scorer. A missing predefined verification artifact or failed platform review

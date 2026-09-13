@@ -841,7 +841,7 @@ fn run() -> String {
     assert observation.categories == ("benchmark_emulation",)
     assert observation.finding is not None
     assert observation.finding["prompt_revision"] == (
-        f"source-review-v24-policy-v{SCREENING_POLICY_VERSION}"
+        f"source-review-v25-policy-v{SCREENING_POLICY_VERSION}"
     )
     assert observation.finding["evidence"] == [
         {
@@ -2104,7 +2104,7 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     assert "use\nanalyze_binary only when" in prompt
     assert 'compact, precomputed\n"binary_analysis"' in prompt
     assert observation.finding["prompt_revision"] == (
-        f"source-review-v24-policy-v{SCREENING_POLICY_VERSION}"
+        f"source-review-v25-policy-v{SCREENING_POLICY_VERSION}"
     )
     assert len(observation.finding["invariant_assessment"]["decisions"]) == 8
     initial_inventory = json.loads(
@@ -2908,7 +2908,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v24-policy-v13"
+    assert _prompt_revision(13) == "source-review-v25-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -3035,11 +3035,15 @@ def test_policy_v13_prompt_adds_mechanism_security_and_i8_rules() -> None:
     assert _POLICY_TAILS[13].startswith(_POLICY_TAILS[12])
     assert "Decide I1 through I8 independently" in v13
     assert "EVALUATION INDEPENDENCE" in v13
+    assert "Public production-score material disclosed" in v13
+    assert "independently sufficient to reject under I5, I7, or I8" in v13
+    assert "a shield for an already source-proven violation" in v13
+    assert "shipped dormant material" in v13
     assert "always-on benchmark recipe is activated on every served request" in v13
     assert "unknown, none, or\nn/a" in v13
     assert "incorrect host removal" in v13
     assert "Security review covers" in v13
-    assert "`bench_version` from changing substantive retrieval" in v13
+    assert "`bench_version` from changing substantive\nretrieval" in v13
     assert "Decide I1 through I8 independently" not in v12
 
     legacy = _source_review_tools_for_policy(12, final_turn=True)[0]
@@ -3265,7 +3269,7 @@ def test_written_policy_v13_publishes_the_metamorphic_minimum_profile() -> None:
         Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
     ).read_text()
     required = {
-        "private\nmetamorphic testing is mandatory",
+        "private metamorphic testing is mandatory",
         "60 paired cases",
         "three transformation classes",
         "at least 20 cases per class",
@@ -3278,6 +3282,100 @@ def test_written_policy_v13_publishes_the_metamorphic_minimum_profile() -> None:
 
     missing = sorted(fragment for fragment in required if fragment not in policy)
     assert not missing, f"policy v13 is missing: {missing}"
+
+
+def test_written_policy_v13_separates_public_scores_from_private_challenges() -> None:
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    required = {
+        "**Public production-score material:**",
+        "Public production-score material may be disclosed only after",
+        "is not an I8 finding",
+        "Private challenge seeds, expected outputs, case identities, transcripts",
+        "Active private challenge material cannot be disclosed to, train, select",
+        "built from public material remains reviewable under I5",
+        "production-score reproducibility boundary",
+        "delay per-case disclosure until",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 evaluation boundary is missing: {missing}"
+
+
+def test_written_policy_v13_makes_metamorphic_testing_a_clear_gate() -> None:
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    required = {
+        "they do not add a\nsecond proof requirement for `REJECT`",
+        "independently sufficient to\n`REJECT` under I5, I7, or I8",
+        "For `CLEAR` where I5, I7, I8",
+        "duplicate an already source-proven violation",
+        "pattern matches alone are not complete source proof",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 metamorphic semantics are missing: {missing}"
+
+
+def test_written_policy_v13_binds_dormant_material_mechanisms() -> None:
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    opaque = (
+        Path(__file__).resolve().parents[1]
+        / "docs"
+        / "policy-v13-opaque-verification.md"
+    ).read_text()
+    required = {
+        "material-component manifest",
+        "including shipped dormant mechanisms",
+        "Enabling a declared dormant material mechanism",
+        "new exact configuration",
+        "complete fresh review before positive emission eligibility",
+        "enablement alone does not prove a breach",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 dormant-mechanism rules are missing: {missing}"
+    assert "## Material-component boundary" in opaque
+    assert "Presence or enablement alone does not prove a violation" in opaque
+
+
+def test_written_policy_v13_defines_clear_validity_and_expiry() -> None:
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    required = {
+        "initial v13 maximum approval age is 90 days",
+        "A benchmark-version or policy-digest change",
+        "Expiry returns the exact artifact to the verification queue",
+        "uniform, bounded\n  transition grace period",
+        "No v13 `CLEAR` remains\n  qualifying beyond the applicable age",
+        "approval_expires_at:",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 CLEAR validity rules are missing: {missing}"
+
+
+def test_written_policy_v13_uses_history_only_for_review_scheduling() -> None:
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    required = {
+        "## Risk-based review scheduling",
+        "three upheld `REJECT` decisions",
+        "in the preceding 90 days",
+        "does not require delaying ordinary scoring",
+        "history alone does not create that implication",
+        "proof thresholds remain exact-artifact scoped",
+        "scheduling_basis_decision_ids:",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 scheduling boundaries are missing: {missing}"
 
 
 def test_latest_backroom_safe_batch_is_fully_represented() -> None:

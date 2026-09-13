@@ -25,6 +25,20 @@ Hosted inference records the provider, model identifier/version, endpoint trust
 boundary, and inference receipt supported by the integration contract. A model
 weight digest is not required when the approved provider does not expose one.
 
+## Material-component boundary
+
+The material-component manifest required by Policy v13 is broader than this
+opaque-component specification. Readable and opaque benchmark-facing
+mechanisms must both be declared when they ship disabled behind a build flag,
+feature flag, environment value, runtime configuration, loader, or alternate
+entrypoint. A readable dormant mechanism does not become opaque and does not
+require opaque-component evidence merely because it is disabled.
+
+The reviewed disabled state and every permitted enabling control are part of
+the exact configuration envelope. Enabling a dormant material mechanism creates
+a new exact configuration and requires a complete fresh review before positive
+emission eligibility. Presence or enablement alone does not prove a violation.
+
 ## Role requirements
 
 ### Unloaded or unreachable component
@@ -133,9 +147,14 @@ An equivalent route is valid only when this specification or a versioned
 successor names it before the artifact is reviewed. A human assertion that a
 missing mandatory test is unnecessary is not an equivalent route.
 
-Complete deterministic source causality may replace behavioral testing only
-when the applicable role requirement says source proof is sufficient and the
-review covers the entire effective downstream path.
+Complete source or controlled-runtime causality satisfying the Policy v13 proof
+chain is independently sufficient to `REJECT` under I5, I7, or I8; a behavioral
+test is not required to duplicate that proof. Static names, patterns,
+similarity, or unreachable code are not complete causality. For `CLEAR`, source
+proof may replace only a role-local behavioral requirement that is not also
+mandatory under the main policy's I5, I7, I8, or material-authority rule, and
+only when the applicable role expressly defines source proof as sufficient and
+the review covers the entire effective downstream path.
 
 ## Failure treatment
 

@@ -692,7 +692,7 @@ async def test_v13_source_budget_exhaustion_is_nonpassing_with_signed_evidence(
     audit = ScreenReviewAudit(
         stage="l1",
         reason_code="source-review-step-budget-exhausted",
-        prompt_revision="source-review-v24-policy-v13",
+        prompt_revision="source-review-v25-policy-v13",
         max_steps=20,
         steps_used=20,
         max_read_bytes=2_000_000,

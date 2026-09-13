@@ -38,6 +38,8 @@ Every decision binds to the exact:
 - permitted runtime configuration;
 - benchmark version;
 - policy version and digest;
+- material-component manifest, including shipped-but-disabled
+  benchmark-facing mechanisms;
 - opaque-component manifest; and
 - verification-profile digest.
 
@@ -50,7 +52,10 @@ configuration are identical.
 ## Activation
 
 - Policy v13 takes effect only through a published activation revision.
-- The activation record contains the exact policy digest and activation time.
+- The activation record contains the exact policy digest and activation time,
+  verification-profile digest, private-challenge profile revision,
+  review-scheduling profile digest, maximum approval age, and transition/grace
+  rules.
 - Existing v12 results remain historical v12 results.
 - Applying v13 to an existing artifact requires an explicit v13 rescreen.
 - `rescreen_scored=true` applies identical criteria to every selected
@@ -83,6 +88,28 @@ configuration are identical.
   published before enforcement. `CLEAR` is a bounded certification of the
   checks performed, not proof that no unknown defect exists.
 
+## Risk-based review scheduling
+
+Prior decisions may allocate review capacity but never supply evidence about a
+different artifact. The published scheduling profile must define the exact
+lineage identity, rolling window, threshold, decay, appeal/reset treatment,
+capacity cap, and Sybil controls used for priority.
+
+The initial v13 profile must place a lineage into enhanced-priority review after
+three upheld `REJECT` decisions with `violation_proven: true` and
+`failure_domain: artifact` in the preceding 90 days. V1, V2, V3, provider or
+platform failures, submission certification failures, overturned decisions,
+scores, names, similarity, and unproved suspicions do not count.
+Here, upheld means that no later appeal or superseding decision reversed the
+proven finding.
+
+Enhanced priority means earlier source and behavioral review before positive
+emission eligibility. It does not require delaying ordinary scoring, create a
+presumption, change a proof threshold, transfer a finding, or cause automatic
+rejection. The private metamorphic package is mandatory for `CLEAR` when the
+current artifact implicates I5, I7, I8, or a materially authoritative opaque
+component; history alone does not create that implication.
+
 ## Definitions
 
 - **Deciding authority:** the genuine model or permitted model planner that
@@ -97,6 +124,16 @@ configuration are identical.
   limits, and the public tool/protocol contract.
 - **Finalized response:** the substantive result emitted by the declared final
   deciding stage.
+- **Public production-score material:** seeds, generated cases, transcripts,
+  aggregates, or results that the published production-scoring contract makes
+  reproducible after the evaluated artifact is irreversibly committed.
+- **Private challenge material:** non-public screening, metamorphic, audit, or
+  verification seeds, cases, identities, expected outputs, transcripts, and
+  per-case results that can still affect eligibility.
+- **Material benchmark-facing mechanism:** readable or opaque code, data,
+  prompts, generated artifacts, or configuration capable of materially
+  changing retrieval, authority, evidence, capabilities, execution, or
+  scorer-visible output for an evaluated request.
 
 ## White checklist: permitted behavior
 
@@ -435,6 +472,14 @@ published retry and remediation procedure.
 - Review and scoring use the approved image.
 - Mutable dependencies cannot replace the reviewed runtime.
 - Changes outside the envelope require fresh review.
+- The material-component manifest declares every shipped-but-disabled material
+  benchmark-facing mechanism, whether readable or opaque, when it is gated by a
+  build flag, feature flag, environment value, runtime configuration, loader,
+  or alternate entrypoint. It records the path, role, digest or source closure,
+  gating condition, and reviewed enabled state.
+- The disabled state and every permitted control that could enable a declared
+  dormant material mechanism are bound into the approved configuration
+  envelope.
 - Tests, fixtures, diagnostics, and helpers are not violations by presence,
   copying, or compilation alone, and require production reachability before
   they support a finding.
@@ -444,7 +489,10 @@ published retry and remediation procedure.
 - A caller excluded by the effective build does not establish runtime
   reachability. Lack of observed execution does not prove deadness.
 - Refuting one dormant finding does not clear the rest of the artifact.
-- Enabling a feature requires reassessment but does not itself prove a breach.
+- Enabling a declared dormant material mechanism is a material configuration
+  change outside the approved envelope. It creates a new exact configuration
+  that requires a complete fresh review before positive emission eligibility;
+  enablement alone does not prove a breach.
 - Provenance establishes identity, not safety.
 - Material runtime changes require another review.
 
@@ -462,10 +510,17 @@ published retry and remediation procedure.
 
 ### W16: evaluation independence
 
-- Artifact commitment precedes private challenge generation and private
-  challenge randomness.
-- Active private seeds, expected outputs, and case identities remain hidden.
-- Active per-case results cannot influence a weight-eligible artifact.
+- Artifact commitment precedes both production-score seed derivation and
+  private challenge generation or randomness for that exact artifact.
+- Public production-score material may be disclosed only after the evaluated
+  artifact is irreversibly committed and only as specified by the published
+  reproducibility contract. Its disclosure alone is not access to private
+  evaluation material and is not an I8 finding.
+- Private challenge seeds, expected outputs, case identities, transcripts, and
+  per-case results remain hidden and access-controlled while they can affect
+  eligibility.
+- Active private challenge material cannot be disclosed to, train, select,
+  tune, or otherwise influence a weight-eligible artifact.
 - Served behavior does not change according to evaluation identity, and served
   logic does not use evaluation identities or expected outputs as answer or
   routing lookup keys.
@@ -475,8 +530,9 @@ published retry and remediation procedure.
 - Protocol-version branches implement published, declared compatibility.
 - Behavior generalizes across renamed fields, paraphrases, reordered records,
   rotated entities, and reordered catalogs.
-- Active private evidence remains embargoed until it can no longer influence
-  eligibility.
+- Hidden challenge seeds and task compositions rotate independently. Private
+  challenge evidence remains embargoed until it can no longer influence any
+  artifact's eligibility.
 - Ordinary brittleness or performance loss is not automatically cheating.
 
 ## Black checklist: rejection conditions
@@ -626,9 +682,10 @@ language alone is insufficient.
 
 ### I8: prohibited evaluation dependence
 
-Reject when active evaluation identities, seeds, results, expected answers,
-private cases, grader behavior, or audit detection materially change
-retrieval, model authority, tools, execution, or scorer-visible output.
+Reject when active private evaluation identities, seeds, results, expected
+answers, or cases influence the artifact, or when evaluation identity, grader
+behavior, or audit detection materially changes retrieval, model authority,
+tools, execution, or scorer-visible output.
 
 - Evaluation identity changes substantive retrieval, authority, capabilities,
   execution, or output.
@@ -646,6 +703,12 @@ retrieval, model authority, tools, execution, or scorer-visible output.
 A public compatibility branch alone is insufficient. Complete source proof is
 independently enforceable. Statistical enforcement requires the published
 behavioral system to be operational.
+
+Possession or use of public production-score material disclosed after artifact
+commitment is not, by itself, an I8 finding. A finding still requires a proven
+evaluation-dependent runtime mechanism, unauthorized private evaluation use,
+or controlled attribution under this section. A benchmark-specific compiler
+built from public material remains reviewable under I5.
 
 ### S1: cross-user access
 
@@ -765,11 +828,20 @@ Every artifact must complete:
 15. response-field and long-answer behavior;
 16. refusal and uncertainty preservation;
 17. complete token accounting;
-18. opaque-component inventory; and
-19. I1-I8 and S1-S3 review.
+18. material-component inventory, including shipped dormant mechanisms;
+19. opaque-component inventory; and
+20. I1-I8 and S1-S3 review.
 
-For I5, I7, I8, or materially authoritative opaque components, private
-metamorphic testing is mandatory.
+These requirements define the evidence needed for `CLEAR`; they do not add a
+second proof requirement for `REJECT`. Complete source or controlled-runtime
+proof that satisfies the published causal chain is independently sufficient to
+`REJECT` under I5, I7, or I8. Static keywords, names, similarity, dormant code,
+or pattern matches alone are not complete source proof.
+
+For `CLEAR` where I5, I7, I8, or materially authoritative opaque components are
+implicated, private metamorphic testing is mandatory. It is also mandatory to
+resolve source causality that remains incomplete. It is not required merely to
+duplicate an already source-proven violation.
 
 Minimum profile:
 
@@ -818,6 +890,7 @@ that the policy is accurate.
 - exact artifact and image identity confirmed;
 - all material leads evaluated against the published proof standard;
 - explicit I1-I8 and S1-S3 decisions;
+- required material-component declarations available;
 - required opaque declarations available;
 - no established rejection ground; and
 - complete decision evidence, including scope and limitations.
@@ -846,9 +919,9 @@ failure_domain: submission
 ```
 
 Examples: a mandatory declaration is omitted; the archive cannot be verified; a
-required endpoint contract is missing; required opaque-component evidence
-remains absent; or the submitted image cannot complete mandatory checks for
-artifact-controlled reasons.
+required endpoint contract is missing; required material- or opaque-component
+evidence remains absent; or the submitted image cannot complete mandatory
+checks for artifact-controlled reasons.
 
 #### C. Platform verification failure
 
@@ -1001,10 +1074,14 @@ benchmark_version:
 applied_policy_version:
 policy_digest:
 verification_profile_digest:
+material_component_manifest_digest:
+opaque_component_manifest_digest:
+review_scheduling_profile_digest:
 
 review_scope:
 completed_checks:
 failed_checks:
+material_components:
 opaque_components:
 evidence_references:
 evidence_type:
@@ -1013,8 +1090,11 @@ limitations:
 failure_domain: artifact | submission | platform | provider | none
 retry_count:
 independent_workers:
+scheduling_tier:
+scheduling_basis_decision_ids:
 reviewer:
 decided_at:
+approval_expires_at:
 supersedes_decision:
 operator_override:
 ```
@@ -1037,6 +1117,25 @@ An operator override is an administrative action, not a third review outcome.
 - At each weight cutoff, positive-emission eligibility requires a valid
   qualifying `CLEAR` for the exact selected artifact under the applicable
   policy or published transition rules.
+- A `CLEAR` is qualifying only while every identity bound under Exact-artifact
+  scope remains unchanged and its finite published maximum approval age has not
+  elapsed.
+- A benchmark-version or policy-digest change makes the previous `CLEAR`
+  non-qualifying for the new version or digest. Artifact, image, build,
+  entrypoint, permitted-configuration, material-component-manifest, or
+  opaque-component-manifest changes create a new exact identity and require a
+  complete fresh review.
+- The initial v13 maximum approval age is 90 days. The activation record may
+  publish a shorter uniform age and the re-verification schedule; a longer age
+  requires a new policy digest and activation revision. No v13 `CLEAR` remains
+  qualifying beyond the applicable age without completed re-verification.
+- Expiry returns the exact artifact to the verification queue and does not
+  establish a violation. After the applicable weight cutoff it is excluded
+  from new positive-weight selection unless a published, uniform, bounded
+  transition grace period still applies.
+- A transition grace period preserves only temporary eligibility under the
+  prior decision; it does not relabel that decision as a `CLEAR` for a new
+  benchmark version, policy digest, artifact, or configuration.
 - `CLEAR` establishes eligibility; ranking/reward rules determine allocation.
 - Another artifact's approval grants no authority.
 - Processing states neither grant approval nor automatically revoke an
@@ -1052,11 +1151,24 @@ An operator override is an administrative action, not a third review outcome.
 - Publish the opaque-component role-verification specification and accepted
   equivalent-evidence routes.
 - Make every mandatory verification route for the activated scope operational.
+- Publish and enforce the production-score reproducibility boundary and the
+  private-challenge boundary. Verify that private challenges are generated
+  after artifact commitment, remain access-controlled, use independent hidden
+  rotations and fresh task compositions, and delay per-case disclosure until
+  the evidence can no longer influence any artifact's eligibility.
+- Require and verify the material-component manifest, including the immutable
+  disabled state of every shipped dormant benchmark-facing mechanism.
 - Publish and meet review-capacity, completion, latency, and backlog
   thresholds.
 - Publish retry deadlines and platform/provider failure treatment.
 - Publish transition, approval-expiry, suspension, revocation, weight-cutoff,
   convergence, and rollback rules.
+- Publish the finite maximum approval age, re-verification schedule, and any
+  uniform bounded grace period, and verify automatic expiry on every bound
+  identity change.
+- Publish the enhanced-priority scheduling profile and verify that only recent,
+  upheld, artifact-domain proven violations count while verdict evidence and
+  proof thresholds remain exact-artifact scoped.
 - Verify the exact-artifact approval gate through ranking and weight
   generation.
 - A staged activation names the exact rules/tests/artifact classes it covers.
