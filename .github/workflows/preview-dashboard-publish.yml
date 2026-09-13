@@ -433,9 +433,23 @@ jobs:
 
           # Only policy skips are explained. A failed build or proof is already
           # a red check on the PR, and restating it here would just add noise.
+          #
+          # A stack profile has two different causes and must not be reported
+          # as one: a PR that really does change stack-owned paths, and a PR
+          # that changes no dashboard path at all, where selection fails closed
+          # to stack rather than guessing. Telling the second kind it is "not
+          # permitted alongside a stack change" accuses it of touching runtime
+          # code it never went near.
           reason=''
           if [ -n "$PREVIEW_PROFILES" ] && [ "$PREVIEW_PROFILES" != dashboard ]; then
-            reason="This PR resolved to preview profiles \`$PREVIEW_PROFILES\`, not \`dashboard\` alone. A dashboard preview serves the built SPA against the **production public Platform API**, which is not permitted alongside a stack change, so only a dashboard-only PR publishes a \`pages.dev\` URL."
+            case ",$PREVIEW_PROFILES," in
+              *,dashboard,*)
+                reason="This PR resolved to preview profiles \`$PREVIEW_PROFILES\`, not \`dashboard\` alone, because it changes stack-owned paths as well as the dashboard. A dashboard preview serves the built SPA against the **production public Platform API**, which is not permitted alongside a stack change, so only a dashboard-only PR publishes a \`pages.dev\` URL."
+                ;;
+              *)
+                reason="This PR resolved to preview profiles \`$PREVIEW_PROFILES\` with no \`dashboard\` profile: it changes no \`apps/platform/dashboard/\` path, so there is no dashboard build to publish. Profile selection fails closed rather than guessing, which is why a PR touching no recognized runtime path still reads as \`stack\`."
+                ;;
+            esac
           elif [ "$CONFIGURED" != true ]; then
             reason="Cloudflare Pages credentials are not configured in the \`preview\` environment of this repository, so dashboard previews are inactive here."
           fi

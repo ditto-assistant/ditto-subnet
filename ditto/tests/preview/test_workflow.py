@@ -398,6 +398,16 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     # needs, not merely state that nothing was published.
     assert "gh workflow run preview-stack.yml -f pr=%s" in explain_script
     assert "-f action=retire" in explain_script
+    # Resolving to stack because the PR changes stack paths, and resolving to
+    # stack because it changes no dashboard path and selection fails closed,
+    # are different facts. Pin both so the second is never told it touched
+    # runtime code it never went near.
+    assert "changes stack-owned paths as well as the dashboard" in explain_script
+    # Backtick-free substrings: the shell string escapes its own backticks, so
+    # matching on a Markdown-quoted term here would assert the escaping, not
+    # the wording.
+    assert "so there is no dashboard build to publish" in explain_script
+    assert "fails closed rather than guessing" in explain_script
     # A later dashboard-only push publishes a real URL, so the stale
     # explanation is removed rather than left to contradict it.
     assert "-X DELETE" in explain_script
