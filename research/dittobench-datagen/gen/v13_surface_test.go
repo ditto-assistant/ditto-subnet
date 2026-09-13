@@ -316,10 +316,14 @@ func TestV13IntegrityQuestionsAreGrammarDrawn(t *testing.T) {
 
 func TestV13FreeFormArgumentsDoNotRequireMagicStrings(t *testing.T) {
 	prof, _ := ProfileForVersion("full", protocol.BenchVersionV13)
+	// recipe_apply is not free-form at v13: the workflow is named by its cadence
+	// and the canonical name exists only in the served list_workflows result
+	// (datagen.applyV13ToolBench), so its pinned name is a result-usage
+	// requirement, not a magic string.
 	freeForm := map[string]bool{
 		"agent_job": true, "workflow_not_job": true, "agent_workflow": true,
 		"feedback": true, "set_tool_prefs": true, "automation_not_job": true,
-		"recipe_create": true, "recipe_apply": true, "calendar_create": true,
+		"recipe_create": true, "calendar_create": true,
 		"calendar_search": true,
 	}
 	seen := map[string]bool{}

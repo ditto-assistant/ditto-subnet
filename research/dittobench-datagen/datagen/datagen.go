@@ -2055,6 +2055,7 @@ func categoriesForVersion(benchVersion int) []category {
 		}
 	}
 	if benchVersion >= protocol.BenchVersionV13 {
+		out = v13Categories(out)
 		// v13 renders every remaining template category from a grammar
 		// (datagen/grammars_v13.go). Routing intent, argKey, wrap, and the
 		// expected tool sequence are untouched; only the prompt source moves.
@@ -2096,7 +2097,17 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 	}
 	cats := categoriesForVersion(benchVersion)
 	var order []int
-	if benchVersion >= protocol.BenchVersionV9 {
+	if benchVersion >= protocol.BenchVersionV13 {
+		// v13: set_effort is optional (weight 2, off the floor) and the family
+		// mix stream is keyed on the v13 version so the histogram rotates.
+		weights := make([]int, len(cats))
+		optional := make([]bool, len(cats))
+		for i, c := range cats {
+			weights[i] = toolCategoryWeightV13(c.name)
+			optional[i] = v13OptionalFamilies[c.name]
+		}
+		order = sampledCategoryOrderV13(toolCategoryMixRNG(seed, benchVersion, n), n, weights, optional)
+	} else if benchVersion >= protocol.BenchVersionV9 {
 		weights := make([]int, len(cats))
 		mandatory := -1
 		for i, c := range cats {
@@ -2183,6 +2194,12 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		} else if benchVersion >= protocol.BenchVersionV8 && cat.argKey != "" {
 			intents = v8ArgIntents[cat.name]
 			useIntent = len(intents) > 0
+		}
+		if benchVersion >= protocol.BenchVersionV13 && cat.argKey != "" {
+			if bank, ok := v13ArgIntents[cat.name]; ok {
+				intents = bank
+				useIntent = true
+			}
 		}
 		switch {
 		case intent13 != nil:
@@ -2322,7 +2339,13 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 			}
 		}
 		if benchVersion >= protocol.BenchVersionV13 {
-			applyV13CapabilityResolution(&tc, argValue, seed, i)
+			// v13 closes set_theme's enum on the wire (catalog.ThemeEnum), so the
+			// `settings` family no longer needs a discovery call; every other
+			// resolvable family renders its discover-then-set prompt from the v13
+			// grammar bank with the typo v2 alias.
+			if cat.name != "settings" {
+				applyV13CapabilityResolution(&tc, argValue, seed, i)
+			}
 		} else if benchVersion >= protocol.BenchVersionV8 {
 			applyV8CapabilityResolution(&tc, argValue, i)
 		}
@@ -2344,6 +2367,9 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		// where the typo v2 projector runs once over every surface with the
 		// surface salt; the v8 single-edit QWERTY projector is retired there.
 		applyV8WritingNoise(seed, cases, storyPairs)
+	}
+	if benchVersion >= protocol.BenchVersionV13 {
+		applyV13ToolBench(seed, cases)
 	}
 	if benchVersion >= protocol.BenchVersionV8 {
 		applyV8AssistantVoice(seed, cases)

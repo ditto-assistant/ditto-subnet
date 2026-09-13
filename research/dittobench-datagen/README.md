@@ -103,7 +103,7 @@ envelope lands. For the public full-profile seed
 | 9 (pre-activation) | `2027-01-01T00:00:00Z` | `b12edd3649dece3af415ad289a24a1a8615b7d906773e718ee637da14cbd541f` |
 | 10 (pre-activation) | `2027-02-01T00:00:00Z` | `04d6f3d9099dd9922f931d9a6f90caffd18e70d041d074986d68752ddf928a0f` |
 | 12 (pre-activation) | `2027-04-01T00:00:00Z` | `775e0eaf2d41c0cf4647c51f19c56ecc3bb6db37a780538bb7db745811ab91bb` |
-| 13 (interim pin, re-pinned per v13 layer) | `2027-05-01T00:00:00Z` | `aa5b71bf01a1765a13d1e0f7f5be5ceb8405ceeed5a280204ae87213bd39964c` |
+| 13 (interim pin, re-pinned per v13 layer) | `2027-05-01T00:00:00Z` | `d13de9df112bc6c78f052c1b8113afa4777228864a23a7c36be0a31210120422` |
 
 Each is regenerated and asserted by CI (`TestV2KnownVector` and friends), so a
 value here that disagrees with `cmd/generate` is a bug in this table, not in the

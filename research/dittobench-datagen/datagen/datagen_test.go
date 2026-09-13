@@ -220,48 +220,54 @@ func TestStratifiedBalance(t *testing.T) {
 	}
 }
 
-// TestV13AppearanceIntentsAreServedByTheInventory: at v13 the mock
-// discover_capabilities inventory is seed-specific, so every set_accent /
-// set_font RequiredArgs value must be one the fixture built for the same seed
-// serves — otherwise the honest inspect-the-options path cannot solve the case.
-// The case keeps the v8 capability-resolution shape.
-func TestV13AppearanceIntentsAreServedByTheInventory(t *testing.T) {
+// TestV13AppearanceValuesAreServedByTheInventory: every appearance value a v13
+// tool case grades (the world's stated accent behind world_theme_discover_set
+// and the discovery-grounded accent/font targets) resolves on the inventory
+// the scorer runtime serves through discover_capabilities — otherwise the
+// honest inspect-the-options path cannot solve the case. set_accent / set_font
+// themselves are retired at v13 (catalog drops); the value now exists only in
+// the served inventory.
+func TestV13AppearanceValuesAreServedByTheInventory(t *testing.T) {
 	const n = 100 // the full-profile tool count
 	checked := map[string]int{}
 	for seed := int64(1); seed <= 40; seed++ {
 		cases, _ := GenerateCasesWithFillersForVersion(rand.New(rand.NewSource(seed)), seed, n, protocol.BenchVersionV13)
 		for _, c := range cases {
-			if c.Category != "set_accent" && c.Category != "set_font" {
+			var color, font string
+			for _, spec := range c.ExpectedTools {
+				switch spec.Name {
+				case "set_accent_color":
+					color = spec.RequiredArgs["color"]
+				case "set_chat_font":
+					font = spec.RequiredArgs["font"]
+				}
+			}
+			if color == "" && font == "" {
 				continue
 			}
-			inventory, ok := toolexec.BuildFixtureForVersion(seed, c, protocol.BenchVersionV13).Result("discover_capabilities", nil)
+			f := toolexec.BuildFixtureForVersion(seed, c, protocol.BenchVersionV13)
+			inventory, ok := f.Result("discover_capabilities", nil)
 			if !ok {
 				t.Fatalf("seed %d %s: no discover_capabilities result", seed, c.ID)
 			}
-			if len(c.ExpectedTools) == 0 || c.ExpectedTools[0].Name != "discover_capabilities" {
-				t.Fatalf("seed %d %s: expected tools %+v do not start with discover_capabilities", seed, c.ID, c.ExpectedTools)
-			}
-			var required string
-			for _, spec := range c.ExpectedTools {
-				for _, value := range spec.RequiredArgs {
-					required = value
+			if color != "" {
+				if canonical, ok := f.Inventory().MatchAccent(color); !ok || canonical != color || !strings.Contains(inventory, color) {
+					t.Fatalf("seed %d %s (%s): accent %q is not served by inventory %q", seed, c.ID, c.Category, color, inventory)
 				}
+				checked["accent"]++
 			}
-			if required == "" {
-				t.Fatalf("seed %d %s: no RequiredArgs value", seed, c.ID)
+			if font != "" {
+				if canonical, ok := f.Inventory().MatchFont(font); !ok || canonical != font || !strings.Contains(inventory, font) {
+					t.Fatalf("seed %d %s (%s): font %q is not served by inventory %q", seed, c.ID, c.Category, font, inventory)
+				}
+				checked["font"]++
 			}
-			if !strings.Contains(inventory, required) {
-				t.Fatalf("seed %d %s: required %q is not served by inventory %q (prompt %q)", seed, c.ID, required, inventory, c.Prompt)
-			}
-			// The v8 writing-noise pass may typo the prompt, so the "check the
-			// options" shape is asserted through its case semantics.
 			if !c.FuzzyTrajectory || !c.AllowExtraTools {
 				t.Fatalf("seed %d %s: lost the capability-resolution shape: %+v", seed, c.ID, c)
 			}
-			checked[c.Category]++
 		}
 	}
-	if checked["set_accent"] < 20 || checked["set_font"] < 20 {
+	if checked["accent"] < 20 || checked["font"] < 20 {
 		t.Fatalf("too few appearance cases checked: %v", checked)
 	}
 }

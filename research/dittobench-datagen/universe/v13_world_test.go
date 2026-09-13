@@ -1,6 +1,7 @@
 package universe
 
 import (
+	"github.com/ditto-assistant/dittobench-datagen/catalog"
 	"regexp"
 	"strings"
 	"testing"
@@ -46,8 +47,6 @@ func TestV13WorldDrawsVocabularyFromPublicCorpora(t *testing.T) {
 	cities := set(publicdata.AllCities())
 	occupations := set(publicdata.AllOccupations())
 	stems := set(publicdata.AllOrgStems())
-	colors := set(publicdata.AllColors())
-	fonts := set(publicdata.AllFonts())
 	projectPurposes := set(publicdata.Purposes(publicdata.PurposeProject))
 	tripPurposes := set(publicdata.Purposes(publicdata.PurposeTrip))
 	legacyCities := set(cities12)
@@ -70,8 +69,13 @@ func TestV13WorldDrawsVocabularyFromPublicCorpora(t *testing.T) {
 			heads[strings.ToLower(head)] = true
 		}
 		checkCompany(w.UserCompany)
-		if !colors[w.Accent] {
-			t.Fatalf("seed %d accent %q is not a corpus colour", seed, w.Accent)
+		// The accent and interface font are discovery-grounded targets of the
+		// seed's served catalog inventory (catalog.InventoryForSeed), the frozen
+		// colour / font tables the tool bench lists through discover_capabilities,
+		// so the stated preference and the served option list always agree.
+		inventory := catalog.InventoryForSeed(seed)
+		if !containsString(inventory.AccentTargets(), w.Accent) {
+			t.Fatalf("seed %d accent %q is not a catalog inventory target", seed, w.Accent)
 		}
 		for _, p := range w.People {
 			if !cities[p.City] {
@@ -114,21 +118,26 @@ func TestV13WorldDrawsVocabularyFromPublicCorpora(t *testing.T) {
 		for _, preference := range w.Preferences {
 			switch preference.Domain {
 			case "accent color":
-				if preference.Value != choice.Accent || !colors[preference.Value] {
+				if preference.Value != choice.Accent || !containsString(inventory.AccentTargets(), preference.Value) {
 					t.Fatalf("seed %d accent preference %q disagrees with the appearance stream", seed, preference.Value)
 				}
+				// The rejected alternatives are the served inventory (catalog):
+				// corpus targets plus the legacy pool and the planted near-miss pair.
+				// The catalog plants near-miss pairs on purpose ("mint" beside "mint
+				// green"), so a listed alternative may be contained in the chosen
+				// value; the catalog's own margin tests bound that ambiguity.
 				for _, rejected := range preference.Rejected {
-					if !colors[rejected] || grade.Hit(rejected, preference.Value) {
-						t.Fatalf("seed %d rejected accent %q is not a safe corpus decoy for %q", seed, rejected, preference.Value)
+					if !containsString(inventory.Accents, rejected) {
+						t.Fatalf("seed %d rejected accent %q is not a served inventory decoy for %q", seed, rejected, preference.Value)
 					}
 				}
 			case "interface font":
-				if preference.Value != choice.Font || !fonts[preference.Value] {
+				if preference.Value != choice.Font || !containsString(inventory.FontTargets(), preference.Value) {
 					t.Fatalf("seed %d font preference %q disagrees with the appearance stream", seed, preference.Value)
 				}
 				for _, rejected := range preference.Rejected {
-					if !fonts[rejected] || grade.Hit(rejected, preference.Value) {
-						t.Fatalf("seed %d rejected font %q is not a safe corpus decoy for %q", seed, rejected, preference.Value)
+					if !containsString(inventory.Fonts, rejected) {
+						t.Fatalf("seed %d rejected font %q is not a served inventory decoy for %q", seed, rejected, preference.Value)
 					}
 				}
 			}

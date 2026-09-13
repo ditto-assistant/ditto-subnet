@@ -32,7 +32,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ditto-assistant/dittobench-datagen/internal/appearance"
+	"github.com/ditto-assistant/dittobench-datagen/catalog"
 	"github.com/ditto-assistant/dittobench-datagen/internal/publicdata"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
@@ -148,7 +148,12 @@ type Fixture struct {
 	recovery     bool   // an error-recovery case: the first content-tool call returns a transient error
 	linkDep      bool   // a dependent link chain: read_links gates the needle on pageURL
 	pageURL      string // the stable URL search_web serves for a link chain
-	inventory    string // v13: the seed's discover_capabilities appearance inventory
+	// Bench v13 (BuildFixtureForVersion, toolexec/v13.go): zero for every
+	// earlier contract, so BuildFixture behavior is untouched.
+	category  string                   // the case category (result-usage detection for the coined list tools)
+	decoys    map[string]catalog.Decoy // the seed's coined decoy tools by name
+	inventory catalog.Inventory        // the seed's appearance inventory (served by discover_capabilities)
+	coined    Coined                   // the seed's coined list/discover content
 }
 
 // v13 reports whether the fixture serves under the public-corpora contract.
@@ -215,23 +220,9 @@ const linkChainMarker = "link_chain"
 func IsLinkChain(category string) bool { return strings.Contains(category, linkChainMarker) }
 
 // BuildFixture derives the deterministic mock environment for one tool case
-// under the frozen pre-v13 content pools.
+// under the frozen pre-v13 content pools (BuildFixtureForVersion serves v13).
 func BuildFixture(masterSeed int64, c protocol.ToolCase) Fixture {
-	return BuildFixtureForVersion(masterSeed, c, protocol.BenchVersionV2)
-}
-
-// BuildFixtureForVersion derives the mock environment for one tool case under
-// an explicit contract. Versions below v13 are byte-identical to BuildFixture.
-// From v13 (#1825) the coined needle names, web sources, URL hosts, and the
-// discover_capabilities appearance inventory come from the public corpora, and
-// the inventory names the seed's true accent and font among corpus near-misses
-// (internal/appearance) rather than a fixed eight-colour string.
-func BuildFixtureForVersion(masterSeed int64, c protocol.ToolCase, benchVersion int) Fixture {
 	f := Fixture{seed: caseSeed(masterSeed, c.ID)}
-	if benchVersion >= protocol.BenchVersionV13 {
-		f.benchVersion = benchVersion
-		f.inventory = appearance.ForSeed(masterSeed).Inventory()
-	}
 	f.jobID = jobIDForSeed(f.seed)
 	f.dependent = IsJobChain(c.Category)
 	f.recovery = IsErrorRecovery(c.Category)
@@ -240,9 +231,9 @@ func BuildFixtureForVersion(masterSeed int64, c protocol.ToolCase, benchVersion 
 		f.pageURL = pageURLForSeed(f.seed)
 	}
 	if caseCarriesNeedle(c) {
-		f.needle = NeedleForVersion(masterSeed, c.ID, benchVersion)
+		f.needle = NeedleFor(masterSeed, c.ID)
 		if strings.HasPrefix(c.Category, "world_") {
-			f.needle = NeedleForV8WorldVersion(masterSeed, c.ID, benchVersion)
+			f.needle = NeedleForV8World(masterSeed, c.ID)
 		}
 		f.has = true
 		f.bearer = needleBearer(c)
@@ -364,6 +355,11 @@ func (f Fixture) Result(name string, args json.RawMessage) (string, bool) {
 	// bearer; every other content tool serves a plausible decoy (a wrong number),
 	// so a harness cannot fish the answer from the easiest/wrong tool.
 	serveNeedle := f.has && name == f.bearer
+	if f.benchVersion >= protocol.BenchVersionV13 {
+		if out, handled := f.resultV13(name, args, r, serveNeedle); handled {
+			return out, true
+		}
+	}
 	switch name {
 	case "search_web":
 		src := f.webSource(r)
@@ -427,9 +423,6 @@ func (f Fixture) Result(name string, args json.RawMessage) (string, bool) {
 	case "list_workflows":
 		return "Saved workflows: weekly standup digest; invoice review; launch checklist.", true
 	case "discover_capabilities":
-		if f.inventory != "" {
-			return f.inventory, true
-		}
 		return "Appearance options: accent colors teal, indigo, amber, emerald, crimson, violet, cobalt, coral; fonts Atkinson Hyperlegible, Inter, and system; light and dark modes.", true
 	case "search_tools":
 		return "Matching tools: run_code for calculations; artifacts for file conversion; search_web for live public information.", true
@@ -866,6 +859,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// on the retry, so a harness that does not recover cannot answer.
 	if fixture.recovery && contentTools[req.Name] && priorSameTool == 0 {
 		writeJSON(w, http.StatusOK, protocol.ToolExecResponse{Error: "transient upstream error (503); retry"})
+		return
+	}
+
+	// Bench v13: a decoy that is not this case's bearer is "not configured",
+	// and a setter given an unlisted/invalid value is refused without echoing
+	// any canonical spelling. Both are recorded above as ordinary calls.
+	if msg, refused := fixture.unavailable(req.Name, req.Args); refused {
+		writeJSON(w, http.StatusOK, protocol.ToolExecResponse{Error: msg})
 		return
 	}
 

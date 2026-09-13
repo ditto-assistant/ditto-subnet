@@ -146,6 +146,21 @@ import (
 //     timestamp comes from a seeded business-hours timeline (OpaqueTimeline), so
 //     neither field carries the generator family, story arc, or record slot.
 //
+// The tool-bench levers (issues #1843/#1842/#1580/#1840) ride the same gate:
+//   - three to five coined decoy tools per seed whose descriptions say what
+//     they are NOT; the mock serves them as "not configured" errors except on
+//     the decoy-correct result-usage cases where the coined decoy IS the tool;
+//   - per-tool paraphrased description banks, JSON-schema enums on set_theme and
+//     set_reasoning_effort, and runtime-described option lists for the
+//     discovery-grounded setters;
+//   - the set_model/set_main_model and set_font/set_chat_font families are
+//     dropped; appearance values survive only in schema-enum cases and in
+//     discovery-grounded cases whose canonical spelling exists only in the
+//     served discover_capabilities result (per-seed font/colour inventories with
+//     one planted near-miss and a unique-nearest-option margin);
+//   - per-seed coined fixtures for the list/discover tools so their dependent
+//     cases are result-usage graded.
+//
 // The deterministic grader, run sizes, inference boundary, LongMemEval
 // deep-history floors, and the v9 signed-evidence/score-gate/curve-v3
 // efficiency stack all carry forward unchanged.

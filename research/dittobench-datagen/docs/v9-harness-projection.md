@@ -37,3 +37,22 @@ chronology inside each session; subjects and links use separate domains.
 
 V7 and V8 never traverse this projection. Their artifact vectors, wire
 serialization, environment forwarding, and execution order stay immutable.
+
+## Bench v13 catalog surfaces
+
+Bench v13 keeps this projection unchanged and adds nothing to it: the per-seed
+tool catalog (`catalog.CatalogForSeed`) is a production-semantic runtime input
+and stays on the wire like every other catalog. Concretely, a v13 harness sees:
+
+| Surface | V13 decision |
+| --- | --- |
+| Paraphrased tool descriptions | Keep on the wire; drawn per seed from each tool's paraphrase bank (entry 0 is the production description). They carry no provenance. |
+| `enum` on `set_theme` / `set_reasoning_effort` | Keep; the production ChatV2 pattern, identical for every seed. |
+| Runtime-described `set_accent_color` / `set_chat_font` | Keep; the schema names `discover_capabilities` as the only source of the option list, and the served list is canonical spelling only. |
+| Coined decoy tools | Keep on the wire exactly as advertised; their names and descriptions are coined per seed, are never a production tool, and reveal no case label. The mock serves them as "not configured" unless the case expects them. |
+| Coined list/discover content | Keep; served results were always production-semantic runtime behavior. |
+| Which cases are decoy-correct, discovery-grounded, or coined-fixture cases | Remove, like every other family/category label: the projection carries no category on the wire. |
+
+Case IDs, user IDs, pair/session/subject aliases, wave removal, permutation,
+and the private artifact retention rules above apply to v13 runs unchanged.
+
