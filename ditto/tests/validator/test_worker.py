@@ -76,6 +76,7 @@ from ditto.validator.weights import (
     resolve_miner_emission_share,
 )
 from ditto.validator.worker import ValidatorWorker
+from ditto_screening_protocol.bench_v9 import CONFIRMATION_BENCH_VERSIONS
 
 _VALIDATOR_HOTKEY = "5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp"
 _BURN_HOTKEY = "5Burn" + "x" * 43
@@ -222,8 +223,16 @@ class TestComputeWeights:
         assert filter_weight_confirmed([receipt_bearing_v9]) == [receipt_bearing_v9]
 
     def test_v10_ordinary_quorum_is_payable_without_a_v9_receipt(self) -> None:
+        """v10 pays on its ordinary quorum while confirmation is off or shadowing.
+
+        The lane follows the live bench, so v10 carries the receipt contract
+        too: only an explicit Platform ``enforce`` marker withholds it, and the
+        served marker has never been enforce (PR #841 shipped v10 under
+        shadow).
+        """
         v10 = _entry("v10", 0.9, bench_version=10)
-        assert filter_weight_confirmed([v10]) == [v10]
+        assert filter_weight_confirmed([v10], enforce=False) == [v10]
+        assert filter_weight_confirmed([v10], enforce=True) == []
 
     @pytest.mark.parametrize("bench_version", SUPPORTED_BENCH_VERSIONS)
     def test_every_executable_version_is_payable(self, bench_version: int) -> None:
@@ -239,21 +248,40 @@ class TestComputeWeights:
         assert filter_weight_confirmed([entry], enforce=False) == [entry]
 
     def test_receipt_contract_versions_gate_withholding_not_payability(self) -> None:
-        """Adding a version to RECEIPT_CONTRACT_VERSIONS must withhold, not drop.
+        """A receipt-contract version is withheld under enforce, never dropped.
 
-        This is the seam the confirmation system returns through at v12: a
-        version listed there is withheld under enforce when its receipt is
-        missing, and pays normally the moment the receipt arrives. A version
-        *not* listed is always payable. Enumerating withholding is safe because
-        it fails open; enumerating payability is what froze the fleet at v11.
+        A listed version is withheld under enforce when its receipt is missing,
+        and pays normally the moment the receipt arrives. A version *not* listed
+        (v8, which predates the evidence stack) is always payable. Enumerating
+        withholding is safe because it fails open; enumerating payability is
+        what froze the fleet at v11.
         """
         assert 9 in RECEIPT_CONTRACT_VERSIONS
-        assert not RECEIPT_CONTRACT_VERSIONS & {10, 11}
+        assert 8 not in RECEIPT_CONTRACT_VERSIONS
         v9 = _entry("v9", 0.9, bench_version=9)
         assert filter_weight_confirmed([v9], enforce=True) == []
         assert filter_weight_confirmed([v9], enforce=False) == [v9]
         with_receipt = v9.model_copy(update={"v9_confirmation": object()})
         assert filter_weight_confirmed([with_receipt], enforce=True) == [with_receipt]
+        v8 = _entry("v8", 0.9, bench_version=8)
+        assert filter_weight_confirmed([v8], enforce=True) == [v8]
+
+    def test_receipt_contract_versions_follow_the_confirmation_lane(self) -> None:
+        """The fold's receipt set is the lane's epoch set, not a second copy.
+
+        The lane follows the live bench (#894); a hand-written ``{9}`` here meant
+        an enforce marker on a v12 ledger could act on nothing, stranding the
+        receipt system at v9 for a second time. Every confirmable epoch is
+        withheld under enforce until its receipt arrives, and every executable
+        epoch below the evidence floor stays payable.
+        """
+        assert frozenset(CONFIRMATION_BENCH_VERSIONS) == RECEIPT_CONTRACT_VERSIONS
+        confirmable = {version for version in SUPPORTED_BENCH_VERSIONS if version >= 9}
+        assert confirmable == RECEIPT_CONTRACT_VERSIONS
+        for bench_version in SUPPORTED_BENCH_VERSIONS:
+            entry = _entry(f"v{bench_version}", 0.9, bench_version=bench_version)
+            withheld = filter_weight_confirmed([entry], enforce=True)
+            assert withheld == ([] if bench_version >= 9 else [entry])
 
     def test_future_version_is_payable_on_ordinary_quorum(self) -> None:
         """A version newer than this binary must not be dropped.
@@ -267,12 +295,17 @@ class TestComputeWeights:
         assert filter_weight_confirmed([future]) == [future]
 
     def test_v11_only_ledger_still_produces_a_weight_vector(self) -> None:
-        """The end-to-end shape of the outage: a healthy ledger must fold."""
+        """The end-to-end shape of the outage: a healthy ledger must fold.
+
+        The Platform served ``v9_confirmation_mode=shadow`` throughout, which
+        is what the worker passes as ``enforce=False``; the fold dropped the
+        ledger anyway because payability was enumerated.
+        """
         entries = [
             _entry("champ", 0.993028, bench_version=11, first_seen=_T0),
             _entry("r1", 0.987052, bench_version=11, first_seen=_T0 + timedelta(1)),
         ]
-        payable = filter_weight_confirmed(entries)
+        payable = filter_weight_confirmed(entries, enforce=False)
         assert payable == entries
         assert compute_weights(payable, **_KOTH) == {"champ": 0.65, "r1": 0.14}
 

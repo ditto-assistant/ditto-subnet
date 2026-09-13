@@ -17,10 +17,13 @@ This is the miner-facing skill. Load it before editing the starter kit,
 scoring, or uploading. A local score is not a production clearance: walk the
 served path against `$backroom-review` before `full`, packaging, or upload.
 
-Live scoring is **bench 11**, `run_size=full`, observed tools, locked
+Live scoring is **bench 12**, `run_size=full`, observed tools, locked
 `openai/gpt-oss-20b`. Update `LIVE_SCORING_BENCH_VERSION` in
 `miners/dittobench-starter-kit/scripts/local-rehearsal.py` when Platform
-activates a new version.
+activates a new version. The kit and the rehearsal script also *accept*
+bench 13 (`MAX_SUPPORTED_BENCH_VERSION` / `MAX_BENCH_VERSION`) so a submitted
+image does not 400 `/run` when validators rehearse it; 13 is not live until
+the owner activates it after the v13 qualification report.
 
 ## Practice loops (do not collapse these)
 
@@ -29,7 +32,7 @@ activates a new version.
 | `cargo run -- mem-eval --k 10` | Retrieval only, no chat model | Retrieval/reranker iteration |
 | `cargo run -- evaluate` | Fixed local subset, **name-only** tool scorer, **no** `tool_endpoint` | Fast prompt/tool-name iteration |
 | `cargo run -- practice --n 20` | Rotating kit templates, still name-only, still no observer | Slightly less overfit than `evaluate` |
-| `uv run ditto practice --run-size small` | Real generator + observed `tool_endpoint`, bench 11 | Smoke after a harness change |
+| `uv run ditto practice --run-size small` | Real generator + observed `tool_endpoint`, bench 12 | Smoke after a harness change |
 | `uv run ditto practice --run-size medium` | Same path, deeper seeding and isolation | Development once small is healthy |
 | `uv run ditto practice --run-size full` | Same path, **on-chain envelope** | Required before upload |
 | Hosted `/v1/submit` | Remote rehearsal, tools **self-report-capped**, often defaults to bench 9 | Reachability only |
@@ -46,10 +49,10 @@ is ~0.7 is expected. Name-only local scoring plus a tiny template pool is not
 
 ## Run sizes (teach these; do not skip full)
 
-From the **repository root**. All three use live bench 11 and a validator-visible
+From the **repository root**. All three use live bench 12 and a validator-visible
 `tool_endpoint`. Only the envelope changes.
 
-| `--run-size` | Bench 11 envelope | When the agent should run it |
+| `--run-size` | Bench 12 envelope | When the agent should run it |
 |---|---|---|
 | `small` | 6 tool + 6 memory, 1 wave, no isolation | After every prompt, tool-routing, or observed-execution change. Minutes. |
 | `medium` | 48 tool + 64 memory, 4 waves, isolation | When small is green and you are iterating on seeding, isolation, or harder families. |
@@ -144,7 +147,7 @@ would fail `$backroom-review`.
 
 Require all of:
 
-- `bench_version` is 11 (or the live version in the rehearsal constant)
+- `bench_version` is 12 (the live version in the rehearsal constant; 13 only when you passed `--bench-version 13` to rehearse the pre-activation contract)
 - `run_size` is the one you asked for
 - `capped_tool_cases` is 0 (or explain why)
 - `observed_tool_cases` is > 0 on a tool-heavy run

@@ -57,6 +57,8 @@ _DEFAULT_MINER_OUT = _CONTRACT_DIR / "miner_contract.json"
 _DEFAULT_CONFIRMATION_OUT = _CONTRACT_DIR / "confirmation_contract.json"
 _DEFAULT_ROUTER_OUT = _CONTRACT_DIR / "router_contract.json"
 
+_DEFAULT_BENCH_VERSIONS_OUT = _CONTRACT_DIR / "bench_versions.json"
+
 
 def _load_contract_schema() -> ModuleType:
     """Load the subnet-owned schema helper without shadowing platform ``ditto``.
@@ -106,6 +108,16 @@ def main() -> None:
         type=Path,
         default=_DEFAULT_CONFIRMATION_OUT,
         help="destination private v9 confirmation contract golden",
+    )
+    parser.add_argument(
+        "--bench-versions-out",
+        type=Path,
+        default=_DEFAULT_BENCH_VERSIONS_OUT,
+        help=(
+            "destination for the cross-layer supported bench-version set that "
+            "ditto/tests/test_bench_version_pins.py diffs against the Go, Rust "
+            "and TypeScript pins"
+        ),
     )
     parser.add_argument(
         "--miner-out",
@@ -161,17 +173,22 @@ def main() -> None:
         ("validator", args.out, []),
         ("confirmation", args.confirmation_out, []),
         ("router", args.router_out, []),
+
+        ("bench_versions", args.bench_versions_out, []),
         ("miner", args.miner_out, []),
     ]
     if mirror_dir is not None:
         plan[0][2].append(mirror_dir / "validator_contract.json")
         plan[1][2].append(mirror_dir / "confirmation_contract.json")
         plan[2][2].append(mirror_dir / "router_contract.json")
+        plan[3][2].append(mirror_dir / "bench_versions.json")
 
     compute = {
         "validator": schema.compute_contract,
         "confirmation": schema.compute_confirmation_contract,
         "router": schema.compute_router_contract,
+
+        "bench_versions": schema.compute_bench_versions,
         "miner": schema.compute_miner_contract,
     }
     for kind, out, mirrors in plan:
@@ -179,7 +196,7 @@ def main() -> None:
         payload = json.dumps(contract, indent=2, sort_keys=True) + "\n"
         for destination in (out, *mirrors):
             destination.write_text(payload)
-            print(f"wrote {len(contract)} model(s) to {destination}")
+            print(f"wrote {len(contract)} {kind} entr(y/ies) to {destination}")
 
 
 if __name__ == "__main__":
