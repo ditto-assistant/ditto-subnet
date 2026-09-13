@@ -456,7 +456,7 @@ jobs:
 
           body=''
           if [ "$PUBLISH_RESULT" != success ] && [ -n "$reason" ]; then
-            printf -v body '%s\n**No dashboard preview for this commit.** %s\n\nStack previews are never automatic. A maintainer can provision one for this PR:\n\n```bash\ngh workflow run preview-stack.yml -f pr=%s\ngh workflow run preview-stack.yml -f pr=%s -f action=retire\n```\n\nIt runs on the default branch, resolves the head commit from the API, and comments dashboard, Platform, and isolated Backroom URLs once readiness succeeds. `profile` defaults to `auto`, which picks `stack-copy` when the PR touches `apps/platform/alembic/`. Eight slots cap every active preview; a re-dispatch reuses the slot this PR already holds. Reconciliation keeps it while the PR is open, up to a 24-hour lease cap, and retires it four hours after the PR closes.\n\nExact SHA: `%s`\n' \
+            printf -v body '%s\n**No dashboard preview for this commit.** %s\n\nStack previews are never automatic. A maintainer can provision one for this PR:\n\n```bash\ngh workflow run preview-stack.yml -f pr=%s                    # provision\ngh workflow run preview-stack.yml -f pr=%s -f action=retire   # free the slot\n```\n\nIt runs on the default branch, resolves the head commit from the API, and comments dashboard, Platform, and isolated Backroom URLs once readiness succeeds. `profile` defaults to `auto`, which picks `stack-copy` when the PR touches `apps/platform/alembic/`. Eight slots cap every active preview; a re-dispatch reuses the slot this PR already holds. Reconciliation keeps it while the PR is open, up to a 24-hour lease cap, and retires it four hours after the PR closes.\n\nExact SHA: `%s`\n' \
               "$marker" "$reason" "$PREVIEW_PR" "$PREVIEW_PR" "$PREVIEW_SHA"
           fi
 
@@ -467,9 +467,14 @@ jobs:
           # A push that turns a stack PR back into a dashboard-only one
           # publishes a real URL, so the stale explanation must go rather than
           # sit next to it contradicting it.
+          # Removing the stale explanation is cosmetic, so it must never fail
+          # the run. GitHub documents both Issues-write and Pull-requests-write
+          # against this endpoint without saying whether either alone suffices,
+          # and a transient 5xx should not red-X a preview job either.
           if [ -z "$body" ]; then
             [ -z "$comment_id" ] || gh api -X DELETE \
-              "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" >/dev/null
+              "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" >/dev/null ||
+              echo "could not remove the stale explanation comment" >&2
             exit 0
           fi
           if [ -n "$comment_id" ]; then

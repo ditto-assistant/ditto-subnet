@@ -389,7 +389,18 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     assert "environment" not in explain
     assert explain["permissions"] == {"pull-requests": "write"}
     assert explain["needs"] == ["inspect", "preflight", "publish"]
-    assert "inputs.action != 'closed'" in explain["if"]
+    # Pin the WHOLE condition. `explain` needs `publish`, which is skipped in
+    # exactly the case this feature exists for, so dropping `always()` would
+    # disable it on every policy skip -- and a substring match on the second
+    # clause alone would still pass.
+    assert explain["if"] == "always() && inputs.action != 'closed'"
+    # The script carries no `${{ }}`, so the env block is the only thing
+    # supplying these. Unpinned, deleting a mapping keeps every other
+    # assertion green while `set -u` fails the job on every PR.
+    assert explain["env"]["PREVIEW_PROFILES"] == "${{ inputs.profiles }}"
+    assert explain["env"]["PUBLISH_RESULT"] == "${{ needs.publish.result }}"
+    assert explain["env"]["CONFIGURED"] == "${{ needs.preflight.outputs.configured }}"
+    assert explain["env"]["PREVIEW_PR"] == "${{ inputs.pr }}"
     assert len(explain["steps"]) == 1
     assert "uses" not in explain["steps"][0]
     explain_script = explain["steps"][0]["run"]
@@ -409,8 +420,11 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     assert "so there is no dashboard build to publish" in explain_script
     assert "fails closed rather than guessing" in explain_script
     # A later dashboard-only push publishes a real URL, so the stale
-    # explanation is removed rather than left to contradict it.
+    # explanation is removed rather than left to contradict it -- on the
+    # no-body branch specifically, and never at the cost of failing the run.
+    assert 'if [ -z "$body" ]' in explain_script
     assert "-X DELETE" in explain_script
+    assert "could not remove the stale explanation comment" in explain_script
     # Nothing a pull request controls reaches a shell word; it arrives via env.
     assert "${{ inputs." not in explain_script
     assert "${{ github.event." not in explain_script
