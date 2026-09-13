@@ -517,7 +517,9 @@ func loadDittoRouter(r *envReader) DittoRouterConfig {
 
 func dittoInferenceHost(host string) bool {
 	h := strings.ToLower(host)
-	return h == "inference.heyditto.ai" || h == "api.heyditto.ai" || h == "staging-api.heyditto.ai" ||
+	// router.heyditto.ai is the canonical production inference host once backend
+	// #2675 lands; inference.heyditto.ai stays as its compatibility hostname.
+	return h == "router.heyditto.ai" || h == "inference.heyditto.ai" || h == "api.heyditto.ai" || h == "staging-api.heyditto.ai" ||
 		(strings.HasSuffix(h, "-api.heyditto.ai") && !strings.Contains(strings.TrimSuffix(h, "-api.heyditto.ai"), "."))
 }
 

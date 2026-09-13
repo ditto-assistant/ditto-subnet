@@ -498,3 +498,36 @@ func TestDittoRouterDefaultsOffAndFailsClosed(t *testing.T) {
 		t.Fatalf("unknown lane must fail boot, got %v", err)
 	}
 }
+
+func TestDittoRouterUpstreamHostAllowlist(t *testing.T) {
+	// router.heyditto.ai is the canonical production host (backend #2675);
+	// inference.heyditto.ai is its compatibility name. Both must boot; a
+	// look-alike, a subdomain of the canonical host, and the wrong path must not.
+	for _, tc := range []struct {
+		url string
+		ok  bool
+	}{
+		{"https://router.heyditto.ai/v1/chat/completions", true},
+		{"https://inference.heyditto.ai/v1/chat/completions", true},
+		{"https://api.heyditto.ai/v1/chat/completions", true},
+		{"https://staging-api.heyditto.ai/v1/chat/completions", true},
+		{"https://be-2686-api.heyditto.ai/v1/chat/completions", true},
+		{"https://router.heyditto.ai/v1", false},
+		{"https://router.heyditto.ai.evil.example/v1/chat/completions", false},
+		{"https://evil.router.heyditto.ai/v1/chat/completions", false},
+		{"https://a.b-api.heyditto.ai/v1/chat/completions", false},
+		{"http://router.heyditto.ai/v1/chat/completions", false},
+	} {
+		env := minimalEnv()
+		env["DITTO_ROUTER_UPSTREAM_ENABLED"] = "true"
+		env["DITTO_ROUTER_API_KEY"] = "dk_test"
+		env["DITTO_ROUTER_UPSTREAM_URL"] = tc.url
+		_, err := Load(MapLookup(env))
+		if tc.ok && err != nil {
+			t.Errorf("%s: expected to boot, got %v", tc.url, err)
+		}
+		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "DITTO_ROUTER_UPSTREAM_URL")) {
+			t.Errorf("%s: expected DITTO_ROUTER_UPSTREAM_URL rejection, got %v", tc.url, err)
+		}
+	}
+}

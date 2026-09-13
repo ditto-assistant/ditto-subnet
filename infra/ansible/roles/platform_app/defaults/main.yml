@@ -363,7 +363,9 @@ secret_ditto_link_client_secret: ""
 # Relay pool -> Ditto Router. The competition lane additionally needs the exact
 # ack the relay demands (memories-off-locked-model); see services/model-relay/README.md.
 platform_ditto_router_upstream_enabled: false
-platform_ditto_router_upstream_url: "https://inference.heyditto.ai/v1"
+# The relay validates this as exactly https://<ditto inference host>/v1/chat/completions
+# (router.heyditto.ai once canonical, inference.heyditto.ai as its compatibility host).
+platform_ditto_router_upstream_url: "https://inference.heyditto.ai/v1/chat/completions"
 platform_ditto_router_lanes: ""
 platform_ditto_router_competition_ack: ""
 # Secret Manager id holding the DittoBench endpoint key used by the relay; empty = not read.

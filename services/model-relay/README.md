@@ -197,7 +197,7 @@ lookup errors — takes the centralized OpenRouter path byte for byte.
 | Env | Default | Meaning |
 | --- | --- | --- |
 | `DITTO_ROUTER_UPSTREAM_ENABLED` | `false` | Master switch. |
-| `DITTO_ROUTER_UPSTREAM_URL` | `https://inference.heyditto.ai/v1/chat/completions` | Pinned to Ditto inference hosts (prod, staging, `pr-N`/`be-N` previews); anything else fails boot. |
+| `DITTO_ROUTER_UPSTREAM_URL` | `https://inference.heyditto.ai/v1/chat/completions` | Pinned to Ditto inference hosts (`router.heyditto.ai`, its `inference.heyditto.ai` compatibility host, staging, `pr-N`/`be-N` previews) and to the exact `/v1/chat/completions` path; anything else fails boot. |
 | `DITTO_ROUTER_API_KEY` | — | Owner-minted key on the DittoBench app endpoint. Required when enabled. |
 | `DITTO_ROUTER_LANES` | *(empty)* | csv of `screener`, `competition`. Empty routes nothing. |
 | `DITTO_ROUTER_COMPETITION_ACK` | — | Must be `memories-off-locked-model` before `competition` is accepted. |
