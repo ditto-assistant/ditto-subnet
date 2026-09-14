@@ -1,0 +1,2233 @@
+{
+  "captured_at": "2026-09-14T15:25:07.497454+00:00",
+  "cost_helper_sha256": "bbe095de20f0bea06d5e347490c0a5d6b29d09f5cc3d8d5c5a9aa5a3e227bd0a",
+  "journal_sha256": [
+    "6b0102dd6df630fd07e1d8e3533095384ef58a0977f97d774e3edaa579e0e340"
+  ],
+  "private_receipt_evidence_sha256": "fb94d34f723457ad9cb91e2d776bb64f05520f7ebdcf3b253f49ae73e7230d1b",
+  "recovery_sha256": [],
+  "report_run_id": "20260914-152212-1cd1cf15245ea39123ea421e9bb2b7bf51d204c1",
+  "report_sha256": "894db237c6bae4f23971548ee55cb396e68768744cfd7d7d7eecdce3d886644e",
+  "reused_final_receipts": 0,
+  "schema": "resumed-captured-cost-union-v1",
+  "scope": "Union of captured reader/judge calls across supplied attempts, including failed calls. No inference. Original prep, query embeddings and calls without captured IDs are not established. Not an invoice or accuracy audit.",
+  "summary": {
+    "all_attempts_coverage_proven": false,
+    "byok_generations": 132,
+    "byok_upstream_estimate_usd": "0.17592414",
+    "captured_generation_cost_per_question_stats_usd": {
+      "mean": "0.0001114166666666666666666666667",
+      "median": "0.00009475",
+      "p95_nearest_rank": "0.00023575"
+    },
+    "captured_generation_cost_per_question_usd": [
+      {
+        "case_id": "06878be2",
+        "recorded_cost_usd": "0.000292"
+      },
+      {
+        "case_id": "0a995998",
+        "recorded_cost_usd": "0.00011025"
+      },
+      {
+        "case_id": "0bc8ad92",
+        "recorded_cost_usd": "0.00009625"
+      },
+      {
+        "case_id": "0edc2aef",
+        "recorded_cost_usd": "0.00017725"
+      },
+      {
+        "case_id": "118b2229",
+        "recorded_cost_usd": "0.00007625"
+      },
+      {
+        "case_id": "1903aded",
+        "recorded_cost_usd": "0.00006575"
+      },
+      {
+        "case_id": "195a1a1b",
+        "recorded_cost_usd": "0.00018975"
+      },
+      {
+        "case_id": "1e043500",
+        "recorded_cost_usd": "0.00005975"
+      },
+      {
+        "case_id": "32260d93",
+        "recorded_cost_usd": "0.00012775"
+      },
+      {
+        "case_id": "35a27287",
+        "recorded_cost_usd": "0.00012125"
+      },
+      {
+        "case_id": "3a704032",
+        "recorded_cost_usd": "0.0000625"
+      },
+      {
+        "case_id": "4c36ccef",
+        "recorded_cost_usd": "0.0000755"
+      },
+      {
+        "case_id": "51a45a95",
+        "recorded_cost_usd": "0.00007325"
+      },
+      {
+        "case_id": "54026fce",
+        "recorded_cost_usd": "0.0002035"
+      },
+      {
+        "case_id": "58bf7951",
+        "recorded_cost_usd": "0.000062"
+      },
+      {
+        "case_id": "58ef2f1c",
+        "recorded_cost_usd": "0.0000795"
+      },
+      {
+        "case_id": "6a1eabeb",
+        "recorded_cost_usd": "0.000102"
+      },
+      {
+        "case_id": "6ade9755",
+        "recorded_cost_usd": "0.000081"
+      },
+      {
+        "case_id": "6ae235be",
+        "recorded_cost_usd": "0.00011575"
+      },
+      {
+        "case_id": "6aeb4375",
+        "recorded_cost_usd": "0.00008175"
+      },
+      {
+        "case_id": "6d550036",
+        "recorded_cost_usd": "0.00009675"
+      },
+      {
+        "case_id": "6f9b354f",
+        "recorded_cost_usd": "0.0000775"
+      },
+      {
+        "case_id": "71017276",
+        "recorded_cost_usd": "0.00008"
+      },
+      {
+        "case_id": "71315a70",
+        "recorded_cost_usd": "0.000096"
+      },
+      {
+        "case_id": "7161e7e2",
+        "recorded_cost_usd": "0.00011425"
+      },
+      {
+        "case_id": "75832dbd",
+        "recorded_cost_usd": "0.0003525"
+      },
+      {
+        "case_id": "7e00a6cb",
+        "recorded_cost_usd": "0.0000985"
+      },
+      {
+        "case_id": "830ce83f",
+        "recorded_cost_usd": "0.000088"
+      },
+      {
+        "case_id": "852ce960",
+        "recorded_cost_usd": "0.0001215"
+      },
+      {
+        "case_id": "89527b6b",
+        "recorded_cost_usd": "0.00008475"
+      },
+      {
+        "case_id": "89941a93",
+        "recorded_cost_usd": "0.00008375"
+      },
+      {
+        "case_id": "8a2466db",
+        "recorded_cost_usd": "0.00023575"
+      },
+      {
+        "case_id": "945e3d21",
+        "recorded_cost_usd": "0.000088"
+      },
+      {
+        "case_id": "9a707b81",
+        "recorded_cost_usd": "0.00016925"
+      },
+      {
+        "case_id": "9ea5eabc",
+        "recorded_cost_usd": "0.00008"
+      },
+      {
+        "case_id": "aae3761f",
+        "recorded_cost_usd": "0.0001175"
+      },
+      {
+        "case_id": "af082822",
+        "recorded_cost_usd": "0.000084"
+      },
+      {
+        "case_id": "afdc33df",
+        "recorded_cost_usd": "0.000214"
+      },
+      {
+        "case_id": "b46e15ed",
+        "recorded_cost_usd": "0.0000985"
+      },
+      {
+        "case_id": "b5ef892d",
+        "recorded_cost_usd": "0.000076"
+      },
+      {
+        "case_id": "c4f10528",
+        "recorded_cost_usd": "0.0000765"
+      },
+      {
+        "case_id": "c5e8278d",
+        "recorded_cost_usd": "0.000081"
+      },
+      {
+        "case_id": "caf03d32",
+        "recorded_cost_usd": "0.00024875"
+      },
+      {
+        "case_id": "ce6d2d27",
+        "recorded_cost_usd": "0.00007825"
+      },
+      {
+        "case_id": "ceb54acb",
+        "recorded_cost_usd": "0.000081"
+      },
+      {
+        "case_id": "d7c942c3",
+        "recorded_cost_usd": "0.00009175"
+      },
+      {
+        "case_id": "dd2973ad",
+        "recorded_cost_usd": "0.000063"
+      },
+      {
+        "case_id": "e47becba",
+        "recorded_cost_usd": "0.00005525"
+      },
+      {
+        "case_id": "e831120c",
+        "recorded_cost_usd": "0.00009075"
+      },
+      {
+        "case_id": "e9327a54",
+        "recorded_cost_usd": "0.0001075"
+      },
+      {
+        "case_id": "f523d9fe",
+        "recorded_cost_usd": "0.00010275"
+      },
+      {
+        "case_id": "f8c5f88b",
+        "recorded_cost_usd": "0.0000645"
+      },
+      {
+        "case_id": "gpt4_4929293a",
+        "recorded_cost_usd": "0.000097"
+      },
+      {
+        "case_id": "gpt4_59149c77",
+        "recorded_cost_usd": "0.000124"
+      },
+      {
+        "case_id": "gpt4_59c863d7",
+        "recorded_cost_usd": "0.00012175"
+      },
+      {
+        "case_id": "gpt4_b5700ca9",
+        "recorded_cost_usd": "0.000081"
+      },
+      {
+        "case_id": "gpt4_d84a3211",
+        "recorded_cost_usd": "0.00009375"
+      },
+      {
+        "case_id": "gpt4_f2262a51",
+        "recorded_cost_usd": "0.0001005"
+      },
+      {
+        "case_id": "gpt4_f49edff3",
+        "recorded_cost_usd": "0.00012075"
+      },
+      {
+        "case_id": "gpt4_fa19884c",
+        "recorded_cost_usd": "0.00009575"
+      }
+    ],
+    "embedding_cost_usd": null,
+    "full_judge_cost_usd": null,
+    "full_lifecycle_cost_per_question_usd": null,
+    "full_lifecycle_cost_usd": null,
+    "historical_preparation_cost_usd": null,
+    "limitation": "Captured generations only. Missing attempts, uncaptured judge calls, embeddings and original preparation are not zero. No full-lifecycle total is established.",
+    "missing_byok_upstream_costs": 0,
+    "missing_generations": 0,
+    "per_case": [
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "06878be2",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000292",
+        "recorded_cost_usd": "0.000292",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0028692",
+        "case_id": "06878be2",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "0a995998",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00011025",
+        "recorded_cost_usd": "0.00011025",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 2,
+        "byok_upstream_estimate_usd": "0.00303902",
+        "case_id": "0a995998",
+        "generations_with_observed_cost": 2,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 2,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "0bc8ad92",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00009625",
+        "recorded_cost_usd": "0.00009625",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 2,
+        "byok_upstream_estimate_usd": "0.00249862",
+        "case_id": "0bc8ad92",
+        "generations_with_observed_cost": 2,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 2,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "0edc2aef",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00017725",
+        "recorded_cost_usd": "0.00017725",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 3,
+        "byok_upstream_estimate_usd": "0.00289043",
+        "case_id": "0edc2aef",
+        "generations_with_observed_cost": 3,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 3,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "118b2229",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00007625",
+        "recorded_cost_usd": "0.00007625",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00188595",
+        "case_id": "118b2229",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "1903aded",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00006575",
+        "recorded_cost_usd": "0.00006575",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 2,
+        "byok_upstream_estimate_usd": "0.00219917",
+        "case_id": "1903aded",
+        "generations_with_observed_cost": 2,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 2,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "195a1a1b",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00018975",
+        "recorded_cost_usd": "0.00018975",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0022761",
+        "case_id": "195a1a1b",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "1e043500",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00005975",
+        "recorded_cost_usd": "0.00005975",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0018443",
+        "case_id": "1e043500",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "32260d93",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00012775",
+        "recorded_cost_usd": "0.00012775",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0020907",
+        "case_id": "32260d93",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "35a27287",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00012125",
+        "recorded_cost_usd": "0.00012125",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0019389",
+        "case_id": "35a27287",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "3a704032",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0000625",
+        "recorded_cost_usd": "0.0000625",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 5,
+        "byok_upstream_estimate_usd": "0.00455049",
+        "case_id": "3a704032",
+        "generations_with_observed_cost": 5,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 5,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "4c36ccef",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0000755",
+        "recorded_cost_usd": "0.0000755",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00184365",
+        "case_id": "4c36ccef",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "51a45a95",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00007325",
+        "recorded_cost_usd": "0.00007325",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00187555",
+        "case_id": "51a45a95",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "54026fce",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0002035",
+        "recorded_cost_usd": "0.0002035",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0021849",
+        "case_id": "54026fce",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "58bf7951",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000062",
+        "recorded_cost_usd": "0.000062",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00191695",
+        "case_id": "58bf7951",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "58ef2f1c",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0000795",
+        "recorded_cost_usd": "0.0000795",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 2,
+        "byok_upstream_estimate_usd": "0.00252122",
+        "case_id": "58ef2f1c",
+        "generations_with_observed_cost": 2,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 2,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "6a1eabeb",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000102",
+        "recorded_cost_usd": "0.000102",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0018832",
+        "case_id": "6a1eabeb",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "6ade9755",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000081",
+        "recorded_cost_usd": "0.000081",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00194455",
+        "case_id": "6ade9755",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "6ae235be",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00011575",
+        "recorded_cost_usd": "0.00011575",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 2,
+        "byok_upstream_estimate_usd": "0.00244496",
+        "case_id": "6ae235be",
+        "generations_with_observed_cost": 2,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 2,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "6aeb4375",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00008175",
+        "recorded_cost_usd": "0.00008175",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00193745",
+        "case_id": "6aeb4375",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "6d550036",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00009675",
+        "recorded_cost_usd": "0.00009675",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 4,
+        "byok_upstream_estimate_usd": "0.00603668",
+        "case_id": "6d550036",
+        "generations_with_observed_cost": 4,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 4,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "6f9b354f",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0000775",
+        "recorded_cost_usd": "0.0000775",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0018691",
+        "case_id": "6f9b354f",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "71017276",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00008",
+        "recorded_cost_usd": "0.00008",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 8,
+        "byok_upstream_estimate_usd": "0.00657826",
+        "case_id": "71017276",
+        "generations_with_observed_cost": 8,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 8,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "71315a70",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000096",
+        "recorded_cost_usd": "0.000096",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0018767",
+        "case_id": "71315a70",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "7161e7e2",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00011425",
+        "recorded_cost_usd": "0.00011425",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 5,
+        "byok_upstream_estimate_usd": "0.00386674",
+        "case_id": "7161e7e2",
+        "generations_with_observed_cost": 5,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 5,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "75832dbd",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0003525",
+        "recorded_cost_usd": "0.0003525",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 3,
+        "byok_upstream_estimate_usd": "0.00426590",
+        "case_id": "75832dbd",
+        "generations_with_observed_cost": 3,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 3,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "7e00a6cb",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0000985",
+        "recorded_cost_usd": "0.0000985",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 2,
+        "byok_upstream_estimate_usd": "0.00230860",
+        "case_id": "7e00a6cb",
+        "generations_with_observed_cost": 2,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 2,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "830ce83f",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000088",
+        "recorded_cost_usd": "0.000088",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00187495",
+        "case_id": "830ce83f",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "852ce960",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0001215",
+        "recorded_cost_usd": "0.0001215",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0020079",
+        "case_id": "852ce960",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "89527b6b",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00008475",
+        "recorded_cost_usd": "0.00008475",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 2,
+        "byok_upstream_estimate_usd": "0.00233427",
+        "case_id": "89527b6b",
+        "generations_with_observed_cost": 2,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 2,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "89941a93",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00008375",
+        "recorded_cost_usd": "0.00008375",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00186015",
+        "case_id": "89941a93",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "8a2466db",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00023575",
+        "recorded_cost_usd": "0.00023575",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0025748",
+        "case_id": "8a2466db",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "945e3d21",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000088",
+        "recorded_cost_usd": "0.000088",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00187835",
+        "case_id": "945e3d21",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "9a707b81",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00016925",
+        "recorded_cost_usd": "0.00016925",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 2,
+        "byok_upstream_estimate_usd": "0.00251363",
+        "case_id": "9a707b81",
+        "generations_with_observed_cost": 2,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 2,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "9ea5eabc",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00008",
+        "recorded_cost_usd": "0.00008",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00185715",
+        "case_id": "9ea5eabc",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "aae3761f",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0001175",
+        "recorded_cost_usd": "0.0001175",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 4,
+        "byok_upstream_estimate_usd": "0.00578634",
+        "case_id": "aae3761f",
+        "generations_with_observed_cost": 4,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 4,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "af082822",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000084",
+        "recorded_cost_usd": "0.000084",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 10,
+        "byok_upstream_estimate_usd": "0.00853744",
+        "case_id": "af082822",
+        "generations_with_observed_cost": 10,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 10,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "afdc33df",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000214",
+        "recorded_cost_usd": "0.000214",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0022116",
+        "case_id": "afdc33df",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "b46e15ed",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0000985",
+        "recorded_cost_usd": "0.0000985",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 7,
+        "byok_upstream_estimate_usd": "0.00864273",
+        "case_id": "b46e15ed",
+        "generations_with_observed_cost": 7,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 7,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "b5ef892d",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000076",
+        "recorded_cost_usd": "0.000076",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 3,
+        "byok_upstream_estimate_usd": "0.00404216",
+        "case_id": "b5ef892d",
+        "generations_with_observed_cost": 3,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 3,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "c4f10528",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0000765",
+        "recorded_cost_usd": "0.0000765",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00189575",
+        "case_id": "c4f10528",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "c5e8278d",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000081",
+        "recorded_cost_usd": "0.000081",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00189405",
+        "case_id": "c5e8278d",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "caf03d32",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00024875",
+        "recorded_cost_usd": "0.00024875",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00252445",
+        "case_id": "caf03d32",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "ce6d2d27",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00007825",
+        "recorded_cost_usd": "0.00007825",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0018722",
+        "case_id": "ce6d2d27",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "ceb54acb",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000081",
+        "recorded_cost_usd": "0.000081",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 2,
+        "byok_upstream_estimate_usd": "0.00237308",
+        "case_id": "ceb54acb",
+        "generations_with_observed_cost": 2,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 2,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "d7c942c3",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00009175",
+        "recorded_cost_usd": "0.00009175",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0018749",
+        "case_id": "d7c942c3",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "dd2973ad",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000063",
+        "recorded_cost_usd": "0.000063",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 9,
+        "byok_upstream_estimate_usd": "0.00774248",
+        "case_id": "dd2973ad",
+        "generations_with_observed_cost": 9,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 9,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "e47becba",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00005525",
+        "recorded_cost_usd": "0.00005525",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0018441",
+        "case_id": "e47becba",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "e831120c",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00009075",
+        "recorded_cost_usd": "0.00009075",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0019686",
+        "case_id": "e831120c",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "e9327a54",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0001075",
+        "recorded_cost_usd": "0.0001075",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 4,
+        "byok_upstream_estimate_usd": "0.00322581",
+        "case_id": "e9327a54",
+        "generations_with_observed_cost": 4,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 4,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "f523d9fe",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00010275",
+        "recorded_cost_usd": "0.00010275",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0019256",
+        "case_id": "f523d9fe",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "f8c5f88b",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0000645",
+        "recorded_cost_usd": "0.0000645",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0018443",
+        "case_id": "f8c5f88b",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "gpt4_4929293a",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000097",
+        "recorded_cost_usd": "0.000097",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 6,
+        "byok_upstream_estimate_usd": "0.00693455",
+        "case_id": "gpt4_4929293a",
+        "generations_with_observed_cost": 6,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 6,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "gpt4_59149c77",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000124",
+        "recorded_cost_usd": "0.000124",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00195885",
+        "case_id": "gpt4_59149c77",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "gpt4_59c863d7",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00012175",
+        "recorded_cost_usd": "0.00012175",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 3,
+        "byok_upstream_estimate_usd": "0.00315518",
+        "case_id": "gpt4_59c863d7",
+        "generations_with_observed_cost": 3,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 3,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "gpt4_b5700ca9",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.000081",
+        "recorded_cost_usd": "0.000081",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.00195575",
+        "case_id": "gpt4_b5700ca9",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "gpt4_d84a3211",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00009375",
+        "recorded_cost_usd": "0.00009375",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 3,
+        "byok_upstream_estimate_usd": "0.00486108",
+        "case_id": "gpt4_d84a3211",
+        "generations_with_observed_cost": 3,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 3,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "gpt4_f2262a51",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.0001005",
+        "recorded_cost_usd": "0.0001005",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 2,
+        "byok_upstream_estimate_usd": "0.00255965",
+        "case_id": "gpt4_f2262a51",
+        "generations_with_observed_cost": 2,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 2,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "gpt4_f49edff3",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00012075",
+        "recorded_cost_usd": "0.00012075",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0020155",
+        "case_id": "gpt4_f49edff3",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 0,
+        "byok_upstream_estimate_usd": "0",
+        "case_id": "gpt4_fa19884c",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0.00009575",
+        "recorded_cost_usd": "0.00009575",
+        "saved_generation_coverage_complete": true,
+        "stage": "judge",
+        "unknown_route_generations": 0
+      },
+      {
+        "byok_generations": 1,
+        "byok_upstream_estimate_usd": "0.0019395",
+        "case_id": "gpt4_fa19884c",
+        "generations_with_observed_cost": 1,
+        "missing_byok_upstream_costs": 0,
+        "missing_generations": 0,
+        "priced_generations": 1,
+        "provisional_observed_cost_usd": "0",
+        "recorded_cost_usd": "0",
+        "saved_generation_coverage_complete": true,
+        "stage": "reader",
+        "unknown_route_generations": 0
+      }
+    ],
+    "priced_generations": 192,
+    "provisional_cost_note": "Observed stream/response snapshots without finality proof. Not additive to reconciled charges; may differ from final charges.",
+    "provisional_observed_cost_usd": "0.00668500",
+    "question_denominator": 60,
+    "recorded_cost_basis": "GET-generation-reconciled OpenRouter account charges ONLY; BYOK vendor usage excluded",
+    "recorded_cost_by_stage_usd": {
+      "judge": "0.00668500",
+      "reader": "0"
+    },
+    "recorded_cost_usd": "0.00668500",
+    "recorded_judge_cost_subtotal_usd": "0.00668500",
+    "requested_resolved_models": [
+      {
+        "exact_alias_mapping_used": true,
+        "requested": "google/gemini-3.1-flash-lite",
+        "resolved": "google/gemini-3.1-flash-lite-20260507"
+      },
+      {
+        "exact_alias_mapping_used": true,
+        "requested": "openai/gpt-5.6-luna",
+        "resolved": "openai/gpt-5.6-luna-20260709"
+      }
+    ],
+    "saved_generation_coverage_complete": true,
+    "selected_generation_estimate_scope": "OpenRouter charges plus provider-reported BYOK upstream estimates, not vendor invoice or full lifecycle. Null if any captured generation/route/upstream estimate is unknown.",
+    "selected_generation_estimated_cost_per_question_stats_usd": {
+      "mean": "0.003043485666666666666666666667",
+      "median": "0.00232666",
+      "p95_nearest_rank": "0.00703155"
+    },
+    "selected_generation_estimated_cost_per_question_usd": [
+      {
+        "case_id": "06878be2",
+        "estimated_cost_usd": "0.0031612"
+      },
+      {
+        "case_id": "0a995998",
+        "estimated_cost_usd": "0.00314927"
+      },
+      {
+        "case_id": "0bc8ad92",
+        "estimated_cost_usd": "0.00259487"
+      },
+      {
+        "case_id": "0edc2aef",
+        "estimated_cost_usd": "0.00306768"
+      },
+      {
+        "case_id": "118b2229",
+        "estimated_cost_usd": "0.00196220"
+      },
+      {
+        "case_id": "1903aded",
+        "estimated_cost_usd": "0.00226492"
+      },
+      {
+        "case_id": "195a1a1b",
+        "estimated_cost_usd": "0.00246585"
+      },
+      {
+        "case_id": "1e043500",
+        "estimated_cost_usd": "0.00190405"
+      },
+      {
+        "case_id": "32260d93",
+        "estimated_cost_usd": "0.00221845"
+      },
+      {
+        "case_id": "35a27287",
+        "estimated_cost_usd": "0.00206015"
+      },
+      {
+        "case_id": "3a704032",
+        "estimated_cost_usd": "0.00461299"
+      },
+      {
+        "case_id": "4c36ccef",
+        "estimated_cost_usd": "0.00191915"
+      },
+      {
+        "case_id": "51a45a95",
+        "estimated_cost_usd": "0.00194880"
+      },
+      {
+        "case_id": "54026fce",
+        "estimated_cost_usd": "0.0023884"
+      },
+      {
+        "case_id": "58bf7951",
+        "estimated_cost_usd": "0.00197895"
+      },
+      {
+        "case_id": "58ef2f1c",
+        "estimated_cost_usd": "0.00260072"
+      },
+      {
+        "case_id": "6a1eabeb",
+        "estimated_cost_usd": "0.0019852"
+      },
+      {
+        "case_id": "6ade9755",
+        "estimated_cost_usd": "0.00202555"
+      },
+      {
+        "case_id": "6ae235be",
+        "estimated_cost_usd": "0.00256071"
+      },
+      {
+        "case_id": "6aeb4375",
+        "estimated_cost_usd": "0.00201920"
+      },
+      {
+        "case_id": "6d550036",
+        "estimated_cost_usd": "0.00613343"
+      },
+      {
+        "case_id": "6f9b354f",
+        "estimated_cost_usd": "0.0019466"
+      },
+      {
+        "case_id": "71017276",
+        "estimated_cost_usd": "0.00665826"
+      },
+      {
+        "case_id": "71315a70",
+        "estimated_cost_usd": "0.0019727"
+      },
+      {
+        "case_id": "7161e7e2",
+        "estimated_cost_usd": "0.00398099"
+      },
+      {
+        "case_id": "75832dbd",
+        "estimated_cost_usd": "0.00461840"
+      },
+      {
+        "case_id": "7e00a6cb",
+        "estimated_cost_usd": "0.00240710"
+      },
+      {
+        "case_id": "830ce83f",
+        "estimated_cost_usd": "0.00196295"
+      },
+      {
+        "case_id": "852ce960",
+        "estimated_cost_usd": "0.0021294"
+      },
+      {
+        "case_id": "89527b6b",
+        "estimated_cost_usd": "0.00241902"
+      },
+      {
+        "case_id": "89941a93",
+        "estimated_cost_usd": "0.00194390"
+      },
+      {
+        "case_id": "8a2466db",
+        "estimated_cost_usd": "0.00281055"
+      },
+      {
+        "case_id": "945e3d21",
+        "estimated_cost_usd": "0.00196635"
+      },
+      {
+        "case_id": "9a707b81",
+        "estimated_cost_usd": "0.00268288"
+      },
+      {
+        "case_id": "9ea5eabc",
+        "estimated_cost_usd": "0.00193715"
+      },
+      {
+        "case_id": "aae3761f",
+        "estimated_cost_usd": "0.00590384"
+      },
+      {
+        "case_id": "af082822",
+        "estimated_cost_usd": "0.00862144"
+      },
+      {
+        "case_id": "afdc33df",
+        "estimated_cost_usd": "0.0024256"
+      },
+      {
+        "case_id": "b46e15ed",
+        "estimated_cost_usd": "0.00874123"
+      },
+      {
+        "case_id": "b5ef892d",
+        "estimated_cost_usd": "0.00411816"
+      },
+      {
+        "case_id": "c4f10528",
+        "estimated_cost_usd": "0.00197225"
+      },
+      {
+        "case_id": "c5e8278d",
+        "estimated_cost_usd": "0.00197505"
+      },
+      {
+        "case_id": "caf03d32",
+        "estimated_cost_usd": "0.00277320"
+      },
+      {
+        "case_id": "ce6d2d27",
+        "estimated_cost_usd": "0.00195045"
+      },
+      {
+        "case_id": "ceb54acb",
+        "estimated_cost_usd": "0.00245408"
+      },
+      {
+        "case_id": "d7c942c3",
+        "estimated_cost_usd": "0.00196665"
+      },
+      {
+        "case_id": "dd2973ad",
+        "estimated_cost_usd": "0.00780548"
+      },
+      {
+        "case_id": "e47becba",
+        "estimated_cost_usd": "0.00189935"
+      },
+      {
+        "case_id": "e831120c",
+        "estimated_cost_usd": "0.00205935"
+      },
+      {
+        "case_id": "e9327a54",
+        "estimated_cost_usd": "0.00333331"
+      },
+      {
+        "case_id": "f523d9fe",
+        "estimated_cost_usd": "0.00202835"
+      },
+      {
+        "case_id": "f8c5f88b",
+        "estimated_cost_usd": "0.0019088"
+      },
+      {
+        "case_id": "gpt4_4929293a",
+        "estimated_cost_usd": "0.00703155"
+      },
+      {
+        "case_id": "gpt4_59149c77",
+        "estimated_cost_usd": "0.00208285"
+      },
+      {
+        "case_id": "gpt4_59c863d7",
+        "estimated_cost_usd": "0.00327693"
+      },
+      {
+        "case_id": "gpt4_b5700ca9",
+        "estimated_cost_usd": "0.00203675"
+      },
+      {
+        "case_id": "gpt4_d84a3211",
+        "estimated_cost_usd": "0.00495483"
+      },
+      {
+        "case_id": "gpt4_f2262a51",
+        "estimated_cost_usd": "0.00266015"
+      },
+      {
+        "case_id": "gpt4_f49edff3",
+        "estimated_cost_usd": "0.00213625"
+      },
+      {
+        "case_id": "gpt4_fa19884c",
+        "estimated_cost_usd": "0.00203525"
+      }
+    ],
+    "selected_generation_estimated_cost_usd": "0.18260914",
+    "selected_generation_estimated_mean_per_question_usd": "0.003043485666666666666666666667",
+    "stats_scope": "Captured OpenRouter account charges only; excludes BYOK vendor usage, uncaptured attempts and lifecycle costs. Stats omitted when any captured generation is unpriced.",
+    "unknown_route_generations": 0
+  },
+  "union_helper_sha256": "b4c1dfc3e43455b595b4bc5e13259f4d19eb8cee10ceffd05276fd7ad6d9327e"
+}
