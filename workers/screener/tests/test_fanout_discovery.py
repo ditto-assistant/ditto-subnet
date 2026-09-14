@@ -124,3 +124,43 @@ def test_high_priority_later_compiler_survives_generic_early_interfaces(tmp_path
     archive = _archive_files(tmp_path, {"x.py": source.encode()})
     report = semantic_discovery(str(archive), max_hints=1)
     assert report["leads"][0]["locations"][0]["line"] > 40
+
+
+def test_provided_repository_uses_one_forward_tar_pass(tmp_path, monkeypatch):
+    import tarfile
+
+    from ditto_screener import fanout_discovery
+
+    archive = _archive_files(
+        tmp_path,
+        {
+            "src/a.py": b"pass\n",
+            "src/z.py": b"return program_result\n",
+            "src/zz.py": b"pass\n",
+        },
+    )
+    repo = TarSourceRepository(str(archive))
+    actual_open = tarfile.open
+    calls = []
+
+    def tracked_open(*args, **kwargs):
+        calls.append(kwargs.get("mode"))
+        return actual_open(*args, **kwargs)
+
+    monkeypatch.setattr(fanout_discovery.tarfile, "open", tracked_open)
+    monkeypatch.setattr(repo, "member_text", lambda *_: pytest.fail("per-file reopen"))
+    report = semantic_discovery(repo)
+    assert calls == ["r|gz"]
+    assert report["leads"][0]["locations"][0]["path"] == "src/z.py"
+    assert report["coverage"]["files_scanned"] == 3
+    assert report["coverage"]["selected_source_bytes_bound"] == 32
+
+
+def test_failed_decode_and_tokenization_are_not_scanned(tmp_path):
+    archive = _archive_files(
+        tmp_path, {"a.py": b'"""unterminated', "b.py": b"\xff", "c.py": b"pass\n"}
+    )
+    report = semantic_discovery(str(archive))
+    assert report["coverage"]["files_scanned"] == 1
+    assert report["coverage"]["unreadable_files"] == 2
+    assert report["coverage"]["truncated"]

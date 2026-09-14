@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import io
 import re
+import tarfile
 import tokenize
 from collections import defaultdict
+from collections.abc import Iterator
+from contextlib import suppress
 from pathlib import PurePosixPath
 
 from ditto_screener.source_review import TarSourceRepository
@@ -98,6 +101,36 @@ def _source(path: str) -> bool:
     return p.suffix in _SOURCE_SUFFIXES and not (_NON_RUNTIME & set(p.parts))
 
 
+def _selected_texts(
+    repo: TarSourceRepository, selected: dict[str, tuple[str, int]]
+) -> Iterator[tuple[str, str | None]]:
+    """One forward gzip pass; selected declared bytes are not archive I/O bytes."""
+    pending = dict(selected)
+    if not pending:
+        return
+    with tarfile.open(repo._archive_path, mode="r|gz") as archive:
+        for member in archive:
+            expected = pending.pop(member.name, None)
+            if expected is None:
+                continue
+            path, size = expected
+            if not member.isfile() or member.size != size:
+                raise ValueError("source archive changed after member validation")
+            extracted = archive.extractfile(member)
+            text = None
+            if extracted is not None:
+                raw = extracted.read(size + 1)
+                if len(raw) != size:
+                    raise ValueError("source archive member length changed")
+                with suppress(UnicodeDecodeError):
+                    text = raw.decode("utf-8")
+            yield path, text
+            if not pending:
+                break
+    for path, _size in pending.values():
+        yield path, None
+
+
 def semantic_discovery(
     source: str | TarSourceRepository,
     *,
@@ -124,6 +157,7 @@ def semantic_discovery(
     buckets: dict[tuple[str, str], list[tuple[int, int]]] = defaultdict(list)
     scanned = scanned_bytes = omitted = unreadable = considered = 0
     windows_omitted = lines_clipped = 0
+    selected: dict[str, tuple[str, int]] = {}
     for path in paths:
         size = repo._members[path].size
         if (
@@ -135,15 +169,16 @@ def semantic_discovery(
             continue
         considered += 1
         scanned_bytes += size
-        text = repo.member_text(path)
+        selected[repo._members[path].archive_name] = (path, size)
+    for path, text in _selected_texts(repo, selected):
         if text is None:
             unreadable += 1
             continue
-        scanned += 1
         code = _code(path, text)
         if code is None:
             unreadable += 1
             continue
+        scanned += 1
         lines = code.splitlines()
         for number, raw in enumerate(lines, 1):
             line = raw[:4096]
@@ -217,7 +252,7 @@ def semantic_discovery(
             "eligible_files": len(paths),
             "files_considered": considered,
             "files_scanned": scanned,
-            "bytes_read_bound": scanned_bytes,
+            "selected_source_bytes_bound": scanned_bytes,
             "files_omitted": omitted,
             "unreadable_files": unreadable,
             "hint_buckets": len(buckets),
