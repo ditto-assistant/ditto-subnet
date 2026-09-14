@@ -102,6 +102,8 @@ class AdminScreeningDisputeItem(BaseModel):
     resolved_by: str | None
     resolution: DisputeResolution | None
     resolution_reason: str | None
+    gate_note_ids: list[str] | None = None
+    """Bench v13+ gate ``note_id`` values the miner contested, if any."""
 
 
 class AdminScreeningDisputeList(BaseModel):

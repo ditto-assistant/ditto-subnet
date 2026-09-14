@@ -441,6 +441,18 @@ def _tools() -> list[dict[str, Any]]:
             },
         ),
         _tool(
+            "get_my_gate_notes",
+            "Return bench v13+ per-case gate notes and the shadow verdict "
+            "(gate-induced loss) for one of this miner's agents, with the "
+            "note_id values a dispute can cite.",
+            {
+                "type": "object",
+                "properties": {"agent_id": {"type": "string"}},
+                "required": ["agent_id"],
+                "additionalProperties": False,
+            },
+        ),
+        _tool(
             "list_my_reviews",
             "List ATH reviews and screening disputes for this hotkey.",
             empty,
@@ -585,6 +597,26 @@ async def _call_tool(
         if screening_payload is None:
             raise HTTPException(status_code=404, detail="no such agent for this hotkey")
         return screening_payload.model_dump(mode="json")
+    if name == "get_my_gate_notes":
+        from uuid import UUID
+
+        from ditto.api_server.endpoints.miner_gate_notes import (
+            load_owned_gate_notes,
+        )
+
+        require_scope(row, "read")
+        try:
+            agent_id = UUID(str(arguments.get("agent_id") or ""))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="agent_id is not a UUID"
+            ) from exc
+        gate_payload = await load_owned_gate_notes(
+            session, hotkey=row.miner_hotkey, agent_id=agent_id
+        )
+        if gate_payload is None:
+            raise HTTPException(status_code=404, detail="no such agent for this hotkey")
+        return gate_payload.model_dump(mode="json")
     if name == "list_my_submissions":
         require_scope(row, "read")
         agents = await list_recent_agents_for_hotkey(

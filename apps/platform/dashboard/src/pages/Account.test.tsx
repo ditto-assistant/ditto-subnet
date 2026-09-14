@@ -248,6 +248,135 @@ describe("miner sign-in page", () => {
   });
 });
 
+describe("gate notes (#1852)", () => {
+  it("loads owner-only bench v13 gate notes with citable note ids", async () => {
+    const session = {
+      token: "ditto_ms_abc",
+      hotkey: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+      scopes: ["read"],
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    };
+    localStorage.setItem("ditto.miner.session.v1", JSON.stringify(session));
+    const { setMinerSession } = await import("../stores/sessionStore");
+    setMinerSession(session);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/me")) {
+        return new Response(
+          JSON.stringify({
+            session: {
+              miner_hotkey: session.hotkey,
+              scopes: ["read"],
+              expires_at: session.expiresAt,
+              expires_in: 3600,
+            },
+            profile: {},
+            profile_url: "/miner/" + session.hotkey,
+            commands: [],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/me/submissions")) {
+        return new Response(
+          JSON.stringify([
+            {
+              agent_id: "5fdadd33-bd0f-492d-ba71-49bef159f069",
+              name: "alpha",
+              status: "scored",
+              created_at: "2026-09-13T00:00:00Z",
+            },
+          ]),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/me/reviews")) {
+        return new Response(JSON.stringify({ reviews: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/gate-notes")) {
+        return new Response(
+          JSON.stringify({
+            agent_id: "5fdadd33-bd0f-492d-ba71-49bef159f069",
+            miner_hotkey: session.hotkey,
+            agent_status: "scored",
+            dispute_submit_url: "/api/v1/public/agent/{agent_id}/dispute",
+            runs: [
+              {
+                validator_hotkey: "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+                run_id: "run_gate_1",
+                bench_version: 13,
+                composite: 0.87,
+                generated_at: "2026-09-13T12:00:00Z",
+                posture: "shadow",
+                composite_with_gates: 0.61,
+                composite_without_gates: 0.87,
+                gate_induced_loss: 0.26,
+                catalog_suppression_rate: 0.02,
+                flagged_case_count: 1,
+                gate_counts: { answer_in_prompt: 1 },
+                relation_outcome_counts: { concordant_zero: 1 },
+                cases: [
+                  {
+                    case_index: 1,
+                    case_id: "memory-9f3a-0002",
+                    category: "temporal_reasoning",
+                    kind: "memory",
+                    score: 1,
+                    score_with_gates: 0,
+                    score_without_gates: 1,
+                    notes: [{ note_id: "0123456789abcdef", gate: "answer_in_prompt" }],
+                    relation: "decision_twin",
+                    relation_outcome: "concordant_zero",
+                    cost_factor: 1,
+                    tools_offered: 0,
+                  },
+                ],
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("[]", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(() => <ReviewsPage />);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Signed in");
+    });
+    const submissionsTab = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "submissions",
+    );
+    fireEvent.click(submissionsTab as HTMLButtonElement);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("alpha");
+    });
+    const gateButton = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Gate notes",
+    );
+    expect(gateButton).toBeTruthy();
+    fireEvent.click(gateButton as HTMLButtonElement);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("0123456789abcdef");
+    });
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("gate-induced loss 0.260 (0.870 → 0.610)");
+    expect(text).toContain("Answer present in harness prompt");
+    expect(text).toContain("case 1 (memory-9f3a-0002)");
+    expect(text).toContain("decision_twin: Twin pair concordant (zeroed)");
+    expect(text).toContain("cost factor 1.00 · 0 tools offered");
+    // The owner read went out with the session bearer token.
+    const gateCall = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/gate-notes"));
+    expect(gateCall).toBeTruthy();
+    const init = gateCall?.[1] as RequestInit | undefined;
+    const headers = new Headers(init?.headers);
+    expect(headers.get("authorization")).toBe("Bearer ditto_ms_abc");
+  });
+});
+
 describe("Ditto account link", () => {
   const session = {
     token: "ditto_ms_abc",

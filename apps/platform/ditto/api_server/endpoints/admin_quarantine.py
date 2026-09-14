@@ -518,6 +518,11 @@ def _dispute_item(
         resolved_by=dispute.resolved_by,
         resolution=dispute.resolution,  # type: ignore[arg-type]
         resolution_reason=dispute.resolution_reason,
+        gate_note_ids=(
+            [str(item) for item in dispute.gate_note_ids]
+            if isinstance(dispute.gate_note_ids, list)
+            else None
+        ),
     )
 
 
