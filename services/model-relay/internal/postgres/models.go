@@ -289,39 +289,6 @@ type InferenceGrant struct {
 	UsageAccountingVersion       int32              `json:"usageAccountingVersion"`
 }
 
-type InferenceProviderRoute struct {
-	Model                     string             `json:"model"`
-	Provider                  string             `json:"provider"`
-	ProfileRevision           string             `json:"profileRevision"`
-	Status                    string             `json:"status"`
-	CalibrationStatus         string             `json:"calibrationStatus"`
-	ContextLength             pgtype.Int4        `json:"contextLength"`
-	Quantization              pgtype.Text        `json:"quantization"`
-	PromptPricePerToken       pgtype.Float8      `json:"promptPricePerToken"`
-	CompletionPricePerToken   pgtype.Float8      `json:"completionPricePerToken"`
-	EwmaTokensPerSecond       pgtype.Float8      `json:"ewmaTokensPerSecond"`
-	EwmaLatencyMs             pgtype.Float8      `json:"ewmaLatencyMs"`
-	EwmaErrorRate             float64            `json:"ewmaErrorRate"`
-	EwmaTimeoutRate           float64            `json:"ewmaTimeoutRate"`
-	EwmaToolAccuracy          pgtype.Float8      `json:"ewmaToolAccuracy"`
-	EwmaComposite             pgtype.Float8      `json:"ewmaComposite"`
-	CalibrationToolAccuracy   pgtype.Float8      `json:"calibrationToolAccuracy"`
-	CalibrationComposite      pgtype.Float8      `json:"calibrationComposite"`
-	CalibrationSampleCount    int32              `json:"calibrationSampleCount"`
-	CalibrationRevision       int32              `json:"calibrationRevision"`
-	CalibrationManifestSha256 pgtype.Text        `json:"calibrationManifestSha256"`
-	CalibratedAt              pgtype.Timestamptz `json:"calibratedAt"`
-	EwmaCostMicrousd          pgtype.Float8      `json:"ewmaCostMicrousd"`
-	SampleCount               int64              `json:"sampleCount"`
-	SelectedTicketCount       int64              `json:"selectedTicketCount"`
-	ExplorationTicketCount    int32              `json:"explorationTicketCount"`
-	LastSelectedAt            pgtype.Timestamptz `json:"lastSelectedAt"`
-	CooldownUntil             pgtype.Timestamptz `json:"cooldownUntil"`
-	DiscoveredAt              pgtype.Timestamptz `json:"discoveredAt"`
-	LastObservedAt            pgtype.Timestamptz `json:"lastObservedAt"`
-	UpdatedAt                 pgtype.Timestamptz `json:"updatedAt"`
-}
-
 type InferenceRequest struct {
 	GrantID             pgtype.UUID        `json:"grantId"`
 	Nonce               pgtype.UUID        `json:"nonce"`
