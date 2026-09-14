@@ -98,7 +98,9 @@ It contains no argv, suite path, source or private object bytes.
   imported native images before a canary (see `coding_runtime/qualification`).
 - **Approval.** Launch checks passing is not approval. The profile digests,
   limits, budgets, driver commands and expected counts still need independent
-  review.
+  review. After review, the digests are bound into one canonical approval
+  document that only a detached curator signature approves
+  (`apps/platform/docs/coding-hosted-profile-approval-v2.md`).
   The approved digests must then be bound together with a current inference
   policy and budget profile.
 - **Activation.** It changes no Platform, host, release, assignment or reward
