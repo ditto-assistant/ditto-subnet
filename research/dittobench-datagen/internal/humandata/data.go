@@ -144,6 +144,16 @@ func AllGivenNames() []string {
 	return out
 }
 
+// AllSurnames returns the frozen 10,000-surname vocabulary, exposed so sibling
+// corpora can prove they never coincide with a persona's family name.
+func AllSurnames() []string {
+	out := make([]string, len(surnames))
+	for i, entry := range surnames {
+		out[i] = entry.value
+	}
+	return out
+}
+
 func weightedPick(r *rand.Rand, entries []weightedName) string {
 	if len(entries) == 0 {
 		panic("humandata: empty weighted corpus")

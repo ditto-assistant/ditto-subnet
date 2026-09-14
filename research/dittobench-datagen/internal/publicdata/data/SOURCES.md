@@ -87,12 +87,31 @@ new `bench_version`.
 - URL: <https://query.wikidata.org/sparql> (query recorded in `tools/freeze.py`).
 - Upstream snapshot SHA-256 (TSV as returned):
   `0e5b7292a7d17f096918bfa8538a9b9980e630f7404fd752ae956999602a093f`.
-- Transformation: take the first token of each label; keep pure-ASCII
-  alphabetic tokens of 4–14 letters; drop a reviewed stop-list of generic and
-  geographic words; skip the 200 most-linked household names; Title-case;
-  deduplicate; keep sitelink order.
-- Rows: 1,528.
-- SHA-256: `e0da61d10a87a7e91ee9ea4fdcdd1036eb1d7ea57b2cde48a63ed1d103cce747`.
+- Transformation, stage 1 (ranked pass over the response): take the first
+  token of each label; keep pure-ASCII alphabetic tokens of 4–14 letters; drop
+  a reviewed stop-list of generic first words (`ORG_STOPLIST`); skip the 200
+  most-linked labels; Title-case; deduplicate; keep sitelink order (1,528
+  stems).
+- Transformation, stage 2 (`refine_org_stems`, over the deduplicated list):
+  drop the next 200 most-linked stems (`ORG_HEAD_DROP`); then drop every stem
+  that is a given name or surname in `../../humandata/data/`, a city in
+  `cities.tsv`, a country, region, nationality, language, or US state
+  (`ORG_PLACE_STOPLIST`), a personal name outside the name tables
+  (`ORG_PERSON_STOPLIST`), an adult, religious, political, weapons, or
+  self-referential label (`ORG_SENSITIVE_STOPLIST`), or a reviewed household
+  consumer or technology brand (`ORG_HOUSEHOLD_STOPLIST`). Order is preserved.
+- Provenance of this table: stage 1 ran on 2026-09-13 against the response
+  above; the response was not retained, so stage 2 was applied to the frozen
+  stage-1 list with `freeze.py --refilter data` the same day. A fresh freeze
+  applies both stages in one pass and yields the same bytes for the same
+  upstream snapshot.
+- Residual exposure: every remaining stem is still the first word of a real
+  organisation's label — the source has no fictional entries — so the list
+  reduces household-name and person/place collisions; it does not eliminate
+  real names. Whether v13 should instead compose stems synthetically is an
+  open owner decision.
+- Rows: 805.
+- SHA-256: `d683c01a72bd537fa7d5290091a37f3643405ed37ca38e1516abf5001bcd5367`.
 - License: Wikidata content is CC0 1.0.
 
 ## `purposes.tsv` — `kind\tpurpose`
