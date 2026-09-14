@@ -152,6 +152,10 @@ from ditto.api_server.efficiency import (
     ensure_current_efficiency_state,
 )
 from ditto.api_server.endpoints.retrieval import AgentNotFoundError
+from ditto.api_server.fail_open_admission import (
+    hold_fail_open_admission,
+    latest_fail_open_admission,
+)
 from ditto.api_server.fingerprint import reference_corpus_provenance
 from ditto.api_server.inference_concurrency_settings import resolved_proxy_config
 from ditto.api_server.inference_routing import record_ticket_route_quality
@@ -6504,6 +6508,29 @@ async def submit_score(
                         audit_pvalue if audit_pvalue is not None else 1.0,
                         AUDIT_ALPHA,
                     )
+                if agent.status == AgentStatus.SCORED:
+                    # Scores are durable, but a row the automated court never
+                    # reviewed (a fail-open clear) must not enter the eligible
+                    # ledger until an operator has read it.
+                    fail_open = await latest_fail_open_admission(
+                        session, agent_id=agent.agent_id
+                    )
+                    if fail_open is not None and (
+                        await hold_fail_open_admission(
+                            session,
+                            agent,
+                            admission=fail_open,
+                            now=audit_now,
+                            actor="platform:fail-open-admission",
+                            source="score-finalization",
+                            score_count=len(agent_scores),
+                        )
+                        is not None
+                    ):
+                        logger.warning(
+                            "agent %s held: admitted by a fail-open court clear",
+                            agent_id,
+                        )
                 if (
                     audit_failed
                     and TRANSFORM_AUDIT_ENFORCE
