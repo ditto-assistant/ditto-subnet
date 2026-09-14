@@ -255,6 +255,10 @@ export type InferenceRouteCalibrationAction = z.infer<typeof inferenceRouteCalib
 
 export const quarantineResolutionSchema = z.enum(['release', 'rescreen', 'reject'])
 export const screeningDisputeResolutionSchema = z.enum(['release', 'uphold'])
+// `screening` appeals a rejected quarantine (release re-evaluates the
+// submission); `gate_notes` appeals cited bench v13+ gate notes on a scored
+// submission (either resolution only records the operator's verdict).
+export const screeningDisputeKindSchema = z.enum(['screening', 'gate_notes'])
 
 export const screenerReviewModeSchema = z.enum(['off', 'shadow', 'enforce', 'inherit'])
 export const screenerReviewModelSchema = z.enum([
@@ -4151,7 +4155,10 @@ export const resolveScreeningQuarantineResponseSchema = z.object({
 export const screeningDisputeSchema = z.object({
   dispute_id: z.string().uuid(),
   agent_id: z.string().uuid(),
-  quarantine_id: z.string().uuid(),
+  // Defaulted so pre-v13 fixtures and responses parse unchanged.
+  kind: screeningDisputeKindSchema.default('screening'),
+  // Null for a gate-notes dispute, which appeals accepted-score evidence.
+  quarantine_id: z.string().uuid().nullable(),
   miner_hotkey: z.string(),
   agent_name: z.string(),
   agent_version: z.number().int().positive().nullish().default(null),
@@ -4164,6 +4171,10 @@ export const screeningDisputeSchema = z.object({
   resolved_by: z.string().nullable(),
   resolution: screeningDisputeResolutionSchema.nullable(),
   resolution_reason: z.string().nullable(),
+  // Bench v13+ gate note ids the miner contested; each re-derives from the
+  // submission's own accepted scores, so they are references, never verdicts.
+  // Optional (not defaulted) so pre-v13 fixtures and responses parse unchanged.
+  gate_note_ids: z.array(z.string()).nullish(),
 })
 
 export const screeningDisputeListSchema = z.object({
@@ -7234,6 +7245,7 @@ export type ScreeningQuarantineBatchPreview = z.infer<
 >
 export type ScreeningDispute = z.infer<typeof screeningDisputeSchema>
 export type ScreeningDisputeResolution = z.infer<typeof screeningDisputeResolutionSchema>
+export type ScreeningDisputeKind = z.infer<typeof screeningDisputeKindSchema>
 export type ScreeningSubmission = z.infer<typeof screeningSubmissionSchema>
 export type ScreeningFailureDiagnostic = z.infer<
   typeof screeningFailureDiagnosticSchema
@@ -7511,6 +7523,94 @@ export const seedSchema = z
   ])
   .transform((seed) => (typeof seed === 'string' ? seed : String(seed)))
 
+// Bench v13+ run-level gate verdict (#1852). Aggregates only -- the per-case
+// notes are owner-only on Platform (`/me/agents/{id}/gate-notes`). Mirrors the
+// generated `PublicGateEvidence`; the posture enum is restated here so a new
+// posture value fails the parse loudly instead of being read as "unknown".
+// `observe` is the twin post-pass's name for shadow.
+export const gatePostureSchema = z.enum(['off', 'shadow', 'observe', 'enforce'])
+
+const gateCountSchema = z.number().int().nonnegative().default(0)
+const gateUnitSchema = z.number().min(0).max(1)
+const gateBpsSchema = z.number().int().min(0).max(10_000)
+
+// Sanitised mirrors of the four scorer run summaries (`details.catalog_gate`,
+// `details.claim_provenance`, `details.twin_post_pass`,
+// `details.inference_cost`): counts and rates, never per-case content.
+export const catalogGateSummarySchema = z.object({
+  posture: gatePostureSchema.nullish().default(null),
+  tool_cases: gateCountSchema,
+  attributed_cases: gateCountSchema,
+  incomplete_capture_cases: gateCountSchema,
+  lower_bound_cases: gateCountSchema,
+  no_completion_cases: gateCountSchema,
+  catalog_absent_cases: gateCountSchema,
+  catalog_suppression_rate: gateUnitSchema.nullish().default(null),
+  safe_harbor_cases: gateCountSchema,
+  restraint_without_offer: gateCountSchema,
+  expected_tool_not_offered: gateCountSchema,
+  swallowed_model_call: gateCountSchema,
+  zeroed_cases: gateCountSchema,
+  claim_uncorroborated_cases: gateCountSchema,
+  attribution_coverage_bps: gateBpsSchema.nullish().default(null),
+})
+
+export const claimProvenanceSummarySchema = z.object({
+  posture: gatePostureSchema.nullish().default(null),
+  memory_cases: gateCountSchema,
+  attributed_cases: gateCountSchema,
+  applicable_cases: gateCountSchema,
+  settled_cases: gateCountSchema,
+  not_model_emitted_cases: gateCountSchema,
+  answer_in_prompt_cases: gateCountSchema,
+  no_model_completion_cases: gateCountSchema,
+  unsettled_cases: gateCountSchema,
+  zeroed_cases: gateCountSchema,
+  attribution_coverage_bps: gateBpsSchema.nullish().default(null),
+})
+
+export const twinPostPassSummarySchema = z.object({
+  posture: gatePostureSchema.nullish().default(null),
+  rule_requested: z.string().nullish().default(null),
+  rule: z.string().nullish().default(null),
+  honest_concordant_error_rate: gateUnitSchema.nullish().default(null),
+  auto_fallback: z.boolean().default(false),
+  twin_groups: gateCountSchema,
+  twin_groups_concordant: gateCountSchema,
+  counterfactual_pairs: gateCountSchema,
+  counterfactual_insensitive: gateCountSchema,
+  cases_affected: gateCountSchema,
+  cases_affected_share: gateUnitSchema.nullish().default(null),
+  applied: z.boolean().default(false),
+})
+
+export const inferenceCostSummarySchema = z.object({
+  posture: gatePostureSchema.nullish().default(null),
+  applied: z.boolean().default(false),
+  floor_bps: gateBpsSchema.nullish().default(null),
+  cases: gateCountSchema,
+  attributed_cases: gateCountSchema,
+  cases_below_full_factor: gateCountSchema,
+  mean_factor_bps: gateBpsSchema.nullish().default(null),
+})
+
+export const publicGateEvidenceSchema = z.object({
+  bench_version: z.number().int().positive(),
+  // The most severe posture any gate ran under: `enforce` means a gate moved
+  // scores; `shadow` means every gate only recorded what it would have done.
+  posture: gatePostureSchema.nullish().default(null),
+  catalog_gate: catalogGateSummarySchema.nullish().default(null),
+  claim_provenance: claimProvenanceSummarySchema.nullish().default(null),
+  twin_post_pass: twinPostPassSummarySchema.nullish().default(null),
+  inference_cost: inferenceCostSummarySchema.nullish().default(null),
+  catalog_suppression_rate: gateUnitSchema.nullish().default(null),
+  // Cases a gate would zero at enforce (or did), plus cases the shadow cost
+  // factor would discount, and that count over the cases the run scored.
+  flagged_case_count: gateCountSchema,
+  flagged_case_share: gateUnitSchema.nullish().default(null),
+  gate_counts: z.record(z.string(), z.number().int().nonnegative()).default({}),
+})
+
 export const publicValidatorScoreSchema = z.object({
   validator_hotkey: z.string(),
   composite: z.number().min(0).max(1),
@@ -7529,6 +7629,8 @@ export const publicValidatorScoreSchema = z.object({
   transform_robustness: z.number().min(0).max(1).nullable().optional(),
   audit_case_count: z.number().int().nonnegative().nullable().optional(),
   transcript_sha256: z.string().nullable().optional(),
+  // Null below bench v13 and for a scorer that emitted no gate telemetry.
+  gate_evidence: publicGateEvidenceSchema.nullable().optional(),
 })
 
 export const publicAgentScoresSchema = z.object({
@@ -7645,6 +7747,11 @@ export const agentScoreHistoryVersionSchema = z.object({
   // Median-composite change against the previous listed version; null for
   // the first version group.
   composite_delta_vs_previous: z.number().nullable(),
+  // Bench v13+ gate verdict, folded over the rows that carry one: the posture
+  // when every such row agrees (null when mixed or absent) and the median
+  // share of cases the gates would zero. Null for versions below v13.
+  gate_posture: gatePostureSchema.nullable().default(null),
+  median_flagged_case_share: z.number().min(0).max(1).nullable().default(null),
 })
 
 export const agentScoreHistorySchema = z.object({

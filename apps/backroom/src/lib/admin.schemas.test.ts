@@ -32,6 +32,7 @@ import {
   screeningDecisionRecordSchema,
   resolveScreeningQuarantineInputSchema,
   screeningDisputeListSchema,
+  screeningDisputeSchema,
   screeningQuarantineListSchema,
   screeningQuarantineBatchExecuteInputSchema,
   screeningQuarantineBatchPreviewInputSchema,
@@ -618,6 +619,43 @@ describe('admin API schemas', () => {
 
     expect(result.items[0].message).toContain('generic routing')
     expect(result.items[0].original_reason).toContain('benchmark-specific')
+    // A pre-v13 row carries no kind: it is a screening dispute.
+    expect(result.items[0].kind).toBe('screening')
+  })
+
+  it('parses a bench v13 gate-notes dispute, which has no quarantine', () => {
+    const result = screeningDisputeListSchema.parse({
+      count: 1,
+      items: [
+        {
+          dispute_id: '44444444-4444-4444-8444-444444444445',
+          agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+          kind: 'gate_notes',
+          quarantine_id: null,
+          miner_hotkey: '5Miner',
+          agent_name: 'memory-agent',
+          agent_version: 3,
+          artifact_sha256: 'ab'.repeat(32),
+          message: 'The twin_concordant marker fired on twins the seeded history answers identically.',
+          status: 'pending',
+          created_at: '2026-09-13T12:00:00Z',
+          original_reason: null,
+          resolved_at: null,
+          resolved_by: null,
+          resolution: null,
+          resolution_reason: null,
+          gate_note_ids: ['0123456789abcdef', 'fedcba9876543210'],
+        },
+      ],
+    })
+
+    expect(result.items[0]).toMatchObject({
+      kind: 'gate_notes',
+      quarantine_id: null,
+      original_reason: null,
+      gate_note_ids: ['0123456789abcdef', 'fedcba9876543210'],
+    })
+    expect(() => screeningDisputeSchema.parse({ ...result.items[0], kind: 'appeal' })).toThrow()
   })
 
   it('parses rejected screening history and short-lived artifact access', () => {

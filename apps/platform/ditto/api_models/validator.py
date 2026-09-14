@@ -29,8 +29,10 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializerFunctionWrapHandler,
     StringConstraints,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -943,6 +945,139 @@ class ValidatorHeartbeatResponse(BaseModel):
     ] = None
 
 
+class _WireEvidence(BaseModel):
+    """Base for the nested per-case evidence records mirrored from Go.
+
+    Two properties keep the persisted breakdown byte-faithful to the wire:
+    ``extra="allow"`` so a field the Go engine grows is kept rather than
+    silently dropped at ingest, and a serializer that emits only the keys the
+    report actually carried -- the Go structs use ``omitempty`` / nil pointers,
+    so a zero the engine omitted must not reappear as a Python default.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    @model_serializer(mode="wrap")
+    def _omit_unset(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        fields = type(self).model_fields
+        declared = {info.alias or name for name, info in fields.items()}
+        carried = {
+            key
+            for name in self.model_fields_set
+            if name in fields
+            for key in (name, fields[name].alias or name)
+        }
+        return {k: v for k, v in data.items() if k not in declared or k in carried}
+
+
+class ToolProvenanceEvidence(_WireEvidence):
+    """Per-case v10+ broker-to-endpoint tool provenance (``tool_provenance``).
+
+    Mirrors the DittoBench ``ToolProvenanceEvidence`` wire shape. Advisory
+    audit context only.
+    """
+
+    model_emitted: int = 0
+    endpoint_attempts: int = 0
+    matched: int = 0
+    unmatched: int = 0
+    model_selected_not_executed: int = 0
+    complete: bool = False
+    findings: list[str] = Field(default_factory=list)
+
+
+class OfferedTool(_WireEvidence):
+    """One tool the harness offered the model: wire name + schema digest."""
+
+    name: str
+    schema_sha256: str = ""
+
+
+class CatalogCompletion(_WireEvidence):
+    """Relay metadata of one attributed chat completion (bench v13 catalog gate)."""
+
+    tools_offered: int = 0
+    tools_choosable: int = 0
+    attribution_source: str = ""
+    claim_corroborated: bool = False
+    catalog_sha256: str = ""
+    tool_choice: str = ""
+    model_emitted_tool_calls: list[str] = Field(default_factory=list)
+    system_span_sha256: str = ""
+    after_last_tool_result: bool = False
+
+
+class CatalogEvidence(_WireEvidence):
+    """Bench v13 per-case relay record of the offered tool catalog (``catalog``).
+
+    Mirrors the DittoBench ``CatalogEvidence`` wire shape (bench_version >= 13;
+    nil before). Digests and counts only -- no prompt or completion text.
+    ``findings`` names the catalog-gate rule outcomes for the case.
+    """
+
+    completions_total: int | None = None
+    completions_after_last_tool_result: int = 0
+    completions_with_catalog: int = 0
+    catalog_present: bool = False
+    tools_offered: list[OfferedTool] = Field(default_factory=list)
+    tool_choice_suppressed_completions: int = 0
+    claim_attributed_completions: int = 0
+    claim_corroborated_completions: int = 0
+    overlap_completions: int = 0
+    overlap_completions_with_catalog: int = 0
+    catalog_present_lower_bound: bool = False
+    completions: list[CatalogCompletion] = Field(default_factory=list)
+    model_emitted_tool_calls: list[str] = Field(default_factory=list)
+    harness_system_span_sha256: list[str] = Field(default_factory=list)
+    complete: bool = False
+    findings: list[str] = Field(default_factory=list)
+
+
+class ClaimProvenanceEvidence(_WireEvidence):
+    """Bench v13 per-case claim-span provenance + causal verdict (``claim_provenance``).
+
+    Mirrors the DittoBench ``ClaimProvenanceEvidence`` wire shape
+    (bench_version >= 13; nil before). Hash-derived verdicts and counts only.
+    ``findings`` names the settled gate outcomes for the case.
+    """
+
+    completions: int | None = None
+    tool_results: int = 0
+    claim_tokens: int = 0
+    complete: bool = False
+    model_emitted: bool | None = None
+    answer_in_prompt: bool | None = None
+    posture: str = ""
+    findings: list[str] = Field(default_factory=list)
+
+
+class InferenceCostEvidence(_WireEvidence):
+    """Bench v13 per-case inference cost record + shadow factor (``inference_cost``).
+
+    Mirrors the DittoBench ``InferenceCostEvidence`` wire shape (bench_version
+    >= 13; nil before). ``factor_bps`` is the cost factor the v13 rule WOULD
+    apply, in basis points; it is reported only, never multiplied into a
+    score, in v13.0. The wire key ``class`` is a Python keyword, hence the
+    aliased ``case_class`` (serialised back under its wire name).
+    """
+
+    model_config = ConfigDict(
+        extra="allow", populate_by_name=True, serialize_by_alias=True
+    )
+
+    case_class: str = Field(default="", alias="class")
+    completions: int = 0
+    choices_total: int = 0
+    output_tokens: int = 0
+    usage_unavailable: int = 0
+    attributed: bool = False
+    attribution: str = ""
+    budget_tokens: int = 0
+    excess_tokens: int = 0
+    factor_bps: int = 0
+
+
 class CaseScore(BaseModel):
     """Per-case breakdown inside a :class:`ScoreReport`.
 
@@ -1045,6 +1180,95 @@ class CaseScore(BaseModel):
             ),
         ),
     ] = False
+
+    # Bench v10+ / v13 report-only fields. Declared for the same reason as the
+    # v3 audit fields above: ``extra="ignore"`` would strip them from the
+    # persisted breakdown, and the v13 gate projection reads the per-case
+    # ``catalog`` / ``claim_provenance`` / ``inference_cost`` records and
+    # ``relation``. Every one is additive-optional: the Go engine omits them
+    # (``omitempty`` / nil) below the version that introduced it, and
+    # :func:`ditto.api_server.gate_evidence.persisted_case_dump` keeps the
+    # stored v<=12 breakdown byte-identical. Guarded by the wire round-trip
+    # test (``score_report_v13.json``).
+    audit_half: Annotated[
+        str,
+        Field(
+            default="",
+            description=(
+                "``base`` | ``transform`` for the two halves of a transform-audit "
+                "pair; empty for every other case."
+            ),
+        ),
+    ] = ""
+    undelivered: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="True when the case never reached the harness.",
+        ),
+    ] = False
+    validator_fault: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="True when an undelivered case was the validator's fault.",
+        ),
+    ] = False
+    allow_extra_tools: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="True when extra tool calls were not penalised on this case.",
+        ),
+    ] = False
+    relation: Annotated[
+        str,
+        Field(
+            default="",
+            description=(
+                "Bench v13+: the generator's metamorphic / counterfactual relation "
+                "for this case (e.g. ``base``, ``causal_counterfactual``); empty "
+                "below v13."
+            ),
+        ),
+    ] = ""
+    tool_provenance: Annotated[
+        ToolProvenanceEvidence | None,
+        Field(
+            default=None,
+            description="Bench v10+ broker-to-endpoint tool provenance; null before.",
+        ),
+    ] = None
+    catalog: Annotated[
+        CatalogEvidence | None,
+        Field(
+            default=None,
+            description=(
+                "Bench v13+ relay record of the tool catalog the harness offered "
+                "the model, with the catalog-gate findings; null before v13."
+            ),
+        ),
+    ] = None
+    claim_provenance: Annotated[
+        ClaimProvenanceEvidence | None,
+        Field(
+            default=None,
+            description=(
+                "Bench v13+ claim-span provenance and causal answer_in_prompt "
+                "verdict for a memory case; null before v13."
+            ),
+        ),
+    ] = None
+    inference_cost: Annotated[
+        InferenceCostEvidence | None,
+        Field(
+            default=None,
+            description=(
+                "Bench v13+ per-case inference cost record and shadow cost "
+                "factor; null before v13."
+            ),
+        ),
+    ] = None
 
     @field_validator("called", "expected", "notes", mode="before")
     @classmethod

@@ -299,14 +299,15 @@ describe('Backroom MCP tools', () => {
     // inline execute) plus the bounded board projection; its tutorials live in
     // get_backroom_tool_help. The two policy-v13 decision-record reads add one
     // uuid input and one outcome-filtered page input (the decision record
-    // itself is a response). Raised from 130_000 to 132_000 when the
-    // screener fan-out shadow read (#1893) landed on main between those two
-    // reads being measured and merged: 131_168 with all three, none of them
-    // a tutorial.
+    // itself is a response). 131_000 admits the union of the batched ATH
+    // rulings triple and the bench v13 gate-evidence notes (130_073 together);
+    // each fit under 130_000 alone. Raised again to 132_000 when the screener
+    // fan-out shadow read (#1893) landed on main between those reads being
+    // measured and merged; none of them is a tutorial.
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(132_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
-    // in get_backroom_tool_help, not here. 24_500 admits the screener
+    // in get_backroom_tool_help, not here. The budget admits the screener
     // policy-activation pair, four short shadow qualification catalog lines,
     // the coding-evaluation ledger read, the bootstrap-grant line, and three
     // short catalog-release lines; operational tutorials stay in
@@ -318,9 +319,11 @@ describe('Backroom MCP tools', () => {
     // (get_screening_decision_record, list_screening_decisions) and the
     // resolve_ath_review citation rule fit under that bound (24_938); the
     // one-line bench v13+ confirmation seed anchor read (its notes live in the
-    // detailed help) lands at 25_047, so the bound moves to 25_200.
+    // detailed help) lands at 25_047, so the bound moves to 25_200;
+    // the one-line bench v13 gate-evidence and dispute-kind notes on the score
+    // and dispute tools land at 25_237, so it moves to 25_400.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      25_200,
+      25_400,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

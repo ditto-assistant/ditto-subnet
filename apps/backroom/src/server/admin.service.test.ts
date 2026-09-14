@@ -3539,6 +3539,54 @@ describe('production score reads', () => {
     generated_at: '2026-07-23T00:00:00Z',
   }
 
+  // Bench v13+ rows carry the run-level gate verdict (#1852); aggregates only.
+  function gateEvidence(overrides: Record<string, unknown> = {}) {
+    return {
+      bench_version: 13,
+      posture: 'shadow',
+      catalog_gate: {
+        posture: 'shadow',
+        tool_cases: 2,
+        attributed_cases: 2,
+        catalog_absent_cases: 1,
+        catalog_suppression_rate: 0.5,
+        restraint_without_offer: 1,
+        swallowed_model_call: 1,
+        attribution_coverage_bps: 10000,
+      },
+      claim_provenance: null,
+      twin_post_pass: {
+        posture: 'observe',
+        rule_requested: 'concordant_zero',
+        rule: 'concordant_zero',
+        twin_groups: 1,
+        twin_groups_concordant: 1,
+        counterfactual_pairs: 1,
+        counterfactual_insensitive: 1,
+        cases_affected: 3,
+        cases_affected_share: 0.6,
+      },
+      inference_cost: null,
+      catalog_suppression_rate: 0.5,
+      flagged_case_count: 4,
+      flagged_case_share: 0.75,
+      gate_counts: { answer_in_prompt: 1, restraint_without_offer: 2 },
+      ...overrides,
+    }
+  }
+
+  const gatedAgentScores = {
+    ...agentScores,
+    score_count: 9,
+    scores: [
+      ...agentScores.scores,
+      scoreRow({ validator_hotkey: '5ValA', composite: 0.87, bench_version: 13, seed: 999, run_id: 'run-a13', generated_at: '2026-09-13T00:00:00Z', gate_evidence: gateEvidence() }),
+      scoreRow({ validator_hotkey: '5ValB', composite: 0.88, bench_version: 13, seed: 999, run_id: 'run-b13', generated_at: '2026-09-13T01:00:00Z', gate_evidence: gateEvidence({ flagged_case_count: 1, flagged_case_share: 0.25 }) }),
+      // A v13 row from a scorer that emitted no gate telemetry.
+      scoreRow({ validator_hotkey: '5ValC', composite: 0.86, bench_version: 13, seed: 999, run_id: 'run-c13', generated_at: '2026-09-13T02:00:00Z', gate_evidence: null }),
+    ],
+  }
+
   it('reads the public leaderboard when no admin token is configured', async () => {
     delete process.env.DITTO_ADMIN_API_TOKEN
     const fetchMock = vi.fn().mockResolvedValue(Response.json(leaderboard))
@@ -3913,6 +3961,59 @@ describe('production score reads', () => {
     })
     expect(history.versions[1]?.composite_delta_vs_previous).toBeCloseTo(0.047, 10)
     expect(history.versions[1]?.validators).toEqual(['5ValA', '5ValB', '5ValC'])
+  })
+
+  it('carries the bench v13 gate verdict through get_agent_scores and folds it into history', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(leaderboard))
+      .mockResolvedValueOnce(Response.json(gatedAgentScores))
+      .mockResolvedValueOnce(Response.json(gatedAgentScores))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const detail = await fetchAgentScores({ agentId: topAgentId })
+    const gated = detail.scores.filter((score) => score.bench_version === 13)
+    expect(gated).toHaveLength(3)
+    expect(gated[0]?.gate_evidence).toMatchObject({
+      posture: 'shadow',
+      flagged_case_share: 0.75,
+      catalog_gate: { catalog_suppression_rate: 0.5, posture: 'shadow' },
+      twin_post_pass: { posture: 'observe', rule: 'concordant_zero' },
+      gate_counts: { answer_in_prompt: 1, restraint_without_offer: 2 },
+    })
+    expect(gated[2]?.gate_evidence).toBeNull()
+    // Pre-v13 rows never carry one.
+    expect(detail.scores.find((score) => score.bench_version === 7)?.gate_evidence).toBeUndefined()
+    // Aggregates only: the per-case notes never cross the Backroom boundary.
+    expect(JSON.stringify(detail)).not.toContain('note_id')
+
+    const history = await fetchAgentScoreHistory({ agentId: topAgentId })
+    const v13 = history.versions.find((version) => version.bench_version === 13)
+    expect(v13).toMatchObject({ score_count: 3, gate_posture: 'shadow' })
+    expect(v13?.median_flagged_case_share).toBeCloseTo(0.5, 10)
+    expect(history.versions.find((version) => version.bench_version === 7)).toMatchObject({
+      gate_posture: null,
+      median_flagged_case_share: null,
+    })
+  })
+
+  it('reports a mixed bench v13 gate posture as null instead of picking one', async () => {
+    const mixed = {
+      ...gatedAgentScores,
+      scores: gatedAgentScores.scores.map((score) =>
+        score.run_id === 'run-b13'
+          ? { ...score, gate_evidence: gateEvidence({ posture: 'enforce', flagged_case_share: 0.25 }) }
+          : score,
+      ),
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(mixed))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const history = await fetchAgentScoreHistory({ agentId: topAgentId })
+    expect(history.versions.find((version) => version.bench_version === 13)).toMatchObject({
+      gate_posture: null,
+      median_flagged_case_share: 0.5,
+    })
   })
 
   // Regression: production agent 454a09ad (lihai) on 2026-07-25. Every seed

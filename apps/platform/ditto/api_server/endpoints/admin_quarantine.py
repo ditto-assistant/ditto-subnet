@@ -495,16 +495,19 @@ def _verify_batch_preview(
 def _dispute_item(
     dispute: ScreeningDispute,
     agent: Agent,
-    quarantine: ScreeningQuarantine,
+    quarantine: ScreeningQuarantine | None,
     history: list[ScreeningQuarantineResolution],
 ) -> AdminScreeningDisputeItem:
+    # A gate-notes dispute appeals accepted-score evidence, not a quarantine:
+    # it has no rejection reason to quote.
     original_reason = next(
         (event.reason for event in history if event.resolution == "reject"),
-        quarantine.resolution_reason,
+        quarantine.resolution_reason if quarantine is not None else None,
     )
     return AdminScreeningDisputeItem(
         dispute_id=dispute.dispute_id,
         agent_id=dispute.agent_id,
+        kind=dispute.kind,  # type: ignore[arg-type]
         quarantine_id=dispute.quarantine_id,
         miner_hotkey=dispute.miner_hotkey,
         agent_name=agent.name,
@@ -518,6 +521,11 @@ def _dispute_item(
         resolved_by=dispute.resolved_by,
         resolution=dispute.resolution,  # type: ignore[arg-type]
         resolution_reason=dispute.resolution_reason,
+        gate_note_ids=(
+            [str(item) for item in dispute.gate_note_ids]
+            if isinstance(dispute.gate_note_ids, list)
+            else None
+        ),
     )
 
 
@@ -1482,7 +1490,8 @@ async def list_screening_disputes(
     stmt = (
         select(ScreeningDispute, Agent, ScreeningQuarantine)
         .join(Agent, Agent.agent_id == ScreeningDispute.agent_id)
-        .join(
+        # Outer: a gate-notes dispute has no quarantine and must still list.
+        .outerjoin(
             ScreeningQuarantine,
             ScreeningQuarantine.quarantine_id == ScreeningDispute.quarantine_id,
         )
@@ -1496,7 +1505,12 @@ async def list_screening_disputes(
         count_stmt = count_stmt.where(ScreeningDispute.status == status)
     rows = (await session.execute(stmt)).all()
     history = await _resolution_history(
-        session, [dispute.quarantine_id for dispute, _agent, _quarantine in rows]
+        session,
+        [
+            dispute.quarantine_id
+            for dispute, _agent, _quarantine in rows
+            if dispute.quarantine_id is not None
+        ],
     )
     return AdminScreeningDisputeList(
         items=[
@@ -1504,7 +1518,7 @@ async def list_screening_disputes(
                 dispute,
                 agent,
                 quarantine,
-                history[dispute.quarantine_id],
+                history[dispute.quarantine_id] if dispute.quarantine_id else [],
             )
             for dispute, agent, quarantine in rows
         ],
@@ -1529,14 +1543,17 @@ async def resolve_screening_dispute(
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
 
     new_dataset: DatasetPin | None = None
-    if payload.resolution == "release":
-        existing = await session.get(ScreeningDispute, dispute_id)
-        quarantine_id = existing.quarantine_id if existing is not None else None
-        await session.rollback()
-        if quarantine_id is None:
+    existing = await session.get(ScreeningDispute, dispute_id)
+    existing_kind = existing.kind if existing is not None else None
+    existing_quarantine_id = existing.quarantine_id if existing is not None else None
+    await session.rollback()
+    if existing is None:
+        raise HTTPException(status_code=404, detail="dispute not found")
+    if payload.resolution == "release" and existing_kind == "screening":
+        if existing_quarantine_id is None:
             raise HTTPException(status_code=404, detail="dispute not found")
         new_dataset = await _prepare_release_dataset(
-            session, chain, generator, quarantine_id
+            session, chain, generator, existing_quarantine_id
         )
 
     async with session.begin():
@@ -1547,20 +1564,23 @@ async def resolve_screening_dispute(
         )
         if dispute is None:
             raise HTTPException(status_code=404, detail="dispute not found")
-        quarantine = await session.scalar(
-            select(ScreeningQuarantine)
-            .where(ScreeningQuarantine.quarantine_id == dispute.quarantine_id)
-            .with_for_update()
-        )
+        quarantine: ScreeningQuarantine | None = None
+        if dispute.quarantine_id is not None:
+            quarantine = await session.scalar(
+                select(ScreeningQuarantine)
+                .where(ScreeningQuarantine.quarantine_id == dispute.quarantine_id)
+                .with_for_update()
+            )
         agent = await session.scalar(
             select(Agent).where(Agent.agent_id == dispute.agent_id).with_for_update()
         )
-        if quarantine is None or agent is None:
+        if agent is None or (dispute.kind == "screening" and quarantine is None):
             raise HTTPException(status_code=404, detail="disputed submission not found")
         if dispute.status != "pending":
             raise HTTPException(status_code=409, detail="dispute is already resolved")
-        if (
-            agent.status != AgentStatus.REJECTED
+        if dispute.kind == "screening" and (
+            quarantine is None
+            or agent.status != AgentStatus.REJECTED
             or quarantine.status != "resolved"
             or quarantine.resolution != "reject"
         ):
@@ -1570,7 +1590,12 @@ async def resolve_screening_dispute(
             )
 
         now = datetime.now(UTC)
-        if payload.resolution == "release":
+        # A gate-notes dispute appeals shadow evidence on a scored submission:
+        # either resolution records the operator's verdict on the cited notes
+        # and NEVER releases, re-evaluates or re-scores the agent. Only a
+        # screening release moves the agent.
+        if payload.resolution == "release" and dispute.kind == "screening":
+            assert quarantine is not None
             agent.status = AgentStatus.EVALUATING
             agent.screening_reason = payload.reason
             await _apply_dataset(session, agent, new_dataset)
@@ -1594,13 +1619,15 @@ async def resolve_screening_dispute(
         dispute.resolution = payload.resolution
         dispute.resolution_reason = payload.reason
 
-    history = await _resolution_history(session, [dispute.quarantine_id])
+    history = await _resolution_history(
+        session, [dispute.quarantine_id] if dispute.quarantine_id else []
+    )
     return AdminScreeningDisputeResolveResponse(
         dispute=_dispute_item(
             dispute,
             agent,
             quarantine,
-            history[dispute.quarantine_id],
+            history[dispute.quarantine_id] if dispute.quarantine_id else [],
         ),
         agent_status=agent.status,
     )

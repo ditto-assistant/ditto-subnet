@@ -1080,13 +1080,26 @@ class ScreeningDecisionRecord(Base):
 
 
 class ScreeningDispute(Base):
-    """One miner-authenticated appeal of a rejected screening decision."""
+    """One miner-authenticated appeal: of a rejected screening decision
+    (``kind = 'screening'``) or of cited bench v13+ gate notes on a scored
+    submission (``kind = 'gate_notes'``). One per submission either way."""
 
     __tablename__ = "screening_disputes"
 
     dispute_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
     agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
-    quarantine_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    quarantine_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """The rejected quarantine a ``screening`` dispute appeals; ``NULL`` for a
+    ``gate_notes`` dispute, which appeals accepted-score evidence instead."""
+
+    kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="screening")
+    """``screening`` | ``gate_notes``. Decides what a resolution does: releasing
+    a ``screening`` dispute returns the submission to evaluation; resolving a
+    ``gate_notes`` dispute only records the operator's verdict on the cited
+    notes and never changes the agent's status or scores."""
+
     miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
@@ -1099,6 +1112,16 @@ class ScreeningDispute(Base):
     resolved_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolution_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gate_note_ids: Mapped[list | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Bench v13+ gate note ids the miner contested with this dispute.
+
+    Each id re-derives from the submission's own accepted scores
+    (:func:`ditto.api_server.gate_evidence.gate_note_id`), so the appeal points
+    at exact per-case verdicts an operator can read back through the owner
+    projection. ``NULL`` for a dispute that cites none.
+    """
 
     __table_args__ = (
         ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
@@ -1120,6 +1143,20 @@ class ScreeningDispute(Base):
         CheckConstraint(
             "resolution IS NULL OR resolution IN ('release', 'uphold')",
             name="screening_disputes_resolution_check",
+        ),
+        CheckConstraint(
+            "kind IN ('screening', 'gate_notes')",
+            name="screening_disputes_kind_check",
+        ),
+        # A screening dispute always names the rejected quarantine it appeals;
+        # a gate-notes dispute always names the notes it contests.
+        CheckConstraint(
+            "kind <> 'screening' OR quarantine_id IS NOT NULL",
+            name="screening_disputes_screening_quarantine_check",
+        ),
+        CheckConstraint(
+            "kind <> 'gate_notes' OR gate_note_ids IS NOT NULL",
+            name="screening_disputes_gate_notes_cited_check",
         ),
         Index("screening_disputes_status_created_idx", "status", "created_at"),
     )
@@ -3945,6 +3982,20 @@ class Score(Base):
     details: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     """Optional per-case breakdown ``{"per_case": [...]}`` for audit."""
 
+    gate_evidence: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Bench v13+ per-case gate notes and the run's shadow verdict.
+
+    The typed projection (:class:`ditto.api_models.gate_evidence.StoredGateEvidence`)
+    the platform builds at ingest from the scorer's advisory
+    ``details.gate_evidence`` object and the per-case ``notes``. Kept beside
+    ``details`` rather than inside it so the owner-only and operator read paths
+    never have to open the answer-key-bearing blob. ``NULL`` below the v13 floor
+    (``scores_gate_evidence_bench_floor``) and for a v13+ report from a scorer
+    that emitted no gate telemetry.
+    """
+
     model_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
     """Reader-model calls this run made, off the lease's inference grant.
 
@@ -4014,6 +4065,12 @@ class Score(Base):
         # is the guarantee that no application bug can score a retired era --
         # see MIN_SCOREABLE_BENCH_VERSION.
         CheckConstraint("bench_version >= 7", name="scores_bench_version_floor"),
+        # Gate evidence is a bench v13+ contract. A floor, not an equality, so
+        # every later version keeps carrying it without another migration.
+        CheckConstraint(
+            "gate_evidence IS NULL OR bench_version >= 13",
+            name="scores_gate_evidence_bench_floor",
+        ),
         Index("scores_agent_id_idx", "agent_id"),
         # Dashboard/ledger reads select one benchmark era before grouping or
         # ranking scores.  Keep the aggregate columns in the index so the

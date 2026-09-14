@@ -3078,6 +3078,34 @@ export interface paths {
         patch: operations["update_me_api_v1_me_patch"];
         trace?: never;
     };
+    "/api/v1/me/agents/{agent_id}/gate-notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * My Gate Notes
+         * @description Return this miner's bench v13+ per-case gate notes for one of their agents.
+         *
+         *     The public per-score record carries only the run-level aggregate (posture,
+         *     composite with/without gates, gate-induced loss). The per-case notes -- which
+         *     case tripped which gate, the twin/pair relation outcome, the shadow cost
+         *     factor -- are owner-only, so a miner can see a shadow verdict before it
+         *     enforces and cite the ``note_id`` values in a dispute. Same ownership rule
+         *     as the other ``/me/agents`` reads: unknown and other-miners' agents are the
+         *     same 404.
+         */
+        get: operations["my_gate_notes_api_v1_me_agents__agent_id__gate_notes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/agents/{agent_id}/harness-logs": {
         parameters: {
             query?: never;
@@ -3613,7 +3641,14 @@ export interface paths {
         put?: never;
         /**
          * Create Screening Dispute
-         * @description Record the submitting hotkey's single appeal of a quarantine rejection.
+         * @description Record the submitting hotkey's single appeal.
+         *
+         *     Two kinds share the one-per-submission slot. A rejected submission with a
+         *     rejected quarantine files a ``screening`` dispute (optionally citing gate
+         *     notes). A scored, live, evaluating or held submission that cites bench
+         *     v13+ ``gate_note_ids`` files a ``gate_notes`` dispute against those exact
+         *     notes -- the appeal path the shadow verdict exists for, so a would-be zero
+         *     can be contested before any gate enforces. Anything else is a 409.
          */
         post: operations["create_screening_dispute_api_v1_public_agent__agent_id__dispute_post"];
         delete?: never;
@@ -9700,17 +9735,22 @@ export interface components {
              * Format: uuid
              */
             dispute_id: string;
+            /** Gate Note Ids */
+            gate_note_ids?: string[] | null;
+            /**
+             * Kind
+             * @default screening
+             * @enum {string}
+             */
+            kind: "screening" | "gate_notes";
             /** Message */
             message: string;
             /** Miner Hotkey */
             miner_hotkey: string;
             /** Original Reason */
             original_reason: string | null;
-            /**
-             * Quarantine Id
-             * Format: uuid
-             */
-            quarantine_id: string;
+            /** Quarantine Id */
+            quarantine_id: string | null;
             /** Resolution */
             resolution: ("release" | "uphold") | null;
             /** Resolution Reason */
@@ -11913,6 +11953,18 @@ export interface components {
          */
         CaseScore: {
             /**
+             * Allow Extra Tools
+             * @description True when extra tool calls were not penalised on this case.
+             * @default false
+             */
+            allow_extra_tools: boolean;
+            /**
+             * Audit Half
+             * @description ``base`` | ``transform`` for the two halves of a transform-audit pair; empty for every other case.
+             * @default
+             */
+            audit_half: string;
+            /**
              * Called
              * @description Tool names the agent called.
              */
@@ -11922,11 +11974,15 @@ export interface components {
              * @description Stable id of the scored case.
              */
             case_id: string;
+            /** @description Bench v13+ relay record of the tool catalog the harness offered the model, with the catalog-gate findings; null before v13. */
+            catalog?: components["schemas"]["CatalogEvidence"] | null;
             /**
              * Category
              * @description Case category, e.g. ``web_search``.
              */
             category: string;
+            /** @description Bench v13+ claim-span provenance and causal answer_in_prompt verdict for a memory case; null before v13. */
+            claim_provenance?: components["schemas"]["ClaimProvenanceEvidence"] | null;
             /**
              * Confidence
              * @description Harness self-reported confidence echoed for Brier calibration (None = not reported; distinct from 0.0).
@@ -11943,6 +11999,8 @@ export interface components {
              * @description Tool names the case expected.
              */
             expected?: string[];
+            /** @description Bench v13+ per-case inference cost record and shadow cost factor; null before v13. */
+            inference_cost?: components["schemas"]["InferenceCostEvidence"] | null;
             /**
              * Injection
              * @description True when the grader flagged injection compliance on this case.
@@ -11978,6 +12036,12 @@ export interface components {
              */
             quality: number;
             /**
+             * Relation
+             * @description Bench v13+: the generator's metamorphic / counterfactual relation for this case (e.g. ``base``, ``causal_counterfactual``); empty below v13.
+             * @default
+             */
+            relation: string;
+            /**
              * Result Usage
              * @description Result-usage half of an observed tool case: did the final answer incorporate the value only the executed tool served.
              * @default 0
@@ -11988,6 +12052,8 @@ export interface components {
              * @description Per-case composite in [0,1].
              */
             score: number;
+            /** @description Bench v10+ broker-to-endpoint tool provenance; null before. */
+            tool_provenance?: components["schemas"]["ToolProvenanceEvidence"] | null;
             /**
              * Tool Score
              * @description Per-case tool accuracy in [0,1].
@@ -11999,6 +12065,217 @@ export interface components {
              * @default
              */
             twin_group: string;
+            /**
+             * Undelivered
+             * @description True when the case never reached the harness.
+             * @default false
+             */
+            undelivered: boolean;
+            /**
+             * Validator Fault
+             * @description True when an undelivered case was the validator's fault.
+             * @default false
+             */
+            validator_fault: boolean;
+        };
+        /**
+         * CatalogCompletion
+         * @description Relay metadata of one attributed chat completion (bench v13 catalog gate).
+         */
+        CatalogCompletion: {
+            /**
+             * After Last Tool Result
+             * @default false
+             */
+            after_last_tool_result: boolean;
+            /**
+             * Attribution Source
+             * @default
+             */
+            attribution_source: string;
+            /**
+             * Catalog Sha256
+             * @default
+             */
+            catalog_sha256: string;
+            /**
+             * Claim Corroborated
+             * @default false
+             */
+            claim_corroborated: boolean;
+            /** Model Emitted Tool Calls */
+            model_emitted_tool_calls?: string[];
+            /**
+             * System Span Sha256
+             * @default
+             */
+            system_span_sha256: string;
+            /**
+             * Tool Choice
+             * @default
+             */
+            tool_choice: string;
+            /**
+             * Tools Choosable
+             * @default 0
+             */
+            tools_choosable: number;
+            /**
+             * Tools Offered
+             * @default 0
+             */
+            tools_offered: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * CatalogEvidence
+         * @description Bench v13 per-case relay record of the offered tool catalog (``catalog``).
+         *
+         *     Mirrors the DittoBench ``CatalogEvidence`` wire shape (bench_version >= 13;
+         *     nil before). Digests and counts only -- no prompt or completion text.
+         *     ``findings`` names the catalog-gate rule outcomes for the case.
+         */
+        CatalogEvidence: {
+            /**
+             * Catalog Present
+             * @default false
+             */
+            catalog_present: boolean;
+            /**
+             * Catalog Present Lower Bound
+             * @default false
+             */
+            catalog_present_lower_bound: boolean;
+            /**
+             * Claim Attributed Completions
+             * @default 0
+             */
+            claim_attributed_completions: number;
+            /**
+             * Claim Corroborated Completions
+             * @default 0
+             */
+            claim_corroborated_completions: number;
+            /**
+             * Complete
+             * @default false
+             */
+            complete: boolean;
+            /** Completions */
+            completions?: components["schemas"]["CatalogCompletion"][];
+            /**
+             * Completions After Last Tool Result
+             * @default 0
+             */
+            completions_after_last_tool_result: number;
+            /** Completions Total */
+            completions_total?: number | null;
+            /**
+             * Completions With Catalog
+             * @default 0
+             */
+            completions_with_catalog: number;
+            /** Findings */
+            findings?: string[];
+            /** Harness System Span Sha256 */
+            harness_system_span_sha256?: string[];
+            /** Model Emitted Tool Calls */
+            model_emitted_tool_calls?: string[];
+            /**
+             * Overlap Completions
+             * @default 0
+             */
+            overlap_completions: number;
+            /**
+             * Overlap Completions With Catalog
+             * @default 0
+             */
+            overlap_completions_with_catalog: number;
+            /**
+             * Tool Choice Suppressed Completions
+             * @default 0
+             */
+            tool_choice_suppressed_completions: number;
+            /** Tools Offered */
+            tools_offered?: components["schemas"]["OfferedTool"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * CatalogGateSummary
+         * @description Run-level catalog-gate record (``details.catalog_gate``), sanitised.
+         *
+         *     Counts, not rates, where they pool; ``catalog_suppression_rate`` is the
+         *     published run-level metric (catalog absent / attributed tool cases).
+         */
+        CatalogGateSummary: {
+            /**
+             * Attributed Cases
+             * @default 0
+             */
+            attributed_cases: number;
+            /** Attribution Coverage Bps */
+            attribution_coverage_bps?: number | null;
+            /**
+             * Catalog Absent Cases
+             * @default 0
+             */
+            catalog_absent_cases: number;
+            /** Catalog Suppression Rate */
+            catalog_suppression_rate?: number | null;
+            /**
+             * Claim Uncorroborated Cases
+             * @default 0
+             */
+            claim_uncorroborated_cases: number;
+            /**
+             * Expected Tool Not Offered
+             * @default 0
+             */
+            expected_tool_not_offered: number;
+            /**
+             * Incomplete Capture Cases
+             * @default 0
+             */
+            incomplete_capture_cases: number;
+            /**
+             * Lower Bound Cases
+             * @default 0
+             */
+            lower_bound_cases: number;
+            /**
+             * No Completion Cases
+             * @default 0
+             */
+            no_completion_cases: number;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            /**
+             * Restraint Without Offer
+             * @default 0
+             */
+            restraint_without_offer: number;
+            /**
+             * Safe Harbor Cases
+             * @default 0
+             */
+            safe_harbor_cases: number;
+            /**
+             * Swallowed Model Call
+             * @default 0
+             */
+            swallowed_model_call: number;
+            /**
+             * Tool Cases
+             * @default 0
+             */
+            tool_cases: number;
+            /**
+             * Zeroed Cases
+             * @default 0
+             */
+            zeroed_cases: number;
         };
         /**
          * CategoryStat
@@ -12029,6 +12306,101 @@ export interface components {
              * @default 0
              */
             std_err: number;
+        };
+        /**
+         * ClaimProvenanceEvidence
+         * @description Bench v13 per-case claim-span provenance + causal verdict (``claim_provenance``).
+         *
+         *     Mirrors the DittoBench ``ClaimProvenanceEvidence`` wire shape
+         *     (bench_version >= 13; nil before). Hash-derived verdicts and counts only.
+         *     ``findings`` names the settled gate outcomes for the case.
+         */
+        ClaimProvenanceEvidence: {
+            /** Answer In Prompt */
+            answer_in_prompt?: boolean | null;
+            /**
+             * Claim Tokens
+             * @default 0
+             */
+            claim_tokens: number;
+            /**
+             * Complete
+             * @default false
+             */
+            complete: boolean;
+            /** Completions */
+            completions?: number | null;
+            /** Findings */
+            findings?: string[];
+            /** Model Emitted */
+            model_emitted?: boolean | null;
+            /**
+             * Posture
+             * @default
+             */
+            posture: string;
+            /**
+             * Tool Results
+             * @default 0
+             */
+            tool_results: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ClaimProvenanceSummary
+         * @description Run-level claim-span / causal gate record (``details.claim_provenance``).
+         */
+        ClaimProvenanceSummary: {
+            /**
+             * Answer In Prompt Cases
+             * @default 0
+             */
+            answer_in_prompt_cases: number;
+            /**
+             * Applicable Cases
+             * @default 0
+             */
+            applicable_cases: number;
+            /**
+             * Attributed Cases
+             * @default 0
+             */
+            attributed_cases: number;
+            /** Attribution Coverage Bps */
+            attribution_coverage_bps?: number | null;
+            /**
+             * Memory Cases
+             * @default 0
+             */
+            memory_cases: number;
+            /**
+             * No Model Completion Cases
+             * @default 0
+             */
+            no_model_completion_cases: number;
+            /**
+             * Not Model Emitted Cases
+             * @default 0
+             */
+            not_model_emitted_cases: number;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            /**
+             * Settled Cases
+             * @default 0
+             */
+            settled_cases: number;
+            /**
+             * Unsettled Cases
+             * @default 0
+             */
+            unsettled_cases: number;
+            /**
+             * Zeroed Cases
+             * @default 0
+             */
+            zeroed_cases: number;
         };
         /**
          * CodeFingerprint
@@ -15679,9 +16051,16 @@ export interface components {
         };
         /**
          * CreateScreeningDisputeRequest
-         * @description One signed appeal of a rejected screening decision.
+         * @description One signed appeal: of a rejected screening decision, or -- for a scored,
+         *     live, evaluating or held submission -- of the bench v13+ gate notes cited
+         *     in ``gate_note_ids``. A submission gets exactly one either way.
          */
         CreateScreeningDisputeRequest: {
+            /**
+             * Gate Note Ids
+             * @description Bench v13+ gate ``note_id`` values this dispute contests, as listed on ``GET /me/agents/{agent_id}/gate-notes``. Every id must belong to this submission's own accepted scores.
+             */
+            gate_note_ids?: string[] | null;
             /** Message */
             message: string;
             /** Signature */
@@ -16824,6 +17203,105 @@ export interface components {
             scope: string;
             settings: components["schemas"]["InferenceConcurrencySettings"];
         };
+        /**
+         * InferenceCostEvidence
+         * @description Bench v13 per-case inference cost record + shadow factor (``inference_cost``).
+         *
+         *     Mirrors the DittoBench ``InferenceCostEvidence`` wire shape (bench_version
+         *     >= 13; nil before). ``factor_bps`` is the cost factor the v13 rule WOULD
+         *     apply, in basis points; it is reported only, never multiplied into a
+         *     score, in v13.0. The wire key ``class`` is a Python keyword, hence the
+         *     aliased ``case_class`` (serialised back under its wire name).
+         */
+        InferenceCostEvidence: {
+            /**
+             * Attributed
+             * @default false
+             */
+            attributed: boolean;
+            /**
+             * Attribution
+             * @default
+             */
+            attribution: string;
+            /**
+             * Budget Tokens
+             * @default 0
+             */
+            budget_tokens: number;
+            /**
+             * Choices Total
+             * @default 0
+             */
+            choices_total: number;
+            /**
+             * Class
+             * @default
+             */
+            class: string;
+            /**
+             * Completions
+             * @default 0
+             */
+            completions: number;
+            /**
+             * Excess Tokens
+             * @default 0
+             */
+            excess_tokens: number;
+            /**
+             * Factor Bps
+             * @default 0
+             */
+            factor_bps: number;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /**
+             * Usage Unavailable
+             * @default 0
+             */
+            usage_unavailable: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * InferenceCostSummary
+         * @description Run-level shadow cost-factor record (``details.inference_cost``).
+         *
+         *     ``mean_factor_bps`` is the mean factor the v13 cost rule WOULD have
+         *     applied over the attributable cases; ``applied`` is always false in v13.0.
+         */
+        InferenceCostSummary: {
+            /**
+             * Applied
+             * @default false
+             */
+            applied: boolean;
+            /**
+             * Attributed Cases
+             * @default 0
+             */
+            attributed_cases: number;
+            /**
+             * Cases
+             * @default 0
+             */
+            cases: number;
+            /**
+             * Cases Below Full Factor
+             * @default 0
+             */
+            cases_below_full_factor: number;
+            /** Floor Bps */
+            floor_bps?: number | null;
+            /** Mean Factor Bps */
+            mean_factor_bps?: number | null;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+        };
         /** InferenceExchangeRequest */
         InferenceExchangeRequest: {
             /** Broker Public Key */
@@ -17955,6 +18433,113 @@ export interface components {
             priced_submissions: number;
         };
         /**
+         * MinerGateNote
+         * @description One gate note on one case, with the id a dispute can cite.
+         */
+        MinerGateNote: {
+            /** Gate */
+            gate: string;
+            /** Note Id */
+            note_id: string;
+            /**
+             * Zeroing
+             * @description Whether this finding zeroes the case when its gate runs in enforce (a would-be zero in shadow).
+             */
+            zeroing: boolean;
+        };
+        /**
+         * MinerGateNoteCase
+         * @description One flagged case's gate outcome, as shown to the owning miner.
+         */
+        MinerGateNoteCase: {
+            /**
+             * Case Id
+             * @description Seed-derived case id. The seed of every accepted score is already published on the submission's pipeline record, so the owner always sees it.
+             */
+            case_id?: string | null;
+            /** Case Index */
+            case_index?: number | null;
+            /** Catalog Present */
+            catalog_present?: boolean | null;
+            /** Category */
+            category?: string | null;
+            /** Cost Factor */
+            cost_factor?: number | null;
+            /** Kind */
+            kind?: string | null;
+            /** Notes */
+            notes?: components["schemas"]["MinerGateNote"][];
+            /** Relation */
+            relation?: string | null;
+            /** Score */
+            score?: number | null;
+            /** Tools Offered */
+            tools_offered?: number | null;
+        };
+        /**
+         * MinerGateNotesResponse
+         * @description Every accepted run's v13 gate notes for one of the miner's own agents.
+         */
+        MinerGateNotesResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /**
+             * Dispute Submit Url
+             * @description Where the submission's one dispute is filed. A rejected submission disputes its quarantine decision; a scored, live, evaluating or held submission disputes the gate notes it cites by passing their ``note_id`` values as ``gate_note_ids``.
+             * @default /api/v1/public/agent/{agent_id}/dispute
+             */
+            dispute_submit_url: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Runs */
+            runs?: components["schemas"]["MinerGateNotesRun"][];
+        };
+        /**
+         * MinerGateNotesRun
+         * @description One validator run's gate verdict and its per-case notes (owner only).
+         */
+        MinerGateNotesRun: {
+            /** Bench Version */
+            bench_version: number;
+            /** Cases */
+            cases?: components["schemas"]["MinerGateNoteCase"][];
+            catalog_gate?: components["schemas"]["CatalogGateSummary"] | null;
+            /** Catalog Suppression Rate */
+            catalog_suppression_rate?: number | null;
+            claim_provenance?: components["schemas"]["ClaimProvenanceSummary"] | null;
+            /** Composite */
+            composite: number;
+            /**
+             * Flagged Case Count
+             * @default 0
+             */
+            flagged_case_count: number;
+            /** Flagged Case Share */
+            flagged_case_share?: number | null;
+            /** Gate Counts */
+            gate_counts?: {
+                [key: string]: number;
+            };
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            inference_cost?: components["schemas"]["InferenceCostSummary"] | null;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            /** Run Id */
+            run_id: string;
+            twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
          * MinerHarnessLogAttempt
          * @description One validator ticket for this agent, with whatever it last reported.
          *
@@ -18343,6 +18928,21 @@ export interface components {
             source_revision?: string | null;
             /** Version */
             version?: string | null;
+        };
+        /**
+         * OfferedTool
+         * @description One tool the harness offered the model: wire name + schema digest.
+         */
+        OfferedTool: {
+            /** Name */
+            name: string;
+            /**
+             * Schema Sha256
+             * @default
+             */
+            schema_sha256: string;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * OwnerLinkProof
@@ -20444,6 +21044,51 @@ export interface components {
             total: number;
         };
         /**
+         * PublicGateEvidence
+         * @description Run-level v13 gate verdict, published beside a validator's score.
+         *
+         *     Aggregates only: the posture the gates ran under, the four gate summaries
+         *     (counts and rates), how many cases the gates would zero, and per-finding
+         *     counts. The per-case notes behind these counts are owner-only
+         *     (``GET /me/agents/{agent_id}/gate-notes``).
+         */
+        PublicGateEvidence: {
+            /** Bench Version */
+            bench_version: number;
+            catalog_gate?: components["schemas"]["CatalogGateSummary"] | null;
+            /**
+             * Catalog Suppression Rate
+             * @description Share of attributed tool cases that offered no tool catalog.
+             */
+            catalog_suppression_rate?: number | null;
+            claim_provenance?: components["schemas"]["ClaimProvenanceSummary"] | null;
+            /**
+             * Flagged Case Count
+             * @description Cases a v13 gate would zero at enforce (or did), plus cases the shadow cost factor would discount.
+             * @default 0
+             */
+            flagged_case_count: number;
+            /**
+             * Flagged Case Share
+             * @description ``flagged_case_count`` over the cases the run scored.
+             */
+            flagged_case_share?: number | null;
+            /**
+             * Gate Counts
+             * @description Gate finding -> number of cases it fired on (closed vocabulary; zeroing and informational findings alike).
+             */
+            gate_counts?: {
+                [key: string]: number;
+            };
+            inference_cost?: components["schemas"]["InferenceCostSummary"] | null;
+            /**
+             * Posture
+             * @description The most severe posture any v13 gate ran under: ``enforce`` means at least one gate changed scores; ``shadow`` means every gate only recorded what it would have done. Per-gate postures are on the gate summaries.
+             */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
+        };
+        /**
          * PublicHealthResponse
          * @description Aggregate subnet-health rollup for the public dashboard.
          *
@@ -21667,6 +22312,8 @@ export interface components {
              * @description Pinned hash of the exact generated dataset, when recorded.
              */
             dataset_sha256?: string | null;
+            /** @description Bench v13+ run-level gate verdict (aggregates only); see ``PublicValidatorScore.gate_evidence``. */
+            gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             model_use?: components["schemas"]["PublicModelUse"] | null;
             /**
              * Raw Composite
@@ -21962,6 +22609,13 @@ export interface components {
          * @description Public-safe appeal state; the miner's private message is never exposed.
          */
         PublicScreeningDispute: {
+            /**
+             * Kind
+             * @description ``screening``: appeals a rejected quarantine decision (release returns the submission to evaluation). ``gate_notes``: appeals cited bench v13+ gate notes on a scored submission; either resolution only records the operator's verdict.
+             * @default screening
+             * @enum {string}
+             */
+            kind: "screening" | "gate_notes";
             /** Resolution */
             resolution?: ("release" | "uphold") | null;
             /** Resolved At */
@@ -22850,6 +23504,8 @@ export interface components {
              */
             composite: number;
             composite_breakdown?: components["schemas"]["PublicCompositeBreakdown"] | null;
+            /** @description Bench v13+ gate verdict for this run: posture, composite with and without the gates, the gate-induced loss and per-gate counts. Aggregates only -- the per-case notes are owner-only (``GET /me/agents/{agent_id}/gate-notes``). Null below v13 and for a scorer that emitted no gate telemetry. */
+            gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             /**
              * Generated At
              * Format: date-time
@@ -26522,6 +27178,49 @@ export interface components {
          */
         TicketPurpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest";
         /**
+         * ToolProvenanceEvidence
+         * @description Per-case v10+ broker-to-endpoint tool provenance (``tool_provenance``).
+         *
+         *     Mirrors the DittoBench ``ToolProvenanceEvidence`` wire shape. Advisory
+         *     audit context only.
+         */
+        ToolProvenanceEvidence: {
+            /**
+             * Complete
+             * @default false
+             */
+            complete: boolean;
+            /**
+             * Endpoint Attempts
+             * @default 0
+             */
+            endpoint_attempts: number;
+            /** Findings */
+            findings?: string[];
+            /**
+             * Matched
+             * @default 0
+             */
+            matched: number;
+            /**
+             * Model Emitted
+             * @default 0
+             */
+            model_emitted: number;
+            /**
+             * Model Selected Not Executed
+             * @default 0
+             */
+            model_selected_not_executed: number;
+            /**
+             * Unmatched
+             * @default 0
+             */
+            unmatched: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * Top5ConfirmationJobRequest
          * @description Fresh signed claim for the top-5 shared-seed rescore lane.
          *
@@ -26806,6 +27505,62 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /**
+         * TwinPostPassSummary
+         * @description Run-level twin / counterfactual post-pass record (``details.twin_post_pass``).
+         *
+         *     ``rule_requested`` is the operator selection; ``rule`` is the rule that
+         *     ran (they differ only after the calibration auto-fallback from
+         *     ``concordant_zero`` to ``pair_product``). ``applied`` is true only when
+         *     the posture was ``enforce`` and at least one score changed.
+         */
+        TwinPostPassSummary: {
+            /**
+             * Applied
+             * @default false
+             */
+            applied: boolean;
+            /**
+             * Auto Fallback
+             * @default false
+             */
+            auto_fallback: boolean;
+            /**
+             * Cases Affected
+             * @default 0
+             */
+            cases_affected: number;
+            /** Cases Affected Share */
+            cases_affected_share?: number | null;
+            /**
+             * Counterfactual Insensitive
+             * @default 0
+             */
+            counterfactual_insensitive: number;
+            /**
+             * Counterfactual Pairs
+             * @default 0
+             */
+            counterfactual_pairs: number;
+            /** Honest Concordant Error Rate */
+            honest_concordant_error_rate?: number | null;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            /** Rule */
+            rule?: string | null;
+            /** Rule Requested */
+            rule_requested?: string | null;
+            /**
+             * Twin Groups
+             * @default 0
+             */
+            twin_groups: number;
+            /**
+             * Twin Groups Concordant
+             * @default 0
+             */
+            twin_groups_concordant: number;
         };
         /**
          * UploadAgentResponse
@@ -33822,6 +34577,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MinerMeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_gate_notes_api_v1_me_agents__agent_id__gate_notes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerGateNotesResponse"];
                 };
             };
             /** @description Validation Error */

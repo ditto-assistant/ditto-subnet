@@ -367,6 +367,93 @@ export interface V9BaseEvidence {
   };
 }
 
+/** Posture a bench v13+ gate ran under. `observe` is the twin post-pass's
+ * name for shadow. */
+export type GatePosture = "off" | "shadow" | "observe" | "enforce";
+
+/** Run-level catalog-present gate summary (`details.catalog_gate`, sanitised). */
+export interface CatalogGateSummary {
+  posture?: GatePosture | null;
+  tool_cases?: number;
+  attributed_cases?: number;
+  incomplete_capture_cases?: number;
+  lower_bound_cases?: number;
+  no_completion_cases?: number;
+  catalog_absent_cases?: number;
+  catalog_suppression_rate?: number | null;
+  safe_harbor_cases?: number;
+  restraint_without_offer?: number;
+  expected_tool_not_offered?: number;
+  swallowed_model_call?: number;
+  zeroed_cases?: number;
+  claim_uncorroborated_cases?: number;
+  attribution_coverage_bps?: number | null;
+}
+
+/** Run-level claim-span / causal gate summary (`details.claim_provenance`). */
+export interface ClaimProvenanceSummary {
+  posture?: GatePosture | null;
+  memory_cases?: number;
+  attributed_cases?: number;
+  applicable_cases?: number;
+  settled_cases?: number;
+  not_model_emitted_cases?: number;
+  answer_in_prompt_cases?: number;
+  no_model_completion_cases?: number;
+  unsettled_cases?: number;
+  zeroed_cases?: number;
+  attribution_coverage_bps?: number | null;
+}
+
+/** Run-level twin / counterfactual post-pass summary (`details.twin_post_pass`). */
+export interface TwinPostPassSummary {
+  posture?: GatePosture | null;
+  rule_requested?: string | null;
+  rule?: string | null;
+  honest_concordant_error_rate?: number | null;
+  auto_fallback?: boolean;
+  twin_groups?: number;
+  twin_groups_concordant?: number;
+  counterfactual_pairs?: number;
+  counterfactual_insensitive?: number;
+  cases_affected?: number;
+  cases_affected_share?: number | null;
+  applied?: boolean;
+}
+
+/** Run-level shadow cost-factor summary (`details.inference_cost`). */
+export interface InferenceCostSummary {
+  posture?: GatePosture | null;
+  applied?: boolean;
+  floor_bps?: number | null;
+  cases?: number;
+  attributed_cases?: number;
+  cases_below_full_factor?: number;
+  mean_factor_bps?: number | null;
+}
+
+/** Run-level bench v13+ gate verdict published beside a validator's score.
+ *
+ * Aggregates only: the per-case notes behind these counts are owner-only
+ * (`/me/agents/{id}/gate-notes`). `posture` is the most severe posture any
+ * gate ran under; `flagged_case_count` / `flagged_case_share` are the cases
+ * the gates would zero at enforce (or did) plus those the shadow cost factor
+ * would discount. Null below v13 and for a scorer that emitted no gate
+ * telemetry. Mirrors `PublicGateEvidence`. */
+export interface GateEvidence {
+  bench_version: number;
+  posture?: GatePosture | null;
+  catalog_gate?: CatalogGateSummary | null;
+  claim_provenance?: ClaimProvenanceSummary | null;
+  twin_post_pass?: TwinPostPassSummary | null;
+  inference_cost?: InferenceCostSummary | null;
+  catalog_suppression_rate?: number | null;
+  flagged_case_count?: number;
+  flagged_case_share?: number | null;
+  /** Gate finding -> cases it fired on (closed vocabulary). */
+  gate_counts?: Record<string, number>;
+}
+
 /** Board-level state of the relative-efficiency adjustment.
  *
  * `active` means the frozen factors rank the board. `preview` means the

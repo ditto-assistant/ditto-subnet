@@ -59,6 +59,7 @@ import { CasesSection } from "./Cases";
 import { ScreeningDispute } from "./DisputeForm";
 import { ScreeningReview } from "./ScreeningReview";
 import { TelemetryLoader } from "./Telemetry";
+import { GateEvidencePanel } from "./GateEvidence";
 import { V9GateEvidence } from "./V9GateEvidence";
 import {
   benchmarkCohorts,
@@ -433,6 +434,7 @@ function AcceptedScoreView(props: {
           </div>
         </Show>
         <Show when={score().v9_base}>{(evidence) => <V9GateEvidence evidence={evidence()} />}</Show>
+        <GateEvidencePanel evidence={score().gate_evidence} />
       </div>
       <CasesSection caseResults={score().case_results} glossary={props.glossary} />
     </div>
@@ -1175,6 +1177,9 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
                   agentId={agentId()}
                   status={detail().status}
                   dispute={detail().dispute}
+                  gateNotes={(detail().provisional_scores ?? []).some((score) =>
+                    Boolean(score.gate_evidence),
+                  )}
                   onSubmitted={retryPipeline}
                 />
                 <section class="pipeline-section" aria-labelledby="pipeline-screening-history">

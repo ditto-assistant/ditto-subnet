@@ -109,7 +109,307 @@
     "type": "object"
   },
   "CaseScore": {
+    "$defs": {
+      "CatalogCompletion": {
+        "additionalProperties": true,
+        "properties": {
+          "after_last_tool_result": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution_source": {
+            "default": "",
+            "type": "string"
+          },
+          "catalog_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "claim_corroborated": {
+            "default": false,
+            "type": "boolean"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "system_span_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_choice": {
+            "default": "",
+            "type": "string"
+          },
+          "tools_choosable": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "CatalogEvidence": {
+        "additionalProperties": true,
+        "properties": {
+          "catalog_present": {
+            "default": false,
+            "type": "boolean"
+          },
+          "catalog_present_lower_bound": {
+            "default": false,
+            "type": "boolean"
+          },
+          "claim_attributed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "claim_corroborated_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "items": {
+              "$ref": "#/$defs/CatalogCompletion"
+            },
+            "type": "array"
+          },
+          "completions_after_last_tool_result": {
+            "default": 0,
+            "type": "integer"
+          },
+          "completions_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "harness_system_span_sha256": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "overlap_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "overlap_completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tool_choice_suppressed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "items": {
+              "$ref": "#/$defs/OfferedTool"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ClaimProvenanceEvidence": {
+        "additionalProperties": true,
+        "properties": {
+          "answer_in_prompt": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "claim_tokens": {
+            "default": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "posture": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_results": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "InferenceCostEvidence": {
+        "additionalProperties": true,
+        "properties": {
+          "attributed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution": {
+            "default": "",
+            "type": "string"
+          },
+          "budget_tokens": {
+            "default": 0,
+            "type": "integer"
+          },
+          "choices_total": {
+            "default": 0,
+            "type": "integer"
+          },
+          "class": {
+            "default": "",
+            "type": "string"
+          },
+          "completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "excess_tokens": {
+            "default": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "default": 0,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "type": "integer"
+          },
+          "usage_unavailable": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "OfferedTool": {
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "schema_sha256": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ToolProvenanceEvidence": {
+        "additionalProperties": true,
+        "properties": {
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "endpoint_attempts": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "matched": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_emitted": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_selected_not_executed": {
+            "default": 0,
+            "type": "integer"
+          },
+          "unmatched": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
     "properties": {
+      "allow_extra_tools": {
+        "default": false,
+        "type": "boolean"
+      },
+      "audit_half": {
+        "default": "",
+        "type": "string"
+      },
       "called": {
         "items": {
           "type": "string"
@@ -119,8 +419,30 @@
       "case_id": {
         "type": "string"
       },
+      "catalog": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CatalogEvidence"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "category": {
         "type": "string"
+      },
+      "claim_provenance": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ClaimProvenanceEvidence"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "confidence": {
         "anyOf": [
@@ -144,6 +466,17 @@
           "type": "string"
         },
         "type": "array"
+      },
+      "inference_cost": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/InferenceCostEvidence"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "injection": {
         "default": false,
@@ -173,6 +506,10 @@
         "minimum": 0.0,
         "type": "number"
       },
+      "relation": {
+        "default": "",
+        "type": "string"
+      },
       "result_usage": {
         "default": 0.0,
         "maximum": 1.0,
@@ -184,6 +521,17 @@
         "minimum": 0.0,
         "type": "number"
       },
+      "tool_provenance": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ToolProvenanceEvidence"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "tool_score": {
         "maximum": 1.0,
         "minimum": 0.0,
@@ -192,6 +540,14 @@
       "twin_group": {
         "default": "",
         "type": "string"
+      },
+      "undelivered": {
+        "default": false,
+        "type": "boolean"
+      },
+      "validator_fault": {
+        "default": false,
+        "type": "boolean"
       }
     },
     "required": [
@@ -4529,6 +4885,14 @@
     "$defs": {
       "CaseScore": {
         "properties": {
+          "allow_extra_tools": {
+            "default": false,
+            "type": "boolean"
+          },
+          "audit_half": {
+            "default": "",
+            "type": "string"
+          },
           "called": {
             "items": {
               "type": "string"
@@ -4538,8 +4902,30 @@
           "case_id": {
             "type": "string"
           },
+          "catalog": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CatalogEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "category": {
             "type": "string"
+          },
+          "claim_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ClaimProvenanceEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "confidence": {
             "anyOf": [
@@ -4563,6 +4949,17 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "inference_cost": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/InferenceCostEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "injection": {
             "default": false,
@@ -4592,6 +4989,10 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "relation": {
+            "default": "",
+            "type": "string"
+          },
           "result_usage": {
             "default": 0.0,
             "maximum": 1.0,
@@ -4603,6 +5004,17 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "tool_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolProvenanceEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "tool_score": {
             "maximum": 1.0,
             "minimum": 0.0,
@@ -4611,6 +5023,14 @@
           "twin_group": {
             "default": "",
             "type": "string"
+          },
+          "undelivered": {
+            "default": false,
+            "type": "boolean"
+          },
+          "validator_fault": {
+            "default": false,
+            "type": "boolean"
           }
         },
         "required": [
@@ -4620,6 +5040,137 @@
           "tool_score",
           "latency_ms"
         ],
+        "type": "object"
+      },
+      "CatalogCompletion": {
+        "additionalProperties": true,
+        "properties": {
+          "after_last_tool_result": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution_source": {
+            "default": "",
+            "type": "string"
+          },
+          "catalog_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "claim_corroborated": {
+            "default": false,
+            "type": "boolean"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "system_span_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_choice": {
+            "default": "",
+            "type": "string"
+          },
+          "tools_choosable": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "CatalogEvidence": {
+        "additionalProperties": true,
+        "properties": {
+          "catalog_present": {
+            "default": false,
+            "type": "boolean"
+          },
+          "catalog_present_lower_bound": {
+            "default": false,
+            "type": "boolean"
+          },
+          "claim_attributed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "claim_corroborated_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "items": {
+              "$ref": "#/$defs/CatalogCompletion"
+            },
+            "type": "array"
+          },
+          "completions_after_last_tool_result": {
+            "default": 0,
+            "type": "integer"
+          },
+          "completions_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "harness_system_span_sha256": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "overlap_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "overlap_completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tool_choice_suppressed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "items": {
+              "$ref": "#/$defs/OfferedTool"
+            },
+            "type": "array"
+          }
+        },
         "type": "object"
       },
       "CategoryStat": {
@@ -4649,6 +5200,67 @@
         ],
         "type": "object"
       },
+      "ClaimProvenanceEvidence": {
+        "additionalProperties": true,
+        "properties": {
+          "answer_in_prompt": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "claim_tokens": {
+            "default": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "posture": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_results": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "CodeFingerprint": {
         "properties": {
           "card": {
@@ -4675,6 +5287,104 @@
           "k",
           "card"
         ],
+        "type": "object"
+      },
+      "InferenceCostEvidence": {
+        "additionalProperties": true,
+        "properties": {
+          "attributed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution": {
+            "default": "",
+            "type": "string"
+          },
+          "budget_tokens": {
+            "default": 0,
+            "type": "integer"
+          },
+          "choices_total": {
+            "default": 0,
+            "type": "integer"
+          },
+          "class": {
+            "default": "",
+            "type": "string"
+          },
+          "completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "excess_tokens": {
+            "default": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "default": 0,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "type": "integer"
+          },
+          "usage_unavailable": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "OfferedTool": {
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "schema_sha256": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ToolProvenanceEvidence": {
+        "additionalProperties": true,
+        "properties": {
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "endpoint_attempts": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "matched": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_emitted": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_selected_not_executed": {
+            "default": 0,
+            "type": "integer"
+          },
+          "unmatched": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
         "type": "object"
       }
     },
@@ -4851,6 +5561,14 @@
     "$defs": {
       "CaseScore": {
         "properties": {
+          "allow_extra_tools": {
+            "default": false,
+            "type": "boolean"
+          },
+          "audit_half": {
+            "default": "",
+            "type": "string"
+          },
           "called": {
             "items": {
               "type": "string"
@@ -4860,8 +5578,30 @@
           "case_id": {
             "type": "string"
           },
+          "catalog": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CatalogEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "category": {
             "type": "string"
+          },
+          "claim_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ClaimProvenanceEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "confidence": {
             "anyOf": [
@@ -4885,6 +5625,17 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "inference_cost": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/InferenceCostEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "injection": {
             "default": false,
@@ -4914,6 +5665,10 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "relation": {
+            "default": "",
+            "type": "string"
+          },
           "result_usage": {
             "default": 0.0,
             "maximum": 1.0,
@@ -4925,6 +5680,17 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "tool_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolProvenanceEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "tool_score": {
             "maximum": 1.0,
             "minimum": 0.0,
@@ -4933,6 +5699,14 @@
           "twin_group": {
             "default": "",
             "type": "string"
+          },
+          "undelivered": {
+            "default": false,
+            "type": "boolean"
+          },
+          "validator_fault": {
+            "default": false,
+            "type": "boolean"
           }
         },
         "required": [
@@ -4942,6 +5716,137 @@
           "tool_score",
           "latency_ms"
         ],
+        "type": "object"
+      },
+      "CatalogCompletion": {
+        "additionalProperties": true,
+        "properties": {
+          "after_last_tool_result": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution_source": {
+            "default": "",
+            "type": "string"
+          },
+          "catalog_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "claim_corroborated": {
+            "default": false,
+            "type": "boolean"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "system_span_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_choice": {
+            "default": "",
+            "type": "string"
+          },
+          "tools_choosable": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "CatalogEvidence": {
+        "additionalProperties": true,
+        "properties": {
+          "catalog_present": {
+            "default": false,
+            "type": "boolean"
+          },
+          "catalog_present_lower_bound": {
+            "default": false,
+            "type": "boolean"
+          },
+          "claim_attributed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "claim_corroborated_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "items": {
+              "$ref": "#/$defs/CatalogCompletion"
+            },
+            "type": "array"
+          },
+          "completions_after_last_tool_result": {
+            "default": 0,
+            "type": "integer"
+          },
+          "completions_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "harness_system_span_sha256": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "overlap_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "overlap_completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tool_choice_suppressed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "items": {
+              "$ref": "#/$defs/OfferedTool"
+            },
+            "type": "array"
+          }
+        },
         "type": "object"
       },
       "CategoryStat": {
@@ -4971,6 +5876,67 @@
         ],
         "type": "object"
       },
+      "ClaimProvenanceEvidence": {
+        "additionalProperties": true,
+        "properties": {
+          "answer_in_prompt": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "claim_tokens": {
+            "default": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "posture": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_results": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "CodeFingerprint": {
         "properties": {
           "card": {
@@ -4996,6 +5962,68 @@
           "v",
           "k",
           "card"
+        ],
+        "type": "object"
+      },
+      "InferenceCostEvidence": {
+        "additionalProperties": true,
+        "properties": {
+          "attributed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution": {
+            "default": "",
+            "type": "string"
+          },
+          "budget_tokens": {
+            "default": 0,
+            "type": "integer"
+          },
+          "choices_total": {
+            "default": 0,
+            "type": "integer"
+          },
+          "class": {
+            "default": "",
+            "type": "string"
+          },
+          "completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "excess_tokens": {
+            "default": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "default": 0,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "type": "integer"
+          },
+          "usage_unavailable": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "OfferedTool": {
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "schema_sha256": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -5167,6 +6195,42 @@
           "n",
           "generated_at"
         ],
+        "type": "object"
+      },
+      "ToolProvenanceEvidence": {
+        "additionalProperties": true,
+        "properties": {
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "endpoint_attempts": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "matched": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_emitted": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_selected_not_executed": {
+            "default": 0,
+            "type": "integer"
+          },
+          "unmatched": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
         "type": "object"
       }
     },
