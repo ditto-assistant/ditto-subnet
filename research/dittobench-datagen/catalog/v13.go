@@ -522,6 +522,16 @@ var decoyShapes = []DecoyShape{
 // DecoyShapeCount is the size of the frozen shape pool (>= 20 by contract).
 func DecoyShapeCount() int { return len(decoyShapes) }
 
+// DecoyShapeKeys returns every shape key in pool order. Category names are
+// "decoy_<key>_result_usage"; the public glossary mirror is checked against it.
+func DecoyShapeKeys() []string {
+	keys := make([]string, len(decoyShapes))
+	for i, shape := range decoyShapes {
+		keys[i] = shape.Key
+	}
+	return keys
+}
+
 // Decoy is one seed's coined near-miss tool.
 type Decoy struct {
 	Name        string
@@ -612,8 +622,11 @@ func v13Perm(seed int64, key string, n int) []int {
 // consonant-vowel syllables, e.g. "veltra") for (seed, salt). It follows the
 // persona.CoinShaped construction — splitmix64 steps over an FNV base so distinct
 // salts give unrelated streams — but always renders the lowercase-letters shape
-// a snake_case tool name needs. Never a pool value or an English word by
-// construction (the alphabet omits the vowels that make common words).
+// a snake_case tool name needs. The stem alone is not guaranteed to avoid an
+// English word (a CV·CV·CV draw can spell one); uniqueness against the
+// production surface comes from the seeded stream plus the coined
+// `<brand>_<shape-suffix>` composition, which TestV13Decoys pins disjoint from
+// every production tool name.
 func CoinedStem(seed int64, salt string) string {
 	h := v13Hash(seed, "stem:"+salt)
 	next := func(alpha string) byte {

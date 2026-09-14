@@ -10,7 +10,8 @@
 // The mirrors carry the seed-free PRODUCTION surface: per-seed decoys are
 // advertised only on the scored wire (catalog.CatalogForSeed) and served by the
 // validator's mock endpoint, so a mirror that named them would be wrong on every
-// other seed. Run `cargo fmt` after writing the Rust mirror.
+// other seed. The Rust rendering is already in cargo fmt shape, so regenerating
+// the mirror is byte-idempotent (TestRustMirrorIsByteIdentical pins it).
 package main
 
 import (
@@ -261,7 +262,12 @@ mod tests {
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!%s);
+        assert_eq!(
+            names,
+            vec![
+%s
+            ]
+        );
     }
 
     #[test]
@@ -294,7 +300,7 @@ mod tests {
             named("list_agent_jobs").parameters["properties"]["limit"]["type"],
             "integer"
         );
-`, version, len(tools), rustVecLiteral(names))
+`, version, len(tools), rustVecLines(names, 16))
 	for _, k := range enumKeys {
 		parts := strings.SplitN(k, ".", 2)
 		fmt.Fprintf(&b, `        assert_eq!(
@@ -335,18 +341,27 @@ mod tests {
 	return b.String(), nil
 }
 
-// rustVecLiteral renders a vec![...] of string literals.
-func rustVecLiteral(values []string) string {
+// rustVecLines renders the body of a multi-line vec![...] of string literals
+// in the shape cargo fmt emits (one literal per line, trailing comma omitted on
+// the last), so a regenerated mirror is byte-identical to the committed file.
+func rustVecLines(values []string, indent int) string {
 	parts := make([]string, len(values))
+	pad := strings.Repeat(" ", indent)
 	for i, v := range values {
-		parts[i] = rustString(v)
+		parts[i] = pad + rustString(v)
 	}
-	return "[" + strings.Join(parts, ", ") + "]"
+	return strings.Join(parts, ",\n")
 }
 
+// jsonArray renders a json!([...]) argument in cargo fmt shape (", " between
+// elements).
 func jsonArray(values []string) string {
-	raw, _ := json.Marshal(values)
-	return string(raw)
+	parts := make([]string, len(values))
+	for i, v := range values {
+		raw, _ := json.Marshal(v)
+		parts[i] = string(raw)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 // renderPython emits the screener oracle's _ORACLE_TOOL_NAMES block.

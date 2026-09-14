@@ -273,11 +273,16 @@ func applyV13ToolBench(seed int64, cases []protocol.ToolCase) {
 		cases[i].WritingProtected = append(cases[i].WritingProtected, strings.Fields(w.Cadence)...)
 	}
 
-	// Cap the legacy world_theme_discover_set family: the excess becomes
-	// discovery-grounded font cases (counting toward the discovery quota).
+	// Cap the legacy world_theme_discover_set family. Every case above the cap
+	// is replaced: the first ones become discovery-grounded font cases (counting
+	// toward the discovery quota); any surplus beyond that quota heads the
+	// conversion order so the decoy and coined-fixture quotas consume it, and
+	// whatever is still left becomes an extra decoy-correct case (that quota is
+	// a floor). The cap therefore holds at every run size.
 	installed := 0
 	themeSeen := 0
 	discoveryOrdinal := 0
+	var surplusTheme []int
 	for i := range cases {
 		if cases[i].Category != "world_theme_discover_set" {
 			continue
@@ -290,10 +295,12 @@ func applyV13ToolBench(seed int64, cases []protocol.ToolCase) {
 			cases[i] = v13DiscoveryCase(seed, cases[i], inventory, discoveryOrdinal, "font")
 			discoveryOrdinal++
 			installed++
+			continue
 		}
+		surplusTheme = append(surplusTheme, i)
 	}
 
-	eligible := v13ConversionOrder(seed, cases)
+	eligible := append(surplusTheme, v13ConversionOrder(seed, cases)...)
 	next := 0
 	take := func() int {
 		if next >= len(eligible) {
@@ -316,22 +323,13 @@ func applyV13ToolBench(seed int64, cases []protocol.ToolCase) {
 		discoveryOrdinal++
 		installed++
 	}
-	for d := 0; d < quota.Decoy; d++ {
+	d := 0
+	for ; d < quota.Decoy; d++ {
 		i := take()
 		if i < 0 {
 			break
 		}
-		decoy := decoys[d%len(decoys)]
-		needle := toolexec.NeedleFor(seed, cases[i].ID)
-		cases[i] = protocol.ToolCase{
-			ID:               cases[i].ID,
-			Category:         "decoy_" + decoy.Shape.Key + "_result_usage",
-			Prompt:           decoy.Prompt(v13ToolPick(seed, i, "decoy-prompt", len(decoy.Shape.Prompts)), needle.Subject),
-			ExpectedTools:    []protocol.ToolSpec{{Name: decoy.Name}},
-			MaxToolCalls:     1,
-			ExpectedBehavior: fmt.Sprintf("call %s exactly once and report the figure it serves", decoy.Name),
-			WritingProtected: []string{decoy.Brand, needle.Subject},
-		}
+		cases[i] = v13DecoyCase(seed, cases[i], decoys[d%len(decoys)], i)
 	}
 	for u := 0; u < quota.Unexpected; u++ {
 		i := take()
@@ -340,12 +338,34 @@ func applyV13ToolBench(seed int64, cases []protocol.ToolCase) {
 		}
 		cases[i] = v13UnexpectedCase(seed, cases[i], coined, v13UnexpectedFamilies[u%len(v13UnexpectedFamilies)], i)
 	}
+	// Surplus theme cases the quotas did not consume: never leave the legacy
+	// family above its cap.
+	for next < len(surplusTheme) {
+		i := take()
+		cases[i] = v13DecoyCase(seed, cases[i], decoys[d%len(decoys)], i)
+		d++
+	}
 	// Re-protect every replaced case's needle subject (the world pass added it
 	// before the replacement) so writing noise cannot touch it.
 	for i := range cases {
 		if IsDecoyCorrect(cases[i].Category) || v13DiscoveryFamily(cases[i].Category) || v13IsUnexpectedFamily(cases[i].Category) {
 			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleFor(seed, cases[i].ID).Subject)
 		}
+	}
+}
+
+// v13DecoyCase builds one decoy-correct result-usage case: the seed's coined
+// decoy is the right tool and bears the case's needle.
+func v13DecoyCase(seed int64, prior protocol.ToolCase, decoy catalog.Decoy, index int) protocol.ToolCase {
+	needle := toolexec.NeedleFor(seed, prior.ID)
+	return protocol.ToolCase{
+		ID:               prior.ID,
+		Category:         "decoy_" + decoy.Shape.Key + "_result_usage",
+		Prompt:           decoy.Prompt(v13ToolPick(seed, index, "decoy-prompt", len(decoy.Shape.Prompts)), needle.Subject),
+		ExpectedTools:    []protocol.ToolSpec{{Name: decoy.Name}},
+		MaxToolCalls:     1,
+		ExpectedBehavior: fmt.Sprintf("call %s exactly once and report the figure it serves", decoy.Name),
+		WritingProtected: []string{decoy.Brand, needle.Subject},
 	}
 }
 
@@ -522,9 +542,11 @@ func v13DiscoveryCase(seed int64, prior protocol.ToolCase, inv catalog.Inventory
 		}
 	}
 	if !ok {
-		// Unreachable across the qualification seeds (TestV13DiscoveryAliasMargin);
-		// fall back to a plain misspelling by duplication so generation never fails.
-		alias = catalog.Alias{Text: base[:1] + base, Edits: 1, Distance: 1, Margin: 1}
+		// Unreachable across the qualification seeds (TestV13DiscoveryAliasMargin,
+		// TestV13ToolBenchContractAcrossFortySeeds). Fail loudly rather than emit
+		// an alias that could carry the canonical spelling or break the margin
+		// property (#1842): a silent fallback here would be a contract leak.
+		panic(fmt.Sprintf("datagen v13: no bounded alias for %s inventory target %q (seed %d, ordinal %d, near-miss %t)", kind, base, seed, ordinal, nearMiss))
 	}
 	var prompt string
 	if nearMiss {

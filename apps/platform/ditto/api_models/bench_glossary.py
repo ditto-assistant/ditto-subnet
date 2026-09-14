@@ -425,7 +425,8 @@ CATEGORY_GLOSSARY: dict[str, tuple[str, CategoryKind, str, str]] = {
     "set_model": (
         "Set the model",
         "tool",
-        "Apply a change-my-model request through the model-setting tool.",
+        "Apply a change-my-model request through the model-setting tool. Retired "
+        "from bench_version 13: the model setter left the advertised surface.",
         '"Switch my chat model to <a model>."',
     ),
     "set_effort": (
@@ -444,13 +445,15 @@ CATEGORY_GLOSSARY: dict[str, tuple[str, CategoryKind, str, str]] = {
     "set_accent": (
         "Set accent color",
         "tool",
-        "Apply an accent-color change through the settings tool.",
+        "Apply an accent-color change through the settings tool. Retired from "
+        "bench_version 13 in favor of the discovery-grounded accent family.",
         '"Set my accent color to teal."',
     ),
     "set_font": (
         "Set the font",
         "tool",
-        "Apply a font change through the settings tool.",
+        "Apply a font change through the settings tool. Retired from bench_version "
+        "13 in favor of the discovery-grounded font family.",
         '"Change my chat font to <a font>."',
     ),
     "capability_discovery": (
@@ -603,7 +606,110 @@ CATEGORY_GLOSSARY: dict[str, tuple[str, CategoryKind, str, str]] = {
         "exact figure it returns.\" — the second call depends on the first's "
         "result.",
     ),
+    # bench_version 13 tool-bench families (issues #1842, #1843, #1840). The
+    # decoy_* rows are generated below from _V13_DECOY_SHAPES.
+    "discovery_accent_set": (
+        "Discover then set an accent",
+        "multi_step",
+        "List the workspace's configured accent colors, resolve the user's "
+        "approximate spelling against that served list, and apply the listed "
+        "option. The canonical spelling exists only in the discovery result, so a "
+        "baked color pool cannot answer it.",
+        '"Make the accent something like <a misspelled color> — check which '
+        'options this workspace offers first." — list, resolve, then set.',
+    ),
+    "discovery_font_set": (
+        "Discover then set a font",
+        "multi_step",
+        "List the workspace's configured chat fonts, resolve the user's "
+        "approximate spelling (sometimes naming a near-miss variant) against the "
+        "served list, and apply the listed option rather than a guessed name.",
+        '"Use <a misspelled font> for chat; pick the matching option from the '
+        "workspace's font list first.\" — list, resolve, then set.",
+    ),
+    "schedules_result_usage": (
+        "Use a schedule listing",
+        "multi_step",
+        "Read the served workflow schedules and report a figure that exists only "
+        "in that result, for the workflow the user named by its cadence.",
+        '"How many runs has the workflow that goes every weekday morning logged? '
+        'Exact number." — read it off the served schedule list.',
+    ),
+    "tool_registry_result_usage": (
+        "Use a tool-registry search",
+        "multi_step",
+        "Search the tool registry for a capability and report a value that exists "
+        "only in the served search result.",
+        '"Find a tool binding that can convert a file and tell me the registry '
+        'snapshot number the search reports."',
+    ),
+    "sandbox_result_usage": (
+        "Use a sandbox result",
+        "multi_step",
+        "Execute the named routine in the code sandbox and report exactly what the "
+        "served execution returns.",
+        '"Run the <named routine> in the sandbox and give me the exact value it '
+        'prints."',
+    ),
+    "agent_jobs_result_usage": (
+        "Use a job listing",
+        "multi_step",
+        "Read the served background-job list and report a figure recorded only "
+        "there for the job the user named.",
+        '"How many items did my <named job> get through? Read it off the job list."',
+    ),
 }
+
+# bench_version 13 coined decoy shapes: shape key -> (what the coined tool is,
+# what the served result reports). Mirrors the frozen catalog.decoyShapes pool in
+# research/dittobench-datagen/catalog/v13.go; the Go test
+# TestV13CategoriesAreInPublicGlossary fails when the two drift. Each seed
+# advertises three to five of these under a coined brand name; on a decoy-correct
+# case that coined tool is the right one to call.
+_V13_DECOY_SHAPES: dict[str, tuple[str, str]] = {
+    "docs_search": ("a product documentation portal", "the figure its article lists"),
+    "chat_message": ("a team chat channel", "the figure the channel bot replies with"),
+    "sidebar_color": ("an add-on sidebar palette", "the palette code it confirms"),
+    "reminders_list": ("a reminders add-on", "the figure the reminder carries"),
+    "note_create": ("a notebook add-on", "the figure in the page summary"),
+    "ticket_lookup": ("a helpdesk ticket lookup", "the figure in the latest update"),
+    "price_quote": ("a pricing service", "the quoted figure"),
+    "translate_text": ("a translation service", "the figure in the returned footnote"),
+    "weather_lookup": ("a weather feed", "the reading it reports"),
+    "contact_lookup": ("an address book", "the figure on the contact card"),
+    "file_convert": ("a file converter", "the figure in the conversion report"),
+    "stock_quote": ("a markets feed", "the quoted figure"),
+    "timer_start": ("a focus-timer add-on", "the session number it returns"),
+    "map_route": ("a route planner", "the figure in the trip summary"),
+    "spreadsheet_read": ("a spreadsheet reader", "the figure in the requested row"),
+    "issue_create": ("an issue tracker", "the issue number it assigns"),
+    "video_summarize": ("a video digest service", "the figure in the digest"),
+    "inbox_triage": ("an inbox digest", "the figure the digest reports"),
+    "crm_lookup": ("a CRM account lookup", "the figure on the account record"),
+    "thesaurus_lookup": ("a thesaurus", "the figure in the usage note"),
+    "unit_convert": ("a unit converter", "the converted figure"),
+    "poll_create": ("a team poll", "the poll number it returns"),
+    "wiki_search": ("an internal wiki", "the figure the wiki page states"),
+}
+
+for _shape, (_what, _reports) in _V13_DECOY_SHAPES.items():
+    _noun = _what.split(" ", 1)[1]
+    _purpose = (
+        "A decoy-correct case: this seed's coined tool for " + _what + " is the "
+        "right tool, so the agent must read the advertised catalog and call the "
+        "unfamiliar name rather than skip it, then report " + _reports + ". "
+        "Ignoring every unknown tool name forfeits these cases."
+    )
+    _example = (
+        '"Use <the coined ' + _noun + "> for <a subject> and tell me the exact "
+        'figure it gives." — call the coined tool and use its result.'
+    )
+    CATEGORY_GLOSSARY["decoy_" + _shape + "_result_usage"] = (
+        "Call a coined " + _noun + " tool",
+        "multi_step",
+        _purpose,
+        _example,
+    )
 
 
 # metric / gate key -> (label, description).

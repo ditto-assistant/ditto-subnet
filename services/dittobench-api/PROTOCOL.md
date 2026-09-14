@@ -112,15 +112,24 @@ table used to bake:
 | `set_main_model` | Retired from the advertised surface (#1580); no v13 case grades it. |
 | `list_workflows`, `list_schedules`, `list_agent_jobs`, `search_tools`, `run_code`, `discover_capabilities` | Serve per-seed **coined content** instead of fixed strings. Cases that depend on them (`recipe_apply` names its workflow by cadence; the `schedules_`/`tool_registry_`/`sandbox_`/`agent_jobs_result_usage` families) are result-usage graded: the needle lives only inside the served content. |
 
-The scoring rule for a decoy call is unchanged: an unexpected tool name is an
-extra call (doubled penalty under v7+ strict scoring, free under
-`allow_extra_tools`), and recovering after a "not configured" error is graded
-exactly like the transient-error recovery family. The seed's full catalog is
-pinned in the dataset artifact (`catalog`) so a dispute re-scores against the
-exact surface the run advertised. The practice `GET /catalog?bench_version=13`
-returns the seed-free production surface (no decoys); add `&seed=<n>` to see
-the exact surface a scored run of that seed advertises. The wire
-`bench_version` a harness receives is unchanged (`publicWireBenchVersion`
+The scoring rule for a decoy call is unchanged: a call to a decoy the case does
+not expect is an ordinary extra call under the case's own extra-tool rule —
+penalized (the doubled v7+ extra-call penalty) on a strict case, free only when
+the case sets `allow_extra_tools`. Backing out after the "not configured" error
+earns no recovery credit; the transient-error recovery family is a separate
+case shape that sets `allow_extra_tools` itself. Setter arguments
+(`set_accent_color.color`, `set_chat_font.font`, `set_theme.theme`,
+`set_reasoning_effort.effort`) are graded exactly against the listed canonical
+spelling — a case-insensitive whole-token match with **no edit tolerance** — so
+the harness must resolve the user's approximate spelling to the served option
+before it calls. The seed's full catalog is pinned in the dataset artifact
+(`catalog`) so a dispute re-scores against the exact surface the run
+advertised. The practice `GET /catalog?bench_version=13` returns the seed-free
+production surface (no decoys); add `&seed=<n>` to see the exact surface a
+scored run of that seed advertises. The scorer accepts `bench_version=13` on
+that route only once its advertised `supported_bench_versions` includes 13
+(the #1519 wiring sweep); until then the request is rejected with `400`. The
+wire `bench_version` a harness receives is unchanged (`publicWireBenchVersion`
 stays 9); every v13 field above is additive and optional for a v9-era harness,
 which simply sees a few more tools and richer schemas.
 

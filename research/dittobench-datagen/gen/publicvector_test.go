@@ -460,6 +460,18 @@ func TestV13KnownVector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
+	if got, want := len(artifact.ToolCases), prof.Tools; got != want {
+		t.Fatalf("v13 full tool cases=%d, want %d", got, want)
+	}
+	if got, want := len(artifact.MemoryCases), V13FullEnvelope.Total(); got != want {
+		t.Fatalf("v13 full memory cases=%d, want %d (the published slot table)", got, want)
+	}
+	if got, want := len(artifact.MemoryWaves), 6; got != want {
+		t.Fatalf("v13 full memory waves=%d, want %d", got, want)
+	}
+	if got, want := len(artifact.Catalog), 35; got != want {
+		t.Fatalf("v13 pinned catalog tools=%d, want %d (30 production + this seed's decoys)", got, want)
+	}
 	got, _, err := artifact.SHA256Hex()
 	if err != nil {
 		t.Fatalf("hash: %v", err)
