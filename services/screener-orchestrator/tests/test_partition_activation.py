@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("failure", ["virsh", "docker", "runuser", "none"])
+@pytest.mark.parametrize("failure", ["virsh", "docker", "runuser", "container", "none"])
 def test_partition_never_stops_rootless_on_unknown_workloads(tmp_path, failure):
     root = Path(__file__).resolve().parents[3]
     source = root / "infra/ansible/roles/screener_partition/files/activate-partition.sh"
@@ -22,8 +22,13 @@ def test_partition_never_stops_rootless_on_unknown_workloads(tmp_path, failure):
 name=${0##*/}
 echo "$name $*" >> "$TEST_LOG"
 if [[ "$name" == "$FAIL_COMMAND" && "$*" != *"docker info"* ]]; then exit 42; fi
+if [[ "$FAIL_COMMAND" == container && "$*" == *"docker run"* ]]; then exit 43; fi
 if [[ "$name" == systemctl && "$1" == show ]]; then
-  echo /dittoscreener.slice/service
+  if [[ "$2" == user@1005.service ]]; then
+    echo /user.slice/user-1005.slice/user@1005.service
+  else
+    echo /dittoscreener.slice/service
+  fi
 fi
 exit 0
 """
@@ -41,15 +46,19 @@ exit 0
         ["bash", str(script)], env=env, capture_output=True, timeout=10
     )
     commands = log.read_text()
-    if failure != "none":
+    if failure not in ("none", "container"):
         assert result.returncode != 0
         assert "systemctl stop user@1005.service" not in commands
         assert "systemctl start dittoscreener.slice" not in commands
-    else:
+    elif failure == "none":
         assert result.returncode == 0, result.stderr
         assert "systemctl disable ditto-screener-worker@2.service" in commands
     start = "systemctl start ditto-screener-fleet-agent.service "
-    assert start + "ditto-screener-worker@1.service\n" in commands
+    if failure in ("container", "runuser"):
+        assert result.returncode != 0
+        assert start not in commands
+    else:
+        assert start + "ditto-screener-worker@1.service\n" in commands
     assert (
         start + "ditto-screener-worker@1.service ditto-screener-worker@2"
         not in commands

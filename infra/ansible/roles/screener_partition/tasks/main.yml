@@ -81,11 +81,29 @@
     mode: '0644'
     content: |
       [Service]
-      Slice=dittoscreener.slice
+      Slice={{ 'user-1005.slice' if item == 'user@1005.service' else 'dittoscreener.slice' }}
       TimeoutStopSec=infinity
       SendSIGKILL=no
       {{ 'KillMode=mixed' if item != 'user@1005.service' else '' }}
   loop: "{{ ['user@1005.service'] + screener_partition_worker_units }}"
+- name: Preserve rootless ownership discovery with a separately bounded native user slice
+  ansible.builtin.file:
+    path: /etc/systemd/system/user-1005.slice.d
+    state: directory
+    mode: '0755'
+- name: Bound rootless runtime alongside the 16 GiB primary lane slice
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/user-1005.slice.d/partition.conf
+    mode: '0644'
+    content: |
+      [Slice]
+      CPUAccounting=yes
+      CPUQuota=800%
+      CPUWeight=200
+      MemoryAccounting=yes
+      MemoryHigh=13G
+      MemoryMax=14G
+      TasksMax=infinity
 - name: Bound local VM/review admission without changing Platform settings
   ansible.builtin.copy:
     dest: /etc/systemd/system/ditto-screener-fleet-agent.service.d/partition.conf
