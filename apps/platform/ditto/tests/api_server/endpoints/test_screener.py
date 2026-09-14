@@ -86,6 +86,7 @@ from ditto.db.models import (
     ScreenerCapacityEvent,
     ScreenerCapacitySnapshot,
     ScreenerHeartbeat,
+    ScreenerNode,
     ScreenerNodeChannelSettingsRevision,
     ScreenerPolicyActivation,
     ScreenerProviderSettingsRevision,
@@ -104,6 +105,7 @@ from ditto.db.models import (
 from ditto.db.queries.attestation import record_attestation
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 from ditto.db.queries.screening import (
+    _SCREENING_CLAIM_LOCK_KEY,
     MAX_SCREENING_EXPIRIES,
     POLICY_ONLY_RESCREEN_REASON,
 )
@@ -760,6 +762,40 @@ _AUTH_HEADER = {
 }
 _CLAIM_URL = f"/api/v1/screener/claim?policy_version={SCREENING_POLICY_VERSION}"
 _CONTROLLER_TOKEN = "test-controller-token-at-least-32-characters"
+
+
+async def _seed_screener_node(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    node_id: str,
+    hotkey: str,
+    token: str,
+    screening_concurrency: int,
+) -> None:
+    async with maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id=node_id,
+                provider="test",
+                provider_resource_id=f"test-resource-{node_id}",
+                screener_hotkey=hotkey,
+                token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                token_expires_at=datetime.now(UTC) + timedelta(hours=1),
+                status="active",
+                capacity=screening_concurrency,
+            )
+        )
+        session.add(
+            ScreenerNodeChannelSettingsRevision(
+                environment="prod",
+                node_id=node_id,
+                parent_revision=0,
+                settings={"screening_concurrency": screening_concurrency},
+                reason="Exercise endpoint claim concurrency",
+                actor="test",
+            )
+        )
 
 
 def _bounded_review_audit(*, steps_used: int = 6) -> ScreenReviewAudit:
@@ -3830,6 +3866,138 @@ class TestQueue:
 
 
 class TestClaim:
+    async def test_busy_claim_gate_returns_before_node_row_lock(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        node_id = "claim-gate-node"
+        hotkey = "5ClaimGateNodeHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+        token = "claim-gate-node-token-at-least-32-characters"
+        await _seed_screener_node(
+            session_maker,
+            node_id=node_id,
+            hotkey=hotkey,
+            token=token,
+            screening_concurrency=2,
+        )
+        await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+
+        async with session_maker() as owner, owner.begin():
+            # Reproduce both locks that the old endpoint took in the opposite
+            # order: the node row and the global screening claim lock.
+            await owner.execute(
+                select(ScreenerNode)
+                .where(ScreenerNode.node_id == node_id)
+                .with_for_update()
+            )
+            await owner.execute(
+                select(func.pg_advisory_xact_lock(_SCREENING_CLAIM_LOCK_KEY))
+            )
+
+            response = await asyncio.wait_for(
+                client.post(
+                    _CLAIM_URL,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "X-Screener-Hotkey": hotkey,
+                    },
+                ),
+                timeout=0.5,
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["items"] == []
+
+    async def test_concurrent_node_claims_obey_node_limit_not_heartbeat_count(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        now = datetime.now(UTC)
+        node_id = "bounded-claim-node"
+        hotkey = "5BoundedClaimNodeHotkeyXXXXXXXXXXXXXXXXXXXXXXXXX"
+        token = "bounded-claim-node-token-at-least-32-characters"
+        await _seed_screener_node(
+            session_maker,
+            node_id=node_id,
+            hotkey=hotkey,
+            token=token,
+            screening_concurrency=2,
+        )
+        async with session_maker() as session, session.begin():
+            session.add_all(
+                [
+                    Agent(
+                        agent_id=uuid4(),
+                        miner_hotkey=f"5HK-endpoint-concurrent-{index}",
+                        name=f"endpoint-concurrent-{index}",
+                        sha256=f"{index + 1:02x}" * 32,
+                        status=AgentStatus.UPLOADED,
+                        created_at=now + timedelta(seconds=index),
+                    )
+                    for index in range(6)
+                ]
+                + [
+                    ScreenerHeartbeat(
+                        screener_hotkey=hotkey,
+                        instance_id=f"bounded-worker-{index}",
+                        software_version="0.21.0",
+                        protocol_version=4,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        state="polling",
+                        first_seen_at=now - timedelta(days=1),
+                        reported_at=now - timedelta(seconds=5),
+                        seen_at=now - timedelta(seconds=5),
+                        signature="ab" * 64,
+                    )
+                    for index in range(4)
+                ]
+            )
+        _install_db(app, session_maker)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Screener-Hotkey": hotkey,
+        }
+
+        first_wave = await asyncio.gather(
+            *(client.post(_CLAIM_URL, headers=headers) for _ in range(4))
+        )
+        admitted = [
+            item for response in first_wave for item in response.json()["items"]
+        ]
+        # Every contender may observe a busy gate before the first transaction
+        # commits. Fill any remaining configured slot through the same endpoint.
+        for _ in range(2 - len(admitted)):
+            response = await client.post(_CLAIM_URL, headers=headers)
+            assert response.status_code == 200, response.text
+            admitted.extend(response.json()["items"])
+
+        blocked_wave = await asyncio.gather(
+            *(client.post(_CLAIM_URL, headers=headers) for _ in range(4))
+        )
+
+        assert all(response.status_code == 200 for response in first_wave)
+        assert len(admitted) == 2
+        assert len({item["agent_id"] for item in admitted}) == 2
+        assert all(response.json()["items"] == [] for response in blocked_wave)
+        async with session_maker() as session:
+            running = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(ScreeningAttempt)
+                    .where(
+                        ScreeningAttempt.screener_hotkey == hotkey,
+                        ScreeningAttempt.status == "running",
+                    )
+                )
+                or 0
+            )
+        assert running == 2
+
     async def test_legacy_gcp_claim_waits_for_fenced_overflow_capacity(
         self,
         app: FastAPI,

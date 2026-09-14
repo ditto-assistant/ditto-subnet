@@ -243,6 +243,64 @@ async def test_attempt_maintenance_skips_rows_owned_by_verdicts(
     assert orphaned == 0
 
 
+async def test_attempt_maintenance_does_not_lock_healthy_old_attempts(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC)
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-healthy-old-attempt",
+        name="healthy-old-attempt",
+        sha256="e3" * 32,
+        status=AgentStatus.SCREENING,
+    )
+    attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=agent.agent_id,
+        screener_hotkey=_SCREENER,
+        policy_version=SCREENING_POLICY_VERSION,
+        status="running",
+        started_at=now - timedelta(minutes=10),
+        deadline=now + timedelta(minutes=35),
+    )
+    async with session_maker() as session, session.begin():
+        session.add_all(
+            [
+                agent,
+                attempt,
+                _heartbeat(
+                    instance_id="healthy-worker",
+                    now=now,
+                    state="screening",
+                    active_agent_id=agent.agent_id,
+                ),
+            ]
+        )
+
+    async with session_maker() as maintenance, maintenance.begin():
+        assert await expire_screening_attempts(maintenance, now=now) == 0
+        assert (
+            await fail_orphaned_screening_attempts(
+                maintenance, screener_hotkey=_SCREENER, now=now
+            )
+            == 0
+        )
+
+        # Keep the maintenance transaction open. A verdict must still be able
+        # to acquire this attempt immediately; otherwise the sweep retained a
+        # row lock while merely observing positive liveness evidence.
+        async with session_maker() as verdict, verdict.begin():
+            locked = await asyncio.wait_for(
+                verdict.scalar(
+                    select(ScreeningAttempt)
+                    .where(ScreeningAttempt.attempt_id == attempt.attempt_id)
+                    .with_for_update()
+                ),
+                timeout=0.5,
+            )
+            assert locked is not None
+
+
 async def _seed_failed_agent(session: AsyncSession) -> Agent:
     agent = Agent(
         agent_id=uuid4(),
