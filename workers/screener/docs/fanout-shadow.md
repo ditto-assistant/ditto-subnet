@@ -66,6 +66,8 @@ The recommended global revision uses:
 | In-job concurrency | 2 |
 | Steps per specialist | 4 |
 | Steps for adjudicator | 12 |
+| Timeout per inference request | 120 seconds |
+| Timeout per specialist/adjudicator stage | 240 seconds |
 | Requests per artifact | 40 |
 | Pre-admitted token bound | 1,500,000 |
 | Wall time per artifact | 900 seconds |
@@ -80,6 +82,11 @@ to actual token and reported dollar usage; in-flight and unknown-cost requests
 retain their full bounds. Each response must fit its own pre-admitted envelope.
 Platform retains the full $3 artifact reservation even after local settlement. The shadow uses
 low reasoning effort and required tool calls to leave room for a structured result.
+The shadow's larger structured output uses a 120-second per-request deadline. The
+shared source-review client keeps its 45-second default for authoritative reviews;
+only the shadow reviewers opt into the longer deadline. The 240-second stage and
+900-second artifact deadlines still cap slow multi-turn runs, and transport retries
+remain disabled.
 Provisional specialist semantics are never schema-corrected. An invalid atomic
 stage-two result gets at most two corrections within its twelve-step allowance and
 the same request/token budget. The tenth turn forces the first atomic submission,

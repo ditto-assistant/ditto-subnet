@@ -2139,6 +2139,74 @@ async def test_each_source_review_completion_has_a_short_hard_timeout(
     assert observation.error_code == "source-review-timeouterror"
 
 
+async def test_completion_request_timeout_override_still_obeys_review_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    final = _with_policy_v10_invariants(_BENIGN_REVIEW)
+    attempts = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        await asyncio.sleep(0.02)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [_tool("submit", "submit_review", final)],
+                        }
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(source_review_module, "_MAX_COMPLETION_REQUEST_SECONDS", 0.005)
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=1,
+        max_steps=1,
+        max_completion_request_seconds=0.5,
+        transport=httpx.MockTransport(handler),
+        transport_retry_delays=(),
+    )
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn main() {}")), artifact_sha256=_SHA
+    )
+    assert observation.ok
+
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn main() {}")),
+        artifact_sha256=_SHA,
+        deadline=asyncio.get_running_loop().time() + 0.005,
+    )
+    assert not observation.ok
+    assert observation.error_code == "source-review-timeouterror"
+    assert attempts == 2
+
+
+@pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan"), True])
+def test_completion_request_timeout_override_must_be_finite_positive(value) -> None:
+    with pytest.raises(
+        ValueError, match="max_completion_request_seconds must be finite and positive"
+    ):
+        OpenRouterSourceReviewAgent(
+            api_key_file=None,
+            model="openai/gpt-5.6-luna",
+            base_url="https://openrouter.test/api/v1",
+            timeout_seconds=10,
+            max_steps=1,
+            max_completion_request_seconds=value,
+        )
+
+
 async def test_first_turn_low_result_is_not_a_clearance_certificate(
     tmp_path: Path,
 ) -> None:

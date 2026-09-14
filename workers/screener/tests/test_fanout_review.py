@@ -229,6 +229,8 @@ async def test_single_specialist_survives_majority_and_transcripts_are_independe
     assert len(instances) == 6
     assert all(not r.kwargs["leads"] for r in instances[:5])
     assert all("Exact active policy manifest" in r.kwargs["focus"] for r in instances)
+    assert all(r.kwargs["timeout_seconds"] == 120 for r in instances)
+    assert all(r.kwargs["max_completion_request_seconds"] == 120 for r in instances)
     assert instances[-1].kwargs["leads"] == []
     assert result["incremental_candidate"] is True
     assert result["outcome"] == expected
@@ -1030,6 +1032,7 @@ async def test_default_budget_completes_two_turn_fanout_and_source_read(tmp_path
     assert report["usage"]["reserved_tokens"] <= 1_500_000
     assert report["usage"]["reserved_cost_usd"] <= 3
     assert report["usage"]["unmetered_responses"] == 0
+    assert report["budgets"]["timeout_seconds_per_request"] == 120
     assert (
         sum(
             any(message.get("role") == "tool" for message in payload["messages"])

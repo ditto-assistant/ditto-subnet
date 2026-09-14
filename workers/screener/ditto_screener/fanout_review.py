@@ -37,6 +37,7 @@ PRICING_BOUND_REVISION = "openrouter-glm-5.3-flash-4x-2026-09-14"
 # This is an admission envelope, not an upstream billing guarantee.
 MAX_INPUT_USD_PER_MILLION = 0.6
 MAX_OUTPUT_USD_PER_MILLION = 2.0
+SHADOW_REQUEST_TIMEOUT_SECONDS = 120.0
 FOCI = {
     "generalist": "Independently inspect all policy invariants and the served path.",
     "answer_authority": "Prioritize I1-I4: authority, retained evidence, dissent, "
@@ -1350,7 +1351,8 @@ async def review_archive(
                 model=model,
                 base_url=base_url,
                 inference_provider=inference_provider,
-                timeout_seconds=60,
+                timeout_seconds=SHADOW_REQUEST_TIMEOUT_SECONDS,
+                max_completion_request_seconds=SHADOW_REQUEST_TIMEOUT_SECONDS,
                 max_steps=max_steps,
                 max_read_bytes=180_000,
                 max_completion_tokens=8000,
@@ -1469,7 +1471,8 @@ async def review_archive(
         model=model,
         base_url=base_url,
         inference_provider=inference_provider,
-        timeout_seconds=60,
+        timeout_seconds=SHADOW_REQUEST_TIMEOUT_SECONDS,
+        max_completion_request_seconds=SHADOW_REQUEST_TIMEOUT_SECONDS,
         max_steps=adjudicator_max_steps,
         max_read_bytes=180_000,
         max_completion_tokens=8000,
@@ -1578,6 +1581,7 @@ async def review_archive(
             "group_bytes": group_bytes,
             "max_groups": max_groups,
             "max_completion_tokens_per_request": 8000,
+            "timeout_seconds_per_request": SHADOW_REQUEST_TIMEOUT_SECONDS,
             "max_requests": max_requests,
             "max_total_tokens": max_total_tokens,
             "max_reported_cost_usd": max_reported_cost_usd,
