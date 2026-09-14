@@ -4,9 +4,18 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from ditto.api_models.screener import ScreenReviewAudit
+
+# One ``file:line`` (optionally ``file:line-line``) citation into the reviewed
+# source, or one machine-produced evidence record reference such as
+# ``anti-copy-comparison:<agent uuid>`` / ``<module>:<sha256>`` so a calibrated
+# comparison clear cites the record it rests on rather than a fake line.
+EVIDENCE_REFERENCE_PATTERN = (
+    r"^\S+:(?:\d+(?:-\d+)?|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-f]{64})$"
+)
 
 
 class AdminDeferredReviewEvidence(BaseModel):
@@ -172,6 +181,8 @@ class AdminCopyReviewAction(BaseModel):
     previous_status: str | None = None
     artifact_sha256: str | None = None
     score_count: int | None = None
+    evidence_references: list[str] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
 
 
 class AdminCopyReviewAudit(BaseModel):
@@ -237,10 +248,41 @@ class AdminSourceDiffFileDetail(BaseModel):
 
 
 class AdminCopyReviewResolveRequest(BaseModel):
+    """Resolve one ATH hold.
+
+    Policy v13 requires every decision record to cite its evidence. A ``clear``
+    must therefore carry at least one ``file:line`` reference into the reviewed
+    source (two of five prior clears carried none and would have been refused).
+    A ``reject`` records whatever the operator cites; its reason text is the
+    miner-visible ground either way.
+    """
+
     model_config = ConfigDict(extra="ignore")
     # release/ban remain accepted for Backroom #20 wire compatibility.
     resolution: Literal["clear", "reject", "release", "ban"]
     reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3)]
+    evidence_references: list[
+        Annotated[
+            str,
+            StringConstraints(
+                strip_whitespace=True, pattern=EVIDENCE_REFERENCE_PATTERN
+            ),
+        ]
+    ] = Field(default_factory=list)
+    # Published policy reason codes (e.g. ``I4.final_text_rewritten``) for the
+    # decision record; free-form so a v14 addendum needs no wire change.
+    reason_codes: list[
+        Annotated[str, StringConstraints(strip_whitespace=True, min_length=2)]
+    ] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _clear_requires_cited_evidence(self) -> "AdminCopyReviewResolveRequest":
+        if self.resolution in ("clear", "release") and not self.evidence_references:
+            raise ValueError(
+                "clearing an ATH hold requires at least one file:line "
+                "evidence_references citation into the reviewed source"
+            )
+        return self
 
 
 class AdminCopyReviewOpenRequest(BaseModel):

@@ -391,7 +391,11 @@ async def test_clearing_manual_hold_restores_live_status(
 
     resolved = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "General behavior confirmed"},
+        json={
+            "resolution": "clear",
+            "reason": "General behavior confirmed",
+            "evidence_references": ["src/main.rs:42"],
+        },
         headers=_HEADERS,
     )
 
@@ -423,7 +427,11 @@ async def test_detailed_manual_hold_reasons_are_preserved_without_truncation(
 
     resolved = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": resolution_reason},
+        json={
+            "resolution": "clear",
+            "reason": resolution_reason,
+            "evidence_references": ["src/main.rs:42"],
+        },
         headers=_HEADERS,
     )
     assert resolved.status_code == 200
@@ -466,7 +474,11 @@ async def test_resolved_review_reopens_without_rewriting_original_evidence(
     assert opened.json()["reopened"] is False
     cleared = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "Initial source review cleared it"},
+        json={
+            "resolution": "clear",
+            "reason": "Initial source review cleared it",
+            "evidence_references": ["src/main.rs:42"],
+        },
         headers=_HEADERS,
     )
     assert cleared.status_code == 200
@@ -511,11 +523,17 @@ async def test_resolved_review_reopens_without_rewriting_original_evidence(
         "previous_status": "live",
         "artifact_sha256": sha256,
         "score_count": 3,
+        "evidence_references": [],
+        "reason_codes": [],
     }
 
     recleared = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "Second review also cleared it"},
+        json={
+            "resolution": "clear",
+            "reason": "Second review also cleared it",
+            "evidence_references": ["src/main.rs:42"],
+        },
         headers=_HEADERS,
     )
     assert recleared.status_code == 200
@@ -600,6 +618,7 @@ async def test_rejected_review_reopens_and_clear_restores_previous_status(
         json={
             "resolution": "clear",
             "reason": "Reconsideration found no current-policy violation",
+            "evidence_references": ["src/main.rs:42"],
         },
         headers=_HEADERS,
     )
@@ -663,6 +682,7 @@ async def test_rejected_score_finalization_copy_hold_reopens_without_previous_st
         json={
             "resolution": "clear",
             "reason": "Same-owner after owner-link; no current-policy violation",
+            "evidence_references": ["src/main.rs:42"],
         },
         headers=_HEADERS,
     )
@@ -738,7 +758,11 @@ async def test_resolved_clear_does_not_reopen_an_unrelated_ban(
     assert opened.status_code == 200
     cleared = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "Initial evidence was clear"},
+        json={
+            "resolution": "clear",
+            "reason": "Initial evidence was clear",
+            "evidence_references": ["src/main.rs:42"],
+        },
         headers=_HEADERS,
     )
     assert cleared.status_code == 200
@@ -777,7 +801,11 @@ async def test_reopen_still_fails_closed_on_changed_score_count(
     assert opened.status_code == 200
     cleared = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "Initial evidence was clear"},
+        json={
+            "resolution": "clear",
+            "reason": "Initial evidence was clear",
+            "evidence_references": ["src/main.rs:42"],
+        },
         headers=_HEADERS,
     )
     assert cleared.status_code == 200
@@ -1220,7 +1248,11 @@ async def test_clear_is_durable_preserves_evidence_and_retries_idempotently(
 ) -> None:
     agent_id, original_id = await _seed(maker)
     _install(app, maker)
-    payload = {"resolution": "release", "reason": "Corrected comparison clears it"}
+    payload = {
+        "resolution": "release",
+        "reason": "Corrected comparison clears it",
+        "evidence_references": ["src/main.rs:42"],
+    }
     first = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve", json=payload, headers=_HEADERS
     )
@@ -1265,12 +1297,20 @@ async def test_whitespace_actor_and_reason_are_rejected(
     _install(app, maker)
     actor = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "valid reason"},
+        json={
+            "resolution": "clear",
+            "reason": "valid reason",
+            "evidence_references": ["src/main.rs:42"],
+        },
         headers={**_HEADERS, "X-Admin-Actor": "   "},
     )
     reason = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "   "},
+        json={
+            "resolution": "clear",
+            "reason": "   ",
+            "evidence_references": ["src/main.rs:42"],
+        },
         headers=_HEADERS,
     )
     assert actor.status_code == 422 and reason.status_code == 422
@@ -1287,7 +1327,11 @@ async def test_changed_hold_reason_fails_closed(
         agent.review_reason = "different evidence"
     response = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "Operator cleared evidence"},
+        json={
+            "resolution": "clear",
+            "reason": "Operator cleared evidence",
+            "evidence_references": ["src/main.rs:42"],
+        },
         headers=_HEADERS,
     )
     assert response.status_code == 409
@@ -1707,3 +1751,134 @@ async def test_precedents_path_is_not_captured_as_an_agent_id(
         "review_kind": None,
         "status": "resolved",
     }
+
+
+async def test_clear_requires_cited_evidence_references(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """Policy v13: a clear with no file:line citation is refused, not recorded."""
+    from ditto.db.models import ScreeningDecisionRecord
+
+    agent_id, sha256 = await _seed_scored_agent(maker)
+    _install(app, maker)
+    opened = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/open",
+        json={
+            "expected_sha256": sha256,
+            "expected_score_count": 3,
+            "reason": "Manual benchmark-overfit review",
+        },
+        headers=_HEADERS,
+    )
+    assert opened.status_code == 200
+
+    uncited = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={"resolution": "clear", "reason": "General behavior confirmed"},
+        headers=_HEADERS,
+    )
+    assert uncited.status_code == 422
+    malformed = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={
+            "resolution": "clear",
+            "reason": "General behavior confirmed",
+            "evidence_references": ["read the whole crate"],
+        },
+        headers=_HEADERS,
+    )
+    assert malformed.status_code == 422
+    async with maker() as session:
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None and agent.status == AgentStatus.ATH_PENDING_REVIEW
+        assert (
+            await session.scalar(
+                select(ScreeningDecisionRecord).where(
+                    ScreeningDecisionRecord.agent_id == agent_id
+                )
+            )
+            is None
+        )
+
+    cited = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={
+            "resolution": "clear",
+            "reason": "Served path reads the model answer verbatim",
+            "evidence_references": ["src/main.rs:120-131", "src/serve.rs:44"],
+            "reason_codes": ["I4.reviewed_no_rewrite"],
+        },
+        headers=_HEADERS,
+    )
+    assert cited.status_code == 200
+    assert cited.json()["agent_status"] == AgentStatus.SCORED
+
+    audit = await client.get(
+        f"/api/v1/admin/copy-reviews/{agent_id}/audit", headers=_HEADERS
+    )
+    assert audit.status_code == 200
+    (action,) = audit.json()["action_history"]
+    assert action["action"] == "clear"
+    assert action["evidence_references"] == ["src/main.rs:120-131", "src/serve.rs:44"]
+    assert action["reason_codes"] == ["I4.reviewed_no_rewrite"]
+
+    async with maker() as session:
+        record = await session.scalar(
+            select(ScreeningDecisionRecord).where(
+                ScreeningDecisionRecord.agent_id == agent_id
+            )
+        )
+    assert record is not None
+    assert record.outcome == "clear"
+    assert record.violation_proven is False
+    assert record.failure_domain == "none"
+    assert record.precedent_weight is True
+    assert record.evidence_references == ["src/main.rs:120-131", "src/serve.rs:44"]
+    assert record.reason_codes == ["I4.reviewed_no_rewrite"]
+    assert record.reviewer == "operator"
+    assert record.identities["artifact_sha256"] == sha256
+    assert record.review_scope == "benchmark_overfit"
+
+
+async def test_reject_records_a_proven_violation_without_requiring_citations(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    from ditto.db.models import ScreeningDecisionRecord
+
+    agent_id, sha256 = await _seed_scored_agent(maker)
+    _install(app, maker)
+    opened = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/open",
+        json={
+            "expected_sha256": sha256,
+            "expected_score_count": 3,
+            "reason": "Manual benchmark-overfit review",
+        },
+        headers=_HEADERS,
+    )
+    assert opened.status_code == 200
+
+    rejected = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={
+            "resolution": "reject",
+            "reason": "Family compiler on served /run",
+            "reason_codes": ["I5.benchmark_semantic_compiler"],
+        },
+        headers=_HEADERS,
+    )
+    assert rejected.status_code == 200
+    assert rejected.json()["agent_status"] == AgentStatus.BANNED
+
+    async with maker() as session:
+        record = await session.scalar(
+            select(ScreeningDecisionRecord).where(
+                ScreeningDecisionRecord.agent_id == agent_id
+            )
+        )
+    assert record is not None
+    assert record.outcome == "reject"
+    assert record.violation_proven is True
+    assert record.failure_domain == "artifact"
+    assert record.reason_codes == ["I5.benchmark_semantic_compiler"]
+    assert record.evidence_references == []
