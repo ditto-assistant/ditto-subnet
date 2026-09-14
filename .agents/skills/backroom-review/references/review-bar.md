@@ -109,7 +109,16 @@ path for I4/I5/I7.
   valid call executed and kept in the result? Any "no" caused by a host plan,
   an exact retry, a pinned choice, a catalog replacement, or an acceptance
   gate fails. An I7 pass on product-surface routing does not park an I5
-  family compiler.
+  family compiler. Under screening policy v14 (the 2026-09-13 board review;
+  v13 is signed and frozen) the I7 record carries a **catalog-writer
+  inventory**: every served-path site that assigns, clears,
+  filters, or omits the `tools` / `defs` / `host_tools` handed to a deciding
+  model call (or sets `tool_choice`), the classifier selecting the branch, and
+  whether the branch is reachable when the request carried a non-empty
+  catalog. The screener surfaces these as `catalog-writer-empty-tools`,
+  `catalog-narrowing-retain`, `tool-choice-none-literal`,
+  `tool-schema-mutation`, and `draft-replacement-guard` leads (never
+  verdicts); an I7 pass without a finished inventory is `inconclusive`.
 
 For each invariant, record the matching published pass clause and why it does
 or does not causally displace the breach. A model call alone never displaces

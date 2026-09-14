@@ -39,6 +39,7 @@ from ditto_screening_protocol import (
     SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
+    STRICT_TWO_OUTCOME_POLICY_VERSION,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -307,9 +308,17 @@ class TestWriteGuards:
     ) -> None:
         # Policy v13 became activation-ready on 2026-09-14: #1801 shipped the
         # strict two-outcome contract and every production screener reported
-        # builtin 13, so the published ceiling now equals the built-in version.
+        # builtin 13, so the published ceiling moved to the strict two-outcome
+        # version. The build may implement a newer policy (v14 distributes the
+        # catalog-writer leads for compatibility and pre-activation tests)
+        # without that policy being activation-ready, so the ceiling is pinned
+        # to the contract version, never to whatever the build implements.
         assert SCREENING_ACTIVATION_CEILING_POLICY_VERSION == 13
-        assert SCREENING_ACTIVATION_CEILING_POLICY_VERSION == SCREENING_POLICY_VERSION
+        assert (
+            SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+            == STRICT_TWO_OUTCOME_POLICY_VERSION
+        )
+        assert SCREENING_ACTIVATION_CEILING_POLICY_VERSION <= SCREENING_POLICY_VERSION
         _install(app, activation_maker)
         response = await client.post(
             _URL,

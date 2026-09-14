@@ -985,6 +985,22 @@ material availability effect and do not require a model/scorer effect.
 """
 _L2_POLICY_TAILS[13] = _L2_POLICY_TAILS[12] + _L2_POLICY_V13_ADDENDUM
 
+# Policy v14 keeps every v13 byte (v13 is signed in production) and tells the
+# analyst what the L1 inventory now carries: the catalog-writer leads.
+_L2_POLICY_V14_ADDENDUM = """\
+POLICY V14: the L1 inventory carries catalog-writer leads (catalog-writer-empty-
+tools, catalog-narrowing-retain, tool-choice-none-literal, tool-schema-mutation,
+draft-replacement-guard) and fixture_generator_ngrams. Each is a lead, never a
+verdict. Before deciding I7, inventory every site on the served path that
+assigns, clears, filters, or omits the tools handed to a deciding model call or
+sets tool_choice, and state whether that branch is reachable when the request
+supplied a non-empty catalog. An I7 pass with an unfinished inventory is
+inconclusive. A host-authored "host:" observation in the L1 ledger records an
+I7 PASS the L1 host coerced to inconclusive; treat it as unfinished evidence,
+not as a breach.
+"""
+_L2_POLICY_TAILS[14] = _L2_POLICY_TAILS[13] + _L2_POLICY_V14_ADDENDUM
+
 
 def _l2_review_system_prompt(policy_version: int) -> str:
     """Return the L2/L3 system prompt for one implemented policy version."""
@@ -1012,6 +1028,8 @@ def _assert_l2_policy_tails_differ() -> None:
     assert _L2_POLICY_TAILS[12].startswith(_L2_POLICY_TAILS[11])
     assert _L2_POLICY_TAILS[12] != _L2_POLICY_TAILS[13]
     assert _L2_POLICY_TAILS[13].startswith(_L2_POLICY_TAILS[12])
+    assert _L2_POLICY_TAILS[13] != _L2_POLICY_TAILS[14]
+    assert _L2_POLICY_TAILS[14].startswith(_L2_POLICY_TAILS[13])
 
 
 _VIOLATION_CAUSE_TASK = """\
@@ -2312,7 +2330,9 @@ class TerraSolSourceReviewAgent:
             workspace = Path(tempfile.mkdtemp(prefix="ditto-l2-source-"))
         try:
             _extract_readonly_workspace(Path(archive_path), workspace)
-            repository = TarSourceRepository(archive_path)
+            repository = TarSourceRepository(
+                archive_path, policy_version=policy_version
+            )
             return await self._run_model(
                 workspace,
                 repository,

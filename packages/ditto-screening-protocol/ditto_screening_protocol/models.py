@@ -16,8 +16,14 @@ from pydantic import (
     model_validator,
 )
 
-SCREENING_POLICY_VERSION = 13
+SCREENING_POLICY_VERSION = 14
 STRICT_TWO_OUTCOME_POLICY_VERSION = 13
+# Policy v14 = the frozen v13 strict two-outcome contract plus the 2026-09-13
+# catalog-writer, schema-mutation, draft-replacement, and generator-n-gram leads
+# and the fail-closed I7 catalog-writer inventory. Workers gate every one of
+# those on this constant, never on a literal, so a review at policy 13 receives
+# byte-identical v13 prompt text and the v13 lead set it was signed against.
+CATALOG_WRITER_LEADS_POLICY_VERSION = 14
 # The highest policy version the scheduling API will present as
 # activation-ready. It moves separately from ``SCREENING_POLICY_VERSION`` so a
 # build that merely distributes new review/evidence code for compatibility and
@@ -26,7 +32,9 @@ STRICT_TWO_OUTCOME_POLICY_VERSION = 13
 # strict two-outcome contract shipped, both production screeners reported
 # builtin policy 13 on release 0.264.0, and fleet adoption was verified on
 # 2026-09-14; the ceiling then moved to 13 so the operator can schedule the
-# v13 activation window.
+# v13 activation window. v14 is distributed for compatibility and
+# pre-activation tests only and is not activation-ready until its own review
+# moves this ceiling.
 SCREENING_ACTIVATION_CEILING_POLICY_VERSION = 13
 # The oldest policy version a mixed-fleet platform may require during a
 # scheduled activation window. v10 stays the floor while the v13 activation is

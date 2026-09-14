@@ -318,7 +318,8 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(11) == "adjudicator-v3-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v3-policy-v12"
     assert adjudicator_prompt_revision(13) == "adjudicator-v3-policy-v13"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v3-policy-v13"
+    assert adjudicator_prompt_revision(14) == "adjudicator-v3-policy-v14"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v3-policy-v14"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
@@ -331,7 +332,19 @@ def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
     assert "NARROWED" not in policy_v11
     assert "NARROWED" not in _system_prompt(10)
     with pytest.raises(ValueError, match="not implemented by this build"):
-        adjudicator_prompt_revision(14)
+        adjudicator_prompt_revision(15)
+
+
+def test_adjudicator_policy_v14_adds_the_catalog_writer_inventory() -> None:
+    policy_v13 = _system_prompt(13)
+    policy_v14 = _system_prompt(14)
+
+    assert policy_v14.startswith(policy_v13)
+    assert "## Policy v14 additions" in policy_v14
+    assert "catalog-writer inventory" in policy_v14
+    assert "catalog-writer-empty-tools" in policy_v14
+    assert "## Policy v14 additions" not in policy_v13
+    assert "catalog-writer-empty-tools" not in policy_v13
 
 
 def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None:

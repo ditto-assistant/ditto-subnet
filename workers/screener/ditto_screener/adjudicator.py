@@ -334,6 +334,28 @@ retains an escalate processing state for the operator's eventual CLEAR/REJECT
 decision.
 """.strip()
 
+# Policy v14 keeps every v13 byte (v13 is signed in production) and binds the
+# court to the catalog-writer inventory the L1 evidence now carries.
+_POLICY_V14_PROMPT_TAIL = """
+
+## Policy v14 additions
+
+Policy v14 adds the I7 catalog-writer inventory on top of the unchanged v13
+checklist. The L1 inventory may carry catalog-writer-empty-tools,
+catalog-narrowing-retain, tool-choice-none-literal, tool-schema-mutation, and
+draft-replacement-guard leads plus fixture_generator_ngrams; each is a lead,
+never a verdict, and its absence is not evidence. Before an I7 clear, confirm
+the served path's catalog writers were inventoried: every site that assigns,
+clears, filters, or omits the tools handed to a deciding model call or sets
+tool_choice, the classifier selecting that branch, and whether the branch is
+reachable when the request supplied a non-empty catalog. A request-keyed
+phrase table or word set that yields zero tools or one host-selected tool is
+the I7 breach; semantic or budget preselection that keeps the applicable
+capability class and still executes an unlisted valid call is the published
+safe harbor. A host-authored "host:" ledger observation records an I7 PASS the
+L1 host coerced to inconclusive: unfinished evidence, not a proven breach.
+""".strip()
+
 
 def _system_prompt(policy_version: int) -> str:
     """Render the court doctrine bound to the submission's policy version."""
@@ -353,6 +375,12 @@ def _system_prompt(policy_version: int) -> str:
         return (
             f"{_SYSTEM_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"
             f"{_POLICY_V12_PROMPT_TAIL}\n\n{_POLICY_V13_PROMPT_TAIL}"
+        )
+    if policy_version == 14:
+        return (
+            f"{_SYSTEM_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"
+            f"{_POLICY_V12_PROMPT_TAIL}\n\n{_POLICY_V13_PROMPT_TAIL}\n\n"
+            f"{_POLICY_V14_PROMPT_TAIL}"
         )
     raise AssertionError("validated policy was not rendered")
 
@@ -663,7 +691,9 @@ class SourceReviewAdjudicator:
         note_count = len(notes)
         try:
             api_key = self._read_api_key()
-            repository = TarSourceRepository(archive_path)
+            repository = TarSourceRepository(
+                archive_path, policy_version=policy_version
+            )
         except (OSError, ValueError) as error:
             logger.warning("adjudication could not start: %s", error)
             return _escalate(

@@ -15,6 +15,7 @@ from ditto_screening_protocol.confirmation_progress import (
     confirmation_progress_signing_token,
 )
 from ditto_screening_protocol.models import (
+    CATALOG_WRITER_LEADS_POLICY_VERSION,
     SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
@@ -136,6 +137,7 @@ __all__ = [
     "failure_domain_for_reason_code",
     "unverified_activation_prerequisites",
     "verification_failure_reason_code",
+    "CATALOG_WRITER_LEADS_POLICY_VERSION",
     "SCREENING_ACTIVATION_CEILING_POLICY_VERSION",
     "SCREENING_FLOOR_POLICY_VERSION",
     "SCREENING_POLICY_VERSION",
