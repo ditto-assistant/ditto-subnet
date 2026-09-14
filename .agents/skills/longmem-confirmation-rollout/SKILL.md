@@ -49,6 +49,24 @@ Never infer one rung from another. In particular:
 - Completed providers are not signed evidence.
 - A dashboard card is not the authoritative database or signature record.
 
+Two facts about the policy row itself, both learned live (2026-09-12/14):
+
+- The policy pins one exact profile identity `(profile_revision, profile_checksum)`.
+  A release installs only the profiles in its
+  `packages/ditto-screening-protocol/.../confirmation_execution_profile_v*_shadow.json`;
+  a pinned-but-uninstalled profile reads `mode=shadow` and issues nothing.
+  Check `get_confirmation_bundle_settings.effective.profile_installed` /
+  `installed_profiles` (the lane diagnosis reports `profile_not_installed`).
+- The bounded single-canary shape is `mode=shadow, eligibility_mode=rank, top_n=1,
+  challenger_z=0, daily_bundle_cap=1` on the installed profile; the confirmation
+  phrase is `APPLY V9 CONFIRMATION MODE <MODE>`. The settings write itself triggers
+  Platform reconciliation: if the live rank-1 king has no completed evidence, an
+  initial bundle for that king is created in the same instant and spends the day's
+  single attempt before any operator retest can. Read `get_leaderboard` and that
+  king's bundles immediately before opening the window and decide which subject
+  the attempt should go to; an operator retest is a second bundle competing for
+  the same cap.
+
 ## Diagnose a failure read-only
 
 Correlate the same bundle, ticket, validator, slot, release, and time window across:
@@ -70,6 +88,43 @@ Localize the boundary before editing. Distinguish at least:
 Do not expose submitted bodies, URLs, case IDs, credentials, private artifacts,
 or arbitrary exception strings. Low-cardinality allowlisted diagnostics must not
 change score, retry ownership, or settlement.
+
+Surfaces that answer the localization questions above without host access:
+
+- `https://api.dittobench.ai/api/v1/public/validators` →
+  `validators[].confirmation_benchmarks[]` (`stage`, `completed/total`, bundle,
+  attempt) and `/health` → `commit`.
+- Prod DB (`gcloud-ditto-readonly/scripts/query_prod_db.sh`):
+  `confirmation_bundle_tickets` (status/attempt/failure_*) and
+  `confirmation_inference_grants` per lane for the ticket — the grant ledger says
+  whether the reader, judge, and embedding lanes were ever used.
+- The claiming validator's W&B run `validator-<hotkey8>` (`wandb-ops`):
+  `confirmation/longmem_received_failures`,
+  `confirmation/longmem_received_failure_kinds/<kind>`,
+  `confirmation/longmem_received_failure_reader_attempts`,
+  `confirmation/longmem_received_failure_reader_agent_rejections`,
+  `confirmation/longmem_received_failure_embedding_dispatches` (#1804/#1806).
+  Absent keys after a completed bundle mean zero received failures.
+
+How to read a zero. A bundle that completes as an official zero with zero reader
+and zero judge requests is a *received-failure* zero
+(`newAllReceivedFailuresEvidence`: every `/run` answered non-2xx or invalid), not an
+outage. Chat and embedding share broker admission, so embeddings admitted inside
+cases with `reader_attempts = 0` means the harness never sent chat;
+`reader_attempts > 0` with reader grants `0` means the trusted reader refused every
+call before reservation (`reader_agent_rejections` names it). The reader's frozen
+per-request completion bound is `max_completion_tokens / max_requests` of the
+reader lane (v8: 2,304,000 / 1,152 = 2,000); before #1806 a harness pinning a
+higher `max_tokens` was refused with a 400 it never acted on.
+
+Compare the failing subject against the last bundles that did score
+(`confirmation_bundles` joined to `confirmation_bundle_subjects` and `agents` on
+`agent_id`): artifact-family-specific zeros point at request shape, fleet-wide
+zeros at a stack regression. When replaying an artifact locally, a permissive
+mock broker proves nothing about admission — dump the exact request body and run
+it through the real `rewriteReaderRequest` and broker `normalizeChatRequest`
+rejection lists before blaming the host. Only ditto-validator-prod (5HEouuDa) has
+host access; 5CFtzzb4 (Rizzo) and 5Cg3DiRf (WildSage) are third-party.
 
 ## Implement the smallest fail-closed repair
 
@@ -174,6 +229,15 @@ cap. If an external condition such as a UTC-day cap or expired read-only cloud
 authentication blocks proof, state the exact condition and natural next window,
 continue safe public monitoring, and request only the missing authority or login.
 
+The daily cap is keyed by UTC day; a scheduled wake for `00:02Z` must be expressed
+in the machine's local zone (check `date`, do not assume). The Backroom MCP token
+expires between sessions — verify `get_backroom_access` at the wake and stop at
+the gate if it reports re-authorization; never fall back to another write path.
+Retests are `authorize_confirmation_bundle_retest` with the current
+`retest_generation`, a fresh `requestId` UUID and the exact phrase; they create a
+generation N+1 bundle and supersede the source, and they consume the same daily
+cap as an initial bundle.
+
 After a failure is fixed, reviewed, merged, released, and adopted under a new
 exact release/profile identity, one successor canary is allowed after repeating
 the duplicate-ticket, eligibility, and cap checks. Never repeat the same failed
@@ -194,3 +258,7 @@ Report LongMem working only when all are true for the same exact attempt:
 After reporting the accepted live result, amend this skill in a follow-up PR if
 the successful attempt exposed a new reusable boundary. That documentation
 follow-up must not delay or redefine the live success claim.
+
+The first accepted shadow attempt after the 2026-08-27 stop, with the canary
+chain, repairs and policy revisions that led to it, is recorded in
+[the 2026-09 rollout record](references/rollout-2026-09-record.md).
