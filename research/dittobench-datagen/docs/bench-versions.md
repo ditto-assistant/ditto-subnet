@@ -544,6 +544,16 @@ gate stack) and `efficiency.ProductionReadyForVersion` treats v13 as
 technically ready; the runtime's advertised `supported_bench_versions` does
 **not** include 13 until the last v13 PR.
 
+### Case families (#1520, #1836, #1837, #1838)
+
+The four opt-in case-family generators — semantic business-event programs,
+personal-life programs, family compiler v2, and the injection tail — are
+documented in [v13-case-families.md](v13-case-families.md). Every case they
+emit is stamped `bench_version 13` and carries grader-only `Claims` (exactly
+one `Critical` claim at weight 1, or partial-weight non-critical claims summing
+to 1); none is wired into the suite budget until the envelope PR, so the
+placeholder known vector above is untouched by them.
+
 ### Governing invariants
 
 1. **Label-insufficiency.** For every family, knowing the family label and the
