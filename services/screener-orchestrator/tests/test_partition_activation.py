@@ -59,5 +59,8 @@ exit 0
         assert result.returncode != 0
         assert start not in commands
     elif failure != "virsh":
-        assert start + "ditto-screener-worker@1.service ditto-screener-worker@2.service\n" in commands
+        assert (
+            start + "ditto-screener-worker@1.service ditto-screener-worker@2.service\n"
+            in commands
+        )
     assert "systemctl disable ditto-screener-worker@2.service" not in commands
