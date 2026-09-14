@@ -1171,7 +1171,7 @@ unchanged). The levers (issues #1843, #1842, #1580, #1840):
   with a JSON-schema `enum` (the production pattern), and the discovery-grounded
   setters describe their option list as runtime-configured and listed only by
   `discover_capabilities`. Three to five **coined decoy tools** per seed
-  (`<brand>_<shape>` over a frozen pool of 24 near-miss shapes, descriptions
+  (`<brand>_<shape>` over a frozen pool of 23 near-miss shapes, descriptions
   stating what the decoy is *not*) are spliced in at seeded positions. The mock
   answers a decoy with a "not configured" error — an ordinary extra call — except
   on the **decoy-correct** cases (≥10% of the run), where the coined decoy is the
@@ -1202,10 +1202,21 @@ unchanged). The levers (issues #1843, #1842, #1580, #1840):
   Non-bearer coined content carries six-digit fillers only, so no other case's
   served list can contain a five-digit needle.
 
-The dataset artifact pins the seeded catalog (`catalog`) from v13. The
-deterministic grader, run sizes, inference boundary, and the wire
-`bench_version` a harness receives (`publicWireBenchVersion` stays 9) are
-unchanged. The public model-free probe stays under the launch gate:
+The dataset artifact pins the seeded catalog (`catalog`) from v13, and
+`TestV13KnownVector` pins the full-profile bytes for seed 123456789: enlarging
+any frozen bank (description paraphrases, decoy shapes, the colour/font corpora,
+near-miss pairs, coined cadences/nouns, the v13 prompt banks) moves that hash
+and is a new-contract decision. The deterministic grader, run sizes, inference
+boundary, and the wire `bench_version` a harness receives
+(`publicWireBenchVersion` stays 9) are unchanged. Setter arguments are graded
+exactly against the listed canonical spelling (case-insensitive, no edit
+tolerance), and an unexpected decoy call is an ordinary extra call under the
+case's own extra-tool rule. Runtime reachability is gated by the #1519 wiring
+sweep: `GET /catalog?bench_version=13` and scored v13 runs are refused with
+`400` until the scorer's advertised `supported_bench_versions`, the scoregates
+upper bound, `efficiency.ProductionReadyForVersion`, the validator
+`SUPPORTED_BENCH_VERSIONS`, and the release identity gate all include 13. The
+public model-free probe stays under the launch gate:
 
 ```sh
 go run ./cmd/toolprobe -bench-version 13 -run-size full -train-seeds 30 -held-out-seeds 10

@@ -2,6 +2,8 @@ package datagen
 
 import (
 	"math/rand"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -266,15 +268,19 @@ func TestV13ToolBenchContractAcrossFortySeeds(t *testing.T) {
 	}
 }
 
-// TestV13PublicProfileQuotas pins the small/medium quotas.
+// TestV13PublicProfileQuotas pins the small/medium quotas and the
+// world_theme_discover_set cap at every public run size (the cap must hold
+// even when the discovery quota is already spent).
 func TestV13PublicProfileQuotas(t *testing.T) {
 	for _, profile := range []struct {
 		n                               int
 		discovery, decoyMin, unexpected int
 	}{{6, 1, 1, 0}, {48, 3, 5, 2}} {
-		for seed := int64(1); seed <= 20; seed++ {
+		// Quota asserts hold on the twenty qualification seeds; the theme cap is
+		// checked across forty (the surplus path is seed-rare).
+		for seed := int64(1); seed <= 40; seed++ {
 			cases := genV13(t, seed, profile.n)
-			discovery, decoy, unexpected := 0, 0, 0
+			discovery, decoy, unexpected, theme := 0, 0, 0, 0
 			for _, tc := range cases {
 				switch {
 				case v13DiscoveryFamily(tc.Category):
@@ -283,10 +289,104 @@ func TestV13PublicProfileQuotas(t *testing.T) {
 					decoy++
 				case v13IsUnexpectedFamily(tc.Category):
 					unexpected++
+				case tc.Category == "world_theme_discover_set":
+					theme++
 				}
 			}
-			if discovery != profile.discovery || decoy < profile.decoyMin || unexpected != profile.unexpected {
+			if seed <= 20 && (discovery != profile.discovery || decoy < profile.decoyMin || unexpected != profile.unexpected) {
 				t.Errorf("n=%d seed %d: discovery=%d decoy=%d unexpected=%d, want %d/>=%d/%d", profile.n, seed, discovery, decoy, unexpected, profile.discovery, profile.decoyMin, profile.unexpected)
+			}
+			if theme > v13WorldThemeCap {
+				t.Errorf("n=%d seed %d: world_theme_discover_set=%d, want <= %d", profile.n, seed, theme, v13WorldThemeCap)
+			}
+		}
+	}
+}
+
+// TestV13ThemeCapHoldsWhenQuotaIsSpent drives the surplus path directly: a
+// run whose legacy theme family exceeds cap + discovery quota must still end at
+// the cap, with the surplus converted rather than left standing.
+func TestV13ThemeCapHoldsWhenQuotaIsSpent(t *testing.T) {
+	const n = 48
+	seed := int64(7)
+	cases := genV13(t, seed, n)
+	quota := v13QuotaFor(n)
+	// Force well over cap + quota theme cases onto ordinary convertible slots.
+	forced := 0
+	for i := range cases {
+		if cases[i].Category == "world_theme_discover_set" || len(cases[i].ExpectedTools) == 0 || IsResultUsage(cases[i].Category) {
+			continue
+		}
+		if forced >= v13WorldThemeCap+quota.Discovery+quota.Decoy+quota.Unexpected+2 {
+			break
+		}
+		cases[i].Category = "world_theme_discover_set"
+		cases[i].PrerequisitePairs = nil
+		forced++
+	}
+	applyV13ToolBench(seed, cases)
+	theme := 0
+	for _, tc := range cases {
+		if tc.Category == "world_theme_discover_set" {
+			theme++
+		}
+	}
+	if theme > v13WorldThemeCap {
+		t.Fatalf("world_theme_discover_set=%d after forcing %d, want <= %d", theme, forced, v13WorldThemeCap)
+	}
+}
+
+// TestV13CategoriesAreInPublicGlossary guards the hand-written Platform glossary
+// mirror (apps/platform/ditto/api_models/bench_glossary.py): every category the
+// v13 pass introduces — one per decoy shape, the two discovery-grounded
+// families, and the four coined-fixture families — must have a public entry, or
+// the /public/bench/glossary endpoint cannot explain a v13 run. Skips when the
+// mirror is absent (standalone module use).
+func TestV13CategoriesAreInPublicGlossary(t *testing.T) {
+	rel := filepath.Join("..", "..", "..", "apps", "platform", "ditto", "api_models", "bench_glossary.py")
+	raw, err := os.ReadFile(rel)
+	if err != nil {
+		t.Skipf("glossary mirror %s not present: %v", rel, err)
+	}
+	src := string(raw)
+	block := regexp.MustCompile(`(?s)_V13_DECOY_SHAPES: dict\[str, tuple\[str, str\]\] = \{(.*?)\n\}`).FindStringSubmatch(src)
+	if block == nil {
+		t.Fatal("_V13_DECOY_SHAPES block not found in bench_glossary.py")
+	}
+	shapes := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^\s*"([a-z_]+)": \(`).FindAllStringSubmatch(block[1], -1) {
+		shapes[m[1]] = true
+	}
+	for _, key := range catalog.DecoyShapeKeys() {
+		if !shapes[key] {
+			t.Errorf("decoy shape %q has no _V13_DECOY_SHAPES glossary row", key)
+		}
+		delete(shapes, key)
+	}
+	for extra := range shapes {
+		t.Errorf("_V13_DECOY_SHAPES names %q, which is not a decoy shape", extra)
+	}
+	literal := []string{"discovery_accent_set", "discovery_font_set"}
+	literal = append(literal, v13UnexpectedFamilies...)
+	for _, category := range literal {
+		if !strings.Contains(src, "\""+category+"\": (") {
+			t.Errorf("category %q has no CATEGORY_GLOSSARY row", category)
+		}
+	}
+	// And every v13-introduced category an actual run emits maps onto one of
+	// those rows.
+	for seed := int64(1); seed <= 20; seed++ {
+		for _, tc := range genV13(t, seed, 100) {
+			switch {
+			case IsDecoyCorrect(tc.Category):
+				key := strings.TrimSuffix(strings.TrimPrefix(tc.Category, "decoy_"), "_result_usage")
+				if !strings.Contains(block[1], "\""+key+"\": (") {
+					t.Errorf("seed %d emitted %q with no glossary shape row", seed, tc.Category)
+				}
+			case v13DiscoveryFamily(tc.Category), v13IsUnexpectedFamily(tc.Category):
+				if !strings.Contains(src, "\""+tc.Category+"\": (") {
+					t.Errorf("seed %d emitted %q with no glossary row", seed, tc.Category)
+				}
 			}
 		}
 	}
