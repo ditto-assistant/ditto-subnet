@@ -114,10 +114,19 @@ release exists:
    accepts the current effective settings checksum. A pre-fan-out worker ignores
    the new fields and cannot reproduce the checksum of an enabled successor
    revision, so do not enable shadow mode while any old worker remains.
-4. Read the complete global screener-review revision through Backroom. Apply a
-   complete successor revision that preserves authoritative fields, sets
-   `fanout_shadow_mode=shadow`, names the trusted image source SHA, and uses the
-   pilot limits above.
+4. Read the complete global and effective node-scoped screener-review revisions
+   through Backroom. Production currently has a non-inheriting
+   `subnet-screener-1` override, so changing the global revision alone does not
+   enroll its submissions: the effective node revision would still have
+   `fanout_shadow_mode=off`. First apply a complete successor to the global
+   revision that preserves every authoritative field and sets the shadow image,
+   limits, and mode. Then apply a complete successor to the
+   `subnet-screener-1` revision with the same fan-out fields while preserving all
+   of its authoritative fields, including its 16,000-token completion limit.
+   The global mode is the fleet kill switch and supplies current operational
+   ceilings; the effective node mode controls whether completed submissions are
+   enrolled and pins the comparison settings. Both must be `shadow` for this
+   fleet. Do not remove the node override.
 5. Submit a new ordinary screening case. Do not rescreen or mutate a held case to
    manufacture coverage.
 6. Read `get_screener_fanout_shadow`. Confirm the row has the same artifact and
@@ -131,9 +140,12 @@ spend difference.
 
 ## Rollback
 
-Apply a complete global screener-review revision with
-`fanout_shadow_mode=off`. The loop marks queued rows skipped and active rows
-incomplete, revokes their job tokens, and deletes their rentals. Baseline
-screening continues. After the cancellation is visible, clear
+First apply a complete successor to the `subnet-screener-1` revision with
+`fanout_shadow_mode=off` so no new baseline completions enroll. Then apply a
+complete global successor with `fanout_shadow_mode=off`. The global kill switch
+marks queued rows skipped and active rows incomplete, revokes their job tokens,
+and deletes their rentals. Preserve all authoritative fields in both successors,
+including the node override's 16,000-token completion limit. Baseline screening
+continues. After the cancellation is visible, clear
 `platform_targon_fanout_shadow_secret` and converge Platform if the credential
 path should also be disabled. Historical comparison rows remain read-only.
