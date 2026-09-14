@@ -10510,3 +10510,62 @@ class TestQuarantineBaselineDiff:
             headers=headers,
         )
         assert response.status_code == 422
+
+
+def test_specialist_protocol_requires_unique_passes_and_adjudication():
+    from copy import deepcopy
+
+    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+
+    report = {
+        "partition": "specialists",
+        "revision": "fanout-source-review-v3",
+        "mode": "shadow_report_only",
+        "outcome": "no_findings",
+        "coverage_scope": "source_review",
+        "coverage_protocol": "five-specialists-v1",
+        "file_plan": None,
+        "passes": [
+            {"name": name, "outcome": "no_findings", "finding": {"risk_level": "low"}}
+            for name in [
+                "generalist",
+                "answer_authority",
+                "benchmark_engine",
+                "tool_fidelity",
+                "evasion_scope",
+            ]
+        ],
+        "critic": None,
+    }
+    assert _fanout_protocol_complete(report, "no_findings")
+    assert not _fanout_protocol_complete(report, "critic_also_flagged")
+    missing = deepcopy(report)
+    missing["passes"].pop()
+    assert not _fanout_protocol_complete(missing, "no_findings")
+    duplicate = deepcopy(report)
+    duplicate["passes"][-1] = duplicate["passes"][0]
+    assert not _fanout_protocol_complete(duplicate, "no_findings")
+    candidate = deepcopy(report)
+    candidate["outcome"] = "critic_also_flagged"
+    candidate["passes"][0]["outcome"] = "candidate"
+    candidate["passes"][0]["finding"] = {"risk_level": "high"}
+    assert not _fanout_protocol_complete(candidate, "critic_also_flagged")
+    candidate["critic"] = {
+        "error_code": None,
+        "candidate_assessments": [
+            {
+                "candidate_id": "candidate-001",
+                "source_pass": "generalist",
+                "disposition": "supported",
+            },
+        ],
+    }
+    assert _fanout_protocol_complete(candidate, "critic_also_flagged")
+    assert not _fanout_protocol_complete(candidate, "no_findings")
+    candidate["critic"]["candidate_assessments"][0]["source_pass"] = "wrong-specialist"
+    assert not _fanout_protocol_complete(candidate, "critic_also_flagged")
+    candidate["critic"]["candidate_assessments"][0]["source_pass"] = "generalist"
+    candidate["critic"]["candidate_assessments"][0]["candidate_id"] = "candidate-999"
+    assert not _fanout_protocol_complete(candidate, "critic_also_flagged")
+    candidate["passes"][1]["outcome"] = "incomplete"
+    assert not _fanout_protocol_complete(candidate, "incomplete")

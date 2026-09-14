@@ -51,8 +51,12 @@ async def test_missing_metering_stops_later_request_admission():
         max_total_tokens=100_000,
         max_reported_cost_usd=3,
     )
-    await budget.before_request(input_token_bound=1_000, completion_token_bound=2_400)
-    await budget.record_response({"usage": {"prompt_tokens": 10}})
+    reservation = await budget.before_request(
+        input_token_bound=1_000, completion_token_bound=2_400
+    )
+    await budget.record_response(
+        {"usage": {"prompt_tokens": 10}}, reservation_id=reservation
+    )
     with pytest.raises(FanoutBudgetExhausted, match="metering unavailable"):
         await budget.before_request(
             input_token_bound=1_000, completion_token_bound=2_400
@@ -65,7 +69,9 @@ async def test_response_model_mismatch_stops_later_request_admission():
         max_total_tokens=100_000,
         max_reported_cost_usd=3,
     )
-    await budget.before_request(input_token_bound=1_000, completion_token_bound=2_400)
+    reservation = await budget.before_request(
+        input_token_bound=1_000, completion_token_bound=2_400
+    )
     await budget.record_response(
         {
             "model": "router-selected-different-model",
@@ -74,7 +80,8 @@ async def test_response_model_mismatch_stops_later_request_admission():
                 "completion_tokens": 10,
                 "cost": 0.001,
             },
-        }
+        },
+        reservation_id=reservation,
     )
     with pytest.raises(FanoutBudgetExhausted, match="response model changed"):
         await budget.before_request(
@@ -89,7 +96,9 @@ async def test_verified_router_response_model_ids_are_accepted(response_model):
         max_total_tokens=100_000,
         max_reported_cost_usd=3,
     )
-    await budget.before_request(input_token_bound=1_000, completion_token_bound=2_400)
+    reservation = await budget.before_request(
+        input_token_bound=1_000, completion_token_bound=2_400
+    )
     await budget.record_response(
         {
             "model": response_model,
@@ -98,7 +107,8 @@ async def test_verified_router_response_model_ids_are_accepted(response_model):
                 "completion_tokens": 10,
                 "cost": 0.001,
             },
-        }
+        },
+        reservation_id=reservation,
     )
     await budget.before_request(input_token_bound=1_000, completion_token_bound=2_400)
     assert budget.snapshot()["model_mismatch"] is False
@@ -112,7 +122,7 @@ async def test_default_envelope_fits_specialists_file_groups_and_critic_first_tu
         max_reported_cost_usd=3,
     )
     for _ in range(10):
-        await budget.before_request(
+        reservation = await budget.before_request(
             input_token_bound=64_000, completion_token_bound=2_400
         )
         await budget.record_response(
@@ -123,11 +133,12 @@ async def test_default_envelope_fits_specialists_file_groups_and_critic_first_tu
                     "completion_tokens": 1_200,
                     "cost": 0.01,
                 },
-            }
+            },
+            reservation_id=reservation,
         )
     usage = budget.snapshot()
     assert usage["requests"] == 10
-    assert usage["reserved_tokens"] == 664_000
+    assert usage["reserved_tokens"] == 172_000
     assert usage["reserved_cost_usd"] < 3
     assert usage["unmetered_responses"] == 0
 
@@ -216,7 +227,7 @@ async def test_single_specialist_survives_majority_and_transcripts_are_independe
     assert len(instances) == 6
     assert all(not r.kwargs["leads"] for r in instances[:5])
     assert all("Exact active policy manifest" in r.kwargs["focus"] for r in instances)
-    assert len(instances[-1].kwargs["leads"]) == 1
+    assert instances[-1].kwargs["leads"] == []
     assert result["incremental_candidate"] is True
     assert result["outcome"] == expected
     assert result["usage"]["requests"] == 6
@@ -612,3 +623,288 @@ async def test_file_scheduling_and_actual_read_coverage(
     assert len(result["passes"]) == 1 + min(max_groups, 3)
     assert result["passes"][0]["name"] == "generalist"
     assert result["critic"] is None
+
+
+async def test_transport_failure_is_unmetered_not_a_different_model():
+    budget = FanoutBudget(
+        max_requests=40, max_total_tokens=100_000, max_reported_cost_usd=3
+    )
+    reservation = await budget.before_request(
+        input_token_bound=10_000, completion_token_bound=2400
+    )
+    await budget.record_response(None, reservation_id=reservation)
+    assert budget.snapshot()["model_mismatch"] is False
+    assert budget.snapshot()["unmetered_responses"] == 1
+    assert budget.snapshot()["reserved_tokens"] == 12_400
+    with pytest.raises(FanoutBudgetExhausted, match="metering unavailable"):
+        await budget.before_request(input_token_bound=100, completion_token_bound=100)
+
+
+async def test_settlement_releases_only_completed_request_token_headroom():
+    budget = FanoutBudget(
+        max_requests=40, max_total_tokens=30_000, max_reported_cost_usd=3
+    )
+    first = await budget.before_request(
+        input_token_bound=10_000, completion_token_bound=2400
+    )
+    await budget.before_request(input_token_bound=10_000, completion_token_bound=2400)
+    await budget.record_response(
+        {
+            "model": "glm-5.3-flash",
+            "usage": {
+                "prompt_tokens": 2500,
+                "completion_tokens": 500,
+                "cost": 0.002,
+            },
+        },
+        reservation_id=first,
+    )
+    assert budget.snapshot()["reserved_tokens"] == 15_400
+    assert budget.snapshot()["unmetered_requests"] == 1
+    await budget.before_request(input_token_bound=10_000, completion_token_bound=2400)
+    assert budget.snapshot()["reserved_tokens"] == 27_800
+    with pytest.raises(FanoutBudgetExhausted, match="token budget exhausted"):
+        await budget.before_request(input_token_bound=3000, completion_token_bound=2400)
+
+
+@pytest.mark.parametrize(
+    "invalid_field,repair",
+    [("categories", True), ("categories", False), ("summary", True)],
+)
+async def test_shadow_schema_correction_is_bounded_and_cannot_coerce_pass(
+    tmp_path, invalid_field, repair
+):
+    from .test_source_review import (
+        _BENIGN_REVIEW,
+        _archive_files,
+        _tool,
+        _with_policy_v10_invariants,
+    )
+
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    key.chmod(0o600)
+    archive = _archive_files(tmp_path, {"src/main.rs": b"fn main() { call_model(); }"})
+    seen = []
+
+    async def handler(request):
+        payload = json.loads(request.content)
+        seen.append(payload)
+        if len(seen) == 1:
+            calls = [
+                _tool(
+                    "read-1",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 5},
+                ),
+                _tool(
+                    "read-2",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 5},
+                ),
+            ]
+        else:
+            verdict = _with_policy_v10_invariants(dict(_BENIGN_REVIEW))
+            if len(seen) == 2 or not repair:
+                verdict[invalid_field] = "x" * 241 if invalid_field == "summary" else []
+            calls = [_tool("submit", "submit_review", verdict)]
+        return httpx.Response(
+            200,
+            json={
+                "model": "glm-5.3-flash",
+                "choices": [{"message": {"role": "assistant", "tool_calls": calls}}],
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 100,
+                    "cost": 0.001,
+                },
+            },
+        )
+
+    budget = FanoutBudget(
+        max_requests=4, max_total_tokens=500_000, max_reported_cost_usd=3
+    )
+    reviewer = ExperimentalReviewer(
+        focus="Generalist",
+        base_url="https://router.example/v1",
+        budget=budget,
+        api_key_file=str(key),
+        model="z-ai/glm-5.3-flash",
+        max_steps=2,
+        max_read_bytes=180_000,
+        max_completion_tokens=2400,
+        timeout_seconds=60,
+        transport=httpx.MockTransport(handler),
+    )
+    result = await reviewer.review(
+        str(archive), artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest()
+    )
+    assert len(seen) == (2 if invalid_field == "summary" else 3 if repair else 4)
+    assert result.ok is repair
+    if invalid_field == "summary":
+        assert reviewer.full_summaries[0]["text"] == "x" * 241
+        assert result.finding["summary"] == "x" * 237 + "..."
+        assert reviewer.validation_errors == []
+    else:
+        assert reviewer.validation_errors == ["source review fields are invalid"] * (
+            1 if repair else 3
+        )
+    assert budget.snapshot()["requests"] == len(seen)
+    assert [t["function"]["name"] for t in seen[-1]["tools"]] == ["submit_review"]
+
+
+@pytest.mark.parametrize("model", [{}, [], 42])
+async def test_malformed_model_identifier_stops_admission_without_crashing(model):
+    budget = FanoutBudget(
+        max_requests=4, max_total_tokens=100_000, max_reported_cost_usd=3
+    )
+    reservation = await budget.before_request(
+        input_token_bound=10_000, completion_token_bound=8000
+    )
+    await budget.record_response(
+        {
+            "model": model,
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 100, "cost": 0.001},
+        },
+        reservation_id=reservation,
+    )
+    assert budget.snapshot()["model_mismatch"]
+    with pytest.raises(FanoutBudgetExhausted, match="response model changed"):
+        await budget.before_request(
+            input_token_bound=10_000, completion_token_bound=8000
+        )
+
+
+async def test_one_underreserved_response_cannot_hide_behind_other_inflight_budget():
+    budget = FanoutBudget(
+        max_requests=4, max_total_tokens=100_000, max_reported_cost_usd=3
+    )
+    small = await budget.before_request(
+        input_token_bound=1000, completion_token_bound=100
+    )
+    await budget.before_request(input_token_bound=50_000, completion_token_bound=8000)
+    await budget.record_response(
+        {
+            "model": "glm-5.3-flash",
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 100,
+                "cost": 0.002,
+            },
+        },
+        reservation_id=small,
+    )
+    assert budget.snapshot()["price_bound_exceeded"]
+    with pytest.raises(FanoutBudgetExhausted, match="pricing bound exceeded"):
+        await budget.before_request(input_token_bound=1000, completion_token_bound=100)
+
+
+async def test_duplicate_settlement_cannot_refund_another_request():
+    budget = FanoutBudget(
+        max_requests=4, max_total_tokens=100_000, max_reported_cost_usd=3
+    )
+    first = await budget.before_request(
+        input_token_bound=10_000, completion_token_bound=8000
+    )
+    await budget.before_request(input_token_bound=10_000, completion_token_bound=8000)
+    payload = {
+        "model": "glm-5.3-flash",
+        "usage": {"prompt_tokens": 1000, "completion_tokens": 100, "cost": 0.001},
+    }
+    await budget.record_response(payload, reservation_id=first)
+    before = budget.snapshot()
+    with pytest.raises(ValueError, match="already settled"):
+        await budget.record_response(payload, reservation_id=first)
+    after = budget.snapshot()
+    assert after["reserved_tokens"] == before["reserved_tokens"]
+    assert after["reserved_cost_usd"] == before["reserved_cost_usd"]
+    assert after["reported_cost_usd"] == before["reported_cost_usd"]
+    assert after["unmetered_requests"] == 1
+    with pytest.raises(FanoutBudgetExhausted, match="metering unavailable"):
+        await budget.before_request(input_token_bound=1000, completion_token_bound=100)
+
+
+@pytest.mark.parametrize("corrected", [False, True])
+async def test_conflicting_final_calls_cannot_select_first_clean(tmp_path, corrected):
+    from .test_source_review import (
+        _BENIGN_REVIEW,
+        _archive_files,
+        _tool,
+        _with_policy_v10_invariants,
+    )
+
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    key.chmod(0o600)
+    archive = _archive_files(
+        tmp_path,
+        {"src/main.rs": b"fn main() { call_model(); }\nfn answer() { shortcut(); }"},
+    )
+    clean = _with_policy_v10_invariants(dict(_BENIGN_REVIEW))
+    flagged = _with_policy_v10_invariants(
+        {
+            **_BENIGN_REVIEW,
+            "risk_level": "high",
+            "categories": ["benchmark_emulation"],
+            "evidence": [
+                {"path": "src/main.rs", "line": line, "category": "benchmark_emulation"}
+                for line in (1, 2)
+            ],
+        }
+    )
+    from ditto_screener.source_review import _parse_review
+
+    for verdict in (clean, flagged):
+        assert _parse_review(
+            verdict,
+            artifact_sha256="a" * 64,
+            repository=TarSourceRepository(str(archive)),
+        ).ok
+    seen = []
+
+    async def handler(request):
+        seen.append(request)
+        calls = [
+            _tool("clean", "submit_review", clean),
+            _tool("flagged", "submit_review", flagged),
+        ]
+        if corrected and len(seen) == 1:
+            calls = [_tool("invalid", "submit_review", {**clean, "categories": []})]
+        return httpx.Response(
+            200,
+            json={
+                "model": "glm-5.3-flash",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": calls,
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 100,
+                    "cost": 0.001,
+                },
+            },
+        )
+
+    reviewer = ExperimentalReviewer(
+        focus="Generalist",
+        api_key_file=str(key),
+        model="z-ai/glm-5.3-flash",
+        base_url="https://router.example/v1",
+        max_steps=4,
+        max_read_bytes=180_000,
+        max_completion_tokens=8000,
+        timeout_seconds=60,
+        transport=httpx.MockTransport(handler),
+    )
+    result = await reviewer.review(
+        str(archive), artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest()
+    )
+    assert not result.ok
+    assert result.finding is None
+    assert reviewer.usage["requests"] == (2 if corrected else 1)
+    assert reviewer.full_summaries == []

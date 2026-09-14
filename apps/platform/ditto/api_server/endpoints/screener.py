@@ -3955,22 +3955,15 @@ async def complete_fanout_shadow_review(
             "unresolved_candidate",
             "critic_also_flagged",
         }
-        file_plan = payload.report.get("file_plan")
-        coverage_complete = bool(
-            payload.outcome != "incomplete"
-            and isinstance(file_plan, dict)
-            and not file_plan.get("truncated", True)
-            and isinstance(passes, list)
-            and passes
-            and all(
-                isinstance(item, dict) and item.get("outcome") != "incomplete"
-                for item in passes
-            )
-        )
+        coverage_complete = _fanout_protocol_complete(payload.report, payload.outcome)
         row.report = payload.report
-        row.disagrees_with_baseline = baseline_candidate != fanout_candidate
         invalid_result = exceeded or model_binding_invalid or unmetered
         row.coverage_complete = coverage_complete and not invalid_result
+        row.disagrees_with_baseline = (
+            baseline_candidate != fanout_candidate
+            if row.coverage_complete and payload.status == "succeeded"
+            else None
+        )
         row.status = "incomplete" if invalid_result else payload.status
         row.outcome = "incomplete" if invalid_result else payload.outcome
         row.error_code = (
@@ -4000,6 +3993,82 @@ async def complete_fanout_shadow_review(
                 stored.provider_resource_id = None
                 stored.updated_at = datetime.now(UTC)
     return FanoutShadowCompleteResponse(accepted=True)
+
+
+def _fanout_protocol_complete(report: dict, outcome: str) -> bool:
+    """Completion of a declared source-review protocol, not an exhaustive audit."""
+    if outcome == "incomplete" or report.get("outcome") != outcome:
+        return False
+    passes = report.get("passes")
+    if (
+        not isinstance(passes, list)
+        or not passes
+        or not all(
+            isinstance(item, dict)
+            and isinstance(item.get("name"), str)
+            and item.get("outcome") in ("candidate", "no_findings")
+            and isinstance(item.get("finding"), dict)
+            and item["finding"].get("risk_level")
+            in (("medium", "high") if item["outcome"] == "candidate" else ("low",))
+            for item in passes
+        )
+    ):
+        return False
+    if report.get("partition") == "specialists":
+        expected = {
+            "generalist",
+            "answer_authority",
+            "benchmark_engine",
+            "tool_fidelity",
+            "evasion_scope",
+        }
+        if (
+            report.get("revision") != "fanout-source-review-v3"
+            or report.get("mode") != "shadow_report_only"
+            or report.get("coverage_protocol") != "five-specialists-v1"
+            or report.get("coverage_scope") != "source_review"
+            or len(passes) != len(expected)
+            or {item.get("name") for item in passes} != expected
+        ):
+            return False
+    else:
+        file_plan = report.get("file_plan")
+        if not isinstance(file_plan, dict) or file_plan.get("truncated", True):
+            return False
+    candidates = [item for item in passes if item["outcome"] == "candidate"]
+    if not candidates:
+        return outcome == "no_findings" and report.get("critic") is None
+    if candidates:
+        critic = report.get("critic")
+        if not isinstance(critic, dict) or critic.get("error_code"):
+            return False
+        assessments = critic.get("candidate_assessments")
+        if (
+            not isinstance(assessments, list)
+            or len(assessments) != len(candidates)
+            or any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("candidate_id"), str)
+                or item.get("disposition") not in {"supported", "refuted", "unresolved"}
+                for item in assessments
+            )
+            or {item.get("candidate_id") for item in assessments}
+            != {f"candidate-{i:03d}" for i in range(1, len(candidates) + 1)}
+        ):
+            return False
+        by_id = {item["candidate_id"]: item for item in assessments}
+        if any(
+            by_id[f"candidate-{i:03d}"].get("source_pass") != candidate["name"]
+            for i, candidate in enumerate(candidates, start=1)
+        ):
+            return False
+        expected_outcome = (
+            "critic_also_flagged"
+            if any(item["disposition"] == "supported" for item in assessments)
+            else "unresolved_candidate"
+        )
+        return outcome == expected_outcome
+    return False
 
 
 def _fanout_response_model_matches(

@@ -44,7 +44,11 @@ def _view(row: ScreenerFanoutShadowReview) -> AdminFanoutShadowReview:
         outcome=cast(FanoutShadowOutcome | None, row.outcome),
         baseline=row.baseline,
         report=row.report,
-        disagrees_with_baseline=row.disagrees_with_baseline,
+        disagrees_with_baseline=(
+            row.disagrees_with_baseline
+            if row.status == "succeeded" and row.coverage_complete
+            else None
+        ),
         coverage_complete=row.coverage_complete,
         error_code=row.error_code,
         provider=row.provider,
@@ -110,7 +114,11 @@ async def get_screener_fanout_shadow(
         await session.scalar(
             select(func.count())
             .select_from(ScreenerFanoutShadowReview)
-            .where(ScreenerFanoutShadowReview.report.is_not(None))
+            .where(
+                ScreenerFanoutShadowReview.report.is_not(None),
+                ScreenerFanoutShadowReview.status == "succeeded",
+                ScreenerFanoutShadowReview.coverage_complete.is_(True),
+            )
         )
         or 0
     )
@@ -118,7 +126,11 @@ async def get_screener_fanout_shadow(
         await session.scalar(
             select(func.count())
             .select_from(ScreenerFanoutShadowReview)
-            .where(ScreenerFanoutShadowReview.disagrees_with_baseline.is_(True))
+            .where(
+                ScreenerFanoutShadowReview.disagrees_with_baseline.is_(True),
+                ScreenerFanoutShadowReview.status == "succeeded",
+                ScreenerFanoutShadowReview.coverage_complete.is_(True),
+            )
         )
         or 0
     )

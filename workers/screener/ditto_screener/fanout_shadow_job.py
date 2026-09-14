@@ -106,7 +106,7 @@ async def _amain() -> int:
                 model=model,
                 base_url=base_url,
                 inference_provider=provider,
-                partition="hybrid",
+                partition="specialists",
                 concurrency=_bounded_int("SCREENER_FANOUT_SHADOW_CONCURRENCY", 2, 1, 4),
                 max_steps=_bounded_int("SCREENER_FANOUT_SHADOW_MAX_STEPS", 4, 1, 8),
                 max_groups=_bounded_int("SCREENER_FANOUT_SHADOW_MAX_GROUPS", 4, 1, 8),

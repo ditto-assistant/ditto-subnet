@@ -17,6 +17,7 @@ from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
     _execute_tool,
+    _parse_review,
     _source_review_system_prompt,
     _source_review_tools_for_policy,
     _tool_call,
@@ -24,7 +25,7 @@ from ditto_screener.source_review import (
 from ditto_screener.source_signals import source_path_priority
 from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
-REVISION = "fanout-source-review-v2"
+REVISION = "fanout-source-review-v3"
 ADJUDICATOR_REVISION = "fanout-candidate-adjudicator-v1"
 MODEL = "z-ai/glm-5.3-flash"
 ALLOWED_RESPONSE_MODELS = frozenset({MODEL, "glm-5.3-flash"})
@@ -74,10 +75,11 @@ class FanoutBudget:
         self.unmetered_responses = 0
         self.price_bound_exceeded = False
         self.model_mismatch = False
+        self._reservations: dict[int, tuple[int, int]] = {}
 
     async def before_request(
         self, *, input_token_bound: int, completion_token_bound: int
-    ) -> None:
+    ) -> int:
         estimated_cost = (
             input_token_bound * MAX_INPUT_USD_PER_MILLION
             + completion_token_bound * MAX_OUTPUT_USD_PER_MILLION
@@ -102,14 +104,25 @@ class FanoutBudget:
             self.reserved_tokens += input_token_bound + completion_token_bound
             self.reserved_cost_usd += estimated_cost
             self.unmetered_requests += 1
+            self._reservations[self.requests] = (
+                input_token_bound,
+                completion_token_bound,
+            )
+            return self.requests
 
-    async def record_response(self, payload: object) -> None:
+    async def record_response(self, payload: object, *, reservation_id: int) -> None:
         async with self._lock:
+            bounds = self._reservations.pop(reservation_id, None)
+            if bounds is None:
+                self.unmetered_responses += 1
+                raise ValueError("unknown or already settled fanout reservation")
             usage = payload.get("usage") if isinstance(payload, dict) else None
             model = payload.get("model") if isinstance(payload, dict) else None
-            if not response_model_matches(self.expected_model, model):
+            if model is not None and not response_model_matches(
+                self.expected_model, model
+            ):
                 self.model_mismatch = True
-            if not isinstance(usage, dict):
+            if not isinstance(usage, dict) or model is None:
                 self.unmetered_responses += 1
                 return
             prompt = usage.get("prompt_tokens")
@@ -131,10 +144,25 @@ class FanoutBudget:
                 self.completion_tokens += completion
             if valid_prompt and valid_completion and valid_cost:
                 assert cost is not None
+                assert isinstance(prompt, int) and isinstance(completion, int)
                 self.reported_cost_usd += float(cost)
                 self.unmetered_requests -= 1
-                if self.reported_cost_usd > self.reserved_cost_usd:
+                # Reconcile only this completed, fully metered request. Retain the
+                # entire reservation for missing responses. This local ledger is
+                # actual usage plus outstanding bounds; Platform independently
+                # retains its full per-artifact dollar reservation.
+                if prompt > bounds[0] or completion > bounds[1]:
                     self.price_bound_exceeded = True
+                else:
+                    self.reserved_tokens -= sum(bounds) - prompt - completion
+                cost_bound = (
+                    bounds[0] * MAX_INPUT_USD_PER_MILLION
+                    + bounds[1] * MAX_OUTPUT_USD_PER_MILLION
+                ) / 1_000_000
+                if float(cost) > cost_bound:
+                    self.price_bound_exceeded = True
+                else:
+                    self.reserved_cost_usd -= cost_bound - float(cost)
             else:
                 self.unmetered_responses += 1
 
@@ -157,7 +185,11 @@ class FanoutBudget:
 
 def response_model_matches(expected_model: str, response_model: object) -> bool:
     """Accept only the requested Router ID and its verified native response ID."""
-    return expected_model == MODEL and response_model in ALLOWED_RESPONSE_MODELS
+    return (
+        expected_model == MODEL
+        and isinstance(response_model, str)
+        and response_model in ALLOWED_RESPONSE_MODELS
+    )
 
 
 def _adjudication_tools(
@@ -452,6 +484,148 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
         }
         self.response_models: set[str] = set()
         self.budget = budget
+        self.validation_errors: list[str] = []
+        self.invalid_review_shapes: list[dict] = []
+        self.full_summaries: list[dict] = []
+        self._review_repository: TarSourceRepository | None = None
+
+    async def _run(self, repository, api_key, **kwargs):
+        self._review_repository = repository
+        self._review_policy_version = kwargs.get(
+            "policy_version", SCREENING_POLICY_VERSION
+        )
+        return await super()._run(repository, api_key, **kwargs)
+
+    def _bound_summary_fields(self, message):
+        # Summary length is a presentation constraint, not a policy decision.
+        # Preserve the full narrative for the independent adjudicator, while
+        # keeping canonical display fields bounded. Never alter risk, evidence,
+        # categories, dispositions or invariant decisions.
+        calls = message.get("tool_calls")
+        if not isinstance(calls, list):
+            return message
+        for call in calls:
+            try:
+                _call_id, name, arguments = _tool_call(call)
+            except ValueError:
+                continue
+            if name not in {"submit_review", "submit_candidate_adjudications"}:
+                continue
+            fields = [("summary", arguments)]
+            list_name = (
+                "invariants" if name == "submit_review" else "candidate_assessments"
+            )
+            invariants = arguments.get(list_name)
+            if isinstance(invariants, list):
+                fields.extend(
+                    (f"{list_name}[{i}].summary", item)
+                    for i, item in enumerate(invariants)
+                    if isinstance(item, dict)
+                )
+            for field, item in fields:
+                summary = item.get("summary")
+                if isinstance(summary, str) and len(summary) > 240:
+                    self.full_summaries.append(
+                        {
+                            "field": field,
+                            "text": summary[:8000],
+                            "original_chars": len(summary),
+                            "truncated": len(summary) > 8000,
+                        }
+                    )
+                    item["summary"] = summary[:237] + "..."
+            call["function"]["arguments"] = json.dumps(arguments)
+        return message
+
+    async def _completion_message(
+        self, client, api_key, messages, *, _shadow_corrections=0, **kwargs
+    ):
+        # A schema correction stays inside this shadow transcript and consumes
+        # the same request/token ledger. Never coerce an invalid verdict to pass.
+        kwargs = {**kwargs, "tool_choice": "required"}
+        message = await super()._completion_message(client, api_key, messages, **kwargs)
+        raw_calls = message.get("tool_calls")
+        if isinstance(raw_calls, list) and len(raw_calls) > 1:
+            for call in raw_calls:
+                _call_id, name, _arguments = _tool_call(call)
+                if name in {"submit_review", "submit_candidate_adjudications"}:
+                    raise ValueError("shadow final tool call must be exclusive")
+        message = self._bound_summary_fields(message)
+        if self._review_repository is None:
+            return message
+        calls = message.get("tool_calls")
+        if not isinstance(calls, list):
+            return message
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            call_id, name, arguments = _tool_call(call)
+            if name != "submit_review":
+                continue
+            try:
+                _parse_review(
+                    arguments,
+                    artifact_sha256="0" * 64,
+                    repository=self._review_repository,
+                    policy_version=self._review_policy_version,
+                )
+            except ValueError as error:
+                self.validation_errors.append(str(error))
+                summary = arguments.get("summary")
+                categories = arguments.get("categories")
+                evidence = arguments.get("evidence")
+                shape = {
+                    "summary_chars": len(summary) if isinstance(summary, str) else None,
+                    "category_count": len(categories)
+                    if isinstance(categories, list)
+                    else None,
+                    "evidence_count": len(evidence)
+                    if isinstance(evidence, list)
+                    else None,
+                }
+                self.invalid_review_shapes.append(shape)
+                if _shadow_corrections >= 2:
+                    return message
+                corrected = [
+                    *messages,
+                    {**message, "tool_calls": [call]},
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": json.dumps(
+                            {
+                                "error": str(error),
+                                "field_shape": shape,
+                                "correctable": True,
+                            }
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            "Correct submit_review using inspected evidence only. "
+                            "Summary: 1..240 characters. Confidence: number 0..1. "
+                            "Use 1..8 valid categories (use ['none'] "
+                            "only for a low-risk result). Follow every required field, "
+                            "invariant and citation constraint. Do not invent evidence."
+                        ),
+                    },
+                ]
+                corrected_message = await self._completion_message(
+                    client,
+                    api_key,
+                    corrected,
+                    _shadow_corrections=_shadow_corrections + 1,
+                    **{
+                        **kwargs,
+                        "tools": _source_review_tools_for_policy(
+                            self._review_policy_version, final_turn=True
+                        ),
+                        "tool_choice": "required",
+                    },
+                )
+                return self._bound_summary_fields(corrected_message)
+        return message
 
     async def _post_completion(self, client, api_key, messages, **kwargs):
         # Only successful host tool outputs count as observed reads, never model
@@ -505,6 +679,7 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                     + json.dumps(self.leads, sort_keys=True),
                 },
             )
+        reservation_id = None
         if self.budget is not None:
             # Byte length is a conservative tokenizer-independent upper bound for
             # these UTF-8 JSON requests. Reserve the maximum possible completion
@@ -521,7 +696,7 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                     separators=(",", ":"),
                 ).encode()
             )
-            await self.budget.before_request(
+            reservation_id = await self.budget.before_request(
                 input_token_bound=input_token_bound,
                 completion_token_bound=self._max_completion_tokens,
             )
@@ -535,7 +710,10 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
             payload = response.json()
         finally:
             if self.budget is not None:
-                await self.budget.record_response(payload)
+                assert reservation_id is not None
+                await self.budget.record_response(
+                    payload, reservation_id=reservation_id
+                )
         if isinstance(payload, dict):
             model = payload.get("model")
             if isinstance(model, str):
@@ -622,7 +800,7 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                     api_key,
                     messages,
                     timeout=min(self._timeout_seconds, remaining),
-                    reasoning_effort="medium",
+                    reasoning_effort="low",
                     tools=_adjudication_tools(
                         policy_version, candidate_ids, final_turn=final_turn
                     ),
@@ -790,8 +968,8 @@ async def review_archive(
                 timeout_seconds=60,
                 max_steps=max_steps,
                 max_read_bytes=180_000,
-                max_completion_tokens=2400,
-                reasoning_effort="medium",
+                max_completion_tokens=8000,
+                reasoning_effort="low",
                 transport_retry_delays=(),
             )
             begin = time.monotonic()
@@ -832,6 +1010,11 @@ async def review_archive(
                 if paths
                 else [],
                 "notes": notes,
+                "full_summaries": list(getattr(reviewer, "full_summaries", [])),
+                "validation_errors": list(getattr(reviewer, "validation_errors", [])),
+                "invalid_review_shapes": list(
+                    getattr(reviewer, "invalid_review_shapes", [])
+                ),
             }
 
     jobs = [
@@ -868,6 +1051,7 @@ async def review_archive(
             "error_code": row["error_code"],
             "finding": row["finding"],
             "notes": row["notes"],
+            "full_summaries": row.get("full_summaries", []),
         }
         for row in passes
     ]
@@ -880,12 +1064,8 @@ async def review_archive(
                 "original source, preserve minority findings and uncertainty, and "
                 "never count votes.\n" + manifest_focus
             ),
-            leads=[
-                {
-                    "candidates": candidates,
-                    "all_pass_summaries": all_pass_summaries,
-                }
-            ],
+            # adjudicate_candidates supplies these once in its own user message.
+            leads=[],
             assigned_paths=(),
             budget=budget,
             api_key_file=api_key_file,
@@ -895,8 +1075,8 @@ async def review_archive(
             timeout_seconds=60,
             max_steps=max_steps,
             max_read_bytes=180_000,
-            max_completion_tokens=2400,
-            reasoning_effort="medium",
+            max_completion_tokens=8000,
+            reasoning_effort="low",
             transport_retry_delays=(),
         )
         begin = time.monotonic()
@@ -947,6 +1127,7 @@ async def review_archive(
             "duration_seconds": time.monotonic() - begin,
             "usage": dict(reviewer.usage),
             "response_models": sorted(reviewer.response_models),
+            "full_summaries": list(getattr(reviewer, "full_summaries", [])),
         }
     if candidates:
         assert critic is not None
@@ -983,6 +1164,10 @@ async def review_archive(
         "policy_manifest_rotation_id": policy_manifest_rotation_id,
         "policy_manifest_digest": manifest.digest,
         "coverage_scope": "source_review",
+        "coverage_protocol": "five-specialists-v1"
+        if partition == "specialists"
+        else "file-partition-v1",
+        "exhaustive_file_audit": False,
         "requested_model": model,
         "mode": "shadow_report_only",
         "outcome": outcome,
@@ -1002,7 +1187,7 @@ async def review_archive(
             "files_per_group": files_per_group,
             "group_bytes": group_bytes,
             "max_groups": max_groups,
-            "max_completion_tokens_per_request": 2400,
+            "max_completion_tokens_per_request": 8000,
             "max_requests": max_requests,
             "max_total_tokens": max_total_tokens,
             "max_reported_cost_usd": max_reported_cost_usd,
