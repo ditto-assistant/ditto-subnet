@@ -882,6 +882,24 @@ class PublicLeaderboardEntry(BaseModel):
             description="Signed full-confirmation evidence root digest.",
         ),
     ] = None
+    router_shadow_composite: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Display-only shadow router-track efficiency composite from the "
+                "published router ledger. Never ranked or weighted while the "
+                "router track is shadow."
+            ),
+        ),
+    ] = None
+    router_shadow_status: Annotated[
+        Literal["queued", "running", "measured"] | None,
+        Field(default=None, exclude_if=lambda value: value is None),
+    ] = None
     aggregate_method: Literal["canonical_median", "continual_mean"] = "canonical_median"
     pre_efficiency_composite: Annotated[
         float | None,
@@ -2127,6 +2145,19 @@ class PublicLeaderboardResponse(BaseModel):
                 "LongMemEval and ablation evidence without changing ranking or "
                 "emissions. Enforce makes full confirmation authoritative and "
                 "suppresses base-only or provisional rows. Null means off."
+            ),
+        ),
+    ] = None
+    router_shadow_mode: Annotated[
+        Literal["shadow"] | None,
+        Field(
+            default=None,
+            description=(
+                "Router track measurement phase. ``shadow`` is present only "
+                "when the published router ledger carries at least one "
+                "measurement; the board's router surface is display-only and "
+                "never changes ranking or emissions. Null means the router "
+                "surface is off."
             ),
         ),
     ] = None

@@ -258,6 +258,12 @@ export interface LeaderboardEntry {
   /** Display-only LongMemEval mean from completed confirmation evidence. */
   v9_longmem_mean_composite?: number | null;
   v9_confirmation_evidence_sha256?: string | null;
+  /** Display-only shadow router-track efficiency composite (dittobench router
+   * shadow ledger). Never ranks, never earns emissions; weight_eligible is
+   * always false on the router track. */
+  router_shadow_composite?: number | null;
+  /** Router shadow measurement phase for the muted placeholder vs. value. */
+  router_shadow_status?: "queued" | "running" | "measured" | null;
   /** Authoritative quality and primary ranking key after continual aggregation. */
   official_composite?: number | null;
   /** Score after continual aggregation but before relative efficiency. */
@@ -397,6 +403,10 @@ export interface LeaderboardPayload {
   entries?: LeaderboardEntry[];
   /** Active confirmation policy; only enforce changes rank and emissions authority. */
   v9_confirmation_mode?: "shadow" | "enforce" | null;
+  /** Router track is shadow-only; present when any row carries a router shadow
+   * measurement. It never changes rank or emissions — display-only, like the
+   * LongMemEval shadow surface. */
+  router_shadow_mode?: "shadow" | null;
   available_bench_versions?: number[];
   active_bench_version?: number | null;
   desired_bench_version?: number | null;
