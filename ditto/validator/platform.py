@@ -70,6 +70,7 @@ from ditto.api_models.inference import (
     InferenceExchangeRequest,
     InferenceExchangeResponse,
 )
+from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.validator import (
     ArtifactResponse,
     FailJobReason,
@@ -1935,6 +1936,48 @@ class PlatformClient:
                 f"{len(invalid)} entr{'y' if len(invalid) == 1 else 'ies'}: {sample}"
             )
         return ledger
+
+    async def get_router_ledger(self) -> RouterLedgerResponse:
+        """Pull the shadow router-track ledger the validator folds each epoch.
+
+        The router eval runs on one trusted, offloaded ``dittobench-api`` scorer
+        that publishes a ledger; the platform relays it here behind the same
+        signed proof-of-possession as :meth:`get_ledger` (``GET
+        /scoring/router-ledger``). The validator only reads and folds it, so no
+        provider secret or harness container ever touches a validator.
+
+        The read is best-effort by contract: :class:`PlatformRouterLedgerSource`
+        wraps this and degrades any failure to an empty ledger (zero router
+        emission), so a scorer outage or malformed publish cannot distort the
+        ``put_weights`` fold. In v1 the whole track is shadow
+        (``weight_eligible=False``), so even a served ledger contributes zero.
+        """
+        url = f"{self._base}{_SCORING_PREFIX}/router-ledger"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        proof_headers = {
+            **self._headers,
+            "X-Validator-Ledger-Nonce": str(nonce),
+            "X-Validator-Ledger-Requested-At": requested_at.isoformat(),
+            "X-Validator-Ledger-Signature": sign_ledger_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
+        try:
+            resp = await self._client.get(url, headers=proof_headers)
+        except httpx.HTTPError as e:
+            raise PlatformError(f"router ledger fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"router ledger rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        try:
+            return RouterLedgerResponse.model_validate(resp.json())
+        except (ValidationError, ValueError) as e:
+            raise PlatformError("router ledger response was invalid") from e
 
     async def get_artifact(self, agent_id: UUID) -> ArtifactResponse:
         """Get a presigned tarball URL with fresh proof of hotkey ownership."""

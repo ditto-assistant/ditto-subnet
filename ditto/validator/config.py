@@ -499,6 +499,20 @@ class ValidatorConfig:
     track's bps share — so these need not sum to one. Inert while the router
     track is shadow / not eligible."""
 
+    router_ledger_read_enabled: bool = False
+    """Whether the worker reads the published router ledger from the platform.
+
+    ``False`` (default) keeps the worker on :class:`EmptyRouterLedgerSource`, so
+    the fold is byte-identical to folding no router track at all — the safe v1
+    shadow default. Setting ``VALIDATOR_ROUTER_LEDGER_READ_ENABLED=true`` swaps in
+    :class:`PlatformRouterLedgerSource`, which reads the shadow ledger the
+    offloaded scorer publishes (via ``GET /scoring/router-ledger``) and folds it.
+    This flips *reading* on only; the track stays shadow
+    (``router_weight_eligible=False``), so a read ledger still contributes zero
+    emission. It is intentionally env-tunable — unlike the consensus-critical
+    ``router_track_state`` — because turning the read on changes no chain output,
+    only which ledger the (already zero-weighted) router fold logs and measures."""
+
     def __post_init__(self) -> None:
         """Fail loud at boot on a genuinely misconfigured router split.
 
@@ -793,6 +807,10 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         coding_executor_timeout_seconds=coding_executor_timeout_seconds,
         coding_canary_enabled=coding_canary_enabled,
         coding_canary_poll_seconds=coding_canary_poll_seconds,
+        router_ledger_read_enabled=(
+            os.environ.get("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", "false").lower()
+            in _truthy
+        ),
     )
     if not config.signing_source_present():
         raise ValidatorConfigError(

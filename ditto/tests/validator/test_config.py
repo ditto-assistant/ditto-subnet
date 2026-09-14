@@ -452,3 +452,27 @@ class TestRouterRankSharesValidation:
         cfg = parse_validator_config_from_env()
         with pytest.raises(ValidatorConfigError, match="router_rank_shares"):
             replace(cfg, router_rank_shares=bad)
+
+
+class TestRouterLedgerReadFlag:
+    def test_default_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.delenv("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", raising=False)
+        # Default-off keeps the fold byte-identical to v1 (EmptyRouterLedgerSource).
+        assert parse_validator_config_from_env().router_ledger_read_enabled is False
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "TRUE", "Yes"])
+    def test_truthy_values_enable(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", value)
+        assert parse_validator_config_from_env().router_ledger_read_enabled is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", ""])
+    def test_non_truthy_values_stay_off(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", value)
+        assert parse_validator_config_from_env().router_ledger_read_enabled is False
