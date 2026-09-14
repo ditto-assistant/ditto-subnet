@@ -65,21 +65,36 @@ def test_checklist_enumerates_every_published_prerequisite() -> None:
         )
 
 
-def test_ceiling_stays_below_strict_policy_until_prerequisites_verified() -> None:
+def test_published_ceiling_records_the_v13_release_decision_ahead_of_checklist() -> (
+    None
+):
+    # The checklist is a ledger of verified release facts, never inferred from
+    # code. The deadline finalizer ships shadow-gated in this build and is not
+    # yet released and live-verified, so the checklist still permits only the
+    # checklist-free version.
     unverified = unverified_activation_prerequisites()
     assert unverified, (
         "every prerequisite reads verified; if that is a real release fact, "
-        "raise SCREENING_ACTIVATION_CEILING_POLICY_VERSION deliberately and "
-        "update this test"
+        "update this test deliberately"
     )
     assert activation_ceiling_from_checklist() == CHECKLIST_FREE_POLICY_VERSION
     assert CHECKLIST_FREE_POLICY_VERSION == STRICT_TWO_OUTCOME_POLICY_VERSION - 1
-    assert SCREENING_ACTIVATION_CEILING_POLICY_VERSION == CHECKLIST_FREE_POLICY_VERSION
-    assert activation_ceiling_is_consistent()
-    # The two named blockers are still open on this build.
     keys = {item.key for item in unverified}
     assert "deadline_finalizer_released" in keys
     assert "ceiling_raise_after_verification" in keys
+    # The published ceiling moved to v13 on 2026-09-14 by recorded release
+    # decision (#1891; policy-v13.md "Activation prerequisites" carries the
+    # record): raising it makes v13 schedulable, it does not activate it and
+    # does not move the v10 floor. The ceiling therefore outruns the checklist
+    # on purpose, and the activation board exposes both numbers side by side
+    # (ActivationCeilingView.checklist_ceiling_policy_version) so the operator
+    # sees the gap rather than a silent invariant.
+    assert (
+        SCREENING_ACTIVATION_CEILING_POLICY_VERSION == STRICT_TWO_OUTCOME_POLICY_VERSION
+    )
+    assert not activation_ceiling_is_consistent()
+    by_key = {item.key: item for item in unverified}
+    assert "2026-09-14" in (by_key["ceiling_raise_after_verification"].evidence or "")
 
 
 def test_ceiling_never_exceeds_the_implemented_policy() -> None:

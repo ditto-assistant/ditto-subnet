@@ -364,6 +364,12 @@ POLICY_V13_ACTIVATION_PREREQUISITES: tuple[ActivationPrerequisite, ...] = (
         doc_fragment=(
             "Raise the separately enforced screening-policy activation ceiling from v12"
         ),
+        evidence=(
+            "ceiling moved to v13 on 2026-09-14 by release decision (#1891) "
+            "after the strict two-outcome contract shipped and both production "
+            "screeners reported builtin 13 on release 0.264.0; the finalizer "
+            "prerequisite above is still pending, so this item stays unverified"
+        ),
     ),
     ActivationPrerequisite(
         key="rollback_preserves_evidence",
