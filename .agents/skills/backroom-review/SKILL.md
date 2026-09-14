@@ -194,14 +194,22 @@ quarantine court's shape, with the crown re-read on both legs.
    every item: `disposition` (`ready` with its `steps`, `already_applied`,
    `stale_guard`, `conflict` with the 409 `conflict_reason`, `not_found`,
    `invalid`), `would_change_crown`, and the `board` (champion, raw leader).
+   The `board` is the public leaderboard's crown (same fold, same fleet-gated
+   tie-weighting and band-clamp flags), and `would_change_crown` is judged
+   cumulatively -- item `i` against the board after items `< i` -- so a
+   batch that removes the top five flags every row, not just the first.
    Fix or drop anything not `ready`; a stale guard means the row moved since
-   the review and needs a fresh `get_screening_submission`.
+   the review and needs a fresh `get_screening_submission`; a `conflict`
+   on a held row can be its hold evidence or reason drifting under the review.
 4. `execute_ath_rulings_batch` with the returned `previewToken` and
    `confirmation: "APPLY ATH RULINGS BATCH"` (inline previews resend the same
    `rulings`). The Platform re-reads the board and re-previews each item
-   before writing; rows whose guards or crown outcome moved come back
-   `failed` with the reason and the rest still land. Tokens expire after ten
-   minutes and are bound to your operator identity and the exact document.
+   before writing, and re-reads the real board after every ruling that
+   lands; rows whose guards or crown outcome moved come back `failed` with
+   the reason and the rest still land. An `applied` row with
+   `annotated: false` landed -- only its audit annotation failed; never
+   re-run it. Tokens expire after ten minutes and are bound to your operator
+   identity and the exact document.
 5. Re-read `board_after`, then `get_leaderboard` and `get_ath_review` for
    each applied row. Every clear/reject action row carries `batch_ruling`
    (batch_id, index, evidence_references, rulings digest, upload key).
