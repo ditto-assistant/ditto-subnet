@@ -222,6 +222,7 @@ from ditto.db.queries.screening import (
     get_screening_attempt,
     prerequisite_screening_predicates,
     screening_priority_order,
+    try_acquire_screening_claim_lock,
 )
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
@@ -4261,6 +4262,12 @@ async def claim(
 
     if session.get_bind().dialect.name == "postgresql":
         async with session.begin():
+            if not await try_acquire_screening_claim_lock(session):
+                return ScreenerQueueResponse(
+                    items=[],
+                    count=0,
+                    required_policy_version=required_policy,
+                )
             node_id = getattr(request.state, "screener_node_id", None)
             if node_id is None:
                 if not await _legacy_gcp_claim_is_authorized(session, now=now):
@@ -4274,11 +4281,7 @@ async def claim(
                         required_policy_version=required_policy,
                     )
             else:
-                node = await session.scalar(
-                    select(ScreenerNode)
-                    .where(ScreenerNode.node_id == node_id)
-                    .with_for_update()
-                )
+                node = await session.get(ScreenerNode, node_id)
                 if node is None:
                     raise ScreenerAuthError("screener node is not authorized")
                 _, limits = await resolve_screener_node_channel_settings(
@@ -4316,6 +4319,7 @@ async def claim(
                 review_settings_binding=binding,
                 review_settings_enrolled_node_id=node_id,
                 canary_policy_version=canary_policy_version,
+                claim_lock_held=True,
             )
     else:
         # SQLite is used by local/test deployments and has no advisory locks.
