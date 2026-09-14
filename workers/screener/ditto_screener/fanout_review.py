@@ -488,9 +488,7 @@ def _normalize_final_adjudication(
     )
     evidence_verified = not unread_locations
     if unread_locations:
-        unread = [
-            {"path": path, "line": line} for path, line in unread_locations
-        ]
+        unread = [{"path": path, "line": line} for path, line in unread_locations]
         raise ValueError(
             "fanout adjudicator cited source it did not read: "
             + json.dumps(unread, sort_keys=True)
@@ -510,9 +508,7 @@ def _normalize_final_adjudication(
     if supported and observation.risk_level == "low":
         raise ValueError("supported candidate conflicts with low final review")
     for row in supported:
-        support_locations = _finding_locations(
-            {"evidence": row["supporting_evidence"]}
-        )
+        support_locations = _finding_locations({"evidence": row["supporting_evidence"]})
         if not (support_locations & final_locations):
             raise ValueError("supported candidate is absent from final review evidence")
 
@@ -1120,10 +1116,7 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                         )
                         self.opened_paths.add(opened["path"])
                         for line in opened["lines"]:
-                            if (
-                                isinstance(line, dict)
-                                and type(line.get("line")) is int
-                            ):
+                            if isinstance(line, dict) and type(line.get("line")) is int:
                                 self.opened_lines.add((opened["path"], line["line"]))
                     messages.append(
                         {

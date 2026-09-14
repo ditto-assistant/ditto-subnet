@@ -175,11 +175,7 @@ async def test_single_specialist_survives_majority_and_transcripts_are_independe
             peak = max(peak, active)
             await asyncio.sleep(0.01)
             active -= 1
-            risk = (
-                "high"
-                if FOCI["benchmark_engine"] in self.kwargs["focus"]
-                else "low"
-            )
+            risk = "high" if FOCI["benchmark_engine"] in self.kwargs["focus"] else "low"
             return {
                 "raw_review": {
                     "risk_level": risk,
@@ -361,9 +357,7 @@ def test_concern_note_source_is_retained_in_provisional_candidate(tmp_path):
 
 
 @pytest.mark.parametrize("policy_version", [12, 13])
-def test_final_adjudicator_is_canonical_and_source_read_bound(
-    tmp_path, policy_version
-):
+def test_final_adjudicator_is_canonical_and_source_read_bound(tmp_path, policy_version):
     from ditto_screening_protocol.models import source_review_invariants_for_policy
 
     from .test_source_review import (
