@@ -2353,7 +2353,7 @@ describe('copy review admin service', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
 
     await resolveCopyReview(
-      { agentId: review.agent_id, resolution: 'clear', reason: 'cleared' },
+      { agentId: review.agent_id, resolution: 'clear', reason: 'cleared', evidenceReferences: ['src/main.rs:42'] },
       'operator@example.com',
     )
     await fetchCopyReviews()
@@ -2400,14 +2400,14 @@ describe('copy review admin service', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const result = await resolveCopyReview(
-      { agentId: review.agent_id, resolution: 'clear', reason: 'Current calibrated evidence is clear' },
+      { agentId: review.agent_id, resolution: 'clear', reason: 'Current calibrated evidence is clear', evidenceReferences: ['src/main.rs:42'] },
       'operator@example.com',
     )
 
     expect(result.review.resolution).toBe('clear')
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
       method: 'POST',
-      body: JSON.stringify({ resolution: 'clear', reason: 'Current calibrated evidence is clear' }),
+      body: JSON.stringify({ resolution: 'clear', reason: 'Current calibrated evidence is clear', evidence_references: ['src/main.rs:42'], reason_codes: [] }),
     })
   })
 

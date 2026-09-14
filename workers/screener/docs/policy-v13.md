@@ -1066,8 +1066,12 @@ An operator override is an administrative action, not a third review outcome.
   non-passing `inconclusive` processing state. Historical v10-v12 attempts
   retain their signed compatibility behavior.
 - Implement the deadline finalizer that converts unresolved v13 processing
-  states into `REJECT` with V1, V2, or V3, the correct failure domain, complete
-  retry evidence, and no misconduct allegation.
+  states into the distinct no-fault terminal `review_timed_out` (never a plain
+  `REJECT`, never a ban, `violation_proven: false`, `precedent_weight: false`)
+  with V2 or V3, the correct failure domain, complete retry evidence, a public
+  no-fault reason and no misconduct allegation, and an automatic no-fault
+  retry while the published retry budget for that failure domain lasts; past
+  the budget the timeout is still recorded and the retry is the operator's.
 - Raise the separately enforced screening-policy activation ceiling from v12
   only after the deadline finalizer and every other prerequisite above are
   released and verified. Record: the ceiling moved to v13 on 2026-09-14, after

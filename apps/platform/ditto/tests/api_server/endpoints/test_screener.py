@@ -97,6 +97,7 @@ from ditto.db.models import (
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
     ScreeningAttempt,
+    ScreeningDecisionRecord,
     ScreeningDispute,
     ScreeningQuarantine,
     ScreeningQuarantineResolution,
@@ -5359,6 +5360,93 @@ class TestClaim:
             assert retained.resolution_reason == (
                 "Late deep-review evidence retained after operator action"
             )
+
+    async def test_deep_review_pass_clears_the_deferred_hold_and_records_decision(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A Platform-automatic clear leaves a no-precedent decision record."""
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.ATH_PENDING_REVIEW,
+            name="deferred-cleared",
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        attempt_id, review_id = uuid4(), uuid4()
+        opened_at = datetime.now(UTC) - timedelta(minutes=20)
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            agent.review_reason = "Score qualified this submission for deferred review"
+            session.add(
+                AthReview(
+                    review_id=review_id,
+                    agent_id=agent_id,
+                    status="pending",
+                    opened_at=opened_at,
+                    original_reason="Deferred source review",
+                    original_policy_version=SCREENING_POLICY_VERSION,
+                    original_evidence={
+                        "previous_status": AgentStatus.SCORED.value,
+                        "score_count": 3,
+                    },
+                    algorithm_provenance={"review_kind": "deferred_source_review"},
+                )
+            )
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="running",
+                    started_at=opened_at + timedelta(minutes=1),
+                    deadline=datetime.now(UTC) + timedelta(minutes=30),
+                    build_only=False,
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        await _seed_verified_image_upload(
+            session_maker, agent_id=agent_id, attempt_id=attempt_id
+        )
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=True,
+                attempt_id=attempt_id,
+                outcome="pass",
+                manifest_digest="12" * 32,
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == AgentStatus.SCORED
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            review = await session.get(AthReview, review_id)
+            record = await session.scalar(
+                select(ScreeningDecisionRecord).where(
+                    ScreeningDecisionRecord.agent_id == agent_id
+                )
+            )
+        assert agent is not None and agent.status == AgentStatus.SCORED
+        assert review is not None and review.status == "resolved"
+        assert review.resolution == "clear"
+        assert record is not None
+        assert record.outcome == "clear"
+        assert record.review_id == review_id
+        assert record.attempt_id == attempt_id
+        assert record.reviewer == "platform:deferred-source-review"
+        assert record.violation_proven is False
+        assert record.precedent_weight is False
+        assert record.failure_domain == "none"
+        assert record.evidence_references == [f"ath-review:{review_id}"]
+        assert record.policy_version == SCREENING_POLICY_VERSION
 
     async def test_deferred_review_health_miss_parks_the_hold(
         self,

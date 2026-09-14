@@ -540,13 +540,17 @@ async def _preview_ruling(
             conflict_reason="score count changed",
             message="score count changed since the ruling was prepared",
         )
-    if ruling.action == "reject" and not ruling.evidence_references:
+    if ruling.action != "open" and not ruling.evidence_references:
+        # Policy v13 makes every decision record cite its evidence, so
+        # ``AdminCopyReviewResolveRequest`` refuses an uncited clear as well as
+        # the uncited reject this court always refused; mirror both here so a
+        # "ready" item cannot fail at execute on a validation the preview saw.
         return _blocked(
             **base,
             ok=False,
             disposition="invalid",
-            conflict_reason="reject requires evidence_references",
-            message="a reject ruling must cite at least one path:line",
+            conflict_reason=f"{ruling.action} requires evidence_references",
+            message=f"a {ruling.action} ruling must cite at least one path:line",
         )
 
     held = (
@@ -856,9 +860,16 @@ async def _apply_step(
             x_admin_actor=actor,
         )
     else:
+        # The ruling's citations ride the same resolve path the single-item
+        # route takes: the policy-v13 decision record and the action row cite
+        # them, and a clear without any is refused there too.
         await resolve_copy_review(
             ruling.agent_id,
-            AdminCopyReviewResolveRequest(resolution=step, reason=ruling.reason),
+            AdminCopyReviewResolveRequest(
+                resolution=step,
+                reason=ruling.reason,
+                evidence_references=list(ruling.evidence_references),
+            ),
             None,
             session,
             x_admin_actor=actor,

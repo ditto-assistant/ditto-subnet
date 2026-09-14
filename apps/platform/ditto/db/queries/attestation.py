@@ -54,6 +54,7 @@ from ditto.db.models import (
     EvaluationPayment,
     OwnerAttestation,
 )
+from ditto.db.queries.screening_decisions import record_automatic_clear
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -251,6 +252,20 @@ async def clear_linked_pending_copy_reviews(
             )
         )
         cleared.append(review.review_id)
+        # The decision record keeps the agent's history complete: an
+        # owner-link clear is a Platform decision with no operator, no
+        # finding and no precedent, cited by the attestation that released it.
+        await record_automatic_clear(
+            session,
+            agent=held,
+            review_id=review.review_id,
+            review_scope="owner_link_attestation",
+            public_reason=reason,
+            reviewer=actor,
+            evidence_references=[f"owner-attestation:{attestation_id}"],
+            evidence_type="owner-link-attestation",
+            decided_at=resolved_at,
+        )
     await session.flush()
     return tuple(cleared)
 

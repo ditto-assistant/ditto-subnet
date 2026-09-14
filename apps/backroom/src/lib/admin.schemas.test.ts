@@ -26,6 +26,10 @@ import {
   previewAthRulingsBatchInputSchema,
   executeAthRulingsBatchInputSchema,
   resolveCopyReviewInputSchema,
+  activationCeilingSchema,
+  reviewTimeoutPolicySchema,
+  screeningDecisionRecordResponseSchema,
+  screeningDecisionRecordSchema,
   resolveScreeningQuarantineInputSchema,
   screeningDisputeListSchema,
   screeningQuarantineListSchema,
@@ -107,6 +111,11 @@ type GeneratedConfirmationBundleView = PlatformComponents['schemas']['Confirmati
 type GeneratedConfirmationBundleList =
   PlatformComponents['schemas']['AdminConfirmationBundleListResponse']
 type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
+type GeneratedScreeningDecisionRecord = PlatformComponents['schemas']['ScreeningDecisionRecordView']
+type GeneratedScreeningDecisionRecordResponse =
+  PlatformComponents['schemas']['AdminScreeningDecisionRecordResponse']
+type GeneratedReviewTimeoutPolicy = PlatformComponents['schemas']['ReviewTimeoutPolicyView']
+type GeneratedActivationCeiling = PlatformComponents['schemas']['ActivationCeilingView']
 type GeneratedSourceReviewInvariantAssessment =
   PlatformComponents['schemas']['SourceReviewInvariantAssessment']
 
@@ -2092,7 +2101,58 @@ describe('copy review schemas', () => {
       agentId: identity.agentId,
       resolution: 'clear',
       reason,
+      evidenceReferences: ['src/main.rs:42'],
     }).reason).toBe(reason)
+  })
+
+  it('requires at least one file:line evidence reference to clear (policy v13)', () => {
+    const base = {
+      agentId: '11111111-1111-4111-8111-111111111111',
+      reason: 'served path reads the model answer verbatim',
+    }
+    expect(() =>
+      resolveCopyReviewInputSchema.parse({ ...base, resolution: 'clear' }),
+    ).toThrow(/evidence reference/)
+    expect(() =>
+      resolveCopyReviewInputSchema.parse({
+        ...base,
+        resolution: 'clear',
+        evidenceReferences: ['read the whole crate'],
+      }),
+    ).toThrow()
+    const cleared = resolveCopyReviewInputSchema.parse({
+      ...base,
+      resolution: 'clear',
+      evidenceReferences: [
+        'src/main.rs:120-131',
+        'anti-copy-comparison:11111111-1111-4111-8111-111111111111',
+      ],
+      reasonCodes: ['I4.reviewed_no_rewrite'],
+    })
+    expect(cleared.evidenceReferences).toHaveLength(2)
+    expect(cleared.reasonCodes).toEqual(['I4.reviewed_no_rewrite'])
+    // A reject records whatever the operator cites; citations are optional.
+    expect(
+      resolveCopyReviewInputSchema.parse({ ...base, resolution: 'reject' }).evidenceReferences,
+    ).toEqual([])
+  })
+
+  it('keeps the decision record schema statically exhaustive against the generated types', () => {
+    expectTypeOf<keyof ZodOutput<typeof screeningDecisionRecordSchema>>().toEqualTypeOf<
+      keyof GeneratedScreeningDecisionRecord
+    >()
+    expectTypeOf<ZodOutput<typeof screeningDecisionRecordSchema>>().toMatchTypeOf<
+      GeneratedScreeningDecisionRecord
+    >()
+    expectTypeOf<keyof ZodOutput<typeof screeningDecisionRecordResponseSchema>>().toEqualTypeOf<
+      keyof GeneratedScreeningDecisionRecordResponse
+    >()
+    expectTypeOf<keyof ZodOutput<typeof reviewTimeoutPolicySchema>>().toEqualTypeOf<
+      keyof GeneratedReviewTimeoutPolicy
+    >()
+    expectTypeOf<keyof ZodOutput<typeof activationCeilingSchema>>().toEqualTypeOf<
+      keyof GeneratedActivationCeiling
+    >()
   })
 
   it('only accepts canonical clear or reject resolutions', () => {

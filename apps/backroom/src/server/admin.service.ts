@@ -15,6 +15,10 @@ import {
   type CopyReviewGeneration,
   athPrecedentListSchema,
   getAthReviewInputSchema,
+  getScreeningDecisionRecordInputSchema,
+  listScreeningDecisionsInputSchema,
+  screeningDecisionListSchema,
+  screeningDecisionRecordResponseSchema,
   openAthReviewInputSchema,
   searchAthPrecedentsInputSchema,
   openAthReviewResponseSchema,
@@ -1710,11 +1714,38 @@ export async function resolveCopyReview(rawInput: unknown, actor: string) {
     {
       method: 'POST',
       actor,
-      body: { resolution: input.resolution, reason: input.reason },
+      body: {
+        resolution: input.resolution,
+        reason: input.reason,
+        evidence_references: input.evidenceReferences,
+        reason_codes: input.reasonCodes,
+      },
     },
   )
   invalidateCopyReviewsCache()
   return resolveCopyReviewResponseSchema.parse(payload)
+}
+
+export async function fetchScreeningDecisionRecord(rawInput: unknown) {
+  const input = getScreeningDecisionRecordInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-decisions/${encodeURIComponent(input.agentId)}`,
+  )
+  return screeningDecisionRecordResponseSchema.parse(payload)
+}
+
+export async function fetchScreeningDecisions(
+  rawInput: unknown,
+  limit: number,
+  offset: number,
+) {
+  const input = listScreeningDecisionsInputSchema.parse(rawInput)
+  const query = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  if (input.outcome) query.set('outcome', input.outcome)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-decisions?${query.toString()}`,
+  )
+  return screeningDecisionListSchema.parse(payload)
 }
 
 export async function fetchAthReview(rawInput: unknown) {
