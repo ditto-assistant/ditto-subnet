@@ -6728,6 +6728,9 @@ export const athRulingExecuteItemSchema = z.object({
   agent_status: z.string().nullable().default(null),
   would_change_crown: z.boolean(),
   steps_applied: z.array(athRulingActionSchema).default([]),
+  // False on an applied row: the ruling landed, only the audit annotation
+  // failed. Never re-run it.
+  annotated: z.boolean().default(false),
   message: z.string(),
 } satisfies PlatformResponseShape<GeneratedAthRulingExecuteItem>)
 

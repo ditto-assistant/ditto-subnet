@@ -4287,6 +4287,7 @@ describe('Backroom MCP tools', () => {
           agent_status: 'banned',
           would_change_crown: true,
           steps_applied: ['open', 'reject'],
+          annotated: true,
           message: 'ruling applied and audit rows annotated',
         },
         {

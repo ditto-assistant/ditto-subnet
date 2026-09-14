@@ -27,6 +27,7 @@ from ditto.api_models.admin_ath_rulings import (
     AdminAthRulingsDocument,
 )
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.endpoints import admin_ath_rulings as rulings_mod
 from ditto.api_server.endpoints.admin_ath_rulings import actor_slug, rulings_digest
 from ditto.api_server.storage.errors import ObjectNotFoundError
 from ditto.db.models import (
@@ -36,6 +37,7 @@ from ditto.db.models import (
     AthReviewAction,
     BenchmarkRollout,
     Score,
+    ValidatorHeartbeat,
 )
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 
@@ -53,6 +55,15 @@ _FIXTURE = (
 _PREVIEW = "/api/v1/admin/ath-rulings/batch-preview"
 _EXECUTE = "/api/v1/admin/ath-rulings/batch-execute"
 _UPLOAD = "/api/v1/admin/ath-rulings/upload-url"
+_LEADERBOARD = "/api/v1/public/leaderboard"
+# The public emissions block validates hotkeys as SS58; the crown-parity test
+# needs real-shaped ones.
+_SS58_A = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
+_SS58_B = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
+_SS58_VALIDATOR = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+# The first validator protocol that caps the dethrone band at the challenger's
+# remaining headroom (scoring._DETHRONE_BAND_CLAMP_PROTOCOL).
+_BAND_CLAMP_PROTOCOL = 24
 
 
 @pytest.fixture
@@ -347,12 +358,14 @@ async def test_preview_never_mutates_and_classifies_each_ruling(
         ["open", "reject"],
         ["clear"],
     ]
-    # The champion is also the raw leader: holding it moves the crown. The
-    # runner is not, and the held 0.7 agent would re-enter below the leader.
+    # Judged cumulatively: holding the 0.9 champion (also the raw leader) moves
+    # the crown; with it gone the 0.8 runner IS the champion, so rejecting it
+    # moves the crown again; with both gone the cleared 0.7 agent re-enters
+    # above the 0.6 leader that is left. Blocked items never touch the board.
     assert [item["would_change_crown"] for item in items] == [
         True,
-        False,
-        False,
+        True,
+        True,
         False,
         False,
         False,
@@ -363,7 +376,7 @@ async def test_preview_never_mutates_and_classifies_each_ruling(
     assert body["ready_count"] == 3
     assert body["already_applied_count"] == 0
     assert body["blocked_count"] == 3
-    assert body["crown_moving_count"] == 1
+    assert body["crown_moving_count"] == 3
     assert body["board"]["champion_agent_id"] == str(board["champion"][0])
     assert body["board"]["raw_leader_agent_id"] == str(board["champion"][0])
     assert body["board"]["ranked_count"] == 4
@@ -386,10 +399,15 @@ async def test_execute_applies_rulings_independently_and_annotates_audit(
     board = await _seed_board(maker)
     _install(app, maker)
     rulings = _board_rulings(board)
-    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    source = "docs/sn118-board-review-2026-09-13.md"
+    preview = await client.post(
+        _PREVIEW, json={"rulings": rulings, "source": source}, headers=_HEADERS
+    )
     assert preview.status_code == 200, preview.text
+    assert preview.json()["source"] == source
     token = preview.json()["preview_token"]
 
+    # Execute is not asked for the inline source again; the token carries it.
     response = await client.post(
         _EXECUTE,
         json={
@@ -411,6 +429,21 @@ async def test_execute_applies_rulings_independently_and_annotates_audit(
         ("failed", None),
         ("failed", AgentStatus.SCORED.value),
     ]
+    # Each landed item was judged against the real board after the previous
+    # one: the cascade the preview simulated is what execute re-read.
+    assert [item["would_change_crown"] for item in body["items"][:3]] == [
+        True,
+        True,
+        True,
+    ]
+    assert [item["annotated"] for item in body["items"]] == [
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+    ]
     assert body["items"][1]["steps_applied"] == ["open", "reject"]
     assert body["items"][3]["message"] == "artifact sha256 changed"
     assert body["items"][4]["message"] == "agent not found"
@@ -427,6 +460,8 @@ async def test_execute_applies_rulings_independently_and_annotates_audit(
     assert annotation["batch_id"] == body["batch_id"]
     assert annotation["action"] == "open"
     assert annotation["would_change_crown"] is True
+    assert annotation["source"] == source
+    assert annotation["board_fingerprint"] == body["board_before"]["fingerprint"]
     assert champion_actions == []
 
     runner_review, runner_actions = await _review(maker, board["runner"][0])
@@ -439,6 +474,14 @@ async def test_execute_applies_rulings_independently_and_annotates_audit(
     evidence = runner_actions[0].evidence
     assert evidence["previous_status"] == AgentStatus.SCORED.value
     assert evidence["batch_ruling"]["batch_id"] == body["batch_id"]
+    assert evidence["batch_ruling"]["source"] == source
+    # Judged against the board after the champion was held, not the pre-batch
+    # snapshot: the runner was the champion it removed.
+    assert evidence["batch_ruling"]["would_change_crown"] is True
+    assert (
+        evidence["batch_ruling"]["board_fingerprint"]
+        != body["board_before"]["fingerprint"]
+    )
     assert evidence["batch_ruling"]["evidence_references"] == [
         "src/baseline.rs:1195-1207"
     ]
@@ -491,10 +534,13 @@ async def test_execute_refuses_items_whose_crown_outcome_moved(
     ]
     preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
     assert preview.status_code == 200
-    assert [i["would_change_crown"] for i in preview.json()["items"]] == [True, False]
+    # Rejecting the champion makes the runner the champion, so the runner's
+    # reject moves the crown too.
+    assert [i["would_change_crown"] for i in preview.json()["items"]] == [True, True]
 
-    # A new leader lands between preview and execute: the champion ruling's
-    # crown effect is no longer what the operator confirmed.
+    # A new leader lands between preview and execute: neither ruling's crown
+    # effect is what the operator confirmed -- the champion is no longer the
+    # champion, and the runner would no longer inherit the crown.
     newcomer = await _seed_scored(
         maker, hotkey="5C", name="c", composite=0.95, created_at=_T0
     )
@@ -511,12 +557,29 @@ async def test_execute_refuses_items_whose_crown_outcome_moved(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["board_before"]["champion_agent_id"] == str(newcomer[0])
-    assert body["items"][0]["status"] == "failed"
-    assert "crown arithmetic moved" in body["items"][0]["message"]
-    assert body["items"][1]["status"] == "applied"
+    assert [item["status"] for item in body["items"]] == ["failed", "failed"]
+    assert all("crown arithmetic moved" in i["message"] for i in body["items"])
     assert await _status(maker, champion[0]) == AgentStatus.SCORED.value
-    assert await _status(maker, runner[0]) == AgentStatus.BANNED.value
+    assert await _status(maker, runner[0]) == AgentStatus.SCORED.value
     assert (await _review(maker, champion[0]))[0] is None
+    assert (await _review(maker, runner[0]))[0] is None
+
+    # Re-previewing against the new board lets the batch through: the newcomer
+    # holds the crown, so neither reject touches it any more.
+    again = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert [i["would_change_crown"] for i in again.json()["items"]] == [False, False]
+    retried = await client.post(
+        _EXECUTE,
+        json={
+            "preview_token": again.json()["preview_token"],
+            "confirmation": ATH_RULINGS_CONFIRMATION,
+            "rulings": rulings,
+        },
+        headers=_HEADERS,
+    )
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["applied_count"] == 2
+    assert retried.json()["board_after"]["champion_agent_id"] == str(newcomer[0])
 
 
 async def test_execute_fails_closed_on_foreign_actor_tampering_and_drift(
@@ -551,6 +614,17 @@ async def test_execute_fails_closed_on_foreign_actor_tampering_and_drift(
     )
     assert bad_signature.status_code == 409
     assert "signature" in bad_signature.text
+
+    # A non-ASCII digest segment must be a signature mismatch, not a 500 from
+    # compare_digest refusing mixed str input.
+    issued, body_segment, _digest = token.split(".", 2)
+    non_ascii = await client.post(
+        _EXECUTE,
+        json={**execute, "preview_token": f"{issued}.{body_segment}.{'é' * 64}"},
+        headers=_HEADERS,
+    )
+    assert non_ascii.status_code == 409
+    assert "signature" in non_ascii.text
 
     edited = [_ruling("reject", agent[0], agent[1], reason="A different reason")]
     drifted = await client.post(
@@ -807,14 +881,10 @@ async def test_replay_of_the_2026_09_13_board_review_rejects(
     body = preview.json()
     assert body["ready_count"] == 5
     assert all(item["steps"] == ["open", "reject"] for item in body["items"])
-    # lets_623 is seeded as the board leader, so its reject moves the crown.
-    assert [item["would_change_crown"] for item in body["items"]] == [
-        True,
-        False,
-        False,
-        False,
-        False,
-    ]
+    # The five rulings empty the board: each reject removes the champion the
+    # previous one left behind, so every one of them moves the crown.
+    assert [item["would_change_crown"] for item in body["items"]] == [True] * 5
+    assert body["crown_moving_count"] == 5
 
     executed = await client.post(
         _EXECUTE,
@@ -837,3 +907,239 @@ async def test_replay_of_the_2026_09_13_board_review_rejects(
             ruling.evidence_references
         )
         assert actions[-1].evidence["batch_ruling"]["source"] == document.source
+
+
+def _heartbeat(
+    hotkey: str, *, protocol_version: int, now: datetime
+) -> ValidatorHeartbeat:
+    """A fresh, benchmark-capable heartbeat: what fleet-protocol gates read."""
+    return ValidatorHeartbeat(
+        validator_hotkey=hotkey,
+        software_version="1.0.0",
+        protocol_version=protocol_version,
+        code_digest="ab" * 32,
+        state="idle",
+        reported_at=now,
+        seen_at=now,
+        signature="cd" * 64,
+        capabilities={
+            "screened_images": True,
+            "require_screened_image": True,
+            "source_build_fallback": False,
+            "full_stack_managed": True,
+            "stack_updater": True,
+            "sandbox_egress_restricted": True,
+            "ticket_inference": False,
+            "signed_score_quorum": False,
+            "executor_isolation": "ephemeral_vm",
+            "scorer_benchmarks": {
+                "status": "fresh_verified",
+                "supported_bench_versions": [MIN_SCOREABLE_BENCH_VERSION],
+                "observed_at": int(now.timestamp()),
+                "software_version": "1.0.0",
+                "source_revision": "a" * 40,
+            },
+        },
+    )
+
+
+async def test_board_matches_the_public_crown_under_the_ceiling_band_clamp(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """The fleet-gated band clamp flips the live crown; the tool must follow.
+
+    A saturated 0.997012 incumbent and a later perfect 1.0 challenger: the
+    uncapped decayed band demands more score than exists, so the incumbent
+    keeps the crown until every live capable validator advertises protocol 24,
+    when the cap makes the perfect challenger the champion. The preview's
+    ``board`` must say what the public leaderboard's ``emissions`` say in both
+    states -- otherwise ``would_change_crown`` lies about the visible crown.
+    """
+    await _activate(maker)
+    saturated = await _seed_scored(
+        maker,
+        hotkey=_SS58_A,
+        name="saturated",
+        composite=0.997012,
+        created_at=_T0 - timedelta(hours=2),
+    )
+    perfect = await _seed_scored(
+        maker,
+        hotkey=_SS58_B,
+        name="perfect",
+        composite=1.0,
+        created_at=_T0 - timedelta(hours=1),
+    )
+    _install(app, maker)
+    rulings = [_ruling("reject", perfect[0], perfect[1])]
+
+    public = (await client.get(_LEADERBOARD)).json()
+    assert public["emissions"]["ceiling_band_clamp_active"] is False
+    assert public["emissions"]["champion_agent_id"] == str(saturated[0])
+    assert public["emissions"]["raw_leader_agent_id"] == str(perfect[0])
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    board = preview.json()["board"]
+    assert board["champion_agent_id"] == public["emissions"]["champion_agent_id"]
+    assert board["raw_leader_agent_id"] == public["emissions"]["raw_leader_agent_id"]
+    assert board["champion_hotkey"] == _SS58_A
+    # Rejecting the raw leader moves the crown arithmetic even while the
+    # incumbent keeps the crown.
+    assert preview.json()["items"][0]["would_change_crown"] is True
+
+    # Every live capable validator now speaks protocol 24: the public board
+    # caps the band and crowns the perfect challenger. So must the tool.
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        session.add(
+            _heartbeat(_SS58_VALIDATOR, protocol_version=_BAND_CLAMP_PROTOCOL, now=now)
+        )
+    public = (await client.get(_LEADERBOARD)).json()
+    assert public["emissions"]["ceiling_band_clamp_active"] is True
+    assert public["emissions"]["champion_agent_id"] == str(perfect[0])
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    board = preview.json()["board"]
+    assert board["champion_agent_id"] == str(perfect[0])
+    assert board["champion_agent_id"] == public["emissions"]["champion_agent_id"]
+    assert board["champion_hotkey"] == _SS58_B
+    assert board["champion_score"] == pytest.approx(1.0)
+
+    # A protocol-23 straggler joining the live fleet withdraws the clamp again
+    # on both surfaces; a bare project_koth(entries) could not follow this.
+    async with maker() as session, session.begin():
+        session.add(_heartbeat(_SS58_A, protocol_version=23, now=now))
+    public = (await client.get(_LEADERBOARD)).json()
+    assert public["emissions"]["ceiling_band_clamp_active"] is False
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.json()["board"]["champion_agent_id"] == str(saturated[0])
+    assert (
+        preview.json()["board"]["champion_agent_id"]
+        == public["emissions"]["champion_agent_id"]
+    )
+
+
+async def test_preview_mirrors_the_resolve_guards_on_a_drifted_hold(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A hold whose evidence or reason moved under its review is a conflict.
+
+    ``resolve_copy_review`` refuses those with a 409 the old preview could not
+    see, so a "ready" clear or reject failed only at execute.
+    """
+    await _activate(maker)
+    evidence_drift = await _seed_held(
+        maker, hotkey="5Drift", composite=0.7, created_at=_T0 - timedelta(hours=1)
+    )
+    reason_drift = await _seed_held(
+        maker, hotkey="5Reason", composite=0.6, created_at=_T0 - timedelta(hours=1)
+    )
+    intact = await _seed_held(
+        maker, hotkey="5Intact", composite=0.5, created_at=_T0 - timedelta(hours=1)
+    )
+    async with maker() as session, session.begin():
+        drifted = await session.get(Agent, evidence_drift[0])
+        assert drifted is not None
+        # Re-matched against another row after the review was opened.
+        drifted.duplicate_of = intact[0]
+        reworded = await session.get(Agent, reason_drift[0])
+        assert reworded is not None
+        reworded.review_reason = "Re-held under a different finding"
+    _install(app, maker)
+
+    rulings = [
+        _ruling("clear", evidence_drift[0], evidence_drift[1], refs=()),
+        _ruling("reject", reason_drift[0], reason_drift[1]),
+        _ruling("clear", intact[0], intact[1], refs=()),
+    ]
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    items = preview.json()["items"]
+    assert [item["disposition"] for item in items] == ["conflict", "conflict", "ready"]
+    assert items[0]["conflict_reason"] == "agent hold evidence no longer matches review"
+    assert items[1]["conflict_reason"] == "agent hold reason no longer matches review"
+    assert (
+        items[0]["message"]
+        == items[1]["message"]
+        == ("resolve_ath_review would answer 409")
+    )
+
+    # And execute agrees: the same two refusals, the intact clear lands.
+    executed = await client.post(
+        _EXECUTE,
+        json={
+            "preview_token": preview.json()["preview_token"],
+            "confirmation": ATH_RULINGS_CONFIRMATION,
+            "rulings": rulings,
+        },
+        headers=_HEADERS,
+    )
+    assert executed.status_code == 200, executed.text
+    assert [item["status"] for item in executed.json()["items"]] == [
+        "failed",
+        "failed",
+        "applied",
+    ]
+    assert executed.json()["items"][0]["message"] == (
+        "agent hold evidence no longer matches review"
+    )
+    assert await _status(maker, evidence_drift[0]) == (
+        AgentStatus.ATH_PENDING_REVIEW.value
+    )
+    assert await _status(maker, reason_drift[0]) == (
+        AgentStatus.ATH_PENDING_REVIEW.value
+    )
+    assert await _status(maker, intact[0]) == AgentStatus.SCORED.value
+
+
+async def test_execute_reports_applied_when_only_the_annotation_fails(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ruling that landed is never reported as failed.
+
+    The audit annotation runs after ``open`` / ``resolve`` committed; if it
+    blows up the row must still say applied (with ``annotated`` false) or the
+    operator re-runs a ban that already happened.
+    """
+    await _activate(maker)
+    agent = await _seed_scored(
+        maker, hotkey="5A", name="a", composite=0.9, created_at=_T0
+    )
+    _install(app, maker)
+
+    async def _boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("annotation store unavailable")
+
+    monkeypatch.setattr(rulings_mod, "_annotate_batch_audit", _boom)
+    rulings = [_ruling("reject", agent[0], agent[1])]
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    executed = await client.post(
+        _EXECUTE,
+        json={
+            "preview_token": preview.json()["preview_token"],
+            "confirmation": ATH_RULINGS_CONFIRMATION,
+            "rulings": rulings,
+        },
+        headers=_HEADERS,
+    )
+
+    assert executed.status_code == 200, executed.text
+    item = executed.json()["items"][0]
+    assert item["status"] == "applied"
+    assert item["annotated"] is False
+    assert item["steps_applied"] == ["open", "reject"]
+    assert item["agent_status"] == AgentStatus.BANNED.value
+    assert item["message"] == (
+        "ruling applied; audit annotation failed: annotation store unavailable"
+    )
+    assert executed.json()["applied_count"] == 1
+    assert executed.json()["failed_count"] == 0
+    assert executed.json()["board_after"]["champion_agent_id"] is None
+    assert await _status(maker, agent[0]) == AgentStatus.BANNED.value
+    review, actions = await _review(maker, agent[0])
+    assert review is not None and review.resolution == "reject"
+    assert "batch_ruling" not in actions[-1].evidence

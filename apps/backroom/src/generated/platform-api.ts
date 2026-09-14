@@ -6419,6 +6419,11 @@ export interface components {
             agent_id: string;
             /** Agent Status */
             agent_status?: string | null;
+            /**
+             * Annotated
+             * @default false
+             */
+            annotated: boolean;
             /** Index */
             index: number;
             /** Message */
@@ -6485,8 +6490,11 @@ export interface components {
          * AdminAthRulingsBoardProjection
          * @description The crown arithmetic the batch was previewed (or executed) against.
          *
-         *     Read from the same eligible ledger, official-score fold, and KOTH
-         *     projection the validator weight fold and the public ``rank`` consume.
+         *     Read from the validator-equivalent KOTH fold (eligible ledger with stderr,
+         *     quorum, confirmation and efficiency inputs) under the same fleet-gated tie
+         *     weighting and ceiling-band-clamp flags the public leaderboard's
+         *     ``emissions`` block applies, so the champion here is the one the board
+         *     shows.
          */
         AdminAthRulingsBoardProjection: {
             /** Bench Version */

@@ -21,7 +21,13 @@ them -- and adds the quarantine court's shape around them:
 
 The crown re-read on both legs is the point (memory:
 crown-arithmetic-stales-across-shifts): a prepared batch's "will not take the
-crown" premise expires while the operator reads source.
+crown" premise expires while the operator reads source. The board is the one
+the operator sees: the validator-equivalent fold (``_current_koth_entries``)
+under the same fleet-gated tie-weighting and ceiling-band-clamp flags the
+public leaderboard applies. The batch's own writes are modeled too -- item
+``i`` is judged against the board after items ``< i`` (simulated in preview,
+re-read from Postgres in execute), so rejecting the champion in item 0 flags
+item 1's new champion instead of hiding it behind the pre-batch snapshot.
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ import json
 import logging
 import re
 import secrets
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
@@ -64,6 +71,7 @@ from ditto.api_models.admin_copy_review import (
     AdminCopyReviewOpenRequest,
     AdminCopyReviewResolveRequest,
 )
+from ditto.api_server.continual_retest_settings import tie_weighting_is_active
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_copy_review import (
     open_copy_review,
@@ -73,16 +81,27 @@ from ditto.api_server.endpoints.admin_quarantine import (
     BATCH_PREVIEW_TTL,
     require_admin,
 )
+from ditto.api_server.endpoints.public import _VALIDATOR_STALE_WINDOW
+from ditto.api_server.endpoints.scoring import (
+    _DETHRONE_BAND_CLAMP_PROTOCOL,
+    _TIE_WEIGHTING_PROTOCOL,
+)
+from ditto.api_server.endpoints.validator import _current_koth_entries
 from ditto.api_server.hippius import HippiusClient, normalize_object_key
-from ditto.api_server.koth import KothEntry, KothProjection, project_koth
+from ditto.api_server.koth import (
+    KothEntry,
+    KothProjection,
+    _ranked_entries,
+    project_koth,
+)
 from ditto.api_server.storage.errors import (
     ObjectDownloadFailedError,
     ObjectNotFoundError,
 )
 from ditto.db.models import Agent, AgentStatus, AthReview, AthReviewAction, Score
 from ditto.db.queries.benchmark_rollout import active_bench_version
-from ditto.db.queries.score_ranking import dedupe_owner_rows, resolve_ranking_scores
-from ditto.db.queries.scores import MIN_ELIGIBLE_CASES, list_eligible_ledger
+from ditto.db.queries.heartbeats import live_validator_fleet_supports_protocol
+from ditto.db.queries.scores import MIN_ELIGIBLE_CASES
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -186,13 +205,77 @@ def _validate_document(raw: object) -> AdminAthRulingsDocument:
 
 @dataclass(frozen=True)
 class BoardSnapshot:
-    """One read of the ranked board and its KOTH projection."""
+    """One read (or one simulated step) of the folded board and its crown.
+
+    ``entries`` are the validator-equivalent KOTH fold rows; ``distinct_hotkeys``
+    and ``ceiling_band_clamp`` are the fleet-gated flags the public leaderboard
+    projected them under. :meth:`without` and :meth:`with_estimate` re-project
+    the same entries under the same flags so a batch can be walked item by
+    item without touching Postgres.
+    """
 
     bench_version: int
     read_at: datetime
+    entries: tuple[KothEntry, ...]
+    distinct_hotkeys: bool
+    ceiling_band_clamp: bool
     projection: KothProjection | None
     ranked_agent_ids: tuple[UUID, ...]
-    scores: dict[UUID, float]
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        bench_version: int,
+        read_at: datetime,
+        entries: Sequence[KothEntry],
+        distinct_hotkeys: bool,
+        ceiling_band_clamp: bool,
+    ) -> BoardSnapshot:
+        scored = tuple(entry for entry in entries if entry.composite > 0.0)
+        return cls(
+            bench_version=bench_version,
+            read_at=read_at,
+            entries=scored,
+            distinct_hotkeys=distinct_hotkeys,
+            ceiling_band_clamp=ceiling_band_clamp,
+            projection=project_koth(
+                scored,
+                distinct_hotkeys=distinct_hotkeys,
+                ceiling_band_clamp=ceiling_band_clamp,
+            ),
+            ranked_agent_ids=tuple(
+                entry.agent_id for entry in (_ranked_entries(scored) if scored else [])
+            ),
+        )
+
+    def _with_entries(self, entries: Sequence[KothEntry]) -> BoardSnapshot:
+        return BoardSnapshot.build(
+            bench_version=self.bench_version,
+            read_at=self.read_at,
+            entries=entries,
+            distinct_hotkeys=self.distinct_hotkeys,
+            ceiling_band_clamp=self.ceiling_band_clamp,
+        )
+
+    def without(self, agent_id: UUID) -> BoardSnapshot:
+        """The board once ``agent_id`` leaves the eligible ledger (open/reject)."""
+        return self._with_entries(
+            [entry for entry in self.entries if entry.agent_id != agent_id]
+        )
+
+    def with_estimate(self, entry: KothEntry) -> BoardSnapshot:
+        """The board once a cleared agent re-enters at ``entry`` (an estimate).
+
+        The ledger keeps one representative per owner; a hotkey already on the
+        board keeps its row unless the returning agent scores higher.
+        """
+        siblings = [e for e in self.entries if e.miner_hotkey == entry.miner_hotkey]
+        if any(sibling.composite >= entry.composite for sibling in siblings):
+            return self
+        return self._with_entries(
+            [*(e for e in self.entries if e.miner_hotkey != entry.miner_hotkey), entry]
+        )
 
     @property
     def champion_agent_id(self) -> UUID | None:
@@ -201,6 +284,9 @@ class BoardSnapshot:
     @property
     def raw_leader_agent_id(self) -> UUID | None:
         return None if self.projection is None else self.projection.raw_leader.agent_id
+
+    def touches_crown(self, agent_id: UUID) -> bool:
+        return agent_id in {self.champion_agent_id, self.raw_leader_agent_id}
 
     @property
     def fingerprint(self) -> str:
@@ -236,72 +322,76 @@ class BoardSnapshot:
 
 
 async def read_board_snapshot(
-    session: AsyncSession, *, now: datetime | None = None
+    session: AsyncSession, request: Request, *, now: datetime | None = None
 ) -> BoardSnapshot:
-    """Rank the eligible ledger the way the fold and the public board do.
+    """Project the crown exactly as the public leaderboard and the ledger do.
 
-    Same population (``list_eligible_ledger``, owner-complete), same score
-    (``resolve_ranking_scores``: the official continual-mean estimator), same
-    owner reduction (``dedupe_owner_rows``) and the same KOTH hysteresis
-    (``project_koth`` on the lineage clock) that the queue floors and the
-    validator ledger consume. Held agents are not in the eligible ledger, so
-    a clear ruling's effect is estimated separately in
-    :func:`_would_change_crown`.
+    Entries come from :func:`_current_koth_entries` -- the eligible ledger with
+    stderr, quorum, completed-wave confirmation and efficiency inputs, owner
+    reduced -- and are folded under the two flags the public ``emissions``
+    block derives from fleet readiness: ``distinct_hotkeys`` (tie weighting,
+    protocol 20 plus the operator switch) and ``ceiling_band_clamp`` (protocol
+    24, no switch). The clamp is what has flipped the live crown, so a bare
+    ``project_koth(entries)`` here would disagree with the board the operator
+    is reading. Held agents are outside the eligible ledger; a clear's effect
+    is estimated in :func:`_crown_effect`.
     """
     read_at = now or datetime.now(UTC)
     active = await active_bench_version(session)
-    rows = [
-        row
-        for row in await list_eligible_ledger(
-            session,
-            include_fingerprints=False,
-            include_details=False,
-            owner_score="canonical",
-            dedupe_owners=False,
-            active_version=active,
-        )
-        if row.eligible and row.composite > 0.0
-    ]
-    if not rows:
-        return BoardSnapshot(active, read_at, None, (), {})
-    official = await resolve_ranking_scores(
-        session, rows=rows, bench_version=None, now=read_at, active_version=active
+    state = request.app.state
+    session_maker = getattr(state, "session_maker", None)
+    continual_settings = await state.continual_retest_settings.resolve(session_maker)
+    efficiency_config = await state.efficiency_settings.resolve(session_maker)
+    tie_weighting_fleet_ready = await live_validator_fleet_supports_protocol(
+        session,
+        minimum_protocol=_TIE_WEIGHTING_PROTOCOL,
+        bench_version=active,
+        now=read_at,
+        freshness=_VALIDATOR_STALE_WINDOW,
     )
-    ranked = dedupe_owner_rows(rows, scores=official)
-    entries = [
-        KothEntry(
-            miner_hotkey=row.miner_hotkey,
-            agent_id=row.agent_id,
-            composite=official.get(row.agent_id, row.composite),
-            first_seen=row.fold_first_seen,
-            raw_rank=rank,
-            bench_version=row.bench_version,
-        )
-        for rank, row in enumerate(ranked, start=1)
-    ]
-    return BoardSnapshot(
+    tie_weighting_active = tie_weighting_is_active(
+        continual_settings, fleet_protocol_ready=tie_weighting_fleet_ready
+    )
+    ceiling_band_clamp = await live_validator_fleet_supports_protocol(
+        session,
+        minimum_protocol=_DETHRONE_BAND_CLAMP_PROTOCOL,
+        bench_version=active,
+        now=read_at,
+        freshness=_VALIDATOR_STALE_WINDOW,
+    )
+    fold = await _current_koth_entries(
+        session,
+        canonical_version=active,
+        wave_membership=continual_settings.wave_membership,
+        efficiency_config=efficiency_config,
+        now=read_at,
+    )
+    return BoardSnapshot.build(
         bench_version=active,
         read_at=read_at,
-        projection=project_koth(entries),
-        ranked_agent_ids=tuple(row.agent_id for row in ranked),
-        scores={
-            row.agent_id: official.get(row.agent_id, row.composite) for row in rows
-        },
+        entries=fold.folded_entries,
+        distinct_hotkeys=tie_weighting_active,
+        ceiling_band_clamp=ceiling_band_clamp,
     )
 
 
-async def _would_change_crown(
+async def _crown_effect(
     session: AsyncSession,
     *,
     board: BoardSnapshot,
     agent: Agent,
     action: str,
-) -> bool:
+) -> tuple[bool, BoardSnapshot]:
+    """``(would_change_crown, board after this ruling)`` for one ready item.
+
+    Holding or rejecting removes the agent from the fold; it moves the crown
+    when the agent is the champion or the raw leader. Clearing is estimated:
+    the held agent re-enters at its canonical quorum median (the median-score
+    rule the anti-copy gate uses) anchored at its upload time, and moves the
+    crown when that re-projected board makes it champion or raw leader.
+    """
     if action in {"open", "reject"}:
-        return agent.agent_id in {board.champion_agent_id, board.raw_leader_agent_id}
-    # clear: the held agent is outside the eligible ledger; estimate where its
-    # canonical quorum median (the same median-score rule the anti-copy gate
-    # uses) would land against the current raw leader.
+        return board.touches_crown(agent.agent_id), board.without(agent.agent_id)
     composites = list(
         (
             await session.execute(
@@ -315,12 +405,20 @@ async def _would_change_crown(
         ).all()
     )
     if not composites:
-        return False
+        return False, board
     ordered = sorted(composites, key=lambda row: (row[0], row[1]))
     canonical = float(ordered[(len(ordered) - 1) // 2][0])
-    if board.projection is None:
-        return True
-    return canonical >= board.projection.raw_leader.composite
+    after = board.with_estimate(
+        KothEntry(
+            miner_hotkey=agent.miner_hotkey,
+            agent_id=agent.agent_id,
+            composite=canonical,
+            first_seen=agent.created_at,
+            raw_rank=0,
+            bench_version=board.bench_version,
+        )
+    )
+    return after.touches_crown(agent.agent_id), after
 
 
 # --- preview token ---------------------------------------------------------
@@ -351,7 +449,8 @@ def _verify_preview(token: str, secret: str, actor: str) -> dict[str, Any]:
     expected = hmac.new(
         secret.encode(), f"{issued_at}.{body}".encode(), hashlib.sha256
     ).hexdigest()
-    if not secrets.compare_digest(digest, expected):
+    # Bytes: the str form raises TypeError on a non-ASCII token segment.
+    if not secrets.compare_digest(digest.encode(), expected.encode()):
         raise HTTPException(status_code=409, detail="preview token signature mismatch")
     now = int(datetime.now(UTC).timestamp())
     if issued_at > now + 30 or now - issued_at > int(BATCH_PREVIEW_TTL.total_seconds()):
@@ -374,7 +473,18 @@ async def _preview_ruling(
     index: int,
     ruling: AdminAthRuling,
     board: BoardSnapshot,
-) -> AdminAthRulingPreviewItem:
+) -> tuple[AdminAthRulingPreviewItem, BoardSnapshot]:
+    """Classify one ruling against ``board``; also return the board after it.
+
+    A non-ready item leaves the board as it is. A ready item's
+    ``would_change_crown`` is judged against ``board`` -- the state after the
+    earlier items of the batch -- and the returned board carries its effect
+    forward so the next item is judged after this one.
+    """
+
+    def _blocked(**item: Any) -> tuple[AdminAthRulingPreviewItem, BoardSnapshot]:
+        return AdminAthRulingPreviewItem(**item), board
+
     base: dict[str, Any] = {
         "index": index,
         "action": ruling.action,
@@ -386,7 +496,7 @@ async def _preview_ruling(
     }
     agent = await session.get(Agent, ruling.agent_id)
     if agent is None:
-        return AdminAthRulingPreviewItem(
+        return _blocked(
             **base,
             ok=False,
             disposition="not_found",
@@ -414,7 +524,7 @@ async def _preview_ruling(
     )
     if agent.sha256 != ruling.expected_sha256:
         base["stale_guard"] = True
-        return AdminAthRulingPreviewItem(
+        return _blocked(
             **base,
             ok=False,
             disposition="stale_guard",
@@ -423,7 +533,7 @@ async def _preview_ruling(
         )
     if score_count != ruling.expected_score_count:
         base["stale_guard"] = True
-        return AdminAthRulingPreviewItem(
+        return _blocked(
             **base,
             ok=False,
             disposition="stale_guard",
@@ -431,7 +541,7 @@ async def _preview_ruling(
             message="score count changed since the ruling was prepared",
         )
     if ruling.action == "reject" and not ruling.evidence_references:
-        return AdminAthRulingPreviewItem(
+        return _blocked(
             **base,
             ok=False,
             disposition="invalid",
@@ -444,19 +554,39 @@ async def _preview_ruling(
         and review is not None
         and review.status == "pending"
     )
+    if held and review is not None and ruling.action != "open":
+        # resolve_copy_review refuses a hold whose evidence moved under the
+        # review (admin_copy_review.py); answer the same 409 detail here so a
+        # "ready" item cannot fail at execute on a guard the preview could see.
+        if agent.duplicate_of != review.original_duplicate_of:
+            return _blocked(
+                **base,
+                ok=False,
+                disposition="conflict",
+                conflict_reason="agent hold evidence no longer matches review",
+                message="resolve_ath_review would answer 409",
+            )
+        if agent.review_reason != review.original_reason:
+            return _blocked(
+                **base,
+                ok=False,
+                disposition="conflict",
+                conflict_reason="agent hold reason no longer matches review",
+                message="resolve_ath_review would answer 409",
+            )
     scored_or_live = agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
     resolved_as = review.resolution if review and review.status == "resolved" else None
     steps: list[Literal["open", "clear", "reject"]]
     if ruling.action == "open":
         if held:
-            return AdminAthRulingPreviewItem(
+            return _blocked(
                 **base,
                 ok=True,
                 disposition="already_applied",
                 message="agent is already held in ath_pending_review",
             )
         if not scored_or_live:
-            return AdminAthRulingPreviewItem(
+            return _blocked(
                 **base,
                 ok=False,
                 disposition="conflict",
@@ -468,7 +598,7 @@ async def _preview_ruling(
         if held:
             steps = ["clear"]
         elif resolved_as == "clear" and scored_or_live:
-            return AdminAthRulingPreviewItem(
+            return _blocked(
                 **base,
                 ok=True,
                 disposition="already_applied",
@@ -480,7 +610,7 @@ async def _preview_ruling(
                 if agent.status == AgentStatus.ATH_PENDING_REVIEW
                 else f"agent is {agent.status.value}, not held"
             )
-            return AdminAthRulingPreviewItem(
+            return _blocked(
                 **base,
                 ok=False,
                 disposition="conflict",
@@ -493,14 +623,14 @@ async def _preview_ruling(
         elif scored_or_live:
             steps = ["open", "reject"]
         elif resolved_as == "reject" and agent.status == AgentStatus.BANNED:
-            return AdminAthRulingPreviewItem(
+            return _blocked(
                 **base,
                 ok=True,
                 disposition="already_applied",
                 message="review already resolved reject; agent is banned",
             )
         else:
-            return AdminAthRulingPreviewItem(
+            return _blocked(
                 **base,
                 ok=False,
                 disposition="conflict",
@@ -509,15 +639,18 @@ async def _preview_ruling(
                 ),
                 message="neither open nor resolve would be accepted",
             )
-    base["would_change_crown"] = await _would_change_crown(
+    base["would_change_crown"], after = await _crown_effect(
         session, board=board, agent=agent, action=ruling.action
     )
-    return AdminAthRulingPreviewItem(
-        **base,
-        ok=True,
-        disposition="ready",
-        steps=steps,
-        message="will " + " then ".join(steps),
+    return (
+        AdminAthRulingPreviewItem(
+            **base,
+            ok=True,
+            disposition="ready",
+            steps=steps,
+            message="will " + " then ".join(steps),
+        ),
+        after,
     )
 
 
@@ -525,6 +658,7 @@ def _preview_payload(
     *,
     actor: str,
     upload_key: str | None,
+    source: str | None,
     digest: str,
     board: BoardSnapshot,
     items: list[AdminAthRulingPreviewItem],
@@ -533,6 +667,9 @@ def _preview_payload(
         "v": _TOKEN_VERSION,
         "actor": actor,
         "key": upload_key,
+        # An inline preview's provenance travels in the token: execute is not
+        # asked for it again, and the audit annotation must still carry it.
+        "source": source,
         "digest": digest,
         "champion": str(board.champion_agent_id) if board.champion_agent_id else None,
         "raw_leader": (
@@ -610,11 +747,18 @@ async def preview_ath_rulings_batch(
         source=payload.source,
     )
     digest = rulings_digest(document.rulings)
-    board = await read_board_snapshot(session)
-    items = [
-        await _preview_ruling(session, index=index, ruling=ruling, board=board)
-        for index, ruling in enumerate(document.rulings)
-    ]
+    board = await read_board_snapshot(session, request)
+    # Walk the batch cumulatively: item i is judged against the board after
+    # items < i, so a champion reject flags the runner-up its successor
+    # becomes, and a clear behind a reject is measured against the leader that
+    # reject leaves behind.
+    items: list[AdminAthRulingPreviewItem] = []
+    simulated = board
+    for index, ruling in enumerate(document.rulings):
+        item, simulated = await _preview_ruling(
+            session, index=index, ruling=ruling, board=simulated
+        )
+        items.append(item)
     # A read-only preview must not leave the implicit transaction open.
     await session.rollback()
     issued_at = int(datetime.now(UTC).timestamp())
@@ -623,7 +767,12 @@ async def preview_ath_rulings_batch(
     token = _sign_preview(
         secret,
         _preview_payload(
-            actor=actor, upload_key=key, digest=digest, board=board, items=items
+            actor=actor,
+            upload_key=key,
+            source=document.source,
+            digest=digest,
+            board=board,
+            items=items,
         ),
         issued_at,
     )
@@ -686,6 +835,71 @@ async def _annotate_batch_audit(
             action.evidence = {**action.evidence, "batch_ruling": annotation}
 
 
+async def _apply_step(
+    session: AsyncSession,
+    *,
+    ruling: AdminAthRuling,
+    step: Literal["open", "clear", "reject"],
+    actor: str,
+) -> None:
+    """Apply one step through the only two writers, then end their autobegin."""
+    if step == "open":
+        await open_copy_review(
+            ruling.agent_id,
+            AdminCopyReviewOpenRequest(
+                expected_sha256=ruling.expected_sha256,
+                expected_score_count=ruling.expected_score_count,
+                reason=ruling.reason,
+            ),
+            None,
+            session,
+            x_admin_actor=actor,
+        )
+    else:
+        await resolve_copy_review(
+            ruling.agent_id,
+            AdminCopyReviewResolveRequest(resolution=step, reason=ruling.reason),
+            None,
+            session,
+            x_admin_actor=actor,
+        )
+    # Both routes read coldkeys after their own transaction commits, which
+    # autobegins another; end it before the next begin().
+    await session.rollback()
+
+
+async def _annotate_applied(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    actor: str,
+    started_at: datetime,
+    annotation: dict[str, Any],
+) -> tuple[bool, str]:
+    """``(annotated, message)`` for a ruling that has already landed."""
+    try:
+        await _annotate_batch_audit(
+            session,
+            agent_id=agent_id,
+            actor=actor,
+            started_at=started_at,
+            annotation=annotation,
+        )
+    except Exception as exc:
+        await session.rollback()
+        logger.exception(
+            "ath rulings batch annotation failed actor=%s batch_id=%s index=%s"
+            " agent_id=%s",
+            actor,
+            annotation.get("batch_id"),
+            annotation.get("index"),
+            agent_id,
+        )
+        detail = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+        return False, f"ruling applied; audit annotation failed: {detail}"
+    return True, "ruling applied and audit rows annotated"
+
+
 @router.post(
     "/ath-rulings/batch-execute", response_model=AdminAthRulingsExecuteResponse
 )
@@ -719,7 +933,7 @@ async def execute_ath_rulings_batch(
         actor=actor,
         upload_key=key,
         rulings=payload.rulings if key is None else None,
-        source=None,
+        source=token.get("source"),
     )
     digest = rulings_digest(document.rulings)
     if digest != token.get("digest"):
@@ -731,7 +945,7 @@ async def execute_ath_rulings_batch(
     previewed_leader = token.get("raw_leader")
 
     batch_id = uuid4()
-    board_before = await read_board_snapshot(session)
+    board_before = await read_board_snapshot(session, request)
     await session.rollback()
     crown_moved = (
         (
@@ -749,11 +963,16 @@ async def execute_ath_rulings_batch(
         != previewed_leader
     )
     results: list[AdminAthRulingExecuteItem] = []
+    # The board each item is judged against: the pre-batch read, then a fresh
+    # Postgres read after every ruling that lands. Execute never trusts the
+    # preview's simulation of the batch's own writes -- it re-reads the real
+    # fold and refuses an item whose flag no longer matches what was confirmed.
+    # None means a post-write re-read failed; later ready items are refused.
+    board_now: BoardSnapshot | None = board_before
     for index, ruling in enumerate(document.rulings):
         started_at = datetime.now(UTC)
-        steps_applied: list[Literal["open", "clear", "reject"]] = []
-        preview = await _preview_ruling(
-            session, index=index, ruling=ruling, board=board_before
+        preview, _projected = await _preview_ruling(
+            session, index=index, ruling=ruling, board=board_now or board_before
         )
         await session.rollback()
         base: dict[str, Any] = {
@@ -763,108 +982,57 @@ async def execute_ath_rulings_batch(
             "agent_status": preview.agent_status,
             "would_change_crown": preview.would_change_crown,
         }
-        try:
-            if preview.disposition == "already_applied":
-                results.append(
-                    AdminAthRulingExecuteItem(
-                        **base, status="already_applied", message=preview.message
-                    )
+        if preview.disposition == "already_applied":
+            results.append(
+                AdminAthRulingExecuteItem(
+                    **base, status="already_applied", message=preview.message
                 )
-                continue
-            if preview.disposition != "ready":
-                results.append(
-                    AdminAthRulingExecuteItem(
-                        **base,
-                        status="failed",
-                        message=preview.conflict_reason or preview.message,
-                    )
-                )
-                continue
-            flagged_now = preview.would_change_crown
-            flagged_then = str(ruling.agent_id) in previewed_crown
-            if flagged_now != flagged_then or (
-                crown_moved and (flagged_now or flagged_then)
-            ):
-                results.append(
-                    AdminAthRulingExecuteItem(
-                        **base,
-                        status="failed",
-                        message=(
-                            "crown arithmetic moved since preview "
-                            "(champion, raw leader, or this ruling's crown effect "
-                            "changed); preview again"
-                        ),
-                    )
-                )
-                continue
-            for step in preview.steps:
-                if step == "open":
-                    await open_copy_review(
-                        ruling.agent_id,
-                        AdminCopyReviewOpenRequest(
-                            expected_sha256=ruling.expected_sha256,
-                            expected_score_count=ruling.expected_score_count,
-                            reason=ruling.reason,
-                        ),
-                        None,
-                        session,
-                        x_admin_actor=actor,
-                    )
-                else:
-                    await resolve_copy_review(
-                        ruling.agent_id,
-                        AdminCopyReviewResolveRequest(
-                            resolution=step, reason=ruling.reason
-                        ),
-                        None,
-                        session,
-                        x_admin_actor=actor,
-                    )
-                # Both routes read coldkeys after their own transaction commits,
-                # which autobegins another; end it before the next begin().
-                await session.rollback()
-                steps_applied.append(step)
-            await _annotate_batch_audit(
-                session,
-                agent_id=ruling.agent_id,
-                actor=actor,
-                started_at=started_at,
-                annotation={
-                    "batch_id": str(batch_id),
-                    "index": index,
-                    "action": ruling.action,
-                    "rulings_sha256": digest,
-                    "upload_key": key,
-                    "source": document.source,
-                    "evidence_references": list(ruling.evidence_references),
-                    "would_change_crown": preview.would_change_crown,
-                    "board_fingerprint": board_before.fingerprint,
-                },
             )
-            agent = await session.get(Agent, ruling.agent_id)
-            # Read before the rollback expires the instance's attributes.
-            status_after = agent.status.value if agent is not None else None
-            await session.rollback()
-            base["agent_status"] = status_after
-            logger.info(
-                "ath rulings batch actor=%s batch_id=%s index=%s action=%s agent_id=%s"
-                " steps=%s crown=%s",
-                actor,
-                batch_id,
-                index,
-                ruling.action,
-                ruling.agent_id,
-                ",".join(steps_applied),
-                preview.would_change_crown,
-            )
+            continue
+        if preview.disposition != "ready":
             results.append(
                 AdminAthRulingExecuteItem(
                     **base,
-                    status="applied",
-                    steps_applied=steps_applied,
-                    message="ruling applied and audit rows annotated",
+                    status="failed",
+                    message=preview.conflict_reason or preview.message,
                 )
             )
+            continue
+        if board_now is None:
+            results.append(
+                AdminAthRulingExecuteItem(
+                    **base,
+                    status="failed",
+                    message=(
+                        "board re-read failed after an earlier ruling landed; "
+                        "preview again"
+                    ),
+                )
+            )
+            continue
+        flagged_now = preview.would_change_crown
+        flagged_then = str(ruling.agent_id) in previewed_crown
+        if flagged_now != flagged_then or (
+            crown_moved and (flagged_now or flagged_then)
+        ):
+            results.append(
+                AdminAthRulingExecuteItem(
+                    **base,
+                    status="failed",
+                    message=(
+                        "crown arithmetic moved since preview "
+                        "(champion, raw leader, or this ruling's crown effect "
+                        "changed); preview again"
+                    ),
+                )
+            )
+            continue
+
+        steps_applied: list[Literal["open", "clear", "reject"]] = []
+        try:
+            for step in preview.steps:
+                await _apply_step(session, ruling=ruling, step=step, actor=actor)
+                steps_applied.append(step)
         except HTTPException as exc:
             await session.rollback()
             results.append(
@@ -875,6 +1043,7 @@ async def execute_ath_rulings_batch(
                     message=str(exc.detail),
                 )
             )
+            continue
         except Exception:
             await session.rollback()
             logger.exception(
@@ -892,7 +1061,69 @@ async def execute_ath_rulings_batch(
                     message="internal error while applying ruling",
                 )
             )
-    board_after = await read_board_snapshot(session)
+            continue
+
+        # The ruling landed. Whatever happens below, the row reports "applied":
+        # an operator reading "failed" would hand-run the single tool again or
+        # tell the miner nothing changed.
+        annotated, message = await _annotate_applied(
+            session,
+            agent_id=ruling.agent_id,
+            actor=actor,
+            started_at=started_at,
+            annotation={
+                "batch_id": str(batch_id),
+                "index": index,
+                "action": ruling.action,
+                "rulings_sha256": digest,
+                "upload_key": key,
+                "source": document.source,
+                "evidence_references": list(ruling.evidence_references),
+                "would_change_crown": preview.would_change_crown,
+                "board_fingerprint": board_now.fingerprint,
+            },
+        )
+        try:
+            agent = await session.get(Agent, ruling.agent_id)
+            # Read before the rollback expires the instance's attributes.
+            base["agent_status"] = agent.status.value if agent is not None else None
+            await session.rollback()
+            board_now = await read_board_snapshot(session, request)
+            await session.rollback()
+        except Exception:
+            await session.rollback()
+            logger.exception(
+                "ath rulings batch board re-read failed actor=%s batch_id=%s"
+                " index=%s agent_id=%s",
+                actor,
+                batch_id,
+                index,
+                ruling.agent_id,
+            )
+            board_now = None
+            message = f"{message}; board re-read failed, later items are refused"
+        logger.info(
+            "ath rulings batch actor=%s batch_id=%s index=%s action=%s agent_id=%s"
+            " steps=%s crown=%s annotated=%s",
+            actor,
+            batch_id,
+            index,
+            ruling.action,
+            ruling.agent_id,
+            ",".join(steps_applied),
+            preview.would_change_crown,
+            annotated,
+        )
+        results.append(
+            AdminAthRulingExecuteItem(
+                **base,
+                status="applied",
+                steps_applied=steps_applied,
+                annotated=annotated,
+                message=message,
+            )
+        )
+    board_after = await read_board_snapshot(session, request)
     await session.rollback()
     return AdminAthRulingsExecuteResponse(
         batch_id=batch_id,
