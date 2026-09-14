@@ -731,26 +731,55 @@ with `input_schema`, `tool_choice` object, `system`):
 - every offered tool's **name** and a **schema digest** — the SHA-256 of the
   canonical JSON of `{"description", "parameters"}` — so catalog fidelity is
   checkable against the published catalog without storing description text;
-- the normalized `tool_choice` (`auto`, `none`, `required`, `tool:<name>`);
+- the normalized `tool_choice` (`auto`, `none`, `required`, `tool:<name>`),
+  **applied to the offer**: `none` leaves nothing choosable and a pinned
+  `tool:<name>` leaves only that tool, so the recorded catalog is what the
+  model could actually select (`tools_choosable` per completion,
+  `tool_choice_suppressed_completions` per case);
 - a **digest** over the harness-authored spans: every `system`/`developer`
   message, the Anthropic top-level `system`, and a trailing assistant prefill.
   A prompt-level "do not call tools" suppression is therefore recorded as a
   citable value; the prose itself is never retained;
-- the **model-emitted tool names** of the response (OpenAI `tool_calls`,
-  Anthropic `tool_use` blocks), including invalid emissions;
+- the **model-emitted tool names** of the response (OpenAI `choices[0]`
+  `tool_calls` — the choice the harness can act on; alternatives under `n > 1`
+  are not emissions — and Anthropic `tool_use` blocks), including invalid
+  emissions;
 - whether the completion came **after the last tool result** the validator
   served that case through `tool_endpoint`.
 
 No prompt, completion, description, or argument text enters the record. The
-capture is bounded per case; a case that hits a bound is marked incomplete.
+capture is bounded per case; a case that hits a bound is marked incomplete, and
+so is a case with a request or response body the relay could not parse (the
+finding is recorded; an unparseable request may have offered a catalog the
+record cannot show, so it fails open rather than reading as an empty offer).
 
 **Attribution is exact or absent.** A completion is booked on the case whose
-exclusive window, verified `X-Ditto-Case-Id` claim (naming a case in flight), or
-sole in-flight `/run` admitted it. Under concurrent `/run` with several cases in
-flight and no verified claim the completion is booked run-wide and every case
-then in flight is marked incomplete (`completions_total: null`,
-`complete: false`). A harness that sends `X-Ditto-Case-Id` on its inference
-calls keeps every case attributable at any concurrency.
+exclusive window, harness-claimed `X-Ditto-Case-Id` (membership-checked against
+the cases in flight — nothing more), or sole in-flight `/run` admitted it; each
+completion records its `attribution_source` (`window`, `claim`, `in_flight`).
+Under concurrent `/run` with several cases in flight and no claim the completion
+is booked run-wide and every case then in flight is marked incomplete
+(`completions_total: null`, `complete: false`). A harness that sends
+`X-Ditto-Case-Id` on its inference calls keeps every case attributable at any
+concurrency — **the shipped starter kit does not yet send it**, and the live
+runtime runs several cases concurrently without exclusive windows, so until the
+kit does, the catalog telemetry is blank fleet-wide (the relay logs one operator
+line per run whose `attribution_coverage_bps` is 0 with tool cases present).
+
+A claim is a harness assertion. It becomes **corroborated** when a tool call the
+claimed completion emitted is consumed by the validator for the same case
+(`claim_corroborated`, counted in `claim_corroborated_completions`). Under
+enforce a settled zero must rest on window/in-flight completions or on
+corroborated claims; a zero that would rest on an uncorroborated claim is
+recorded as `claim_attribution_uncorroborated` and withheld.
+
+Under concurrency the relay also keeps a **sound lower bound**: when every
+completion that could have served a case — attributed or overlapping — left an
+actionable (non-memory) catalog choosable, and the capture is otherwise intact,
+`catalog_present_lower_bound` is true. It never settles the case and never
+zeroes; on a declarative/chit-chat/decline case it records the non-empty safe
+harbor, so an honest full-catalog harness shows up in `lower_bound_cases` even
+before it sends `X-Ditto-Case-Id`.
 
 **Where it appears.** The transcript's `execution.catalog` and the report's
 per-case `catalog` carry the same `CatalogEvidence`:
@@ -759,11 +788,14 @@ per-case `catalog` carry the same `CatalogEvidence`:
 "catalog": {
   "completions_total": 2,                 // null when attribution is incomplete
   "completions_after_last_tool_result": 1,
+  "completions_with_catalog": 2,          // completions with an actionable choosable catalog
   "catalog_present": true,
-  "tools_offered": [ { "name": "search_web", "schema_sha256": "…" }, /* union, sorted */ ],
-  "completions": [ { "tools_offered": 31, "catalog_sha256": "…", "tool_choice": "auto",
+  "tools_offered": [ { "name": "search_web", "schema_sha256": "…" }, /* choosable union, sorted */ ],
+  "completions": [ { "tools_offered": 31, "tools_choosable": 31, "catalog_sha256": "…", "tool_choice": "auto",
                      "model_emitted_tool_calls": ["search_web"], "system_span_sha256": "…",
-                     "after_last_tool_result": false }, /* … */ ],
+                     "after_last_tool_result": false, "attribution_source": "claim",
+                     "claim_corroborated": true }, /* … */ ],
+  "claim_attributed_completions": 2, "claim_corroborated_completions": 1,
   "model_emitted_tool_calls": ["search_web"],
   "harness_system_span_sha256": ["…"],
   "complete": true,
@@ -773,21 +805,38 @@ per-case `catalog` carry the same `CatalogEvidence`:
 
 The report's `details.catalog_gate` summary publishes the run-level
 **`catalog_suppression_rate`** (tool cases with at least one completion and no
-tool offered, over attributed tool cases with a completion), the per-finding
-counts, the posture, and `attribution_coverage_bps` — this validator's half of
-the enforce precondition below.
+tool offered, over settled tool cases with a completion), the per-finding
+counts, the posture, and `attribution_coverage_bps` — attributed tool cases
+(`completions_total` non-null) over tool cases, this validator's half of the
+enforce precondition below. `incomplete_capture_cases` counts attributed cases
+the capture nonetheless did not settle (truncation, unparseable body);
+`lower_bound_cases` counts unattributed cases whose lower bound held;
+`claim_uncorroborated_cases` counts zeros enforce withheld.
 
 **Scoring rules (tool cases; memory cases are never gated here).**
 
 - (a) **`restraint_without_offer`** — a no-expected-tool case (chit-chat,
   abstention, missing-argument, negation) earns restraint credit only when the
-  model was in a position to act: at least one attributed completion offered a
-  catalog. A case with no completion at all is the host answering without the
-  model and is charged the same way. Waived by the safe harbor (d).
+  model was in a position to act: at least one attributed completion left a
+  **non-memory tool choosable**. Sending the full `tools[]` with
+  `tool_choice: "none"` (`tool_choice_none_suppression`), pinning `tool_choice`
+  to a memory tool, or offering memory tools alone (`memory_only_catalog`) is
+  host-decided restraint and offers nothing. A case with no completion at all
+  is the host answering without the model and is charged the same way. Waived
+  by the safe harbor (d).
 - (b) **`expected_tool_not_offered`** — a case whose expected non-memory tool
   was never offered on any attributed completion earns no tool credit: the
   model could not have chosen it. Memory tools are harness-internal and never
-  required on the wire. Waived by the safe harbor (d).
+  required on the wire. Waived by the safe harbor (d), and waived
+  (`offer_inferred_from_execution`) when the validator executed that very tool
+  under matched v10 provenance — the model demonstrably chose it, so it was
+  offered, even if the request body that offered it could not be parsed.
+
+Rules (a) and (b) are evaluated over the **union** of the case's attributed
+completions, not only the deciding turn: an offer on any turn the model
+declined is still model-chosen restraint, and an expected tool offered on any
+turn was choosable. `completions[].after_last_tool_result` keeps the per-turn
+record for the audit trail.
 - (c) **`swallowed_model_call`** — restraint is scored on what the **model**
   chose: on a no-expected-tool case, a model-emitted non-memory call the
   validator never observed executed is a host override, not restraint.
@@ -809,10 +858,14 @@ the enforce precondition below.
 `catalog_suppression_rate` are recorded and no score moves. Under **enforce**
 (`DITTOBENCH_V13_CATALOG_GATE_POSTURE=enforce`) a settled finding zeroes the
 case's tool credit in scored scope; incomplete or unavailable evidence always
-fails **open**. Enforce is an operator decision with an explicit fleet
-precondition: `completions_total` non-null on **≥ 99 %** of cases across **≥ 3**
-v13-capable validators. Evidence rows are leads for source review (policy v14)
-either way.
+fails **open**, and a settled zero whose attribution rests on an uncorroborated
+`X-Ditto-Case-Id` claim is withheld and recorded. Enforce is an operator
+decision with an explicit fleet precondition: `completions_total` non-null on
+**≥ 99 %** of cases across **≥ 3** v13-capable validators — reachable only once
+the shipped harnesses send `X-Ditto-Case-Id` — and, because a no-tool case can
+never corroborate a claim (it emits no call), the owner must decide whether
+claim-attributed no-tool cases are ever eligible to zero. Evidence rows are
+leads for source review (policy v14) either way.
 
 ### Prohibited: content-keyed mutation of the graded response
 

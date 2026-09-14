@@ -1235,6 +1235,14 @@ var memoryTools = map[string]bool{
 	"search_memories_in_subjects": true,
 }
 
+// IsMemoryTool reports whether name is one of the catalog's memory-retrieval
+// tools (harness-internal, never served by the mock endpoint). The v13 catalog
+// capture uses it to decide whether an offered catalog left the model in a
+// position to ACT.
+func IsMemoryTool(name string) bool {
+	return memoryTools[name]
+}
+
 // allMemoryTools reports whether every expected tool is a memory-retrieval tool
 // (so the case is answered from the harness's own memory, not a served tool).
 func allMemoryTools(specs []protocol.ToolSpec) bool {

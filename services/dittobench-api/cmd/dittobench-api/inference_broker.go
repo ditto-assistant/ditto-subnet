@@ -1803,7 +1803,7 @@ func (b *inferenceBroker) consumeModelToolCall(
 		session.caseToolCalls[generation] = calls
 		snapshot.MatchedToolCalls++
 		session.caseSnapshots[generation] = snapshot
-		recordCatalogToolResultLocked(session, caseID)
+		recordCatalogToolResultLocked(session, caseID, call.Name)
 		return true
 	}
 	snapshot.UnmatchedToolCalls++
@@ -1905,7 +1905,7 @@ func consumeSessionModelToolCallLocked(
 		candidate.consumed = true
 		session.sessionToolConsumed++
 		ledger.MatchedToolCalls++
-		recordCatalogToolResultLocked(session, caseID)
+		recordCatalogToolResultLocked(session, caseID, name)
 		return true
 	}
 	ledger.UnmatchedToolCalls++

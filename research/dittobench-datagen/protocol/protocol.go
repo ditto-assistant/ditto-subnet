@@ -686,11 +686,15 @@ type ToolProvenanceEvidence struct {
 // scorers; historical report bytes omit it.
 //
 // Attribution is exact or absent. A completion is booked on the case whose
-// exclusive window, verified X-Ditto-Case-Id claim, or sole in-flight /run
-// admitted it; a completion the broker cannot attribute to exactly one case is
-// booked run-wide and marks every case then in flight incomplete
-// (CompletionsTotal nil, Complete false). The v13 catalog gate fails OPEN on an
-// incomplete case: it zeroes only on affirmative, attributed evidence.
+// exclusive window, harness-claimed X-Ditto-Case-Id (membership-checked against
+// the cases in flight, never verified further), or sole in-flight /run admitted
+// it; a completion the broker cannot attribute to exactly one case is booked
+// run-wide and marks every case then in flight incomplete (CompletionsTotal
+// nil, Complete false). A body the broker could not parse also leaves the case
+// incomplete. The v13 catalog gate fails OPEN on an incomplete case: it zeroes
+// only on affirmative, attributed evidence, and under enforce only when every
+// claim-attributed completion is corroborated by a tool call the validator
+// consumed for the same case.
 type CatalogEvidence struct {
 	// CompletionsTotal is the number of successful chat completions attributed to
 	// this case. nil when the case's attribution is incomplete -- the fleet
@@ -701,13 +705,38 @@ type CatalogEvidence struct {
 	// the validator last served this case a tool_endpoint result (every completion
 	// when no tool result was served). It is the length of the deciding tail.
 	CompletionsAfterLastToolResult int `json:"completions_after_last_tool_result"`
-	// CatalogPresent is true when at least one attributed completion offered a
-	// non-empty tools[] catalog.
+	// CompletionsWithCatalog counts the attributed completions on which at least
+	// one non-memory tool was CHOOSABLE: offered in tools[] and not suppressed by
+	// tool_choice ("none" offers nothing; a pinned tool_choice offers only the
+	// pinned tool).
+	CompletionsWithCatalog int `json:"completions_with_catalog"`
+	// CatalogPresent is true when at least one attributed completion left a
+	// non-empty choosable catalog after tool_choice.
 	CatalogPresent bool `json:"catalog_present"`
 	// ToolsOffered is the union, over the case's attributed completions, of the
-	// tools offered to the model, sorted by name. A tool offered under two
-	// different schema digests appears once per digest.
+	// tools the model could choose, sorted by name. A tool offered under two
+	// different schema digests appears once per digest. Tools the request's
+	// tool_choice suppressed are not in it.
 	ToolsOffered []OfferedTool `json:"tools_offered,omitempty"`
+	// ToolChoiceSuppressedCompletions counts the attributed completions whose
+	// tool_choice made part or all of the sent tools[] unchoosable.
+	ToolChoiceSuppressedCompletions int `json:"tool_choice_suppressed_completions,omitempty"`
+	// ClaimAttributedCompletions counts the attributed completions booked on an
+	// X-Ditto-Case-Id claim rather than a window or a sole in-flight case;
+	// ClaimCorroboratedCompletions is how many of those emitted a tool call the
+	// validator later consumed for this same case.
+	ClaimAttributedCompletions   int `json:"claim_attributed_completions,omitempty"`
+	ClaimCorroboratedCompletions int `json:"claim_corroborated_completions,omitempty"`
+	// OverlapCompletions counts the unattributable completions admitted while
+	// this case was in flight (each also marks the case incomplete);
+	// OverlapCompletionsWithCatalog is how many of them left a non-empty
+	// choosable non-memory catalog. CatalogPresentLowerBound is true when every
+	// completion that could have served this case -- attributed or overlapping
+	// -- did so, and the capture is otherwise intact: a sound "the model was in
+	// a position to act" bound that never settles the case.
+	OverlapCompletions            int  `json:"overlap_completions,omitempty"`
+	OverlapCompletionsWithCatalog int  `json:"overlap_completions_with_catalog,omitempty"`
+	CatalogPresentLowerBound      bool `json:"catalog_present_lower_bound,omitempty"`
 	// Completions is the per-completion metadata in admission order, bounded by
 	// the broker's capture ceiling (Complete is false once the ceiling is hit).
 	Completions []CatalogCompletion `json:"completions,omitempty"`
@@ -734,8 +763,18 @@ type OfferedTool struct {
 
 // CatalogCompletion is the relay metadata of one attributed chat completion.
 type CatalogCompletion struct {
-	// ToolsOffered is the number of tools in the request's catalog.
-	ToolsOffered int `json:"tools_offered"`
+	// ToolsOffered is the number of tools in the request's catalog; ToolsChoosable
+	// is how many of them tool_choice left choosable (0 under "none", at most 1
+	// under a pinned tool).
+	ToolsOffered   int `json:"tools_offered"`
+	ToolsChoosable int `json:"tools_choosable"`
+	// AttributionSource is how the broker booked this completion on the case:
+	// "window" (exclusive case window), "in_flight" (sole /run case in flight),
+	// or "claim" (harness-sent X-Ditto-Case-Id naming a case in flight). A claim
+	// is membership-checked, not verified; ClaimCorroborated is true once a tool
+	// call this completion emitted was consumed by the validator for this case.
+	AttributionSource string `json:"attribution_source,omitempty"`
+	ClaimCorroborated bool   `json:"claim_corroborated,omitempty"`
 	// CatalogSHA256 is the SHA-256 over the sorted "name:schema_sha256" lines of
 	// the offered catalog; empty when no tool was offered.
 	CatalogSHA256 string `json:"catalog_sha256,omitempty"`
@@ -758,9 +797,17 @@ type CatalogCompletion struct {
 // run-level published metric (catalog absent / attributed cases with at least
 // one completion).
 type CatalogGateSummary struct {
-	Posture                string  `json:"posture"`
-	ToolCases              int     `json:"tool_cases"`
+	Posture   string `json:"posture"`
+	ToolCases int    `json:"tool_cases"`
+	// AttributedCases counts tool cases with a non-nil completions_total (every
+	// completion attributable); IncompleteCaptureCases is how many of those were
+	// nonetheless not settled (truncated capture or an unparseable body) and so
+	// are excluded from the finding counts and the suppression rate.
+	// LowerBoundCases counts unattributed cases whose catalog_present_lower_bound
+	// held (every candidate completion offered an actionable catalog).
 	AttributedCases        int     `json:"attributed_cases"`
+	IncompleteCaptureCases int     `json:"incomplete_capture_cases,omitempty"`
+	LowerBoundCases        int     `json:"lower_bound_cases,omitempty"`
 	NoCompletionCases      int     `json:"no_completion_cases,omitempty"`
 	CatalogAbsentCases     int     `json:"catalog_absent_cases"`
 	CatalogSuppressionRate float64 `json:"catalog_suppression_rate"`
@@ -769,6 +816,12 @@ type CatalogGateSummary struct {
 	ExpectedToolNotOffered int     `json:"expected_tool_not_offered,omitempty"`
 	SwallowedModelCall     int     `json:"swallowed_model_call,omitempty"`
 	ZeroedCases            int     `json:"zeroed_cases,omitempty"`
+	// ClaimUncorroboratedCases counts settled zeroing findings that enforce
+	// withheld because the case's attribution rested on an uncorroborated
+	// X-Ditto-Case-Id claim; ClaimAttributedCompletions sums the per-case
+	// claim-attributed completions.
+	ClaimUncorroboratedCases   int `json:"claim_uncorroborated_cases,omitempty"`
+	ClaimAttributedCompletions int `json:"claim_attributed_completions,omitempty"`
 	// CompletionsTotal and CompletionsUnattributed are the session-wide relay
 	// counts; AttributionCoverageBPS is attributed tool cases over tool cases in
 	// basis points -- the per-validator half of the enforce precondition.

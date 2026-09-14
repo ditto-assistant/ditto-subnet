@@ -17,10 +17,18 @@ package main
 // is bounded per case so a hostile harness cannot grow broker memory.
 //
 // Attribution is exact or absent. A completion is booked on the case whose
-// exclusive window, verified X-Ditto-Case-Id claim, or sole in-flight /run
-// admitted it. Under concurrent /run with several cases in flight and no
-// verified claim, the completion is booked run-wide and every case in flight at
-// admission is marked incomplete; the scorer fails OPEN on those cases.
+// exclusive window, harness-claimed X-Ditto-Case-Id (membership-checked against
+// the cases in flight, nothing more), or sole in-flight /run admitted it. Under
+// concurrent /run with several cases in flight and no claim, the completion is
+// booked run-wide and every case in flight at admission is marked incomplete;
+// the scorer fails OPEN on those cases. Each attributed completion records its
+// attribution source, and a claim is corroborated once a tool call it emitted
+// is consumed by the validator for the same case, so the scorer can refuse to
+// zero on a harness-asserted label alone.
+//
+// tool_choice is applied to the OFFER: "none" leaves nothing choosable and a
+// pinned "tool:<name>" leaves only that tool, so a harness that sends the full
+// tools[] while forbidding its use records an empty choosable catalog.
 
 import (
 	"crypto/sha256"
@@ -29,6 +37,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ditto-assistant/dittobench-api/internal/scorer"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
@@ -53,6 +62,17 @@ const (
 	catalogFindingCaptureTruncated    = "catalog_capture_truncated"
 	catalogFindingAttributionGap      = "catalog_attribution_incomplete"
 	catalogFindingUnparseableResponse = "catalog_response_unparseable"
+	// catalogFindingToolChoiceSuppression: at least one attributed completion
+	// sent a tools[] catalog its tool_choice made (partly) unchoosable.
+	catalogFindingToolChoiceSuppression = "tool_choice_none_suppression"
+)
+
+// Attribution sources (CatalogCompletion.AttributionSource); the names match
+// the trace context's case_source.
+const (
+	catalogAttributionWindow   = "window"
+	catalogAttributionClaim    = "claim"
+	catalogAttributionInFlight = "in_flight"
 )
 
 // catalogRequest is the request-side metadata of one chat completion.
@@ -63,9 +83,41 @@ type catalogRequest struct {
 	parsed         bool
 }
 
+// choosable returns the tools the request's tool_choice left the model able to
+// select: nothing under "none", only the pinned tool under "tool:<name>", and
+// the whole catalog otherwise.
+func (r catalogRequest) choosable() []protocol.OfferedTool {
+	switch {
+	case r.toolChoice == "none":
+		return nil
+	case strings.HasPrefix(r.toolChoice, "tool:"):
+		pinned := strings.TrimPrefix(r.toolChoice, "tool:")
+		var kept []protocol.OfferedTool
+		for _, tool := range r.tools {
+			if tool.Name == pinned {
+				kept = append(kept, tool)
+			}
+		}
+		return kept
+	}
+	return r.tools
+}
+
+// actionableCatalog reports whether a choosable set leaves the model in a
+// position to ACT: at least one tool that is not a harness-internal memory tool.
+func actionableCatalog(tools []protocol.OfferedTool) bool {
+	for _, tool := range tools {
+		if !scorer.IsMemoryTool(tool.Name) {
+			return true
+		}
+	}
+	return false
+}
+
 // brokerCatalogLedger is one wire case's catalog evidence under construction.
 type brokerCatalogLedger struct {
 	completions            int
+	completionsWithCatalog int
 	afterLastToolResult    int
 	catalogPresent         bool
 	offered                map[string]struct{} // "name\x00schema" keys
@@ -73,7 +125,11 @@ type brokerCatalogLedger struct {
 	completionMeta         []protocol.CatalogCompletion
 	emitted                []string
 	spanHashes             map[string]struct{}
+	toolChoiceSuppressed   int
+	claimAttributed        int
+	claimCorroborated      int
 	unattributedOverlap    int
+	overlapWithCatalog     int
 	truncated              bool
 	unparseableRequests    int
 	unparseableResponses   int
@@ -106,22 +162,22 @@ func ensureCatalogLedgerLocked(session *brokerSession, caseID string) *brokerCat
 // attributedCaseLocked resolves the one case a chat completion serves, using
 // the same evidence order as the trace context: an exclusive case window, then
 // a harness claim that names an in-flight case, then a sole in-flight case.
-// ok=false means the completion cannot be attributed to exactly one case.
-// Caller holds session.mu.
-func attributedCaseLocked(session *brokerSession, caseGeneration uint64, claimed string) (string, bool) {
+// source names which of those decided it. ok=false means the completion cannot
+// be attributed to exactly one case. Caller holds session.mu.
+func attributedCaseLocked(session *brokerSession, caseGeneration uint64, claimed string) (caseID, source string, ok bool) {
 	if caseGeneration != 0 && session.activeCaseGeneration == caseGeneration && session.activeCaseID != "" {
-		return session.activeCaseID, true
+		return session.activeCaseID, catalogAttributionWindow, true
 	}
 	claimed = strings.TrimSpace(claimed)
 	if claimed != "" && session.runCases[claimed] > 0 {
-		return claimed, true
+		return claimed, catalogAttributionClaim, true
 	}
 	if len(session.runCases) == 1 {
 		for caseID := range session.runCases {
-			return caseID, true
+			return caseID, catalogAttributionInFlight, true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 // catalogAttribution is the admission-time attribution of one chat completion,
@@ -130,6 +186,7 @@ func attributedCaseLocked(session *brokerSession, caseGeneration uint64, claimed
 type catalogAttribution struct {
 	enabled bool
 	caseID  string
+	source  string
 	exact   bool
 	// inFlight is the set of /run cases in flight at admission; when the
 	// completion is unattributable and SUCCEEDS, each of them is marked
@@ -144,9 +201,9 @@ func beginCatalogCompletionLocked(session *brokerSession, caseGeneration uint64,
 	if !catalogCaptureEnabled(session) {
 		return catalogAttribution{}
 	}
-	caseID, ok := attributedCaseLocked(session, caseGeneration, claimed)
+	caseID, source, ok := attributedCaseLocked(session, caseGeneration, claimed)
 	if ok {
-		return catalogAttribution{enabled: true, caseID: caseID, exact: true}
+		return catalogAttribution{enabled: true, caseID: caseID, source: source, exact: true}
 	}
 	session.catalogUnattributedAdmitted++
 	attribution := catalogAttribution{enabled: true}
@@ -164,31 +221,46 @@ func recordCatalogCompletionLocked(session *brokerSession, attribution catalogAt
 		return
 	}
 	request := parseCatalogRequest(requestBody)
+	choosable := request.choosable()
+	actionable := actionableCatalog(choosable)
 	emitted, responseOK := modelEmittedToolNames(responseBody)
 	session.catalogCompletions++
-	if len(request.tools) > 0 {
+	if len(choosable) > 0 {
 		session.catalogCompletionsWithCatalog++
 	}
 	if !attribution.exact {
 		session.catalogUnattributedCompletions++
 		for _, inFlight := range attribution.inFlight {
-			ensureCatalogLedgerLocked(session, inFlight).unattributedOverlap++
+			ledger := ensureCatalogLedgerLocked(session, inFlight)
+			ledger.unattributedOverlap++
+			if actionable && request.parsed {
+				ledger.overlapWithCatalog++
+			}
 		}
 		return
 	}
 	ledger := ensureCatalogLedgerLocked(session, attribution.caseID)
 	ledger.completions++
 	ledger.afterLastToolResult++
+	if attribution.source == catalogAttributionClaim {
+		ledger.claimAttributed++
+	}
 	if !request.parsed {
 		ledger.unparseableRequests++
 	}
 	if !responseOK {
 		ledger.unparseableResponses++
 	}
-	if len(request.tools) > 0 {
+	if len(choosable) > 0 {
 		ledger.catalogPresent = true
 	}
-	for _, tool := range request.tools {
+	if actionable {
+		ledger.completionsWithCatalog++
+	}
+	if len(choosable) < len(request.tools) {
+		ledger.toolChoiceSuppressed++
+	}
+	for _, tool := range choosable {
 		key := tool.Name + "\x00" + tool.SchemaSHA256
 		if _, seen := ledger.offered[key]; seen {
 			continue
@@ -223,25 +295,43 @@ func recordCatalogCompletionLocked(session *brokerSession, attribution catalogAt
 	}
 	ledger.completionMeta = append(ledger.completionMeta, protocol.CatalogCompletion{
 		ToolsOffered:          len(request.tools),
+		ToolsChoosable:        len(choosable),
 		CatalogSHA256:         catalogDigest(request.tools),
 		ToolChoice:            request.toolChoice,
 		ModelEmittedToolCalls: emitted,
 		SystemSpanSHA256:      request.systemSpanHash,
 		AfterLastToolResult:   true,
+		AttributionSource:     attribution.source,
 	})
 }
 
-// recordCatalogToolResultLocked notes that the validator served this case a
-// tool_endpoint result: the deciding tail restarts after it. Caller holds
-// session.mu.
-func recordCatalogToolResultLocked(session *brokerSession, caseID string) {
+// recordCatalogToolResultLocked notes that the validator consumed a
+// model-emitted call named name for this case through tool_endpoint: the
+// deciding tail restarts after it, and the earliest claim-attributed completion
+// that emitted that name and is not yet corroborated becomes corroborated (the
+// harness label is now backed by an execution the validator matched to the
+// same case). Caller holds session.mu.
+func recordCatalogToolResultLocked(session *brokerSession, caseID, name string) {
 	if !catalogCaptureEnabled(session) || caseID == "" {
 		return
 	}
 	ledger := ensureCatalogLedgerLocked(session, caseID)
 	ledger.afterLastToolResult = 0
+	corroborated := false
 	for index := range ledger.completionMeta {
-		ledger.completionMeta[index].AfterLastToolResult = false
+		meta := &ledger.completionMeta[index]
+		meta.AfterLastToolResult = false
+		if corroborated || meta.AttributionSource != catalogAttributionClaim || meta.ClaimCorroborated {
+			continue
+		}
+		for _, emitted := range meta.ModelEmittedToolCalls {
+			if emitted == name {
+				meta.ClaimCorroborated = true
+				ledger.claimCorroborated++
+				corroborated = true
+				break
+			}
+		}
 	}
 }
 
@@ -468,11 +558,12 @@ func normalizeToolChoice(raw json.RawMessage) string {
 }
 
 // modelEmittedToolNames lists the tool names a chat completion response
-// selected: OpenAI choices[].message.tool_calls[].function.name (every choice,
-// in order) and Anthropic content[] blocks of type tool_use. Unlike
-// decodeModelToolCalls it is lenient -- an invalid call still names its tool
-// so restraint can be scored on what the model chose -- and it reports whether
-// the body was parseable at all.
+// selected: OpenAI choices[0].message.tool_calls[].function.name (only the
+// first choice -- the one the harness can act on; alternatives under n>1 are
+// not emissions the harness swallowed) and Anthropic content[] blocks of type
+// tool_use. Unlike decodeModelToolCalls it is lenient -- an invalid call still
+// names its tool so restraint can be scored on what the model chose -- and it
+// reports whether the body was parseable at all.
 func modelEmittedToolNames(responseBody []byte) ([]string, bool) {
 	var response struct {
 		Choices []struct {
@@ -493,8 +584,8 @@ func modelEmittedToolNames(responseBody []byte) ([]string, bool) {
 		return nil, false
 	}
 	var names []string
-	for _, choice := range response.Choices {
-		for _, call := range choice.Message.ToolCalls {
+	if len(response.Choices) > 0 {
+		for _, call := range response.Choices[0].Message.ToolCalls {
 			if call.Function.Name != "" {
 				names = append(names, call.Function.Name)
 			}
@@ -512,6 +603,9 @@ func modelEmittedToolNames(responseBody []byte) ([]string, bool) {
 // the session is unknown or below Bench v13 (the scorer then records
 // unavailability and fails open). A case with no ledger and no overlap is a
 // case the harness never sent a completion for: CompletionsTotal is 0, not nil.
+// Complete requires exact attribution, an untruncated capture, and every body
+// parsed: an unparseable request may have offered a catalog the record cannot
+// show, so it fails OPEN rather than reading as an empty offer.
 func (b *inferenceBroker) sessionCatalogEvidence(id, caseID string) *protocol.CatalogEvidence {
 	b.mu.RLock()
 	session := b.sessions[id]
@@ -528,14 +622,26 @@ func (b *inferenceBroker) sessionCatalogEvidence(id, caseID string) *protocol.Ca
 	if ledger == nil {
 		ledger = &brokerCatalogLedger{}
 	}
+	intact := !ledger.truncated && ledger.unparseableRequests == 0 && ledger.unparseableResponses == 0
 	evidence := &protocol.CatalogEvidence{
-		CompletionsAfterLastToolResult: ledger.afterLastToolResult,
-		CatalogPresent:                 ledger.catalogPresent,
-		Complete:                       ledger.unattributedOverlap == 0 && !ledger.truncated,
+		CompletionsAfterLastToolResult:  ledger.afterLastToolResult,
+		CompletionsWithCatalog:          ledger.completionsWithCatalog,
+		CatalogPresent:                  ledger.catalogPresent,
+		ToolChoiceSuppressedCompletions: ledger.toolChoiceSuppressed,
+		ClaimAttributedCompletions:      ledger.claimAttributed,
+		ClaimCorroboratedCompletions:    ledger.claimCorroborated,
+		OverlapCompletions:              ledger.unattributedOverlap,
+		OverlapCompletionsWithCatalog:   ledger.overlapWithCatalog,
+		Complete:                        ledger.unattributedOverlap == 0 && intact,
 	}
 	if ledger.unattributedOverlap == 0 {
 		completions := ledger.completions
 		evidence.CompletionsTotal = &completions
+	} else if intact && ledger.completionsWithCatalog == ledger.completions &&
+		ledger.overlapWithCatalog == ledger.unattributedOverlap {
+		// Every completion that could have served this case offered an actionable
+		// catalog: a sound "position to act" bound that never settles the case.
+		evidence.CatalogPresentLowerBound = true
 	}
 	if len(ledger.offeredList) > 0 {
 		evidence.ToolsOffered = append([]protocol.OfferedTool(nil), ledger.offeredList...)
@@ -574,6 +680,9 @@ func (b *inferenceBroker) sessionCatalogEvidence(id, caseID string) *protocol.Ca
 	}
 	if ledger.unparseableResponses > 0 {
 		evidence.Findings = append(evidence.Findings, catalogFindingUnparseableResponse)
+	}
+	if ledger.toolChoiceSuppressed > 0 {
+		evidence.Findings = append(evidence.Findings, catalogFindingToolChoiceSuppression)
 	}
 	return evidence
 }
