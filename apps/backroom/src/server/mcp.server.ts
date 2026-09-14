@@ -97,6 +97,7 @@ import {
   screenerFanoutShadowInputSchema,
   applyCopyCourtSettingsInputSchema,
   copyCourtRecommendationsInputSchema,
+  confirmationSeedAnchorsInputSchema,
   rotateScreenerPolicyManifestInputSchema,
   setQueuePolicySettingsInputSchema,
   scheduleScreenerPolicyActivationInputSchema,
@@ -225,6 +226,7 @@ import {
   fetchScreenerFanoutShadow,
   fetchCopyCourtControl,
   fetchCopyCourtRecommendations,
+  fetchConfirmationSeedAnchors,
   applyCopyCourtSettings,
   applyScreenerReviewSettings,
   fetchScreenerPolicyManifestControl,
@@ -585,6 +587,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read bounded baseline/fan-out shadow comparisons, coverage, disagreements, latency, and spend.',
   get_copy_court_settings:
     'Read the copy-hold triage court posture and revision history.',
+  get_confirmation_seed_anchors:
+    'Read bench v13+ finalized-block confirmation seed anchors: pinned and still-waiting reigns, floor, and delta.',
   list_copy_court_recommendations:
     'Page the shadow court\'s non-authoritative verdicts for pending copy holds.',
   apply_screener_review_settings:
@@ -2005,6 +2009,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchCopyCourtControl()),
+  )
+
+  registerTool(
+    'get_confirmation_seed_anchors',
+    {
+      title: 'Get confirmation seed anchors',
+      description:
+        'Read the bench v13+ finalized-block confirmation seed anchors for one version (default: active), oldest first: one row per (champion, bench_version) reign with ready_block, anchor_block, the pinned hash or null while the reign waits for finality, pinned_at, plus binding_active, floor, and delta. The ledger serves pinned rows only; a waiting row means catch-up-only issuance and deferral under enforce. Requires backroom:read.',
+      inputSchema: confirmationSeedAnchorsInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchConfirmationSeedAnchors(input)),
   )
 
   registerTool(

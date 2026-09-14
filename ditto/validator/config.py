@@ -348,6 +348,24 @@ class ValidatorConfig:
     like ``koth_margin`` (every validator must run the same K to derive the same
     seed set). ``1`` reproduces the single-seed pre-P4 sweep, byte-identical."""
 
+    crn_block_binding_posture: str
+    """How the validator-derived confirmation lanes (version-bump re-score
+    sweep, contested dethrone) behave at a **binding** bench version
+    (``crn_block_binding_active``) when the ledger carries no pinned
+    finalized-block anchor for the reign they would hash:
+
+    * ``observe`` (default, v13.0): log the missing pin and fall back to the
+      legacy unbound family, exactly as every version below the floor derives.
+      A Platform pin gap can then never stall the lanes.
+    * ``enforce``: defer the lane until a pin lands. An unbound family at a
+      binding version is one a miner could have precomputed from public ids.
+
+    A **consensus knob** like ``koth_confirmation_seeds``: validators on
+    different postures derive different seed sets for the same ledger. Read
+    from ``VALIDATOR_CRN_BLOCK_BINDING_POSTURE``. The pin *mismatch* refusal
+    (a bound seed that does not re-derive) is not a posture; it always
+    refuses."""
+
     top5_max_confirmation_seeds: int
     """Hard ceiling on the variance-sized continual shared-seed target."""
 
@@ -528,6 +546,24 @@ def _require(name: str, value: str) -> str:
     if not value:
         raise ValidatorConfigError(f"{name} is required")
     return value
+
+
+CRN_BLOCK_BINDING_POSTURES: frozenset[str] = frozenset({"observe", "enforce"})
+"""Accepted ``VALIDATOR_CRN_BLOCK_BINDING_POSTURE`` values."""
+
+
+def _parse_crn_block_binding_posture() -> str:
+    """``observe`` unless the operator explicitly opts the validator into
+    ``enforce``; anything else is a typed configuration error, not a silent
+    fallback to either posture."""
+    raw = os.environ.get("VALIDATOR_CRN_BLOCK_BINDING_POSTURE", "observe")
+    posture = raw.strip().lower()
+    if posture not in CRN_BLOCK_BINDING_POSTURES:
+        raise ValidatorConfigError(
+            "VALIDATOR_CRN_BLOCK_BINDING_POSTURE must be one of "
+            f"{sorted(CRN_BLOCK_BINDING_POSTURES)}, got {raw!r}"
+        )
+    return posture
 
 
 def _parse_float(name: str, default: str) -> float:
@@ -759,6 +795,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         koth_rank_shares=KOTH_RANK_SHARES,
         koth_dethrone_z=KOTH_DETHRONE_Z,
         koth_confirmation_seeds=KOTH_CONFIRMATION_SEEDS,
+        crn_block_binding_posture=_parse_crn_block_binding_posture(),
         top5_max_confirmation_seeds=TOP5_MAX_CONFIRMATION_SEEDS,
         top5_catch_up_rate=TOP5_CATCH_UP_RATE,
         top5_max_cohort_size=TOP5_MAX_COHORT_SIZE,

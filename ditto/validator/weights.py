@@ -20,7 +20,7 @@ change, mirroring the platform's ledger read.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -35,7 +35,7 @@ from ditto.validator.config import (
     TOP5_MAX_CONFIRMATION_SEEDS,
     TOP5_MIN_CONFIRMATION_SEEDS,
 )
-from ditto.validator.crn import confirmation_seeds
+from ditto.validator.crn import confirmation_seeds, crn_block_binding_active
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -1106,16 +1106,81 @@ def _elastic_confirmation_seed_ceiling(
     return min(cap, max(floor, required))
 
 
+def reign_seed_planning(
+    anchors: Iterable[object] | None,
+    *,
+    champion_agent_id: UUID,
+    version: int,
+) -> tuple[str | None, bool]:
+    """``(block_hash, allow_fresh_seeds)`` for one reign, from the ledger's pins.
+
+    Mirrors Platform's ``reign_seed_planning``: below the binding floor the
+    legacy unbound derivation with fresh seeds allowed; at or above it the
+    finalized block hash Platform pinned for this champion
+    (``LedgerResponse.confirmation_seed_anchors``), or -- with no matching pin
+    -- **no fresh seeds**, so a validator never introduces a confirmation seed
+    a miner could have computed from public ids. Every input is ledger data,
+    so the whole fleet plans the same family.
+    """
+    if not crn_block_binding_active(version):
+        return (None, True)
+    for anchor in anchors or ():
+        if (
+            getattr(anchor, "champion_agent_id", None) == champion_agent_id
+            and getattr(anchor, "bench_version", None) == version
+        ):
+            block_hash = getattr(anchor, "anchor_block_hash", None)
+            if isinstance(block_hash, str) and block_hash:
+                return (block_hash, True)
+    return (None, False)
+
+
+def version_seed_planning(
+    anchors: Iterable[object] | None, *, version: int
+) -> tuple[str | None, bool]:
+    """``(block_hash, allow_fresh_seeds)`` for a comparison not keyed on a champion.
+
+    The version-bump re-score sweep hashes the whole stale set rather than one
+    champion, so it binds to the version's **oldest pinned reign anchor** (the
+    ledger serves them oldest first). Any finalized block nobody could know at
+    submission time gives the unpredictability; agreeing on *which* one is what
+    the ledger order buys. Below the floor: legacy, unbound.
+    """
+    if not crn_block_binding_active(version):
+        return (None, True)
+    for anchor in anchors or ():
+        if getattr(anchor, "bench_version", None) != version:
+            continue
+        block_hash = getattr(anchor, "anchor_block_hash", None)
+        if isinstance(block_hash, str) and block_hash:
+            return (block_hash, True)
+    return (None, False)
+
+
 def _bounded_continual_seed_set(
     champion: LedgerEntry,
     entries: Sequence[LedgerEntry],
     *,
     current_version: int,
     ceiling: int,
+    block_hash: str | None = None,
+    allow_fresh_seeds: bool = True,
 ) -> tuple[int, ...]:
-    """Most-shared durable seeds first, then fresh champion-anchored CRNs."""
-    anchor = confirmation_seeds(
-        [str(champion.agent_id)], version=current_version, count=ceiling
+    """Most-shared durable seeds first, then fresh champion-anchored CRNs.
+
+    ``block_hash`` / ``allow_fresh_seeds`` come from :func:`reign_seed_planning`:
+    a bound reign plans fresh bound seeds, an unpinned bench v13+ reign plans
+    recorded coverage only.
+    """
+    anchor = (
+        confirmation_seeds(
+            [str(champion.agent_id)],
+            version=current_version,
+            count=ceiling,
+            block_hash=block_hash,
+        )
+        if allow_fresh_seeds
+        else []
     )
     anchor_order = {seed: index for index, seed in enumerate(anchor)}
     coverage: dict[int, int] = {}
@@ -1152,8 +1217,13 @@ def top5_confirmation_set(
     cohort_size: int | None = None,
     max_cohort_size: int = 25,
     ceiling_band_clamp: bool = False,
+    confirmation_seed_anchors: Iterable[object] | None = None,
 ) -> Top5ConfirmationPlan | None:
     """Plan one continual champion-anchored shared-seed round.
+
+    ``confirmation_seed_anchors`` is ``LedgerResponse.confirmation_seed_anchors``:
+    at bench v13+ the champion's family is derived from its pinned finalized
+    block, and with no pin yet the plan covers recorded seeds only.
 
     ``cohort_size`` is how many ranked agents the *platform's operator* wants
     rescored (``LedgerResponse.continual_retest_cohort_size``). ``None`` --- an
@@ -1198,11 +1268,18 @@ def top5_confirmation_set(
         z=dethrone_z,
         maximum=max_seeds,
     )
+    block_hash, allow_fresh_seeds = reign_seed_planning(
+        confirmation_seed_anchors,
+        champion_agent_id=champion.agent_id,
+        version=current_version,
+    )
     full = _bounded_continual_seed_set(
         champion,
         emission_members,
         current_version=current_version,
         ceiling=cap,
+        block_hash=block_hash,
+        allow_fresh_seeds=allow_fresh_seeds,
     )
     champion_map = _entry_seed_composites(champion) or {}
     covered = 0

@@ -38,6 +38,8 @@ type GeneratedCopyCourtRecommendation =
   PlatformComponents['schemas']['AdminCopyCourtRecommendation']
 type GeneratedCopyCourtRecommendationList =
   PlatformComponents['schemas']['AdminCopyCourtRecommendationList']
+type GeneratedConfirmationSeedAnchorList =
+  PlatformComponents['schemas']['AdminConfirmationSeedAnchorList']
 
 // Every bench epoch that carries the signed confirmation evidence stack. One
 // definition, derived from the generated contract -- restating it per schema is
@@ -8037,4 +8039,42 @@ export const applyCopyCourtSettingsInputSchema = z.object({
 export type CopyCourtControl = z.infer<typeof copyCourtControlSchema>
 export type CopyCourtRecommendationList = z.infer<
   typeof copyCourtRecommendationListSchema
+>
+
+// Bench v13+ finalized-block confirmation seed anchors: one row per
+// (champion, bench_version) reign, pinned or still in its finality wait. The
+// ledger serves pinned rows only, so this read is where a waiting reign shows.
+
+export const confirmationSeedAnchorSchema = z.object({
+  champion_agent_id: z.string().uuid(),
+  champion_name: z.string().nullable(),
+  champion_miner_hotkey: z.string().nullable(),
+  bench_version: z.number().int().positive(),
+  ready_block: z.number().int().nonnegative(),
+  anchor_block: z.number().int().nonnegative(),
+  anchor_block_hash: z.string().nullable(),
+  pinned: z.boolean(),
+  pinned_at: z.string().nullable(),
+  created_at: z.string(),
+})
+
+export const confirmationSeedAnchorListSchema: z.ZodType<GeneratedConfirmationSeedAnchorList> =
+  z.object({
+    bench_version: z.number().int().positive(),
+    binding_active: z.boolean(),
+    binding_floor_bench_version: z.number().int().positive(),
+    anchor_block_delta: z.number().int().positive(),
+    items: z.array(confirmationSeedAnchorSchema),
+    count: z.number().int().nonnegative(),
+    pinned_count: z.number().int().nonnegative(),
+    waiting_count: z.number().int().nonnegative(),
+  })
+
+export const confirmationSeedAnchorsInputSchema = z.object({
+  benchVersion: z.number().int().positive().optional(),
+  limit: z.number().int().min(1).max(200).default(50),
+})
+
+export type ConfirmationSeedAnchorList = z.infer<
+  typeof confirmationSeedAnchorListSchema
 >

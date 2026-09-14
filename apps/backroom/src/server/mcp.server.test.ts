@@ -133,6 +133,7 @@ describe('Backroom MCP tools', () => {
         'get_benchmark_rollout_qualification',
         'get_burn_settings',
         'get_copy_court_settings',
+        'get_confirmation_seed_anchors',
         'get_copy_review_source_diff',
         'get_continual_retest_settings',
         'get_core_qualification_policy',
@@ -315,10 +316,11 @@ describe('Backroom MCP tools', () => {
     // three one-line batched ATH rulings catalog entries (upload, preview,
     // execute). The two one-line policy-v13 decision-record reads
     // (get_screening_decision_record, list_screening_decisions) and the
-    // resolve_ath_review citation rule fit under the same bound (24_938 at
-    // the time of writing).
+    // resolve_ath_review citation rule fit under that bound (24_938); the
+    // one-line bench v13+ confirmation seed anchor read (its notes live in the
+    // detailed help) lands at 25_047, so the bound moves to 25_200.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      25_100,
+      25_200,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

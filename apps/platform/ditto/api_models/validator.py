@@ -273,11 +273,66 @@ class Top5ConfirmationJobRequest(BaseModel):
 
 
 class ConfirmationDatasetPin(BaseModel):
-    """One platform-generated dataset used by a continual confirmation lease."""
+    """One platform-generated dataset used by a continual confirmation lease.
+
+    The four optional fields are the seed's **finalized-block binding** (bench
+    v13+): ``seed == crn_seed([anchor_agent_id], version=bench_version,
+    k=seed_index, block_hash=seed_block_hash)``. The validator re-derives and
+    refuses a lease whose seed is not consistent with the pin Platform served
+    (it does not read the pinned hash back from the chain). Absent on legacy
+    versions and on seeds no pinned reign anchor derives; the lease is then
+    accepted as before.
+    """
 
     seed: Annotated[int, Field(ge=0)]
     dataset_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     run_size: Annotated[str, Field(min_length=1)]
+    anchor_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description="Champion the seed family is anchored on (bench v13+).",
+        ),
+    ] = None
+    seed_index: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description="Replicate index ``k`` of this seed within the family.",
+        ),
+    ] = None
+    seed_block: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description="Finalized chain block the family is bound to.",
+        ),
+    ] = None
+    seed_block_hash: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=r"^(0x)?[0-9a-f]{64}$",
+            description="Hash of ``seed_block``; the derivation input.",
+        ),
+    ] = None
+
+
+class ConfirmationSeedAnchorPin(BaseModel):
+    """One reign's pinned finalized-block anchor, served on the ledger.
+
+    Lets every validator re-derive the champion-anchored confirmation family
+    for ``bench_version`` (``crn_seed(..., block_hash=anchor_block_hash)``) and
+    agree fleet-wide without a chain read. Only pinned anchors are served; a
+    reign still in its finality wait is simply absent.
+    """
+
+    champion_agent_id: UUID
+    bench_version: Annotated[int, Field(ge=1)]
+    anchor_block: Annotated[int, Field(ge=0)]
+    anchor_block_hash: Annotated[str, Field(pattern=r"^(0x)?[0-9a-f]{64}$")]
 
 
 class JobResponse(BaseModel):
@@ -1812,6 +1867,17 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = 5
+    confirmation_seed_anchors: list[ConfirmationSeedAnchorPin] = Field(
+        default_factory=list,
+        description=(
+            "Pinned finalized-block anchors of the active version's "
+            "confirmation seed families (bench v13+), oldest first. A "
+            "validator derives the champion-anchored CRN family from the "
+            "anchor whose champion_agent_id matches its fold's champion; with "
+            "no matching pin at a binding version it introduces no fresh "
+            "confirmation seed. Empty on older platforms and below the floor."
+        ),
+    )
     track_shares_bps: dict[str, int] = Field(
         default_factory=dict,
         description=(

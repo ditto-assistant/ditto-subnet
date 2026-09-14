@@ -207,6 +207,8 @@ import {
   copyCourtRevisionSchema,
   copyCourtRecommendationListSchema,
   copyCourtRecommendationsInputSchema,
+  confirmationSeedAnchorListSchema,
+  confirmationSeedAnchorsInputSchema,
   screenerCapacityViewSchema,
   createScreenerBootstrapGrantInputSchema,
   screenerBootstrapGrantResponseSchema,
@@ -508,6 +510,19 @@ export async function fetchScreenerFanoutShadow(rawInput: unknown = {}) {
 export async function fetchCopyCourtControl() {
   const payload = await platformAdminRequest('/api/v1/admin/copy-court/settings')
   return copyCourtControlSchema.parse(payload)
+}
+
+export async function fetchConfirmationSeedAnchors(rawInput: unknown) {
+  const input = confirmationSeedAnchorsInputSchema.parse(rawInput)
+  const params = new URLSearchParams()
+  if (input.benchVersion !== undefined) {
+    params.set('bench_version', String(input.benchVersion))
+  }
+  params.set('limit', String(input.limit))
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/confirmation-seed-anchors?${params.toString()}`,
+  )
+  return confirmationSeedAnchorListSchema.parse(payload)
 }
 
 export async function fetchCopyCourtRecommendations(rawInput: unknown) {

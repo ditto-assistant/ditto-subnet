@@ -2316,6 +2316,25 @@ CREATE TABLE public.confirmation_scores (
 
 
 --
+-- Name: confirmation_seed_anchors; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.confirmation_seed_anchors (
+    champion_agent_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    ready_block bigint NOT NULL,
+    anchor_block bigint NOT NULL,
+    anchor_block_hash text,
+    pinned_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__187e CHECK (((ready_block >= 0) AND (anchor_block > ready_block))),
+    CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__18b7 CHECK (((anchor_block_hash IS NULL) OR (anchor_block_hash ~ '^0x[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__bb97 CHECK ((bench_version > 0)),
+    CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__c2e5 CHECK (((anchor_block_hash IS NULL) = (pinned_at IS NULL)))
+);
+
+
+--
 -- Name: continual_retest_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5271,6 +5290,14 @@ ALTER TABLE ONLY public.confirmation_scores
 
 
 --
+-- Name: confirmation_seed_anchors confirmation_seed_anchors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_seed_anchors
+    ADD CONSTRAINT confirmation_seed_anchors_pkey PRIMARY KEY (champion_agent_id, bench_version);
+
+
+--
 -- Name: confirmation_bundle_settings_revisions confirmation_settings_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6975,6 +7002,13 @@ CREATE INDEX confirmation_scores_agent_version_idx ON public.confirmation_scores
 
 
 --
+-- Name: confirmation_seed_anchors_version_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX confirmation_seed_anchors_version_idx ON public.confirmation_seed_anchors USING btree (bench_version, anchor_block);
+
+
+--
 -- Name: confirmation_settings_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8226,6 +8260,14 @@ ALTER TABLE ONLY public.confirmation_retest_authorizations
 
 ALTER TABLE ONLY public.confirmation_scores
     ADD CONSTRAINT confirmation_scores_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: confirmation_seed_anchors confirmation_seed_anchors_champion_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_seed_anchors
+    ADD CONSTRAINT confirmation_seed_anchors_champion_fkey FOREIGN KEY (champion_agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
 
 
 --
