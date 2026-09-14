@@ -56,3 +56,21 @@ and stays on the wire like every other catalog. Concretely, a v13 harness sees:
 Case IDs, user IDs, pair/session/subject aliases, wave removal, permutation,
 and the private artifact retention rules above apply to v13 runs unchanged.
 
+## Bench v13 evidence, gate notes, and grader-only fields
+
+Bench v13 adds evidence the validator records *about* the harness and fields
+the grader reads; none of it widens what the harness sees. The decisions:
+
+| Surface | V13 decision |
+| --- | --- |
+| Wire `bench_version` | Stays 9 on `/seed` and `/run` for v10–v13 (`publicWireBenchVersion`, issue #1519 option A). A harness never advertises or branches on a validator-owned revision. |
+| `MemoryCase.Claims`, `TwinRelation` / `TwinPairID`, `ToolSpec.RequiredArgClaims`, `ToolCase.Restraint`, `MemoryCase.Language`, `GroundingTokens`, `SlotLexicon`, `AnswerUnit` / `AnswerCurrency` | Remove: grader-only, `json:"-"` or stripped in `BuildArtifactForVersion`; pinned by `TestV13GraderOnlyFieldsNeverReachHarnessWire` (#1824) and the runner-side `TestV13GraderOnlyFieldsNeverReachRunPayload` (#1824). The harness sees only the rendered text a case carries. |
+| `surface_salt` on the artifact | Remove from the wire: an artifact/audit field only. Salt 0 is the public rehearsal default and is byte-identical to the unsalted path; a non-zero salt changes surfaces only. Which side holds the private salt is an open owner decision (#1832). |
+| Staged `/seed` waves | Keep `wave` removed from the wire (as in V9); the validator enforces the dependency barrier and, from v13, treats the harness's 2xx as the ingest acknowledgement before dispatching wave-dependent cases. |
+| Same-turn "as of" anchors and corrections | Keep on the wire inside `user_input`: production-semantic user context. Which cases are `as_of_twin` halves, and their `TwinPairID`, are removed with every other label. |
+| Relay-recorded catalog evidence (`tools_offered` names + schema digests, `tool_choice`, harness-authored span digests, model-emitted tool names, completion spans, hashed value-token sets, choices and output tokens) | Validator-side only. Metadata, never prompt or completion text, in the transcript's `execution.catalog` and the report's per-case `catalog` / `inference_cost`; nothing is sent back to the harness. The private artifact retention rules above apply. |
+| Per-case gate notes (`restraint_without_offer`, `expected_tool_not_offered`, `swallowed_model_call`, `served_text_not_model_emitted`, `slot_not_in_prose`, `answer_in_prompt`, `twin_concordant`, `counterfactual_insensitive`) | Report only; exposed to the owning miner on the Platform per-score detail (#1852), never on the wire during a run. |
+| `X-Ditto-Case-Id` on harness inference calls | Advisory and additive, unchanged from v10: it keeps completions attributable per case under concurrent `/run`; the broker never reads it for admission, scoring or accounting. |
+
+V7 and V8 still never traverse this projection; V9–V12 traverse it exactly as
+before, and the v13 additions above are gated `bench_version >= 13`.

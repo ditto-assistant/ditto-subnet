@@ -211,7 +211,7 @@ cargo run -- serve --port 8080
 ```
 
 Local Ollama uses the canonical `gpt-oss:20b` chat model and `embeddinggemma`
-embedder and requires no provider credential. Scored v8 runs use
+embedder and requires no provider credential. Scored runs use
 the validator-injected, ticket-scoped platform inference and hosted embedding
 routes; Ollama is not a scored fallback.
 
@@ -781,8 +781,11 @@ produces a container serving that protocol on :8080.
 > Status: the hosted practice validator, on-chain submission path (`ditto upload`,
 > eval fee, scoring, weights), and the [SN118 leaderboard](https://platform-api.heyditto.ai/)
 > are live today.
-> Benchmark v8 is the only active scoring contract. It uses locked
-> `openai/gpt-oss-20b` inference and validator-observed tool execution.
+> Benchmark v12 is the active scoring contract; Bench v13 is generated and
+> scored in shadow during calibration and activates by a separate owner
+> decision (see *Bench v13: how to stay inside the gates* below). Every
+> contract uses locked `openai/gpt-oss-20b` inference and validator-observed
+> tool execution, and reaches your harness as wire version 9.
 
 1. Registration. You need a hotkey registered on subnet netuid 118 and TAO for
 the registration cost plus per-submission eval fees. `ditto upload` offers to
@@ -810,7 +813,7 @@ tarball. You do not keep a server running. A screener builds your `Dockerfile`
 once; the scorer loads that exact image, starts it, and injects runtime model configuration
 for a trusted local broker plus a fresh `DITTOBENCH_DB` path. No validator or
 provider credential is placed in the harness container. The broker supplies
-only ticket-scoped v8 inference and locks `DITTOBENCH_MODEL` to GPT-OSS-20B.
+only ticket-scoped inference for the active contract and locks `DITTOBENCH_MODEL` to GPT-OSS-20B.
 The Docker host gateway is mapped so the default `OLLAMA_BASE_URL` resolves to
 the scoring host's Ollama, which serves the reference `embeddinggemma`
 embedder. If you use a different local embedder, bundle it in your image. The
@@ -818,8 +821,10 @@ container has network egress to model providers (hardened deployments may
 restrict egress to an allowlist). Your harness must read all model config from
 env. `Baseline::from_env` already does this, so keep that property if you rewrite it.
 
-4. Timeouts. 10 s for `/health` to come up, 60 s per `/run` call (a case
-that misses it scores 0), 5 minutes per `/seed` wave. The table is in
+4. Timeouts. 3 minutes for the container to answer `/health` (each probe is
+bounded at 10 s), 5 minutes per `/run` call (a case that misses it scores 0),
+15 minutes per `/seed` wave — and from Bench v13 your `/seed` 2xx is the ingest
+acknowledgement the validator dispatches dependent cases on. The table is in
 [PROTOCOL.md](PROTOCOL.md).
 
 5. Run shape. An on-chain run is `run_size=full`: on the order of 50
@@ -839,8 +844,11 @@ approach the ceiling; a near-miss is settled by re-scoring both agents on shared
 seeds rather than dataset luck. Weights are recomputed from the public score
 ledger on every validator sweep.
 
-7. bench_version. Version 8 is activated and is the only version accepted by
-this starter harness. Every `/run` request must include `"bench_version": 8`.
+7. bench_version. Every `/run` request carries `bench_version`. This starter
+accepts the inclusive range `MIN_SUPPORTED_BENCH_VERSION..=MAX_SUPPORTED_BENCH_VERSION`
+(`src/protocol.rs`; the ceiling moves to 13 with the v13 wiring sweep, #1519)
+and every contract from v9 on arrives as wire version 9, so do not branch on a
+higher number. Version 12 is the active scoring contract; v13 is in shadow.
 
 8. Lifecycle. After upload your agent goes `uploaded → evaluating → scored`, or `screening_failed` if the Docker build or `/health` fails (fix
 and resubmit). Scores land on the public score ledger and the
@@ -853,7 +861,7 @@ embedded injection payload, surfacing another user's value, or naming a
 distractor value zeroes the case, and those events land in the run's public
 details. Malformed responses, timeouts, and build failures score 0. Observed tool
 execution (the validator runs your tool calls against its own mock endpoint)
-is mandatory on scored v8 tool cases; an unobserved observable case scores 0. Beyond
+is mandatory on scored tool cases; an unobserved observable case scores 0. Beyond
 per-case grading, the composite carries bounded integrity multipliers: a per-run
 canary nonce (bounded penalty for an honest miss, hard cap for leaking the
 decoy), a metamorphic-consistency factor over invariance families, and the
@@ -903,6 +911,125 @@ differentiator, since scoring locks every miner to the same frozen model.
 sufficient. No GPU is required unless you bundle a local LLM.
 
 12. Support. Open a GitHub issue on `ditto-assistant/ditto-subnet`.
+
+## Bench v13: how to stay inside the gates
+
+Bench v13 ([contract](../../research/dittobench-datagen/docs/bench-versions.md),
+[wire rules](PROTOCOL.md#bench-v13-additions-harness-visible)) adds relay
+evidence and five scorer gates that make a request-keyed harness lose by
+construction. They are designed around one invariant: **no gate may zero a
+response whose graded claim is correct and model-emitted.** If your harness
+lets the model decide, executes what the model emits, and serves what the
+model said, you are inside every gate. The architectures below are the honest
+positives the calibration cohort (#1521) measures before any gate enforces;
+each is listed with the gate it touches and why it passes.
+
+| Architecture | Gate it touches | Why it passes |
+| --- | --- | --- |
+| **Full catalog every turn** (the stock kit) | catalog-present | Every tool is offered; the safe harbor is not even needed. |
+| **Top-k semantic preloading** — embed tool descriptions, keep the k most similar to the request (k ≥ 3), always offer them | catalog-present safe harbor | The retained set contains the top-3 of the published model-free TF-IDF embedding (`scorer.CatalogSemanticTopK`, recomputable from the dataset); trimming for token efficiency is free. Keep the whole catalog's *names* stable and its descriptions unedited (screener W10). |
+| **Threshold preloading** — offer only tools above a similarity threshold | catalog-present safe harbor | Passes whenever the retained set is non-empty on chit-chat/declarative cases or holds the top-3 elsewhere. A threshold that yields **zero** tools on chit-chat is recorded as `restraint_without_offer` in shadow — keep a floor of the top-3 so restraint is the model's choice, not the router's. The negation family names a tool cue, so its top-3 must be retained. |
+| **LLM tool-router** — a first completion picks the tool subset, a second completion acts | catalog-present, cost factor | The deciding completion still offers a catalog (the router's output), so restraint and expected-tool credit are the model's; the extra completion sits inside the published cost budget (3 completion-equivalents on single-tool cases, 5 on chains). |
+| **JSON-mode / structured output** — the model returns `{"answer": …, "final_text": …}` | claim-span provenance, causal | Structured-output fields are completion spans; the graded value is contained in them, and the model derived it. Pass. |
+| **`final_answer` tool delivery** — the model emits a `final_answer{value}` call you turn into the response | claim-span provenance, causal | Tool-call arguments are completion spans. Pass — as long as you do not execute it through `tool_endpoint` as a non-memory action (it is not in the catalog, so it is not a swallowed catalog call either). |
+| **Formatter post-processor** — render `4110.67 dollars` as `$4,110.67`, `**Answer:** …` as plain text | claim-span provenance | The public normaliser (`scoregates.NormalizeSpan` + `ValueTokenHashes`) folds every honest rendering of the model's value to one claim token before containment, so a uniform, content-independent rendering passes. Rescaling (`/100`), unit changes and word→word maps produce a token the model never emitted and do not. |
+| **Reply in the user's language** | grader reply-language policy | Answers are accepted in the question's language or English through the published lexicons; values stay canonical in every language. |
+| **Plain ReAct with tool results quoted into the next prompt** | causal | Delivered records and tool results are hash-exempt from the harness-authored span set, so quoting them is fine; only a value *you* computed that appears in no record or result trips `answer_in_prompt`. |
+| **Grounded abstention and clarifying questions authored by the model** | `AnswerAbsence`, `AnswerClarify` | Let the model write the decline citing what it searched, or the question naming the missing slot. A templated "I don't have that" or "what would you like?" scores 0. |
+
+What loses, by construction:
+
+- A phrase table or classifier that **empties or withholds `tools[]`** on a
+  family so the model cannot act (`restraint_without_offer`,
+  `expected_tool_not_offered`); the stock `no_tool` / `arg_hallucination`
+  surfaces are now paired with matched act-half twins, so always-ask scores
+  at chance.
+- **Swallowing** a model-emitted call before execution
+  (`swallowed_model_call`); restraint is scored on what the model chose.
+- **Rewriting the model's value** — `/100`, direction-word maps, draft
+  replacement by wording, hedged slots (`served_text_not_model_emitted`,
+  `slot_not_in_prose`). At v13 the grader accepts the requested unit and the
+  question's vocabulary, so these rewrites have no honest purpose left.
+- **Compute-then-launder** — computing the answer on the host and asking the
+  model to "reply exactly" (`answer_in_prompt`), including a generator-inverse
+  parser over the public repo and a local majority vote injected into a final
+  prompt.
+- **Evidence-independent defaults** — always answer, always abstain, always
+  act, keep only the latest state (`twin_concordant`,
+  `counterfactual_insensitive`).
+- **Baked option pools and fixed served strings** — the seeded catalog,
+  discovery inventories and coined fixtures make them wrong on most seeds.
+- **Regenerating the dataset from the public generator** — the surface pass
+  plants a regeneration canary; the public salt-0 rehearsal artifact is what
+  you practice on, never what you are scored on once the private pass lands.
+
+Practical checklist before you upload:
+
+1. Run `uv run ditto practice --run-size full` and then
+   `scripts/local-rehearsal.py --gates` (#1851) and read every per-case note.
+   A shadow note is a warning you can fix before enforce.
+2. Put the value the model asserted in `answer` **and** in `final_text`;
+   never populate the slot with something the prose does not say.
+3. Execute every model-emitted non-memory call through `tool_endpoint`.
+4. Offer the model a catalog on every deciding turn; if you trim, keep the
+   semantic top-3.
+5. Return `/seed` 2xx only when the wave is queryable.
+6. Send `X-Ditto-Case-Id` on inference calls so every completion is
+   attributable under concurrency.
+
+## Miner-facing changelog: Bench v13
+
+Everything below is `bench_version >= 13`; v12 and earlier are unchanged.
+The wire stays at version 9 — no `protocol.rs` change is required to *parse*
+v13 traffic, only `MAX_SUPPORTED_BENCH_VERSION` moves to 13 with the v13
+wiring sweep (#1519) so `/run` accepts the new number when a validator
+rehearses it; `local-rehearsal.py` follows (`LIVE_SCORING_BENCH_VERSION` 12,
+`MAX_BENCH_VERSION` 13).
+
+- **Tool catalog is per seed** (#1843, #1842, #1580, #1840): paraphrased
+  descriptions, `enum` on `set_theme`/`set_reasoning_effort`,
+  runtime-described accent/font options discoverable only through
+  `discover_capabilities`, 3–5 coined decoy tools (≥ 10% decoy-correct cases),
+  coined list/discover/`run_code` content, `set_main_model` and
+  `set_chat_font` families retired, `set_effort` no longer in every run.
+- **Restraint is graded** (#1846): no-tool cases come in matched ask/act
+  groups; the ask half expects a clarifying question naming the missing slot
+  and citing a searched record.
+- **Memory routing is graded on effect** (#1845): the answer must carry the
+  planted needle; "any non-empty text" no longer scores; mutations are graded
+  on end state through a follow-up read.
+- **Free-text tool arguments accept paraphrase** (#1847).
+- **Staged `/seed` waves are live and your 2xx is the ingest acknowledgement**
+  (#1844); point-in-time anchors arrive inside `user_input` as `as_of_twin`
+  pairs.
+- **Grounded abstention** (#1530): 25 unanswerable cases per run, each paired
+  with an answerable twin; decline and cite what you searched.
+- **Memory mix rebalanced** (#1848, #1529): money falls from 50.9% to ≤ 12%
+  target / 15% hard of memory weight; business programs, personal-life
+  programs, story v2 with six typed oracles per arc, record-stated sign
+  conventions, four injection probes including two data-inside-envelope cases.
+- **Grader** (#1523, #1522, #1831): prose graded with the slot as tie-break;
+  quantities in the requested unit (the v12 minor-unit inversion is fixed —
+  `411067` now scores on a minor-unit question); three-valued direction with
+  the question's vocabulary; dates at the requested granularity; Unicode-safe
+  normalisation; answers accepted in the question's language or English;
+  declarative acknowledgement credit 0.25.
+- **Relay evidence and gates, all shadow/observe in v13.0** (#1826, #1849,
+  #1833, #1835, #1850): catalog-present with the semantic-preloading safe
+  harbor, swallowed model call, claim-span provenance, causal model dependence,
+  twin/pair post-pass, per-case inference cost factor. Notes are visible on
+  your per-score detail (#1852) and reproducible locally (#1851).
+- **Surface** (#1825, #1827, #1828, #1832): public-corpus vocabulary, opaque
+  `/seed` session ids and jittered timestamps, grammar-drawn prompts with typo
+  projector v2 (per-seed keyboard layout, 1–3 edits, no safelist), and a
+  salted surface pass whose salt 0 is the public rehearsal default. Which side
+  holds the private salt (validator commit-reveal or Platform paraphrase) is an
+  open owner decision and a v13.0 activation blocker.
+- **Timeouts** were already 5 min per `/run` and 15 min per `/seed` wave since
+  v7; this README and `PROTOCOL.md` now say so.
+- **Activation** is a separate owner decision after the calibration cohort
+  (#1521) and lands together with screener policy v14 (#1857). Until then v12
+  is the active scoring contract and v13 runs in shadow.
 
 ## Pitfalls
 
