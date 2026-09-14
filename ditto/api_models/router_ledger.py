@@ -122,10 +122,28 @@ class RouterLedgerEntry(RouterLedgerModel):
             le=1.0,
             description=(
                 "Soft per-harness-weighted, floor-gated aggregate in [0, 1]. The "
-                "raw double the scorer reported (never rounded), the sole rank key."
+                "raw double the scorer reported (never rounded), the sole rank key. "
+                "Forced 0 in shadow (v1): the validator folds this, so a shadow "
+                "feed contributes zero emission by construction."
             ),
         ),
     ]
+    shadow_composite: Annotated[
+        float,
+        Field(
+            default=0.0,
+            ge=0.0,
+            le=1.0,
+            description=(
+                "The real measured, floor-gated aggregate in [0, 1] the scorer "
+                "computed for this router — carried separately from combined_score "
+                "so a shadow feed can report a genuine number the dashboard shows "
+                "while combined_score stays 0 and folds to zero emission. In "
+                "shadow (v1) this holds the measurement and combined_score is 0; at "
+                "promotion the two converge. Never a weight input on its own."
+            ),
+        ),
+    ] = 0.0
     harnesses: Annotated[
         tuple[RouterHarnessResult, ...],
         Field(

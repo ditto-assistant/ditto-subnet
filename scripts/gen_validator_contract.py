@@ -55,6 +55,7 @@ _PLATFORM_CONTRACT_DIR = (
 _DEFAULT_OUT = _CONTRACT_DIR / "validator_contract.json"
 _DEFAULT_MINER_OUT = _CONTRACT_DIR / "miner_contract.json"
 _DEFAULT_CONFIRMATION_OUT = _CONTRACT_DIR / "confirmation_contract.json"
+_DEFAULT_ROUTER_OUT = _CONTRACT_DIR / "router_contract.json"
 
 
 def _load_contract_schema() -> ModuleType:
@@ -113,6 +114,12 @@ def main() -> None:
         help="destination miner golden path (default: the committed one)",
     )
     parser.add_argument(
+        "--router-out",
+        type=Path,
+        default=_DEFAULT_ROUTER_OUT,
+        help="destination shadow router-ledger contract golden",
+    )
+    parser.add_argument(
         "--mirror-dir",
         type=Path,
         default=_PLATFORM_CONTRACT_DIR,
@@ -153,15 +160,18 @@ def main() -> None:
     plan: list[tuple[str, Path, list[Path]]] = [
         ("validator", args.out, []),
         ("confirmation", args.confirmation_out, []),
+        ("router", args.router_out, []),
         ("miner", args.miner_out, []),
     ]
     if mirror_dir is not None:
         plan[0][2].append(mirror_dir / "validator_contract.json")
         plan[1][2].append(mirror_dir / "confirmation_contract.json")
+        plan[2][2].append(mirror_dir / "router_contract.json")
 
     compute = {
         "validator": schema.compute_contract,
         "confirmation": schema.compute_confirmation_contract,
+        "router": schema.compute_router_contract,
         "miner": schema.compute_miner_contract,
     }
     for kind, out, mirrors in plan:

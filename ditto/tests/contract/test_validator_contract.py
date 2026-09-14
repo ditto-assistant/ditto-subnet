@@ -22,10 +22,12 @@ from ditto.api_models import validator_confirmation
 from ditto.api_models.agent_status import AgentStatus
 from ditto.tests.contract._schema import (
     CONFIRMATION_MODELS,
+    ROUTER_MODELS,
     SHARED_MODELS,
     compute_confirmation_contract,
     compute_contract,
     compute_miner_contract,
+    compute_router_contract,
 )
 
 # ``scripts/`` is not an importable package; the freshness helper is shared
@@ -37,6 +39,7 @@ from screening_protocol_freshness import hint as stale_install_hint  # noqa: E40
 _GOLDEN = Path(__file__).parent / "validator_contract.json"
 _MINER_GOLDEN = Path(__file__).parent / "miner_contract.json"
 _CONFIRMATION_GOLDEN = Path(__file__).parent / "confirmation_contract.json"
+_ROUTER_GOLDEN = Path(__file__).parent / "router_contract.json"
 _PLATFORM_CONTRACT_DIR = (
     Path(__file__).resolve().parents[3] / "apps/platform/ditto/tests/contract"
 )
@@ -122,7 +125,11 @@ def test_v9_confirmation_transport_executes_only_shared_model_classes() -> None:
 
 
 def test_monorepo_validator_goldens_match_platform_byte_for_byte() -> None:
-    for filename in ("validator_contract.json", "confirmation_contract.json"):
+    for filename in (
+        "validator_contract.json",
+        "confirmation_contract.json",
+        "router_contract.json",
+    ):
         local = (Path(__file__).parent / filename).read_bytes()
         platform = (_PLATFORM_CONTRACT_DIR / filename).read_bytes()
         assert local == platform, (
@@ -161,6 +168,28 @@ def test_v9_confirmation_models_match_platform_contract() -> None:
         "contract; regenerate confirmation_contract.json from Platform"
     )
 
+
+def test_router_models_match_platform_contract() -> None:
+    """Guard: the shadow router-ledger wire models match the platform's contract.
+
+    ``router_ledger.py`` is a net-new hand-maintained copy on both sides. The
+    scorer publishes ``shadow_composite`` (the real measured number) while
+    ``combined_score`` stays 0 and ``weight_eligible`` stays False; a one-sided
+    rename/retype of any of these would silently break the shadow fold or the
+    dashboard without a golden to notice.
+    """
+    golden = json.loads(_ROUTER_GOLDEN.read_text())
+    actual = compute_router_contract()
+    assert set(actual) == set(golden) == set(ROUTER_MODELS), (
+        "shared router model set changed; update ROUTER_MODELS + golden"
+    )
+    mismatched = [name for name in ROUTER_MODELS if actual[name] != golden[name]]
+    assert not mismatched, (
+        f"router wire model(s) {mismatched} drifted from the platform contract. "
+        f"If intended, regenerate ditto/tests/contract/router_contract.json from "
+        f"ditto-platform via scripts/gen_validator_contract.py and commit it "
+        f"with the change.{stale_install_hint()}"
+    )
 
 def test_public_agent_status_matches_platform_generated_contract() -> None:
     """Keep the shared lifecycle enum aligned with the platform contract."""
