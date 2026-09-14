@@ -210,6 +210,24 @@ class HippiusClient:
         key = normalize_object_key(key)
         return await self._presign("get_object", key, expires_in=expires_in)
 
+    async def presigned_put_url(
+        self,
+        *,
+        key: str,
+        content_type: str,
+        expires_in: int = _PRESIGN_TTL_SECONDS,
+    ) -> str:
+        """A time-bounded PUT URL for one object the caller uploads itself.
+
+        ``content_type`` is part of the signature, so the uploader must send
+        exactly that ``Content-Type`` header or Hippius answers
+        SignatureDoesNotMatch.
+        """
+        key = normalize_object_key(key)
+        return await self._presign(
+            "put_object", key, content_type=content_type, expires_in=expires_in
+        )
+
     async def list_objects(
         self,
         *,

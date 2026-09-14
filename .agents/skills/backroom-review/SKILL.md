@@ -165,6 +165,47 @@ so.
    engine test failed or passed, and the cited precedent.
 8. Re-read the agent. A timeout is ambiguous; verify before retrying.
 
+### Batched rulings (5-20 decisions from one board review)
+
+Use the rulings court instead of walking `open_ath_review` /
+`resolve_ath_review` one row at a time. It is the same two writers behind the
+quarantine court's shape, with the crown re-read on both legs.
+
+1. Write the rulings document (Platform wire shape, snake_case):
+
+   ```json
+   {"source": "docs/<board-review>.json",
+    "rulings": [{"action": "reject", "agent_id": "<uuid>",
+                 "expected_sha256": "<64 hex>", "expected_score_count": 3,
+                 "reason": "<miner-visible reason with policy category and file:line>",
+                 "evidence_references": ["baseline.py:1884-1887", "routing.py:357-395"]}]}
+   ```
+
+   `action` is `open` (hold for investigation), `clear`, or `reject`. A
+   `reject` on a scored/live agent opens and resolves in one item; on a held
+   agent it resolves only. Each agent appears once; every reject cites at
+   least one `path:line`. The replay of the 2026-09-13 top-5 rejects lives at
+   `apps/platform/ditto/tests/fixtures/ath_rulings_replay_2026-09-13.json`.
+2. `create_ath_rulings_upload` (backroom:write), then
+   `curl -X PUT -H "Content-Type: application/json" --data-binary @rulings.json "<url>"`
+   within five minutes (<= 1 MiB). Small batches may skip the upload and pass
+   `rulings` inline to the preview.
+3. `preview_ath_rulings_batch` with `uploadKey` (or inline `rulings`). Read
+   every item: `disposition` (`ready` with its `steps`, `already_applied`,
+   `stale_guard`, `conflict` with the 409 `conflict_reason`, `not_found`,
+   `invalid`), `would_change_crown`, and the `board` (champion, raw leader).
+   Fix or drop anything not `ready`; a stale guard means the row moved since
+   the review and needs a fresh `get_screening_submission`.
+4. `execute_ath_rulings_batch` with the returned `previewToken` and
+   `confirmation: "APPLY ATH RULINGS BATCH"` (inline previews resend the same
+   `rulings`). The Platform re-reads the board and re-previews each item
+   before writing; rows whose guards or crown outcome moved come back
+   `failed` with the reason and the rest still land. Tokens expire after ten
+   minutes and are bound to your operator identity and the exact document.
+5. Re-read `board_after`, then `get_leaderboard` and `get_ath_review` for
+   each applied row. Every clear/reject action row carries `batch_ruling`
+   (batch_id, index, evidence_references, rulings digest, upload key).
+
 Do not un-ban a row to restore a bench version. Rollout authority is a
 Platform question, not an enforcement undo.
 
