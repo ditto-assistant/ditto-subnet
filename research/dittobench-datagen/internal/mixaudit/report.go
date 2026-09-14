@@ -174,7 +174,7 @@ func (s Summary) Markdown(env Envelope) string {
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n", name, f(r.Min), f(r.Mean), f(r.Max), limit)
 	}
-	row("Memory cases", s.MemoryCases, false, "")
+	row("Memory cases", s.MemoryCases, false, fmt.Sprintf("= %d", env.MemoryCasesTarget))
 	row("Direct `money` cases", s.DirectMoneyCases, false, "")
 	row("Money-bearing cases", s.MoneyBearingCases, false, fmt.Sprintf("≤ %d", env.MoneyBearingCasesCap))
 	row("Money share of memory weight", s.MoneyShare, true, fmt.Sprintf("≤ %.0f%% (target %.0f%%)", 100*env.MoneyWeightHardCap, 100*env.MoneyWeightTarget))

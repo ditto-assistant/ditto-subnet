@@ -103,6 +103,7 @@ func TestMixauditClassifiesEveryPinnedSeed(t *testing.T) {
 func TestMixauditEnvelopeConstantsMatchPlan(t *testing.T) {
 	env := mixaudit.V13Envelope
 	want := mixaudit.Envelope{
+		MemoryCasesTarget:  250,
 		MoneyWeightHardCap: 0.15, MoneyWeightTarget: 0.12, MoneyBearingCasesCap: 22, MonetaryOpenPrograms: 0,
 		ArithmeticShareCap: 0.20, PersonalWeightFloor: 0.30, BusinessWeightFloor: 0.40, SubDomainWeightCap: 0.20,
 		KindOperationWeightCap: 0.15, AbstentionShareTarget: 0.10, AbstentionShareBand: 0.01, TwinCoverageFloor: 0.40,
