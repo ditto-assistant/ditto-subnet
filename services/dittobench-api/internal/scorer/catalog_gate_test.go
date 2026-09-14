@@ -63,20 +63,20 @@ func TestCatalogSemanticTopKIsDeterministicAndRanksTheCuedTool(t *testing.T) {
 func TestCatalogGateFailsOpenWithoutSettledEvidence(t *testing.T) {
 	full := catalog.CatalogForVersion(protocol.BenchVersionV12)
 	c := protocol.ToolCase{ID: "chat", Category: "no_tool", Prompt: "How is your day?"}
-	if v := EvaluateCatalogGate(c, full, nil, nil); v.Settled || v.Zero ||
+	if v := EvaluateCatalogGate(c, full, nil, nil, false); v.Settled || v.Zero ||
 		!slices.Equal(v.Findings, []string{CatalogFindingEvidenceUnavailable}) {
 		t.Fatalf("nil evidence verdict=%+v", v)
 	}
 	incomplete := settledEvidence(1)
 	incomplete.CompletionsTotal = nil
 	incomplete.Complete = false
-	if v := EvaluateCatalogGate(c, full, incomplete, nil); v.Settled || v.Zero ||
+	if v := EvaluateCatalogGate(c, full, incomplete, nil, false); v.Settled || v.Zero ||
 		!slices.Equal(v.Findings, []string{CatalogFindingEvidenceIncomplete}) {
 		t.Fatalf("incomplete evidence verdict=%+v", v)
 	}
 	truncated := settledEvidence(1, "search_web")
 	truncated.Complete = false
-	if v := EvaluateCatalogGate(c, full, truncated, nil); v.Settled || v.Zero {
+	if v := EvaluateCatalogGate(c, full, truncated, nil, false); v.Settled || v.Zero {
 		t.Fatalf("truncated evidence verdict=%+v", v)
 	}
 }
@@ -86,21 +86,21 @@ func TestCatalogGateRestraintRequiresAnOfferUnlessSafeHarbor(t *testing.T) {
 	chitchat := protocol.ToolCase{ID: "chat", Category: "no_tool", Prompt: "How is your day going so far?"}
 
 	// Fixture: emptying tools[] on a declarative turn is restraint without offer.
-	empty := EvaluateCatalogGate(chitchat, full, settledEvidence(1), nil)
+	empty := EvaluateCatalogGate(chitchat, full, settledEvidence(1), nil, false)
 	if !empty.Settled || !empty.Zero || !empty.CatalogAbsent || empty.SafeHarbor != "" ||
 		!slices.Contains(empty.Findings, CatalogFindingRestraintWithoutOffer) ||
 		!slices.Contains(empty.Findings, CatalogFindingCatalogAbsent) {
 		t.Fatalf("empty catalog on declarative turn verdict=%+v", empty)
 	}
 	// No completion at all: the host answered without the model.
-	none := EvaluateCatalogGate(chitchat, full, settledEvidence(0), nil)
+	none := EvaluateCatalogGate(chitchat, full, settledEvidence(0), nil, false)
 	if !none.Settled || !none.Zero || !none.NoCompletion || none.CatalogAbsent ||
 		!slices.Contains(none.Findings, CatalogFindingNoModelCompletion) ||
 		!slices.Contains(none.Findings, CatalogFindingRestraintWithoutOffer) {
 		t.Fatalf("no completion verdict=%+v", none)
 	}
 	// Safe harbor: any non-empty catalog on a declarative/chit-chat case.
-	trimmed := EvaluateCatalogGate(chitchat, full, settledEvidence(1, "set_theme"), nil)
+	trimmed := EvaluateCatalogGate(chitchat, full, settledEvidence(1, "set_theme"), nil, false)
 	if !trimmed.Settled || trimmed.Zero || trimmed.SafeHarbor != CatalogSafeHarborNonEmptyDeclarative ||
 		!slices.Contains(trimmed.Findings, CatalogFindingSafeHarbor) ||
 		slices.Contains(trimmed.Findings, CatalogFindingRestraintWithoutOffer) {
@@ -109,7 +109,7 @@ func TestCatalogGateRestraintRequiresAnOfferUnlessSafeHarbor(t *testing.T) {
 	// Abstention and arg_hallucination are declarative/decline classes too.
 	for _, category := range []string{"abstention", "arg_hallucination"} {
 		c := protocol.ToolCase{ID: category, Category: category, Prompt: "Change my theme."}
-		if v := EvaluateCatalogGate(c, full, settledEvidence(1, "search_web"), nil); v.Zero || v.SafeHarbor == "" {
+		if v := EvaluateCatalogGate(c, full, settledEvidence(1, "search_web"), nil, false); v.Zero || v.SafeHarbor == "" {
 			t.Fatalf("%s with a non-empty catalog verdict=%+v", category, v)
 		}
 	}
@@ -124,12 +124,12 @@ func TestCatalogGateRestraintRequiresAnOfferUnlessSafeHarbor(t *testing.T) {
 	if !slices.Contains(topK, "search_web") {
 		t.Fatalf("published top-k %v lacks the cued tool", topK)
 	}
-	omitted := EvaluateCatalogGate(negation, full, settledEvidence(1, "set_theme", "set_chat_font"), nil)
+	omitted := EvaluateCatalogGate(negation, full, settledEvidence(1, "set_theme", "set_chat_font"), nil, false)
 	if !omitted.Zero || omitted.SafeHarbor != "" ||
 		!slices.Contains(omitted.Findings, CatalogFindingRestraintWithoutOffer) {
 		t.Fatalf("negation with the cued class withheld verdict=%+v", omitted)
 	}
-	retained := EvaluateCatalogGate(negation, full, settledEvidence(1, append(topK, "set_theme")...), nil)
+	retained := EvaluateCatalogGate(negation, full, settledEvidence(1, append(topK, "set_theme")...), nil, false)
 	if retained.Zero || retained.SafeHarbor != CatalogSafeHarborSemanticTopK {
 		t.Fatalf("negation with the semantic top-k retained verdict=%+v", retained)
 	}
@@ -138,7 +138,7 @@ func TestCatalogGateRestraintRequiresAnOfferUnlessSafeHarbor(t *testing.T) {
 	for _, tool := range full {
 		names = append(names, tool.Name)
 	}
-	if v := EvaluateCatalogGate(negation, full, settledEvidence(1, names...), nil); v.Zero || v.SafeHarbor == "" {
+	if v := EvaluateCatalogGate(negation, full, settledEvidence(1, names...), nil, false); v.Zero || v.SafeHarbor == "" {
 		t.Fatalf("full catalog verdict=%+v", v)
 	}
 }
@@ -148,24 +148,24 @@ func TestCatalogGateSwallowedModelCallScoresRestraintOnModelChoice(t *testing.T)
 	c := protocol.ToolCase{ID: "chat", Category: "no_tool", Prompt: "Hope you're having a nice afternoon!"}
 	evidence := settledEvidence(1, "set_theme", "search_web")
 	evidence.ModelEmittedToolCalls = []string{"set_theme"}
-	swallowed := EvaluateCatalogGate(c, full, evidence, nil)
+	swallowed := EvaluateCatalogGate(c, full, evidence, nil, false)
 	if !swallowed.Zero || !slices.Contains(swallowed.Findings, CatalogFindingSwallowedModelCall) {
 		t.Fatalf("swallowed call verdict=%+v", swallowed)
 	}
 	// Executed calls are not swallowed (the base rule already zeroes the action).
-	executed := EvaluateCatalogGate(c, full, evidence, []protocol.ObservedToolCall{{Name: "set_theme"}})
+	executed := EvaluateCatalogGate(c, full, evidence, []protocol.ObservedToolCall{{Name: "set_theme"}}, false)
 	if slices.Contains(executed.Findings, CatalogFindingSwallowedModelCall) {
 		t.Fatalf("executed call flagged as swallowed: %+v", executed)
 	}
 	// Memory retrieval is harness-internal and never served: not an action.
 	evidence.ModelEmittedToolCalls = []string{"search_memories", "fetch_memories"}
-	memory := EvaluateCatalogGate(c, full, evidence, nil)
+	memory := EvaluateCatalogGate(c, full, evidence, nil, false)
 	if memory.Zero || slices.Contains(memory.Findings, CatalogFindingSwallowedModelCall) {
 		t.Fatalf("memory emission flagged as swallowed: %+v", memory)
 	}
 	// Emitted twice, executed once: one was swallowed.
 	evidence.ModelEmittedToolCalls = []string{"search_web", "search_web"}
-	twice := EvaluateCatalogGate(c, full, evidence, []protocol.ObservedToolCall{{Name: "search_web"}})
+	twice := EvaluateCatalogGate(c, full, evidence, []protocol.ObservedToolCall{{Name: "search_web"}}, false)
 	if !slices.Contains(twice.Findings, CatalogFindingSwallowedModelCall) {
 		t.Fatalf("second emission not flagged: %+v", twice)
 	}
@@ -178,12 +178,12 @@ func TestCatalogGateExpectedToolMustBeOfferedUnlessSafeHarbor(t *testing.T) {
 		Prompt:        "Search the web for the current Veltrix index figure.",
 		ExpectedTools: []protocol.ToolSpec{{Name: "search_web"}},
 	}
-	withheld := EvaluateCatalogGate(web, full, settledEvidence(1, "set_theme"), nil)
+	withheld := EvaluateCatalogGate(web, full, settledEvidence(1, "set_theme"), nil, false)
 	if !withheld.Zero || withheld.SafeHarbor != "" ||
 		!slices.Contains(withheld.Findings, CatalogFindingExpectedToolNotOffered) {
 		t.Fatalf("expected tool withheld verdict=%+v", withheld)
 	}
-	if v := EvaluateCatalogGate(web, full, settledEvidence(1, "search_web", "read_links"), nil); v.Zero || len(v.Findings) != 0 {
+	if v := EvaluateCatalogGate(web, full, settledEvidence(1, "search_web", "read_links"), nil, false); v.Zero || len(v.Findings) != 0 {
 		t.Fatalf("expected tool offered verdict=%+v", v)
 	}
 	// Memory-only expectations are harness-internal and never required on the wire.
@@ -191,7 +191,7 @@ func TestCatalogGateExpectedToolMustBeOfferedUnlessSafeHarbor(t *testing.T) {
 		ID: "mem", Category: "memory_search", Prompt: "What did I say about my mentor last spring?",
 		ExpectedTools: []protocol.ToolSpec{{Name: "search_memories"}},
 	}
-	if v := EvaluateCatalogGate(memory, full, settledEvidence(1), nil); v.Zero || len(v.Findings) != 1 || v.Findings[0] != CatalogFindingCatalogAbsent {
+	if v := EvaluateCatalogGate(memory, full, settledEvidence(1), nil, false); v.Zero || len(v.Findings) != 1 || v.Findings[0] != CatalogFindingCatalogAbsent {
 		t.Fatalf("memory-only case verdict=%+v", v)
 	}
 	// Safe harbor: the retained set holds the published top-k but the dataset's
@@ -202,7 +202,7 @@ func TestCatalogGateExpectedToolMustBeOfferedUnlessSafeHarbor(t *testing.T) {
 		ExpectedTools: []protocol.ToolSpec{{Name: "set_chat_font"}},
 	}
 	topK := CatalogSemanticTopK(odd.Prompt, full, CatalogSafeHarborTopK)
-	harbor := EvaluateCatalogGate(odd, full, settledEvidence(1, topK...), nil)
+	harbor := EvaluateCatalogGate(odd, full, settledEvidence(1, topK...), nil, false)
 	if harbor.Zero || harbor.SafeHarbor != CatalogSafeHarborSemanticTopK ||
 		!slices.Contains(harbor.Findings, CatalogFindingExpectedToolNotOffered) {
 		t.Fatalf("safe-harbor trim verdict=%+v", harbor)
@@ -256,6 +256,137 @@ func TestApplyCatalogGateForVersionPostureAndFrozenContracts(t *testing.T) {
 	// The attached evidence is a copy: the relay's record is never mutated.
 	if len(evidence.Findings) != 0 {
 		t.Fatalf("relay evidence mutated: %+v", evidence.Findings)
+	}
+}
+
+func TestCatalogGateToolChoiceSuppressionOffersNothing(t *testing.T) {
+	full := catalog.CatalogForVersion(protocol.BenchVersionV12)
+	chitchat := protocol.ToolCase{ID: "chat", Category: "no_tool", Prompt: "How is your day going so far?"}
+
+	// The relay applied tool_choice "none": the full tools[] was sent but nothing
+	// was choosable, so the union is empty and catalog_present is false. That is
+	// host-decided restraint, not the model's.
+	none := settledEvidence(1)
+	none.ToolChoiceSuppressedCompletions = 1
+	none.Completions = []protocol.CatalogCompletion{{
+		ToolsOffered: 31, ToolsChoosable: 0, ToolChoice: "none", AfterLastToolResult: true,
+	}}
+	v := EvaluateCatalogGate(chitchat, full, none, nil, false)
+	if !v.Settled || !v.Zero || v.SafeHarbor != "" || !v.CatalogAbsent ||
+		!slices.Contains(v.Findings, CatalogFindingRestraintWithoutOffer) {
+		t.Fatalf("tool_choice none verdict=%+v", v)
+	}
+	// A pinned memory tool leaves a catalog of one harness-internal tool: the
+	// model was not in a position to act on a served tool.
+	pinned := settledEvidence(1, "search_memories")
+	pinned.ToolChoiceSuppressedCompletions = 1
+	pinned.Completions = []protocol.CatalogCompletion{{
+		ToolsOffered: 31, ToolsChoosable: 1, ToolChoice: "tool:search_memories", AfterLastToolResult: true,
+	}}
+	v = EvaluateCatalogGate(chitchat, full, pinned, nil, false)
+	if !v.Zero || v.SafeHarbor != "" || v.CatalogAbsent ||
+		!slices.Contains(v.Findings, CatalogFindingMemoryOnlyCatalog) ||
+		!slices.Contains(v.Findings, CatalogFindingRestraintWithoutOffer) {
+		t.Fatalf("memory-pinned verdict=%+v", v)
+	}
+	// A pinned action tool is a choosable offer of that one tool.
+	action := settledEvidence(1, "set_theme")
+	action.Completions = []protocol.CatalogCompletion{{
+		ToolsOffered: 31, ToolsChoosable: 1, ToolChoice: "tool:set_theme", AfterLastToolResult: true,
+	}}
+	if v = EvaluateCatalogGate(chitchat, full, action, nil, false); v.Zero || v.SafeHarbor != CatalogSafeHarborNonEmptyDeclarative {
+		t.Fatalf("action-pinned verdict=%+v", v)
+	}
+}
+
+func TestCatalogGateExecutedExpectedToolWaivesRuleB(t *testing.T) {
+	full := catalog.CatalogForVersion(protocol.BenchVersionV12)
+	web := protocol.ToolCase{
+		ID: "web", Category: "web_search",
+		Prompt:        "Search the web for the current Veltrix index figure.",
+		ExpectedTools: []protocol.ToolSpec{{Name: "search_web"}},
+	}
+	// The request body that offered search_web could not be parsed, so the
+	// recorded union lacks it -- but the validator executed search_web under
+	// matched v10 provenance: the model chose it, so it was offered.
+	evidence := settledEvidence(1)
+	observed := []protocol.ObservedToolCall{{Name: "search_web"}}
+	proven := EvaluateCatalogGate(web, full, evidence, observed, true)
+	if proven.Zero || slices.Contains(proven.Findings, CatalogFindingExpectedToolNotOffered) ||
+		!slices.Contains(proven.Findings, CatalogFindingOfferInferredFromExecution) {
+		t.Fatalf("execution-proven verdict=%+v", proven)
+	}
+	// Without matched provenance the execution is a self-report and waives nothing.
+	unproven := EvaluateCatalogGate(web, full, evidence, observed, false)
+	if !unproven.Zero || !slices.Contains(unproven.Findings, CatalogFindingExpectedToolNotOffered) {
+		t.Fatalf("unproven verdict=%+v", unproven)
+	}
+	// Through ApplyCatalogGateForVersion the v10 provenance decides.
+	base := protocol.CaseScore{CaseID: "web", Kind: protocol.KindTool, ToolScore: 1, Score: 1,
+		ToolProvenance: &protocol.ToolProvenanceEvidence{ModelEmitted: 1, EndpointAttempts: 1, Matched: 1, Complete: true}}
+	got, verdict := ApplyCatalogGateForVersion(protocol.BenchVersionV13, ScopeScored, CatalogGateEnforce, base, web, full, evidence, observed)
+	if got.ToolScore != 1 || verdict.Zero {
+		t.Fatalf("provenance-backed execution zeroed: %+v verdict=%+v", got, verdict)
+	}
+	base.ToolProvenance.Unmatched = 1
+	if got, _ = ApplyCatalogGateForVersion(protocol.BenchVersionV13, ScopeScored, CatalogGateEnforce, base, web, full, evidence, observed); got.ToolScore != 0 {
+		t.Fatalf("unmatched provenance still waived rule (b): %+v", got)
+	}
+}
+
+func TestCatalogGateLowerBoundRecordsHarborWithoutSettling(t *testing.T) {
+	full := catalog.CatalogForVersion(protocol.BenchVersionV12)
+	chitchat := protocol.ToolCase{ID: "chat", Category: "no_tool", Prompt: "How is your day going so far?"}
+	bound := &protocol.CatalogEvidence{
+		OverlapCompletions: 3, OverlapCompletionsWithCatalog: 3, CatalogPresentLowerBound: true,
+	}
+	v := EvaluateCatalogGate(chitchat, full, bound, nil, false)
+	if v.Settled || v.Zero || !v.LowerBound || v.SafeHarbor != CatalogSafeHarborNonEmptyDeclarative ||
+		!slices.Contains(v.Findings, CatalogFindingEvidenceIncomplete) ||
+		!slices.Contains(v.Findings, CatalogFindingCatalogPresentLowerBound) {
+		t.Fatalf("lower-bound verdict=%+v", v)
+	}
+	// The bound proves an offer, not WHICH tools: it does not cover the tempting
+	// class or an expected-tool case.
+	negation := protocol.ToolCase{ID: "neg", Category: "negation_no_tool", Prompt: "Don't search the web for this."}
+	if v = EvaluateCatalogGate(negation, full, bound, nil, false); v.LowerBound || v.SafeHarbor != "" {
+		t.Fatalf("tempting-class lower bound verdict=%+v", v)
+	}
+	web := protocol.ToolCase{ID: "web", Category: "web_search", Prompt: "Search the web.", ExpectedTools: []protocol.ToolSpec{{Name: "search_web"}}}
+	if v = EvaluateCatalogGate(web, full, bound, nil, false); v.LowerBound || v.Settled {
+		t.Fatalf("expected-tool lower bound verdict=%+v", v)
+	}
+	// Not every candidate offered a catalog: no bound, plain incomplete.
+	partial := &protocol.CatalogEvidence{OverlapCompletions: 3, OverlapCompletionsWithCatalog: 2}
+	if v = EvaluateCatalogGate(chitchat, full, partial, nil, false); v.LowerBound || len(v.Findings) != 1 {
+		t.Fatalf("partial overlap verdict=%+v", v)
+	}
+}
+
+func TestApplyCatalogGateEnforceRequiresCorroboratedClaims(t *testing.T) {
+	full := catalog.CatalogForVersion(protocol.BenchVersionV12)
+	c := protocol.ToolCase{ID: "chat", Category: "no_tool", Prompt: "Good morning!"}
+	base := protocol.CaseScore{CaseID: "chat", Kind: protocol.KindTool, ToolScore: 1, Score: 1}
+	// Settled zero, but the only completion was booked on a harness-asserted
+	// X-Ditto-Case-Id that nothing corroborated: enforce records, never zeroes.
+	claimed := settledEvidence(1)
+	claimed.ClaimAttributedCompletions = 1
+	claimed.Completions = []protocol.CatalogCompletion{{AttributionSource: "claim", AfterLastToolResult: true}}
+	got, verdict := ApplyCatalogGateForVersion(protocol.BenchVersionV13, ScopeScored, CatalogGateEnforce, base, c, full, claimed, nil)
+	if !verdict.Settled || !verdict.Zero || got.ToolScore != 1 ||
+		!slices.Contains(got.Catalog.Findings, CatalogFindingClaimUncorroborated) ||
+		slices.Contains(got.Catalog.Findings, CatalogFindingZeroed) || len(got.Notes) != 1 {
+		t.Fatalf("uncorroborated claim result=%+v verdict=%+v", got, verdict)
+	}
+	// Once the claim is corroborated by a consumed tool call, enforce zeroes.
+	claimed.ClaimCorroboratedCompletions = 1
+	if got, _ = ApplyCatalogGateForVersion(protocol.BenchVersionV13, ScopeScored, CatalogGateEnforce, base, c, full, claimed, nil); got.ToolScore != 0 {
+		t.Fatalf("corroborated claim not zeroed: %+v", got)
+	}
+	// Shadow never zeroes and does not record the enforce-only finding.
+	shadow, _ := ApplyCatalogGateForVersion(protocol.BenchVersionV13, ScopeScored, CatalogGateShadow, base, c, full, settledEvidence(1), nil)
+	if shadow.ToolScore != 1 || slices.Contains(shadow.Catalog.Findings, CatalogFindingClaimUncorroborated) {
+		t.Fatalf("shadow result=%+v", shadow)
 	}
 }
 

@@ -2176,6 +2176,8 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			catalogTotals = &totals
 		}
 	}
+	catalogGateSummary := summarizeV13CatalogGate(req.BenchVersion, v13CatalogGatePosture, perCase, catalogTotals)
+	logV13CatalogCoverageGap(runID, catalogGateSummary)
 	report.Details = &protocol.RunDetails{
 		BenchVersion:      req.BenchVersion,
 		RunSize:           req.RunSize,
@@ -2189,7 +2191,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		ObservedToolCases: observedTool,
 		CappedToolCases:   cappedTool,
 		ToolProvenance:    summarizeV10ToolProvenance(perCase, toolProvenanceTotals),
-		CatalogGate:       summarizeV13CatalogGate(req.BenchVersion, v13CatalogGatePosture, perCase, catalogTotals),
+		CatalogGate:       catalogGateSummary,
 		IsolationCases:    len(iso.Cases),
 		LifecycleCases:    memSuite.LifecycleCases,
 		ToolEfficiency:    scorer.ToolEfficiencyFactorForVersion(perCase, req.BenchVersion),

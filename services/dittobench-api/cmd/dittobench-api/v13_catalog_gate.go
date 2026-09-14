@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"math"
 	"os"
 
@@ -46,9 +47,12 @@ func applyV13CatalogGate(
 
 // summarizeV13CatalogGate aggregates the per-case catalog evidence into the
 // run's catalog_gate summary, including the published
-// catalog_suppression_rate (catalog absent / attributed cases with at least one
+// catalog_suppression_rate (catalog absent / settled cases with at least one
 // completion) and the attribution coverage that is this validator's half of
-// the enforce precondition. nil below Bench v13 so earlier report bytes are
+// the enforce precondition. A case is ATTRIBUTED when completions_total is
+// non-nil; one that is attributed but not settled (truncated capture or an
+// unparseable body) is counted in incomplete_capture_cases and excluded from
+// the finding counts. nil below Bench v13 so earlier report bytes are
 // unchanged. totals may be nil when no v13 session exists.
 func summarizeV13CatalogGate(
 	benchVersion int,
@@ -67,10 +71,23 @@ func summarizeV13CatalogGate(
 		}
 		summary.ToolCases++
 		evidence := cs.Catalog
-		if evidence == nil || evidence.CompletionsTotal == nil || !evidence.Complete {
+		if evidence == nil {
+			continue
+		}
+		summary.ClaimAttributedCompletions += evidence.ClaimAttributedCompletions
+		if evidence.CompletionsTotal == nil {
+			for _, finding := range evidence.Findings {
+				if finding == scorer.CatalogFindingCatalogPresentLowerBound {
+					summary.LowerBoundCases++
+				}
+			}
 			continue
 		}
 		summary.AttributedCases++
+		if !evidence.Complete {
+			summary.IncompleteCaptureCases++
+			continue
+		}
 		if *evidence.CompletionsTotal == 0 {
 			summary.NoCompletionCases++
 		} else {
@@ -91,6 +108,8 @@ func summarizeV13CatalogGate(
 				summary.SwallowedModelCall++
 			case scorer.CatalogFindingZeroed:
 				summary.ZeroedCases++
+			case scorer.CatalogFindingClaimUncorroborated:
+				summary.ClaimUncorroboratedCases++
 			}
 		}
 	}
@@ -105,4 +124,21 @@ func summarizeV13CatalogGate(
 		summary.CompletionsUnattributed = int(totals.Unattributed)
 	}
 	return summary
+}
+
+// logV13CatalogCoverageGap writes one operator line when a v13 run attributed
+// no tool case at all. Under the live runtime (case_concurrency > 1, no
+// exclusive windows for ordinary /run) that is what a harness that never sends
+// X-Ditto-Case-Id looks like: every completion overlaps several cases, the
+// shadow telemetry is blank, and the enforce precondition cannot be measured.
+// nil or a run without tool cases logs nothing.
+func logV13CatalogCoverageGap(runID string, summary *protocol.CatalogGateSummary) {
+	if summary == nil || summary.ToolCases == 0 || summary.AttributionCoverageBPS != 0 {
+		return
+	}
+	log.Printf(
+		"v13 catalog gate: run %s attributed 0 of %d tool cases (completions=%d unattributed=%d lower_bound=%d); "+
+			"the harness sends no X-Ditto-Case-Id under concurrent /run, so catalog telemetry is blank for this run",
+		runID, summary.ToolCases, summary.CompletionsTotal, summary.CompletionsUnattributed, summary.LowerBoundCases,
+	)
 }

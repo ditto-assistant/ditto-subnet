@@ -46,15 +46,26 @@ func TestSummarizeV13CatalogGatePublishesSuppressionRateAndCoverage(t *testing.T
 		{Kind: protocol.KindTool, Catalog: &protocol.CatalogEvidence{CompletionsTotal: &zero, Complete: true,
 			Findings: []string{scorer.CatalogFindingNoModelCompletion, scorer.CatalogFindingExpectedToolNotOffered}}},
 		{Kind: protocol.KindTool, Catalog: &protocol.CatalogEvidence{Complete: false, Findings: []string{scorer.CatalogFindingEvidenceIncomplete}}},
+		// Unattributed, but every candidate completion offered a catalog.
+		{Kind: protocol.KindTool, Catalog: &protocol.CatalogEvidence{Complete: false, OverlapCompletions: 2, OverlapCompletionsWithCatalog: 2,
+			CatalogPresentLowerBound: true, Findings: []string{scorer.CatalogFindingEvidenceIncomplete, scorer.CatalogFindingCatalogPresentLowerBound, scorer.CatalogFindingSafeHarbor}}},
+		// Attributed (completions_total known) but the capture was not settled: an
+		// unparseable body. Counted as coverage, excluded from the finding counts.
+		{Kind: protocol.KindTool, Catalog: &protocol.CatalogEvidence{CompletionsTotal: &one, Complete: false,
+			Findings: []string{catalogFindingUnparseableRequest, scorer.CatalogFindingEvidenceIncomplete}}},
+		// Settled zero withheld under enforce: attribution rests on a claim.
+		{Kind: protocol.KindTool, Catalog: &protocol.CatalogEvidence{CompletionsTotal: &one, Complete: true, ClaimAttributedCompletions: 1,
+			Findings: []string{scorer.CatalogFindingCatalogAbsent, scorer.CatalogFindingRestraintWithoutOffer, scorer.CatalogFindingClaimUncorroborated}}},
 		{Kind: protocol.KindTool},
 	}
 	totals := sessionCatalogTotals{Completions: 7, CompletionsWithCatalog: 4, Unattributed: 2}
 	got := summarizeV13CatalogGate(protocol.BenchVersionV13, scorer.CatalogGateEnforce, perCase, &totals)
 	want := &protocol.CatalogGateSummary{
-		Posture: "enforce", ToolCases: 5, AttributedCases: 3, NoCompletionCases: 1,
-		CatalogAbsentCases: 1, CatalogSuppressionRate: 0.5, SafeHarborCases: 1,
-		RestraintWithoutOffer: 1, ExpectedToolNotOffered: 1, ZeroedCases: 1,
-		CompletionsTotal: 7, CompletionsUnattributed: 2, AttributionCoverageBPS: 6000,
+		Posture: "enforce", ToolCases: 8, AttributedCases: 5, IncompleteCaptureCases: 1, LowerBoundCases: 1,
+		NoCompletionCases: 1, CatalogAbsentCases: 2, CatalogSuppressionRate: 0.666667, SafeHarborCases: 1,
+		RestraintWithoutOffer: 2, ExpectedToolNotOffered: 1, ZeroedCases: 1,
+		ClaimUncorroboratedCases: 1, ClaimAttributedCompletions: 1,
+		CompletionsTotal: 7, CompletionsUnattributed: 2, AttributionCoverageBPS: 6250,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("summary=%+v want %+v", got, want)

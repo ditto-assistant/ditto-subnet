@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
@@ -327,15 +328,139 @@ func TestV13CatalogCaptureBoundsPerCaseMemory(t *testing.T) {
 	if evidence.Complete || !slices.Contains(evidence.Findings, catalogFindingCaptureTruncated) || evidence.CompletionsTotal == nil {
 		t.Fatalf("truncated evidence=%+v", evidence)
 	}
-	// Unparseable bodies are recorded as findings, never as failures.
+	// Unparseable bodies are recorded as findings, never as failures -- and they
+	// leave the case UNSETTLED: an unparseable request may have offered a catalog
+	// the record cannot show, so the gate fails open instead of reading an empty
+	// offer.
 	other := &brokerSession{benchVersion: protocol.BenchVersionV13, runCases: map[string]int{"case-b": 1}}
 	recordCatalogCompletionLocked(other, beginCatalogCompletionLocked(other, 0, ""), []byte("nope"), []byte("nope"))
 	broker.mu.Lock()
 	broker.sessions["o"] = other
 	broker.mu.Unlock()
 	bad := broker.sessionCatalogEvidence("o", "case-b")
-	if *bad.CompletionsTotal != 1 || !bad.Complete ||
+	if *bad.CompletionsTotal != 1 || bad.Complete || bad.CatalogPresentLowerBound ||
 		!reflect.DeepEqual(bad.Findings, []string{catalogFindingUnparseableRequest, catalogFindingUnparseableResponse}) {
 		t.Fatalf("unparseable evidence=%+v", bad)
+	}
+}
+
+func TestModelEmittedToolNamesReadsOnlyTheFirstChoice(t *testing.T) {
+	names, ok := modelEmittedToolNames([]byte(`{"choices":[
+	  {"index":0,"message":{"tool_calls":[{"type":"function","function":{"name":"set_theme","arguments":"{}"}}]}},
+	  {"index":1,"message":{"tool_calls":[{"type":"function","function":{"name":"search_web","arguments":"{}"}}]}}]}`))
+	if !ok || !slices.Equal(names, []string{"set_theme"}) {
+		t.Fatalf("n>1 names=%v ok=%t", names, ok)
+	}
+}
+
+func TestV13BrokerToolChoiceSuppressesTheOffer(t *testing.T) {
+	session := &brokerSession{benchVersion: protocol.BenchVersionV13, runCases: map[string]int{"case-a": 1}}
+	attribution := beginCatalogCompletionLocked(session, 0, "")
+	none := strings.Replace(openAICatalogRequest, `"tool_choice":"auto"`, `"tool_choice":"none"`, 1)
+	recordCatalogCompletionLocked(session, attribution, []byte(none), []byte(`{"choices":[{"message":{"content":"hi"}}]}`))
+	broker := newInferenceBroker(1)
+	broker.mu.Lock()
+	broker.sessions["s"] = session
+	broker.mu.Unlock()
+	// The full tools[] was sent, nothing was choosable: no offer is recorded.
+	evidence := broker.sessionCatalogEvidence("s", "case-a")
+	if !evidence.Complete || evidence.CatalogPresent || len(evidence.ToolsOffered) != 0 ||
+		evidence.CompletionsWithCatalog != 0 || evidence.ToolChoiceSuppressedCompletions != 1 ||
+		!slices.Contains(evidence.Findings, catalogFindingToolChoiceSuppression) ||
+		evidence.Completions[0].ToolsOffered != 2 || evidence.Completions[0].ToolsChoosable != 0 ||
+		evidence.Completions[0].ToolChoice != "none" || evidence.Completions[0].AttributionSource != catalogAttributionInFlight {
+		t.Fatalf("tool_choice none evidence=%+v", evidence)
+	}
+	// A pinned tool offers exactly that tool.
+	pinned := strings.Replace(openAICatalogRequest, `"tool_choice":"auto"`, `"tool_choice":{"type":"function","function":{"name":"set_theme"}}`, 1)
+	recordCatalogCompletionLocked(session, attribution, []byte(pinned), []byte(emitSetThemeCompletion))
+	evidence = broker.sessionCatalogEvidence("s", "case-a")
+	if !evidence.CatalogPresent || len(evidence.ToolsOffered) != 1 || evidence.ToolsOffered[0].Name != "set_theme" ||
+		evidence.CompletionsWithCatalog != 1 || evidence.ToolChoiceSuppressedCompletions != 2 ||
+		evidence.Completions[1].ToolsChoosable != 1 {
+		t.Fatalf("pinned evidence=%+v", evidence)
+	}
+	// A pinned MEMORY tool is choosable but not actionable: the completion does
+	// not count as one that left the model in a position to act.
+	memoryPinned := `{"messages":[{"role":"user","content":"Hi"}],"tools":[{"type":"function","function":{"name":"search_memories","parameters":{}}}],"tool_choice":{"type":"function","function":{"name":"search_memories"}}}`
+	recordCatalogCompletionLocked(session, attribution, []byte(memoryPinned), []byte(`{"choices":[{"message":{"content":"hi"}}]}`))
+	if evidence = broker.sessionCatalogEvidence("s", "case-a"); evidence.CompletionsWithCatalog != 1 || len(evidence.ToolsOffered) != 2 {
+		t.Fatalf("memory-pinned evidence=%+v", evidence)
+	}
+}
+
+func TestV13BrokerRecordsAttributionSourceAndCorroboratesClaims(t *testing.T) {
+	broker, sessionID, stop := newCatalogCaptureBroker(t, protocol.BenchVersionV13, emitSetThemeCompletion)
+	defer stop()
+	broker.beginRunCase(sessionID, "case-a")
+	broker.beginRunCase(sessionID, "case-b")
+	defer broker.endRunCase(sessionID, "case-a")
+	defer broker.endRunCase(sessionID, "case-b")
+	// Two claimed completions on case-b: both emit set_theme.
+	postCatalogChat(t, broker, openAICatalogRequest, harnessCaseHeader, "case-b")
+	postCatalogChat(t, broker, openAICatalogRequest, harnessCaseHeader, "case-b")
+	before := broker.sessionCatalogEvidence(sessionID, "case-b")
+	if before.ClaimAttributedCompletions != 2 || before.ClaimCorroboratedCompletions != 0 ||
+		before.Completions[0].AttributionSource != catalogAttributionClaim || before.Completions[0].ClaimCorroborated {
+		t.Fatalf("claimed evidence=%+v", before)
+	}
+	// The validator consumes ONE set_theme execution for case-b: exactly one
+	// claim is corroborated, and only for the case the call was consumed on.
+	route, unregister, err := broker.registerToolWithProvenance(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }),
+		"192.0.2.91", false, true, sessionID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unregister()
+	call := protocol.ToolExecRequest{CaseID: "case-b", UserID: "user-b", Name: "set_theme", Args: json.RawMessage(`{"theme":"dark"}`)}
+	raw, _ := json.Marshal(call)
+	request := httptest.NewRequest(http.MethodPost, route.endpoint("http://broker.test/v1/tools/"+route.id+"/tool", call.CaseID, call.UserID), bytes.NewReader(raw))
+	request.SetPathValue("id", route.id)
+	request.RemoteAddr = "192.0.2.91:1234"
+	recorder := httptest.NewRecorder()
+	broker.handleTool(recorder, request)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("tool status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	after := broker.sessionCatalogEvidence(sessionID, "case-b")
+	if after.ClaimAttributedCompletions != 2 || after.ClaimCorroboratedCompletions != 1 ||
+		!after.Completions[0].ClaimCorroborated || after.Completions[1].ClaimCorroborated {
+		t.Fatalf("corroborated evidence=%+v", after)
+	}
+	if a := broker.sessionCatalogEvidence(sessionID, "case-a"); a.ClaimAttributedCompletions != 0 || a.ClaimCorroboratedCompletions != 0 {
+		t.Fatalf("case-a picked up case-b's claims: %+v", a)
+	}
+	// Window attribution is recorded as such.
+	single := &brokerSession{benchVersion: protocol.BenchVersionV13, activeCaseGeneration: 7, activeCaseID: "case-w"}
+	if attribution := beginCatalogCompletionLocked(single, 7, ""); attribution.source != catalogAttributionWindow || attribution.caseID != "case-w" {
+		t.Fatalf("window attribution=%+v", attribution)
+	}
+}
+
+func TestV13BrokerOverlapLowerBoundNeverSettles(t *testing.T) {
+	broker, sessionID, stop := newCatalogCaptureBroker(t, protocol.BenchVersionV13, emitSetThemeCompletion)
+	defer stop()
+	broker.beginRunCase(sessionID, "case-a")
+	broker.beginRunCase(sessionID, "case-b")
+	// Three unattributable completions, every one offering an actionable
+	// catalog: both cases stay unsettled but carry the lower bound.
+	for i := 0; i < 3; i++ {
+		postCatalogChat(t, broker, openAICatalogRequest)
+	}
+	for _, caseID := range []string{"case-a", "case-b"} {
+		evidence := broker.sessionCatalogEvidence(sessionID, caseID)
+		if evidence.Complete || evidence.CompletionsTotal != nil || evidence.OverlapCompletions != 3 ||
+			evidence.OverlapCompletionsWithCatalog != 3 || !evidence.CatalogPresentLowerBound {
+			t.Fatalf("%s lower-bound evidence=%+v", caseID, evidence)
+		}
+	}
+	// One more overlapping completion with an EMPTY catalog breaks the bound.
+	postCatalogChat(t, broker, `{"model":"openai/gpt-oss-20b","messages":[{"role":"user","content":"Hi"}],"tools":[]}`)
+	broker.endRunCase(sessionID, "case-a")
+	broker.endRunCase(sessionID, "case-b")
+	if a := broker.sessionCatalogEvidence(sessionID, "case-a"); a.CatalogPresentLowerBound || a.OverlapCompletions != 4 || a.OverlapCompletionsWithCatalog != 3 {
+		t.Fatalf("broken bound evidence=%+v", a)
 	}
 }
