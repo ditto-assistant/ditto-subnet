@@ -4089,7 +4089,8 @@ def _revealed_weighted_hotkeys(app_state: Any) -> set[str] | None:
     for vector in vectors:
         for weight in getattr(vector, "weights", ()):
             hotkey = getattr(weight, "hotkey", None)
-            if isinstance(hotkey, str) and getattr(weight, "value", 0):
+            value = getattr(weight, "value", None)
+            if isinstance(hotkey, str) and isinstance(value, (int, float)) and value:
                 hotkeys.add(hotkey)
     return hotkeys
 
