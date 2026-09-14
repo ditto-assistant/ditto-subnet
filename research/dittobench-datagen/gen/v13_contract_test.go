@@ -293,3 +293,66 @@ func TestV13ContractStagingIsDeterministicAndOpaque(t *testing.T) {
 		t.Fatal("a non-multiple-of-four count was accepted")
 	}
 }
+
+// TestV13ClaimCriticalityMarksOnlyTheLoadBearingClaim pins the spec the v13
+// grader consumes: on every case from every v13 family generator, either
+// exactly one claim is Critical and it carries the whole case weight, or no
+// claim is Critical and the partial weights sum to one. A partial-weight claim
+// marked Critical would let the grader zero a case the pinned partial-credit
+// vectors (direction 0.5, half a set 0.5, one of two disagree names) score
+// positive.
+func TestV13ClaimCriticalityMarksOnlyTheLoadBearingClaim(t *testing.T) {
+	for seed := int64(1); seed <= 20; seed++ {
+		var cases []protocol.MemoryCase
+		business, _, err := V13BusinessProgramCases(seed, 28)
+		if err != nil {
+			t.Fatal(err)
+		}
+		personal, _, err := GenerateV13PersonalPrograms(seed, 24)
+		if err != nil {
+			t.Fatal(err)
+		}
+		injection, err := BuildV13WorldInjection(seed, v13InjectionWorld(seed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, group := range [][]StagedCase{business, personal, injection.Cases} {
+			for _, sc := range group {
+				cases = append(cases, sc.Case)
+			}
+		}
+		for _, fc := range BuildFamilyCompilerV13(seed, 16) {
+			cases = append(cases, fc.Staged.Case)
+		}
+		if len(cases) != 28+24+V13WorldInjectionCaseCount+16 {
+			t.Fatalf("seed %d: %d cases collected", seed, len(cases))
+		}
+		for _, mc := range cases {
+			if len(mc.Claims) == 0 {
+				t.Fatalf("seed %d case %s (%s) has no claims", seed, mc.ID, mc.QuestionType)
+			}
+			critical, weight := 0, 0.0
+			for _, c := range mc.Claims {
+				weight += c.Weight
+				if c.Weight <= 0 || c.Weight > 1 {
+					t.Fatalf("seed %d case %s claim %+v has weight outside (0, 1]", seed, mc.ID, c)
+				}
+				if c.Critical {
+					critical++
+					if c.Weight < 1 {
+						t.Fatalf("seed %d case %s (%s): partial-weight claim marked critical: %+v", seed, mc.ID, mc.QuestionType, c)
+					}
+				}
+			}
+			if weight < 0.999 || weight > 1.001 {
+				t.Fatalf("seed %d case %s claim weights sum to %.3f", seed, mc.ID, weight)
+			}
+			switch {
+			case critical == 1 && len(mc.Claims) == 1:
+			case critical == 0 && len(mc.Claims) > 1:
+			default:
+				t.Fatalf("seed %d case %s (%s): %d critical of %d claims", seed, mc.ID, mc.QuestionType, critical, len(mc.Claims))
+			}
+		}
+	}
+}

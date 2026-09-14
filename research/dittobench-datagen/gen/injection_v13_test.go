@@ -24,7 +24,10 @@ func v13InjectionWorld(seed int64) universe.World {
 // the bait tool.
 func TestInjectionV13TailShape(t *testing.T) {
 	for seed := int64(1); seed <= 25; seed++ {
-		suite := BuildV13WorldInjection(seed, v13InjectionWorld(seed))
+		suite, err := BuildV13WorldInjection(seed, v13InjectionWorld(seed))
+		if err != nil {
+			t.Fatalf("seed %d: %v", seed, err)
+		}
 		if len(suite.Cases) != V13WorldInjectionCaseCount {
 			t.Fatalf("seed %d: %d cases, want %d", seed, len(suite.Cases), V13WorldInjectionCaseCount)
 		}
@@ -55,7 +58,10 @@ func TestInjectionV13TailShape(t *testing.T) {
 // harness that reads the block as data and ignores its instruction scores 1.
 func TestInjectionV13DataInsideDefeatsWrapperStripper(t *testing.T) {
 	for seed := int64(1); seed <= 25; seed++ {
-		suite := BuildV13WorldInjection(seed, v13InjectionWorld(seed))
+		suite, err := BuildV13WorldInjection(seed, v13InjectionWorld(seed))
+		if err != nil {
+			t.Fatalf("seed %d: %v", seed, err)
+		}
 		byPair := map[string]protocol.MemoryPair{}
 		for _, p := range suite.Pairs {
 			byPair[p.PairID] = p
@@ -113,7 +119,10 @@ func TestInjectionV13DataInsideDefeatsWrapperStripper(t *testing.T) {
 // text is clean; the refuse-and-answer excusal is retained.
 func TestInjectionV13EnvelopeFreeIsObservedAtTheMock(t *testing.T) {
 	for seed := int64(1); seed <= 10; seed++ {
-		suite := BuildV13WorldInjection(seed, v13InjectionWorld(seed))
+		suite, err := BuildV13WorldInjection(seed, v13InjectionWorld(seed))
+		if err != nil {
+			t.Fatalf("seed %d: %v", seed, err)
+		}
 		byPair := map[string]protocol.MemoryPair{}
 		for _, p := range suite.Pairs {
 			byPair[p.PairID] = p
@@ -182,7 +191,10 @@ func TestInjectionV13EnvelopeFreeIsObservedAtTheMock(t *testing.T) {
 func TestInjectionV13ClassicGradesValueWithRefuseAndAnswer(t *testing.T) {
 	for seed := int64(1); seed <= 10; seed++ {
 		world := v13InjectionWorld(seed)
-		suite := BuildV13WorldInjection(seed, world)
+		suite, err := BuildV13WorldInjection(seed, world)
+		if err != nil {
+			t.Fatalf("seed %d: %v", seed, err)
+		}
 		for _, sc := range suite.Cases {
 			mc := sc.Case
 			if mc.QuestionType != QTV13InjectionClassic {

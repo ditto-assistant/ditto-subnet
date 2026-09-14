@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"time"
 
 	"github.com/ditto-assistant/dittobench-datagen/internal/humandata"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -321,20 +322,41 @@ func v13Purpose(seed int64, salt string, used map[string]bool) string {
 	}
 }
 
+// v13RecordYear is the calendar year every v13 record date and timestamp is
+// rendered in (v13DateProse prints it; the timestamps below start from it).
+const v13RecordYear = 2026
+
+// v13DefaultRecordMonth is the month record sets that assert no past date are
+// written in: every plan date those records mention (milestones, appointments,
+// renewals) is drawn from March onward, so the note precedes the plan.
+const v13DefaultRecordMonth = 2
+
 // V13Timestamp renders a business-hours-plausible RFC3339 timestamp for slot i
-// of a record set. Gaps between slots are seeded (one to three days, a fresh
-// hour and minute each), so no constant step identifies a slot.
+// of a record set that asserts no past date. Gaps between slots are seeded
+// (one to three days, a fresh hour and minute each), so no constant step
+// identifies a slot.
 func V13Timestamp(seed int64, salt string, i int) string {
-	day := 2 + int(v10Seed(seed, "v13:ts-day:"+salt)%9)
+	return v13TimestampFrom(seed, salt, i, time.Date(v13RecordYear, v13DefaultRecordMonth, 1, 0, 0, 0, 0, time.UTC))
+}
+
+// V13TimestampAfter renders the slot-i timestamp for a record set that asserts
+// dates as past: slot 0 lands one to nine days after (month, day) of the record
+// year and every later slot keeps the seeded one-to-three-day gaps, so no
+// record is written before an event it reports. Day arithmetic rolls across
+// month and year boundaries.
+func V13TimestampAfter(seed int64, salt string, i, month, day int) string {
+	return v13TimestampFrom(seed, salt, i, time.Date(v13RecordYear, time.Month(month), day, 0, 0, 0, 0, time.UTC))
+}
+
+func v13TimestampFrom(seed int64, salt string, i int, from time.Time) string {
+	offset := 1 + int(v10Seed(seed, "v13:ts-day:"+salt)%9)
 	for k := 1; k <= i; k++ {
-		day += 1 + int(v10Seed(seed, fmt.Sprintf("v13:ts-gap:%s:%d", salt, k))%3)
-	}
-	if day > 27 {
-		day = 27
+		offset += 1 + int(v10Seed(seed, fmt.Sprintf("v13:ts-gap:%s:%d", salt, k))%3)
 	}
 	hour := 8 + int(v10Seed(seed, fmt.Sprintf("v13:ts-hour:%s:%d", salt, i))%10)
 	minute := int(v10Seed(seed, fmt.Sprintf("v13:ts-min:%s:%d", salt, i)) % 60)
-	return fmt.Sprintf("2026-02-%02dT%02d:%02d:00Z", day, hour, minute)
+	t := from.AddDate(0, 0, offset)
+	return time.Date(t.Year(), t.Month(), t.Day(), hour, minute, 0, 0, time.UTC).Format("2006-01-02T15:04:05Z")
 }
 
 // V13DateAccept returns every unambiguous rendering of a calendar day the
@@ -540,6 +562,33 @@ func v13LatestEventIndex(events [3]struct {
 	return latest
 }
 
+// v13LatestAssertedDate is the latest calendar day a group's records can
+// report as having happened: the three event dates plus the counterfactual's
+// moved date, so base and counterfactual members share one anchor. Groups
+// whose records mention only plan dates (the milestone review) report none.
+func v13LatestAssertedDate(g v13Group) (v13Date, bool) {
+	if g.Family != V13FamilyLatestEvent {
+		return v13Date{}, false
+	}
+	latest := g.CounterDate
+	for _, ev := range g.Events {
+		if ev.Date.ordinal() > latest.ordinal() {
+			latest = ev.Date
+		}
+	}
+	return latest, true
+}
+
+// v13GroupTimestamp places a group's record timestamps after every date the
+// records assert as past (V13TimestampAfter), or in the default record month
+// when the records only mention plans (V13Timestamp).
+func v13GroupTimestamp(seed int64, salt string, i int, g v13Group) string {
+	if latest, ok := v13LatestAssertedDate(g); ok {
+		return V13TimestampAfter(seed, salt, i, latest.Month, latest.Day)
+	}
+	return V13Timestamp(seed, salt, i)
+}
+
 // ── Rendered member ──────────────────────────────────────────────────────────
 
 // v13Member is one rendered scenario member before it is wrapped into a
@@ -575,8 +624,12 @@ func v13Question(seed int64, group, variant int, forms []string, closers []strin
 		v13Pick(seed, fmt.Sprintf("qclose-%d-%d", group, variant), closers)
 }
 
+// v13Claim builds one graded claim. Only a claim carrying the whole case
+// weight is load-bearing (Critical): partial-weight claims (a set member, one
+// side of a disagreement) contribute their share and never zero the case, so
+// the pinned partial-credit vectors and the spec agree.
 func v13Claim(kind, expected string, accept []string, weight float64) protocol.Claim {
-	return protocol.Claim{Kind: kind, Expected: expected, Accept: append([]string(nil), accept...), Critical: true, Weight: weight}
+	return protocol.Claim{Kind: kind, Expected: expected, Accept: append([]string(nil), accept...), Critical: weight >= 1, Weight: weight}
 }
 
 // renderV13Member materialises one member of a group. counter selects the
@@ -1006,7 +1059,7 @@ func materializeV13Case(
 		pairs = append(pairs, protocol.MemoryPair{
 			PairID:    pairIDs[i],
 			SessionID: protocol.OpaqueCaseID(seed, fmt.Sprintf("v13-session-%d", group), i),
-			Timestamp: V13Timestamp(seed, fmt.Sprintf("v13-%d-%d", group, variant), i),
+			Timestamp: v13GroupTimestamp(seed, fmt.Sprintf("v13-%d-%d", group, variant), i, g),
 			Prompt:    prompt, Response: response,
 		})
 	}
