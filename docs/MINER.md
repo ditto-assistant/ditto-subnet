@@ -305,8 +305,9 @@ result.
 - DittoBench generates fresh tool-use and memory-recall cases for each
   submission. Production locks every harness to one consensus model, so model
   choice is not a miner lever: on the current contract (**Bench v12**; Bench
-  v13 is scored in shadow and activates by a separate owner decision, see the
-  starter kit's [*Bench v13: how to stay inside the
+  v13 will be scored in shadow once its rollout is scheduled and activates by
+  a separate owner decision — see the starter kit's [*Bench v13: how to stay
+  inside the
   gates*](../miners/dittobench-starter-kit/README.md#bench-v13-how-to-stay-inside-the-gates))
   that is **`openai/gpt-oss-20b`**, served through the platform-owned
   OpenRouter inference boundary. Reasoning effort is an intentional v9 strategy: a harness

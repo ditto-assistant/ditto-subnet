@@ -481,14 +481,17 @@ LongMemEval floors, and the v9 efficiency stack all carry forward unchanged.
 v13 is the contract issue #1518 defines: **typed semantic outcomes graded
 through claim sets, on a surface a harness cannot regenerate, with the graded
 value causally traced to a model completion the relay observed.** It answers
-the 2026-09-13 board review (`docs/sn118-top5-board-review-2026-09-13.json`,
-briefing in `docs/sn118-bench-v12-adversary-briefing.md`): 4/5 rejected
-top-5 artifacts lived on the tool axis (request-keyed catalog suppression,
-baked option pools, phrase tables), and the memory axis rewarded a
-request-keyed `/100` rewrite of a correct bare-cents answer (the v12 minor-unit
-inversion: `411067` → 0, `$4,110.67` → 1 on a question that asked for minor
-units). Money owned 50.9% of memory score weight, so a cents ledger with a
-formatter competed with a generally competent agent.
+the 2026-09-13 top-of-board review (operator-private records
+`sn118-top5-board-review-2026-09-13.json` and
+`sn118-bench-v12-adversary-briefing.md`, held with the Backroom board-review
+precedents — they quote never-released miner source, so they do not live in
+this public repository): 4/5 rejected top-5 artifacts lived on the tool axis
+(request-keyed catalog suppression, baked option pools, phrase tables), and the
+memory axis rewarded a request-keyed `/100` rewrite of a correct bare-cents
+answer (the v12 minor-unit inversion: `411067` → 0, `$4,110.67` → 1 on a
+question that asked for minor units). Money owned 50.9% of memory score
+weight, so a cents ledger with a formatter competed with a generally competent
+agent.
 
 Every lever is gated on `bench_version >= 13`; v2–v12 regenerate and re-grade
 byte-identically (the v2–v12 known-vector tests and
@@ -497,10 +500,18 @@ byte-identically (the v2–v12 known-vector tests and
 from the v13 generator path). Nothing here activates: `CurrentBenchVersion`
 stays v8, the runtime advertises 13 in `supported_bench_versions` only through
 the #1519 wiring sweep, Platform dispatches v13 in shadow during #1521
-calibration, and activation is a separate owner gate. This section is the
-public contract; the per-area pages are
-[v13-case-families.md](v13-case-families.md) and
-[v13-family-mix-study.md](v13-family-mix-study.md).
+calibration, and activation is a separate owner gate.
+
+This is the **one** v13 section of this document. Each v13 PR documented its
+lever here under an interim per-PR umbrella while the contract was assembled
+(plumbing, surface levers, case families, envelope and money cap, grader,
+surface gate and mix audit, story v2, tool bench, evidence-bounded, twins and
+cost); those umbrellas are folded into the subsections below and must not be
+reintroduced by a later merge — `gen/v13_contract_doc_test.go` fails on a
+second `## Bench v13` heading or a second `13` row in the version table. The
+per-area detail pages are `v13-case-families.md` (#1520) and
+`v13-family-mix-study.md` (#1848, #1830); the per-area code comments stay the
+authority for anything a subsection summarises.
 
 ### Governing invariants
 
@@ -608,7 +619,13 @@ pinned to the v12 diagnosis (`TestMixAuditReproducesV12MoneyExposure` (#1830):
 117 direct money cases / 143 money-bearing / 50.9% of weight on seed
 `123456789`); the gate over the pinned 40 seeds is
 `TestV13MixAuditGateAcrossFortySeeds` (#1848), and it arms itself slot by slot
-as the interim generators are replaced (`gen.V13InterimSlots`).
+as the interim generators are replaced (`gen.V13InterimSlots`,
+`gen.V13InterimGenerators`; while either list is non-empty the full gate skips
+with a violation report and only the structural bounds and the pinned interim
+ceilings — money ≤ 37% of weight, ≤ 110 money-bearing cases, arithmetic ≤ 45%
+— are asserted, so interim exposure cannot creep upward). Medium is 95 memory
+cases (36 · 10 · 8 · 6 · 6 · 4 · 4 · 2 · 14 · 5) and small 27 (6 · 4 · 4 · 13);
+only the three public run sizes have a table, any other size fails closed.
 
 ```sh
 go run ./cmd/mixaudit -bench-version 13 -seeds 40 -run-size full
@@ -620,6 +637,28 @@ go run ./cmd/mixaudit -bench-version 13 -seeds 40 -gate   # exit 1 on a violatio
 Every lever below is `bench_version >= 13`-gated and names the test that pins
 it; an issue number in parentheses is the PR that carries the lever and its
 vector into the stack.
+
+**Plumbing (issue #1824).** `protocol.BenchVersionV13`, `datasetEpochV13 =
+2027-05-01`, and one derived list (`protocol.SupportedBenchVersions()`,
+`NewestSupportedBenchVersion()`, `SupportedBenchVersionList()`) that every
+acceptance check, error string and probe default reads — floors and shared
+constants, never retyped enumerations. `profilesV13` (full: 100 tool cases,
+250 memory cases, waves stay at 5) and the grader-only protocol types, all
+tagged `json:"-"` so they never enter the hashed artifact, `/seed` or `/run`:
+`MemoryCase.Claims []Claim{Kind, Expected, Accept, Unit, Critical, Weight}`,
+`MemoryCase.TwinRelation` / `ToolCase.TwinRelation` (`decision_twin`,
+`as_of_twin`), `ToolSpec.RequiredArgClaims`, `ToolCase.Restraint`
+(`no_call`, `clarify_first`, `decline`), the answer kinds `AnswerClarify` and
+`AnswerAbsence`; `CaseScore.Relation` carries `V10CaseProvenance.Relation`
+into the report for v13 runs only. Every staged v13 case is stamped
+`bench_version 13` and the grader dispatches its policy on that stamp.
+`cmd/memoryprobe` / `cmd/toolprobe` take `-bench-version` defaulting to the
+newest supported version, and `gen.AuditMemoryExposureForVersion` counts the
+correction/join families as computed from v13 while keeping the strict
+verbatim share visible (`TestMemoryExposureAuditIsVersionExplicit` (#1824)).
+Scorer side, `scoregates.SupportedBenchVersion` accepts v13 (inheriting the
+v12 gate stack) and `efficiency.ProductionReadyForVersion` treats v13 as
+technically ready.
 
 **Surface (issues #1825 #1827 #1828 #1832 #1831).**
 
@@ -768,26 +807,50 @@ quantifier → partial credit.
   Lisbon", "was X, now Y" assert one value
   (`TestV13ClaimScopedDistractorScan` (#1523)); > 2 distinct asserted
   candidates or two inconsistent assertions for one scalar claim → 0
-  (`TestV13StuffingQuantifier` (#1523)); slot tie-break `slot_not_in_prose`
+  (`TestV13StuffingQuantifier` (#1523)). Within a sentence, cue-positioned
+  values ("= 3800", "leaves $3,800", "the balance is") are the claim; an
+  enumeration ("3800 or 4200", "maybe X") asserts everything it lists; a lone
+  value is asserted; a multi-value sentence with neither cue nor enumeration
+  is exposition. A calendar-year token beside a count or amount is a
+  qualifier, not a candidate ("You took 3 trips in 2026" asserts 3), an uncued
+  bare integer beside a marked amount is exposition ("$3,800 across 4 trips"),
+  a clause-closing colon cues the value after it, and verb-object counts
+  ("took 3") are weak cues. Slot tie-break `slot_not_in_prose`
   (`TestV13SlotTieBreak` (#1523)); three-valued direction with the questions'
-  own vocabulary (`TestV13ThreeValuedDirection` (#1523)); `AnswerDate` at the
-  requested granularity (`TestV13DateClaims` (#1523)); `AnswerAbsence` and
-  `AnswerClarify` (`TestV13AbsenceAndClarifyKinds` (#1523)); declarative
-  acknowledgement 0.25 (`TestV13DeclarativeAckCredit` (#1523)).
+  own vocabulary and "neither … nor" → unchanged
+  (`TestV13ThreeValuedDirection` (#1523)); `AnswerDate` at the requested
+  granularity — any unambiguous rendering passes, `04/03/2026` never matches
+  (`TestV13DateClaims` (#1523)); `AnswerAbsence` and `AnswerClarify`
+  (`TestV13AbsenceAndClarifyKinds` (#1523)); declarative acknowledgement 0.25
+  (`TestV13DeclarativeAckCredit` (#1523)). Grader notes name the matched,
+  missing or contradictory claim by kind and never quote a hidden value.
 - Unicode and **reply language**: NFKC-style compatibility fold plus Unicode
   case folding with rune-based boundaries; a case carries `MemoryCase.Language`
   and the answer is accepted in that language or English through the
   `internal/multilingual` lexicons (es, pt, fr, it, de, nl); a sampled language
   without a lexicon fails closed (`TestV13UnicodeAndMultilingual` (#1523),
   `TestConfigFailsClosedOnUnsupportedLanguage` (#1831)).
-- The public grader audit is versioned per policy floor: `v13-1`
-  (`grade/audit_v13_bank.go`) carries 59 hard negatives (3-candidate stuffing,
-  templated grounding, served-text-not-model-emitted, the GIH transcript
-  class) and 47 reviewed positives (hedged-correct, grounded abstention citing
-  the near-miss, slot `411067` beside `$4,110.67`, records-disagree, date
-  renderings, reply-in-question-language); the release gate fails closed
-  when a supported version owns no bank
-  (`TestReleaseGateCoversEverySupportedVersionAndPolicyFloor` (#1522)).
+- The public grader audit is versioned per policy floor (`v9-2` for v9..v11,
+  `v12-1` for v12, `v13-1` in `grade/audit_v13_bank.go` for v13): the v13-1
+  bank carries 59 hard negatives (3-candidate stuffing, templated grounding,
+  served-text-not-model-emitted, the GIH transcript class) and 54 reviewed
+  positives (hedged-correct, grounded abstention citing the near-miss, slot
+  `411067` beside `$4,110.67`, records-disagree, date renderings,
+  reply-in-question-language), all of which must score as labelled
+  (`TestSyntheticRobustnessV13BankIsCleanAndCoversEveryKind` (#1522)). The
+  generated-corpus gate regrades the newest generatable corpus under the v13
+  policy, reports `corpus_bench_version`, and adds a per-claim-kind bound
+  (public-question-only passable share strictly below 5% for every
+  non-interaction kind; `TestCannedAuditV13RegradesTheNewestGeneratableCorpus`
+  (#1522)). `datagen-ci.yml` runs `-release-gate` on every datagen pull
+  request and the release gate fails closed when a supported version or a
+  grading-policy floor owns no bank
+  (`TestReleaseGateCoversEverySupportedVersionAndPolicyFloor` (#1522)):
+
+  ```sh
+  go run ./cmd/graderaudit -bench-version 13 -seeds 40 -run-size full
+  go run ./cmd/graderaudit -release-gate
+  ```
 
 ### Gates and postures (scorer, `services/dittobench-api`)
 
@@ -839,6 +902,28 @@ not secret defences; an adversary can read every one.
 | Mix audit | `go run ./cmd/mixaudit -bench-version 13 -seeds 40 -gate` | the `MixGateV13` caps and floors above | `TestV13MixAuditGateAcrossFortySeeds` (#1848) |
 | `/seed` label-leak probe | `go test ./gen -run LabelLeak` | family / arc / slot at chance on 10 held-out seeds (v12: 94% from the session prefix) | `TestV13SeedWireCarriesNoFamilyArcOrSlotLabel` (#1827) |
 | Story arc recovery | `go test ./universe -run StoryV2ArcRecovery` | raw pre-pass ceiling reported per seed; the enforced ceiling is parserprobe's after the surface pass | `TestStoryV2ArcRecoveryCeilingIsReportedAndDeterministic` (#1839) |
+
+`cmd/parserprobe` is the honest adversary every surface claim is measured
+against, replacing the 1-NN / family-id / 4-gram / fixed-recipe strawmen the
+generator itself beat: it reads only what a harness sees on the wire (the
+`/seed` records, the staged questions, the tool prompts), assembles a
+typo-tolerant parser from the repository's own frames (`internal/parserprobe`
+registers the v10–v12 question and record surfaces and derives the
+`v<N>-open-program` family from the artifact's `bench_version`, so a contract
+without a registered grammar is reported as unclassified rather than scored as
+a silent zero), recovers (family, slots) for every question, applies the
+public oracle arithmetic, launders the value through one "reply exactly"
+completion, and is graded by the real deterministic grader. The router (N14)
+replaces only the family-identification step with a naive-Bayes classifier
+trained on locally generated seeds. `TestParserprobeProgramGrammarCoversEveryContract`
+(#1829) walks every supported `bench_version` from v10 up and requires the
+program family to be recognised and inverted near-perfectly, so a v13 contract
+that re-renders the program surface fails it until its grammar is registered.
+Three wire properties the probe exposes are worth naming because an honest
+harness pays for them too: the program question binds its subject
+relationally and never names its group, so order is the only wire-visible
+binding; the parser-divergence questions repeat verbatim per round; and the
+projector edits unprotected join keys, which one-edit fuzzy joins absorb.
 
 ### Known vector
 

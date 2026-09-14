@@ -569,40 +569,6 @@ dependent calls, and useful exploration. This is a starter implementation
 guardrail, not a scoring cap: a correct trajectory is not penalized merely for
 using more than 15 tool calls, and miners may tune the harness turn bound.
 
-### Bench v13: staying inside the gates
-
-Bench v13 grades the prose and adds relay-observed gates that charge
-substitution, never a correct model answer ([PROTOCOL.md](PROTOCOL.md) "Bench
-v13"). The stock kit is the reference honest architecture; `src/v13.rs` holds
-each piece and `src/baseline.rs` wires them. Verified honest patterns and the
-rewrite each one must not become:
-
-| Honest pattern (passes) | Rewrite it must not become (charged) |
-| --- | --- |
-| Serve the model's value as written; the `answer` slot is a verbatim copy of the model's own `Answer:` line (`v13::answer_slot_from_prose`) or absent | `/100` rescale, direction-word map, `%.2f` reformat, composed slot, replaced draft (`served_text_not_model_emitted`, `slot_not_in_prose`) |
-| A formatter, JSON mode, or a `final_answer` tool that carries the model's number | Any value the model did not emit |
-| Values-free system prompt (`v13::HARNESS_POLICY_PROMPT`); retrieved memory injected as `/seed`-derived context | The answer computed on the host and placed in the prompt ("reply exactly: X") (`answer_in_prompt`) |
-| Full catalog on every turn, or a semantic top-k preloader that keeps the published top-3 (`DITTOBENCH_PRELOAD_TOP_K`, `v13::preload_catalog`) | A request-keyed empty or one-tool catalog (`restraint_without_offer`, `expected_tool_not_offered`) |
-| Every model-emitted call is executed through `tool_endpoint` | A host that swallows the model's call to look restrained (`swallowed_model_call`) |
-| The model asks a clarifying question that names the missing detail and cites what memory search found; declines say what was found | An always-ask or always-decline phrase rule (`twin_concordant`) |
-| List-then-act on runtime-described options: `discover_capabilities`, then one listed spelling; the qualifier decides a near-miss; the mock's "unknown option" error is fed back to the model | A baked option registry or a host-side edit-distance repair of the argument |
-
-Run the gate replay before you upload:
-
-```bash
-uv run ditto practice --bench-version 13 --gates --keep-artifacts /tmp/v13-gates
-python3 miners/dittobench-starter-kit/scripts/rehearsal_gates.py \
-  --dataset /tmp/v13-gates/dataset.json --transcript /tmp/v13-gates/transcript.json \
-  --completions /tmp/v13-gates/completions.jsonl --projection /tmp/v13-gates/projection.json \
-  --report /tmp/v13-gates/report.json
-```
-
-Every gate is shadow in v13.0, so the replay never moves a local score: it
-prints what the validator's relay would record on the same behavior and a
-"gate-induced loss (shadow)". Fix the served path a note points at; do not tune
-the note away. The local log is the kit's own view of the model exchange; the
-validator's relay record is the authoritative one.
-
 ### What isn't scored, and why
 
 Model identity and latency do not affect your score. Bench v9 does intentionally
@@ -781,9 +747,10 @@ produces a container serving that protocol on :8080.
 > Status: the hosted practice validator, on-chain submission path (`ditto upload`,
 > eval fee, scoring, weights), and the [SN118 leaderboard](https://platform-api.heyditto.ai/)
 > are live today.
-> Benchmark v12 is the active scoring contract; Bench v13 is generated and
-> scored in shadow during calibration and activates by a separate owner
-> decision (see *Bench v13: how to stay inside the gates* below). Every
+> Benchmark v12 is the active scoring contract. Bench v13 will be scored in
+> shadow once the v13 rollout is scheduled and activates by a separate owner
+> decision (see *Bench v13: how to stay inside the gates* below);
+> `GET /api/v1/public/bench/config` is authoritative for what is active. Every
 > contract uses locked `openai/gpt-oss-20b` inference and validator-observed
 > tool execution, and reaches your harness as wire version 9.
 
@@ -848,7 +815,9 @@ ledger on every validator sweep.
 accepts the inclusive range `MIN_SUPPORTED_BENCH_VERSION..=MAX_SUPPORTED_BENCH_VERSION`
 (`src/protocol.rs`; the ceiling moves to 13 with the v13 wiring sweep, #1519)
 and every contract from v9 on arrives as wire version 9, so do not branch on a
-higher number. Version 12 is the active scoring contract; v13 is in shadow.
+higher number. Version 12 is the active scoring contract; `GET
+/api/v1/public/bench/config` is authoritative for what is active and for the
+shadow target once the v13 rollout is scheduled.
 
 8. Lifecycle. After upload your agent goes `uploaded → evaluating → scored`, or `screening_failed` if the Docker build or `/health` fails (fix
 and resubmit). Scores land on the public score ledger and the
@@ -920,9 +889,11 @@ evidence and five scorer gates that make a request-keyed harness lose by
 construction. They are designed around one invariant: **no gate may zero a
 response whose graded claim is correct and model-emitted.** If your harness
 lets the model decide, executes what the model emits, and serves what the
-model said, you are inside every gate. The architectures below are the honest
-positives the calibration cohort (#1521) measures before any gate enforces;
-each is listed with the gate it touches and why it passes.
+model said, you are inside every gate. This is the one v13 guide in this
+README (the per-PR "staying inside the gates" section is folded into it). The
+architectures below are the honest positives the calibration cohort (#1521)
+measures before any gate enforces; each is listed with the gate it touches and
+why it passes.
 
 | Architecture | Gate it touches | Why it passes |
 | --- | --- | --- |
@@ -936,6 +907,20 @@ each is listed with the gate it touches and why it passes.
 | **Reply in the user's language** | grader reply-language policy | Answers are accepted in the question's language or English through the published lexicons; values stay canonical in every language. |
 | **Plain ReAct with tool results quoted into the next prompt** | causal | Delivered records and tool results are hash-exempt from the harness-authored span set, so quoting them is fine; only a value *you* computed that appears in no record or result trips `answer_in_prompt`. |
 | **Grounded abstention and clarifying questions authored by the model** | `AnswerAbsence`, `AnswerClarify` | Let the model write the decline citing what it searched, or the question naming the missing slot. A templated "I don't have that" or "what would you like?" scores 0. |
+
+The stock kit is the reference honest architecture: `src/v13.rs` holds each
+piece and `src/baseline.rs` wires them. Each verified honest pattern beside the
+rewrite it must not become:
+
+| Honest pattern (passes) | Rewrite it must not become (charged) |
+| --- | --- |
+| Serve the model's value as written; the `answer` slot is a verbatim copy of the model's own `Answer:` line (`v13::answer_slot_from_prose`, on only when `DITTOBENCH_ANSWER_SLOT` is set; `--gates` sets it) or absent | `/100` rescale, direction-word map, `%.2f` reformat, composed slot, replaced draft (`served_text_not_model_emitted`, `slot_not_in_prose`) |
+| A formatter, JSON mode, or a `final_answer` tool that carries the model's number | Any value the model did not emit |
+| Values-free system prompt (`v13::HARNESS_POLICY_PROMPT`); retrieved memory injected as `/seed`-derived context | The answer computed on the host and placed in the prompt ("reply exactly: X") (`answer_in_prompt`) |
+| Full catalog on every turn, or a semantic top-k preloader that keeps the published top-3 (`DITTOBENCH_PRELOAD_TOP_K`, `v13::preload_catalog`) | A request-keyed empty or one-tool catalog (`restraint_without_offer`, `expected_tool_not_offered`) |
+| Every model-emitted call is executed through `tool_endpoint` | A host that swallows the model's call to look restrained (`swallowed_model_call`) |
+| The model asks a clarifying question that names the missing detail and cites what memory search found; declines say what was found | An always-ask or always-decline phrase rule (`twin_concordant`) |
+| List-then-act on runtime-described options: `discover_capabilities`, then one listed spelling; the qualifier decides a near-miss; the mock's "unknown option" error is fed back to the model | A baked option registry or a host-side edit-distance repair of the argument |
 
 What loses, by construction:
 
@@ -963,11 +948,27 @@ What loses, by construction:
   plants a regeneration canary; the public salt-0 rehearsal artifact is what
   you practice on, never what you are scored on once the private pass lands.
 
+Run the gate replay before you upload:
+
+```bash
+uv run ditto practice --bench-version 13 --gates --keep-artifacts /tmp/v13-gates
+python3 miners/dittobench-starter-kit/scripts/rehearsal_gates.py \
+  --dataset /tmp/v13-gates/dataset.json --transcript /tmp/v13-gates/transcript.json \
+  --completions /tmp/v13-gates/completions.jsonl --projection /tmp/v13-gates/projection.json \
+  --report /tmp/v13-gates/report.json
+```
+
+Every gate is shadow in v13.0, so the replay never moves a local score: it
+prints what the validator's relay would record on the same behavior and a
+"gate-induced loss (shadow)". Fix the served path a note points at; do not tune
+the note away. The local log is the kit's own view of the model exchange; the
+validator's relay record is the authoritative one.
+
 Practical checklist before you upload:
 
-1. Run `uv run ditto practice --run-size full` and then
-   `scripts/local-rehearsal.py --gates` (#1851) and read every per-case note.
-   A shadow note is a warning you can fix before enforce.
+1. Run `uv run ditto practice --run-size full`, then the gate replay above
+   (#1851), and read every per-case note. A shadow note is a warning you can
+   fix before enforce.
 2. Put the value the model asserted in `answer` **and** in `final_text`;
    never populate the slot with something the prose does not say.
 3. Execute every model-emitted non-memory call through `tool_endpoint`.
@@ -990,8 +991,11 @@ rehearses it; `local-rehearsal.py` follows (`LIVE_SCORING_BENCH_VERSION` 12,
   descriptions, `enum` on `set_theme`/`set_reasoning_effort`,
   runtime-described accent/font options discoverable only through
   `discover_capabilities`, 3–5 coined decoy tools (≥ 10% decoy-correct cases),
-  coined list/discover/`run_code` content, `set_main_model` and
-  `set_chat_font` families retired, `set_effort` no longer in every run.
+  coined list/discover/`run_code` content; the baked model-slug and font
+  option-pool families (`set_model`/`set_main_model`, `set_font`) are retired
+  while `set_chat_font` stays on the wire as a discovery-grounded setter whose
+  options are listed only by `discover_capabilities`; `set_effort` no longer in
+  every run.
 - **Restraint is graded** (#1846): no-tool cases come in matched ask/act
   groups; the ask half expects a clarifying question naming the missing slot
   and citing a searched record.
@@ -1029,7 +1033,9 @@ rehearses it; `local-rehearsal.py` follows (`LIVE_SCORING_BENCH_VERSION` 12,
   v7; this README and `PROTOCOL.md` now say so.
 - **Activation** is a separate owner decision after the calibration cohort
   (#1521) and lands together with screener policy v14 (#1857). Until then v12
-  is the active scoring contract and v13 runs in shadow.
+  is the active scoring contract; v13 will be scored in shadow once the v13
+  rollout is scheduled through the Backroom, and
+  `GET /api/v1/public/bench/config` is authoritative for what is active.
 
 ## Pitfalls
 

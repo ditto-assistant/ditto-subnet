@@ -12,9 +12,9 @@ Returns `200 {"status":"ok"}`.
 The validator may POST several cases concurrently (`case_concurrency`, 1–64).
 `bench_version` is required. This starter accepts the inclusive range
 `MIN_SUPPORTED_BENCH_VERSION..=MAX_SUPPORTED_BENCH_VERSION` in
-[`src/protocol.rs`](src/protocol.rs) (the ceiling moves to 13 with the v13
-wiring sweep, #1519; accepting a version is not the same as practising on it)
-and practices on `ACTIVE_BENCH_VERSION` (9). Every
+[`src/protocol.rs`](src/protocol.rs) (v8 through v13 once the v13 starter-kit
+and wiring PRs land, #1851 and #1519; accepting a version is not the same as
+practising on it) and practices on `ACTIVE_BENCH_VERSION` (9). Every
 contract from Bench v9 on reaches the harness as **wire version 9**
 (`publicWireBenchVersion` in the validator): v10–v13 change the dataset, the
 grader and the gates, never what your harness must advertise or branch on, so
@@ -222,6 +222,14 @@ and v13) uses; the pre-v7 `[0.85, 1.0]` / first-extra-free curve is history:
 - Reproduce-under-transform audit: enforced, maximum 40%, keyed on the
   directional base-only-minus-transform-only brittleness signal
   (`transform_robustness` in the run details).
+- v9+ score gates (`scoregates`): model-use and authoritative-tool coverage are
+  binary (a zero-inference run zeroes); v12 adds model dependence, an
+  inference-latency check and a capped answer-stuffing penalty; v13 adds the
+  relay-evidenced gates below, all shadow/observe in v13.0.
+
+The pre-v7 description that used to sit here (`[0.85, 1.0]` factors, a free
+first extra call, a `×0.85` canary miss) described the v3–v6 contracts and is
+retired.
 
 Token usage never moves the composite (quality-only since v7); the relative
 efficiency bonus lives in the Platform layer as a capped tie-break. Bench v13
@@ -254,9 +262,19 @@ request and response shapes; everything new is an additive optional field or a
 rule about what the validator records and grades. The full statement of every
 rule, with its case note and vector test, is
 [`services/dittobench-api/PROTOCOL.md`](../../services/dittobench-api/PROTOCOL.md)
-(*bench_version 13* sections). This is the harness-side summary; the
-architecture guide that shows how honest designs pass is the README's *Bench
-v13: how to stay inside the gates*.
+(*bench_version 13* sections). This is the harness-side summary — the one
+Bench v13 section of this document; the architecture guide that shows how
+honest designs pass is the README's *Bench v13: how to stay inside the gates*.
+The stock kit is the reference honest architecture: `src/v13.rs` holds each
+piece (`answer_slot_from_prose`, `preload_catalog` / `semantic_top_k`,
+`HARNESS_POLICY_PROMPT`, the completion log) and `src/baseline.rs` wires them.
+The `answer` slot is **off unless `DITTOBENCH_ANSWER_SLOT` is set**
+(`v13::ANSWER_SLOT_ENV`; the `--gates` rehearsal sets it): the wire stays at
+bench 9, so the slot cannot be gated on the contract version, and under the
+live v9+ grading policy a populated slot is authoritative with no prose
+fallback, so a default-on slot would change live v12 scores. With the switch
+on, the policy prompt asks the model for a final `Answer: <value>` line and the
+slot is that line, copied verbatim.
 
 ### What changes in the requests you receive
 
@@ -270,7 +288,10 @@ v13: how to stay inside the gates*.
   names are spliced in, answered `{"error": "<name> is not configured …"}`
   unless the case expects them — and on ≥ 10% of tool cases the decoy *is* the
   right tool and serves the needle, so a blacklist of unknown names loses real
-  weight. `set_main_model` and the `set_chat_font` family are retired. Pass
+  weight. The baked model-slug and font option-pool families
+  (`set_model`/`set_main_model`, `set_font`) are retired; `set_chat_font`
+  **stays on the wire** as a discovery-grounded setter whose options are listed
+  only by `discover_capabilities`, so keep it in the catalog you offer. Pass
   every wire tool to the model unchanged (`WireTool::from_wire` already does).
 - **Served content is coined per seed.** `list_workflows`, `list_schedules`,
   `list_agent_jobs`, `search_tools`, `run_code` and `discover_capabilities`
@@ -316,7 +337,7 @@ marked incomplete, which always fails **open**.
 
 | Gate | You lose the case when… | Note | v13.0 posture |
 | --- | --- | --- | --- |
-| Catalog-present | the model was never offered a catalog on a no-tool case (restraint you decided, not the model), or the expected tool was never offered; waived when your retained set holds the top-3 of the published TF-IDF embedding or is merely non-empty on a chit-chat/declarative/decline case | `restraint_without_offer`, `expected_tool_not_offered` | shadow |
+| Catalog-present | the model was never offered a choosable non-memory catalog on a no-tool case (restraint you decided, not the model — `tool_choice: "none"` and a memory-only catalog count as no offer), or the expected tool was never offered; waived when your retained set holds the top-3 of the published TF-IDF embedding (`v13::semantic_top_k` in this kit, `scorer.CatalogSemanticTopK` in the validator) or is merely non-empty on a chit-chat/declarative/decline case (the negation family excepted) | `restraint_without_offer`, `expected_tool_not_offered` | shadow (`DITTOBENCH_V13_CATALOG_GATE_POSTURE`) |
 | Swallowed model call | the model emitted a non-memory call on a no-tool case and you did not execute it through `tool_endpoint` | `swallowed_model_call` | shadow |
 | Claim-span provenance | the graded value tokens in the credited span (`answer`, else `final_text`) are not contained in any completion of the case after the public normaliser `scoregates.NormalizeSpan` (`/100` rescale, direction map, draft replacement); a credited value with no completion at all | `served_text_not_model_emitted`, `no_model_completion` | shadow (`DITTOBENCH_V13_CLAIM_PROVENANCE_POSTURE`, shared with the causal gate) |
 | Slot tie-break | the `answer` slot alone would pass but no typed-equivalent value is asserted in `final_text` | `slot_not_in_prose` | grading rule |
@@ -325,11 +346,10 @@ marked incomplete, which always fails **open**.
 | Inference cost | output tokens of successful completions exceed the published per-class budget (3 completion-equivalents of 512 tokens on memory / single-tool cases, 5 on chains); floor 0.6 at twice the budget | `per_case[].inference_cost` | shadow, reported only |
 
 Shadow and observe mean recorded, not applied: your composite does not move,
-the notes appear on your per-score detail on the Platform (#1852), and
-`scripts/local-rehearsal.py --gates` (#1851) reproduces them locally against a
-pass-off artifact. A gate flips to enforce only as a fleet-wide operator
-decision after the calibration cohort (#1521) shows 0 false zeros on every
-honest architecture.
+the notes appear on your per-score detail on the Platform (#1852), and the
+local replay below (#1851) reproduces them against a pass-off artifact. A gate
+flips to enforce only as a fleet-wide operator decision after the calibration
+cohort (#1521) shows 0 false zeros on every honest architecture.
 
 ### What the grader now accepts
 
@@ -357,3 +377,15 @@ graded value on the host and laundering it through a "reply exactly" completion;
 replacing the model's served text by wording; rescaling its number or mapping
 its direction word onto grader vocabulary. Each of these is now relay-visible
 and noted per case, and each is a screener I4/I5/I7 finding under policy v14.
+
+### Local replay (shadow)
+
+`uv run ditto practice --bench-version 13 --gates` (or
+`python3 scripts/local-rehearsal.py --bench-version 13 --gates`) records what
+this kit offered and emitted per case (`DITTOBENCH_COMPLETION_LOG`), turns the
+`answer` slot on (`DITTOBENCH_ANSWER_SLOT=1`), and replays every rule above against the public (salt 0) pass-off artifact, printing
+per-case notes and a shadow gate-induced loss. `--keep-artifacts DIR` keeps the
+dataset, transcript, completion log and result for an offline re-run with
+`scripts/rehearsal_gates.py`. Every gate is shadow in v13.0, so the replay never
+moves a local score. The validator's relay is the authoritative evidence
+source; the local log is the same rule over the harness's own view.
